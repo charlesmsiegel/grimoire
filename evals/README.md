@@ -66,7 +66,8 @@ backend\.venv\Scripts\python.exe evals\run.py --gate
   replies to today's parser and to `decide()`'s, and scores what the call site
   would store from each. It says the structured parse reads every shape
   today's did; it says nothing about what a model would write. Offline, no
-  key, and it refuses `--live`, `--record` and `--case`.
+  key, and it refuses `--live`, `--record`, `--case`, `--provider`,
+  `--model` and `--decide-backend`.
 - **Replay grades recorded output.** It holds the prompt contract (every
   `prompt.*` check runs on the freshly assembled prompt) and the graders,
   against a fixed recording (below).
@@ -134,11 +135,22 @@ read (`decisions.render`), whichever backend answered, so one grader scores
 both. The report names what answered on the case's line: `(backend:
 native)` or `(backend: structured)`, or -- when a fallback stage answered
 the items the primary failed -- each backend with how many items it
-answered, in the order they first answered: `(backend: native 3,
-structured 4)`. A native endpoint returns answers and no rationale, so on a
+answered, in item order: `(backend: native 3, structured 4)`. Where a stage
+failed some items of a batch, each failure's cause follows (`; failed:
+bad_response: ...`), so a failed answer check says why.
+
+A native endpoint is asked for answers only, never a rationale. So on a
 case whose prompt asks for one (`decide-scene-break`, `decide-voice-drift`)
-a native run fails `decide.rationale` whatever it answered; read that run's
-answer checks.
+an item a native endpoint answered passes `decide.rationale` as `n/a:
+answered natively`, listed under the case in the report rather than
+dropped; an item answered structured keeps the real check, and fails it
+without a rationale.
+
+The `prompt.*` checks of a live decide case grade the case's own prompt,
+built fresh -- what a structured stage sends. A native item sends no such
+prompt (its request is the decisions endpoint's own body), so on a native
+run those checks say nothing about what was sent; the answer checks are
+the measurement.
 
 Two flags change what a live run sends, and both need `--live`:
 
@@ -151,9 +163,12 @@ Two flags change what a live run sends, and both need `--live`:
   answered. `chain` (the default) is what production sends, above. `native`
   and `structured` force that one backend on the resolution's primary,
   without its fallback. `native` is refused for a connection kind with no
-  native decisions endpoint, or a provider preset that never decides
-  natively; `structured` for a model known unable to generate. A refusal is
-  one sentence and exit 2, before any case is sent.
+  native decisions endpoint, a provider preset that never decides natively,
+  or a model known (not guessed) unable to decide natively; `structured`
+  for a model known unable to generate. An `unknown` refuses neither. A
+  chain with no stage at all (`chain` on a model that can do neither) is
+  refused too. A refusal is one sentence and exit 2, before any case is
+  sent.
 
 To compare the two backends, compare them **on one model**: a model that
 both generates and decides natively, run twice --

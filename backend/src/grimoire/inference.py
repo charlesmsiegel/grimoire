@@ -122,10 +122,11 @@ class Stage(NamedTuple):
     retries: int | None
 
 
-def _alone(conn: dict) -> dict:
+def without_fallback(conn: dict) -> dict:
     """A COPY of `conn` without the fallback it carries (`llm.FALLBACK_KEY`):
     never a pop, so the resolution's own dict keeps what the resolver wrote
-    (M2)."""
+    (M2). What a stage of its own sends, here and where an eval forces one
+    backend on a primary (`evals/runner.chain`)."""
     return {k: v for k, v in conn.items() if k != llm.FALLBACK_KEY}
 
 
@@ -156,11 +157,12 @@ def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
              and NATIVE in (primary.decision_mode, fallback.decision_mode))
     chain: list[Stage] = []
     if primary.decision_mode == NATIVE:
-        chain.append(Stage(NATIVE, _alone(primary.conn), None))
+        chain.append(Stage(NATIVE, without_fallback(primary.conn), None))
     elif resolve.generates(primary):
-        chain.append(Stage(STRUCTURED, _alone(primary.conn) if apart else primary.conn, None))
+        chain.append(Stage(STRUCTURED,
+                           without_fallback(primary.conn) if apart else primary.conn, None))
     if apart and fallback is not None:
-        chain.append(Stage(fallback.decision_mode, _alone(fallback.conn), 0))
+        chain.append(Stage(fallback.decision_mode, without_fallback(fallback.conn), 0))
     return tuple(chain)
 
 

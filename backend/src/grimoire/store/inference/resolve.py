@@ -750,6 +750,14 @@ def generates(attempt: Attempt) -> bool:
     return not _missing(attempt, (frozenset({"generate"}),))
 
 
+def decides_natively(attempt: Attempt) -> bool:
+    """Whether `attempt` may decide natively: `decide_native` is not among
+    what it is KNOWN (`_missing`) not to do, so `unknown` and a name-rule
+    guess both still may (spec 5.3). `generates`' twin, asked where a native
+    decision is forced on an attempt (`evals/runner.chain`)."""
+    return not _missing(attempt, (frozenset({"decide_native"}),))
+
+
 def native_only(caps: dict[str, capabilities.Cap]) -> bool:
     """Whether a model with these capabilities is answered natively: it is
     known (`no`, from a source other than the name rule) unable to

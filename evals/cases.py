@@ -1345,7 +1345,8 @@ def grade_decide_scene_break(ctx: dict, output: str) -> list[Check]:
             Check("prompt.explain", bool(explain) and explain in text,
                   "scene_break/explain.j2 no longer reaches the prompt"),
             *graders.grade_decision(output, ctx["items"], explain=bool(explain),
-                                    question=scene_break.QUESTION_ID, expected=True)]
+                                    question=scene_break.QUESTION_ID, expected=True,
+                                    native=0 in ctx.get("native_items", ()))]
 
 
 # ------------------------------------------- case 11: decide, voice drift
@@ -1446,7 +1447,8 @@ def grade_decide_voice_drift(ctx: dict, output: str) -> list[Check]:
             *graders.grade_decision(output, ctx["items"], explain=bool(ctx["explain"]),
                                     question=voice_drift.QUESTION_ID,
                                     expected=voice_drift.DRIFT,
-                                    max_rationale=voice_drift.MAX_NOTE)]
+                                    max_rationale=voice_drift.MAX_NOTE,
+                                    native=0 in ctx.get("native_items", ()))]
 
 
 # ------------------------------------------- case 12: decide, speaker

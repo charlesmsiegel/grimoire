@@ -1566,6 +1566,24 @@ def test_grade_decision_fails_a_missing_rationale_alone():
                                          question="over", expected=True)) == {"decide.rationale"}
 
 
+def test_grade_decision_reads_a_native_items_rationale_as_not_applicable():
+    """A native endpoint is asked for no rationale: its item's
+    `decide.rationale` passes, visibly, as `NATIVE_RATIONALE` -- and the
+    answer is still graded. A cap (voice drift's) is not applied to nothing."""
+    bare = json.dumps({"0": {"answers": {"over": True}}})
+    for max_rationale in (None, 10):
+        checks = graders.grade_decision(bare, _decision_items(), explain=True,
+                                        question="over", expected=True,
+                                        max_rationale=max_rationale, native=True)
+        assert [c.name for c in checks] == ["decide.json", "decide.answer",
+                                            "decide.rationale"]
+        assert failed(checks) == set()
+        assert checks[-1].detail == graders.NATIVE_RATIONALE
+    wrong = graders.grade_decision(_decision(False, ""), _decision_items(), explain=True,
+                                   question="over", expected=True, native=True)
+    assert failed(wrong) == {"decide.answer"}
+
+
 def test_grade_decision_asks_no_rationale_when_none_was_asked_for():
     """A decision asked with no rationale (the speaker pick) is graded on its
     object and its answer alone: there is no `decide.rationale` to fail."""

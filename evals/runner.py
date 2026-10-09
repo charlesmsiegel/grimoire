@@ -196,26 +196,28 @@ class BackendRefusedError(ValueError):
     sentence. Raised before anything is sent."""
 
 
-def _alone(conn: dict) -> dict:
-    """A copy of `conn` without the fallback it carries (`llm.FALLBACK_KEY`):
-    a forced backend measures the primary alone."""
-    return {k: v for k, v in conn.items() if k != llm.FALLBACK_KEY}
-
-
 def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.Stage, ...]:
     """The decide chain a live run sends `resolved`'s case down.
 
     `chain` is `inference.stages(resolved)`, exactly what production sends.
     `native` and `structured` are one stage on the primary, without its
-    fallback, so the two backends can be compared on the SAME model (a
-    native-only model against a structured one would compare the models as
-    well). Each refuses (`BackendRefusedError`) a primary that cannot take
-    it: `native` a connection kind with no decisions endpoint
-    (`llm.NATIVE_DECISION_KINDS`) or a provider preset whose `never` holds
-    `decide_native`; `structured` a primary known unable to generate
-    (`resolve.generates`)."""
+    fallback (`inference.without_fallback`, as production's own stage is),
+    so the two backends can be compared on the SAME model (a native-only
+    model against a structured one would compare the models as well). Each
+    refuses (`BackendRefusedError`) a primary that cannot take it: `native` a
+    connection kind with no decisions endpoint (`llm.NATIVE_DECISION_KINDS`),
+    a provider preset whose `never` holds `decide_native`, or a model known
+    (`resolve.decides_natively`: a `no` that is not a guess; `unknown` is
+    allowed, spec 5.3) unable to decide natively; `structured` a primary
+    known unable to generate (`resolve.generates`). A chain with no stage at
+    all is refused too, rather than failing mid-run."""
     if backend == CHAIN:
-        return inference.stages(resolved)
+        stages = inference.stages(resolved)
+        if not stages:
+            raise BackendRefusedError(
+                f"{resolved.task} resolved to no decide stage: its model can "
+                f"neither generate nor decide natively.")
+        return stages
     if backend not in DECIDE_BACKENDS:
         raise ValueError(f"unknown decide backend {backend!r}")
     if not resolved.attempts:
@@ -234,22 +236,32 @@ def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.
             raise BackendRefusedError(
                 f"--decide-backend native: {where} is behind the "
                 f"{preset.label} preset, which never decides natively.")
+        if not inference_resolve.decides_natively(primary):
+            raise BackendRefusedError(
+                f"--decide-backend native: {where} is known unable to decide natively.")
     elif not inference_resolve.generates(primary):
         raise BackendRefusedError(
             f"--decide-backend structured: {where} is known unable to generate.")
-    return (inference.Stage(backend, _alone(primary.conn), None),)
+    return (inference.Stage(backend, inference.without_fallback(primary.conn), None),)
 
 
 def backend_note(decision: decisions.Decision) -> str:
     """What answered `decision`, for the report: `backend: <name>` when one
     backend answered every item; when stages with different backends split
     the batch (`Decision.backend` is ""), each backend with how many items it
-    answered, in the order they first answer -- `backend: native 3,
-    structured 4`. Items nothing answered are not counted."""
+    answered, in item order (the backend of the lowest-numbered item it
+    answered first) -- `backend: native 3, structured 4`. Items nothing
+    answered are not counted. Each failed unit's final error
+    (`Decision.errors`) follows, so an item a stage failed shows its cause
+    beside the answer check it fails: `...; failed: bad_response: <detail>`."""
     if decision.backend:
-        return f"backend: {decision.backend}"
-    counts = Counter(r.backend for r in decision.items if r.backend)
-    return "backend: " + ", ".join(f"{name} {n}" for name, n in counts.items())
+        note = f"backend: {decision.backend}"
+    else:
+        counts = Counter(r.backend for r in decision.items if r.backend)
+        note = "backend: " + ", ".join(f"{name} {n}" for name, n in counts.items())
+    if decision.errors:
+        note += "; failed: " + "; ".join(f"{e.kind}: {e.detail}" for e in decision.errors)
+    return note
 
 
 def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
@@ -272,10 +284,11 @@ def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
     ctx = prepare(case)
     decide = case.schema is not None
     if decide:
-        assert not isinstance(target, dict), f"{case.id} is a decide case: pass its resolution"
+        if isinstance(target, dict):
+            raise TypeError(f"{case.id} is a decide case: pass its resolution")
         stages = chain(target, backend)
-    else:
-        assert isinstance(target, dict), f"{case.id} is a generate case: pass its connection"
+    elif not isinstance(target, dict):
+        raise TypeError(f"{case.id} is a generate case: pass its connection")
     note = ""
 
     async def ask(c) -> str:
@@ -286,6 +299,11 @@ def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
         decision = await inference.run_stages(case.task, ctx["items"], stages, client=c,
                                               explain=explain)
         note = backend_note(decision)
+        # Which items a native endpoint answered: it is asked for no
+        # rationale, so a grader reads that item's as not applicable.
+        ctx["native_items"] = frozenset(
+            index for index, result in enumerate(decision.items)
+            if result.backend == decisions.NATIVE_BACKEND)
         return decisions.render(decision.items, ctx["items"], explain=bool(explain))
 
     async def run() -> str:
@@ -340,6 +358,7 @@ def report(results: list[Result]) -> str:
         note = f"  ({r.note})" if r.note else ""
         lines.append(f"  [{status}] {r.case.id}.{r.variant}{note}")
         if r.passed:
+            lines.extend(_not_applicable(r))
             continue
         failed += 1
         if r.error:
@@ -347,11 +366,20 @@ def report(results: list[Result]) -> str:
         for c in r.failures:
             detail = f": {c.detail}" if c.detail else ""
             lines.append(f"           {c.name}{detail}")
+        lines.extend(_not_applicable(r))
     total = len(results)
     lines.append("")
     lines.append(f"{total - failed}/{total} passed" if failed
                  else f"all {total} checks passed")
     return ascii_safe("\n".join(lines))
+
+
+def _not_applicable(r: Result) -> list[str]:
+    """A passing check that was not applicable (its detail says `n/a`, e.g. a
+    native item's rationale), listed so the report shows it was not graded
+    rather than dropping it silently."""
+    return [f"           {c.name}: {c.detail}" for c in r.checks
+            if c.ok and c.detail.startswith("n/a")]
 
 
 def ascii_safe(text: str) -> str:

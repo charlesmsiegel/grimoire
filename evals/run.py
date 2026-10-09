@@ -99,7 +99,10 @@ def run_live(args: argparse.Namespace, selected: tuple) -> list[runner.Result] |
     # encode in the console's code page (see runner.report).
     for key, target in conns.items():
         conn = target if isinstance(target, dict) else target.conn
-        assert conn is not None, key   # the seam refuses a resolution of nothing
+        if conn is None:   # the seam refuses a resolution of nothing; never sent
+            print(runner.ascii_safe(f"live: {key} resolved to no connection"),
+                  file=sys.stderr)
+            return 1
         print(runner.ascii_safe(
             f"live: {key} -> {conn['kind']} / {conn.get('model') or '(default)'}"
             f"{modes.get(key, '')}"))

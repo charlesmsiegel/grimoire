@@ -232,26 +232,72 @@ def test_live_runs_a_decide_case_through_the_chain(monkeypatch, tmp_path):
 
 
 def test_live_a_native_decision_carries_no_rationale(monkeypatch, tmp_path):
-    """What a real native endpoint returns: answers and no rationale. On a case
-    whose prompt asks for one, the answer checks pass and `decide.rationale`
-    alone fails -- the grade is unchanged, and the README says to read a
-    native run's answer checks."""
+    """What a real native endpoint returns: answers and no rationale. A native
+    item was never asked for one, so on a case whose prompt asks for one its
+    `decide.rationale` passes as not applicable -- visibly, in the report."""
+    from evals import graders
     from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     case = case_mod.BY_ID["decide-scene-break"]
     fake = FakeLLM([["never sent"]], decisions=[_over(rationale="")])
     result = runner.live(case, _decide_target(case), client=fake)
+    assert result.passed, result.failures
+    (rationale,) = [c for c in result.checks if c.name == "decide.rationale"]
+    assert rationale.ok and rationale.detail == graders.NATIVE_RATIONALE
+    assert f"decide.rationale: {graders.NATIVE_RATIONALE}" in runner.report([result])
+
+
+def test_live_a_structured_reply_without_a_rationale_still_fails(monkeypatch, tmp_path):
+    """The n/a is the native item's alone: a structured answer that leaves out
+    the rationale it was asked for fails `decide.rationale` as before."""
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", BOTH)
+    case = case_mod.BY_ID["decide-scene-break"]
+    fake = FakeLLM([['{"0": {"answers": {"over": true}}}']])
+    result = runner.live(case, _decide_target(case), client=fake, backend="structured")
+    assert result.note == "backend: structured"
     assert [c.name for c in result.failures] == ["decide.rationale"]
 
 
+@pytest.mark.parametrize("case_id", ["decide-scene-break", "decide-voice-drift"])
+def test_only_a_natively_answered_item_reads_its_rationale_as_not_applicable(
+        monkeypatch, tmp_path, case_id):
+    """The grader reads `native_items` by index: the one item of a rationale
+    case is n/a only when IT is in the set. A set naming another item (as a
+    mixed batch would) leaves item 0 a structured answer, which fails a
+    missing rationale; replay sets no key at all."""
+    from evals import graders
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID[case_id]
+    ctx = runner.prepare(case)
+    reply = json.loads(_compliant(case))
+    reply["0"]["rationale"] = ""
+    output = json.dumps(reply)
+
+    def rationale(native_items):
+        if native_items is not None:
+            ctx["native_items"] = native_items
+        (check,) = [c for c in case.grade(ctx, output) if c.name == "decide.rationale"]
+        return check
+
+    assert not rationale(None).ok
+    assert not rationale(frozenset({1})).ok
+    native = rationale(frozenset({0}))
+    assert native.ok and native.detail == graders.NATIVE_RATIONALE
+
+
 def test_live_forces_the_native_backend_on_a_dual_capable_model(monkeypatch, tmp_path):
+    from grimoire import inference
     from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-scene-break"]
     target = _decide_target(case)
     # The chain serves this model structured; native is forced on the same one.
+    assert runner.chain(target) == inference.stages(target)
     assert [s.mode for s in runner.chain(target)] == ["structured"]
 
     fake = FakeLLM([["never sent"]], decisions=[_over()])
@@ -304,6 +350,7 @@ def test_a_forced_backend_measures_the_primary_alone(monkeypatch, tmp_path):
 @pytest.mark.parametrize("setup,backend,says", [
     ("anthropic", "native", "no native decisions endpoint"),
     ("custom", "native", "never decides natively"),
+    ("known-no", "native", "known unable to decide natively"),
     ("decider", "structured", "known unable to generate"),
 ])
 def test_live_refuses_native_on_a_kind_without_an_endpoint(monkeypatch, tmp_path, capsys,
@@ -312,6 +359,7 @@ def test_live_refuses_native_on_a_kind_without_an_endpoint(monkeypatch, tmp_path
     sent -- every chain is built before the first case runs."""
     from evals import run
     from grimoire.store import config, llm_connections
+    from grimoire.store.inference import facts
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     if setup == "anthropic":
@@ -323,6 +371,11 @@ def test_live_refuses_native_on_a_kind_without_an_endpoint(monkeypatch, tmp_path
                                           base_url="http://localhost:5678/v1")
         config.write_config(role_decision_provider="winifred-local",
                             role_decision_model="small")
+    elif setup == "known-no":
+        # The catalog says the model decides natively; the user's own fact
+        # says it does not -- a known `no`, which the resolver refuses on.
+        facts.set_overrides("openrouter", BOTH, {"decide_native": "no"})
+        config.write_config(role_decision_model=BOTH)
 
     def never(*_a, **_k):
         raise AssertionError("a refused run sent something")
@@ -334,6 +387,111 @@ def test_live_refuses_native_on_a_kind_without_an_endpoint(monkeypatch, tmp_path
     err = capsys.readouterr().err
     assert code == 2
     assert says in err and len(err.strip().splitlines()) == 1
+
+
+def test_an_unknown_decide_native_is_not_refused(monkeypatch, tmp_path):
+    """Spec 5.3: only a known `no` refuses. A model the catalog says only
+    generates leaves `decide_native` unknown (absence says nothing), so a
+    native run may be forced on it."""
+    from grimoire.store.inference import capabilities
+
+    _decision_store(monkeypatch, tmp_path / "home", ACTIVE)
+    target = _decide_target(case_mod.BY_ID["decide-scene-break"])
+    assert target.attempts[0].capabilities["decide_native"].value == capabilities.UNKNOWN
+    (stage,) = runner.chain(target, "native")
+    assert stage.mode == "native"
+
+
+def test_a_run_whose_chain_has_no_stage_is_refused(monkeypatch, tmp_path, capsys):
+    """A resolution `inference.stages` builds no stage for (a primary known
+    unable to do either thing) is refused before anything is sent, rather
+    than raising mid-run after earlier cases spent money. The seam refuses
+    such a model first; this holds the runner on its own."""
+    import dataclasses
+
+    from evals import run
+    from grimoire import inference
+    from grimoire.store.inference import capabilities
+
+    _decision_store(monkeypatch, tmp_path / "home", ACTIVE)
+    case = case_mod.BY_ID["decide-scene-break"]
+    target = _decide_target(case)
+    primary = target.attempts[0]
+    no = capabilities.Cap(capabilities.NO, "override")
+    unable = dataclasses.replace(target, attempts=(dataclasses.replace(
+        primary, decision_mode="",
+        capabilities={**primary.capabilities, "generate": no, "decide_native": no}),))
+    assert inference.stages(unable) == ()
+    with pytest.raises(runner.BackendRefusedError):
+        runner.chain(unable)
+
+    def never(*_a, **_k):
+        raise AssertionError("a refused run sent something")
+
+    monkeypatch.setattr(runner, "resolve_connections",
+                        lambda *_a, **_k: {runner.conn_key(case): unable})
+    monkeypatch.setattr(runner, "live_all", never)
+    assert run.main(["--live", "--case", "decide-scene-break"]) == 2
+    assert "no decide stage" in capsys.readouterr().err
+
+
+def test_a_mixed_chain_answers_through_live_and_names_each_backend(monkeypatch, tmp_path):
+    """A native-only Decision model with a generating fallback: the chain is
+    `inference.stages` -- native, then the fallback as a structured stage of
+    its own -- and a batch whose middle item the native endpoint fails is
+    finished by the fallback. The note counts each backend's items."""
+    from grimoire import decisions, inference
+    from grimoire.llm_errors import LLMError
+    from grimoire.store import config, llm_connections
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", DECIDER)
+    llm_connections.create_connection("openrouter", "Rowan Spare", api_key="sk-spare")
+    config.write_config(role_decision_fallback_provider="rowan-spare",
+                        role_decision_fallback_model=ACTIVE)
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    target = _decide_target(case)
+    stages = runner.chain(target)
+    assert stages == inference.stages(target)
+    assert [s.mode for s in stages] == ["native", "structured"]
+
+    ctx = runner.prepare(case)
+    recorded = json.loads(_compliant(case))
+    parsed = decisions.parse(_compliant(case), ctx["items"], explain=True)
+    native = [decisions.ItemResult(r.answers) for r in parsed]
+    failure = LLMError("bad_response", "the decisions endpoint sent no answers")
+    fake = FakeLLM([[json.dumps({"0": recorded["1"]})]],
+                   decisions=[native[0], failure, native[2]])
+    result = runner.live(case, target, client=fake)
+
+    assert result.passed, result.error or [(c.name, c.detail) for c in result.failures]
+    assert len(fake.native_requests) == 3 and fake.calls == 1
+    assert fake.conn["id"] == "rowan-spare"
+    assert result.note == "backend: native 2, structured 1"
+
+
+def test_a_partly_failed_batch_says_why_in_its_note(monkeypatch, tmp_path):
+    """No fallback to finish it: the item the native endpoint failed stays
+    unanswered (`Decision.errors` holds why), and the note carries the cause
+    beside the answer check that item fails."""
+    from grimoire import decisions
+    from grimoire.llm_errors import LLMError
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", DECIDER)
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    target = _decide_target(case)
+    ctx = runner.prepare(case)
+    parsed = decisions.parse(_compliant(case), ctx["items"], explain=True)
+    native = [decisions.ItemResult(r.answers) for r in parsed]
+    failure = LLMError("bad_response", "the decisions endpoint sent no answers")
+    fake = FakeLLM([["never sent"]], decisions=[native[0], failure, native[2]])
+    result = runner.live(case, target, client=fake)
+
+    assert not result.passed and fake.calls == 0
+    assert result.note == ("backend: native; "
+                           "failed: bad_response: the decisions endpoint sent no answers")
+    assert "the decisions endpoint sent no answers" in runner.report([result])
 
 
 def test_a_live_only_flag_without_live_is_refused():
@@ -421,8 +579,8 @@ def test_every_decide_case_runs_through_live(monkeypatch, tmp_path, case):
 
 def test_a_mixed_decision_names_each_backend():
     """`Decision.backend` is "" when stages with different backends split the
-    batch; the note then counts each one's items, in the order they first
-    answer, and leaves out an item nothing answered."""
+    batch; the note then counts each one's items, in item order, and leaves
+    out an item nothing answered."""
     from grimoire import decisions
 
     def answered(backend: str) -> decisions.ItemResult:
@@ -433,6 +591,11 @@ def test_a_mixed_decision_names_each_backend():
                decisions.ItemResult({"q": decisions.Answer(None, "error")})),
         backend="")
     assert runner.backend_note(mixed) == "backend: native 2, structured 1"
+    # Item order: the backend of the lowest-numbered item is named first,
+    # whichever stage answered first.
+    fallback_first = decisions.Decision(
+        items=(answered("structured"), answered("native")), backend="")
+    assert runner.backend_note(fallback_first) == "backend: structured 1, native 1"
     assert runner.backend_note(decisions.Decision(items=(answered("native"),),
                                                   backend="native")) == "backend: native"
 
