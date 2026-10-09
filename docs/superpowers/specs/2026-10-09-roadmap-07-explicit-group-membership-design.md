@@ -154,8 +154,8 @@ to `leader` arrives as a pending change whose visible fields are identical.
 Membership would make that the common case, not the corner one.
 
 `promote` and `push` copy the whole record into the library. They check a
-greeting's character refs (`sync._require_world_character`, called at `:761`
-and `:1090`) and nothing else; a group's `leader` naming a campaign-made actor
+greeting's character refs (`sync._require_world_character`, called at `:762`
+and `:1093`) and nothing else; a group's `leader` naming a campaign-made actor
 is published as is.
 
 ### 1.5 Absorb and groups
@@ -228,7 +228,7 @@ the group record, readable without a model, so that:
 
 - Membership is **not knowledge**. Belonging to a group does not make an actor
   know the group's secrets, its lore, or what another member saw. That question
-  is 11's (section 12.3).
+  is 11's (section 12.4).
 - Membership is **current state, not history**. No join date, no "was a member
   in scene 10". Retrieval must not read it as historical evidence (section
   12.4).
@@ -420,7 +420,7 @@ Once a campaign has diverged a group, every later world-side edit to that group
 (a body typo fix, a new keyword) arrives as a sync `conflict`, and the two
 resolutions are whole-record. Taking the world's copy loses the campaign's
 membership; keeping the campaign's loses the world's edit until it is redone.
-That is the existing contract for every field (section 1.4). Section 15, Q3,
+That is the existing contract for every field (section 1.4). Section 19, Q3,
 asks whether a field-aware merge is worth adding; the recommendation is not
 yet.
 
@@ -478,7 +478,7 @@ naming the first member ref that either has no world record
 remove them from the group. A ref that does not parse is ignored here, as the
 greeting check ignores a hand-edited name (`sync.py:861-862`).
 
-Whether the same check should cover `leader` is open (section 15, Q4): it is
+Whether the same check should cover `leader` is open (section 19, Q4): it is
 the same failure, but adding it would refuse pushes that succeed today.
 
 `demote` (world -> dependent campaigns) copies the whole record down and needs
@@ -534,7 +534,7 @@ the page makes for its owned-lore count (`CharacterPage.tsx:294-302`).
 ### 6.3 Frontend mirror and drift
 
 `ENTITY_FIELDS.groups` in `types.ts` gains the member spec in the same
-position. This spec adds the missing drift test (section 14.1): a backend test
+position. This spec adds the missing drift test (section 17.1): a backend test
 that parses `ENTITY_FIELDS` out of `types.ts` and holds every kind's keys,
 widgets, `kinds`, `multi`, bounds and option sources to
 `entity_schema.FIELDS`, the way `test_the_frontend_ships_the_same_kind_list`
@@ -654,12 +654,12 @@ inputs  = [("world_groups",    collection_digest(<wroot>/groups, "*.md", safe_id
   05 can rebuild it eagerly after an external edit.
 
 The persistent tier changes cost, never answers: a test runs every consumer
-with and without it and requires equal output (section 14.2).
+with and without it and requires equal output (section 17.2).
 
 ### 7.5 The API
 
 Two read routes, registered before the generic entity router (whose
-`/{scope}/{id}/{kind}` captures any third segment; `test_route_order.py`
+`/worlds/{wid}/{kind}` and `/campaigns/{cid}/{kind}` capture any third segment; `test_route_order.py`
 guards it):
 
 ```
@@ -738,7 +738,7 @@ Each row carries the citation fields every staged section carries
 
 The wording is a starting point. `evals/run.py --live` is the only check that a
 model follows it; the offline suite proves only that the instruction is in the
-prompt (section 14.4).
+prompt (section 17.4).
 
 ### 9.2 What the model is shown
 
@@ -782,12 +782,12 @@ for e in _rows(obj, "membership_changes"):
 
 `materialize` stages one `StagedEdit` per row that survives these drops, each
 of which is "tolerated, not an error", the module's rule for targets that do
-not exist (`materializer.py:878-879`):
+not exist (`materializer.py:877-878`):
 
 - `group` resolves through `groups/<id>`, `groups:<id>` or a bare id to a group
   this campaign can see (`overlay.read_entity(cid, "groups", gid)`); otherwise
   dropped. A group created by a `new_lore` row in the same reply does not exist
-  yet and is dropped (section 15, Q5).
+  yet and is dropped (section 19, Q5).
 - `actor` normalizes `characters/<id>` to `characters:<id>`
   (`continuity.canon.actor_ref`'s rule) and must exist through the overlay
   (`materializer._actor_exists`, `:96-111`); otherwise dropped.
@@ -873,7 +873,7 @@ here is permission").
   generic `entity_fields` descriptor (`undo.py:298-304`, `:355-358`) would
   restore the whole line and refuse whenever any member changed; it stays for
   the editor's adopt path, which writes whole keys. A restore never
-  de-materializes the group (the module's stated limit, `undo.py:52-60`).
+  de-materializes the group (the module's stated limit, `undo.py:53-60`).
 
 ### 9.6 The review panel
 
@@ -886,7 +886,7 @@ kind union in `api/types.ts` gains `"membership"`.
 
 ### 9.7 What absorb still does not do
 
-- Change `leader` (section 15, Q5).
+- Change `leader` (section 19, Q5).
 - Record members on a group it creates in the same review (Q5).
 - Infer membership from prose already on disk. Absorb reads a scene, not the
   library.
@@ -990,9 +990,9 @@ present leader win over a present member, which wins over the headquarters.
   groups only).
 - It does **not** change who **knows** anything. `actor.knows` treats a group
   owner as an object owner (`context/actor.py:41`, `:70-72`), and structural
-  presence was already the scene's, not the NPC's (`world_state.py:207-214`).
+  presence was already the scene's, not the NPC's (`world_state.py:208-214`).
 - A gm-only or excluded group confers no presence, by the engine's existing
-  rule (`activation.py:66-67`).
+  rule (`activation.py:79-80`).
 
 ### 11.3 Inspector and wording
 
@@ -1004,10 +1004,10 @@ ${via}\` : "member here";`, and the reason union in `api/types.ts:1681` gains
 
 The lore-activation spec named exactly this as the thing waiting on membership
 ("everyone in the Guild knows this is out until membership exists"). The
-knowledge half of that sentence stays out (section 12.3). The presence half is
+knowledge half of that sentence stays out (section 12.4). The presence half is
 one table row on a seam built for it, it is inert until a user records members,
 and without it a recorded membership changes nothing a player sees during play.
-Section 15, Q1, asks the user to confirm.
+Section 19, Q1, asks the user to confirm.
 
 ---
 
@@ -1093,7 +1093,7 @@ connected; it does not say either knows what the other saw. 09 weights them;
 - **Membership is now, not then.** The index is current state. An actor who
   joined in scene 40 is in `members` when scene 10 is retrieved. A consumer
   must not describe a past scene with present membership ("Mara, of the Salt
-  Circle, ...") as though it held then. History is a non-goal (section 15,
+  Circle, ...") as though it held then. History is a non-goal (section 19,
   Q7).
 - **The secret-lore gap is 11's.** Today secret lore owned only by a group is
   known by no actor's own call: `actor.knows` returns True for a secret entry
@@ -1134,7 +1134,7 @@ which signals help. The seam is `groups_for` (Q10).
 
 It holds no groups (section 1.7), so every reader sees an empty listing:
 no graph node, no presence reason, no snapshot segment, no index row.
-`snapshot.json` must not move; section 14.6 makes that an acceptance check
+`snapshot.json` must not move; section 17.6 makes that an acceptance check
 rather than an expectation. `home/` is not edited to add membership coverage
 (its README's rule); that coverage lives in ordinary tests built by the code
 under test.
@@ -1154,7 +1154,24 @@ under test.
 
 ---
 
-## 14. Contract
+## 14. Slicing (for the plan)
+
+Each slice ships alone and leaves the tree green.
+
+1. **A. Field, reader, inverse, routes, editor, actor sections** (C1 minus
+   sync, C2 in-process tier). The smallest slice with user value: record
+   members, see them on both sides.
+2. **B. Sync visibility and push/promote check** (rest of C1).
+3. **C. Structural presence** (C3d). Small, prompt-affecting, isolated.
+4. **D. Absorb** (C3a). The largest; touches templates, evals and the review
+   UI.
+5. **E. Graph** (C3b).
+6. **F. Projections** (C3c), landing before 08's plan starts.
+7. **G. Persistent tier** (C2 with 03), once 03-C1 has landed.
+
+---
+
+## 15. Contract
 
 ### 07-C1: Authoritative members and a leader on the group record
 
@@ -1264,7 +1281,7 @@ never activates a group's own entry and never changes `actor.knows`.
 
 ---
 
-## 15. Interaction with repo rules
+## 16. Interaction with repo rules
 
 - **Privacy.** Every fixture, example and test uses invented placeholders
   (Salt Circle, Seraphine, Mara, Winifred, Saltmarch). No constant here was
@@ -1300,7 +1317,7 @@ never activates a group's own entry and never changes `actor.knows`.
   absorb system prompt grows by one paragraph on every absorb, a small fixed
   cost on a call that is already the longest generation in the app.
 - **Regex view.** Absorb's transcript still goes through
-  `regex.view.view(..., phase="prompt")` (`routes/scenes.py:3081`); nothing
+  `regex.view.view(..., phase="prompt")` (`routes/scenes.py:3080`); nothing
   here reads transcript text.
 - **Write token (`store/revision.py`).** Membership edits through the campaign
   entity routes are stamped by the activity middleware; absorb writes are
@@ -1318,9 +1335,9 @@ never activates a group's own entry and never changes `actor.knows`.
 
 ---
 
-## 16. Tests and acceptance
+## 17. Tests and acceptance
 
-### 16.1 Field and validation (C1)
+### 17.1 Field and validation (C1)
 
 - `test_entity_schema.py`: `members` is a `multi` ref over `("characters",
   "pcs")`, after `leader`; a list of actor refs passes; `groups:`,
@@ -1338,7 +1355,7 @@ never activates a group's own entry and never changes `actor.knows`.
 - Reclassify a group with members to lore and back: the line is untouched and
   the index answers nothing, then the same rosters again.
 
-### 16.2 Inverse (C2)
+### 17.2 Inverse (C2)
 
 - `index_from_rows` on Salt Circle (leader Seraphine, members Mara, Winifred,
   Seraphine) gives the `by_actor` roles of section 7.5.
@@ -1354,7 +1371,7 @@ never activates a group's own entry and never changes `actor.knows`.
   malformed ref; 404 for an unknown campaign; route order holds
   (`test_route_order.py`).
 
-### 16.3 Sync (C1)
+### 17.3 Sync (C1)
 
 - An incoming world change that touches only `members` carries a `fields` row
   whose two sides differ, and `IncomingReview` renders it (no
@@ -1362,7 +1379,7 @@ never activates a group's own entry and never changes `actor.knows`.
 - `promote` and `push` of a group naming a campaign-made Mara raise
   `DanglingReferenceError`; with Mara promoted first, they succeed.
 
-### 16.4 Absorb (C3a)
+### 17.4 Absorb (C3a)
 
 - `parse_output("{}")` gains `membership_changes`;
   `test_identity_fields_live_inside_rows_not_the_top_level`'s key set is
@@ -1393,7 +1410,7 @@ never activates a group's own entry and never changes `actor.knows`.
 - Frontend: `SceneReview.test.tsx` shows a membership row in the "Group
   membership" drawer, with no textarea.
 
-### 16.5 Graph (C3b)
+### 17.5 Graph (C3b)
 
 - `test_graph_tuples_are_pinned` updated (section 10.2), and the `ts_union`
   pin covers `NodeKind`, `EdgeKind` and `GraphPart`.
@@ -1406,7 +1423,7 @@ never activates a group's own entry and never changes `actor.knows`.
 - Frontend: `model.test.ts` for the Groups toggle and the Cast preset;
   `layout.test.ts` for the band.
 
-### 16.6 Presence and prompts (C3d)
+### 17.6 Presence and prompts (C3d)
 
 - `test_lore_golden.py` passes unchanged.
 - `test_frozen_campaign.py` passes with `snapshot.json` unchanged. This is an
@@ -1422,13 +1439,13 @@ never activates a group's own entry and never changes `actor.knows`.
   (`test_context_actor.py`-style table).
 - Frontend: `loreReasons.test.ts` row for `member_present`.
 
-### 16.7 Projections (C3c)
+### 17.7 Projections (C3c)
 
 - `scene_groups` ordering, `limit`, `characters/<id>` normalization, and the
   `prompt_visible` default dropping gm-only rosters.
 - `co_affiliates` excludes the actor itself and unions member and leader.
 
-### 16.8 UI pattern (C1)
+### 17.8 UI pattern (C1)
 
 Per CLAUDE.md's list/detail tests: in `EntityEditor.test.tsx`, clicking a
 group row shows the read-only view with a Members side-section of chips (no
@@ -1438,27 +1455,10 @@ form directly. In `CharacterPage.test.tsx` and `PCPage.test.tsx`, the Groups
 column section lists the actor's groups with the leader suffix, and is absent
 for an actor in no group.
 
-### 16.9 Gate
+### 17.9 Gate
 
 `make check` green, with the ratcheted lint baselines re-recorded only where a
 finding was actually resolved.
-
----
-
-## 17. Slicing (for the plan)
-
-Each slice ships alone and leaves the tree green.
-
-1. **A. Field, reader, inverse, routes, editor, actor sections** (C1 minus
-   sync, C2 in-process tier). The smallest slice with user value: record
-   members, see them on both sides.
-2. **B. Sync visibility and push/promote check** (rest of C1).
-3. **C. Structural presence** (C3d). Small, prompt-affecting, isolated.
-4. **D. Absorb** (C3a). The largest; touches templates, evals and the review
-   UI.
-5. **E. Graph** (C3b).
-6. **F. Projections** (C3c), landing before 08's plan starts.
-7. **G. Persistent tier** (C2 with 03), once 03-C1 has landed.
 
 ---
 

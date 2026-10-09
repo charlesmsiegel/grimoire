@@ -146,7 +146,7 @@
   own meter per structured chunk and per native item.
 - It refuses a resolution for another task or operation before any meter
   opens.
-- `test_operation_guard.py:965-988` holds every call site to a **literal**
+- `test_operation_guard.py:965-992` holds every call site to a **literal**
   task on a decide route with `resolved=`, and requires every decide task to
   be decided by some call site (`test_operation_guard.py:994-1000`).
 
@@ -963,7 +963,7 @@ an honest `incapable` sentence, and such a fallback never rides.
 - **Vocabulary.** `tools` joins `capabilities.NAMES`,
   `providers.CAPABILITIES`, `capabilities.CANNOT` (`"call tools"`) and
   `_GERUND` (`"calling tools"`). The frontend reads capability names from the
-  API (`api/types.ts:170`, `routes/ProvidersView.tsx:39`, and the
+  API types (`api/types.ts:168-170`), the provider page lists capabilities and the testable ones (`routes/ProvidersView.tsx:31-40`; `tools` joins `TESTABLE` with its probe), and the
   `selection.ts` phrase table), and each gains the entry.
 - **Sources** (the resolver's order, unchanged):
   - **adapter**: the `claude` preset's `never` lists `tools` until C2b; no

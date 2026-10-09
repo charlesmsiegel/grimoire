@@ -1383,3 +1383,561 @@ count of detached handlers in CLAUDE.md does not change.
   validation), costs, branches from the check's reachable tiers, and values.
 
 ---
+
+## 20. II-B: conditions (13-C2a)
+
+Named, persistent, formal statuses attached to a sheet-bearing record, with
+deterministic check modifiers. Detailed enough here to keep II-A's shapes from
+foreclosing it; the II-B plan refines.
+
+### 20.1 Module file: `conditions.json`
+
+```json
+{"winded": {"label": "Winded", "description": "Short of breath.",
+            "stacking": "count", "max_stacks": 3,
+            "applies_to": {"kinds": ["characters", "pcs"]},
+            "modifiers": [{"checks": ["athletics"], "tags": [], "amount": -1, "per_stack": true}],
+            "rules": ["skill-checks"]}}
+```
+
+`stacking` is `none` (one instance; adding again is a recorded no-op) or
+`count` (an integer with optional `max_stacks`; adding past it clamps and is
+recorded). Modifiers name checks by id and/or by a new optional check field,
+`tags`. Free text never decides a modifier (MII 16.3, kept). Validation adds:
+unknown check or tag, non-integer amount, bad stacking, unknown rule.
+
+### 20.2 Store and unit
+
+`<campaign>/mechanics/conditions.json`: `{"<kind>:<id>": {"<condition>":
+{"stacks": n, "source": "mt-...", "scene_identity": "...", "applied": iso}}}`.
+Not in `character_state.md`, which is narrative (MII 16.1, kept). The unit of
+application is this file, with `before`/`after` holding exactly the touched
+`(ref, condition)` entries, so 11.2's compare-and-swap carries over unchanged:
+the touched entries read `before`, `after`, or something else.
+
+### 20.3 Ops
+
+`condition_add {target, condition, stacks = 1}` and `condition_remove {target,
+condition, stacks = "all" | expr}`, legal in outcome branches (and in costs,
+for "become winded to do this"). Removing an absent condition is a recorded
+no-op; it never rejects, since "clear the condition if present" is the common
+intent.
+
+### 20.4 Manual edits
+
+A player adding or clearing a condition by hand goes through the ledger as a
+`kind: "manual"` transaction (no roll, no proposal), so the audit, the History
+and undo see it like any other formal change. `GET/PUT
+/campaigns/{cid}/mechanics/conditions` are thin routes over that.
+
+### 20.5 Effects on resolution and availability
+
+- `checks.resolve_check` reads the actor's active conditions and reports
+  `base_modifier`, `condition_modifiers: [{condition, stacks, amount}]` and
+  `modifier` (the final value, so every existing reader of `modifier` keeps
+  working). `roll_result.j2` and `action_result.j2` show the breakdown. Same
+  inputs give the same modifier: the conditions file is read under the lock that
+  covers the roll.
+- An Action may declare `requires_conditions` / `forbids_conditions` for the
+  actor, a new availability reason `condition`.
+- Retries cannot double-apply: a condition unit lands once by 11.2.
+
+### 20.6 Module edits
+
+A condition rename rewrites every bound campaign's `conditions.json` (the
+sheet-migration pattern, under every campaign lock, stamping each changed
+campaign). A delete with live instances is refused unless the edit says to
+drop them; an instance whose definition vanished another way reads as
+`unknown` and applies no modifier, visibly.
+
+## 21. II-C: clocks (13-C2b)
+
+### 21.1 Store, templates, instances
+
+`<campaign>/mechanics/clocks.json`: `{"<clock id>": {"label", "current",
+"max", "status": "active"|"complete"|"archived", "template"?, "created": "mt-...",
+"scene_identity"}}`. Separate from continuity plot threads (MII 17, kept):
+a clock is formal state, a thread is narrative.
+
+A pack may declare `clocks.json` templates `{id: {label, max, overflow:
+"stop"|"reject", rules}}`; a campaign may also create an ad-hoc clock by hand (a
+`manual` transaction). A template is never required.
+
+### 21.2 Addressing a clock from an Action
+
+`clock_advance {clock, amount}` / `clock_set {clock, value}` name a
+**template** id. At proposal time the Action is offered with a `clock`
+parameter whose choices are the active instances of that template; one instance
+is chosen automatically, more than one makes `clock` a required proposal field
+(a select on the card, and a fence key). Zero instances makes the Action
+unavailable with reason `no_clock`. An Action never creates a clock as a side
+effect in II-C (creation stays explicit).
+
+### 21.3 Completion
+
+`overflow: "stop"` caps at `max` and sets `status: "complete"`; `"reject"`
+refuses the outcome like a `set` out of bounds. Reaching `max` records an event
+`{"clock_complete": id}` on the transaction and in the resolution; the
+continuation is told the clock completed and the template's rules are added. The
+fictional consequence is the module's or the narrator's, never the engine's
+(MII 17.3, kept).
+
+### 21.4 Extended actions
+
+An extended action is an Action whose success branch advances a clock, taken
+again. No second state machine (the draft 20, MII 17.4, kept).
+
+## 22. II-D: contests (13-C2c)
+
+### 22.1 Definition
+
+```json
+"grapple": {"label": "Grapple", "targets": {"min": 1, "max": 1, "kinds": ["characters", "pcs"]},
+            "contest": {"actor_check": "athletics", "target_check": "athletics",
+                        "compare": "total", "tie": "target"},
+            "outcomes": {"win": [...], "lose": [...]}}
+```
+
+`check` and `contest` are exclusive. `compare` is `total` or `successes`
+(validated against both checks' `roll_shape`). `tie` is `actor`, `target` or
+`tie`; with `tie`, a `tie` branch is legal. Branch keys are `win`, `lose`,
+`tie`, `_otherwise`. A contest Action must have `targets.max == 1` (MII 18.5,
+kept). Contest roll values join the effect scope as `actor_total` /
+`target_total` (or `_successes`) and `margin` (actor minus target); these names
+are reserved from II-D on.
+
+### 22.2 Resolution and recording
+
+Both rolls are `resolve_check` calls, each with its own side's conditions (II-B)
+and its own `difficulty`/`modifier` (`adjustable` applies to the actor's side
+only; the target's side takes its check's defaults). Both are recorded in the
+transaction at 11.1 step 4, before anything applies, so a retry can never
+re-roll one side. Projection appends two roll entries, tagged `pid` and
+`pid#target`, so `find_or_append_by_proposal` stays idempotent for each. The
+line shows both and the winner.
+
+Target eligibility adds: the target's sheet type satisfies `target_check`'s
+`requires`.
+
+## 23. II-E: encounter structure (sketch; needs its own spec)
+
+Optional, for modules that need turn order. Not started before II-A to II-D
+work (MII 5 and 19, kept).
+
+- Store: `<campaign>/mechanics/encounters/<eid>.json` with `participants`,
+  `order`, `round`, `turn`, `status`.
+- A module may declare per-turn reset effects (a `manual`-style transaction at
+  each turn boundary) and an `initiative` check.
+- Availability gains one gate, `not_your_turn`, active only while an encounter is
+  running in the scene.
+- Initiative is a check, its results are rolls, the order is data; nothing about
+  it needs a new random primitive.
+
+A game with no encounter keeps using Actions exactly as in II-A.
+
+---
+
+## 24. The NPC action seam (13-C3)
+
+### 24.1 What it is
+
+A way for a non-player character's turn to **choose a formal Action** before
+its prose is written:
+
+```text
+legal_set(actor)                        13-C1a: deterministic code owns legality
+   -> decide("npc-action", item)        a distribution over the legal options
+   -> sample(distribution, seed)        01c-C2, recorded as 01c-C3
+   -> re-check under the lock           still legal? (digest and check_proposal)
+   -> action proposal, source "npc"     13-C1c: the ordinary path
+   -> player accepts, modifies, or declines
+   -> resolution and transaction        13-C1b
+   -> the NPC's contribution narrates the committed result
+```
+
+The Decision model **may not** invent an Action, bypass legality, roll, write a
+sheet, or redefine an outcome (the draft 27, kept). It can only put weight on
+options the engine enumerated, and the engine re-checks the winner.
+
+### 24.2 Where it runs
+
+In a character round (`routes/character_turns.py`), when the next speaker is a
+sheeted NPC in the actor pool, **before** that contribution is generated, and
+only when the campaign's `npc_actions` setting is `propose` (default `off`; a
+campaign frontmatter key, so II-A ships without it reachable). If the legal set
+is empty the step is skipped silently.
+
+When an Action is selected, the round pauses on its proposal through the
+existing pause path, with no partial contribution written; acceptance resumes
+the round through `resume_roll` with `action_result.j2` as the appended block
+(1.5), so the contribution narrates an Action that already happened. A decline
+resumes with the declined block, and the NPC writes its turn without the
+Action.
+
+II-A ships no `auto` mode. Accepting on the NPC's behalf without the player is
+a later decision, after the eval gate has data (Open question 8).
+
+### 24.3 The question
+
+One `decisions.Item` per NPC turn, context bounded and built off the event
+loop: the actor's name, sheet summary (the `mechanics_sheets` line), active
+conditions (II-B, when present), the scene's recent turns through
+`store.regex.view.view` (phase `prompt`, which the regex guard requires of every
+LLM reader of transcript text), and the 02-C2 intent when there is one (24.6).
+
+- **Flat form, available today**: when every option has at most one target and
+  the legal set has at most 254 options, one `Choice` whose options are the
+  legal pairs (`strike→characters:seraphine`, `mend→characters:winifred`, and
+  `none`, `allow_none=True`, meaning "no formal action this turn"). Each
+  option's description is the Action's label and description and the target's
+  name. This needs nothing from 01e.
+- **Joint form, 01e-C3**: an Action choice plus a target choice conditioned on
+  it, and a multi-select for an Action with `targets.max > 1`, used when any
+  option is `multi` (6.4) or the flat form would pass 254 options.
+- A legal set the available forms cannot carry (multi-target before 01e-C3
+  lands) drops the offending options from the question and records that it did;
+  it never fakes a selection for them.
+
+### 24.4 Selection
+
+- **A distribution was reported** (native, or structured where 01c-C1's policy
+  allows it): restrict it to the legal options, renormalise only if 01c-C2 says
+  so, and draw with 01c-C2's helper and a fresh 53-bit seed
+  (`secrets.randbits(53)`, the dice engine's width, `dice.py:114-118`). The
+  replay record is 01c-C3's `{distribution, seed, selected, backend}`.
+- **No distribution, but an answer**: use the answer as the selection and
+  record `{distribution: null, seed: null, selected, backend, sampled: false}`.
+  This is not a sampled answer; 01c-C4 is about never *manufacturing* one, and
+  this record says plainly that none was drawn (Open question 4).
+- **Abstention, refusal, `none`, or no usable answer**: no Action. The NPC's
+  turn proceeds as prose (01c-C4).
+- **`DecideRequestError` or an `LLMError`**: logged, no Action, the turn
+  proceeds. A failed decision never fails the round, as the speaker pick's
+  refusal returns control rather than failing (`character_turns.py:741-760`).
+
+### 24.5 Re-check and record
+
+The decide call is async and outside the lock; the world may move. Under the
+campaign lock, before creating the proposal: recompute the legal set, compare
+digests, and run `check_proposal` on the selection. A mismatch whose selection
+is still legal proceeds; one that is no longer legal records
+`npc_action: {selection, dropped: "no_longer_legal"}` on the round record and
+proceeds as prose. The replay record is stored where the outcome is (01c-C3):
+on the proposal payload's `selection`, on the round record, and copied into the
+transaction (`selection`, 10.2). Mechanical randomness stays separately
+reproducible through the roll's own seed; choice and dice never share one.
+
+### 24.6 The 02-C2 soft seam
+
+When 02-C2 has produced a turn intent for this NPC (an evasion, a threat), it
+is placed in the item's context and, where the Action declares `tags`, the
+option descriptions carry them, so a model can connect "threaten" to an
+`intimidate`-tagged Action. An intent **never filters** the legal set and never
+names an Action. Without 02-C2 the item simply has no intent line.
+
+### 24.7 Route, metering, capture, eval gate
+
+- A new route, `Route("npc_action", "NPC actions", ..., ("npc-action",), True,
+  operation="decide", default_role="decision", legacy="scene")`, added in the
+  same change as its call site, which is `test_operation_guard.py`'s rule; it
+  appears on the Models page because that page reads `routing.ROUTES`
+  (`store/inference/settings.py:305`).
+- Metered by `decide`'s own meter, attributed `campaign`, `scene`, `post` and
+  `round_id` (`inference.py:684-688`). A native-only Decision model files
+  native rows with no `modelled_usd`, per CLAUDE.md's native decision rule.
+- Captured through 01b-C1 when it lands.
+- **Eval gate** (`evals/run.py --gate`): a synthetic corpus of NPC situations
+  with a module fixture, graded on (a) every selection is a member of the legal
+  set (must be 100%, and is enforced by code anyway), (b) a hand-labelled
+  plausible-option set per case, and (c) abstention where nothing fits. The
+  `propose` setting stays hidden until the gate passes. 01a-C1 reports its cost
+  and latency.
+
+---
+
+## 25. Contract
+
+### 13-C1a: Actions, availability, the legal set
+
+- **Inputs**: a campaign whose bound pack is valid and may carry
+  `actions.json` (5); a scene; optionally an actor ref.
+- **Outputs**: `available_actions(cid, sid, actor_ref=None) ->
+  list[ActorActions]`; `legal_set(cid, sid, actor_ref) -> LegalSet` with
+  `options` and `digest`; `check_proposal(cid, sid, proposal) ->
+  list[Problem]` (6).
+- **Guarantees**: one implementation answers the palette, the prompt section,
+  the fence parser, accept and the NPC seam. Deterministic for equal pack bytes,
+  sheets, cast and location; ordered by Action file order then pool order. Reads
+  under the campaign lock; writes nothing; never raises on store content.
+- **Failure**: no module or an invalid pack -> empty results. Store problems
+  are reason codes, not exceptions.
+
+### 13-C1b: the Effect DSL and the transaction ledger
+
+- **Inputs**: a pack's effect templates (7); a claim snapshot; a check
+  resolution or none.
+- **Outputs**: `effects.plan(...) -> Plan | Rejection` (pure);
+  `txn.record/apply/complete/recover/settle/undo` and
+  `sheets.writer.apply_unit_locked` (10-12).
+- **Guarantees**: II-A ops are `set`, `add`, `spend`, `restore` on `resource`
+  and `track` fields with the bounds of 7.2. A roll is durable in an `open/`
+  record before any unit is written; recovery never rolls; a unit is
+  applied at most once and only over its exact `before`; a value someone else
+  wrote is never overwritten (stall, not overwrite); undo is a new transaction
+  under the same compare-and-swap. Every transaction is in `open/` until its
+  proposal handoff is complete. Revision bumped wherever a transaction writes.
+- **Failure**: a precondition fails before the roll (nothing recorded); an
+  outcome fails after it (`rejected`, roll kept); a foreign write before
+  recovery (`stalled`, settled by the player); `StoreBusy` propagates as the
+  409 every lock holder already answers.
+
+### 13-C1c: proposals, narration, audit
+
+- **Inputs**: an action fence, a player Action, or (13-C3) an NPC selection.
+- **Outputs**: a `kind: "action"` proposal payload (8.1); the resolution (9);
+  the transcript line and continuation block (13); the audit's transaction lines
+  and reversal guard (15).
+- **Guarantees**: one adjudication route resolves every source; records without
+  `kind` are check proposals and behave exactly as before; the revert edge is
+  refused while a transaction names the proposal; `heal` completes an open
+  transaction before retiring a record; a pack without Actions produces
+  byte-identical prompts.
+- **Failure**: a malformed or illegal proposal opens in Modify with problems; it
+  is never dropped and never resolved as written.
+
+### 13-C2a: conditions (II-B)
+
+`conditions.json`, `<campaign>/mechanics/conditions.json`, ops
+`condition_add`/`condition_remove` as a unit kind of 13-C1b, `manual`
+transactions, modifier reporting from `resolve_check`, and availability gates
+(20). Guarantee: a condition changes only through a transaction; no modifier is
+applied twice through a retry; a dangling condition applies nothing, visibly.
+
+### 13-C2b: clocks (II-C)
+
+`<campaign>/mechanics/clocks.json`, optional templates, ops
+`clock_advance`/`clock_set`, completion events (21). Guarantee: a clock moves only
+through a transaction; completion is reported, never acted on by the engine.
+
+### 13-C2c: contests (II-D)
+
+`contest` Actions, both rolls recorded before any effect, two tagged roll
+entries, one target (22). Guarantee: no retry re-rolls either side.
+
+### 13-C3: the NPC action seam
+
+- **Inputs**: a sheeted NPC about to take a turn in a round; the campaign's
+  `npc_actions` setting; 13-C1a's legal set; 01c-C2/C3; 01e-C3 where 24.3 needs
+  it; 02-C2's intent when present.
+- **Outputs**: either nothing (the turn proceeds as prose) or an action proposal
+  with `source: "npc"` and a replay record (24.5).
+- **Guarantees**: the selection is a member of the legal set re-checked under
+  the lock; the replay record is persisted on the proposal, the round and the
+  transaction; abstention, refusal or failure never become an Action; no Action
+  resolves without the player's accept.
+- **Failure**: any decide failure or stale selection degrades to prose, logged,
+  never a failed round.
+
+---
+
+## 26. Interaction with repo rules
+
+- **Campaign lock.** `store.mechanics.txn` and `store.mechanics.resolve` join
+  `locks.DOMAIN_MODULES` with their reasons (`test_lock_domain_guard.py`);
+  `availability` and `effects` mutate nothing. Every Action touches one
+  campaign, so no `hold_all`. The module-edit guards run under the locks the
+  edit already holds.
+- **Atomic writes and paths.** Every write goes through `atomic.write_text`;
+  every path is built from `campaigns_paths.campaign_root(cid)`
+  (`test_atomic_guard.py`, `test_paths_guard.py`). The `open/` to `done/`
+  move is a write then an unlink, never a rename across a crash-unsafe step:
+  either file present is a readable state (10.3).
+- **Imports.** New package `store/mechanics/` (`availability`, `effects`,
+  `txn`, `resolve`, `lines`), module-scope imports only, submodules bound as
+  modules (`from ..sheets import writer as sheets_writer`), acyclic per 11.4
+  (`test_import_guard.py`).
+- **Revision.** Bumped in a `finally` from the first durable transaction write
+  (11.1), by recovery wherever it wrote (11.3), and by undo and settle. The
+  middleware still stamps the 2xx answers on top.
+- **Scene freeze.** `POST .../action-proposal` joins `test_scene_freeze.py`.
+  Adjudication already holds the scene through its turn reservation.
+- **Detached runs.** No new detached handler (18); the CLAUDE.md count of
+  thirty-two is unchanged. An NPC decision runs inside the character turn that
+  is already detached.
+- **Metering and the LLM.** II-A adds no LLM call: the continuation is the
+  existing `continuation` task. 13-C3 adds one decide task on a decide route,
+  through `operations.decide` (`test_operation_guard.py`, `test_routing_guard.py`).
+- **Regex view.** The NPC item reads transcript text through `store.regex.view`
+  (`test_regex_prompt_guard.py`).
+- **Templates.** `action_result.j2`, `action_rejected.j2` and the Actions block
+  are checked by `verify_templates.py`; the offline evals cover the roll
+  protocol including Actions (14).
+- **Frozen campaign.** No built-in pack changes in II-A (17), so the frozen
+  campaign's sweep snapshot does not move. II-A's test that a pack without
+  Actions renders byte-identical prompts is the stronger guarantee.
+- **Privacy.** Transactions hold ids, labels already in the campaign, and
+  integers; they live in the campaign tree and are never written to the log.
+  `logs.record` lines from this subsystem (a stall, a recovery that wrote, an NPC
+  decision dropped) carry the campaign id, the transaction id and a code, never
+  values. Test fixtures use the placeholder names only.
+- **Android and pydantic.** Pure Python, standard library; request models are
+  plain `BaseModel` fields (`list[str] | None = None`, `bool = True`), dumped via
+  `routes.common._dump`. No new dependency.
+- **Frontend.** List/detail pattern and the History as a `ColumnSection`
+  (19); bindings through `useHotkeys`; no `keydown` listener.
+- **Codex gates.** The plan for II-A, and each of II-B to II-D and 13-C3, passes
+  `/codex:adversarial-review` before implementation, per CLAUDE.md.
+
+## 27. Tests and acceptance
+
+### 27.1 Store tests (II-A)
+
+- **Pack validation**, one case per error in 5.4, including reachable tiers
+  with and without a ladder and with and without `vs`; a roll name the shape
+  cannot produce; a value name colliding with a field; a cost on a target.
+- **`reachable_tiers` and `roll_shape`** against both shipped packs' checks.
+- **Availability**: each reason code; pool order; `self`; a target whose type
+  lacks a touched field is ineligible; the legal set's order and digest are
+  stable across runs and change when a sheet value that affects payability does.
+- **Effects** (pure): each op on `resource` and `track` at, inside and past
+  each bound; `add` clamp and reject; `spend` refusal; `restore` clamp; negative
+  amounts for `spend`/`restore`; float-to-int; `ambiguous_name`; values in file
+  order; two ops on one field fold into one unit; fan-out order; one failing
+  expansion rejects all; a no-op unit is dropped.
+- **Sheet unit writer**: `applied`, `already`, conflict on a changed value,
+  conflict on a re-created sheet with a new `gen`, conflict on a type change;
+  `gen` and the creation mark preserved.
+- **Transactions and recovery**, each with a dice fake that fails if
+  `resolve_check` is called during recovery:
+  - crash (injected exception) after claim, before record: no transaction; the
+    revert is allowed; a fresh accept rolls fresh;
+  - after record, before the first unit: recovery applies all units once;
+  - after the first of several units (multi-target): recovery finishes the rest
+    once;
+  - after commit, before hand-off; after hand-off, before close: each finished
+    by recovery with no second write to any sheet;
+  - a foreign sheet write before recovery: `stalled`, value untouched; settle
+    moves it to `partial`;
+  - the revert edge refused while an open transaction names the proposal;
+  - `heal` (through `supersede` and `new`) completes an open transaction and
+    projects its line before retiring the record;
+  - rejected outcome: roll recorded, record `resolved`, a second accept answers
+    the existing stale/narrated paths and rolls nothing.
+- **Undo**: succeeds on unchanged fields; 409 when any touched field moved;
+  redo of an undo; a crash between the undo's commit and marking the original
+  is finished by recovery.
+- **Fan-outs**: a scene rename repoints transactions; a reclassify repoints
+  refs and a later undo writes the moved sheet.
+
+### 27.2 Route and stream tests
+
+- A model fence with `action` produces an action proposal; with problems, it
+  opens in Modify; with both `check` and `action`, `check_and_action`.
+- A player Action: create (400 with problems; 200 with a record), accept with
+  `narrate: false` (one frame, record `resolved`, line projected), accept with
+  `narrate: true` (continuation streams with `action_result.j2` appended).
+- Double accept and a lost-response retry each produce one transaction and one
+  line.
+- A `resolving` record with an open transaction is finished by a retry, not
+  refused with 409.
+- `POST .../action-proposal` is refused while a turn holds the scene
+  (`test_scene_freeze.py`).
+- An Action rename is refused while an action proposal names it; any module edit
+  is refused while a bound campaign has a stalled transaction.
+- **Byte identity**: for each shipped pack and for a fixture pack whose Actions
+  are all unavailable, the composed prompt equals the pre-II-A prompt.
+- The audit drops a delta that would reverse a committed transaction, with its
+  reason, and lists transactions in its prompt.
+
+### 27.3 Frontend tests
+
+The proposal card renders an action payload and edits targets; the palette
+disables an unavailable Action with its reason and its key binding follows the
+disabled state; the History lists transactions, opens one read-only, and shows
+Undo / Settle in the sidebar (CLAUDE.md's list/detail test triple).
+
+### 27.4 Acceptance: II-A is done when
+
+1. A pack may define checked and no-roll Actions, validated at load (5).
+2. Availability, the legal set and proposal checking are one implementation
+   used by every surface (6).
+3. `set`, `add`, `spend`, `restore` work on `resource` and `track` with the
+   bounds of 7.2; costs are preconditions; fan-out is exact.
+4. The play model proposes Actions through the roll fence; players create them
+   from the palette; both resolve through the one adjudication route.
+5. The roll is recorded before any effect; recovery is idempotent and never
+   re-rolls; a foreign change stalls rather than being overwritten.
+6. Undo reverses a transaction or refuses with the field that moved.
+7. Narration receives concrete committed effects; the audit lists transactions
+   and refuses to reverse one.
+8. Packs without Actions, and every existing check proposal, behave exactly as
+   before, prompts included.
+9. The module editor creates, edits, renames and deletes Actions, with guards.
+10. `make check` passes, and the four Codex gates have run.
+
+II-B, II-C and II-D are done when their contract items (25) hold with the same
+style of crash-injection tests over their unit kinds. 13-C3 is done when its
+eval gate passes and its guarantees (25) are tested with a fake Decision client
+returning: a distribution, an answer with no distribution, an abstention, a
+refusal, an illegal option, and an error.
+
+## 28. Non-goals
+
+- A combat engine, initiative or action economy in II-A (II-E is a sketch).
+- Executable module code, or any evaluator other than `store/expressions.py`.
+- Effects on `number`, `dots`, `text` or `ref` fields; `ref_add`/`ref_remove`.
+- Cross-sheet expressions beyond actor-scope `values`.
+- Off-scene targets, area targeting, multi-target contests, reactions,
+  triggered or nested Actions, durations in rounds, refundable costs,
+  alternative costs, reroll currencies, damage-type taxonomies.
+- Making every narrated deed an Action; the audit remains the exception path.
+- Automatic NPC Action resolution (`auto`), and NPC actions outside a character
+  round (factions, downtime).
+- Writing formal mechanics into the scene tracker, or the tracker into
+  mechanics.
+- Reversing transactions on cut, retcon or branch.
+- A journal entry per transaction.
+- A Todo chore for gameplay state ("low hit points"); the only chore is a
+  stalled transaction, which is app maintenance (MII 30, kept).
+
+## 29. Open questions
+
+1. **Ship Actions in the built-in packs?** Adding `actions.json` to the shipped
+   packs changes the prompt for every campaign bound to them and moves the
+   frozen campaign's snapshot. **Recommendation:** not in II-A; a separate
+   reviewed change after II-A has been played with a fixture pack, regenerating
+   the snapshot deliberately.
+2. **`add` clamps by default.** MII preferred reject. **Recommendation:** clamp,
+   recorded, for outcome effects (7.2), because a post-roll rejection erases the
+   whole outcome; `bounds: "reject"` remains available. Revisit if authors
+   report surprise.
+3. **Effects on `number`/`dots`.** Some systems drain attributes.
+   **Recommendation:** no; II-B conditions express a temporary drain as a
+   modifier, and a permanent one is advancement or a hand edit.
+4. **Using an unsampled answer for an NPC.** 01c-C4 forbids turning a missing
+   distribution into a *sampled* answer; this spec uses the model's plain answer,
+   recorded with `sampled: false`. **Recommendation:** keep, and ask the 01c
+   author to confirm the reading in 01c-C4's wording. If the answer is no, the
+   NPC seam requires a distribution and otherwise proceeds as prose.
+5. **Should a cut that removes an Action's line offer to undo it?**
+   **Recommendation:** not automatically; the cut dialog warns and links the
+   History (16). Automatic reversal would make a transcript edit a mechanics
+   edit.
+6. **Undo appends no transcript line.** **Recommendation:** keep; the History
+   and the audit carry it. A "note it in the scene" option can come later.
+7. **Audit of a branched sibling.** Transactions are keyed by scene identity,
+   and a sibling's pre-branch lines were played in its source.
+   **Recommendation:** the sibling's audit reads its own transactions plus its
+   `branch_of` source's transactions up to the branch point, so pre-branch
+   effects read as explained.
+8. **An `auto` NPC mode.** **Recommendation:** not until the 13-C3 eval gate has
+   real results; then as a per-campaign opt-in with the same proposal record and
+   an "auto-accepted" mark.
+9. **Speaker eligibility from conditions.** 02's draft mentioned an
+   incapacitated NPC being ineligible to speak. **Recommendation:** leave it to a
+   02 revision after II-B lands; II-B can expose a `blocks_turn` flag on a
+   condition without committing 02 to read it. This is a possible future edge,
+   not a contract here.
+10. **Per-transaction files vs one file.** **Recommendation:** per-file with
+    `open/`/`done/` (10.1). If History listing over `done/` grows slow, 03-C1's
+    cache can key a projection over the directory; nothing here depends on it.
