@@ -36,6 +36,13 @@ Each attempt's dict carries an account block (`ACCOUNT_KEY`): what the ledger
 files about the attempt that the wire does not say -- its `billing`, its
 `operation` and the `role` whose slot supplied it (`_account`).
 
+Beside each dict, an attempt carries the same values typed (`Attempt.target`,
+a `wire.Target`, slice I): built by `_target` from the lowered dict, and
+stamped with the dict's account block and structured flag in the one place
+both are written (`_stamp`). `ResolvedInference.chain` carries the fallback's
+target exactly where the dict carries `FALLBACK_KEY`. Nothing sends a target
+yet, so every dict is what it was.
+
 Each attempt also carries what slice B knows of it -- its provider's kind, URL,
 rev, billing and preset, its model's facts, its effective controls
 (`llm_sampling.effective` over the lowered connection), and every capability
@@ -58,7 +65,7 @@ import dataclasses
 from collections.abc import Callable
 from typing import NamedTuple
 
-from ... import llm_sampling
+from ... import llm_sampling, wire
 from .. import (
     campaigns,
     config,
@@ -354,6 +361,68 @@ def _rev(conn: dict) -> str:
     return rev if isinstance(rev, str) else ""
 
 
+def _text(conn: dict, key: str) -> str:
+    value = conn.get(key, "")
+    return value if isinstance(value, str) else ""
+
+
+def _target(conn: dict, attempt_caps: dict, model_facts: dict) -> wire.Target:
+    """`conn`, a lowered connection dict, as the `wire.Target` an adapter
+    sends: the same values, typed. Built beside the dict (slice I), never
+    from anything the dict does not carry, so the two cannot disagree --
+    `test_inference_target.py` holds every field to it.
+
+    `model` is the one sent (`facts.model_of`, `llm.effective_model`'s rule),
+    and so is `requested_model`: what the usage holder files as asked for. The
+    account block and the structured flag are the dict's as it stands; the
+    resolver lays a stamp on both together (`_stamp`). `reads_images` is
+    `post_images.capability`'s rule (`capabilities.post_image_reach`) over the
+    attempt's own `vision` capability, which `attempt_caps` already holds --
+    the dict's `vision` field is the preference that rule reads (its
+    connection's at format 1, `model_facts`' overlay at format 2,
+    `with_facts`), so the store is not read again.
+
+    `model_facts` (`facts.of`'s shape) is what `_attempt` read. Every field
+    the target takes from it is already on `conn` at format 2, and must NOT
+    be at format 1, where the connection's legacy fields stand; so nothing
+    here reads it while the dict exists. It is in the signature for the
+    builder that outlives the dict (`target_for`, which lays the facts on
+    without one)."""
+    sampling: dict = conn.get("sampling") or NO_SAMPLING
+    block = conn.get(ACCOUNT_KEY)
+    account = ({k: v for k, v in block.items() if k in _ACCOUNT_FIELDS}
+               if isinstance(block, dict) else {})
+    params = conn.get("model_params")
+    features = conn.get("model_features")
+    model = facts.model_of(conn)
+    return wire.Target(
+        provider_id=_text(conn, "id"), kind=_text(conn, "kind"), model=model,
+        provider_name=_text(conn, "name"), base_url=_text(conn, "base_url"),
+        api_key=_text(conn, "api_key"), rev=_rev(conn), requested_model=model,
+        sampling=wire.Sampling(preset_id=sampling["preset_id"],
+                               preset_name=sampling["preset_name"],
+                               scope=sampling["scope"], params=dict(sampling["params"])),
+        sampler_support=_text(conn, "sampler_support"),
+        model_params=tuple(params) if isinstance(params, list) else None,
+        model_features=dict(features) if isinstance(features, dict) else None,
+        prefill=conn.get("prefill") is True,
+        post_process=_text(conn, "post_process"),
+        # `post_images.capability`'s own reading of the dict: a kind left
+        # off is OpenRouter's.
+        reads_images=capabilities.post_image_reach(
+            str(conn.get("kind", "openrouter")), _text(conn, "vision"),
+            attempt_caps.get("vision", _UNKNOWN_CAP)),
+        structured=conn.get(STRUCTURED_KEY) is True,
+        account=wire.Account(**account))
+
+
+#: The account block keys a `wire.Account` holds (`llm_usage.ACCOUNT_FIELDS`).
+_ACCOUNT_FIELDS = frozenset(f.name for f in dataclasses.fields(wire.Account))
+
+#: A capability nothing has said anything about.
+_UNKNOWN_CAP = capabilities.Cap(capabilities.UNKNOWN, "unknown")
+
+
 def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
              current: bool, retries: int = 0, catalog: bool = True,
              model_facts: dict | None = None) -> Attempt:
@@ -382,15 +451,15 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
     if current:
         conn = with_facts(conn, model_facts)
     base_url = conn.get("base_url", "")
+    caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
     return Attempt(
         provider_id, model, sampling["preset_id"], conn,
         provider_kind=str(conn.get("kind", "") or ""),
         base_url=(base_url if isinstance(base_url, str) and base_url else preset.base_url),
         rev=rev, billing=providers.billing(conn), provider_preset=preset.id,
-        facts=model_facts,
-        capabilities=capabilities.resolve_caps(preset, model, catalog_row=row,
-                                               facts=model_facts),
-        controls=llm_sampling.effective(conn), retries=retries)
+        facts=model_facts, capabilities=caps,
+        controls=llm_sampling.effective(conn), retries=retries,
+        target=_target(conn, caps, model_facts))
 
 
 #: The capabilities an operation needs of itself, as ALTERNATIVES: an attempt
@@ -701,9 +770,10 @@ def _chain(attempts: list[Attempt], operation: str, needs: tuple[frozenset[str],
     resolution's attempts their `decision_mode`, and attach the fallback the
     facade sends (`_rides`)."""
     # Stamped BEFORE the fallback is attached, so the dict the facade sends
-    # is the stamped one.
-    _account(attempts, operation, choice, selection)
-    _flag_structured(attempts, operation)
+    # is the stamped one. Each lays the same stamp on the attempt's target
+    # (`_stamp`), so the attempts are replaced.
+    attempts = _account(attempts, operation, choice, selection)
+    attempts = _flag_structured(attempts, operation)
     # The "Images: on" bridge applies to a format-1 fallback as it does to the
     # primary (`_bridged`): what the legacy layout sent, it still sends.
     fallback_missing = (_bridged(_missing(attempts[1], needs), attempts[1], current=current)
@@ -797,17 +867,42 @@ def _apart(primary: Attempt, operation: str) -> bool:
     return operation == "decide" and not generates(primary)
 
 
-def _flag_structured(attempts: list[Attempt], operation: str) -> None:
+def _flag_structured(attempts: list[Attempt], operation: str) -> list[Attempt]:
     """Flag each attempt whose `structured_output` is `yes` (spec 7.2), on its
-    own lowered dict -- the resolution's copy, as the fallback attach writes.
-    A decide resolution only: a generate resolution's dicts stay byte-identical
-    to what they were before slice F (plan Minor 4)."""
+    own lowered dict -- the resolution's copy, as the fallback attach writes --
+    and on its target (`_stamp`). A decide resolution only: a generate
+    resolution's dicts stay byte-identical to what they were before slice F
+    (plan Minor 4)."""
     if operation != "decide":
-        return
+        return attempts
+    out = []
     for attempt in attempts:
         found = attempt.capabilities.get("structured_output")
-        if found is not None and found.value == capabilities.YES:
-            attempt.conn[STRUCTURED_KEY] = True
+        structured = found is not None and found.value == capabilities.YES
+        out.append(_stamp(attempt, structured=True) if structured else attempt)
+    return out
+
+
+def _stamp(attempt: Attempt, *, account: dict | None = None,
+           structured: bool = False) -> Attempt:
+    """`attempt` with `account` laid over its account block and, when
+    `structured`, flagged for its provider's structured mode -- on its dict and
+    its target together, the one place either is written (until the dict
+    goes).
+
+    The dict is written in place: it is the resolution's own copy
+    (`_lowered`), and the fallback attach reads the very dict the attempt
+    carries. Its account block is REPLACED, never `update()`d: `{**conn}`
+    copies share it, and an in-place write would reach every one of them. The
+    target is frozen, so the attempt is replaced around a new one."""
+    target = attempt.target
+    if account:
+        attempt.conn[ACCOUNT_KEY] = {**attempt.conn.get(ACCOUNT_KEY, {}), **account}
+        target = target.with_account(**account)
+    if structured:
+        attempt.conn[STRUCTURED_KEY] = True
+        target = dataclasses.replace(target, structured=True)
+    return dataclasses.replace(attempt, target=target)
 
 
 def embed_endpoint(conn: dict, current: bool) -> str:
@@ -961,12 +1056,10 @@ def embedding(cfg: dict | None = None, *,
     # operation, and the role whose slot supplied the selection -- always the
     # Embedding role's, since nothing overrides it per call (spec 9.3).
     # Replaced, never updated in place: the block is shared by `{**conn}` copies.
-    conn = got.attempt.conn
-    conn[ACCOUNT_KEY] = {**conn.get(ACCOUNT_KEY, {}), "operation": "embed",
-                         "role": "embedding"}
+    attempt = _stamp(got.attempt, account={"operation": "embed", "role": "embedding"})
     return ResolvedInference(
         task="", operation="embed", route="", legacy_route="",
-        role="embedding", via="role", scope=scope, attempts=(got.attempt,),
+        role="embedding", via="role", scope=scope, attempts=(attempt,),
         standing=selection, current=current, missing=got.missing, space_id=got.space_id)
 
 
@@ -986,20 +1079,19 @@ def _role_supplied(standing: Selection | None, selection: Selection | None,
 
 
 def _account(attempts: list[Attempt], operation: str, choice: cascade.Choice,
-             selection: Selection | None) -> None:
+             selection: Selection | None) -> list[Attempt]:
     """Stamp each attempt's account block (spec 9.3): the `operation`, and the
-    `role` whose slot supplied the resolution, on both attempts (ruling 9).
+    `role` whose slot supplied the resolution, on both attempts (ruling 9) --
+    on the dict and the target together (`_stamp`, which replaces the block).
 
     No role for a pin (`choice.role` is empty), nor when a per-call override
     chose the provider or the model -- the user supplied that selection, not a
-    role. The block is REPLACED, never `update()`d: `{**conn}` copies share it,
-    and an in-place write would reach every one of them."""
+    role."""
     stamp = {"operation": operation}
     kind = str(attempts[0].conn.get("kind", "") or "") if attempts else ""
     if choice.role and _role_supplied(choice.selection, selection, kind):
         stamp["role"] = choice.role
-    for attempt in attempts:
-        attempt.conn[ACCOUNT_KEY] = {**attempt.conn.get(ACCOUNT_KEY, {}), **stamp}
+    return [_stamp(attempt, account=stamp) for attempt in attempts]
 
 
 def _same_model(primary: dict, fallback: dict, model: str) -> bool:

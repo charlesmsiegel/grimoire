@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from .. import llm_connections
+from .. import image_drafts, llm_connections
 from . import facts, providers
 
 YES, NO, UNKNOWN = "yes", "no", "unknown"
@@ -246,6 +246,25 @@ def caps_for(conn: dict | None, model: str | None = None) -> dict[str, Cap]:
     return resolve_caps(preset, model,
                         catalog_row=llm_connections.cached_row(conn_id, model),
                         facts=_facts(conn_id, model, rev))
+
+
+def post_image_reach(kind: str, vision_fact: str, vision_cap: Cap) -> str:
+    """"yes", "no" or "unknown": whether post images may be sent to a model
+    (#377) -- `post_images.capability`'s rule, over values already in hand.
+
+    A `kind` whose client cannot carry an image part
+    (`image_drafts.SUPPORTED_KINDS`) is "no", whatever is said of it. Else the
+    post-image preference `vision_fact` wins ("on" / "off": the connection's
+    field at format 1, the model's facts at format 2), which is a setting
+    rather than a statement about the model, so this resolver's `vision` never
+    reads it. Else `vision_cap`, the model's `vision` capability, answers."""
+    if kind not in image_drafts.SUPPORTED_KINDS:
+        return NO
+    if vision_fact == "on":
+        return YES
+    if vision_fact == "off":
+        return NO
+    return vision_cap.value
 
 
 def _needed(need: str) -> tuple[str, ...]:

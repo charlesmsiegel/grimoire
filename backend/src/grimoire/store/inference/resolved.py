@@ -21,14 +21,31 @@ sent.
 Slice F adds what a decide resolution needs: each attempt's `decision_mode`
 (which backend would answer it). Slice H serves a primary that cannot
 generate natively, so `conn` is always the primary's.
+
+Slice I builds each attempt's `wire.Target` beside its dict (`target`), from
+the same lowered values, and a resolution's `chain`: the primary's target,
+with the fallback's exactly where the primary's dict carries it under
+`FALLBACK_KEY`. Nothing sends them yet; the dict stays what the facade reads.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ... import wire
 from .capabilities import Cap
 from .cascade import Selection
+
+#: Where the primary's connection dict carries the fallback the facade sends:
+#: `resolve.FALLBACK_KEY`, restated because `resolve` imports this module; a
+#: test holds the two equal. What `ResolvedInference.chain` reads to decide
+#: whether the fallback rides, so the chain and the dict cannot disagree.
+FALLBACK_KEY = "_fallback"
+
+#: The target of an attempt built by hand, as tests build them -- its twin is
+#: the empty `controls`. Every attempt the resolver builds carries its own
+#: (`resolve._target`).
+UNBUILT = wire.Target(provider_id="", kind="", model="")
 
 
 @dataclass(frozen=True)
@@ -76,6 +93,10 @@ class Attempt:
     #: "" on a generate resolution. The capability answer only -- the backend
     #: stamps the mode a call actually used on a copy of its account block.
     decision_mode: str = ""
+    #: The attempt as an adapter sends it (`resolve._target`): built from the
+    #: same lowered values as `conn`, with the same account block and
+    #: structured flag. `UNBUILT` only on an attempt built by hand.
+    target: wire.Target = UNBUILT
 
 
 @dataclass(frozen=True)
@@ -150,6 +171,19 @@ class ResolvedInference:
         it (spec 5.3) -- or what `inference.stages` sends as a stage of its own
         where either attempt is native."""
         return self.attempts[1].conn if len(self.attempts) > 1 else None
+
+    @property
+    def chain(self) -> wire.Chain | None:
+        """What the facade is sent, typed: the primary attempt's target, and
+        the fallback attempt's exactly where the primary's dict carries it
+        (`FALLBACK_KEY`) -- so a fallback known incapable, or one a decide
+        resolution sends as a stage of its own, is not on it. None when
+        nothing resolved."""
+        if not self.attempts:
+            return None
+        primary = self.attempts[0]
+        rides = len(self.attempts) > 1 and FALLBACK_KEY in primary.conn
+        return wire.Chain(primary.target, self.attempts[1].target if rides else None)
 
     @property
     def decision_mode(self) -> str | None:

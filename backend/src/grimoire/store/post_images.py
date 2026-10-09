@@ -76,18 +76,28 @@ YES, NO, UNKNOWN, OFF, NONE = "yes", "no", "unknown", "off", "none"
 #: use rather than measured.
 MAX_LIMIT = 20
 
+#: The `vision` capability before anything has been read (`capability`).
+_UNASKED = capabilities.Cap(UNKNOWN, "unknown")
+
 
 def capability(conn: dict | None) -> str:
     """"yes", "no" or "unknown" -- whether `conn`'s model reads images. Never
-    raises: a catalog or facts file that cannot be read says nothing."""
-    if conn is None or conn.get("kind", "openrouter") not in image_drafts.SUPPORTED_KINDS:
+    raises: a catalog or facts file that cannot be read says nothing.
+
+    The rule is `capabilities.post_image_reach`, which a resolved attempt's
+    target asks too (`Target.reads_images`); the store is read only when the
+    preference leaves the answer to the capability."""
+    if conn is None:
         return NO
-    override = conn.get("vision", "")
-    if override == "on":
-        return YES
-    if override == "off":
-        return NO
-    return capabilities.caps_for(conn)["vision"].value
+    kind = conn.get("kind", "openrouter")
+    vision = conn.get("vision", "")
+    # Asked first with the capability unknown: a "yes" or "no" then is the
+    # kind's or the preference's, which no capability can change, so the
+    # catalog and facts are read only when the answer is theirs to give.
+    decided = capabilities.post_image_reach(kind, vision, _UNASKED)
+    if decided != UNKNOWN:
+        return decided
+    return capabilities.post_image_reach(kind, vision, capabilities.caps_for(conn)["vision"])
 
 
 def limit() -> int:
