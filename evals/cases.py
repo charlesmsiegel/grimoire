@@ -132,8 +132,10 @@ class Case:
     task: str = "chat"
     #: Set on a decide case (`decide-*`): the JSON Schema `decide` would send
     #: for this fixture (`decisions.schema`). A live run then resolves `task`
-    #: as a decide operation and asks for the reply with `schema=`, so it
-    #: measures what production sends (I9). Replay never calls it.
+    #: as a decide operation and answers the case's `items` down that
+    #: resolution's decide chain (`runner.live`), so it measures what
+    #: production sends (I9); a structured stage sends this schema. Replay
+    #: never calls it.
     schema: Callable[[dict], dict] | None = None
 
     @property

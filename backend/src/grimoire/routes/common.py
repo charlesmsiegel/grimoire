@@ -1293,7 +1293,8 @@ def require_inference(task: str = "", cid: str = "", *,
         task, cid, operation=operation))
 
 
-def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInference, bool]:
+def override_inference(body, task: str = "", cid: str = "", *,
+                       operation: str = "generate") -> tuple[UsableInference, bool]:
     """Where ONE call runs, and whether that is somewhere it would not have gone
     anyway (#77).
 
@@ -1378,6 +1379,10 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     one first would refuse the request that fixes the session. A `model`-only
     override does still require it — that is the connection it is overriding.
 
+    `operation` is `require_inference`'s: a reroll generates, and an eval
+    that forces a decide case onto another model (`evals/run.py --live
+    --provider/--model`) resolves it as the decide operation its route is.
+
     What this does NOT change is the fallback (#144). An override picks which
     connection is *primary*; the fallback is the route's policy about what
     happens when a primary is exhausted, and silently suspending it for one
@@ -1407,7 +1412,7 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     override = (inference_cascade.Selection(conn_id, model, preset)
                 if conn_id or model or preset else None)
     resolved = inference.resolve(  # routing-ok: this IS the seam, for a per-call override
-        task, cid, override=override)
+        task, cid, operation=operation, override=override)
     conn = resolved.conn
     if preset and conn is not None \
             and resolved.attempts[0].conn["sampling"]["scope"] != "override":
