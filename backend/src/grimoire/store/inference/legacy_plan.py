@@ -226,7 +226,7 @@ class _Reader:
         recorded = self._fields(conn_id)
         if not recorded:
             if self.strict and llm_connections.stripped(conn_id):
-                raise retired.EntryMissingError(conn_id)
+                raise retired.EntryMissingError(conn_id, str(raw.get("name") or ""))
             return raw
         out = dict(raw)
         for field, value in recorded.items():
@@ -917,20 +917,27 @@ class Overlay(NamedTuple):
         """Connection `conn_id` as the planner plans a slot that names it --
         what a format-1 reroll naming the provider runs on (spec 5.6): its own
         model (or `model`, when the reroll names one) and its own preset, then
-        the planner's derivation of that slot (`_derived_for`), so a GLM
-        connection's legacy reasoning effort rides a derived preset exactly as
-        it does on a stored slot, and the reroll sends what the legacy wire
-        sent. A derived preset no stored slot planned is added to `presets`
-        here, so the resolution that asked can read it. Read through this
+        `derived`, so a GLM connection's legacy reasoning effort rides a
+        derived preset exactly as it does on a stored slot. Read through this
         overlay's lookup, so the record fallback for a stripped connection
         applies as it does to the mapping. Empty model and preset for an
         unknown id or one that sets none."""
-        conn = self.lookup or _no_connection
-        sel = _selection(conn_id, conn)
-        chosen = cascade.Selection(sel["provider"], model or sel["model"], sel["preset"])
+        sel = _selection(conn_id, self.lookup or _no_connection)
+        return self.derived(
+            cascade.Selection(sel["provider"], model or sel["model"], sel["preset"]))
+
+    def derived(self, chosen: cascade.Selection) -> cascade.Selection:
+        """`chosen` with the planner's derivation of that slot applied
+        (`_derived_for`), judged on the model it sends: a format-1 reroll --
+        naming a provider, or a model alone on the standing provider -- sends
+        a GLM connection's legacy effort wherever the legacy wire did. A
+        preset that already sets an effort (a derived one included) is left
+        as it is. A derived preset no stored slot planned is added to
+        `presets`, so the resolution that asked can read it."""
         if self.read_preset is None or not isinstance(self.presets, dict):
             return chosen
-        made = _derived_for(chosen, conn, self.read_preset, self.read_preset)
+        made = _derived_for(chosen, self.lookup or _no_connection, self.read_preset,
+                            self.read_preset)
         if made is None:
             return chosen
         got = _virtual(made)

@@ -610,7 +610,8 @@ def own_target(raw: dict) -> wire.Target:
 # ---- the resolver ----
 def _overridden(standing: Selection | None, override: Selection | None,
                 lookup: llm_connections.Lookup, *,
-                own: Callable[[str, str], Selection] | None = None) -> Selection | None:
+                own: Callable[[str, str], Selection] | None = None,
+                derive: Callable[[Selection], Selection] | None = None) -> Selection | None:
     """The selection one call runs on, given a per-call override (#77).
 
     A model alone drives the STANDING provider at that model, so with no
@@ -629,7 +630,9 @@ def _overridden(standing: Selection | None, override: Selection | None,
       model together take the named connection's own preset too, as a
       format-1 store always has. That preset is the planner's for such a
       slot, so a GLM connection's legacy reasoning effort rides its derived
-      preset and is sent, as the legacy wire sent it.
+      preset and is sent, as the legacy wire sent it. A model alone keeps the
+      standing slot, judged again on the model it now sends (`derive`,
+      `Overlay.derived`), for the same reason.
 
     The override's preset is never merged into the selection: it outranks the
     route's preset, which no selection's own can, so `resolve` applies it on
@@ -651,7 +654,13 @@ def _overridden(standing: Selection | None, override: Selection | None,
         return None
     else:
         base = standing
-    return Selection(base.provider, override.model or base.model, base.preset)
+    chosen = Selection(base.provider, override.model or base.model, base.preset)
+    # Format 1, a model alone: the standing slot judged again on the model the
+    # reroll sends, as the legacy wire read a GLM effort off the connection
+    # whenever the SENT model was GLM (`Overlay.derived`).
+    if derive is not None and not override.provider and override.model:
+        return derive(chosen)
+    return chosen
 
 
 class Silence(NamedTuple):
@@ -785,7 +794,8 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     attempts: list[Attempt] = []
     fallback_problem: str | None = None
     selection = _overridden(choice.selection, override, lookup,
-                            own=seen.selection if seen.legacy else None)
+                            own=seen.selection if seen.legacy else None,
+                            derive=seen.derived if seen.legacy else None)
     raw = lookup(selection.provider) if selection is not None else None
     standing_preset: str | None = None
     if selection is not None and raw is not None:

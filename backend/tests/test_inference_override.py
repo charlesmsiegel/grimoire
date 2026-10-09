@@ -327,6 +327,57 @@ def test_a_format_1_reroll_naming_a_glm_provider_sends_its_effort(at, active, bo
         assert standing["wire"]["openai_compatible"][0][2] == _GLM_WIRE
 
 
+def _tobin_format_1(*, active: bool) -> None:
+    """`_glm_format_1`'s store plus "tobin": an `openai_compatible` connection
+    whose own model is NOT GLM, carrying a legacy effort and the Warm preset."""
+    _glm_format_1(active=False)
+    store.llm_connections.create_connection(
+        "openai_compatible", "tobin", base_url="http://localhost:11434/v1",
+        api_key="sk-test-tobin", model="tobin-model", reasoning_effort="high",
+        sampler_preset="warm")
+    if active:
+        store.write_config(active_connection_id="tobin")
+
+
+def _sent(body, cid: str) -> tuple[str, dict]:
+    from .test_adapter_wire_golden import _drive
+
+    resolved, _ = _run(body, cid)
+    call = _drive("ok", resolved.chain, frozenset())["wire"]["openai_compatible"][0]
+    return call[1][1], call[2]
+
+
+#: What main sends with no effort: the Warm preset alone.
+_PLAIN_WIRE = {"sampling": {"temperature": 0.9}, "strict": False}
+
+
+def test_a_format_1_model_only_reroll_is_judged_on_the_model_it_sends(at):
+    """Brutal re-review 🟢E: on a standing `openai_compatible` connection that
+    is not GLM but carries a legacy effort, a model-only reroll to a GLM model
+    sends the effort, and one to another model does not -- main's wire, as
+    recorded there for each (and the provider-spelled reroll agrees)."""
+    ctx = at()
+    _tobin_format_1(active=True)
+    assert _sent({}, ctx["cid"]) == ("tobin-model", _PLAIN_WIRE)
+    assert _sent({"model": "glm-5.3"}, ctx["cid"]) == ("glm-5.3", _GLM_WIRE)
+    assert _sent({"provider": "tobin", "model": "glm-5.3"}, ctx["cid"]) == ("glm-5.3", _GLM_WIRE)
+    assert _sent({"model": "other-model"}, ctx["cid"]) == ("other-model", _PLAIN_WIRE)
+
+
+def test_a_format_1_reroll_naming_a_provider_is_judged_on_the_named_model(at):
+    """Brutal re-review 🟢F: a provider and a model are judged on the NAMED
+    model, not the connection's own -- from OpenRouter, "tobin" (own model not
+    GLM) at a GLM model sends the effort, and "glm" at a model that is not GLM
+    runs its own preset, underived, and sends none. Main's wire for both."""
+    ctx = at()
+    _tobin_format_1(active=False)
+    assert _sent({"provider": "tobin", "model": "glm-5.3"}, ctx["cid"]) == ("glm-5.3", _GLM_WIRE)
+    assert _sent({"provider": "glm", "model": "vendor/x"}, ctx["cid"]) == ("vendor/x",
+                                                                           _PLAIN_WIRE)
+    resolved, _ = _run({"provider": "glm", "model": "vendor/x"}, ctx["cid"])
+    assert resolved.chain.primary.sampling.preset_id == "warm"
+
+
 def test_a_format_1_reroll_override_preset_still_drops_the_effort(at):
     """Ratification item 4, unchanged: a reroll whose OWN preset sets no
     reasoning effort sends none, on a GLM provider too."""
