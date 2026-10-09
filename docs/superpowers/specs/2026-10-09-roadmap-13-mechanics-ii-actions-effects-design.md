@@ -570,6 +570,7 @@ a target source that is not the scene, which is a different question (28).
 class LegalOption:
     action: str
     targets: tuple[str, ...]          # in selection order
+    multi: bool = False               # targets.max > 1: targets chosen by multi-select (24.3)
 
 @dataclass(frozen=True)
 class LegalSet:
@@ -879,8 +880,10 @@ object narration and the UI read:
 ```
 
 - The check fields sit at the top level, where a check resolution has them, so
-  `checks.roll_label`, `format_check_roll` and `dice_segment` keep working on
-  an action resolution's roll part.
+  `checks.dice_segment` and the existing roll-template expressions read an
+  action resolution's roll part unchanged. The roll-log label is
+  `mechanics.lines.roll_label(res)`, `"{actor_label} — {action_label}"`, not
+  `checks.roll_label` (which needs a `check_label` a no-roll Action lacks).
 - A no-roll Action has `check`, `notation`, `result`, `tier`, `difficulty` and
   `modifier` all `null`, and `branch: "resolved"`.
 - `status` is the transaction's (10.3); a `rejected` resolution has empty
@@ -990,7 +993,8 @@ route (`_roll_proposal_run`), for a pending action proposal being accepted:
 5. **Apply** each unit through the sheet unit writer (11.2), appending its
    index to `landed` (a rewrite of the open file) after each one lands. A
    rejected transaction skips this step.
-6. **Commit**: rewrite the open file with status `committed`, `committed` set.
+6. **Commit** (a `prepared` record only): rewrite the open file with status
+   `committed` and the `committed` timestamp set.
 7. **Hand off**: `proposals.transition(resolving -> resolved, resolution)`.
 8. **Close**: write `done/<id>.json` (the committed or rejected record), then
    unlink `open/<id>.json`.
@@ -1051,9 +1055,10 @@ For each open record, under the campaign lock:
 | `prepared` | Apply each unit not in `landed` through `apply_unit_locked` (which also absorbs a unit that landed after the last `landed` write: it answers `"already"`). All land -> step 6 onward. A `SheetConflict` -> `stalled` (11.5) |
 | `committed` or `rejected` | Steps 7-9: if the proposal still carries this id and is `resolving`, transition it with the stored resolution; if it is `resolved` or `superseded` with this resolution, nothing; then close and project |
 | `stalled` | Nothing until settled (11.5) |
+| Present in both `open/` and `done/` | A crash inside step 8: check the hand-off as above, then unlink the open copy |
 
 **Recovery never calls `resolve_check`.** The roll, tier and units come from
-the record. `test_*` asserts it with a dice fake that fails if called.
+the record. A store test asserts it with a resolver fake that fails if called.
 
 Where recovery runs:
 
@@ -1302,8 +1307,8 @@ then: no delta; a delta (as today); a warning; a warning. The output schema
   nothing in a transaction names the campaign.
 - **Scene renames**: `mechanics.txn` joins `scene_refs.repoint` (its
   `repoint_scenes` rewrites `scene` in every record whose `scene` is mapped;
-  `scene_identity` is the stable key and never moves). The docstring count in
-  `scene_refs.py` moves from twenty-two to twenty-three.
+  `scene_identity` is the stable key and never moves), and the module
+  docstring's count of stores grows by one.
 - **Reclassify**: `mechanics.txn` joins `record_refs.repoint` (actor, targets,
   ops and units carry `<kind>:<id>`), so a recovery or an undo resolves to the
   file the sheet moved to.
@@ -1418,8 +1423,9 @@ the touched entries read `before`, `after`, or something else.
 ### 20.3 Ops
 
 `condition_add {target, condition, stacks = 1}` and `condition_remove {target,
-condition, stacks = "all" | expr}`, legal in outcome branches (and in costs,
-for "become winded to do this"). Removing an absent condition is a recorded
+condition, stacks = "all" | expr}`, legal in outcome branches, and in costs
+on the `actor` selector ("become winded to do this"), which widens 7.4's cost
+list by this one op. Removing an absent condition is a recorded
 no-op; it never rejects, since "clear the condition if present" is the common
 intent.
 
@@ -1567,8 +1573,10 @@ only when the campaign's `npc_actions` setting is `propose` (default `off`; a
 campaign frontmatter key, so II-A ships without it reachable). If the legal set
 is empty the step is skipped silently.
 
-When an Action is selected, the round pauses on its proposal through the
-existing pause path, with no partial contribution written; acceptance resumes
+When an Action is selected, the round pauses on its proposal through a
+pre-generation variant of the existing pause (`_pause`,
+`character_turns.py:844`), which today pauses only on a fence inside a
+contribution; here no partial contribution is written; acceptance resumes
 the round through `resume_roll` with `action_result.j2` as the appended block
 (1.5), so the contribution narrates an Action that already happened. A decline
 resumes with the declined block, and the NPC writes its turn without the
