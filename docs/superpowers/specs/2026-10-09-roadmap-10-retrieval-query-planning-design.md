@@ -176,11 +176,16 @@ So `routing` gains a sentinel, `NO_LEGACY = None`, for "born at format 2":
   `PRESET_CONFIG_KEYS` and the campaign allow-list (`routes_for`,
   `store/campaigns/lifecycle.py:536`) are unchanged and their frozen tests
   stay green as written.
-- `legacy_key(route)` returns `None` for it, and every `routing.ROUTES` loop in
-  `store/inference/legacy_plan.py` (lines 287, 371, 593, 713, 755) and
-  `store/inference/retire.py` skips a route with no legacy key. On a format-1
-  store such a route resolves to its `default_role` through the overlay,
-  exactly as an unpinned format-2 route does.
+- `legacy_key(route)` returns `""` for it (today it returns `route.legacy or
+  route.key`, which would hand back the route's own key and read a
+  `route_history_plan` nobody ever wrote). The two readers of `legacy_key`,
+  the format-1 pins-and-presets mapping (`store/inference/legacy_plan.py:287`-`300`)
+  and `legacy_route` (`legacy_plan.py:949`-`953`), skip such a route and answer
+  `""` respectively. The other `routing.ROUTES` loops in `legacy_plan.py` read
+  format-2 keys only and need nothing, and `store/inference/retire.py` reads
+  only `CONFIG_KEYS` (`retire.py:98`), which never contains it. On a format-1
+  store such a route therefore resolves to its `default_role` through the
+  overlay, exactly as an unpinned format-2 route does.
 - The Models page lists it from `routing.ROUTES` like every route
   (`store/inference/settings.py:305`), so 01s's settings work needs nothing
   route-specific.
@@ -672,7 +677,7 @@ cases do not trigger under the free gate.
 1. **`NO_LEGACY` versus amending the frozen legacy tests.** The sentinel keeps
    `LEGACY_ROUTES` and its tests exactly as they are and makes the new routes
    resolve to their default role on a format-1 store. *Recommendation:* the
-   sentinel; it is one constant and five loop guards, and it is reusable by
+   sentinel; it is one constant and two reader guards, and it is reusable by
    every route the roadmap adds later (02-C5's, 11's).
 2. **One decide route for rerank and sufficiency, and who lands it.** 02-C5
    promises retrieval-relevance routes for 09 and 11. *Recommendation:* one
