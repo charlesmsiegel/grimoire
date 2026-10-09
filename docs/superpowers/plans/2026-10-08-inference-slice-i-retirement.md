@@ -4,6 +4,19 @@
 
 **Revision 3.** Revision 2 answered the round-1 adversarial plan review (`.superpowers/sdd/plan-reviews/slice-i-plan-review.md`, verdict "No"). This revision answers its re-review (`slice-i-plan-rereview.md`, verdict "NEEDS FIXES": N1–N20). Every finding is answered under "Rulings", in this order: the controller's rulings on each round, then the review's other findings, then the plan's own rulings as amended.
 
+**Rebase onto C–H (2026-10-09).** Task 1 rebuilt this branch on `main` at `16fb57d`, where C–H are squash-landed, and re-checked A1–A13 there (no FAIL; `task-1-report.md`). This pass makes the plan match the code as landed. No ruling's substance changed, and none became impossible as written, so no "**Controller to rule:**" note was needed. The larger in-place changes are marked "2026-10-09" or "on `main`". What changed:
+- **Base** (header, A9, Task 1 Step 1): `main` at `16fb57d`, with C `1177012`, D `e4566c1`, E `4712a27`, F `75478e0`, G `5af18f9` and H `16fb57d`. A12 and A13 now name `1177012`, and A12's grep reads `llm_connections._read`.
+- **A12's consequence.** C's migration lookup already *raises* `ConnectionUnreadableError` for a zero-byte, unfenced or `kind`-less file. So Task 4's `test_the_migrate_lookup_is_cs` expects that error, not `None`.
+- **A10 is RENAMED.** H's stages strip the fallback with the public `inference.without_fallback`, which `evals/runner.chain` also calls. Task 10's guard bans it by that name, and Task 1 Step 3's grep finds it.
+- **Task 6a builds on C's strict record read.** It moves `migrate.RecordUnreadableError` and `migrate._record` into `store/frontmatter.py`, rather than adding a parallel `UnreadableError`/`read_strict` (guarantee 6, CR3, ruling 6, ruling 16, Tasks 6a and 6b).
+- **One lock.** `llm_connections.LOCK` *is* `locks.config_lock()`. It is one reentrant, cross-process lock, and it raises `StoreBusy` (409) after `LOCK_TIMEOUT` (30 s). `config.retire_write` holds `config.format_hold()` (ruling 6(a), N4, N19, Tasks 6a and 6b).
+- **Births go through C's `lifecycle.publish_birth`** (R2-1, N3, ruling 15, Task 6a). A fork goes through it too, so a fork of an unmarked source is translated and marked, not copied (ruling 15).
+- **Task 5** names a home for `translate.Lookup`, `translate.is_current` and `translate.embedding_role`. **Task 6a** rewrites `migrate.py`'s stale "slice I, ruling 3" docstring line.
+- **A2 and Task 8** name F's voice-drift `_noting` as a third `.conn` reader.
+- **Task 9a** absorbs H's `llm.NATIVE_DECISION_KINDS` table. **Task 9c** re-expresses four more H dependencies on `FALLBACK_KEY` and the conn id. **Tasks 9b/9c** pin the native ledger row (`decision_mode="native"`, `usage_rollup.VERSION` 6).
+- **Task 10's guard** bans `without_fallback` and `NATIVE_DECISION_KINDS`, and follows tuple-unpacked `override_inference` bindings.
+- **Ratification items 5, 6 and 7** have their factual references corrected. Their substance is unchanged.
+
 **Goal:** Retire the legacy settings layout and the connection-dict lowering, with no change a user can see except those listed under "Needs user ratification before Task 2". The legacy GLM reasoning effort becomes derived presets. The legacy keys and connection fields are deleted from format-2 stores. The translation layer is deleted as a second runtime read path. Every generation goes through `inference.generate` and an adapter registry that takes typed targets instead of connection dicts, and `FALLBACK_KEY` and `STRUCTURED_KEY` are deleted with the lowering.
 
 **Architecture:**
@@ -30,7 +43,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-07-inference-backend-refactor-design.md`. Slice I is §14 row I ("User-visible: No"). It draws on §11 (all of it), §5.4, §5.6, §7.1–§7.2, §8, §9.3, §10, §12, §13, §14.1, §15 "Migration" and §17. Task 2 folds this plan's rulings, as the user ratified them, into the spec.
 
-**Base:** `claude/inference-slice-i` at `b2c85c6`. That is an F-era commit, not F's head: F's head is `e6c4d12`. D (`877e964`), E (`eb415d4`), F, G and H are separate branches off `main`, and none of them is an ancestor of `b2c85c6`. **Every A9 name lives only on those branches until they are integrated** (M1). Task 1 checks the assumptions only after rebasing onto the integration branch the controller names, never against the un-integrated base. Slice I lands last, after D, E, F, G and H.
+**Base:** `main` at `16fb57d` (Task 1, 2026-10-09). C–H are squash-landed there: C `1177012` (#485), D `e4566c1` (#486), E `4712a27` (#487), F `75478e0` (#488), G `5af18f9` (#489) and H `16fb57d` (#490). This branch is `main` plus this plan's own commits, and every A9 name is on `main` (M1). *(Revision 4 planned against `b2c85c6`, an F-era commit that had none of the D–H branch heads as an ancestor. Task 1 left that base behind; `backup/slice-i-pre-main` keeps it.)* Slice I lands last, after C–H.
 
 ---
 
@@ -61,11 +74,12 @@ Row I says "User-visible: No". Each item below is a user-visible change, or a de
    - **No alternative:** this is a consequence of §11.4's "the legacy GLM `reasoning_effort` stops being read".
 5. **Older builds on a synced library after retirement** (review I6 item 5; §11.3).
    - A pre-C build sees no model settings: its connections have no `model`, so it sends requests with an empty model.
-   - A C–H build keeps playing, and loses only what item 1 names. It writes `active_connection_id` back on each start. This build ignores it and removes it again on its next start (re-review N5).
+   - A C–H build keeps playing, and loses only what item 1 names. It can write `active_connection_id` back: its `llm_connections.ensure_migrated` seeds it wherever `llm_connections/.migrated` is absent, so at most once per library. This build ignores it and removes it again on its next start (re-review N5).
+   - *Corrected 2026-10-09:* this item used to say "on each start". On `main`, as at the old base, the seed is gated by `.migrated`. What a user sees is unchanged.
    - **No alternative:** this is a consequence of §11.4's deletion itself.
-6. **A second never-pruned archive, `pre-retirement-grimoire-<stamp>.zip`** (CR4; review I5, Q2; re-review N12). It is listed in Backups beside `pre-inference-grimoire-` and is never deleted by retention. It is a full-library archive, like `pre-inference-`. A fresh install never takes one, because it is born retired (re-review N3).
+6. **A second never-pruned archive, `pre-retirement-grimoire-<stamp>.zip`** (CR4; review I5, Q2; re-review N12). It is listed in Backups beside C's `pre-inference-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`, `_SAFETY_NAME_RE`), and retention never deletes it: `backups.sweep` counts and prunes only the ordinary `grimoire-` series. It is a full-library archive, like `pre-inference-`. Like that archive, it is in `list_backups()`, so `backups.due()` counts it as a restore point. A fresh install never takes one, because it is born retired (re-review N3).
    - **Fallback (Task 6a Step 4, "Declined" branch):** a settings-only archive, `pre-retirement-settings-grimoire-<stamp>.zip`, under the same never-prune rule. It is not a whole-store restore point and does not count toward the backup schedule (R2-7). It holds `config.md`, each `campaign.md`, `llm_connections/*.md`, `sampler_presets/` and `inference-retired.json`. That may suit Android storage.
-7. **A durable "not carried over" notice on the `/models` page** (CR5 fallback; review I6). It is stored in the library (`inference-retired.json`), so every device shows it until the user dismisses it. It lists what items 1 (if declined) and 3 lost, and any model fact the C migration did not carry (re-review N9), worded as permanent.
+7. **A durable "not carried over" notice on the `/models` page** (CR5 fallback; review I6). It is stored in the library, in `<home>/inference-retired.json` at the store root, so every device shows it until the user dismisses it. That file is not under `<home>/.cache/`, where C keeps its per-root migration note (`inference-migration.json`) and which backups leave out as derived data. So the notice is in every backup and every synced copy. It lists what items 1 (if declined) and 3 lost, and any model fact the C migration did not carry (re-review N9), worded as permanent.
    - **Re-plan if declined.** Without it, those losses would be silent, which guarantee 7 forbids.
 8. **§13's per-adapter `embed` is dropped** (ruling 10; review M6). Embedding stays D's caller-owned `EmbeddingsClient` door, because the store must not import the gateway (#239). The registry carries an `embeds` flag that a test holds equal to the store's rule.
    - **Re-plan if declined.** A per-adapter embed that the store calls breaks #239.
@@ -164,9 +178,14 @@ Only `frozen_campaign/snapshot.json` may be regenerated, deliberately and with t
    - A campaign is retired only after its marker is re-read inside the hold. An unmarked campaign is migrated in that same write first. A newer one is skipped (Task 6, C2).
    - Connection fields are stripped only once `config.md` and every campaign are readable, marked and retired, and no connection is unreadable (C3).
    - Each connection's fields are written to the retirement record before the strip, so a campaign that arrives unmarked later still resolves. A model fact the C migration did not carry gets a note first (N9).
-   - The strip holds `llm_connections.LOCK` across its read, record and write, so a connection edit is never overwritten (N4).
+   - The strip holds `llm_connections.LOCK` (which is `config_lock`) across its read, record and write, so a connection edit is never overwritten (N4).
    - The migration persists only the old mapping, never a repoint, so no persisted preset key names a file that does not exist (N2).
-6. **Fail closed** (ruling 6; CR3; N1, N6). Every new writer reads strictly, and so does every lookup that feeds a write. The failure is `frontmatter.UnreadableError`, or `ConnectionUnreadableError` from retirement's lookup. It is raised when a file exists and:
+6. **Fail closed** (ruling 6; CR3; N1, N6). Every new writer reads strictly, and so does every lookup that feeds a write. The failure is one of three:
+   - `frontmatter.RecordUnreadableError`, which is C's `migrate.RecordUnreadableError` moved to `store/frontmatter.py` (Task 6a);
+   - the read's own `OSError`/`UnicodeDecodeError`, which pass through as they do in C's `_record`;
+   - `ConnectionUnreadableError`, from C's `llm_connections.read_connection_strict`, under retirement's lookup.
+
+   One of them is raised when a file exists and:
    - cannot be read;
    - is empty;
    - has frontmatter that does not parse;
@@ -183,13 +202,14 @@ Only `frozen_campaign/snapshot.json` may be regenerated, deliberately and with t
 
 ## Assumptions to re-check in Task 1
 
-G and H are planned in parallel with this plan. This section was rewritten against their revised plans, re-read for revision 3 at the heads of `claude/inference-slice-g` and `claude/inference-slice-h` (CR8). Task 1 checks against whatever those branch heads hold when they are integrated, not against a pinned sha (re-review, neighbour pins). Each line is what this plan assumes they deliver, together with how Task 1 checks it. **If one fails, Task 1 stops and reports. It does not improvise.**
+G and H are planned in parallel with this plan. This section was rewritten against their revised plans, re-read for revision 3 at the heads of `claude/inference-slice-g` and `claude/inference-slice-h` (CR8). Task 1 checks against whatever those branch heads hold when they are integrated, not against a pinned sha (re-review, neighbour pins). Each line is what this plan assumes they deliver, together with how Task 1 checks it. **If one fails, Task 1 stops and reports. It does not improvise.** *(2026-10-09: G and H landed on `main` as `5af18f9` and `16fb57d`. Task 1 checked every line there: A1–A9 PASS, A10, A12 and A13 RENAMED, A11 open, no FAIL. Each RENAMED line below now carries the landed name.)*
 
 - **A1 (G).** `continuity` is `operation="decide", default_role="decision"` (G Task 5). Absorb's identity phase and the reconcile sweep resolve with `require_inference("continuity-identity"|"continuity-reconcile", cid, operation="decide")` inside the thunk `_soft_resolved` takes, then call `operations.decide("<task>", items, client=client, resolved=resolved, explain=…, campaign=…, around=…)`. The task literal is on the line after `operations.decide(`.
   - Check: `grep -n '"continuity"' backend/src/grimoire/store/routing.py`.
   - Check (M2): `grep -rn -A1 "operations.decide(" backend/src/grimoire | grep continuity` prints both tasks.
 - **A2 (G).** G adds no `client.complete`/`client.stream` call site and no reader of a legacy key or connection field. It adds two `.conn` readers: `_noting(client, resolved.conn, holder)` in the identity and reconcile `around` hooks. Task 8 converts both to `resolved.chain.primary`, and Task 10's guard would catch either if missed.
   - Check: `grep -rn "_noting(client, resolved.conn" backend/src/grimoire`. Record the files.
+  - *On `main` (Task 1):* the grep prints G's two, `routes/scenes.py:2121` (identity) and `routes/continuity.py:689` (reconcile). It also prints a third that A2 did not name: F's voice-drift `around` hook, at `routes/scenes.py:2653`. Task 8 converts all three.
 - **A3 (H).** The native backend's shapes (H Tasks 2, 4):
   - `LLMClient.decide_native(item: decisions.Item, conn: dict, usage=None, *, retries=None) -> decisions.ItemResult`. One item and a `retries` keyword. It calls `_without_fallback(conn)` itself, refuses a kind with no native adapter and an item with a `native_gap` (`code="native_unrepresentable"`), sends no sampling and installs no `Estimate`.
   - `llm.native_body(item, conn) -> dict` (pure, module level) and `llm.NATIVE_REJECTED_STATUSES`.
@@ -207,16 +227,17 @@ G and H are planned in parallel with this plan. This section was rewritten again
   - Check: `grep -n "^Capture\|Capture =" backend/src/grimoire/inference.py` and `grep -n "def _capture" backend/src/grimoire/routes/character_turns.py`.
 - **A8 (H).** `evals/runner.resolve_connections` returns `dict[str, dict | ResolvedInference]`: the whole resolution for a decide case, and `.conn` for a generate case. `live(case, target, record=False, *, client=None, backend="chain")` runs a decide case through `inference.run_stages` with a chain built from `stages(resolved)`, or a forced one-stage `native`/`structured` chain built from `A0.conn` without `FALLBACK_KEY`. `--provider/--model` resolve through `override_inference`. A generate case still calls the client with `.conn`, and Task 8 converts it.
   - Check: `grep -n "def resolve_connections\|def live\|run_stages\|Stage(" evals/runner.py`.
-- **A9 (D/E/F, landed on their branches).** These names exist after integration (M1):
+- **A9 (D/E/F, landed on `main`).** These names are on `main` at `16fb57d` (M1; PASS in Task 1):
   - D: `store/inference/embed.py` (`embed_sync`, `embed`, `_stamp`); `resolve.embedding`, `resolve.embed_attempt`, `resolve.embed_endpoint(conn, current)`; `translate.embedding_view`; `embed_space.endpoint_of` (reads `conn["api_key"]`); `embed_space.moved_by`; `facts.FactsUnreadableError`.
   - E: `llm_usage.ACCOUNT_KEY`, `ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode")`, `with_account`, `account`; the holder field `requested_model`; `llm._estimate` with `COUNT_TIMEOUT_S`; `store/inference/in_use.py`.
   - F: `resolve.FALLBACK_KEY`/`STRUCTURED_KEY`/`ACCOUNT_KEY`, `llm.FALLBACK_KEY` (`"_fallback"`)/`STRUCTURED_KEY` (`"_structured"`), `llm.DEGRADE` (`"_degrade"`), `llm.ATTEMPTED`, `inference._with_mode`, `inference._BACKENDS`.
   - Check each with one `grep -n`. A rename is followed silently. A missing name stops the task.
-- **A10 (H).** H adds no new private connection-dict key. `NONE_KEY` (`"<none>"`) is a distribution key in `decisions`, not a conn key. H's `stages` uses `_without_fallback`, which Task 10 deletes and its guard catches.
-- **A12 (C; re-review N1, R2-5).** C's strict connection read is on the integration base. That is C's fix, commit 68fd9a6 on PR #485: `llm_connections.read_connection_strict` raises `ConnectionUnreadableError` for a file with no `kind`, which covers a zero-byte or unfenced file. Before it, a zero-byte connection read as "no such connection", and step 8 or the switch could persist a pin with an empty model on top of it. Retirement deletes the `route_*` and legacy global keys that would repair such a pin, so I depends on the fix and must not land without it. I's own writes use `mode="retire"` either way.
-  - Check: `git merge-base --is-ancestor 68fd9a6 HEAD` (or the commit carrying the same change after a rebase, found with `git log --oneline -S "ConnectionUnreadableError" -- backend/src/grimoire/store/llm_connections.py`), and `grep -n "def read_connection_strict" -A30 backend/src/grimoire/store/llm_connections.py | grep -n "kind"`. Then one targeted run of C's test for a `kind`-less connection file. **Absent: Task 1 stops.**
-- **A13 (C; re-review N9, R2-6).** C re-copies each connection's `vision`, `prefill` and `post_process` into its model's facts under `llm_connections.LOCK` before the format switch (commit 4e68846). I's `fact_not_carried` note covers whatever still differs, and does not replace that copy.
-  - Check: `git merge-base --is-ancestor 4e68846 HEAD` (or the rebased equivalent, found with `git log --oneline -S "_facts" -- backend/src/grimoire/store/inference/migrate.py`), and a read of `migrate._facts` showing the copy under `llm_connections.LOCK`. **Absent: Task 1 stops.**
+- **A10 (H; RENAMED in Task 1).** H adds no new private connection-dict key. `NONE_KEY` (`"<none>"`) is a distribution key in `decisions`, not a conn key. H's `stages` does not use `llm._without_fallback`. It uses a public copy, **`inference.without_fallback(conn)`**, and `evals/runner.chain` calls it too. Task 9c replaces it with `Chain.alone()`, and Task 10's guard bans it by its public name, beside `_without_fallback`, which `LLMClient.decide_native` and `_routes` still use.
+- **A12 (C; re-review N1, R2-5; RENAMED in Task 1).** C's strict connection read is on the base. That is C's fix, planned as commit 68fd9a6 and squash-landed in **`1177012`** (PR #485): `llm_connections.read_connection_strict` raises `ConnectionUnreadableError` for a file with no `kind`, which covers a zero-byte or unfenced file. Before it, a zero-byte connection read as "no such connection", and step 8 or the switch could persist a pin with an empty model on top of it. Retirement deletes the `route_*` and legacy global keys that would repair such a pin, so I depends on the fix and must not land without it. I's own writes use `mode="retire"` either way.
+  - Check: `git merge-base --is-ancestor 1177012 HEAD` (found with `git log --oneline -S "ConnectionUnreadableError" -- backend/src/grimoire/store/llm_connections.py`), and `grep -n 'if strict and "kind" not in meta' backend/src/grimoire/store/llm_connections.py`. The check lives in `llm_connections._read(id, *, strict=False)`, which `read_connection_strict` calls. A grep of `read_connection_strict` itself hits only its docstring. Then one targeted run of C's test for a `kind`-less connection file (`test_inference_migrate.py::test_a_connection_file_with_no_record_in_it_fails_the_run`). **Absent: Task 1 stops.**
+  - *Consequence, on `main`:* C's migration lookup (`migrate._lookup`, `read_connection_strict`) already **raises** `ConnectionUnreadableError` for a zero-byte, whitespace, unfenced or `kind`-less file. So `lookup(mode="migrate")` and `lookup(mode="retire")` read a connection file the same way, and differ only in their record fallback (R3-2, N6).
+- **A13 (C; re-review N9, R2-6; RENAMED in Task 1).** C re-copies each connection's `vision`, `prefill` and `post_process` into its model's facts under `llm_connections.LOCK` before the format switch. That was planned as commit 4e68846 and squash-landed in **`1177012`**: `migrate._switch` runs `_facts(run)` inside `with llm_connections.LOCK:` before the marker write. I's `fact_not_carried` note covers whatever still differs, and does not replace that copy.
+  - Check: `git merge-base --is-ancestor 1177012 HEAD` (found with `git log --oneline -S "_facts" -- backend/src/grimoire/store/inference/migrate.py`), and a read of `migrate._switch` showing `_facts(run)` under `llm_connections.LOCK`. **Absent: Task 1 stops.**
 - **A11 (H ruling 21).** H leaves OpenRouter's `provider.require_parameters` to I. **I declines it.** It is a wire change, and row I is "User-visible: No". Task 1's report hands it back to the controller as an open item for a later slice.
 
 ---
@@ -255,7 +276,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
 
 - **CR1 (C1, I3, Q1).** Play is never refused. A format-1 store, an unmarked campaign at format 2 and (so that the derived presets apply before retirement persists them) any unretired scope resolve in memory through one guarded planner, `legacy_plan.py`, which includes the facts overlay and the derived presets. The format-1 baseline comparison is kept. `test_planned_equals_persisted` is added. Ruling 3's write on the play path is gone. This honours §11.2, §12, §5.6, §15, §17.8 and row I.
 - **CR2 (C2).** `retire_campaign` re-reads the campaign's marker inside its hold. An unmarked campaign is migrated in the same write before any key is deleted. A newer one is skipped.
-- **CR3 (C3, I4).** Every new writer fails closed through `frontmatter.UnreadableError`, slice D's `FactsUnreadableError` pattern. An unreadable campaign, connection or `config.md` stops retirement for that item and is never treated as finished or overwritten. The strip runs only once every campaign is verified migrated and retired.
+- **CR3 (C3, I4).** Every new writer fails closed through `frontmatter.RecordUnreadableError`, slice D's `FactsUnreadableError` pattern. It is C's `migrate.RecordUnreadableError`, moved to `store/frontmatter.py` (2026-10-09: C landed it, so Task 6a builds on it rather than adding a second one). An unreadable campaign, connection or `config.md` stops retirement for that item and is never treated as finished or overwritten. The strip runs only once every campaign is verified migrated and retired.
 - **CR4 (I5, Q2).** A `pre-retirement-` archive is taken before retirement's first write. It is never pruned, taken once per root, reused on resume, and skipped only when this same run took `pre-inference-`. No archive, no write.
 - **CR5 (Q3, I6).** `max` joins `REASONING` as a GLM-only value, unsupported elsewhere: **needs user approval** (ratification item 1; Task 4 Step 5). The fallback beside it accepts the loss and reports it in the durable, library-stored notice, never through `skipped`.
 - **CR6 (Q4, M7).** The birth seam is public (`config.birth_fields()`), and the test birth comes from `GRIMOIRE_TEST_BIRTH`, set at conftest import beside `GRIMOIRE_INFERENCE_AUTOMIGRATE`.
@@ -281,16 +302,18 @@ G and H are planned in parallel with this plan. This section was rewritten again
 ### Controller rulings on the re-review (revision 3)
 
 - **N1 (Critical).** Retirement's strict lookup separates "absent" from "unreadable".
-  - A zero-byte, whitespace, unfenced or `kind`-less connection file raises `ConnectionUnreadableError` (`legacy_plan.lookup(mode="retire")`, built on `read_strict(require="kind")`). That scope stops: nothing is rewritten and nothing is marked retired.
+  - A zero-byte, whitespace, unfenced or `kind`-less connection file raises `ConnectionUnreadableError`. That is `legacy_plan.lookup(mode="retire")`, built on C's `llm_connections.read_connection_strict`, which already raises for each of those (A12). That scope stops: nothing is rewritten and nothing is marked retired.
   - The test covers a zero-byte file, an unfenced one and a `kind`-less one.
-  - C's migration keeps its own lookup (`mode="migrate"`). C closes the same hole on its own PR, and Task 1 checks that the fix is present (A12, R2-5).
+  - C's migration keeps its own lookup (`mode="migrate"`). C closed the same hole on its own PR (`1177012`), and Task 1 checked that the fix is present (A12, R2-5).
 - **N2.** The migration's mapping and retirement's repoints are two products: `Plan.mapped` and `Plan.repoint`.
   - The migration persists `mapped` only, so it never persists a derived preset id without its preset file, and a base preset's params are never lost.
   - `test_the_global_mapping_is_translates` reads `mapped`.
 - **N3 / I2.** `RETIRED_KEY` is stamped at birth, so a fresh install takes no `pre-retirement-` archive and a new campaign triggers no pass. Both are tested.
   - `config.md` gets it through `birth_fields()`, the existing `born_current` seam.
-  - Each new `campaign.md` gets it at creation, when `config.md` is itself retired, which is always so on a fresh install. It comes through `lifecycle._birth_marker()` (revision 4, R2-1). In an unretired store a new campaign joins the next pass with the rest, so its GLM pins still get their derived presets.
+  - Each new `campaign.md` gets it at creation, when `config.md` is itself retired, which is always so on a fresh install. It comes through C's birth seam, `lifecycle.publish_birth`, through an option only `create_campaign` passes (revision 4, R2-1, as amended 2026-10-09). In an unretired store a new campaign joins the next pass with the rest, so its GLM pins still get their derived presets.
 - **N4.** `strip_model_fields` holds `llm_connections.LOCK` across the read, the record and the write. `retire.strip` re-checks its precondition per connection inside that hold. The interleaving is tested.
+  - *On `main`:* `llm_connections.LOCK` **is** `locks.config_lock()`. It is one reentrant, cross-process lock, and a holder waits up to `LOCK_TIMEOUT` (30 s) before `StoreBusy`, which answers 409. So a `PUT /llm-connections/{id}` that meets the strip waits, or after 30 s answers 409. It is never overwritten.
+  - The holds stay per connection. One hold across the whole strip would put every model-settings write behind it.
 - **N5.** `retire.left()` sees a legacy key or field an older build wrote back into a retired scope, so the next start removes it with a deletion-only write. The test is split per scope, so each case fails for its own reason first.
 - **N6.** Every path that persists from the retirement record reads it strictly, and an unparseable record stops that item (fail closed). The fallback applies only when the connection file exists and holds no **non-empty** `MODEL_FIELDS` value.
 - **N7.** Every ratification item names a fallback with its implementing step, "no alternative", or "re-plan". Item 6's settings-only archive has a conditional step (Task 6a Step 4). The claim that only one step is conditional is corrected.
@@ -308,17 +331,19 @@ G and H are planned in parallel with this plan. This section was rewritten again
   - **N16:** the birth-stamp sentence in CLAUDE.md moves with Task 3a.
   - **N17:** `test_a_c_era_writer_keeps_the_retired_marker`.
   - **N18:** a newer campaign holds the strip, and that is stated.
-  - **N19:** `config_lock` is taken around `put_derived`, and each retirement item checks `run.halted()`.
+  - **N19:** `config_lock` is taken around `put_derived`, and each retirement item checks `run.halted()`. On `main`, every sampler-preset write already runs inside `config.format_hold()`, which is `config_lock`, so `put_derived` gets that hold by joining it.
   - **N20:** `record_fields` keeps the first values, and the fallback never answers for an absent file.
 
 ### Controller rulings on the second re-review (revision 4)
 
-- **R2-1.** A new campaign's retired stamp is written only at creation, through a separate `lifecycle._birth_marker()` that `create_campaign` alone calls. It is never written by `_inference_marker()` or by any settings write. Tested: on a retired `config.md`, a settings write to a campaign whose retirement is pending leaves it unretired with its pin and effort intact, and the next pass retires it with its repoint.
+- **R2-1.** A new campaign's retired stamp is written only at creation, never by `_inference_marker()` or by any settings write.
+  - *Amended 2026-10-09:* C landed `lifecycle.publish_birth(cid, meta, body="", translate=None)`. Its docstring calls it "the birth-stamp seam, and the one place a new marker is added", and both `create_campaign` and `fork._copy` call it.
+  - So the stamp is a create-only keyword on `publish_birth`, which only `create_campaign` passes, instead of a separate `lifecycle._birth_marker()`. The rule is the same: only creation stamps. Tested: on a retired `config.md`, a settings write to a campaign whose retirement is pending leaves it unretired with its pin and effort intact, and the next pass retires it with its repoint.
 - **R2-2.** Once `config.md` carries `RETIRED_KEY`, the migration's lookup (step 8 and the §11.1 write path) answers a connection with no non-empty `MODEL_FIELDS` from the retirement record. It reads the record strictly, so an unparseable record leaves the campaign unwritten. A late unmarked campaign is therefore never persisted with an empty pin. The plan's two tests for this case run through `ensure()` with step 8 active and through the §11.1 write path.
 - **R2-3.** The archive is decided once per pass, over every remaining unit of work: global, each readable campaign, stray keys and strip candidates. A pass with any write left takes (or reuses) the `pre-retirement-` archive before its first write of any kind, marker-only writes included.
 - **R2-4.** `post_images.reach` and `health.record` join the 9b dict door, with their three dict callers listed until Task 10.
-- **R2-5.** A12 is a Task 1 check, not an open item. It verifies that C's strict read is on the integration base: commit 68fd9a6 (PR #485), where `read_connection_strict` raises `ConnectionUnreadableError` for a file with no `kind`. Task 1 stops if it is absent.
-- **R2-6.** New assumption A13: I depends on C re-copying the model facts under the connection lock before its switch (4e68846). Task 1 checks it the same way and stops if it is absent.
+- **R2-5.** A12 is a Task 1 check, not an open item. It verifies that C's strict read is on the base: commit 68fd9a6 (PR #485), squash-landed as `1177012`, where `read_connection_strict` raises `ConnectionUnreadableError` for a file with no `kind`. Task 1 stops if it is absent.
+- **R2-6.** New assumption A13: I depends on C re-copying the model facts under the connection lock before its switch (4e68846, squash-landed as `1177012`). Task 1 checks it the same way and stops if it is absent.
 - **R2-7.** Under ratification item 6's fallback, the settings-only archive gets its own prefix, `pre-retirement-settings-`. It is never in `list_backups()`, the whole-store restore points, and so never counted by `backups.due()`. `GET /backups` lists it apart, as `partial: true`, as `create_image_backup`'s archives are. Tested.
 - **R2-8.** `test_a_failed_retirement_archive_writes_nothing` states that the archive precedes every write of the pass, marker-only writes included, which is why no `RETIRED_KEY` is written.
 
@@ -358,18 +383,18 @@ G and H are planned in parallel with this plan. This section was rewritten again
      - It is skipped when this run *created* a `pre-inference-` archive. A `pre-inference-` archive reused from an earlier run does not count: it predates every edit since (N13). It is also skipped when the whole pass only adds markers.
      - If it fails, nothing below runs.
      - A reused `pre-retirement-` archive can predate items a later run retires. That is acceptable because every retirement deletion keeps its value in a new key or in the record. The one exception is a legacy key an older build wrote *after* retirement (N5), whose value this build never read.
-   - **(a) Global.** One `config.md` write under `llm_connections.LOCK` then `config_lock`: derived presets first (`sampler_presets.put_derived`), then the repoint, the deletion of every legacy config key and global `route_*`, and `RETIRED_KEY`.
+   - **(a) Global.** One `config.md` write, in one hold of `config.format_hold()`: derived presets first (`sampler_presets.put_derived`), then the repoint, the deletion of every legacy config key and global `route_*`, and `RETIRED_KEY`. *(2026-10-09: this read "under `llm_connections.LOCK` then `config_lock`". On `main` those are one lock, `locks.config_lock()`: reentrant and cross-process, 409 `StoreBusy` after 30 s. `format_hold` is that lock with the format read inside it, and it raises `NewerFormatError` on a newer store.)*
    - **(b) Campaigns.** Each under `campaign_lock_nowait(cid)`, with the marker re-read inside the hold.
      - Unmarked: migrated in the same write first.
      - Newer: skipped. It holds the strip for as long as it stays newer, which is fail-safe and stated in the docs and in `left()` (N18).
      - Busy: left for the next run.
-     - Its derived presets are written under `config_lock` (N19). Then one write carries the repoint, the deletion, the markers and `revision.bump(cid)`.
+     - Its derived presets are written under `config_lock` (N19), taken inside the campaign hold. That is the only order `main` allows: `config_lock` is innermost, never held around a campaign lock (`locks.config_lock`'s docstring). Then one write carries the repoint, the deletion, the markers and `revision.bump(cid)`.
    - **(a′/b′) Stray keys.** A retired scope that holds a legacy key again, written by an older build, gets a deletion-only write: nothing derived, nothing read from the key (N5).
    - **(c) Strip.** Only when `config.md` and every campaign are readable, marked and retired, and every connection reads. Per connection, under `llm_connections.LOCK` across the precondition re-check, the read, the record and the write (N4):
      - each `vision`/`prefill`/`post_process` its model's facts do not state becomes a `fact_not_carried` note (N9);
      - its non-empty `MODEL_FIELDS` go to the retirement record;
      - a `keep_rev` write strips them.
-   - **Fail closed.** Every reader in (a)–(c) is strict, including the lookup and the record. An `UnreadableError` or `ConnectionUnreadableError` stops that item, and every scope that names it. Each item checks `run.halted()` first, as the migration's steps do (N19).
+   - **Fail closed.** Every reader in (a)–(c) is strict, including the lookup and the record. A `RecordUnreadableError` (or the read's own `OSError`/`UnicodeDecodeError`) or a `ConnectionUnreadableError` stops that item, and every scope that names it. Each item checks `run.halted()` first, as the migration's steps do (N19).
    - **The status.** Retirement never moves `migrate.status().state`. What is left is reported in `Status.retirement` (`left`, `failed`), read fail-soft, and is not rendered. So a fresh install reads `done`, and the Models page's quiet line is unchanged (CR11, I2, I4).
 7. **Legacy keys and fields stay writable at format 1** (they are the planner's input) **and refused at format 2**, as today. `llm_connections.ensure_migrated` seeds them only below format 2. `_write_raw` never writes an empty `MODEL_FIELDS` value (I2).
 8. **`inference.generate`** is `generate(task, messages, *, client, resolved, usage=None, schema=None, stream=True)` (ratification item 9).
@@ -396,9 +421,15 @@ G and H are planned in parallel with this plan. This section was rewritten again
 14. *(Dropped: CR12. H bounds the strict-mode limits.)*
 15. **Retirement markers.** `inference_keys.RETIRED_KEY = "inference_retired"`, value `"1"`.
     - It is written in the retirement write of `config.md` and of each `campaign.md`.
-    - **It is stamped at birth** (N3): by `config.birth_fields()` on a new `config.md`, and by `lifecycle._birth_marker()` on a new campaign when `config.md` is retired (R2-1).
-      - `_birth_marker()` is called by `create_campaign` only. `_inference_marker()`, which `set_campaign_inference` calls on every campaign settings write, stamps `FORMAT_KEY` only and never `RETIRED_KEY`, because a settings write is not a retirement.
-      - A fork or an import copies what its source says.
+    - **It is stamped at birth** (N3): by `config.birth_fields()` on a new `config.md`, and on a new campaign when `config.md` is retired (R2-1), through C's `lifecycle.publish_birth`.
+      - `publish_birth` gains a create-only keyword (for example `retired: bool = False`), and only `create_campaign` passes it. When it is set, `RETIRED_KEY` is added beside `_inference_marker()`'s fields if `config.md` carries it. That read happens in the same `config_lock` hold `publish_birth` already takes for the format. `_inference_marker()`, which `set_campaign_inference` calls on every campaign settings write, stamps `FORMAT_KEY` only and never `RETIRED_KEY`, because a settings write is not a retirement.
+      - **A fork** also goes through `publish_birth` (`fork._copy`), without that keyword.
+        - A source that is marked current or newer is copied as it stands. A retired source's `RETIRED_KEY` is part of that copy.
+        - An unmarked source is not copied as it stands. *(Corrected 2026-10-09: this read "a fork … copies what its source says".)* `publish_birth` translates it through `fork._translated`, which is `migrate.campaign_fields(meta, migrate.connection_reader())`, then stamps `FORMAT_KEY` only, so the fork joins the next retirement pass.
+        - If the translation raises `OSError`, the fork is born unmarked.
+        - That path reaches the planner only through `migrate.campaign_fields`, which Task 4 makes delegate. So Task 5's legacy-reader guard needs no entry for `fork.py`.
+        - `migrate.connection_reader()` must become `legacy_plan.lookup(mode="migrate")` in Task 4, so a fork made after the strip gets the record fallback (R3-2). An unreadable record raises `RecordUnreadableError`, an `OSError`, so the fork is born unmarked rather than with an empty pin.
+      - The app has no campaign import route. A campaign that arrives by sync or a restore keeps what its file says.
     - It gates the in-memory derivation (ruling 1), so a legacy field an older build writes after retirement changes nothing here (§11.3).
     - It is how retirement knows a scope is verified retired (ruling 6c).
     - It is in `config._CONFIG_KEYS` (default `""`). C–H writers keep unknown frontmatter keys, which `test_a_c_era_writer_keeps_the_retired_marker` checks (N17).
@@ -409,7 +440,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
       - A later strip keeps the first recorded values, which are the ones C translated (N20).
     - `notes`: the ruling-5 notes plus `fact_not_carried` (N9), each `{id, scope, subject, provider_id, effort, kind, text, dismissed}`. `id` is a digest of (`scope`, `subject`, `provider_id`, `effort`, `kind`) only, so a wording change in a later build does not bring back a dismissed note (N14). Merging never un-dismisses a note.
     - `retired.Note` is defined here, in a leaf module the planner imports, so the two never import each other (N10).
-    - Every writer, and every lookup that feeds a write (`mode="retire"`), reads it strictly: a non-empty file that does not parse raises `UnreadableError` (N6). Display readers fail soft.
+    - Every writer, and every lookup that feeds a write (`mode="retire"`), reads it strictly: a non-empty file that does not parse raises `frontmatter.RecordUnreadableError` (N6). Display readers fail soft.
 
 ---
 
@@ -425,12 +456,12 @@ G and H are planned in parallel with this plan. This section was rewritten again
 | `store/inference/legacy_plan.py` (new), `tests/test_inference_legacy_plan.py` (new) | the planner: mapping, facts overlay, derivation, notes, `overlay` | 4, 5 |
 | `llm_sampling.py`, `llm_reasoning.py`, `frontend/src/api/types.ts` | `max` (if ratified); GLM effort from the preset only | 4, 5 |
 | `store/inference/translate.py`, `tests/test_inference_translate.py` | **deleted** (cases move to the planner's tests) | 5 |
-| `store/inference/resolve.py`, `resolved.py`, `settings.py`, `in_use.py`, `migrate.py`, `store/embed_space.py`, `routes/common.py`, `routes/config.py`, `store/llm_connections.py` (`get_active`) | one planner call; no legacy branch | 5 |
+| `store/inference/resolve.py`, `resolved.py`, `settings.py`, `in_use.py`, `migrate.py`, `store/embed_space.py`, `routes/common.py`, `routes/config.py`, `store/llm_connections.py` (`get_active` deleted; `Lookup`) | one planner call; no legacy branch | 5 |
 | `tests/test_legacy_reader_guard.py` (new) | only the planner reads the legacy layout | 5 |
 | `tests/fixtures/frozen_campaign/sweep.py`, `tests/frozen_copy.py` (new helper) | the sweep and the tests prepare their copy identically | 5 |
-| `store/inference/retire.py` (new), `store/frontmatter.py` (`UnreadableError`, `read_strict`), `store/backups.py` (`RETIRE_PREFIX`), `store/sampler_presets.py` (`put_derived`), `store/locks.py` | retirement writes, fail closed, archive | 6a |
+| `store/inference/retire.py` (new), `store/frontmatter.py` (`RecordUnreadableError`, `read_record`: C's, moved from `migrate`), `store/inference/migrate.py` (imports them), `store/backups.py` (`RETIRE_PREFIX`), `store/sampler_presets.py` (`put_derived`), `store/locks.py` | retirement writes, fail closed, archive | 6a |
 | `store/inference/retired.py` (new in Task 4 with `Note`), `store/llm_connections.py` (`strip_model_fields`, `_write_raw`, `ensure_migrated`, `_dangling`), `routes/inference.py` or the settings route module (dismiss) | record, strip, I2, notes, facts check | 4, 6b |
-| `store/campaigns/lifecycle.py` (`_birth_marker`, creation only), `store/config.py` (`birth_fields`) | born retired (N3, R2-1) | 6a |
+| `store/campaigns/lifecycle.py` (`publish_birth`'s create-only keyword, passed by `create_campaign` alone), `store/config.py` (`birth_fields`) | born retired (N3, R2-1) | 6a |
 | `frontend/src/components/inference/RetiredNotes.tsx` (+ test), `frontend/src/routes/ModelsView.tsx`, `frontend/src/api/types.ts`, `client.ts`, `routes/ConfigView.tsx` | the notice; legacy fields out of the types | 6b |
 | `wire.py` (new), `tests/wire_kit.py` (new) | `Target`, `Account`, `Sampling`, `Chain`; test builders | 7 |
 | `store/inference/capabilities.py` | `post_image_reach(kind, vision_fact, vision_cap)` | 7 |
@@ -448,16 +479,16 @@ G and H are planned in parallel with this plan. This section was rewritten again
 
 ---
 
-### Task 1: Rebase onto D–H and re-check every assumption
+### Task 1: Rebase onto C–H and re-check every assumption
 
 **Files:** none changed except fix-ups the rebase forces. Report: `.superpowers/sdd/2026-10-08-inference-slice-i-retirement/task-1-report.md`.
 
-- [ ] **Step 1: Rebase.** `git -C <worktree> fetch origin && git rebase <integration branch>` once D–H have landed (on `main`, or on the integration branch the controller names). Resolve conflicts in this plan file only. Before the rebase, the only commits on this branch beyond `b2c85c6` are plan commits (M1).
+- [ ] **Step 1: Rebase.** *(Done 2026-10-09.)* C–H landed on `main`, so the base is `main` at `16fb57d`. The branch was rebuilt with `git checkout -B claude/inference-slice-i origin/main`. This plan's five commits were cherry-picked onto it, in order, with no conflicts. The old head, `332e113`, is kept as `backup/slice-i-pre-main`. Beyond `b2c85c6`, that head held only the five plan commits (M1). Below `b2c85c6` it held old C–F commits, which `main` carries as squashes, and those were dropped.
 - [ ] **Step 2: Check A1–A11.** Run each check under "Assumptions to re-check". Record each as PASS, RENAMED (with the new name) or FAIL.
 - [ ] **Step 3: Inventory.** Record the file lists (the counts go only in the report) of these, because Tasks 3, 5, 8 and 10 size themselves from them:
   - `grep -rn "translate\." backend/src`
   - `grep -rn "\.conn\b" backend/src evals backend/scripts`
-  - `grep -rn "FALLBACK_KEY\|STRUCTURED_KEY\|ACCOUNT_KEY\|with_account\|_without_fallback" backend/src backend/tests evals`
+  - `grep -rn "FALLBACK_KEY\|STRUCTURED_KEY\|ACCOUNT_KEY\|with_account\|_without_fallback\|\bwithout_fallback\|\bstages(\|run_stages\|Stage(" backend/src backend/tests evals`. The last four alternatives were added 2026-10-09. H's public `inference.without_fallback` and its stage helpers carry the fallback too, and the original pattern missed them and their test users.
   - `grep -rnE "\.(stream|complete|single|decide_native)\(" backend/src evals backend/scripts`
   - `rg -lU "active_connection_id|fallback_connection_id|embeddings_connection_id|set_campaign_routing|active_connection\b" backend/tests`
 - [ ] **Step 4: Start green.** Run:
@@ -575,7 +606,7 @@ The mapping moves into `legacy_plan.py`, and the derivation and the notes are ad
 - Create: `backend/src/grimoire/store/inference/legacy_plan.py`, `backend/src/grimoire/store/inference/retired.py` (only `Note` and `note_id` in this task; N10), `backend/tests/test_inference_legacy_plan.py`.
 - Modify:
   - `store/inference/translate.py`: `global_view`/`campaign_view`/`embedding_view` call the planner (deleted in Task 5).
-  - `store/inference/migrate.py`: `global_fields`, `campaign_fields`, `_enriched` and `_stated` call the planner, and persist `Plan.mapped` only (N2).
+  - `store/inference/migrate.py`: `global_fields`, `campaign_fields`, `_enriched` and `_stated` call the planner, and persist `Plan.mapped` only (N2). `_lookup` and `connection_reader()` (the lookup `fork._translated` hands `campaign_fields`; ruling 15) return `legacy_plan.lookup(mode="migrate")`.
   - `store/inference_keys.py`: `RETIRED_KEY = "inference_retired"` (ruling 15; nothing writes it until Task 6a).
   - `store/config.py`: `RETIRED_KEY` in `_CONFIG_KEYS`, default `""`, so `read_config` returns it.
   - `store/inference/__init__.py`.
@@ -585,6 +616,7 @@ The mapping moves into `legacy_plan.py`, and the derivation and the notes are ad
 
 ```python
 Lookup = Callable[[str], dict | None]         # connection id -> raw connection, legacy fields included
+                                              # (Task 5 moves the alias to llm_connections.Lookup; this name re-binds it)
 PresetRead = Callable[[str], dict | None]     # preset id -> preset
 REPRESENTABLE: tuple[str, ...]                # tuple(e for e in llm_reasoning.GLM_EFFORTS if e in llm_sampling.REASONING)
 
@@ -607,14 +639,16 @@ def campaign_plan(meta: Mapping[str, str], *, global_current: bool, lookup: Look
 def legacy_embeds(cfg: Mapping[str, str], lookup: Lookup) -> bool   # in place of embed_space.resolve (no cycle)
 def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
     # "soft": translate's fail-soft read (play).
-    # "migrate": migrate._lookup moved verbatim -- C's behaviour (A12). From Task 6b, a connection
+    # "migrate": migrate._lookup moved verbatim -- C's behaviour (A12): read_connection_strict,
+    #   memoised, so a zero-byte, unfenced or `kind`-less file RAISES ConnectionUnreadableError
+    #   and an absent one answers None. From Task 6b, a connection
     #   whose file exists and holds no non-empty MODEL_FIELDS value answers from the retirement
     #   record whenever the record holds an entry for that connection (R3-2: the entry proves a
     #   strip; config.md's marker is not consulted). The record is read strictly: an unparseable
-    #   record raises UnreadableError, so step 8 leaves the campaign unwritten and the §11.1 write
+    #   record raises RecordUnreadableError, so step 8 leaves the campaign unwritten and the §11.1 write
     #   path answers 409 retirement_unreadable (R2-2, R3-3).
     # "retire": raises ConnectionUnreadableError when the file exists and is unreadable, empty,
-    #   unfenced or has no `kind` (read_strict(require="kind")) -- N1. From Task 6b it falls back to
+    #   unfenced or has no `kind` (C's read_connection_strict, as "migrate" reads it) -- N1. From Task 6b it falls back to
     #   the record, read strictly (N6).
 ```
 
@@ -665,7 +699,8 @@ def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
   def test_a_marked_unretired_scope_plans_the_derivation_only(home)   # mapped == {}, repoint non-empty
   def test_the_migration_never_persists_a_repoint(home)         # N2: legacy GLM store, ensure() without retirement ->
                                                                 # role_primary_preset == "warm", and every persisted preset key names an existing file
-  def test_the_migrate_lookup_is_cs(home)                       # A12: mode="migrate" on a zero-byte file answers None, as C's did
+  def test_the_migrate_lookup_is_cs(home)                       # A12: mode="migrate" on a zero-byte file raises ConnectionUnreadableError,
+                                                                # as C's landed _lookup does; absent -> None (2026-10-09: read "answers None")
   def test_the_retire_lookup_refuses_what_it_cannot_read(home)  # N1: zero bytes, unfenced, no `kind` -> ConnectionUnreadableError; absent -> None
   def test_notes_have_stable_ids(home)                          # same store, two plans -> same Note.id
   ```
@@ -709,7 +744,7 @@ def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
   - `store/inference/legacy_plan.py`: `Overlay`, `overlay`.
   - `store/inference/resolve.py`, `resolved.py`, `settings.py`, `in_use.py`, `migrate.py`, `store/embed_space.py`, `store/context/semantic.py` (docstring).
   - `llm_reasoning.py`, `llm_sampling.py`.
-  - `routes/common.py`, `routes/config.py`, `store/llm_connections.py` (`get_active` deleted).
+  - `routes/common.py`, `routes/config.py`, `store/llm_connections.py` (`get_active` deleted; `Lookup` added, below).
   - `tests/test_inference_equivalence.py`, `test_inference_equivalence_c.py`, `test_frozen_campaign.py`, `tests/fixtures/frozen_campaign/sweep.py`.
   - Docs: `CLAUDE.md`, `CONTRIBUTING.md`, `docs/store-guarantees.md`.
 - Create: `tests/test_inference_format2.py`, `tests/test_legacy_reader_guard.py`, `tests/frozen_copy.py`.
@@ -734,6 +769,19 @@ def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
 - `resolve.retirement_notes(cid: str = "") -> tuple[retired.Note, ...]` reads `_overlay(...).notes`. `settings.view` gets its notes there and never imports the planner (N11).
 - `llm_reasoning.glm_effort(model: str, value: str | None) -> str`: the preset's value only.
 - `refuse_unmigrated` uses `keys.is_current` (I1).
+- **Homes for the rest of `translate`'s API** (2026-10-09). `main` uses three more `translate` names beside the three views:
+  - **`translate.is_current`.** It is a pass-through to `inference_keys.is_current`, so every caller calls that directly:
+    - `resolve._current_layout` and `resolve.resolve`/`embedding`;
+    - `embed_space` (four uses);
+    - `routes/common.py`, where it is spelled `inference_translate.is_current`, at the `refuse_unmigrated` and rates checks.
+  - **`translate.embedding_role`** (`settings._embedding_card`, `in_use._selections`, `embed_space` ×3) becomes `resolve.embedding_role(cfg) -> tuple[str, str]`.
+    - It reads `role_embedding_provider`/`role_embedding_model` off `_overlay(cfg, {}).cfg`, stripped (the `embeddings_*` trim rule `embedding_view` kept).
+    - It calls `_overlay`, so `resolve` still names `legacy_plan.overlay` exactly once.
+    - `translate.embedding_view`'s format-2 branch becomes private in `resolve`, for `resolve.embedding`. Its legacy branch is the planner's mapping.
+    - `settings` and `in_use` already import `resolve`, and `embed_space` imports it as `inference_resolve`.
+  - **`translate.Lookup`** (annotations in `resolve`, `settings`, `in_use` and `migrate`) becomes `llm_connections.Lookup`.
+    - That is the type of a raw-connection reader, beside `read_connection_raw`/`read_connection_strict`, in a module every one of them can import without a cycle.
+    - `legacy_plan.Lookup` re-binds it, so `settings` and `in_use` annotate without naming the planner (N11).
 - Deleted:
   - `translate.*`, `resolve.IMAGES_ON_OUTRANKS`, `resolve._bridged` and every format-1 branch of `resolve.unusable`/`incapable`;
   - `ResolvedInference.legacy_route`;
@@ -829,35 +877,47 @@ Two commits. **CI checkpoint after 6b.**
 **Files:**
 - Create: `store/inference/retire.py`, `tests/test_inference_retire.py`.
 - Modify:
-  - `store/frontmatter.py`: `UnreadableError`, `read_strict`.
-  - `store/backups.py`: `RETIRE_PREFIX`; `_PREFIXES`; `sweep`'s exclusion; `_sweep_abandoned_temps`' prefix list (N12); the listing; and, with item 6 declined only (Step 4), `create_backup(..., only=None)`, `RETIRE_SETTINGS_PREFIX` and `list_partial_backups()` (R2-7).
+  - `store/frontmatter.py`: `RecordUnreadableError` and `read_record`, which are C's `migrate.RecordUnreadableError` and `migrate._record`, moved here. `retire` cannot import `migrate`, because `migrate.ensure` calls retirement.
+  - `store/backups.py`: `RETIRE_PREFIX` and a `_RETIRE_NAME_RE` beside `_SAFETY_NAME_RE`, in every place that regex is read (N12):
+    - `_PREFIXES`;
+    - `_is_backup_artifact`, for the archive and its `.pre-retirement-…` temp;
+    - `_is_abandoned_temp`, which `_sweep_abandoned_temps` uses;
+    - `list_backups()`;
+    - `_taken_at`, which `due()` reaches through `list_backups()` and which asserts that a name parses under one of the series it knows.
+
+    `sweep` lists `_NAME_RE` alone, so it needs no change. A test holds that it never prunes the new prefix. With item 6 declined only (Step 4), the file also gains `create_backup(..., only=None)`, `RETIRE_SETTINGS_PREFIX` and `list_partial_backups()` (R2-7).
   - `store/sampler_presets.py`: `put_derived`.
   - `store/config.py`: `retire_write`; `birth_fields()` stamps `RETIRED_KEY` (N3).
   - `tests/inference_fixtures.py`: `UPGRADED_DEFAULT` gains `RETIRED_KEY: "1"`, so it stays equal to `birth_fields()` (R3-4).
   - `tests/test_inference_storage.py`: `test_a_product_store_is_born_with_the_marker_alone` asserts both markers, `FORMAT_KEY` and `RETIRED_KEY`, and still no Primary (R3-4).
-  - `store/campaigns/lifecycle.py`: a new `_birth_marker()`, called only by `create_campaign`. It is `_inference_marker()`'s fields, plus `RETIRED_KEY` when `config.md` carries it (N3, R2-1). `_inference_marker()` and `set_campaign_inference` are unchanged.
+  - `store/campaigns/lifecycle.py`: C's `publish_birth` gains a create-only keyword (for example `retired: bool = False`), which only `create_campaign` passes. With it set, the birth write adds `RETIRED_KEY` beside `_inference_marker()`'s fields when `config.md` carries it, read in the `config_lock` hold `publish_birth` already takes (N3, R2-1). `fork._copy` does not pass it. `_inference_marker()` and `set_campaign_inference` are unchanged. *(2026-10-09: this was a separate `lifecycle._birth_marker()`. C's docstring makes `publish_birth` "the one place a new marker is added".)*
   - `store/inference/legacy_plan.py`: `lookup(mode="retire")` (N1).
-  - `store/inference/migrate.py`: the retirement stage; `Status.retirement`; the note's `retire_safety`/`retire_failed`; the `_run` early return.
+  - `store/inference/migrate.py`:
+    - the retirement stage; `Status.retirement`; the note's `retire_safety`/`retire_failed`; the `_run` early return;
+    - `RecordUnreadableError` and `read_record`, imported from `frontmatter`. `migrate.RecordUnreadableError` stays bound, so `test_inference_migrate.py`'s `pytest.raises(migrate.RecordUnreadableError)` holds, and `_record`'s callers move to `read_record` with no change in behaviour;
+    - **the module docstring's step 4** (2026-10-09). It still reads "*(derived reasoning presets: slice I, ruling 3)*", but ruling 3 is dropped. Step 4 becomes a pointer: derived reasoning presets are retirement's, persisted after the marker by `retire` (rulings 4 and 6), and the migration persists `Plan.mapped` only (N2).
   - `store/locks.py`.
   - Docs: `docs/store-guarantees.md`, `CLAUDE.md`, `tests/test_docs_guard.py`.
 
 **Interfaces:**
-- `frontmatter.UnreadableError(OSError)`: "a file that exists and could not be read or parsed; a writer never replaces it" (D's `FactsUnreadableError` docstring, generalised).
-- `frontmatter.read_strict(path: Path, *, require: str | None) -> dict`. It raises `FileNotFoundError` for an absent file. It raises `UnreadableError` when:
-  - the read fails (`OSError`, `UnicodeDecodeError`);
-  - the file is empty or whitespace;
-  - its frontmatter does not parse (no opening or closing fence);
-  - `require` is given and is missing or empty in it.
+- `frontmatter.RecordUnreadableError(OSError)`: C's class, moved unchanged with its docstring. It stands for a record that is there but holds nothing: zero bytes, or a frontmatter block that is unfenced or never closed. A writer never replaces it.
+- `frontmatter.read_record(path: Path, what: str, *, require: str | None = None) -> tuple[dict[str, str], str]`. It is C's `_record`, moved, plus `require`.
+  - An absent file raises `FileNotFoundError`.
+  - The read's own `OSError`/`UnicodeDecodeError` pass through, as in C, and every caller catches them beside `RecordUnreadableError`, as `migrate`'s callers do.
+  - It raises `RecordUnreadableError` when the file is empty or whitespace, when its frontmatter does not parse (no opening or closing fence), and when `require` is given and is missing or empty in it.
 
-  Otherwise it returns the meta.
-- `backups.RETIRE_PREFIX = "pre-retirement-"`, so archives are named `pre-retirement-grimoire-<stamp>.zip`. It is kept by the same never-prune rule as `SAFETY_PREFIX`, listed by `GET /backups` beside it, and its `.pre-retirement-…` temp is cleaned by `_sweep_abandoned_temps` (N12).
-- `config.retire_write(set_keys: Mapping[str, str], drop: Iterable[str]) -> None`. Under `config_lock`, it calls `read_strict(config path, require=FORMAT_KEY)`, refuses a non-current marker, sets and drops, and writes atomically. It never adds a key outside `set_keys`.
+  Otherwise it returns the meta and the body. With `require=None` it behaves exactly as C's `_record`, so the migration's behaviour does not change.
+- `backups.RETIRE_PREFIX = "pre-retirement-"`, so archives are named `pre-retirement-grimoire-<stamp>.zip`.
+  - It is kept by the same never-prune rule as C's `SAFETY_PREFIX` (`"pre-inference-"`).
+  - It is listed by `GET /backups` beside that archive, in the `backups` list `list_backups()` returns.
+  - Its `.pre-retirement-…` temp is recognised by `_is_backup_artifact` and cleaned by `_sweep_abandoned_temps` (N12).
+- `config.retire_write(set_keys: Mapping[str, str], drop: Iterable[str]) -> None`. In one `config.format_hold()`, it calls `read_record(config path, "config.md", require=FORMAT_KEY)`, refuses a non-current marker, sets and drops, and writes atomically. That hold is `config_lock` with the format read inside it, and it raises `NewerFormatError` on a newer store. `retire_write` never adds a key outside `set_keys`.
 - `sampler_presets.put_derived(pid: str, name: str, params: dict) -> None`. It writes when absent and does nothing when identical. It raises `ValueError` when the id holds something else, which `derive`'s digest suffix makes unreachable.
 - In `retire.py`:
-  - `retire_global(lookup: Lookup) -> tuple[Note, ...]`, under `llm_connections.LOCK` then `config_lock`. It reads `config.md` strictly and computes `global_plan` with `lookup(mode="retire")`. It writes each derived preset, then calls `config.retire_write(plan.mapped | plan.repoint | {RETIRED_KEY: "1"}, drop=LEGACY_GLOBAL_KEYS + global route keys)`.
+  - `retire_global(lookup: Lookup) -> tuple[Note, ...]`, in one hold of `llm_connections.LOCK`. On `main` that lock *is* `config_lock`, so `retire_write`'s `format_hold` re-enters it. It reads `config.md` strictly and computes `global_plan` with `lookup(mode="retire")`. It writes each derived preset, then calls `config.retire_write(plan.mapped | plan.repoint | {RETIRED_KEY: "1"}, drop=LEGACY_GLOBAL_KEYS + global route keys)`.
     - On an already-retired `config.md` that holds a legacy key again, it writes the deletion only (N5).
     - A `ConnectionUnreadableError` from the lookup stops it before any write (N1).
-  - `retire_campaign(cid: str, lookup: Lookup) -> tuple[Note, ...] | None`. The caller holds the campaign lock; like `migrate.campaign`, it raises `RuntimeError` when `locks.holds_campaign(cid)` is false. Inside the hold it calls `read_strict(campaign.md, require=None)` and re-reads the marker:
+  - `retire_campaign(cid: str, lookup: Lookup) -> tuple[Note, ...] | None`. The caller holds the campaign lock; like `migrate.campaign`, it raises `RuntimeError` when `locks.holds_campaign(cid)` is false. Inside the hold, and as `migrate.campaign` does inside one `config.format_hold()`, it calls `read_record(campaign.md, …)` and re-reads the marker:
     - **newer:** returns `None`, nothing written;
     - **unmarked:** `campaign_plan(meta, global_current=True, …)` carries the migration's fields (step 8's work) and the derivation;
     - **marked:** the derivation only.
@@ -881,7 +941,7 @@ Two commits. **CI checkpoint after 6b.**
     3. `retire_campaign` for each campaign under `campaign_lock_nowait`, where busy, unreadable or a strict lookup failure leaves that campaign;
     4. the strip (6b).
 
-    An `UnreadableError` or `ConnectionUnreadableError` stops only its item, and every scope that names it. Each item checks `run.halted()` first (N19).
+    A `RecordUnreadableError` (or the read's own `OSError`/`UnicodeDecodeError`) or a `ConnectionUnreadableError` stops only its item, and every scope that names it. Each item checks `run.halted()` first (N19).
   - `_run`'s early return `if current and not left` becomes `if current and not left and not retire.left()`.
   - `Status` gains `retirement: dict = {"left": [...], "failed": ""}`. `state` is computed exactly as before.
 
@@ -923,7 +983,7 @@ Two commits. **CI checkpoint after 6b.**
   def test_a_campaign_skipped_by_step_8_is_migrated_before_it_is_retired(home)   # C2: busy at step 8, free at retirement:
                                                                                   # use_scene_* present, route_scene gone, one write
   def test_a_newer_campaign_is_never_retired(home)                      # C2
-  def test_retire_global_refuses_a_config_it_cannot_parse(home)         # I4: zero bytes, a truncated fence, no marker -> UnreadableError; file bytes unchanged
+  def test_retire_global_refuses_a_config_it_cannot_parse(home)         # I4: zero bytes, a truncated fence, no marker -> RecordUnreadableError; file bytes unchanged
   def test_retire_campaign_refuses_an_unparseable_campaign(home)        # I4: same three cases; campaign.md bytes unchanged; the others retire
   @pytest.mark.parametrize("damage", ["zero_bytes", "unfenced", "no_kind"])
   def test_an_unreadable_connection_holds_the_scopes_that_name_it(home, damage)   # N1: the GLM connection a global slot and an
@@ -988,7 +1048,7 @@ Two commits. **CI checkpoint after 6b.**
   - `store/inference/retire.py`: `strip`; `left` widened; the facts check (N9).
   - `store/inference/legacy_plan.py`: `lookup` falls back to the record's `fields` for a connection whose file exists and holds no non-empty `MODEL_FIELDS` value. The `retire` mode, and the `migrate` mode once `config.md` is retired, read the record strictly (N6, N20, R2-2).
   - `store/inference/migrate.py`: step 8 (`_campaign_step` → `migrate.campaign`) and the §11.1 write path build their lookup with `mode="migrate"`, which now reaches the record for any connection the record holds (R3-2).
-    - Step 8 treats `UnreadableError` as "leave this campaign".
+    - Step 8 treats `RecordUnreadableError` as "leave this campaign". It already does: C's step 8 catches `OSError`, and the error is one.
     - The §11.1 write path's route answers **409** with detail `{"kind": "retirement_unreadable", "detail": "The record of retired model settings could not be read; try again once it has synced."}`, following D's `facts_unreadable` precedent. It is never a 500 (R3-3).
   - `store/llm_connections.py`: `strip_model_fields`; `_write_raw`; `ensure_migrated`; `_dangling`.
   - `store/config.py`: the legacy defaults out of `read_config` (kept in `_CONFIG_KEYS`).
@@ -1002,18 +1062,22 @@ Two commits. **CI checkpoint after 6b.**
   - `record_fields(conn_id, values: Mapping[str, str]) -> None`. It keeps any values already recorded for `conn_id` and adds only keys not yet there, so the first values (the ones C translated) win (N20).
   - `record_notes(notes: Iterable[Note]) -> None`, which merges by id and never un-dismisses;
   - `dismiss(note: Note | str) -> bool`;
-  - `read(*, strict: bool = False) -> dict`. Fail-soft for display. `strict=True` is for every writer and for `lookup(mode="retire")`: it raises `UnreadableError` on a non-empty file whose JSON does not parse (N6).
+  - `read(*, strict: bool = False) -> dict`. Fail-soft for display. `strict=True` is for every writer and for `lookup(mode="retire")`: it raises `frontmatter.RecordUnreadableError` on a non-empty file whose JSON does not parse (N6).
 
   Writes go through `store.atomic` under `retired._lock`. **Lock order:** `llm_connections.LOCK` → `retired._lock`, never the reverse. Nothing that holds `retired._lock` takes another lock (N4).
-- `llm_connections.strip_model_fields(conn_id: str) -> bool`. It holds `llm_connections.LOCK` (an RLock) across all three steps, so a `PUT /llm-connections/{id}` waits rather than being overwritten (N4):
-  1. `read_strict(path, require="kind")`;
+  - *On `main`:* `llm_connections.LOCK` is `config_lock`. That lock's docstring (`locks.config_lock`), and the comment on `llm_connections.LOCK`, both say the only lock taken under it is `inference.facts`' process-local `_lock`. 6b adds `retired._lock` to both, under the same rule: it is process-local and innermost.
+- `llm_connections.strip_model_fields(conn_id: str) -> bool`. It holds `llm_connections.LOCK` across all three steps, so a `PUT /llm-connections/{id}` waits rather than being overwritten (N4).
+  - That lock is `config_lock`: a `_ProcessScopedLock`, an `RLock` plus an OS file lock. A waiter gives up with `StoreBusy` (409) after 30 s, and is never overwritten.
+
+  The three steps:
+  1. `frontmatter.read_record(path, f"connection {conn_id}", require="kind")`, for the raw meta that step 3 rewrites. `read_connection_strict` returns only the known fields, so it cannot be used here;
   2. `retired.record_fields(conn_id, <its non-empty MODEL_FIELDS>)`;
   3. a raw frontmatter rewrite minus `MODEL_FIELDS`, with `keep_rev`.
 
   It returns whether it wrote.
 - `retire.strip(lookup) -> list[Note]`.
   - **Precondition.** `config.md` carries `RETIRED_KEY`; every campaign reads, is marked and carries `RETIRED_KEY`; every connection file reads. Otherwise it writes nothing, and the reason is in `left()`.
-  - It takes `llm_connections.LOCK` per connection and **re-checks the precondition inside that hold**, then runs that connection's facts check and `strip_model_fields` (N4).
+  - It takes `llm_connections.LOCK` per connection and **re-checks the precondition inside that hold**, then runs that connection's facts check and `strip_model_fields` (N4). The re-check reads each `campaign.md` without taking its campaign lock: `config_lock` is never held around a campaign lock (`locks.config_lock`'s docstring).
   - **The facts check (N9).** For each of the connection's non-default `vision`, `prefill` and `post_process`, it compares against its model's facts. The read is strict, and a `FactsUnreadableError` stops that connection's strip. Where the facts state no value for the field, a `Note(kind="fact_not_carried", subject=<field>, provider_id=<id>)` is recorded **before** the strip. The facts are never written here: the user's word is never overwritten, and C re-copies them before its switch (A13). This note covers whatever still differs.
 - `llm_connections._write_raw` omits every `MODEL_FIELDS` key whose value is empty. A read already defaults them to `""` (I2).
 - `ensure_migrated` seeds model fields and `active_connection_id` only below format 2 (ruling 7, I2).
@@ -1040,7 +1104,7 @@ Two commits. **CI checkpoint after 6b.**
                                                                         # the new key and its new rev are in the file, and no MODEL_FIELDS key is
   def test_an_unreadable_record_holds_a_late_unmarked_campaign(home)    # N6, R2-2: after the strip, corrupt inference-retired.json, add an unmarked
                                                                         # Saltmarch with route_scene: spare; run ensure() with step 8 active (not
-                                                                        # retire_campaign alone) -> step 8 raises UnreadableError for it and leaves
+                                                                        # retire_campaign alone) -> step 8 raises RecordUnreadableError for it and leaves
                                                                         # campaign.md bytes unchanged, retirement.left names it; once the record is
                                                                         # repaired, step 8 migrates it with spare's recorded model and retirement retires it
   def test_the_write_path_reads_the_record_on_a_retired_store(client, home)   # R2-2: same late Saltmarch, reached first by a campaign
@@ -1196,7 +1260,7 @@ The facade is unchanged in this task: `generate` still hands `client.stream` the
   - `backend/src/grimoire/inference.py`: `generate`, `note_outcome`.
   - `llm_reasoning.py`: `stream` takes a source factory.
   - Every generation call site from Task 1's inventory: `routes/common.py` (`draft_completion`, `_bounded_call` users, `_record_prompt` callers), `routes/streaming.py`, `routes/character_turns.py`, `routes/tracker.py`, `routes/characters.py`, `routes/scenes.py`, `routes/greetings.py`, `routes/continuity.py`, `routes/mechanics.py`, `routes/worlds.py`, `routes/campaigns.py`, `routes/passage_characters.py`, `store/usage.py`, `backend/scripts/ingest_scene.py`, `evals/runner.py` (generate cases: the whole resolution, A8), `evals/run.py`.
-  - G's two `_noting(client, resolved.conn, holder)` sites (A2): they read `resolved.chain.primary`'s display facts from this task.
+  - The three `_noting(client, resolved.conn, holder)` sites in `decide` `around` hooks: G's two (A2), absorb's identity check at `routes/scenes.py:2121` and the reconcile sweep at `routes/continuity.py:689`, and F's voice-drift hook at `routes/scenes.py:2653`, which the grep in A2 also prints. They read `resolved.chain.primary`'s display facts from this task. *(2026-10-09: this named G's two only.)*
   - Tests: `tests/test_routing_guard.py`, `tests/test_usage_guard.py`, `tests/test_operation_guard.py`.
   - Docs: `CONTRIBUTING.md` (the guard halves), `CLAUDE.md` ("Adding an LLM call site?": the generation line).
 
@@ -1300,6 +1364,14 @@ LISTABLE_KINDS: frozenset[str]    # derived: lists_models
 
 The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapter` and `ClaudeAgentAdapter`, each wrapping its client. In this sub-task their bodies are copies of today's per-kind code in `LLMClient._provider`, `list_models`, `check`, `decide_native` and `native_body`. 9b deletes the facade's copies.
 
+**H's native table is absorbed here** (2026-10-09). H landed `llm.NATIVE_DECISION_KINDS: dict[str, NativeAdapter]`, which is already a per-kind dispatch table.
+- Each `NativeAdapter(body, client, conn_fields)` is a pure body builder `(item, model) -> dict`, the name of the `LLMClient` attribute that sends it, and the connection fields that adapter's `decide` takes by name. Today the table holds `openrouter` (no extra fields) and `openai_compatible` (`conn_fields=("base_url",)`).
+- So:
+  - `decides_natively` is True for exactly the table's kinds. Its docstring says that it answers for the *kind*, unlike `resolve.decides_natively(attempt)`, H's function of the same name, which says one *model* is not known unable. `test_adapter_facts_agree_with_the_registry` asserts that, against `providers.PRESETS[*].never`: `anthropic` and `claude` list `decide_native`, the `openai` preset does not, and every other `openai_compatible` preset does.
+  - Each adapter's `decision_body` is its table entry's `body`, given `target.model`.
+  - The `openai_compatible` adapter's `decide` reads `target.base_url` where the table names `base_url`.
+- The table stays beside the registry in this sub-task. 9b deletes the facade's per-kind copies but keeps the table for `decide_native`, which still takes a dict until 9c. 9c deletes `NATIVE_DECISION_KINDS` and `NativeAdapter`, and moves `evals/runner.chain`'s kind check (`kind not in llm.NATIVE_DECISION_KINDS`) to the registry flag.
+
 - [ ] **Step 1: Write the failing tests:**
 
   ```python
@@ -1318,6 +1390,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
       # today's LLMClient._provider with attempt.conn; the wire calls (model, api_key,
       # base_url, sampling kwargs, reasoning kwargs, strict, schema) are equal.
   def test_a_native_body_is_the_same_from_a_target(tmp_path):   # adapters' decision_body == llm.native_body(item, conn)
+  def test_decides_natively_is_the_native_table(): # {k for k, a in registry.items() if a.decides_natively} == set(llm.NATIVE_DECISION_KINDS)
   def test_target_for_matches_the_attempt_target(state):         # every baseline state: target_for(raw, model, sampling, facts) == attempt.target
   ```
 
@@ -1348,7 +1421,12 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
 - `llm.fallback_sampling(primary: Target, fallback: Target) -> Target`; `llm._same_route(a, b)` by `provider_id`; `llm.prefill_capable(target) -> bool`. The degrade sibling is `dataclasses.replace(target, degrade=True)`. `llm.ATTEMPTED` holds the `Target`.
 - `_routes(chain)` builds `[(primary, retries), (fallback_sampling(primary, fallback), 0)]`. `_usable_routes` drops a fallback whose kind is in `adapters.TEXT_ONLY_KINDS` for image-bearing messages. `_dispatch` calls `self._adapters[target.kind].generate(…, schema=schema if target.structured else None)`.
 - **E's `_estimate` call stays exactly where `_resilient` makes it** (ruling 11), with a comment naming the window.
-- `inference.generate`/`decide`/`note_outcome` **still hand dicts** in this sub-task, through the shim. `decide_native` still takes a dict, and `llm_usage.with_account` stays, both until 9c.
+- `inference.generate`/`decide`/`note_outcome` **still hand dicts** in this sub-task, through the shim. `decide_native` still takes a dict, and `llm_usage.with_account` stays, both until 9c. So does `llm.NATIVE_DECISION_KINDS`, which 9c deletes (9a).
+- **The ledger row keeps its shape** (2026-10-09). E and H file `operation`, `role`, `billing` and `decision_mode` from the account block (`usage.Meter.SERVED`). Moving that block from `ACCOUNT_KEY` to `Target.account` must file the same fields with the same values.
+  - The values matter. `usage._modellable` refuses to model a row whose `decision_mode` is `decisions.NATIVE_BACKEND` (`"native"`). A native row that lost the field would start being priced at chat rates.
+  - `usage_rollup.VERSION` is `6` and stays `6` while the row shape is unchanged. A change to any row field bumps it to `7` in the same commit, so an older rollup file is never read with the new rows folded in.
+  - A GLM row's `preset` names the derived preset after retirement. That is a value, not a field, so the version does not move.
+  - Test: `test_the_ledger_row_is_unchanged_through_the_shim`. For a generate call and a structured decide call, each driven once through a dict and once through its `Chain`, the filed rows are equal field for field.
 - `FakeLLM.stream/complete/single` accept a dict or a `Chain`/`Target`. They record `request["chain"]`/`request["target"]` always (converting a dict with `wire.from_lowered`), and `request["conn"]` only when handed a dict. So every existing assertion holds.
 
 - [ ] **Step 1:** Write these tests, then run them. Expected: FAIL.
@@ -1373,7 +1451,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
 
 #### Task 9c: H's native chain on targets
 
-**Files:** `inference.py` (`Stage`, `stages`, `run_stages`, `_Call`, `_structured`, `_native`, `_with_mode`, `Capture`), `llm.py` (`decide_native`, `native_body`), `llm_usage.py` (`with_account` deleted), `routes/config.py` (H's probe), `routes/character_turns.py` (`_capture`), `evals/runner.py` (`--decide-backend` chains), `tests/llm_fakes.py` (`decide_native`), and the decide suites.
+**Files:** `inference.py` (`Stage`, `stages`, `run_stages`, `_Call`, `_structured`, `_native`, `_with_mode`, `_without_mode`, `_stops_chunks`, `_same_connection`, `without_fallback` deleted, `Capture`), `llm.py` (`decide_native`, `native_body`; `NATIVE_DECISION_KINDS` and `NativeAdapter` deleted, 9a), `llm_usage.py` (`with_account` deleted), `routes/config.py` (H's probe), `routes/character_turns.py` (`_capture`), `evals/runner.py` (`--decide-backend` chains), `tests/llm_fakes.py` (`decide_native`), and the decide suites.
 
 **Interfaces** (ruling 9; A3, A4, A7, A8):
 - `Stage(mode: str, chain: wire.Chain, retries: int | None)`.
@@ -1383,10 +1461,18 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
 - `LLMClient.decide_native(item, target: Target, usage=None, *, retries=None)`. It dispatches `self._adapters[target.kind].decide`, and keeps H's refusals, retries, observer and capture. `llm.native_body(item, target)`.
 - `Capture = Callable[[list[dict], dict, Target], Awaitable[None]]`. A native stage passes `target.without_sampling()`. `_capture(cid, sid, task, messages, target, outcome=None)` reads `.kind`/`.model`/`.provider_id`.
 - H's probe: `client.decide_native(probes.PROBE_ITEM, target.with_account(operation="decide", decision_mode="native"), m.usage, retries=0)`, where `target` is the model test's `Target`. Until Task 10 it is `wire.from_lowered(conn).primary`, and Task 10 moves both probes to `resolve.target_for` and deletes `from_lowered` with them (N8).
-- `evals/runner`: the forced one-stage chains use `Stage("native"|"structured", Chain(A0.target), None)`.
+- `evals/runner`: the forced one-stage chains use `Stage("native"|"structured", Chain(A0.target), None)`, in place of `inference.without_fallback(primary.conn)`. The native refusal's kind check reads the registry's `decides_natively` flag in place of `kind not in llm.NATIVE_DECISION_KINDS` (9a). The preset `never` check and `resolve.decides_natively(primary)` stay. That function shares a name with the registry flag but answers a different question: the flag says the *kind* can decide natively, and the function says this *model* is not known unable. The 9a docstring says so.
 - `FakeLLM.decide_native(item, target, usage=None, *, retries=None)` records `(item, target, retries)` in `native_requests`.
+- **H's other dependencies on `FALLBACK_KEY` and the conn id** (2026-10-09). H's coordination note names two, which are covered above: `stages`' strip, now `Chain.alone()`, and ruling 6's attach rule. Task 1 found four more in the code H landed. Each becomes stage data:
+  - **`inference._stops_chunks(error, conn)`** reads `llm.FALLBACK_KEY in conn` to decide whether a bare chunk error stops a structured stage. It becomes `_stops_chunks(error, chain)`, with `chain.fallback is not None`.
+  - **`inference._without_mode(conn)`** strips `STRUCTURED_KEY` and `FALLBACK_KEY` for the prompt-only re-send. It becomes `Chain(dataclasses.replace(chain.primary, structured=False))`.
+  - **`run_stages`' connection-wide stop**: `dead: list[dict]` and `_same_connection(conn, other)`, which compares `conn["id"]`. These become a list of the stopped stages' `chain.primary.provider_id`, compared the same way: an empty id never matches.
+  - **`LLMClient.decide_native`'s own strip.** It drops the fallback and also `sampling` (`{k: v for k, v in _without_fallback(conn).items() if k != "sampling"}`), so the ledger row files no `preset`. `_native` makes the same strip for `named`. Both become `target.without_sampling()` inside the facade. A test asserts that a native row still carries no `preset`.
+  - `inference.without_fallback(conn)`, H's public copy that `stages` and `evals/runner.chain` call (A10), is deleted here. Every caller holds a `Chain` and calls `.alone()`.
+  - `_native`'s `NATIVE_TIMEOUT_STOP` (a stage starts nothing more once that many items in a row have timed out) is not a key dependency, but it lives in the code this sub-task rewrites, and it must survive unchanged.
+- **The native ledger row** (2026-10-09). `_native`'s stamp moves from `llm_usage.with_account(call.conn, decision_mode=NATIVE)` to `call.chain.with_account(decision_mode=NATIVE)`. The row it files must still carry `decision_mode="native"`, so `usage._modellable` keeps excluding it and `usage_rollup.VERSION` stays `6` (9b). Test: `test_a_native_row_still_files_decision_mode_native`, in `test_inference_decide_native.py`. A native call's ledger row has `decision_mode == "native"`, no `preset`, and no `modelled_usd` when a rate exists for its model.
 
-- [ ] **Step 1:** Convert H's suites and F's decide suites to `request["chain"]`/`request["target"]` and `native_requests` targets: `test_inference_decide.py`, `test_inference_decide_native.py`, and the decide cases in `test_scene_break_routes.py`, `test_routes.py` (voice drift), `test_character_turns.py` (speaker), `test_absorb_identity.py`, `test_continuity_reconcile_routes.py`, `test_model_test_call.py` (probe) and `test_evals.py`. Keep every assertion about stages, retries, the fallback, the mode, the capture and the ledger.
+- [ ] **Step 1:** Convert H's suites and F's decide suites to `request["chain"]`/`request["target"]` and `native_requests` targets: `test_inference_decide.py`, `test_inference_decide_native.py`, and the decide cases in `test_scene_break_routes.py`, `test_routes.py` (voice drift), `test_character_turns.py` (speaker), `test_absorb_identity.py`, `test_continuity_reconcile_routes.py`, `test_model_test_call.py` (probe) and `test_evals.py`. Keep every assertion about stages, retries, the fallback, the mode, the capture and the ledger. The assertions on `NATIVE_TIMEOUT_STOP` and on the connection-wide stop (in `test_inference_decide_native.py` and `test_inference_decide.py`) are kept, and so are the bare-chunk-error cases that reach `_stops_chunks`.
 - [ ] **Step 2:** Implement until they pass. `llm_usage.with_account` is deleted. Every stamp is `Target.with_account`/`Chain.with_account`.
 - [ ] **Step 3:** Run those suites plus `tests/test_usage_guard.py tests/test_operation_guard.py tests/test_routing_guard.py tests/test_prompt_log*.py tests/test_format2_play.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py`, then the gates.
 - [ ] **Step 4:** Commit: `refactor(inference): decide's stages carry chains of targets`.
@@ -1431,7 +1517,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - `wire.py`: `from_lowered` deleted, together with its last callers above (N8), and its round-trip test.
   - `store/embed_space.py`: D's note. `endpoint_of` reads `attempt.target.api_key`, and its `"conn"` entry becomes `"target"`.
   - `store/inference/embed.py`: `_stamp` reads the target.
-  - `llm.py`: `FALLBACK_KEY`, `STRUCTURED_KEY`, `_without_fallback`, and `DEGRADE` as a dict key.
+  - `llm.py`: `FALLBACK_KEY`, `STRUCTURED_KEY`, `_without_fallback`, and `DEGRADE` as a dict key. (`inference.without_fallback` and `NATIVE_DECISION_KINDS` already went in 9c.)
   - `llm_usage.py`: `ACCOUNT_KEY`.
   - `store/inference/settings.py`.
   - `tests/inference_baseline.py` and `inference_baseline_c.py`: observe projects `Target` into the same JSON keys, and the JSON is untouched.
@@ -1451,14 +1537,19 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   def test_the_lowering_stays_retired():
       # AST over backend/src/grimoire, evals, backend/scripts. Flags:
       #  - a name or attribute FALLBACK_KEY, STRUCTURED_KEY, ACCOUNT_KEY, with_facts, own_sampling,
-      #    _lowered, _without_fallback, from_lowered (CR7: the shim), _as_chain;
+      #    _lowered, _without_fallback, without_fallback (H's public copy, A10),
+      #    NATIVE_DECISION_KINDS, NativeAdapter (H's table, absorbed by the registry, 9a),
+      #    from_lowered (CR7: the shim), _as_chain;
       #  - `lower` imported from store.inference.resolve;
       #  - attribute `.conn` on a ResolvedInference/UsableInference/Attempt binding
-      #    (`require_inference(...)`, `override_inference(...)[0]`, `inference.resolve(...)`,
-      #    `.attempts[i]`), on a `Stage` (`stages(...)` items, `Stage(...)`) and on a `_Call`
-      #    (`call`, `replace(call, ...)`) (I7);
+      #    (`require_inference(...)`, `override_inference(...)[0]`, the FIRST name of a
+      #    tuple unpack of `override_inference(...)` -- `resolved, routed = ...` and
+      #    `resolved, _ = ...`, the shape every production caller uses --
+      #    `inference.resolve(...)`, `.attempts[i]`), on a `Stage` (`stages(...)` items,
+      #    `Stage(...)`) and on a `_Call` (`call`, `replace(call, ...)`) (I7);
       #  - a str constant "_fallback", "_structured", "_account" or "_degrade".
-  def test_the_guard_flags_a_planted_lowering():   # one plant per rule, each reported
+  def test_the_guard_flags_a_planted_lowering():   # one plant per rule, each reported, including
+                                                   # `resolved, _ = override_inference(...)` then `resolved.conn`
   ```
 
 - [ ] **Step 2:** Run. Expected: FAIL, listing what remains.
@@ -1514,11 +1605,12 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
 - **Carried notes:**
   - D's (`resolve.embedding` on translate): Task 5.
   - D's (`embed_space` key from the lowered dict): Task 10.
-  - D's `FactsUnreadableError` pattern: generalised as `frontmatter.UnreadableError` in Task 6a.
+  - D's `FactsUnreadableError` pattern: C's `RecordUnreadableError` already follows it. Task 6a moves it, with `_record`, to `frontmatter` (`read_record`) and adds `require`.
   - E's cancel window: ruling 11, Task 9b.
   - F's (`complete(schema=)` in place of `generate`): Tasks 8 and 9.
   - F's (delete `FALLBACK_KEY`/`STRUCTURED_KEY`): Task 10.
-  - H's I11 (two `FALLBACK_KEY` dependencies as stage data): Task 9c, `Chain.alone()` and the attach rule.
+  - H's I11 (two `FALLBACK_KEY` dependencies as stage data): Task 9c, `Chain.alone()` and the attach rule. Four more found on `main` (`_stops_chunks`, `_without_mode`, `run_stages`' `dead`/`_same_connection`, `decide_native`'s sampling strip): Task 9c as well.
+  - H's `NATIVE_DECISION_KINDS` table: absorbed by the registry (9a), deleted in 9c. H's native ledger row (`decision_mode="native"`, `usage_rollup.VERSION` 6): pinned in 9b and 9c.
   - H's strict-mode limits: H's (A6).
   - H's ruling 21 (`require_parameters`): declined, reported (A11).
 - **Revision 3 (the re-review).** N1–N9 are answered in the task text, not only in the rulings:
@@ -1533,7 +1625,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - N9: the `fact_not_carried` note (6b).
   - N10–N20 are listed in the rulings with where each landed.
 - **Revision 4 (the second re-review).**
-  - R2-1: `_birth_marker()`, called only by `create_campaign` (6a), with two tests.
+  - R2-1: a create-only keyword on C's `publish_birth`, passed only by `create_campaign` (6a), with two tests. (It was a separate `_birth_marker()` until 2026-10-09.)
   - R2-2: the migrate lookup reads the record on a retired store (6b), and both late-campaign tests run through step 8.
   - R2-3: `pass_plan`/`needs_archive(pass_plan)` (6a), with three tests.
   - R2-4: the 9b dict door, widened.
