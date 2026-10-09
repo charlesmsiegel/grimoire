@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 
-from grimoire import content_parts, llm, llm_reasoning, llm_usage
+from grimoire import content_parts, llm, llm_reasoning, llm_usage, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
@@ -534,7 +534,7 @@ def test_a_retried_attempt_counts_only_the_attempt_that_answered(home):
 
 # ---- embed rows ----
 def test_an_embed_operation_never_gets_a_completion_estimate(home):
-    conn = llm_usage.with_account(CONN, operation="embed")
+    conn = wire.from_lowered(CONN).with_account(operation="embed")
     _text, row, _m = _filed(_client(ScriptedProvider(CHUNKS)), conn=conn)
     assert row["operation"] == "embed"
     assert row["prompt_tokens"] == tokens.count_tokens(PROMPT_TEXT)

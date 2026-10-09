@@ -87,10 +87,11 @@ class Adapter(Protocol):
         False for."""
         ...
 
-    def decision_body(self, item: decisions.Item, target: wire.Target) -> dict:
-        """The body `decide` sends for `item`: pure, and holding no key or
-        URL, so a capture can record what was asked. Raises as `decide`
-        does."""
+    @staticmethod
+    def decision_body(item: decisions.Item, target: wire.Target) -> dict:
+        """The body `decide` sends for `item`: pure -- it reads no client --
+        and holding no key or URL, so a capture can record what was asked.
+        Raises as `decide` does."""
         ...
 
 
@@ -150,7 +151,8 @@ class OpenRouterAdapter:
         return await self._client.decide(item, target.model, target.api_key,
                                          usage=usage, bound=bound)
 
-    def decision_body(self, item: decisions.Item, target: wire.Target) -> dict:
+    @staticmethod
+    def decision_body(item: decisions.Item, target: wire.Target) -> dict:
         return openrouter.decision_body(item, target.model)
 
 
@@ -196,7 +198,8 @@ class OpenAICompatibleAdapter:
         return await self._client.decide(item, target.model, target.api_key,
                                          usage=usage, bound=bound, base_url=target.base_url)
 
-    def decision_body(self, item: decisions.Item, target: wire.Target) -> dict:
+    @staticmethod
+    def decision_body(item: decisions.Item, target: wire.Target) -> dict:
         return openai_compatible.decision_body(item, target.model)
 
 
@@ -233,8 +236,9 @@ class AnthropicAdapter:
                      *, bound: float | None = None) -> decisions.ItemResult:
         raise _no_native(self.kind)
 
-    def decision_body(self, item: decisions.Item, target: wire.Target) -> dict:
-        raise _no_native(self.kind)
+    @staticmethod
+    def decision_body(item: decisions.Item, target: wire.Target) -> dict:
+        raise _no_native("anthropic")
 
 
 class ClaudeAgentAdapter:
@@ -270,8 +274,9 @@ class ClaudeAgentAdapter:
                      *, bound: float | None = None) -> decisions.ItemResult:
         raise _no_native(self.kind)
 
-    def decision_body(self, item: decisions.Item, target: wire.Target) -> dict:
-        raise _no_native(self.kind)
+    @staticmethod
+    def decision_body(item: decisions.Item, target: wire.Target) -> dict:
+        raise _no_native("claude")
 
 
 #: Every connection kind, in the order the registry is built.
@@ -295,3 +300,22 @@ def build(*, openrouter: OpenRouterClient, openai_compatible: OpenAICompatibleCl
     clients = {"openrouter": openrouter, "openai_compatible": openai_compatible,
                "anthropic": anthropic, "claude": claude}
     return {kind: _CLASSES[kind](clients[kind]) for kind in KINDS}
+
+
+def decides_natively(kind: str) -> bool:
+    """Whether connections of `kind` have a native decisions endpoint: the
+    registry's `decides_natively` flag, False for a kind it does not know.
+    The KIND's answer -- whether one model may is
+    `store.inference.resolve.decides_natively(attempt)`."""
+    adapter = _CLASSES.get(kind)
+    return adapter is not None and bool(adapter.decides_natively)
+
+
+def decision_body(item: decisions.Item, target: wire.Target) -> dict:
+    """The body a native decision on `target` sends for `item`: its kind's
+    `decision_body`, which needs no client, so a capture can build it. A kind
+    with no native endpoint -- or one the registry does not know -- is
+    refused, unsent, as `decide` refuses it."""
+    if not decides_natively(target.kind):
+        raise _no_native(target.kind)
+    return _CLASSES[target.kind].decision_body(item, target)

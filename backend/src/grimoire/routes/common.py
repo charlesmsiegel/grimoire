@@ -405,7 +405,7 @@ def _turn_override(body) -> dict | None:
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
                    messages: list[dict] | None = None,
-                   conn: dict | None = None) -> None:
+                   conn: dict | wire.Target | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -423,10 +423,10 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     variant callback is handed a model id only -- so its counts read as
     estimates, which is the safe direction.
 
-    `conn` is the connection this attempt is sent on, and what the snapshot
-    records about its sampler preset -- `llm_sampling.report`, the same split
-    the facade sends -- so a past turn says what it was sent WITH, and what
-    its backend could not take.
+    `conn` is the connection this attempt is sent on -- its lowered dict, or a
+    decision's target -- and what the snapshot records about its sampler
+    preset -- `llm_sampling.report`, the same split the facade sends -- so a
+    past turn says what it was sent WITH, and what its backend could not take.
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -453,10 +453,10 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
             # The fallback as the facade sends it: the one this call carries
             # (`llm.FALLBACK_KEY`), with the route's preset carried onto it
             # under the same rule.
-            fallback = conn.get(llm.FALLBACK_KEY) if conn is not None else None
+            fallback = conn.get(llm.FALLBACK_KEY) if isinstance(conn, dict) else None
             _record_prompt(cid, sid, task, variant, model=selected,
                            conn=llm.fallback_sampling(conn, fallback)
-                           if conn is not None and fallback is not None else None)
+                           if isinstance(conn, dict) and fallback is not None else None)
         messages.on_variant = on_variant
     # The scene check and the append are ONE critical section, on the same lock
     # `record` uses. Another client can rename or delete the scene between the

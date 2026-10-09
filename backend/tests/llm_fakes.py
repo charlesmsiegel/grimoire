@@ -7,7 +7,7 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
     async def stream(messages, chain, usage=None, *, schema=None) -> AsyncIterator[str]
     async def complete(messages, chain, usage=None, *, schema=None, retries=None) -> str
     async def single(messages, target, usage=None) -> str
-    async def decide_native(item, conn, usage=None, *, retries=None) -> ItemResult
+    async def decide_native(item, target, usage=None, *, retries=None) -> ItemResult
     async def list_models(conn) -> list[dict]
     async def check(conn) -> None
 
@@ -21,10 +21,12 @@ handed a dict, so every assertion written against the dict still holds.
 `decide_native` is a native decisions endpoint's one attempt (slice H, spec
 7.4). `FakeLLM(decisions=[...])` scripts it by call order like `turns`, each
 entry an `ItemResult` to return or an `LLMError` to raise; the calls are
-recorded in `native_requests`. Like the facade, it takes the fallback off
-the connection, and refuses a kind with no native endpoint and an item
-`decisions.native_gap` names before recording or stamping anything, with the
-facade's own errors, so a chain test sees the same refusal.
+recorded in `native_requests` as `(item, target, retries)`. Like the facade,
+it refuses a kind with no native endpoint (`adapters.decides_natively`) and
+an item `decisions.native_gap` names before recording or stamping anything,
+with the facade's own errors, so a chain test sees the same refusal, and
+stamps the target without its sampler preset, which a native call never
+sends.
 
 `schema` is the JSON Schema `decide` asks the facade for (slice F, spec 7.2).
 `complete` records it in `schemas`, one entry per call (None when the call
@@ -94,14 +96,8 @@ from pathlib import Path
 
 import anyio
 
-from grimoire import decisions, llm_usage, wire
-from grimoire.llm import (
-    ATTEMPTED,
-    FALLBACK_KEY,
-    _native_kind,
-    _without_fallback,
-    effective_model,
-)
+from grimoire import adapters, decisions, llm_usage, wire
+from grimoire.llm import ATTEMPTED, FALLBACK_KEY, effective_model
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -135,14 +131,20 @@ def _chain_of(attempt) -> wire.Chain | None:
     return None
 
 
-def carrying(conn: dict, fallback: dict | None) -> dict:
-    """`conn` carrying `fallback` as the call's own (`llm.FALLBACK_KEY`), the
-    way a resolved dict carries the resolver's -- where a call's fallback
-    comes from, now that the client holds none. None, or a conn that already
-    carries one, leaves the conn as it is."""
-    if fallback is None or FALLBACK_KEY in conn:
+def carrying(conn, fallback: dict | None):
+    """`conn` carrying `fallback` as the call's own, the way a resolution
+    carries the resolver's -- where a call's fallback comes from, now that the
+    client holds none: a dict under `llm.FALLBACK_KEY`, and a target or a
+    chain as a `wire.Chain` with `fallback` read as its fallback. None, or an
+    attempt that already carries one, leaves it as it is."""
+    if fallback is None:
         return conn
-    return {**conn, FALLBACK_KEY: fallback}
+    if isinstance(conn, dict):
+        return conn if FALLBACK_KEY in conn else {**conn, FALLBACK_KEY: fallback}
+    chain = _chain_of(conn)
+    if chain is None or chain.fallback is not None:
+        return conn
+    return wire.Chain(chain.primary, wire.from_lowered(fallback).primary)
 
 
 class Cassette:
@@ -306,7 +308,7 @@ class FakeLLM:
         self.noted: list[tuple] = []
         #: The native decisions script (the last entry repeats), and each
         #: `decide_native` call that got past the gap check, as
-        #: `(item, conn, retries)`. Not counted in `calls`: no generation ran.
+        #: `(item, target, retries)`. Not counted in `calls`: no generation ran.
         self.decisions = None if decisions is None else list(decisions)
         self.native_requests: list[tuple] = []
 
@@ -334,22 +336,26 @@ class FakeLLM:
         if self.stall:
             await asyncio.sleep(STALL_SECONDS)
 
-    async def decide_native(self, item, conn, usage=None, *, retries=None):
+    async def decide_native(self, item, target, usage=None, *, retries=None):
         """The next scripted native decision. An `LLMError` entry is raised; an
         `ItemResult` is returned, stamped `backend="native"` when it names
         none. The holder is stamped as `stream` stamps it, so a meter files
         the row the real facade's would."""
         if self.decisions is None:
             raise AssertionError("FakeLLM has no native decisions scripted")
-        # The facade's own boundary, in its order: the fallback off, then a
-        # kind with no endpoint, then the gap -- each before any stamp.
-        conn = _without_fallback(conn)
-        _native_kind(conn)
+        # The facade's own boundary, in its order: a kind with no endpoint,
+        # then the gap -- each before any stamp. A dict is read as the facade
+        # reads one (its shim), without the fallback it carries.
+        chain = _chain_of(target)
+        target = chain.primary if chain is not None else target
+        if not adapters.decides_natively(target.kind):
+            raise LLMError("bad_response",
+                           f"{target.kind} connections have no native decisions endpoint")
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
-        self.native_requests.append((item, conn, retries))
-        self._stamp(usage, conn)
+        self.native_requests.append((item, target, retries))
+        self._stamp(usage, target.without_sampling())
         entry = self.decisions[min(len(self.native_requests), len(self.decisions)) - 1]
         if isinstance(entry, LLMError):
             raise entry

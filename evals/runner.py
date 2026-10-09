@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from grimoire import decisions, inference, llm, openai_compatible, openrouter
+from grimoire import adapters, decisions, inference, openai_compatible, openrouter, wire
 from grimoire.store.inference import providers
 from grimoire.store.inference import resolve as inference_resolve
 
@@ -235,11 +235,12 @@ def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.
 
     `chain` is `inference.stages(resolved)`, exactly what production sends.
     `native` and `structured` are one stage on the primary, without its
-    fallback (`inference.without_fallback`, as production's own stage is),
+    fallback (`wire.Chain.alone`, as production's own stage is),
     so the two backends can be compared on the SAME model (a native-only
     model against a structured one would compare the models as well). Each
     refuses (`BackendRefusedError`) a primary that cannot take it: `native` a
-    connection kind with no decisions endpoint (`llm.NATIVE_DECISION_KINDS`),
+    connection kind with no decisions endpoint (`adapters.decides_natively`,
+    the registry's flag for the KIND),
     a provider preset whose `never` holds `decide_native`, or a model known
     (`resolve.decides_natively`: a `no` that is not a guess; `unknown` is
     allowed, spec 5.3) unable to decide natively; `structured` a primary
@@ -260,8 +261,8 @@ def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.
     primary = resolved.attempts[0]
     where = f"{primary.model or '(default)'} on {primary.provider_id}"
     if backend == decisions.NATIVE_BACKEND:
-        kind = primary.conn.get("kind", "openrouter")
-        if kind not in llm.NATIVE_DECISION_KINDS:
+        kind = primary.target.kind
+        if not adapters.decides_natively(kind):
             raise BackendRefusedError(
                 f"--decide-backend native: {where} is a {kind} connection, "
                 f"which has no native decisions endpoint.")
@@ -276,7 +277,7 @@ def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.
     elif not inference_resolve.generates(primary):
         raise BackendRefusedError(
             f"--decide-backend structured: {where} is known unable to generate.")
-    return (inference.Stage(backend, inference.without_fallback(primary.conn), None),)
+    return (inference.Stage(backend, wire.Chain(primary.target), None),)
 
 
 def backend_note(decision: decisions.Decision) -> str:

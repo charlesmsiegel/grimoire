@@ -1144,7 +1144,7 @@ def test_identity_on_a_decide_only_model_answers_natively(client, scene, on):
     assert body["identity"]["status"] == "ok"
     assert _checks(body) == [("new", "accepted")]
     [(_item, conn, _retries)] = fake.native_requests
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/decider")
     assert identity_requests(fake) == []
     assert [(r["operation"], r["decision_mode"]) for r in _identity_rows(cid)] == [
         ("decide", "native")]
@@ -1167,8 +1167,8 @@ def test_identity_on_a_decide_only_model_answers_on_the_fallback(client, scene, 
     assert body["identity"]["status"] == "ok"
     assert len(fake.native_requests) == 1
     [sent] = identity_requests(fake)
-    assert (sent["conn"]["id"], sent["conn"]["model"]) == on
-    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+    assert (sent["target"].provider_id, sent["target"].model) == on
+    assert all(r["target"].model != "vendor/decider" for r in fake.requests)
 
 
 def test_a_native_identity_answer_maps_with_an_empty_reason(client, scene):
@@ -1246,7 +1246,7 @@ def test_a_budget_stopped_native_stage_is_the_budget_through_its_fallback(
     real_native = fake.decide_native
 
     def stalls(item, conn, *args, **kwargs):
-        asked.append(conn["model"])          # the call is built; the clock decides if it goes
+        asked.append(conn.model)          # the call is built; the clock decides if it goes
 
         async def sent():
             result = await real_native(item, conn, *args, **kwargs)
@@ -1312,7 +1312,7 @@ def test_identity_on_a_model_that_neither_generates_nor_decides_fails_the_phase(
                                       "generate text or make native decisions"), block["reason"]
     assert identity_requests(fake) == [] and _identity_rows(cid) == []
     assert fake.native_requests == []
-    assert all(q["conn"].get("model") != "vendor/neither" for q in fake.requests)
+    assert all(q["target"].model != "vendor/neither" for q in fake.requests)
     [edit] = _plot_edits(body)
     assert edit["identity_check"]["status"] == "hint_only"
 
@@ -1332,8 +1332,8 @@ def test_the_decision_role_now_serves_the_identity_check(client, scene):
     assert _absorb(client, cid, sid)["identity"]["status"] == "ok"
 
     [sent] = identity_requests(fake)
-    assert (sent["conn"]["id"], sent["conn"]["model"]) == ("spare", "vendor/spare")
-    assert {r["conn"]["id"] for r in fake.requests if r is not sent} == {"openrouter"}
+    assert (sent["target"].provider_id, sent["target"].model) == ("spare", "vendor/spare")
+    assert {r["target"].provider_id for r in fake.requests if r is not sent} == {"openrouter"}
 
 
 def test_identity_rows_file_decide_and_structured(client, scene, monkeypatch):

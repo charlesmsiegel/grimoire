@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from grimoire import decisions, llm, llm_usage, openai_compatible
+from grimoire import decisions, llm, llm_usage, openai_compatible, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate, Score
 from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
@@ -53,6 +53,8 @@ SPEAKER_ONLY = Item(CONTEXT, (SPEAKER,))
 ONE_OPTION = Choice("speaker", "Who speaks next?", (MARA,), allow_none=True)
 
 CONN = {"id": "or-main", "kind": "openrouter", "model": MODEL, "api_key": KEY}
+#: `CONN` as the target the facade sends it.
+TARGET = wire.from_lowered(CONN).primary
 OPENAI_CONN = {"id": "oa-main", "kind": "openai_compatible", "model": OPENAI_MODEL,
                "api_key": OPENAI_KEY, "base_url": OPENAI_BASE}
 
@@ -798,33 +800,34 @@ async def test_fake_decide_native_scripts_and_stamps():
     fake = FakeLLM([["unused"]], decisions=[answered, failure])
     holder: dict = {}
     item = Item(CONTEXT, (OVER,))
-    result = await fake.decide_native(item, CONN, holder, retries=1)
+    result = await fake.decide_native(item, TARGET, holder, retries=1)
     assert result.backend == "native" and result.answers == answered.answers
     assert holder["model"] == MODEL and holder["provider"] == "openrouter"
-    assert holder[llm.ATTEMPTED] is CONN and holder["attempts"] == 1
+    assert holder[llm.ATTEMPTED] == TARGET and holder["attempts"] == 1
     with pytest.raises(LLMError) as exc:
-        await fake.decide_native(item, CONN)
+        await fake.decide_native(item, TARGET)
     assert exc.value is failure
     with pytest.raises(LLMError):  # the last entry repeats
-        await fake.decide_native(item, CONN)
-    assert fake.native_requests == [(item, CONN, 1), (item, CONN, None), (item, CONN, None)]
+        await fake.decide_native(item, TARGET)
+    assert fake.native_requests == [(item, TARGET, 1), (item, TARGET, None),
+                                    (item, TARGET, None)]
     assert fake.calls == 0  # no generation was made
 
     structured = ItemResult({"over": Answer(False)}, backend="structured")
-    assert (await FakeLLM([["x"]], decisions=[structured]).decide_native(item, CONN)).backend == \
-        "structured"
+    assert (await FakeLLM([["x"]], decisions=[structured]).decide_native(
+        item, TARGET)).backend == "structured"
 
     crowd = Item(CONTEXT, (Choice("speaker", "Who?", tuple(
         Option(f"characters:c{i}", "") for i in range(255)), allow_none=True),))
     refusing = FakeLLM([["x"]], decisions=[answered])
     empty: dict = {}
     with pytest.raises(LLMError) as exc:
-        await refusing.decide_native(crowd, CONN, empty)
+        await refusing.decide_native(crowd, TARGET, empty)
     assert exc.value.code == "native_unrepresentable" and empty == {}
     assert refusing.native_requests == []
 
     with pytest.raises(AssertionError, match="FakeLLM has no native decisions scripted"):
-        await FakeLLM([["x"]]).decide_native(item, CONN)
+        await FakeLLM([["x"]]).decide_native(item, TARGET)
     with pytest.raises(ValueError, match="at least one native decision"):
         FakeLLM([["x"]], decisions=[])
 
@@ -841,22 +844,26 @@ async def test_fake_decide_native_refuses_a_kind_the_facade_refuses(kind):
 
 
 async def test_fake_decide_native_strips_the_fallback_before_it_stamps():
-    fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
-    conn = {**CONN, FALLBACK_KEY: {"kind": "openrouter", "model": "spare/model"}}
-    holder: dict = {}
-    await fake.decide_native(Item(CONTEXT, (OVER,)), conn, holder)
-    assert holder[llm.ATTEMPTED] == CONN and FALLBACK_KEY not in holder[llm.ATTEMPTED]
-    assert fake.native_requests[0][1] == CONN
-    assert FALLBACK_KEY in conn
+    """Handed a chain, the fake -- like the facade -- sends and stamps its
+    primary alone; so it does a dict, read as the facade reads one."""
+    spare = wire.from_lowered({"kind": "openrouter", "model": "spare/model"}).primary
+    for handed in (wire.Chain(TARGET, spare),
+                   {**CONN, FALLBACK_KEY: {"kind": "openrouter", "model": "spare/model"}}):
+        fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
+        holder: dict = {}
+        await fake.decide_native(Item(CONTEXT, (OVER,)), handed, holder)
+        assert holder[llm.ATTEMPTED] == TARGET
+        assert fake.native_requests[0][1] == TARGET
 
 
 async def test_fake_decide_native_accepts_openai_compatible():
     fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
     holder: dict = {}
-    result = await fake.decide_native(Item(CONTEXT, (OVER,)), OPENAI_CONN, holder)
+    target = wire.from_lowered(OPENAI_CONN).primary
+    result = await fake.decide_native(Item(CONTEXT, (OVER,)), target, holder)
     assert result.answers["over"].answer is True
     assert holder["provider"] == "openai_compatible"
-    assert fake.native_requests == [(Item(CONTEXT, (OVER,)), OPENAI_CONN, None)]
+    assert fake.native_requests == [(Item(CONTEXT, (OVER,)), target, None)]
 
 
 # ---- continuity's folded choices on the native path ------------------------

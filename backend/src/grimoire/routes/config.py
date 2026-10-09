@@ -25,6 +25,7 @@ from .. import (
     llm_sampling,
     llm_usage,
     store,
+    wire,
 )
 from ..llm import LLMClient
 from ..llm_errors import LLMError
@@ -1169,7 +1170,8 @@ async def _embed_probe(raw: dict, conn: dict, model: str) -> dict:
         m.usage.update({"model": model, "connection": raw.get("name") or raw["id"],
                         "provider": raw.get("kind", "openrouter"), "attempts": 1,
                         "requested_model": model})
-        llm_usage.account(m.usage, llm_usage.with_account(conn, operation="embed"))
+        llm_usage.account(m.usage,
+                          wire.from_lowered(conn).primary.with_account(operation="embed"))
         try:
             # Off the loop: the embeddings client is synchronous by design.
             vectors = await asyncio.to_thread(lambda: _EMBEDDINGS.embed(
@@ -1259,20 +1261,23 @@ async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str)
             return _Outcome(await _embed_probe(raw, conn, model), True, False)
         with store.usage.meter("model-test") as m:
             # Completed is accepted; the text is not read. The row names the
-            # probe's operation (M9) on a copy: `conn` serves every probe.
+            # probe's operation (M9) on a new target: `conn` serves every
+            # probe. Read as a target through `wire.from_lowered` until Task 10
+            # builds the probes' targets directly (`resolve.target_for`).
+            target = wire.from_lowered(conn).primary
             if probe.operation == "decide":
                 # One native request, one attempt: any `ItemResult` is a body
                 # the endpoint accepted and the adapter normalised. The row
                 # says it was native, which the ledger never models.
                 await _bounded_call(client.decide_native(
                     probes.PROBE_ITEM,
-                    llm_usage.with_account(conn, operation=probe.operation,
-                                           decision_mode=decisions.NATIVE_BACKEND),
+                    target.with_account(operation=probe.operation,
+                                        decision_mode=decisions.NATIVE_BACKEND),
                     m.usage, retries=0), ceiling=MODEL_TEST_CEILING)
             else:
                 await _bounded_call(client.single(
                     probes.messages(cap),
-                    llm_usage.with_account(conn, operation=probe.operation),
+                    target.with_account(operation=probe.operation),
                     m.usage), ceiling=MODEL_TEST_CEILING)
     except LLMError as exc:
         return _Outcome({"ok": False, "kind": exc.kind,

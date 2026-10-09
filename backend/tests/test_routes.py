@@ -7666,7 +7666,7 @@ def test_voice_drift_on_a_decide_only_model_answers_natively(client, on):
     body = review_runs.absorb(client, cid, sid).json()
     assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
     [(_item, conn, _retries)] = fake.native_requests
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/decider")
     assert _voice_requests(fake) == []
     (row,) = _voice_rows()
     assert (row["operation"], row["decision_mode"]) == ("decide", "native")
@@ -7686,8 +7686,8 @@ def test_voice_drift_on_a_decide_only_model_answers_on_the_fallback(client, on):
     assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
     assert len(fake.native_requests) == 1
     (sent,) = _voice_requests(fake)
-    assert (sent["conn"]["id"], sent["conn"]["model"]) == on
-    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+    assert (sent["target"].provider_id, sent["target"].model) == on
+    assert all(r["target"].model != "vendor/decider" for r in fake.requests)
 
 
 def test_a_voice_check_the_clock_refused_on_both_stages_is_skipped_not_failed(
@@ -7834,7 +7834,7 @@ def test_a_voice_drift_overrun_on_the_fallback_is_filed_and_noted_against_it(cli
     assert (row["connection"], row["model"]) == ("spare", "vendor/spare")
     logged = store.logs.read(level="error", module="voice-drift")["rows"]
     assert len(logged) == 1 and logged[0]["kind"] == "timeout"
-    assert [(c["id"], c["model"], e.kind) for c, e in noted] == [
+    assert [(c.provider_id, c.model, e.kind) for c, e in noted] == [
         ("spare", "vendor/spare", "timeout")]
 
 
@@ -7850,8 +7850,8 @@ def test_the_decision_role_now_serves_voice_drift(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     assert review_runs.absorb(client, cid, sid).json()["voice"]["status"] == "ok"
     (sent,) = _voice_requests(fake)
-    assert (sent["conn"]["id"], sent["conn"]["model"]) == ("spare", "vendor/spare")
-    assert {r["conn"]["id"] for r in fake.requests if r is not sent} == {"openrouter"}
+    assert (sent["target"].provider_id, sent["target"].model) == ("spare", "vendor/spare")
+    assert {r["target"].provider_id for r in fake.requests if r is not sent} == {"openrouter"}
 
 
 def test_voice_drift_on_a_legacy_store_resolves_as_before(client):
@@ -7868,7 +7868,7 @@ def test_voice_drift_on_a_legacy_store_resolves_as_before(client):
         client.app.dependency_overrides[routes.get_llm] = lambda: fake  # noqa: B023 -- this iteration
         review_runs.absorb(client, cid, sid)
         (sent,) = _voice_requests(fake)
-        assert sent["conn"]["id"] == want, legacy
+        assert sent["target"].provider_id == want, legacy
 
 
 def test_a_stale_voice_finding_is_reported_as_a_conflict(client):

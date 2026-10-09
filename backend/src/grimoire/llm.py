@@ -14,7 +14,7 @@ import random
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from concurrent.futures import Executor, Future
 from typing import NamedTuple, overload
 
@@ -28,8 +28,6 @@ from . import (
     llm_sampling,
     llm_usage,
     model_guidance,
-    openai_compatible,
-    openrouter,
     wire,
 )
 from .anthropic import AnthropicClient
@@ -355,31 +353,6 @@ REJECTED_STATUSES = frozenset({400, 404, 413, 415, 422})
 #: while it serves every chat call -- so the connection answered, and is not
 #: marked failing. A revoked key answers 401 and stays observed (M6).
 NATIVE_REJECTED_STATUSES = REJECTED_STATUSES | {403}
-
-
-class NativeAdapter(NamedTuple):
-    """How one connection kind reaches its native decisions endpoint: the pure
-    builder of its request body (`native_body`), the `LLMClient` attribute
-    holding the adapter whose `decide` sends it (`LLMClient.decide_native`),
-    and the connection fields that `decide` takes by name beside the model and
-    key -- an `openai_compatible` endpoint's `base_url`, which is the
-    connection's and not the adapter's."""
-
-    body: Callable[[decisions.Item, str], dict]
-    client: str
-    conn_fields: tuple[str, ...] = ()
-
-
-#: Connection kinds with a native decisions endpoint. The ONE dispatch table:
-#: `native_body` and `decide_native` both choose by kind through it, so a kind
-#: is never sent through another kind's adapter -- with that kind's key.
-#: `openai_compatible` is reached only by the OpenAI preset: every other preset
-#: of that kind lists `decide_native` in `never`, so nothing resolves it native.
-NATIVE_DECISION_KINDS: dict[str, NativeAdapter] = {
-    "openrouter": NativeAdapter(openrouter.decision_body, "_openrouter"),
-    "openai_compatible": NativeAdapter(openai_compatible.decision_body, "_openai_compatible",
-                                       ("base_url",)),
-}
 
 
 class _Route(NamedTuple):
@@ -1242,20 +1215,24 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                              words=words)
 
 
-def _native_kind(conn: dict) -> str:
-    """`conn`'s kind, when it has a native decisions endpoint; raises the
-    `bad_response` a call on any other kind is refused with, unsent."""
-    kind = conn.get("kind", "openrouter")
-    if kind not in NATIVE_DECISION_KINDS:
-        raise LLMError("bad_response", f"{kind} connections have no native decisions endpoint")
-    return kind
+def _native_route(target: wire.Target | dict) -> _Route:
+    """The one route a native decision makes: `target` alone and without its
+    sampler preset, which a decision is never sent (spec 8) -- so neither the
+    wire nor the ledger's `preset` names one. A dict is handed back as itself
+    (`_spelled`), less its fallback and its `sampling`."""
+    said, _fallback = _spelled(target)
+    if said is None:
+        return _Route(_attempt_of(target).without_sampling(), 0)
+    return _Route({k: v for k, v in said.items() if k != "sampling"}, 0)
 
 
-def native_body(item: decisions.Item, conn: dict) -> dict:
-    """The body a native decision on `conn` sends for `item`: its adapter's
-    `decision_body` on the model the call runs on. Pure, and holds no key or
-    URL, so a capture can record what was asked."""
-    return NATIVE_DECISION_KINDS[_native_kind(conn)].body(item, effective_model(conn))
+def native_body(item: decisions.Item, target: wire.Target | dict) -> dict:
+    """The body a native decision on `target` sends for `item`: its kind's
+    adapter's `decision_body`, on the model the call runs on. Pure, and holds
+    no key or URL, so a capture can record what was asked. A kind with no
+    native endpoint is refused with the `bad_response` a call on it gets,
+    unsent. A dict is read through the shim (`_as_chain`)."""
+    return adapters.decision_body(item, _attempt_of(target))
 
 
 class LLMClient:
@@ -1271,8 +1248,7 @@ class LLMClient:
         # Last in the signature so no positional caller shifts.
         self._anthropic = anthropic if anthropic is not None else AnthropicClient()
         #: One adapter per kind (`adapters`), around the clients above, which
-        #: stay attributes: they are the test seams, and slice H's native
-        #: table (`NATIVE_DECISION_KINDS`) names them until 9c.
+        #: stay attributes: they are the test seams.
         self._adapters = adapters.build(
             openrouter=self._openrouter, openai_compatible=self._openai_compatible,
             anthropic=self._anthropic, claude=self._claude)
@@ -1328,6 +1304,14 @@ class LLMClient:
         """The adapter that sends a target of `kind`. A kind the registry does
         not know is sent through OpenRouter's, as the facade always sent one."""
         return self._adapters.get(kind) or self._adapters["openrouter"]
+
+    def _native_adapter(self, kind: str) -> adapters.Adapter:
+        """The adapter that sends a native decision on `kind`, or the
+        `bad_response` a kind with no native endpoint is refused with,
+        unsent (`adapters.decides_natively`)."""
+        if not adapters.decides_natively(kind):
+            raise LLMError("bad_response", f"{kind} connections have no native decisions endpoint")
+        return self._adapters[kind]
 
     def _routes(self, attempt: wire.Chain | wire.Target | dict,
                 retries: int | None = None) -> list[_Route]:
@@ -1571,16 +1555,19 @@ class LLMClient:
                           usage=usage, capture=sink, counter=self._count_tokens)
         return "".join([chunk async for chunk in agen])
 
-    async def decide_native(self, item: decisions.Item, conn: dict, usage: dict | None = None,
-                            *, retries: int | None = None) -> decisions.ItemResult:
-        """Ask `item` of `conn`'s native decisions endpoint (spec 7.4): one
-        attempt, retried, and never fallen back -- the chain of stages is
-        `inference.decide`'s, so the fallback the dict carries is taken off.
+    async def decide_native(self, item: decisions.Item, target: wire.Target | dict,
+                            usage: dict | None = None, *,
+                            retries: int | None = None) -> decisions.ItemResult:
+        """Ask `item` of `target`'s native decisions endpoint (spec 7.4), through
+        its kind's adapter: one attempt, retried, and never fallen back -- the
+        chain of stages is `inference.decide`'s, so a fallback a dict carries
+        is not read.
 
         Refused unsent, before any stamp (so a meter files no row, and still
-        records the failure): a kind with no native endpoint, and an item the
-        endpoint cannot represent (`decisions.native_gap`, ruling 25), as a
-        `bad_response` with the code `native_unrepresentable`.
+        records the failure): a kind with no native endpoint
+        (`adapters.decides_natively`), and an item the endpoint cannot
+        represent (`decisions.native_gap`, ruling 25), as a `bad_response`
+        with the code `native_unrepresentable`.
 
         Retries are `_resilient`'s rule: only `RETRYABLE_KINDS`, never past a
         `Retry-After` over `RETRY_AFTER_CAP`, after the longer of the backoff
@@ -1588,19 +1575,17 @@ class LLMClient:
         Each attempt is stamped and captured like a generation's; none is
         estimated (no `Estimate`, no `note_prompt`), because a native row's
         billing unit is not a chat prompt, and none is sent sampling, which a
-        decision takes none of (spec 8) -- nor stamped with it: `conn`'s
-        `sampling` is dropped, so the row files no `preset`. A status in
+        decision takes none of (spec 8) -- nor stamped with it: the target is
+        sent `without_sampling`, so the row files no `preset`. A status in
         `NATIVE_REJECTED_STATUSES` is not reported to the observer.
+
+        A dict is read through the shim (`_as_chain`); what is handed back
+        for it (the observer, `ATTEMPTED`) is that dict, without its fallback
+        and its sampler preset, as before the facade sent targets.
         """
-        # Neither the fallback (the chain's) nor the sampler preset (a native
-        # call sends none, spec 8), so the ledger row `_stamp` files names no
-        # preset that was never sent (`llm_usage.account`).
-        conn = {k: v for k, v in _without_fallback(conn).items() if k != "sampling"}
-        route = _Route(conn, 0)
-        kind = _native_kind(conn)
-        entry = NATIVE_DECISION_KINDS[kind]
-        adapter = getattr(self, entry.client)
-        extra = {field: conn.get(field, "") for field in entry.conn_fields}
+        route = _native_route(target)
+        attempt = route.target
+        adapter = self._native_adapter(attempt.kind)
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
@@ -1619,18 +1604,17 @@ class LLMClient:
             _stamp(usage, route, tries)
             if sink is not None and usage is not None:
                 usage[llm_capture.KEY] = llm_capture.Capture(
-                    sink, call_id, tries, effective_model(conn), kind)
+                    sink, call_id, tries, attempt.model, attempt.kind)
                 llm_capture.emit(usage, "start", None)
             outcome = "interrupted"
             try:
-                result = await adapter.decide(
-                    item, effective_model(conn), conn.get("api_key", ""), usage=usage,
-                    bound=self._timeout_seconds(), **extra)
+                result = await adapter.decide(item, attempt, usage,
+                                              bound=self._timeout_seconds())
                 outcome = "complete"
             except LLMError as exc:
                 outcome = "error"
                 if exc.status not in NATIVE_REJECTED_STATUSES:
-                    _observe(self._observer, conn, exc)
+                    _observe(self._observer, route.said, exc)
                 retryable = (exc.kind in RETRYABLE_KINDS
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
                 if not retryable or tries == attempts:
@@ -1639,7 +1623,7 @@ class LLMClient:
                 continue
             finally:
                 llm_capture.emit(usage, "end", {"status": outcome})
-            _observe(self._observer, conn, None)
+            _observe(self._observer, route.said, None)
             return result
         raise AssertionError("unreachable: the last attempt returns or raises")
 

@@ -160,10 +160,17 @@ def test_the_registry_embed_flag_matches_the_store_endpoint_rule():
         assert bool(resolve.embed_endpoint(conn)) is registry[kind].embeds, kind
 
 
-def test_decides_natively_is_the_native_table():
+def test_decides_natively_is_every_kind_a_preset_may_decide_natively_on():
+    """The registry's native flag (which replaced slice H's
+    `NATIVE_DECISION_KINDS` table in 9c) is True for exactly the kinds
+    that have a provider preset not ruling `decide_native` out: OpenRouter,
+    and OpenAI-compatible through the OpenAI preset."""
     registry = _registry(_clients())
-    assert ({k for k, a in registry.items() if a.decides_natively}
-            == set(llm.NATIVE_DECISION_KINDS))
+    native = {k for k, a in registry.items() if a.decides_natively}
+    assert native == {p.kind for p in providers.PRESETS.values()
+                      if "decide_native" not in p.never}
+    assert native == {"openrouter", "openai_compatible"}
+    assert all(adapters.decides_natively(k) is (k in native) for k in (*adapters.KINDS, "x"))
 
 
 def test_the_derived_kind_sets_are_the_facades():
@@ -311,7 +318,7 @@ def test_a_native_body_is_the_same_from_a_target(tmp_path):
     seen = 0
     for _where, resolved in _resolved("base:routed", tmp_path, migrated=True):
         for attempt in resolved.attempts:
-            if attempt.target.kind in llm.NATIVE_DECISION_KINDS:
+            if adapters.decides_natively(attempt.target.kind):
                 assert (registry[attempt.target.kind].decision_body(ITEM, attempt.target)
                         == llm.native_body(ITEM, attempt.conn))
                 seen += 1
@@ -449,7 +456,10 @@ def test_the_ledger_row_is_unchanged_through_the_shim(tmp_path):
         generate = resolve.resolve("chat")
         decide = resolve.resolve("scene-break", operation="decide")
         assert decide.chain is not None and decide.chain.primary.structured
-        stamped = llm_usage.with_account(decide.conn, decision_mode="structured")
+        # The dict spelling of the stamp `decide` makes (`_with_mode`):
+        # the primary's account block, replaced whole.
+        stamped = {**decide.conn, llm_usage.ACCOUNT_KEY: {
+            **decide.conn[llm_usage.ACCOUNT_KEY], "decision_mode": "structured"}}
         for resolved, conn, chain, schema in (
                 (generate, generate.conn, generate.chain, None),
                 (decide, stamped, decide.chain.with_account(decision_mode="structured"), SCHEMA)):

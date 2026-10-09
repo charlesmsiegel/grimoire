@@ -264,7 +264,7 @@ def test_a_global_route_sends_that_job_to_its_own_connection(client, route):
     DRIVERS[route](client, wid, cid, sid)
 
     assert fake.requests, f"{route}: nothing reached the provider"
-    assert {r["conn"]["id"] for r in fake.requests} == {routed}, (
+    assert {r["target"].provider_id for r in fake.requests} == {routed}, (
         f"{route} did not run on the connection it was routed to")
 
 
@@ -277,7 +277,7 @@ def test_an_unset_route_still_runs_on_the_primary_role(client, route):
     DRIVERS[route](client, wid, cid, sid)
 
     assert fake.requests
-    assert {r["conn"]["id"] for r in fake.requests} == {"openrouter"}
+    assert {r["target"].provider_id for r in fake.requests} == {"openrouter"}
 
 
 @pytest.mark.parametrize("route", sorted(CAMPAIGN_ROUTES))
@@ -291,7 +291,7 @@ def test_a_campaign_override_beats_the_global_route(client, route):
 
     DRIVERS[route](client, wid, cid, sid)
 
-    assert {req["conn"]["id"] for req in fake.requests} == {locally}
+    assert {req["target"].provider_id for req in fake.requests} == {locally}
 
 
 @pytest.mark.parametrize("route", sorted(GLOBAL_ONLY))
@@ -311,7 +311,7 @@ def test_a_world_scoped_route_takes_no_campaign_override(client, route):
 
     DRIVERS[route](client, wid, cid, sid)
 
-    assert {req["conn"]["id"] for req in fake.requests} == {"openrouter"}
+    assert {req["target"].provider_id for req in fake.requests} == {"openrouter"}
 
 
 def test_absorbs_phases_each_follow_their_own_route(client):
@@ -329,7 +329,7 @@ def test_absorbs_phases_each_follow_their_own_route(client):
 
     review_runs.absorb(client, cid, sid)
 
-    used = {r["conn"]["id"] for r in fake.requests}
+    used = {r["target"].provider_id for r in fake.requests}
     assert extraction in used, "the extraction did not use the absorb route"
     assert dossiers in used, "the dossier loop did not use the dossier route"
 
@@ -356,7 +356,7 @@ def test_the_reconcile_sweep_runs_on_the_continuity_route(client):
               in req["messages"][0]["content"]
               and "Candidate — " in req["messages"][1]["content"]]
     assert sweeps, "the sweep made no reconcile call"
-    assert {req["conn"]["id"] for req in sweeps} == {routed}
+    assert {req["target"].provider_id for req in sweeps} == {routed}
 
 
 def test_a_misrouted_secondary_phase_reports_itself_and_leaves_absorb_standing(client):
@@ -419,7 +419,7 @@ def test_a_scene_turn_and_its_retry_share_the_one_route(client):
                        json={}) as r:
         _drain(r)
 
-    assert {req["conn"]["id"] for req in fake.requests} == {routed}
+    assert {req["target"].provider_id for req in fake.requests} == {routed}
     assert len(fake.requests) >= 2
 
 
@@ -435,7 +435,7 @@ def test_a_route_naming_a_deleted_connection_falls_back_rather_than_failing(clie
 
     drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
-    assert {r["conn"]["id"] for r in fake.requests} == {"openrouter"}
+    assert {r["target"].provider_id for r in fake.requests} == {"openrouter"}
 
 
 def test_deleting_a_connection_clears_it_from_the_global_routes(client):

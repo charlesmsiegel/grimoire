@@ -14,7 +14,7 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import content_parts, decisions, llm_reasoning, prompts, store
+from .. import content_parts, decisions, llm_reasoning, prompts, store, wire
 from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
@@ -627,7 +627,11 @@ def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
     """Record one call's prompt in the prompt log. `outcome` is a decision's
     record of what it decided (`inference.Capture`), filed as a last
     `decision` section beside the messages built from plain ones, and left
-    out of `total_tokens`: it was never sent."""
+    out of `total_tokens`: it was never sent.
+
+    `conn` is the attempt the call was sent on: a generation's lowered dict,
+    or -- a decision's -- its `wire.Target`. A native decision is sent no
+    sampler preset, so its capture reports none (`outcome`'s `mode`)."""
     if not store.prompt_log.capturing():
         return
     # A prompt that carries its own breakdown (`PreparedMessages`) is filed
@@ -664,6 +668,11 @@ def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
+    if isinstance(conn, wire.Target):
+        native = (outcome or {}).get("mode") == decisions.NATIVE_BACKEND
+        _record_prompt(cid, sid, task, breakdown, model=conn.model, kind=conn.kind,
+                       messages=messages, conn=None if native else conn)
+        return
     _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), kind=conn["kind"], messages=messages,
                    conn=conn)
     if isinstance(messages, PreparedMessages):

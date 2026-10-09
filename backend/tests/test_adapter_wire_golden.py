@@ -49,7 +49,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire import decisions, llm, wire
+from grimoire import adapters, decisions, llm, wire
 from grimoire.llm_errors import LLMError
 
 from .test_adapter_registry import HAND_BUILT, ITEM, NATIVE, STATES, _resolved
@@ -163,20 +163,17 @@ def _cases(conn: dict) -> list[tuple[str, frozenset[str]]]:
     primary = frozenset({llm.effective_model(conn)})
     cases = [("ok", frozenset()), ("fallback", primary), ("structured", frozenset()),
              ("structured_fallback", primary), ("single", frozenset())]
-    if conn.get("kind", "openrouter") in llm.NATIVE_DECISION_KINDS:
+    if adapters.decides_natively(conn.get("kind", "openrouter")):
         cases.append(("native", frozenset()))
     return cases
 
 
 def _spellings(conn: dict, chain: wire.Chain | None, case: str) -> list:
     """The attempt, as each caller may hand it: the dict and its chain (the
-    target alone, for `single`). A native decision takes the dict alone until
-    Task 9c moves it onto a target."""
-    if case == "native":
-        return [conn]
+    target alone, for `single` and a native decision)."""
     if chain is None:
         chain = wire.from_lowered(conn)
-    return [conn, chain.primary if case == "single" else chain]
+    return [conn, chain.primary if case in ("single", "native") else chain]
 
 
 def _key(record: dict) -> str:

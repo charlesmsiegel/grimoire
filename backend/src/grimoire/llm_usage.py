@@ -178,7 +178,8 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
 #: `decision_mode` one call used. `store.inference.resolve.ACCOUNT_KEY`,
 #: restated because the gateway imports no store (#239); a test holds the two
 #: spellings equal. Private-looking for the reason `llm.FALLBACK_KEY` is: no
-#: adapter reads it, and nothing here sends it.
+#: adapter reads it, and nothing here sends it. A stamp is laid on a target's
+#: account (`wire.Target.with_account`), never on a dict's block.
 ACCOUNT_KEY = "_account"
 
 #: The account block's keys that `account` files, each as its own ledger field.
@@ -213,19 +214,6 @@ def account(usage: dict | None, target: wire.Target | dict) -> None:
         usage.update({key: value for key, value in values.items() if _text(value)})
     except Exception:  # noqa: BLE001 - see the docstring
         return
-
-
-def with_account(conn: dict, **fields: str) -> dict:
-    """`conn` with `fields` laid over its account block: a NEW conn and a NEW
-    block, and the one way to change an account block.
-
-    Never in place, because the block is shared: every `{**conn}` copy --
-    `llm.fallback_sampling`'s, `resolve.with_facts`'s -- carries the same dict,
-    so a write to it would rewrite the primary's and the fallback's at once.
-    Slice F stamps `decision_mode` per call through this; the model test call
-    stamps its probe's `operation`."""
-    block = conn.get(ACCOUNT_KEY)
-    return {**conn, ACCOUNT_KEY: {**(block if isinstance(block, dict) else {}), **fields}}
 
 
 # ---- a count the provider did not report (slice E, Task 3; spec 9.1) ----

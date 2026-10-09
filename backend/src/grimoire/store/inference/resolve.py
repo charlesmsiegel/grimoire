@@ -121,8 +121,8 @@ STRUCTURED_KEY = "_structured"
 #: (stamped on every lowered dict), and, on a resolved attempt, the
 #: `operation` and the `role` whose slot supplied it (spec 9.3).
 #: `llm_usage.ACCOUNT_KEY`, restated for the same reason; a test holds them
-#: equal. A block is never written in place (`llm_usage.with_account`): every
-#: `{**conn}` copy shares it.
+#: equal. A block is never written in place (`_stamp` replaces it whole):
+#: every `{**conn}` copy shares it.
 ACCOUNT_KEY = "_account"
 
 #: The ways reading one connection can fail, every one of which reads as "no

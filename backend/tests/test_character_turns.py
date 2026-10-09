@@ -663,9 +663,9 @@ def test_the_selector_capture_records_the_decision(client):
     assert {k: decision[k] for k in ("id", "label", "tier", "tokens", "dropped")} == {
         "id": "decision", "label": "decision", "tier": "lock-in", "tokens": 0,
         "dropped": False}
-    pick = fake.requests[0]["conn"]
+    pick = fake.requests[0]["target"]
     assert json.loads(decision["text"]) == {
-        "mode": "structured", "provider": pick["id"], "model": pick["model"],
+        "mode": "structured", "provider": pick.provider_id, "model": pick.model,
         "items": [{"backend": "structured",
                    "answers": {"next": {"answer": "characters:winifred"}}}]}
     assert captured["total_tokens"] == sum(row["tokens"] for row in sent) > 0
@@ -692,9 +692,9 @@ def test_the_speaker_on_a_decide_only_model_answers_natively(client, on):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
     [(_item, conn, _retries)] = fake.native_requests
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/decider")
     (actor,) = fake.requests
-    assert (actor["conn"]["id"], actor["conn"]["model"]) == ("openrouter", "vendor/active")
+    assert (actor["target"].provider_id, actor["target"].model) == ("openrouter", "vendor/active")
     assert _speakers(cid, sid) == ["Mara"]
 
 
@@ -712,9 +712,9 @@ def test_the_speaker_on_a_decide_only_model_answers_on_the_fallback(client, on):
     _chat(client, cid, sid)
     assert len(fake.native_requests) == 1
     pick, actor = fake.requests
-    assert (pick["conn"]["id"], pick["conn"]["model"]) == on
-    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
-    assert actor["conn"]["id"] == "openrouter"
+    assert (pick["target"].provider_id, pick["target"].model) == on
+    assert all(r["target"].model != "vendor/decider" for r in fake.requests)
+    assert actor["target"].provider_id == "openrouter"
     assert _speakers(cid, sid) == ["Mara"]
 
 
@@ -842,8 +842,8 @@ def test_the_decision_role_now_serves_the_speaker(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
     pick, actor = fake.requests
-    assert (pick["conn"]["id"], pick["conn"]["model"]) == ("spare", "vendor/spare")
-    assert (actor["conn"]["id"], actor["conn"]["model"]) == ("openrouter", "vendor/active")
+    assert (pick["target"].provider_id, pick["target"].model) == ("spare", "vendor/spare")
+    assert (actor["target"].provider_id, actor["target"].model) == ("openrouter", "vendor/active")
 
 
 def test_a_fenced_selector_reply_now_reads(client):

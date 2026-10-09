@@ -10,7 +10,8 @@ call asked for, into the usage holder `store.usage.Meter` writes.
 
 The account block is never mutated in place: `{**conn}` copies share it, so
 one in-place write would rewrite the primary's block and the fallback's copy
-at once. `llm_usage.with_account` is the one way to change it.
+at once. A stamp is laid on a target (`wire.Target.with_account`), which
+makes new ones and leaves the resolution's as they were.
 
 Invented provider names, fake keys and `vendor/model-*` models only.
 """
@@ -24,7 +25,7 @@ from copy import deepcopy
 import pytest
 
 import grimoire.store as store
-from grimoire import llm, llm_usage
+from grimoire import llm, llm_usage, wire
 from grimoire.llm import LLMClient
 from grimoire.routes.common import require_inference
 from grimoire.store import inference_keys as keys
@@ -88,7 +89,7 @@ def with_fallback(primary) -> tuple[str, str]:
     return primary, fb
 
 
-def _filed(conn: dict, provider, task: str = "chat") -> dict:
+def _filed(conn: dict | wire.Chain, provider, task: str = "chat") -> dict:
     """The ledger row one call through a REAL facade files."""
     client = LLMClient(openai_compatible=provider)
 
@@ -277,9 +278,9 @@ def test_a_lowered_conn_carries_billing_without_a_resolution(home):
 
 
 def test_a_decision_mode_in_the_account_is_filed(primary):
-    conn = llm_usage.with_account(require_inference("chat", "").conn,
-                                  decision_mode="structured")
-    row = _filed(conn, ScriptedProvider(["hi"]))
+    chain = require_inference("chat", "").chain
+    assert chain is not None
+    row = _filed(chain.with_account(decision_mode="structured"), ScriptedProvider(["hi"]))
     assert row["decision_mode"] == "structured"
     assert row["role"] == "primary"
 
@@ -294,33 +295,30 @@ def test_account_blocks_are_never_mutated_in_place(with_fallback):
     assert second.conn[resolve.ACCOUNT_KEY] == {
         "billing": "subscription", "operation": "generate", "role": "primary"}
 
-    # 2. `with_account` leaves the conn's block, and a shallow copy's, as they were.
+    # 2. A stamp makes a new target, and leaves the resolution's target, its
+    # dict's block and a shallow copy's as they were.
     conn = first.conn
     block = conn[resolve.ACCOUNT_KEY]
     before = dict(block)
     shallow = {**conn}
-    stamped = llm_usage.with_account(conn, decision_mode="native")
+    target = first.target
+    stamped = target.with_account(decision_mode="native")
     assert conn[resolve.ACCOUNT_KEY] is block and block == before
     assert shallow[resolve.ACCOUNT_KEY] is block and block == before
-    assert stamped[resolve.ACCOUNT_KEY] is not block
-    assert stamped[resolve.ACCOUNT_KEY] == {**before, "decision_mode": "native"}
-    assert stamped is not conn
-    # A conn with no block at all gains one, still without a write to it.
-    bare = {"id": "realm"}
-    assert llm_usage.with_account(bare, operation="embed")[resolve.ACCOUNT_KEY] == {
-        "operation": "embed"}
-    assert bare == {"id": "realm"}
-    # A block that is not a dict (a hand-built conn) reads as no block.
-    assert llm_usage.with_account({resolve.ACCOUNT_KEY: "x"}, operation="embed")[
-        resolve.ACCOUNT_KEY] == {"operation": "embed"}
+    assert target.account.decision_mode == "" and stamped is not target
+    assert stamped.account == wire.Account(**{**before, "decision_mode": "native"})
 
-    # 3. `_stamp` and `account` read the conn they are handed and write nothing to it.
-    one = llm._without_fallback(stamped)
+    # 3. `_stamp` and `account` read the attempt they are handed and write
+    # nothing to it.
+    one = llm._without_fallback(conn)
     snapshot = deepcopy(one)
     holder: dict = {}
     llm._stamp(holder, one, 1)
     llm_usage.account(holder, one)
     assert one == snapshot
+    assert holder["operation"] == "generate"
+    holder = {}
+    llm._stamp(holder, stamped, 1)
     assert holder["decision_mode"] == "native"
 
 

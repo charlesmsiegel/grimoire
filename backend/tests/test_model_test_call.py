@@ -486,8 +486,8 @@ def test_a_confirmed_test_meters_one_row_per_probe_and_records_the_verdicts(
     # under test and the 64-token cap, nothing else from a preset.
     assert fake.calls == 2
     for request in fake.requests:
-        assert request["conn"]["model"] == MODEL
-        assert request["conn"]["sampling"]["params"] == {"max_tokens": 64}
+        assert request["target"].model == MODEL
+        assert request["target"].sampling.params == {"max_tokens": 64}
     assert fake.requests[0]["messages"] == probes.messages("generate")
     # The embed probe went to the endpoint the Embedding path resolves for an
     # OpenRouter provider, with the model under test and the provider's key.
@@ -1168,7 +1168,7 @@ def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
 
 def test_a_model_test_row_carries_its_probe_operation(client, monkeypatch):
     """M9: each probe's row names the operation it probed, and the billing the
-    lowered connection carries -- through `llm_usage.with_account`, so the
+    lowered connection carries -- on a target stamped with it, so the
     connection the run holds is never written to."""
     _use(client, FakeOpenRouter(["ok"]))
     conn = _connection(client)
@@ -1220,7 +1220,7 @@ def test_the_decide_native_probe_sends_one_native_request(client):
     item, sent, retries = fake.native_requests[0]
     assert item == probes.PROBE_ITEM
     assert retries == 0
-    assert sent["model"] == MODEL
+    assert sent.model == MODEL
     assert fake.calls == 0   # nothing generated
     rows = _rows()
     assert [(r["task"], r["operation"], r["decision_mode"]) for r in rows] == [

@@ -153,7 +153,8 @@ def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
     assert result.passed, result.error or result.failures
     assert result.note == "backend: structured"
     assert fake.schemas == [decisions.schema([item], explain=True)]
-    assert (fake.conn["id"], fake.conn["model"]) == ("winifred-local", "small")
+    sent = fake.requests[-1]["target"]
+    assert (sent.provider_id, sent.model) == ("winifred-local", "small")
 
     # Replay of the same case reads its recording and asks for no schema.
     monkeypatch.setattr(case_mod, "RECORDINGS", tmp_path)
@@ -226,7 +227,7 @@ def test_live_runs_a_decide_case_through_the_chain(monkeypatch, tmp_path):
     assert result.note == "backend: native"
     assert fake.calls == 0
     ((_item, conn, _retries),) = fake.native_requests
-    assert conn["model"] == DECIDER
+    assert conn.model == DECIDER
     assert "native" in runner.report([result])
 
 
@@ -306,7 +307,7 @@ def test_live_forces_the_native_backend_on_a_dual_capable_model(monkeypatch, tmp
     assert result.note == "backend: native"
     assert fake.calls == 0
     ((_item, conn, _retries),) = fake.native_requests
-    assert conn["model"] == BOTH
+    assert conn.model == BOTH
 
 
 def test_live_forces_the_structured_backend(monkeypatch, tmp_path):
@@ -324,7 +325,7 @@ def test_live_forces_the_structured_backend(monkeypatch, tmp_path):
     assert fake.native_requests == []
     ctx = runner.prepare(case)
     assert fake.schemas == [case.schema(ctx)]
-    assert fake.conn["model"] == BOTH
+    assert fake.requests[-1]["target"].model == BOTH
 
 
 def test_a_forced_backend_measures_the_primary_alone(monkeypatch, tmp_path):
@@ -341,7 +342,7 @@ def test_a_forced_backend_measures_the_primary_alone(monkeypatch, tmp_path):
     assert llm.FALLBACK_KEY in target.conn
     for backend in ("native", "structured"):
         (stage,) = runner.chain(target, backend)
-        assert stage.mode == backend and llm.FALLBACK_KEY not in stage.conn
+        assert stage.mode == backend and stage.chain.fallback is None
         assert stage.retries is None
     assert llm.FALLBACK_KEY in target.conn     # the resolution's own dict is untouched
 
@@ -465,7 +466,7 @@ def test_a_mixed_chain_answers_through_live_and_names_each_backend(monkeypatch, 
 
     assert result.passed, result.error or [(c.name, c.detail) for c in result.failures]
     assert len(fake.native_requests) == 3 and fake.calls == 1
-    assert fake.conn["id"] == "rowan-spare"
+    assert fake.requests[-1]["target"].provider_id == "rowan-spare"
     assert result.note == "backend: native 2, structured 1"
 
 
@@ -528,7 +529,7 @@ def test_live_override_writes_no_settings(monkeypatch, tmp_path):
 
     assert code == 0
     ((_item, conn, _retries),) = fake.native_requests
-    assert conn["model"] == DECIDER          # the override served, natively
+    assert conn.model == DECIDER          # the override served, natively
     assert {p: p.read_bytes() for p in settings} == before
     assert sorted((home / "llm_connections").iterdir()) == settings[1:]
 

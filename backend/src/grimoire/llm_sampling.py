@@ -687,7 +687,7 @@ def sent_fields(conn: wire.Target | dict) -> dict[str, dict]:
     return shares
 
 
-def report(conn: dict | None) -> dict | None:
+def report(conn: wire.Target | dict | None) -> dict | None:
     """What a reader is shown about this connection's sampling, or None when
     nothing was resolved for it at all.
 
@@ -699,10 +699,19 @@ def report(conn: dict | None) -> dict | None:
     catalog for its model, which sends everything and cannot say whether the
     model takes it.
     """
-    if not isinstance(conn, dict) or not isinstance(conn.get("sampling"), dict):
+    if isinstance(conn, wire.Target):
+        t = conn
+        head = {"preset_id": t.sampling.preset_id, "preset_name": t.sampling.preset_name,
+                "scope": t.sampling.scope, "kind": t.kind}
+    elif isinstance(conn, dict) and isinstance(conn.get("sampling"), dict):
+        t = _target(conn)
+        sampling = conn["sampling"]
+        head = {"preset_id": sampling.get("preset_id", ""),
+                "preset_name": sampling.get("preset_name", ""),
+                "scope": sampling.get("scope", ""), "kind": conn.get("kind", "openrouter")}
+    else:
         return None
-    sampling = conn["sampling"]
-    eff = effective(conn)
+    eff = effective(t)
     applied: dict = {}
     for name in CONTROLS:
         entry = eff["controls"][name]
@@ -720,9 +729,7 @@ def report(conn: dict | None) -> dict | None:
             # An `unknown` that sends nothing has applied nothing anyone knows.
             applied[name] = eff["requested"][name]
     verified = not any(eff["controls"][name]["state"] == UNKNOWN for name in applied)
-    return {"preset_id": sampling.get("preset_id", ""),
-            "preset_name": sampling.get("preset_name", ""),
-            "scope": sampling.get("scope", ""), "kind": conn.get("kind", "openrouter"),
+    return {**head,
             "applied": applied, "dropped": _dropped(eff, CONTROLS), "verified": verified}
 
 
