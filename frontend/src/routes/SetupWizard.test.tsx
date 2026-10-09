@@ -61,9 +61,9 @@ function settings(over: Record<string, unknown> = {}) {
     routes: [],
     providers: [
       { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
-        usable: true },
+        usable: true, problem: null },
       { id: "openrouter", name: "OpenRouter", kind: "openrouter", preset: "openrouter",
-        usable: true },
+        usable: true, problem: null },
     ],
     presets: [],
     preset_clear: "⁣none",
@@ -555,7 +555,7 @@ test("the provider just saved is not shown as missing while its step re-reads", 
   (api.getInferenceSettings as any)
     .mockResolvedValueOnce(settings({ providers: [
       { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
-        usable: true }] }))
+        usable: true, problem: null }] }))
     .mockReturnValue(new Promise(() => {}));
   await goToStep(2);
   await saveProvider("openrouter", { key: "sk-or-test" });
@@ -567,7 +567,7 @@ test("the provider just saved is not shown as missing while its step re-reads", 
 
 test("a Claude subscription as Primary takes a typed model id", async () => {
   const claude = { id: "claude-subscription", name: "Claude subscription", kind: "claude",
-                   preset: "claude", usable: true };
+                   preset: "claude", usable: true, problem: null };
   (api.createConnection as any).mockResolvedValue({ id: "claude-subscription" });
   (api.getInferenceSettings as any).mockResolvedValue(settings({
     providers: [...settings().providers, claude] }));
@@ -1110,9 +1110,9 @@ test("a Primary stored on a provider that cannot send starts on the one just sav
              primary: card({ provider: "saltmarch", model: "mara-large", preset: "winifred" }) },
     providers: [
       { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
-        usable: false },
+        usable: false, problem: "No API key set" },
       { id: "openrouter", name: "OpenRouter", kind: "openrouter", preset: "openrouter",
-        usable: true },
+        usable: true, problem: null },
     ],
   }));
   await goToStep(2);

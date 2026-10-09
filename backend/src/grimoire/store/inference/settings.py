@@ -54,12 +54,14 @@ import functools
 import unicodedata
 from collections.abc import Callable, Mapping
 
+from ... import decisions
 from .. import (
     alternates,
     config,
     embed_space,
     llm_connections,
     locks,
+    pricing,
     routing,
     sampler_presets,
 )
@@ -161,7 +163,40 @@ def _decides_natively(resolved: ResolvedInference) -> str:
     return capabilities.UNKNOWN if resolve.decides_natively(first) else capabilities.NO
 
 
-def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
+def _prices() -> tuple[dict, dict]:
+    """The rate table and every provider's stated rates, read once per view:
+    `_rate` is asked for every card and row, and each read is a file read."""
+    return pricing.read_pricing(), pricing.provider_rates()
+
+
+def _rate(sel: dict | None, prices: tuple[dict, dict], *, native: bool = False) -> dict | None:
+    """What a call answered under `sel`'s configured model would be priced at
+    (spec 3.5): `pricing.rate_for_call`, the one precedence function the ledger
+    and `in_use.unpriced` use, and where that rate came from. None when nothing
+    resolves -- a stored choice that does not resolve prices nothing.
+
+    It is the rate for a call answered under the CONFIGURED name: a real row
+    may answer as a dated snapshot and match a different table entry, which is
+    why the screen says "would be priced at".
+
+    A native decision is never modelled (`usage.py`: a native row has no
+    estimate whatever rate exists), so it is `native` with no figures rather
+    than a number nothing uses."""
+    if sel is None:
+        return None
+    if native:
+        return {"source": "native"}
+    table, stated = prices
+    provider, model = sel["provider"], sel["model"]
+    entry = pricing.rate_for_call(table, stated, provider_id=provider, model=model)
+    if entry is None:
+        return {"source": "none"}
+    own = model in stated.get(provider, {})
+    return {"source": "provider" if own else "table", "entry": entry}
+
+
+def _role_card(role: str, own: dict, scope: str, cid: str,
+               prices: tuple[dict, dict]) -> dict:
     silence = resolve.Silence(scope, frozenset(keys.role_key(role, p) for p in keys.PARTS))
     # The Decision card reads its role as the decide routes it serves do
     # (spec 12, one decision): a model that cannot generate is answered
@@ -169,9 +204,10 @@ def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
     # its own rather than a retry -- so the card says what those routes do.
     operation = "decide" if role == "decision" else "generate"
     resolved = resolve.resolve("", cid, role=role, operation=operation)
+    sel = _sel(resolved)
     return {"stored": _stored(own, functools.partial(keys.role_key, role)),
             "fallback": _stored(own, functools.partial(keys.fallback_key, role)),
-            "resolves": _sel(resolved),
+            "resolves": sel,
             "inherits": _sel(resolve.resolve("", cid, role=role, operation=operation,
                                              silence=silence)),
             "problem": _problem(resolved),
@@ -186,13 +222,16 @@ def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
             # "structured", or "" when it can do neither (`decision_mode`);
             # "" on every other role.
             "decision_mode": resolved.decision_mode or "",
-            "decides_natively": _decides_natively(resolved)}
+            "decides_natively": _decides_natively(resolved),
+            "rate": _rate(sel, prices,
+                          native=resolved.decision_mode == decisions.NATIVE_BACKEND)}
 
 
 def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
-               uses: str) -> dict:
+               uses: str, prices: tuple[dict, dict]) -> dict:
     task = route.tasks[0]
     resolved = resolve.resolve(task, cid, operation=route.operation)
+    sel = _sel(resolved)
     inherited = resolve.resolve(task, cid, operation=route.operation,
                                 silence=resolve.Silence(scope, frozenset(keys.route_keys(route))))
     return {"key": route.key, "label": route.label, "hint": route.hint,
@@ -202,7 +241,7 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             "use": in_use.text(own, keys.use_key(route.key)),
             "pin": _stored(own, functools.partial(keys.pin_key, route.key)),
             "preset": in_use.text(own, keys.preset_key(route.key)),
-            "resolves": _sel(resolved), "inherits": _sel(inherited),
+            "resolves": sel, "inherits": _sel(inherited),
             "problem": _problem(resolved),
             "fallback_missing": list(resolved.fallback_missing),
             "fallback_problem": resolved.fallback_problem,
@@ -215,10 +254,13 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             "role": resolved.role or None,
             # The role the route walks to get there (`cascade.walked_role`):
             # what the Decision card lists, inheriting or not. None for a pin.
-            "uses": uses or None}
+            "uses": uses or None,
+            "rate": _rate(sel, prices,
+                          native=resolved.decision_mode == decisions.NATIVE_BACKEND)}
 
 
-def _embedding_card(cfg: dict, lookup: llm_connections.Lookup) -> dict:
+def _embedding_card(cfg: dict, lookup: llm_connections.Lookup,
+                    prices: tuple[dict, dict]) -> dict:
     provider, model = resolve.embedding_role(cfg)
     # One resolution per card: whether it is on, and why not, are read from
     # the same answer (spec 12, one decision).
@@ -234,7 +276,8 @@ def _embedding_card(cfg: dict, lookup: llm_connections.Lookup) -> dict:
     # refusal to borrow (nothing is refused; recall degrades), so this is the
     # embedding resolver's account of itself rather than `_problem`'s.
     return {"stored": {"provider": provider, "model": model}, "resolves": resolves,
-            "on": on, "problem": None if on else _embedding_problem(cfg, got)}
+            "on": on, "problem": None if on else _embedding_problem(cfg, got),
+            "rate": _rate(resolves, prices)}
 
 
 def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:
@@ -254,19 +297,22 @@ def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:
 
 
 def _providers() -> list[dict]:
-    """Every provider, with whether it can send at all -- `resolve.problem`,
-    the seam's credential rule, asked of a masked record (`key_set` stands in
-    for the key it deliberately does not carry) -- and `own_model`, the model
+    """Every provider, with why it cannot send (`problem`: `resolve.problem`,
+    the seam's credential rule, asked of a masked record -- `key_set` stands in
+    for the key it deliberately does not carry; None when it can) and
+    `usable`, which is exactly `problem is None`; and `own_model`, the model
     its record names (`facts.model_of`): what a reroll naming the provider
-    alone runs on a store still at format 1, where a provider has a model of
-    its own (`resolve._overridden`, spec 5.6); "" when it names none."""
-    return [{"id": c["id"], "name": str(c.get("name") or c["id"]),
-             "kind": str(c.get("kind") or ""),
-             "preset": str(c.get("preset") or "") or providers.infer(c).id,
-             "usable": resolve.problem({**c, "api_key": "x" if c.get("key_set") else ""})
-             is None,
-             "own_model": facts.model_of(c)}
-            for c in llm_connections.list_connections()]
+    alone runs on a store still at format 1 (`resolve._overridden`, spec 5.6);
+    "" when it names none."""
+    out = []
+    for c in llm_connections.list_connections():
+        problem = resolve.problem({**c, "api_key": "x" if c.get("key_set") else ""})
+        out.append({"id": c["id"], "name": str(c.get("name") or c["id"]),
+                    "kind": str(c.get("kind") or ""),
+                    "preset": str(c.get("preset") or "") or providers.infer(c).id,
+                    "usable": problem is None, "problem": problem,
+                    "own_model": facts.model_of(c)})
+    return out
 
 
 def view(scope: str, cid: str = "") -> dict:
@@ -277,6 +323,7 @@ def view(scope: str, cid: str = "") -> dict:
         raise ValueError(f"no such scope: {scope!r}")
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
+    prices = _prices()
     # What each row STORES is the layout as the migration persists it
     # (`stored`): every preset id in it names a preset file, so a save that
     # sends a row back unchanged names what a write accepts. The derived
@@ -293,16 +340,16 @@ def view(scope: str, cid: str = "") -> dict:
     def uses(route: routing.Route) -> str:
         return cascade.walked_role(route, campaign=own if scope == "campaign" else {},
                                    glob=glob, exists=lambda c: lookup(c) is not None)
-    roles: dict[str, dict] = {role: _role_card(role, own, scope, cid)
+    roles: dict[str, dict] = {role: _role_card(role, own, scope, cid, prices)
                               for role in keys.GENERATIVE_ROLES}
     if scope == "global":
-        roles["embedding"] = _embedding_card(cfg, lookup)
+        roles["embedding"] = _embedding_card(cfg, lookup, prices)
     return {
         "format": in_use.text(cfg, keys.FORMAT_KEY).strip() or "1",
         "newer": keys.is_newer(cfg),
         "migration": migrate.status().as_dict(),
         "roles": roles,
-        "routes": [_route_row(r, own, scope, cid, uses(r)) for r in routing.ROUTES
+        "routes": [_route_row(r, own, scope, cid, uses(r), prices) for r in routing.ROUTES
                    if scope == "global" or r.campaign_scoped],
         "providers": _providers(),
         "presets": [{"id": p["id"], "name": p["name"]}

@@ -13,7 +13,7 @@ const INFERENCE = {
   format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
   roles: {} as never, routes: [], preset_clear: "\u2063none",
   providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
-                usable: true }],
+                usable: true, problem: null }],
   presets: [{ id: "warm", name: "Warm" }], retirement_notes: [],
 } as Awaited<ReturnType<typeof api.getCampaignInference>>;
 

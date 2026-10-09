@@ -3648,7 +3648,7 @@ test.each(["Reroll guidance", "Provider", "Reroll preset"])(
  *  to, and two presets: what the picker offers is read from here. */
 function rerollInference() {
   const provider = (id: string, name: string, kind: string) =>
-    ({ id, name, kind, preset: kind, usable: true });
+    ({ id, name, kind, preset: kind, usable: true, problem: null });
   return {
     format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: {}, preset_clear: "\u2063none",

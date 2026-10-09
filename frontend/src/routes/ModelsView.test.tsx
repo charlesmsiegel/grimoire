@@ -65,14 +65,15 @@ const resolved = (over: Record<string, unknown> = {}) => ({
 });
 const card = (over: Record<string, unknown> = {}) => ({
   stored: sel(), fallback: sel(), resolves: resolved(), inherits: resolved(), problem: null,
-  fallback_missing: [], fallback_problem: null, decision_mode: "", decides_natively: "unknown",
+  fallback_missing: [], fallback_problem: null, decision_mode: "", decides_natively: "unknown", rate: null,
   ...over,
 });
 const route = (over: Record<string, unknown>) => ({
   hint: "", tasks: [], operation: "generate", default_role: "fast", requires: [],
   campaign_scoped: true, use: "", pin: sel(), preset: "", resolves: resolved(),
   inherits: resolved(), problem: null, fallback_missing: [], fallback_problem: null,
-  decision_mode: "", decides_natively: "unknown", role: "fast", uses: "fast", ...over,
+  decision_mode: "", decides_natively: "unknown", role: "fast", uses: "fast",
+  rate: null, ...over,
 });
 
 const ROUTES = [
@@ -90,14 +91,14 @@ function settings(over: Record<string, unknown> = {}) {
         resolves: resolved({ preset: "balanced", preset_name: "Balanced" }), inherits: null }),
       fast: card(),
       decision: card(),
-      embedding: { stored: { provider: "", model: "" }, resolves: null, on: false },
+      embedding: { stored: { provider: "", model: "" }, resolves: null, on: false, problem: null, rate: null },
     },
     routes: ROUTES,
     providers: [
       { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
-        usable: true },
+        usable: true, problem: null },
       { id: "realm", name: "Realm Local", kind: "openai_compatible", preset: "custom",
-        usable: true },
+        usable: true, problem: null },
     ],
     presets: [{ id: "balanced", name: "Balanced" }, { id: "tight", name: "Tight" }],
     preset_clear: PRESET_CLEAR,
@@ -634,7 +635,7 @@ test("a decide route says how its decision is answered", async () => {
 test("warns when the Embedding model can't create embeddings", async () => {
   (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
     ...settings().roles,
-    embedding: { stored: { provider: "saltmarch", model: "vendor/m" }, resolves: null, on: false },
+    embedding: { stored: { provider: "saltmarch", model: "vendor/m" }, resolves: null, on: false, problem: null, rate: null },
   } }));
   open("/models/role/embedding");
   expect(await main().findByText("This model can't create embeddings.")).toBeInTheDocument();

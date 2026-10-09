@@ -791,7 +791,7 @@ const NONE = { provider: "", model: "", preset: "" };
 /** A role this campaign leaves to the library: it inherits Saltmarch's model. */
 function inheritedRole(model: string) {
   return { stored: NONE, fallback: NONE, problem: null, fallback_missing: [],
-           fallback_problem: null,
+           fallback_problem: null, rate: null,
            resolves: RESOLVED("saltmarch", "Saltmarch Router", model),
            inherits: RESOLVED("saltmarch", "Saltmarch Router", model) };
 }
@@ -804,14 +804,14 @@ function campaignInference(over: Partial<any> = {}) {
     routes: [{ key: "scene", label: "Scene turns", hint: "Story turns.", tasks: ["chat"],
                operation: "generate", default_role: "primary", requires: [],
                campaign_scoped: true, use: "", pin: NONE, preset: "", problem: null,
-               fallback_missing: [], fallback_problem: null,
+               fallback_missing: [], fallback_problem: null, rate: null,
                role: "primary",
                resolves: RESOLVED("saltmarch", "Saltmarch Router", "vendor/opus"),
                inherits: RESOLVED("saltmarch", "Saltmarch Router", "vendor/opus") }],
     providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter",
-                  preset: "openrouter", usable: true },
+                  preset: "openrouter", usable: true, problem: null },
                 { id: "realm", name: "Realm Local", kind: "openai_compatible",
-                  preset: "custom", usable: true }],
+                  preset: "custom", usable: true, problem: null }],
     presets: [{ id: "terse", name: "Terse" }],
     preset_clear: "⁣none",
     ...over,
@@ -854,7 +854,7 @@ describe("the Models section", () => {
     const saved = campaignInference({ roles: {
       ...campaignInference().roles,
       fast: { stored: { provider: "realm", model: "realm/small", preset: "terse" },
-              fallback: NONE, problem: null, fallback_missing: [], fallback_problem: null,
+              fallback: NONE, problem: null, fallback_missing: [], fallback_problem: null, rate: null,
               resolves: RESOLVED("realm", "Realm Local", "realm/small", "campaign", "terse",
                                  "Terse"),
               inherits: RESOLVED("saltmarch", "Saltmarch Router", "vendor/haiku") } } });
@@ -1213,7 +1213,7 @@ describe("the Models section", () => {
     return campaignInference({ roles: { ...campaignInference().roles,
       fast: { stored: { provider: "realm", model: "realm/small", preset: "terse" },
               fallback: { provider: "saltmarch", model: "vendor/haiku", preset: "" },
-              problem: null, fallback_missing: [],
+              problem: null, fallback_missing: [], rate: null,
               resolves: RESOLVED("realm", "Realm Local", "realm/small", "campaign", "terse",
                                  "Terse"),
               inherits: RESOLVED("saltmarch", "Saltmarch Router", "vendor/haiku") } } });
