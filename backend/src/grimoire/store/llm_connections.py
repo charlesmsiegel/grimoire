@@ -479,7 +479,16 @@ def create_connection(kind: str, name: str, *, refuse_model_fields: bool = False
     `refuse_model_fields` (the API's writes): a body setting any of
     `MODEL_FIELDS` on a store at format 2 raises `ModelFieldsRefusedError`, checked
     in the hold that writes. Off for the store's own callers (migration, test
-    fixtures), which write what they mean at either format."""
+    fixtures), which write what they mean at either format.
+
+    A create is always a brand-new provider, so a retirement-record entry
+    under the id it claims can only be a dead provider's -- one deleted
+    while the record was elsewhere, whose entry a sync brought back. It is
+    forgotten in the same hold, BEFORE the file is written
+    (`inference_retired.forget_fields`): left, it would be merged under the
+    new provider by the next strip ("first values win") and answer for it.
+    Strict: a record that cannot be read raises
+    `inference_retired.RecordUnreadableError` and nothing is written."""
     ensure_migrated()
 
     def exists(c: str) -> bool:
@@ -491,6 +500,7 @@ def create_connection(kind: str, name: str, *, refuse_model_fields: bool = False
         if refuse_model_fields:
             _refuse_model_fields(_named_model_fields(fields))
         id = uniquify(slugify(name), exists)
+        inference_retired.forget_fields(id)
         _write_raw(id, kind=kind, name=name, **fields)
     return id
 

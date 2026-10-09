@@ -2126,7 +2126,13 @@ synced copy.
   a connection whose file exists and holds no non-empty legacy field, so a
   campaign that arrives unmarked after the strip still resolves. It never
   answers for an absent file, so a deleted provider does not come back. A
-  later strip keeps the first recorded values, the ones C translated.
+  later strip keeps the first recorded values, the ones C translated. A
+  delete forgets the connection's entry, and a create forgets any entry under
+  the id it claims, in the hold that claims it and before the file is written
+  (a create is always a new provider; an entry there is a dead one's a sync
+  brought back), so a reused id never inherits a dead provider's fields. A
+  record that cannot be read refuses either with 409
+  `retirement_unreadable`, nothing written.
 - The strip marks each connection file it recorded fields for
   (`inference_stripped: "1"`, `llm_connections.STRIPPED_KEY`) in the write
   that strips it, and this build's own connection writes keep the mark. A
@@ -2138,10 +2144,12 @@ synced copy.
   is persisted from a connection read as having no model and no effort. Play's
   soft lookup reads it as it stands. An entry that will never arrive (the
   record removed by hand, or a crash between a delete's `forget_fields` and
-  its unlink) has a way out the refusal names: add the provider again under a
-  new id, remove the old one, and choose the new one where the old was chosen.
-  A record that arrives afterwards resurrects nothing — it never answers for a
-  connection whose file is gone. A C–H edit of the file drops the mark,
+  its unlink) has a way out the refusal names, by the provider's name: add it
+  again on Providers under another name and re-enter its key (a new id while
+  the old one exists), Delete the old one, and choose the new one where the
+  old was chosen. A record that arrives afterwards resurrects nothing — it
+  never answers for a connection whose file is gone, and a create forgets any
+  entry under the id it claims (below). A C–H edit of the file drops the mark,
   and that residue is accepted (§11.3).
 - `notes`: the route-preset notes of §11.2 step 4 and the `fact_not_carried`
   notes, each `{id, scope, subject, provider_id, effort, kind, text,

@@ -1212,11 +1212,12 @@ it — no scope retired, no campaign migrated, no `config.md` switched — and t
 next start tries again, so the record's arrival finishes the pass as the
 first device did. An entry that will never arrive — the record removed by
 hand, or lost to a crash between a delete's record write and its unlink —
-has one way out, which the refusal names: add the provider again (a new id,
-while the old one exists), remove the old one, and choose the new one where
+has one way out, which the refusal names by the provider's name: add it
+again on Providers under another name and re-enter its key (it gets a new id
+while the old one exists), Delete the old one, and choose the new one where
 the old was chosen. Nothing comes back if the record turns up after all: it
-never answers for a provider whose file is gone, and the new one has another
-id.
+never answers for a provider whose file is gone, and a provider created later
+under the freed id forgets any entry under that id as it is created (below).
 
 **The markers.** `inference_retired: "1"` in `config.md` and in each
 `campaign.md` says the scope's legacy layout is gone; the planner reads a
@@ -1254,10 +1255,15 @@ backup and every synced copy. It holds two things:
   the entry is there. It never answers for a
   connection whose file is gone, and the first values recorded for a
   connection are the ones kept. Deleting a connection forgets its entry, in
-  the same hold, before the file goes, so a provider created later under the
-  same slug never inherits it; the record is read before the delete writes
-  anything, and a record that cannot be read refuses the delete with 409
-  `retirement_unreadable` — no reference cleared, no file removed.
+  the same hold, before the file goes; the record is read before the delete
+  writes anything, and a record that cannot be read refuses the delete with
+  409 `retirement_unreadable` — no reference cleared, no file removed.
+  Creating a connection forgets any entry under the id it claims, in the hold
+  that claims it and before the file is written: a create is always a new
+  provider, so such an entry can only be a dead one's that a sync brought
+  back, and the next strip would otherwise merge it in. So a provider created
+  under a reused id never inherits a dead one's fields. A record that cannot
+  be read refuses the create the same way, with nothing written.
 - **`notes`**: what could not be carried over — a route-level preset that
   sets no reasoning effort over a GLM effort, a GLM effort in a scope already
   marked retired before it was migrated, a model behaviour the connection

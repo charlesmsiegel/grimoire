@@ -141,25 +141,31 @@ class EntryMissingError(RecordUnreadableError):
 
     An entry that will never arrive -- the record removed by hand, or lost
     with a crash between a delete's `forget_fields` and its unlink -- has one
-    way out a user can reach, which the message names (`WAY_OUT`): add the
-    provider again (a new id, since the old one still holds the slug),
-    remove the old one, and choose the new one where the old was chosen.
-    Removing it clears the global references to it and leaves a campaign's
-    dangling, which the planner walks past; and since the record never
-    answers for a connection whose file is gone, a record that does arrive
-    later brings nothing back -- the new provider has another id."""
+    way out a user can reach, which the message names (`WAY_OUT`), by the
+    name Providers lists: add the provider again (under another name, so the
+    two rows tell apart; it gets a new id either way while the old one holds
+    the slug) and re-enter its key, Delete the old one, and choose the new one
+    where the old was chosen. Deleting it clears the global references to it
+    and leaves a campaign's dangling, which the planner walks past. A record
+    that arrives afterwards brings nothing back: it never answers for a
+    connection whose file is gone, and a provider created later under the
+    freed id forgets any entry under that id as it is created
+    (`llm_connections.create_connection`), so the dead provider's fields are
+    never merged into it."""
 
-    #: How to get out when the entry will never arrive, `{conn}` the id.
-    WAY_OUT = ("If it never arrives (the file was removed or lost), add that provider "
-               "again on Providers (it gets a new id while “{conn}” exists), remove "
-               "“{conn}”, then choose the new one wherever “{conn}” was chosen.")
+    #: How to get out when the entry will never arrive: `{name}` is the
+    #: provider's name as Providers lists it.
+    WAY_OUT = ("If it never arrives (the file was removed or lost), add “{name}” again "
+               "on Providers under another name and re-enter its key, Delete the old "
+               "“{name}”, then choose the new one wherever the old one was chosen.")
 
-    def __init__(self, conn_id: str):
+    def __init__(self, conn_id: str, name: str = ""):
+        self.conn_id = conn_id
+        self.name = name or conn_id
         super().__init__(
             f"connection {conn_id} was stripped by retirement, but {FILENAME} holds no "
             "entry for it yet (not synced?); it is left for the next start. "
-            + self.WAY_OUT.format(conn=conn_id))
-        self.conn_id = conn_id
+            + self.WAY_OUT.format(name=self.name))
 
 
 def note_id(scope: str, subject: str, provider_id: str, effort: str, kind: str) -> str:

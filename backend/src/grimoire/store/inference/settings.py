@@ -337,9 +337,9 @@ def retirement_unreadable(exc: retired.RecordUnreadableError) -> str:
         return RETIREMENT_MALFORMED.format(why=why)
     if isinstance(exc, retired.EntryMissingError):
         return (f"The record of retired model settings ({retired.FILENAME}, at the "
-                f"library's root) holds nothing yet for the provider “{exc.conn_id}”, "
+                f"library's root) holds nothing yet for the provider “{exc.name}”, "
                 "whose old model settings it keeps; try again once it has synced. "
-                + retired.EntryMissingError.WAY_OUT.format(conn=exc.conn_id))
+                + retired.EntryMissingError.WAY_OUT.format(name=exc.name))
     return RETIREMENT_UNREADABLE
 
 

@@ -1652,8 +1652,8 @@ def test_an_entry_that_never_arrives_has_a_way_out_that_brings_nothing_back(clie
     got = client.put(f"/api/campaigns/{cid}/inference", json=body)
     assert got.status_code == 409, got.text
     detail = got.json()["detail"]
-    assert "“spare”" in detail and "add that provider again on Providers" in detail, detail
-    assert "remove “spare”" in detail
+    assert "“spare”" in detail and "add “spare” again on Providers" in detail, detail
+    assert "re-enter its key" in detail and "Delete the old “spare”" in detail
 
     made = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
                                                     "api_key": "sk-test-spare2"})
@@ -1676,6 +1676,47 @@ def test_an_entry_that_never_arrives_has_a_way_out_that_brings_nothing_back(clie
     assert legacy_plan.lookup(mode="retire")(fresh)["model"] == ""
 
 
+def test_a_provider_created_under_a_freed_id_never_inherits_its_entry(client):
+    """Brutal re-review 🟡D: after the way out, the record arrives after all,
+    still holding the dead provider's fields under its id. A provider created
+    later under that freed id forgets the entry as it is created, so the next
+    strip records only its own, and a late campaign pinning it is never handed
+    the dead provider's model."""
+    llm_connections.create_connection("openrouter", "spare", api_key="sk-test-spare",
+                                      model="vendor/spare")
+    assert retire.strip() == []
+    record = retired.path().read_bytes()
+    retired.path().unlink()
+    assert client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Spare Two", "api_key": "sk-test-2"}).status_code == 200
+    assert client.delete("/api/llm-connections/spare").status_code == 200
+    retired.path().write_bytes(record)          # it arrives after all
+    assert retired.read()["fields"]["spare"]["model"] == "vendor/spare"
+
+    made = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Spare", "api_key": "sk-test-other"})
+    assert made.status_code == 200, made.text
+    assert made.json()["id"] == "spare"
+    assert "spare" not in retired.read()["fields"]
+    late = _late_unmarked("Winifred", route="spare")
+    migrate.ensure()
+    meta = _meta(late)
+    assert meta[keys.pin_key("scene", "provider")] == "spare"
+    assert meta.get(keys.pin_key("scene", "model"), "") != "vendor/spare"
+    assert retired.read()["fields"].get("spare", {}).get("model", "") != "vendor/spare"
+
+
+def test_a_create_over_an_unreadable_record_writes_nothing(client):
+    llm_connections.list_connections()          # the seeded connections, first
+    retired.path().write_text("{not json", encoding="utf-8")
+    before = sorted(p.name for p in (store.home() / "llm_connections").glob("*.md"))
+    got = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "Rowan",
+                                                    "api_key": "sk-test-rowan"})
+    assert got.status_code == 409 and got.json()["kind"] == "retirement_unreadable"
+    assert "inference-retired.json" in got.json()["detail"]
+    assert sorted(p.name for p in (store.home() / "llm_connections").glob("*.md")) == before
+
+
 def test_a_missing_entry_says_which_provider_it_waits_for(home):
     _spare_stripped()
     retired.path().unlink()
@@ -1683,6 +1724,7 @@ def test_a_missing_entry_says_which_provider_it_waits_for(home):
         legacy_plan.lookup(mode="retire")("spare")
     said = inference_settings.retirement_unreadable(caught.value)
     assert "“spare”" in said and "once it has synced" in said
+    assert caught.value.name == "spare"
 
 
 def test_a_deleted_campaigns_notes_go_with_it(legacy_client):

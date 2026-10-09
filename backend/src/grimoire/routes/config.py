@@ -775,6 +775,12 @@ def post_connection(body: ConnectionCreate):
                 kind, name, refuse_model_fields=True, **fields)
     except store.llm_connections.ModelFieldsRefusedError as exc:
         raise _model_fields_refused(exc) from exc
+    except retired.RecordUnreadableError as exc:
+        # The create forgets a dead provider's record entry under the id it
+        # claims, and the record cannot be read: nothing was written.
+        raise HTTPException(status_code=409, detail={
+            "kind": "retirement_unreadable",
+            "detail": inference_settings.retirement_unreadable(exc)}) from None
     return {"id": conn_id}
 
 
