@@ -467,7 +467,7 @@ def _chore_unpriced(ctx: _Ctx) -> dict | None:
         "why": f"Nobody reported a price for these and no rate you have entered "
                f"prices them, so they are counted rather than costed: {names}{more}. "
                + how,
-        "fix": "/config?section=pricing", "fix_label": "Pricing",
+        "fix": "/models#rates", "fix_label": "Token rates",
     }
 
 
@@ -509,7 +509,7 @@ def _chore_unpriced_models(ctx: _Ctx) -> dict | None:
             "severity": "note", "n": n,
             "what": f"{n} model{'s' if n != 1 else ''} in use with no price",
             "why": why + " " + block,
-            "fix": "/config?section=pricing", "fix_label": "Pricing",
+            "fix": "/models#rates", "fix_label": "Token rates",
         }
     return {
         "id": "unpriced-models", "scope": "library", "group": "Housekeeping",
@@ -546,7 +546,7 @@ def _chore_embeddings(ctx: _Ctx) -> dict | None:
         "why": "Grimoire still uses basic matching to find possible overlaps in your ledgers. "
                "Semantic matching improves detection when the same story business is phrased "
                "differently.",
-        "fix": "/models/role/embedding", "fix_label": "Embeddings",
+        "fix": "/models/edit", "fix_label": "Embeddings",
     }
 
 
@@ -1030,7 +1030,7 @@ def _items_unpriced(cid: str) -> list[dict]:
     for m in models:
         provider_id = m.get("provider_id") or ""
         asked = m.get("facts_model") or m["model"]
-        fix = "/config?section=pricing"
+        fix = "/models#rates"
         if provider_id in providers:
             fix = _model_rates_href(provider_id, asked)
         label = m["model"] if asked == m["model"] else f"{m['model']} asked for as {asked}"
@@ -1119,14 +1119,14 @@ def _items_unpriced_models(cid: str) -> list[dict]:
              "label": f"{m['model']} on {m['provider_name']}",
              "detail": "Used by " + ", ".join(_use_label(u, names) for u in m["uses"]),
              "fix": (_model_rates_href(m["provider_id"], m["model"]) if editable
-                     else "/config?section=pricing")}
+                     else "/models#rates")}
             for m in models]
 
 
 def _items_embeddings(cid: str) -> list[dict]:
     return [{"id": "embeddings", "label": "Semantic matching",
              "detail": "No embeddings connection and model are set",
-             "fix": "/models/role/embedding"}]
+             "fix": "/models/edit"}]
 
 
 #: What a continuity item says it is, in §30's hedged wording.
