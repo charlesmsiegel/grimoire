@@ -201,14 +201,24 @@ def _conn_reads(tree: ast.Module) -> list[ast.Attribute]:
     return out
 
 
+#: The resolver's own module, where the lowering lived as a bare `lower`.
+RESOLVER = "backend/src/grimoire/store/inference/resolve.py"
+
+
 def _resolve_aliases(tree: ast.Module) -> set[str]:
-    """The names a module binds `store.inference.resolve` to."""
+    """The names a module binds `store.inference.resolve` to: `from
+    ..store.inference import resolve [as X]`, `from .inference import
+    resolve`, a relative `from . import resolve` / `from .. import resolve`
+    (how `store/inference/`'s own modules reach it), and `import
+    ...inference.resolve as X`. The package holds one module named
+    `resolve`, so a relative import of that name is it."""
     out: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
             for alias in node.names:
-                if alias.name == "resolve" and module.split(".")[-1] == "inference":
+                if alias.name == "resolve" and (module.split(".")[-1] == "inference"
+                                                or (node.level > 0 and not module)):
                     out.add(alias.asname or alias.name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
@@ -222,6 +232,26 @@ def _from_resolve(node: ast.ImportFrom) -> bool:
     relatively as `.resolve` inside the package)."""
     module = node.module or ""
     return module.endswith("inference.resolve") or (node.level > 0 and module == "resolve")
+
+
+def _lowers(node: ast.AST, aliases: set[str], rel: str) -> str | None:
+    """What `node` says, if it reaches the resolver's `lower`: `X.lower` on a
+    name bound to the module (`_resolve_aliases`), `<...>.resolve.lower` on a
+    dotted path to it, and -- inside the resolver itself -- a `def lower` or
+    a bare `lower(...)` call."""
+    if isinstance(node, ast.Attribute) and node.attr == "lower":
+        if isinstance(node.value, ast.Name) and node.value.id in aliases:
+            return f"reads {node.value.id}.lower (the resolver's lowering)"
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "resolve":
+            return "reads resolve.lower (the resolver's lowering)"
+    if rel != RESOLVER:
+        return None
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "lower":
+        return "defines lower in the resolver"
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "lower"):
+        return "calls lower in the resolver"
+    return None
 
 
 def _named(node: ast.AST) -> str | None:
@@ -264,9 +294,9 @@ def scan(source: str, rel: str) -> list[str]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str) \
                 and node.value in RETIRED_KEYS:
             found.append((line, f"spells the dict key {node.value!r}"))
-        if (isinstance(node, ast.Attribute) and node.attr == "lower"
-                and isinstance(node.value, ast.Name) and node.value.id in aliases):
-            found.append((line, f"reads {node.value.id}.lower (the resolver's lowering)"))
+        lowers = _lowers(node, aliases, rel)
+        if lowers is not None:
+            found.append((line, lowers))
     found.extend((node.lineno, "reads .conn off a resolution, attempt, stage or call")
                  for node in _conn_reads(tree))
     return [f"{rel}:{line}: {what}" for line, what in sorted(set(found))]
@@ -369,10 +399,40 @@ PLANTS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Plants that only count in one module: `(module, source, expected)`. The
+#: relative import is how `store/inference/controls.py` reached the lowering
+#: before slice I deleted it; the bare `lower` is how the resolver itself did.
+PLACED_PLANTS: tuple[tuple[str, str, str], ...] = (
+    ("backend/src/grimoire/store/inference/controls.py",
+     "from . import capabilities, resolve\nresolve.lower(conn, {}, model)\n",
+     "reads resolve.lower"),
+    ("backend/src/grimoire/store/inference/settings.py",
+     "from . import resolve as inf\ninf.lower(conn, {}, model)\n",
+     "reads inf.lower"),
+    ("backend/src/grimoire/routes/config.py",
+     "x = store.inference.resolve.lower(raw, sampling)\n",
+     "reads resolve.lower"),
+    (RESOLVER, "def lower(raw, sampling, model=None):\n    return raw\n",
+     "defines lower in the resolver"),
+    (RESOLVER, "def own(conn):\n    return lower(conn, {})\n",
+     "calls lower in the resolver"),
+)
+
+
 def test_the_guard_flags_a_planted_lowering():
     for source, expected in PLANTS:
         hits = scan(source, "planted.py")
         assert any(expected in hit for hit in hits), (source, hits)
+    for rel, source, expected in PLACED_PLANTS:
+        hits = scan(source, rel)
+        assert any(expected in hit for hit in hits), (rel, source, hits)
+
+
+def test_a_lower_outside_the_resolver_is_not_the_lowering():
+    """A `def lower` or a bare `lower(...)` elsewhere is some other `lower`;
+    only the resolver's own module once held this one."""
+    source = "def lower(x):\n    return x\nlower(1)\n"
+    assert scan(source, "backend/src/grimoire/store/inference/controls.py") == []
 
 
 def test_the_guard_passes_what_is_not_the_lowering():
