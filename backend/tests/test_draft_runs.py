@@ -37,8 +37,6 @@ from tests.llm_fakes import (
     StallingOpenRouter,
 )
 
-pytestmark = pytest.mark.upgraded_birth
-
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 

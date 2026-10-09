@@ -1,10 +1,8 @@
 import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from tests.inference_fixtures import legacy_store
 
 
@@ -20,14 +18,6 @@ def legacy_home(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     legacy_store(tmp_path)
     return s
-
-
-@pytest.fixture
-def legacy_client(monkeypatch, tmp_path):
-    """A client on a format-1 store, where a provider still carries `prefill`."""
-    legacy_home(monkeypatch, tmp_path)
-    with TestClient(create_app()) as c:
-        yield c
 
 
 # ---- migration ----

@@ -16,8 +16,6 @@ from tests.test_character_turns import seed
 from tests.test_response_controls_routes import _answer
 from tests.test_runs_routes import _events
 
-pytestmark = pytest.mark.upgraded_birth
-
 # --- pure helpers -----------------------------------------------------------
 
 

@@ -7,6 +7,7 @@ import pytest
 from grimoire import routes, store
 from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
+from tests.inference_fixtures import primary
 from tests.test_character_turns import seed
 
 CONN = {"kind": "openai_compatible", "model": "glm-5.3", "base_url": "https://example.test/v1"}
@@ -49,9 +50,9 @@ async def test_glm_effort_is_opt_in_and_sent_to_provider(effort):
 
 def test_reasoning_is_saved_per_variant_and_never_in_transcript_content(client):
     cid, sid = seed(client)
-    conn_id = store.llm_connections.create_connection("openai_compatible", "Local", **{
-        k:v for k,v in CONN.items() if k != "kind"})
-    store.config.write_config(active_connection_id=conn_id)
+    conn_id = store.llm_connections.create_connection("openai_compatible", "Local",
+                                                      base_url=CONN["base_url"])
+    primary(client, CONN["model"], provider=conn_id, api_key="")
     requests = []
     model = gateway(requests=requests)
     client.app.dependency_overrides[routes.get_llm] = lambda: model
@@ -76,7 +77,10 @@ def test_reasoning_is_saved_per_variant_and_never_in_transcript_content(client):
     assert store.scenes.read_scene(cid, sid)["messages"][0]["response_thinking"] == original
 
 
-def test_reasoning_effort_connection_roundtrip(client):
+def test_reasoning_effort_connection_roundtrip(legacy_client):
+    # A provider's own `reasoning_effort` is the legacy layout's: at format 2
+    # it is a model field the provider routes refuse (`MODEL_FIELDS`).
+    client = legacy_client
     response = client.post("/api/llm-connections", json={"kind":"openai_compatible", "name":"Local", "model":"glm-5.3", "reasoning_effort":"low"})
     assert response.status_code == 200, response.text
     cid = response.json()["id"]

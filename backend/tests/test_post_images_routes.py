@@ -2,15 +2,12 @@
 
 import io
 
-import pytest
 from PIL import Image
 
 from grimoire import content_parts as cp
 from grimoire import routes, store
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import CapturingOpenRouter
-
-pytestmark = pytest.mark.upgraded_birth
 
 
 def _png():

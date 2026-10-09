@@ -1,7 +1,6 @@
 """Sampler presets through the real routes: CRUD, import, attachment, and what
 a turn is actually sent."""
 
-import pytest
 
 from grimoire import llm, routes, store
 from grimoire.llm_errors import LLMError
@@ -9,8 +8,6 @@ from grimoire.routes import common
 from grimoire.store.sampler_presets import PRESET_CLEAR
 from tests.inference_fixtures import legacy_store, put_settings
 from tests.llm_fakes import ScriptedProvider
-
-pytestmark = pytest.mark.upgraded_birth
 
 
 def _preset(client, name="Warm", **params):

@@ -19,7 +19,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests import draft_runs as drafts
-from tests.inference_fixtures import legacy_store, put_settings
+from tests.inference_fixtures import put_settings
 from tests.llm_fakes import (
     FakeCatalog,
     FlakyProvider,
@@ -27,23 +27,11 @@ from tests.llm_fakes import (
     StallingGateway,
 )
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
-
-
-@pytest.fixture
-def legacy_client(monkeypatch, tmp_path):
-    """`client` on a format-1 store: one the settings switch has not reached."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    legacy_store(tmp_path)
     with TestClient(create_app()) as c:
         yield c
 

@@ -16,8 +16,6 @@ from tests import draft_runs as drafts
 from tests import inference_fixtures, review_runs
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 def _unfenced_stream(*args, **kw):
     """`_chat_stream` with the publish fence and the outcome box switched off.

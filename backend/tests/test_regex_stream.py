@@ -11,25 +11,11 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from grimoire import routes, store
 from grimoire.routes import character_turns, streaming
 from grimoire.store.regex import rules, stream
-from tests.inference_fixtures import put_settings
+from tests.inference_fixtures import primary
 from tests.llm_fakes import FailingOpenRouter, FakeLLM
-
-pytestmark = pytest.mark.upgraded_birth
-
-
-def _primary(client, model="primary"):
-    """The seeded `openrouter` provider keyed, and the Primary role on it at
-    `model` (format 2: a provider names no model of its own)."""
-    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    assert got.status_code == 200, got.text
-    put_settings(client, {"roles": {"primary": {"selection": {
-        "provider": "openrouter", "model": model}}}})
-
 
 THINK = {"name": "Strip thinking", "pattern": r"<think>[\s\S]*?</think>", "replacement": ""}
 
@@ -127,7 +113,7 @@ def put_rules(client, url, *rule_list):
 
 
 def seed(client, names=("Mara",)):
-    _primary(client)
+    primary(client)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")

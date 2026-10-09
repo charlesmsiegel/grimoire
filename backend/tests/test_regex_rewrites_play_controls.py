@@ -5,14 +5,10 @@ views like every other reader of transcript text."""
 
 from __future__ import annotations
 
-import pytest
-
 from grimoire import routes, store
 from tests.llm_fakes import FakeLLM
 from tests.test_regex_rewrites import ELLIPSIS, messages, put_rules, records, seed, send
 from tests.test_runs_routes import _events
-
-pytestmark = pytest.mark.upgraded_birth
 
 _HANDOFF = '\n```handoff\n{"next":null}\n```'
 

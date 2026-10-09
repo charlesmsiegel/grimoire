@@ -62,8 +62,6 @@ from grimoire.store.inference import embed
 from grimoire.store.scenes import read as scenes_read
 from tests import llm_fakes
 
-pytestmark = pytest.mark.upgraded_birth
-
 SIZES = (1, 12)
 
 #: Whole-file readers: each must be read as often at 12 as at 1.

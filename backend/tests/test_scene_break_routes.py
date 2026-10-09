@@ -34,8 +34,6 @@ from .inference_fixtures import (
 )
 from .llm_fakes import FakeLLM, decision_reply
 
-pytestmark = pytest.mark.upgraded_birth
-
 YES = decision_reply({"over": True}, rationales=["The ledger changed hands."])
 NO = decision_reply({"over": False}, rationales=["They are still mid-argument."])
 

@@ -25,10 +25,7 @@ from grimoire.store import (
     usage,
     worlds,
 )
-from grimoire.store.inference import settings as inference_settings
-from tests.inference_fixtures import legacy_store
-
-pytestmark = pytest.mark.upgraded_birth
+from tests.inference_fixtures import embedding, legacy_store
 
 # Vectors are 2-D and hand-picked so a similarity is readable at the call site:
 # the query points at [1, 0], so a document at [1, 0] scores 1.0 and one at
@@ -87,8 +84,7 @@ def configure(kind="openai_compatible", model="embed-1",
     if connection:
         cid = llm_connections.create_connection(kind, "Vectors", base_url=base_url,
                                                 api_key="sk-x", model="", post_process="none")
-    inference_settings.write("global", "", {"roles": {"embedding": {
-        "selection": {"provider": cid, "model": model}}}}, confirm_embedding=True)
+    embedding(cid, model)
     return cid
 
 

@@ -41,8 +41,6 @@ from grimoire.store.inference import facts, probes
 from grimoire.store.inference import resolve as inference
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter
 
-pytestmark = pytest.mark.upgraded_birth
-
 REFUSAL = ("This test sends a request to the provider and may cost money — "
            "confirm to run it.")
 MODEL = "vendor/model-a"

@@ -47,8 +47,6 @@ from .test_absorb_identity import ROW_ENVELOPE, _dumped, _leaked, _row_texts
 from .test_continuity_reconcile import _chores as chores
 from .test_continuity_reconcile import _configure as configure_embeddings
 
-pytestmark = pytest.mark.upgraded_birth
-
 #: What marks a request as the sweep's: the decide system phrase every
 #: decision carries, and the heading only a reconcile item's context holds
 #: (`continuity_reconcile/item.j2`).

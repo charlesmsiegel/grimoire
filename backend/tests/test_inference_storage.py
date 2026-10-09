@@ -7,6 +7,7 @@ route overrides with its marker. Invented names and fake keys only.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -109,7 +110,6 @@ def test_the_background_switch_does_not_unbirth_a_fresh_store(home, monkeypatch)
     assert config.read_config()[inference_keys.FORMAT_KEY] == "2"
 
 
-@pytest.mark.upgraded_birth
 def test_a_test_store_is_born_an_upgraded_default_library(home):
     cfg = config.read_config()
     assert inference_keys.is_current(cfg)
@@ -118,8 +118,16 @@ def test_a_test_store_is_born_an_upgraded_default_library(home):
     assert config.birth_fields() == inference_fixtures.UPGRADED_DEFAULT
 
 
-def test_a_product_store_is_born_with_the_marker_alone(home, monkeypatch):
-    monkeypatch.delenv(config.TEST_BIRTH_ENV, raising=False)
+def test_the_suites_birth_is_set_where_an_undo_cannot_reach_it(monkeypatch):
+    # `conftest.py` sets it at import, outside every test's `monkeypatch`, so
+    # a test that lifts its own patches mid-test still births upgraded stores
+    # (and a subprocess it spawns inherits the same birth).
+    monkeypatch.undo()
+    assert os.environ.get(config.TEST_BIRTH_ENV) == "upgraded-default"
+
+
+@pytest.mark.product_birth
+def test_a_product_store_is_born_with_the_marker_alone(home):
     cfg = config.read_config()
     assert inference_keys.is_current(cfg) and not cfg.get("role_primary_provider")
     assert config.birth_fields() == {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}

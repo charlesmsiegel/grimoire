@@ -17,8 +17,6 @@ import grimoire.store as store
 from grimoire.main import create_app
 from tests.inference_fixtures import put_settings
 
-pytestmark = pytest.mark.upgraded_birth
-
 #: Quoted, so the four words are one term rather than four -- "the" alone
 #: matches half the store, which would make these assertions about the fixture
 #: rather than about the route.

@@ -17,8 +17,6 @@ from tests import draft_runs as drafts
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import CapturingOpenRouter, FakeOpenRouterComplete
 
-pytestmark = pytest.mark.upgraded_birth
-
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 

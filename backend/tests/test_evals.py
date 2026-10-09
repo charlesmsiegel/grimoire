@@ -75,17 +75,16 @@ def test_every_case_names_a_routed_task():
 
 def test_a_live_run_resolves_through_the_seam_not_the_active_connection(
         monkeypatch, tmp_path):
-    """On a migrated store `active_connection_id` is frozen for older builds;
+    """On a format-2 store `active_connection_id` is frozen for older builds;
     a live pass must be scored on the model the app plays on now."""
-    from grimoire.store import config, llm_connections
-    from grimoire.store.inference import migrate
+    from grimoire.store import config, inference_keys, llm_connections
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     config.read_config()
     llm_connections.create_connection("openai_compatible", "Mara Local",
                                       base_url="http://localhost:1234/v1")
     llm_connections.create_connection("openai_compatible", "Winifred Local",
                                       base_url="http://localhost:5678/v1")
-    assert migrate.ensure().state == "done"
+    assert inference_keys.is_current(config.read_config())   # born at format 2
     config.write_config(role_primary_provider="mara-local", role_primary_model="big",
                         role_fast_provider="winifred-local", role_fast_model="small")
 
@@ -107,8 +106,7 @@ def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
     resolution, so it measures what production sends; replay scores the
     recording and never builds a schema."""
     from grimoire import decisions
-    from grimoire.store import config, llm_connections
-    from grimoire.store.inference import migrate
+    from grimoire.store import config, inference_keys, llm_connections
     from tests.llm_fakes import FakeLLM
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
@@ -117,7 +115,7 @@ def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
                                       base_url="http://localhost:1234/v1")
     llm_connections.create_connection("openai_compatible", "Winifred Local",
                                       base_url="http://localhost:5678/v1")
-    assert migrate.ensure().state == "done"
+    assert inference_keys.is_current(config.read_config())   # born at format 2
     config.write_config(role_primary_provider="mara-local", role_primary_model="big",
                         role_decision_provider="winifred-local",
                         role_decision_model="small", use_scene_break="decision")
@@ -175,18 +173,17 @@ DECIDER, BOTH, ACTIVE = "vendor/decider", "vendor/both", "vendor/active"
 def _decision_store(monkeypatch, home: Path, decision_model: str) -> None:
     """A format-2 store with the Decision role on `decision_model` at the
     seeded OpenRouter provider, no fallback. Nothing reaches a provider."""
-    from grimoire.store import config, llm_connections
-    from grimoire.store.inference import migrate
+    from grimoire.store import config, inference_keys, llm_connections
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
     config.read_config()
-    llm_connections.update_connection("openrouter", api_key="sk-test", model=ACTIVE)
+    llm_connections.update_connection("openrouter", api_key="sk-test")
     rev = llm_connections.read_connection_raw("openrouter")["rev"]
     llm_connections.set_cached_models(
         "openrouter", [{"id": DECIDER, "outputs": ["decisions"]},
                        {"id": BOTH, "outputs": ["text", "decisions"]},
                        {"id": ACTIVE, "outputs": ["text"]}], rev)
-    assert migrate.ensure().state == "done"
+    assert inference_keys.is_current(config.read_config())   # born at format 2
     config.write_config(role_primary_provider="openrouter", role_primary_model=ACTIVE,
                         role_decision_provider="openrouter",
                         role_decision_model=decision_model)

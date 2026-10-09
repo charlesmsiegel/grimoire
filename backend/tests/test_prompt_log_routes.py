@@ -10,8 +10,6 @@ import pytest
 
 from grimoire import routes, store
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(client):

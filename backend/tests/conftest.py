@@ -29,6 +29,7 @@ from grimoire.store import (
     config as store_config,
 )
 from tests import phase_profile, route_memo
+from tests.inference_fixtures import legacy_client  # noqa: F401 -- a fixture, found by name
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 
 # Before any app is built: FastAPI analyses each route once per process rather
@@ -45,6 +46,14 @@ route_memo.install()
 # `tests.inference_fixtures.legacy_store()` before anything reads the store.
 # Set at import, not in a fixture, so a subprocess a test spawns inherits it.
 os.environ["GRIMOIRE_INFERENCE_AUTOMIGRATE"] = "0"
+# Every suite plays at format 2 on what a fresh install that has been through
+# the layout switch holds: a store a test creates from nothing is born an
+# upgraded default library (`store.config.birth_fields`) -- the format marker
+# and the Primary role on `openrouter` at `DEFAULT_MODEL`. At import for the
+# same reasons as the line above, and so that a mid-test `monkeypatch.undo()`
+# cannot reach it. `@pytest.mark.product_birth` gives one test the product's
+# own birth (the marker alone).
+os.environ[store_config.TEST_BIRTH_ENV] = "upgraded-default"
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -112,18 +121,18 @@ def pytest_configure(config):
         "reconcile: keep the automatic continuity sweep after End Scene on for this test")
     config.addinivalue_line(
         "markers",
-        "upgraded_birth: a fresh store is born an upgraded default library "
-        "(GRIMOIRE_TEST_BIRTH=upgraded-default); a suite opts in with pytestmark")
+        "product_birth: a fresh store is born as the product births one (the format "
+        "marker alone), not as the suite's upgraded default library")
 
 
 @pytest.fixture(autouse=True)
-def _upgraded_birth(request, monkeypatch):
-    """`@pytest.mark.upgraded_birth` (or a `pytestmark` naming it) sets
-    `config.TEST_BIRTH_ENV`, so a store the test creates from nothing is born
-    holding the default Primary as well as the format marker. Monkeypatched, so
-    it is put back after the test."""
-    if request.node.get_closest_marker("upgraded_birth"):
-        monkeypatch.setenv(store_config.TEST_BIRTH_ENV, "upgraded-default")
+def _product_birth(request, monkeypatch):
+    """`@pytest.mark.product_birth` unsets `config.TEST_BIRTH_ENV` for the
+    test, so a store it creates from nothing is born holding the format marker
+    and nothing else -- the product's birth. Monkeypatched, so the suite's
+    default comes back after the test."""
+    if request.node.get_closest_marker("product_birth"):
+        monkeypatch.delenv(store_config.TEST_BIRTH_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

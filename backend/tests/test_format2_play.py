@@ -1,13 +1,11 @@
 """The core play path on a format-2 store: one chat turn and a reroll.
 
-`tests/conftest.py` turns off the format-2 birth stamp
-(`GRIMOIRE_INFERENCE_AUTOMIGRATE=0`), so every older streaming, absorb and
-route suite plays on a format-1 store. That default stays -- it is what keeps
-those suites pinned to the legacy translation -- and this file is the one run
-of the turn path at the layout a fresh install ships with: roles, a role
-fallback riding the primary's connection dict, a model's facts overlaid on
-the wire, and a reroll naming another preset. Not a parametrisation of the
-whole suite: the narrow thing that format 2 changes on the way to the facade.
+Every suite plays at format 2 now: `tests/conftest.py` sets
+`GRIMOIRE_TEST_BIRTH`, so each store a test creates is born an upgraded
+default library. This file is the focused run of the turn path at that
+layout, with every format-2 ingredient on the way to the facade in one
+place: roles, a role fallback riding the primary's connection dict, a
+model's facts overlaid on the wire, and a reroll naming another preset.
 
 Invented names, fake keys and a scripted fake only; no LLM call is made.
 """
@@ -19,7 +17,6 @@ import pytest
 import grimoire.store as store
 from grimoire import llm, routes
 from grimoire.store import inference_keys as keys
-from grimoire.store.inference import migrate
 from tests.llm_fakes import FakeLLM
 
 REPLY = 'The tide turns.\n```handoff\n{"next":null}\n```'
@@ -28,7 +25,7 @@ MODEL = "vendor/active"
 
 @pytest.fixture
 def played(client):
-    """A migrated store: Primary on the keyed OpenRouter connection at
+    """A format-2 store: Primary on the keyed OpenRouter connection at
     `vendor/active` with the `warm` preset, a fallback on `spare`, the model's
     facts saying strict post-processing, and a scene with one cast member."""
     assert client.put("/api/llm-connections/openrouter",
@@ -47,7 +44,6 @@ def played(client):
                        json={"id": actor.json()["character"]})
     assert cast.status_code == 200, cast.text
 
-    assert migrate.ensure().state == "done"
     assert keys.is_current(store.read_config())
     got = client.put("/api/inference/settings", json={"roles": {"primary": {
         "selection": {"provider": "openrouter", "model": MODEL, "preset": "warm"},

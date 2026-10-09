@@ -33,8 +33,6 @@ from . import review_runs
 from .inference_fixtures import put_settings
 from .llm_fakes import FakeLLM
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):

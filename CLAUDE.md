@@ -557,10 +557,14 @@ would answer neither question.
   the migration calls `migrate.ensure` itself, and a test that needs a format-1
   library calls `tests.inference_fixtures.legacy_store()` before anything reads
   the store (a `config.md` that exists without the marker stays legacy).
-  `GRIMOIRE_TEST_BIRTH=upgraded-default` is the suite's seam on the birth, adding
-  the default Primary; a suite opts in with the `upgraded_birth` marker, and
-  `test_format2_play.py` is the turn path (a chat turn and a reroll) at the
-  format a fresh install ships.
+  The suite is **born an upgraded default library at format 2**:
+  `tests/conftest.py` sets `GRIMOIRE_TEST_BIRTH=upgraded-default` at import,
+  which adds the default Primary to the birth stamp, so every suite plays at
+  the format a fresh install ships. A test about the product's own birth (the
+  marker alone) takes `@pytest.mark.product_birth`; one about the legacy
+  layout takes the `legacy_client` fixture or calls `legacy_store()`.
+  `test_format2_play.py` is the focused run of the turn path (a chat turn and
+  a reroll) at that format.
 - **Model settings moved to a new layout, once, in the background**
   (`store/inference/migrate.py`, started by `main.start` at startup and after a
   data-dir move). Its first write is a full archive named

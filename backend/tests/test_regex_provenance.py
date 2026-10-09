@@ -8,30 +8,17 @@ metadata, and absent on anything written before it existed.
 import contextlib
 import json
 
-import pytest
-
 from grimoire import llm, routes, store
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.store.scenes import serialize
-from tests.inference_fixtures import put_settings
+from tests.inference_fixtures import primary, put_settings
 from tests.llm_fakes import FakeLLM, FlakyProvider
-
-pytestmark = pytest.mark.upgraded_birth
-
-
-def _primary(client, model="primary"):
-    """The seeded `openrouter` provider keyed, and the Primary role on it at
-    `model` (format 2: a provider names no model of its own)."""
-    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    assert got.status_code == 200, got.text
-    put_settings(client, {"roles": {"primary": {"selection": {
-        "provider": "openrouter", "model": model}}}})
 
 
 def seed(client):
-    _primary(client)
+    primary(client)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
@@ -158,7 +145,7 @@ def test_legacy_stream_fallback_records_serving_connection(client, monkeypatch):
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
-    _primary(client)
+    primary(client)
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
     assert response.status_code == 200, response.text
 
@@ -270,7 +257,7 @@ def test_live_display_follows_the_serving_connection_legacy(client, monkeypatch)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
-    _primary(client)
+    primary(client)
     connection_rules(client, "openrouter", {**ANSWERS, "replacement": "WRONG"})
     connection_rules(client, backup, ANSWERS)
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})

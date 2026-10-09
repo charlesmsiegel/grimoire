@@ -15,8 +15,6 @@ import grimoire.store as store
 from grimoire import routes
 from tests.llm_fakes import FakeLLM
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 def seed(client, module=None):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})

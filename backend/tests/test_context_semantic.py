@@ -32,19 +32,10 @@ from grimoire.store import context as ctx
 from grimoire.store.context import semantic, world_state
 from grimoire.store.inference import providers
 from grimoire.store.inference import settings as inference_settings
-from tests.inference_fixtures import legacy_store
-
-pytestmark = pytest.mark.upgraded_birth
+from tests.inference_fixtures import embedding, legacy_store
 
 #: The Embedding role's two keys in `config.md` (format 2).
 EMBED_PROVIDER = inference_keys.role_key("embedding", "provider")
-
-
-def embed_with(provider_id, model="embed-1"):
-    """Point the Embedding role at `provider_id` serving `model` (confirmed:
-    nothing here sends what re-embedding would)."""
-    inference_settings.write("global", "", {"roles": {"embedding": {
-        "selection": {"provider": provider_id, "model": model}}}}, confirm_embedding=True)
 
 
 # --- a fake provider -------------------------------------------------------
@@ -95,7 +86,7 @@ def configure(depth="2", threshold="0.4", model="embed-1", kind="openai_compatib
         cid = llm_connections.create_connection(kind, "Vectors", base_url=base_url,
                                                 api_key="sk-x", model="", post_process="none")
     config.write_config(semantic_recall_depth=depth, semantic_recall_threshold=threshold)
-    embed_with(cid, model)
+    embedding(cid, model)
     return cid
 
 
@@ -282,9 +273,9 @@ def test_two_connections_to_one_endpoint_do_not_share_a_namespace(store):
     second = llm_connections.create_connection(
         "openai_compatible", "Same gateway",          # identical URL and model
         base_url="https://vectors.example/v1", api_key="sk-other")
-    embed_with(first)
+    embedding(first, "embed-1")
     one = semantic.settings()["space"]
-    embed_with(second)
+    embedding(second, "embed-1")
     assert semantic.settings()["space"] != one
 
 

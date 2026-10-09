@@ -48,8 +48,6 @@ from tests.llm_fakes import (  # the shared gateway fakes (#204)
     from_entries,
 )
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(client, monkeypatch):
@@ -411,6 +409,15 @@ def test_config_retry_and_fallback_roundtrip(client):
     assert (body["llm_retries"], body["fallback_connection_id"]) == ("0", "claude")
 
 
+def test_config_retries_roundtrip_at_format_2(client):
+    """The retry count is not a model setting, so it round-trips at format 2
+    too, where the fallback is the role's (`test_the_fallback_resolver_...`)."""
+    assert keys.is_current(store.read_config())
+    assert client.get("/api/config").json()["llm_retries"] == "2"
+    assert client.put("/api/config", json={"llm_retries": "0"}).status_code == 200
+    assert client.get("/api/config").json()["llm_retries"] == "0"
+
+
 def _carried_fallback() -> dict | None:
     """The fallback a generation's resolved connection carries to the facade
     (`llm.FALLBACK_KEY`), or None."""
@@ -592,20 +599,41 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     between the two, and most settings narrow their vocabulary on read. The response mode
     validates its two values at the API boundary, so it uses a valid probe below.
     """
+    # `ConfigUpdate` still names the legacy inference keys, which only a
+    # format-1 store accepts; the twin below is the same loop at format 2.
+    legacy_store()
+    _round_trip_every_key(client, _writable_config_keys())
+
+
+def test_every_key_writable_at_format_2_reports_back_the_value_it_stored(client):
+    """The loop above on a format-2 store, over every key it still accepts:
+    the settings that are not model settings must round-trip at both
+    formats, and only the legacy inference keys are the format-1 layout's."""
+    assert keys.is_current(store.read_config())
+    legacy = set(keys.LEGACY_GLOBAL_KEYS)
+    writable = [k for k in _writable_config_keys() if k not in legacy]
+    assert writable and "llm_retries" in writable and "semantic_recall_depth" in writable
+    _round_trip_every_key(client, writable)
+
+
+def _writable_config_keys() -> list[str]:
+    """Every key `ConfigUpdate` accepts, but the confirmation: a yes to a
+    question the write asks, never stored, so nothing to read back."""
     from grimoire.routes.models import ConfigUpdate
 
-    # `ConfigUpdate` still names the legacy inference keys, which only a
-    # format-1 store accepts.
-    legacy_store()
+    return sorted(set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+                  - {"confirm_embedding"})
+
+
+def _round_trip_every_key(client, writable: list[str]) -> None:
+    """One `PUT /config` per key in `writable`, each read back, and no other
+    key in `writable` moved (`test_every_writable_config_key_reports_back_the_value_
+    it_stored` says why one at a time)."""
     # `active_connection_id` is answered from the connection it names rather
     # than the string that was stored, so an invented id reads back as "" --
     # correctly. `claude` is the other connection every store is seeded with,
     # which makes this a real round trip rather than an exemption.
     live = {"active_connection_id": "claude", "character_response_mode": "individual"}
-    # A yes to a question the write asks, never stored: nothing to read back.
-    writable = sorted(set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
-                      - {"confirm_embedding"})
-
     for key in writable:
         before = client.get("/api/config").json()
         wanted = live.get(key) or _other_config_value(str(before.get(key, "")))
@@ -655,6 +683,20 @@ def test_config_semantic_recall_defaults_to_off_and_roundtrips(client):
     body = client.get("/api/config").json()
     assert body["embeddings_connection_id"] == "vectors"
     assert body["embeddings_model"] == "text-embedding-3-small"
+    assert (body["semantic_recall_depth"], body["semantic_recall_threshold"]) == ("4", "0.55")
+
+
+def test_config_semantic_recall_defaults_to_off_and_roundtrips_at_format_2(client):
+    """Recall's depth and threshold are not model settings: at format 2 they
+    round-trip as before, and the embedding model is the Embedding role's."""
+    assert keys.is_current(store.read_config())
+    body = client.get("/api/config").json()
+    assert body["semantic_recall_depth"] == "0"          # off for every install
+    assert body["semantic_recall_threshold"] == "0.4"
+    r = client.put("/api/config", json={"semantic_recall_depth": "4",
+                                        "semantic_recall_threshold": "0.55"})
+    assert r.status_code == 200
+    body = client.get("/api/config").json()
     assert (body["semantic_recall_depth"], body["semantic_recall_threshold"]) == ("4", "0.55")
 
 

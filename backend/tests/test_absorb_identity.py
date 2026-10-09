@@ -31,7 +31,6 @@ from grimoire.main import create_app
 from grimoire.store import llm_connections
 from grimoire.store.absorb import materializer
 from grimoire.store.continuity import identity, similarity
-from grimoire.store.inference import settings as inference_settings
 
 from . import inference_fixtures, review_runs
 from .llm_fakes import FakeEmbeddings, FakeLLM, SequencedProvider, decision_reply, from_entries
@@ -42,31 +41,6 @@ from .review_runs import (
     SALTMARCH_TITHE,
     identity_requests,
 )
-
-pytestmark = pytest.mark.upgraded_birth
-
-
-def _format2(client):
-    """`inference_fixtures.format2` on a store born at format 2: the seeded
-    `openrouter` provider keyed and on Primary at `vendor/active`, and a keyed
-    `spare` provider. The shared helper still names a provider's model in the
-    provider body, which a format-2 store refuses (`set this on the model, not
-    the provider`), and migrates a store that is already current."""
-    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test-active"})
-    assert got.status_code == 200, got.text
-    got = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
-                                                    "api_key": "sk-spare"})
-    assert got.status_code == 200, got.text
-    inference_fixtures.put_settings(client, {"roles": {"primary": {
-        "selection": {"provider": "openrouter", "model": "vendor/active"}}}})
-
-
-@pytest.fixture(autouse=True)
-def _format2_at_birth(monkeypatch):
-    """`decide_only` and `neither` build on `format2`: route them through
-    `_format2` until the shared helper builds format-2 state itself."""
-    monkeypatch.setattr(inference_fixtures, "format2", _format2)
-
 
 WHEN_EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
 WHEN_IDENTITY = dict(zip(("system_contains", "user_contains"), review_runs.IDENTITY_MATCH,
@@ -201,8 +175,7 @@ def _configure_embeddings(monkeypatch, double):
     conn = llm_connections.create_connection("openai_compatible", "Vectors",
                                              base_url="https://vectors.example/v1",
                                              api_key="sk-x", model="", post_process="none")
-    inference_settings.write("global", "", {"roles": {"embedding": {
-        "selection": {"provider": conn, "model": "embed-1"}}}}, confirm_embedding=True)
+    inference_fixtures.embedding(conn, "embed-1")
     monkeypatch.setattr(similarity, "_CLIENT", double)
     return double
 

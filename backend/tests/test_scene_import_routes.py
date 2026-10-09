@@ -9,14 +9,10 @@ post-processing pipeline" half of the issue's title.
 
 from __future__ import annotations
 
-import pytest
-
 import grimoire.store as store
 from grimoire import routes
 from tests import review_runs
 from tests.llm_fakes import FakeOpenRouterComplete
-
-pytestmark = pytest.mark.upgraded_birth
 
 STORED = """---
 title: The Long Quay

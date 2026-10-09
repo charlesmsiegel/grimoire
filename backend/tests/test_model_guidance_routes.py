@@ -7,8 +7,6 @@ from grimoire.llm_errors import LLMError
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(client):

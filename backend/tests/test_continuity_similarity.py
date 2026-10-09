@@ -23,10 +23,8 @@ from grimoire.main import create_app
 from grimoire.store import config, embed_space, llm_connections, logs, usage, vectors
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import effective, review, similarity
-from grimoire.store.inference import settings as inference_settings
+from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
-
-pytestmark = pytest.mark.upgraded_birth
 
 S1, S2 = "001--saltmarch", "002--realm"
 MARA = "characters:mara"
@@ -366,13 +364,7 @@ def _configure(depth="2"):
                                              base_url="https://vectors.example/v1",
                                              api_key="sk-x", model="", post_process="none")
     config.write_config(semantic_recall_depth=depth, semantic_recall_threshold="0.4")
-    _embed_with(conn, "embed-1")
-
-
-def _embed_with(provider_id, model):
-    """The Embedding role on `provider_id` serving `model` (confirmed)."""
-    inference_settings.write("global", "", {"roles": {"embedding": {
-        "selection": {"provider": provider_id, "model": model}}}}, confirm_embedding=True)
+    embedding(conn, "embed-1")
 
 
 def _space():
@@ -385,7 +377,7 @@ def _soon():
 
 def test_unconfigured_is_off_and_never_calls(home, fake):
     config.write_config(semantic_recall_depth="0")
-    _embed_with("", "embed-1")
+    embedding("", "embed-1")
     got = similarity.semantic(["x"], [], deadline=_soon())
     assert got.mode == "off"
     assert got.vectors == {}

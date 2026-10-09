@@ -16,8 +16,6 @@ from grimoire.store import config, embed_space, llm_connections
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import facts, providers, translate
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):

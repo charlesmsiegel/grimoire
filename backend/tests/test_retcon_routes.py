@@ -19,8 +19,6 @@ from grimoire.main import create_app
 from tests import review_runs
 from tests.inference_fixtures import put_settings
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):

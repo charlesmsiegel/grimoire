@@ -9,8 +9,6 @@ from grimoire import catalog, store
 from grimoire.store import config, llm_connections, post_images
 from tests.inference_fixtures import put_settings
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def home(monkeypatch, tmp_path):

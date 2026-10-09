@@ -22,8 +22,6 @@ from grimoire.routes import scenes as scenes_routes
 
 from .llm_fakes import FakeLLM
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 def _summarizer(*texts: str) -> FakeLLM:
     """The shared fake scripted with one turn per refresh (`llm_fakes.py` — this

@@ -32,8 +32,6 @@ from grimoire.store.continuity import doc as continuity_doc
 from tests import inference_fixtures
 from tests.collection_fixtures import format1, format2
 
-pytestmark = pytest.mark.upgraded_birth
-
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
@@ -1643,12 +1641,23 @@ def test_on_a_store_not_yet_migrated_no_rates_link_leads_to_an_editor_that_canno
 def test_on_a_store_a_newer_build_wrote_no_rates_link_is_offered(client, monkeypatch):
     """That store is already past the upgrade, and this version will never
     write its rates, so the copy says a newer version wrote it -- never "after
-    the upgrade"."""
+    the upgrade".
+
+    This build reads a store it is not current for through the legacy
+    translation, so the selection it sees there is the one in the frozen
+    legacy keys. Built that way on purpose -- a legacy library holding a
+    provider at its own model, then a newer build's marker -- rather than by
+    writing legacy fields into a store already born at format 2."""
+    inference_fixtures.legacy_store()
     pid = store.llm_connections.create_connection(
         "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
         model="vendor/model-a")
     store.write_config(active_connection_id=pid)
     store.write_config(**{inference_keys.FORMAT_KEY: str(int(inference_keys.CURRENT_FORMAT) + 1)})
+    assert inference_keys.is_newer(store.read_config())
+    # The model in use, read off that store (`in_use` is what the chore asks).
+    assert [(m["provider_id"], m["model"]) for m in store.inference.in_use.unpriced()] == [
+        (pid, "vendor/model-a")]
     monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
         {"model": "vendor/model-a", "facts_model": "vendor/model-a",
          "provider_id": pid, "calls": 2}])

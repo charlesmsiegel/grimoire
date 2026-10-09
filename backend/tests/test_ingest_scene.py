@@ -1386,17 +1386,16 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
 # ---- where the ingest runs: the app's absorb route, never the retired active connection ----
 
 def _format_2_campaign(monkeypatch, tmp_path) -> str:
-    """A campaign on a migrated store whose Primary is a local provider, while
+    """A campaign on a format-2 store whose Primary is a local provider, while
     the frozen legacy `active_connection_id` still names a keyless OpenRouter."""
-    from grimoire.store import config, llm_connections
+    from grimoire.store import config, inference_keys, llm_connections
     from grimoire.store import worlds as worlds_store
-    from grimoire.store.inference import migrate
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     llm_connections.create_connection("openai_compatible", "Mara Local",
                                       base_url="http://localhost:1234/v1")
-    assert migrate.ensure().state == "done"
+    assert inference_keys.is_current(config.read_config())   # born at format 2
     config.write_config(role_primary_provider="mara-local",
                         role_primary_model="local-model")
     assert config.read_config()["active_connection_id"] == "openrouter"
