@@ -291,6 +291,14 @@ export type RetiredNote = {
   /** The sentence to show, ending "— this was not carried over." */
   text: string;
 };
+/** What would price a role's or route's calls (spec 3.5): `pricing.rate_for_call`
+ *  on the resolved selection, and where it came from. `none` is no rate at all
+ *  (calls read unpriced; never drawn as $0); `native` is a native decision,
+ *  which is never modelled. `entry` is per 1,000 tokens, as the ledger keeps it. */
+export type RateInfo = {
+  source: "provider" | "table" | "none" | "native";
+  entry?: PricingEntry;
+};
 /** One generative role card. `inherits` is what this scope would run on with
  *  its own choice for the role cleared -- what "Same as ..." shows -- and
  *  `problem` is the seam's own refusal of `resolves` (no key, a known
@@ -318,6 +326,8 @@ export type RoleCard = {
    *  its own. `no` only when it is KNOWN (a name-rule guess is `unknown`):
    *  the one value under which "no native decision API" may be said. */
   decides_natively: DecidesNatively;
+  /** What would price this role's calls; null when nothing resolves. */
+  rate: RateInfo | null;
 };
 /** Which backend answers a decision (`RoleCard.decision_mode`). */
 export type DecisionMode = "native" | "structured" | "";
@@ -332,6 +342,8 @@ export type EmbeddingCard = {
   resolves: ResolvedSelection | null;
   on: boolean;
   problem: string | null;
+  /** As on `RoleCard`; null while the role is off. */
+  rate: RateInfo | null;
 };
 /** What a route's `use` says: inherit (`""`), a generative role, or the
  *  route's own pin (`"model"`). */
@@ -366,6 +378,8 @@ export type RouteRow = {
    *  role ends up supplying it -- a route can use Decision while Decision
    *  inherits Fast. `null` for a pin. */
   uses: GenerativeRole | null;
+  /** As on `RoleCard`. */
+  rate: RateInfo | null;
 };
 /** A provider as the settings view lists it, with whether it can send at all. */
 export type InferenceProvider = {
@@ -376,6 +390,8 @@ export type InferenceProvider = {
   /** The provider preset it was made from, or the one inferred for it. */
   preset: string;
   usable: boolean;
+  /** Why it cannot send (the seam's own sentence); null exactly when usable. */
+  problem: string | null;
   /** The model the provider's own record names ("" for none): what a reroll
    *  naming the provider alone runs while the store is at format 1. At
    *  format 2 a provider has no model of its own and this is not used. */

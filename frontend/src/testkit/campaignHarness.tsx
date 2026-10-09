@@ -45,7 +45,7 @@ export function campaignInference(scene: Record<string, unknown> = {}) {
                            preset: "", preset_name: "", via: "role", scope: "global" },
                ...scene }],
     providers: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter", preset: "openrouter",
-                  usable: true }],
+                  usable: true, problem: null }],
     presets: [],
   };
 }

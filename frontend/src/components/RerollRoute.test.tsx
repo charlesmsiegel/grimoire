@@ -15,10 +15,10 @@ import { forgetModelTests } from "./inference/TestCallDialog";
 import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
 
 const PROVIDERS = [
-  { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter", usable: true },
-  { id: "realm", name: "Realm Local", kind: "openai_compatible", preset: "custom", usable: true },
-  { id: "winifred", name: "Winifred Anthropic", kind: "anthropic", preset: "anthropic", usable: true },
-  { id: "mara", name: "Mara Claude", kind: "claude", preset: "claude", usable: true },
+  { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter", usable: true, problem: null },
+  { id: "realm", name: "Realm Local", kind: "openai_compatible", preset: "custom", usable: true, problem: null },
+  { id: "winifred", name: "Winifred Anthropic", kind: "anthropic", preset: "anthropic", usable: true, problem: null },
+  { id: "mara", name: "Mara Claude", kind: "claude", preset: "claude", usable: true, problem: null },
 ];
 
 /** The scene route as the campaign's view resolves it: what Default runs. */

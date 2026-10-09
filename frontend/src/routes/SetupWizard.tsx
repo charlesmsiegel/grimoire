@@ -386,7 +386,7 @@ export default function SetupWizard(
       setInference((s) => (!s || s.providers.some((p) => p.id === id) ? s : {
         ...s,
         providers: [...s.providers,
-                    { id, name, kind: preset.kind, preset: preset.id, usable: true }],
+                    { id, name, kind: preset.kind, preset: preset.id, usable: true, problem: null }],
       }));
       setPrimary((p) => (p.provider ? p : { ...p, provider: id }));
       // Then ask the provider whether the thing just saved actually works, and

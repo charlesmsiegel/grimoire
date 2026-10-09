@@ -30,7 +30,7 @@ function settings(over: { newer?: boolean } = {}) {
     format: "2", newer: false, roles: {}, routes: [], presets: [], preset_clear: "",
     migration: { state: "done", reason: "", skipped: [] },
     providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter",
-                  preset: "openrouter", usable: true }],
+                  preset: "openrouter", usable: true, problem: null }],
     ...over,
   } as never;
 }

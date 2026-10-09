@@ -13,9 +13,9 @@ vi.mock("../../api/client", async () => {
 
 const PROVIDERS = [
   { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter" as const,
-    preset: "openrouter", usable: true },
+    preset: "openrouter", usable: true, problem: null },
   { id: "realm", name: "Realm Local", kind: "openai_compatible" as const,
-    preset: "custom", usable: true },
+    preset: "custom", usable: true, problem: null },
 ];
 
 const PRESET = {
@@ -372,7 +372,7 @@ test("a provider that cannot send says so without guessing why", async () => {
     answer("generate", ["a"], [], []));
   // `kind: ""` is what the view sends for a record that names none.
   const providers: InferenceProvider[] = [
-    { id: "saltmarch", name: "Saltmarch Router", kind: "", preset: "custom", usable: false },
+    { id: "saltmarch", name: "Saltmarch Router", kind: "", preset: "custom", usable: false, problem: null },
   ];
   const { rerender } = render(
     <ProviderModelPicker needs={["generate"]} providers={providers}
@@ -442,7 +442,7 @@ test("an empty list on a provider with no catalog asks only for an id", async ()
   render(<ProviderModelPicker needs={["generate"]} value={{ provider: "realm-claude", model: "" }}
                               onChange={() => {}}
                               providers={[{ id: "realm-claude", name: "Realm Claude",
-                                            kind: "claude", usable: true }]} />);
+                                            kind: "claude", usable: true, problem: null }]} />);
   expect(await screen.findByText("This provider lists no models: type an id."))
     .toBeInTheDocument();
   expect(screen.queryByText(/Refresh/)).toBeNull();
