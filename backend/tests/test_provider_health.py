@@ -428,10 +428,6 @@ def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(legacy_
     assert body["rev"] == rev
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "at format 2, turning a model's prefill fact off through put_connection_facts "
-    "does not forget the verdict a refused prefill earned, whereas turning a "
-    "provider's prefill off through put_connection does"))
 def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
     """The format-2 twin of the test above: `prefill` is the model's fact."""
     client.app.dependency_overrides[routes.get_llm] = \
@@ -450,6 +446,46 @@ def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earne
     body = client.get("/api/llm-connections/openrouter").json()
     assert body["health"]["state"] == "unknown"
     assert body["rev"] == rev
+
+
+def _errored_with_prefill(client, prefill):
+    """A format-2 provider whose model states `prefill` and whose last health
+    check failed: `(facts url, model, rev)`."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeCatalog(health_error=LLMError("bad_response", "assistant prefill"))
+    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
+    facts = "/api/llm-connections/openrouter/facts"
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    assert client.put(facts, json={"model": model, "prefill": prefill}).status_code == 200
+    client.post("/api/llm-connections/openrouter/health")
+    assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "error"
+    return facts, model
+
+
+def _state(client):
+    return client.get("/api/llm-connections/openrouter").json()["health"]["state"]
+
+
+def test_any_change_to_a_models_prefill_fact_forgets_the_verdict(client):
+    """`put_connection`'s rule is that `prefill` changed, in either direction,
+    and the fact's twin of it is the same."""
+    facts, model = _errored_with_prefill(client, False)
+
+    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+
+    assert _state(client) == "unknown"
+
+
+def test_a_facts_write_that_leaves_prefill_alone_keeps_the_verdict(client):
+    """Another fact, or the same `prefill` stated again, is not the switch the
+    refusal was about."""
+    facts, model = _errored_with_prefill(client, True)
+
+    assert client.put(facts, json={"model": model, "vision": "off"}).status_code == 200
+    assert _state(client) == "error"
+
+    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+    assert _state(client) == "error"
 
 
 def test_a_connection_deleted_mid_update_is_still_a_404(client, monkeypatch):

@@ -1638,7 +1638,8 @@ FACTS_MANGLED = ("This provider's model facts file is not valid JSON (it may hav
 
 
 @router.put("/llm-connections/{conn_id}/facts")
-def put_connection_facts(conn_id: str, body: FactsUpdate):
+def put_connection_facts(conn_id: str, body: FactsUpdate,
+                         registry: health.ProviderHealth = Depends(get_health)):
     """State `vision`, `prefill`, `post_process`, capability `overrides`
     (`{cap: "" | "yes" | "no"}`, "" removing one) and `rates` (the model's own
     per-token price; `{}` removing it) for one model; a field left out (or
@@ -1669,11 +1670,21 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
         raise HTTPException(status_code=400, detail="name a model")
     if len(model) > store.alternates.MAX_MODEL_CHARS:
         raise HTTPException(status_code=400, detail="model id is too long")
+    refuse = None if confirmed else _refuse_unconfirmed_facts(conn, model)
+    prefill_moved: list[bool] = []
+
+    def guard(before: dict, after: dict) -> None:
+        # Always runs, confirmed or not: it is also how this route learns, from
+        # the very hold that writes, whether the write moved `prefill`.
+        if refuse is not None:
+            refuse(before, after)
+        prefill_moved.append(bool(after["prefill"]) != bool(before["prefill"]))
+
     try:
         facts.state(conn_id, model, vision=fields.get("vision"),
                     prefill=fields.get("prefill"), post_process=fields.get("post_process"),
                     overrides=fields.get("overrides"), rates=fields.get("rates"),
-                    guard=None if confirmed else _refuse_unconfirmed_facts(conn, model))
+                    guard=guard)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except store.llm_connections.ConnectionNotFound:
@@ -1687,6 +1698,13 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
     except facts.FactsUnreadableError:
         # Held by another program: nothing was written, and a retry may land.
         raise HTTPException(status_code=503, detail=FACTS_UNREADABLE) from None
+    # `put_connection`'s rule for the legacy field, for the model's fact:
+    # `prefill` is what a refused trailing assistant message earns a verdict
+    # over, and it is rev-neutral, so a change to it is the one facts write that
+    # must forget the verdict -- otherwise unticking it leaves the dot red until
+    # some later call happens to succeed. Any other fact leaves it alone.
+    if prefill_moved and prefill_moved[-1]:
+        registry.forget(conn_id)
     return _facts_body(_facts_conn(conn_id), model)
 
 
