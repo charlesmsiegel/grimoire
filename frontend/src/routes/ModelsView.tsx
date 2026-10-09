@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { api, type GenerativeRole, type InferenceSettings } from "../api/client";
+import { api, type InferenceSettings } from "../api/client";
 import { ErrorNote } from "../components/ErrorNote";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
 import { InferenceNav } from "../components/inference/InferenceNav";
@@ -8,13 +8,13 @@ import { migrationBanner } from "../components/inference/migration";
 import { RetiredNotes } from "../components/inference/RetiredNotes";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 import { useProviderHealth } from "../components/models/health";
+import { ModelsEditForm } from "../components/models/ModelsEditForm";
 import { addedModel } from "../components/models/rates";
 import { EmbeddingRow, RoleRow } from "../components/models/RoleRow";
+import { GENERATIVE } from "../components/models/selections";
 import { ADVANCED_HASH } from "../components/models/taskHash";
 import { TokenRates } from "../components/models/TokenRates";
 import { PageShell } from "../components/PageShell";
-
-const GENERATIVE: GenerativeRole[] = ["primary", "fast", "decision"];
 
 /** Routes this scope overrides: its own `use` or its own `preset`. */
 export function overrideCount(settings: InferenceSettings): number {
@@ -29,7 +29,6 @@ export function overrideCount(settings: InferenceSettings): number {
  *  overrides are its Inspector's. Every "resolves", problem and rate is the
  *  server's; health is the connections list's. */
 export default function ModelsView({ edit = false }: { edit?: boolean }) {
-  void edit; // the form arrives in Task 6
   const location = useLocation();
   const navigate = useNavigate();
   const { settings, error, install } = useInferenceSettings();
@@ -56,7 +55,11 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
     body = error != null ? null : <p className="field-hint">Reading the model settings…</p>;
   } else {
     const n = overrideCount(settings);
-    body = (
+    body = edit ? (
+      <ModelsEditForm settings={settings} health={health} blocked={blocked}
+                      onSaved={(next) => { install(next); navigate("/models"); }}
+                      onCancel={() => navigate("/models")} />
+    ) : (
       <>
         <section className="models-roles" aria-label="Roles">
           {GENERATIVE.map((r) => <RoleRow key={r} role={r} settings={settings} health={health} />)}
