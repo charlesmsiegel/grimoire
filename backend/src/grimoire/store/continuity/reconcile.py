@@ -782,7 +782,9 @@ def _commit(cid: str, sweep: Sweep, build: Build, stillborn: Callable[[], bool])
         if (records == stored["records"] and _same_basis(basis, stored["basis"])
                 and not candidates.malformed(cid)):
             return _result(candidates=live)
-        candidates.write(cid, {"version": candidates.VERSION, "generated": paths.now_iso(),
+        candidates.write(cid, {"version": candidates.VERSION,
+                               "questions": candidates.QUESTIONS,
+                               "generated": paths.now_iso(),
                                "generation": sweep.stamp, "basis": basis, "records": records})
         revision.bump(cid)
         return _result(written=True, candidates=live)
@@ -831,6 +833,25 @@ def _unvoided(record: dict, scenes: set[str] | None) -> dict:
     return {**record, "proposal": None}
 
 
+def _reasked(record: dict) -> dict:
+    """A proposal stored ``uncertain`` under an older question shape
+    (`candidates.QUESTIONS`) becomes None, so `select` asks it again under
+    today's: before every question stood alone, a native endpoint answered
+    the direction and the evidence none, and stored every directed or status
+    verdict it gave as ``uncertain`` (spec 7.4). Every ``uncertain`` is asked
+    again, a structured one included, since the shape it was asked under
+    cannot be told from the proposal; once, since the next write stamps
+    today's shape. A declined model-only nomination keeps its answer, as
+    `_unvoided` keeps it, and so does one the reader set aside (`dismissed`).
+    A dismissal itself is never touched: it lives in continuity.json, keyed by
+    a fingerprint the question shape is no part of."""
+    proposal = record["proposal"]
+    if (proposal is None or proposal["decision"] != "uncertain"
+            or pending.settled(record) or record.get("dismissed")):
+        return record
+    return {**record, "proposal": None}
+
+
 def _found_basis(sweep: Sweep, current: pending.Current, old: dict) -> dict:
     """The rescored refs' hashes and stamp; every other ref that still exists
     keeps its old entries (absent when new), so a ref the cap or a missing
@@ -853,7 +874,9 @@ def persist_found(cid: str, sweep: Sweep, *,
     """Persist 1 (§11.1 step 2): what the sweep discovered, plus every cached
     record it did not retract, re-judged against continuity.json as it stands
     under the lock -- so a dismissal, merge or link that landed after
-    discovery is honoured. Model-only nominations wait for persist 2.
+    discovery is honoured. A cache stamped with an older question shape has
+    its ``uncertain`` proposals asked again (`_reasked`). Model-only
+    nominations wait for persist 2.
 
     Returns ``{written, superseded, gone, cancelled, continuity, candidates}``,
     `candidates` counting the ``live`` records."""
@@ -865,6 +888,8 @@ def persist_found(cid: str, sweep: Sweep, *,
         rows = _soft(scenes_read.list_scenes, None, cid)
         scenes = None if rows is None else {row["id"] for row in rows}
         records = {key: _unvoided(rec, scenes) for key, rec in records.items()}
+        if stored["questions"] < candidates.QUESTIONS:
+            records = {key: _reasked(rec) for key, rec in records.items()}
         return records, _found_basis(sweep, current, stored["basis"])
 
     return _commit(cid, sweep, build, stillborn)

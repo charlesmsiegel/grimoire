@@ -2,11 +2,15 @@
 
 Stored at ``<campaign>/continuity_candidates.json``::
 
-    {"version": 1, "generated", "generation",
+    {"version": 1, "questions": 2, "generated", "generation",
      "basis":   {"embedding_space", "embedding_model", "identity_hashes", "scored",
                  "text_hashes"},
      "records": {"<candidate id>": {"kind", "refs", "fingerprint", "signals",
                                     "proposal", "created", ["dismissed"]}}}
+
+`questions` is the shape of the questions the stored proposals were asked
+under (`QUESTIONS`), so a proposal an older shape could not answer is asked
+again once (`reconcile._reasked`); absent, it is 1.
 
 `dismissed` is present only on a model-only finding the reader set aside
 (`review.settle`, §12.7): the fingerprint its dismissal was written under, so a
@@ -50,6 +54,15 @@ from .. import atomic, locks
 from ..campaigns import paths as campaigns_paths
 
 VERSION = 1
+#: The shape of the questions a stored proposal was asked under. 1 (absent in
+#: a file written before it existed): slice G's, whose `from` / `to` and
+#: evidence questions referred to the decision, so a native decisions
+#: endpoint (#490), answering each question alone, answered them none and
+#: every directed or status verdict was stored ``uncertain``. 2: every
+#: question stands alone (spec 7.4). A cache below it has its ``uncertain``
+#: proposals asked again, once, by the next persist (`reconcile._reasked`).
+#: Not part of any fingerprint, so no dismissal is touched.
+QUESTIONS = 2
 KINDS = ("possible_duplicate", "possible_relation",
          "possible_thread_closure", "possible_commitment_resolution")
 PAIR_KINDS = KINDS[:2]
@@ -79,7 +92,7 @@ def _path(cid: str) -> Path:
 
 
 def empty() -> dict:
-    return {"version": VERSION, "generated": "", "generation": "",
+    return {"version": VERSION, "questions": QUESTIONS, "generated": "", "generation": "",
             "basis": {"embedding_space": "", "embedding_model": "",
                       "identity_hashes": {}, "scored": {}, "text_hashes": {}},
             "records": {}}
@@ -211,6 +224,8 @@ def read(cid: str) -> dict:
     if not isinstance(raw, dict):
         return empty()
     out = empty()
+    questions = raw.get("questions", 1)
+    out["questions"] = questions if type(questions) is int and questions >= 1 else 1
     out["generated"] = _text(raw.get("generated"))
     out["generation"] = _text(raw.get("generation"))
     out["basis"] = _basis(raw.get("basis"))

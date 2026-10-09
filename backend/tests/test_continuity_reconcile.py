@@ -1710,3 +1710,93 @@ def test_a_zero_vector_text_costs_one_resend_per_sweep(cid, s0, monkeypatch):
     assert other in sweeps[0].rescored
     assert zero not in sweeps[0].rescored
     assert vectors.load(_vector_space(), [texts[zero]]) == {}
+
+
+# ------------------------------------------- uncertain from before the fold
+#
+# Before every continuity question stood alone (spec 7.4), a native decisions
+# endpoint answered the direction and the evidence none and stored every
+# directed or status verdict as ``uncertain`` -- and `select` never re-asks a
+# record with a proposal, while its fingerprint holds. The cache's question
+# shape (`candidates.QUESTIONS`) asks such a proposal again, once.
+
+def _prefold(cid):
+    """The cache as a build before the question shape left it: no stamp."""
+    raw = json.loads(_cache(cid).read_text(encoding="utf-8"))
+    raw.pop("questions", None)
+    _cache(cid).write_text(json.dumps(raw), encoding="utf-8")
+    assert candidates.read(cid)["questions"] == 1
+
+
+def test_an_uncertain_cached_before_the_fold_is_asked_again_once(cid, s0):
+    sid = _dated_scene(cid, "Saltmarch quay", "2026-05-01")
+    _map(cid, sid)
+    clock.advance(cid, to="2026-07-15")
+    sweep = _found(cid, s0)
+    assert CLOSE_MAP in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    closed = _proposal("close", status="closed", reason="", evidence=[sid])
+    reconcile.persist_proposals(cid, sweep, {PAIR: _proposal("uncertain", reason=""),
+                                             CLOSE_MAP: closed})
+    assert candidates.read(cid)["questions"] == candidates.QUESTIONS
+    _prefold(cid)
+
+    sweep = _sweep(cid, stamp=_stamp(11))
+    assert reconcile.persist_found(cid, sweep)["written"] is True
+    records = _records(cid)
+    assert records[PAIR]["proposal"] is None
+    assert records[CLOSE_MAP]["proposal"] == closed       # a verdict is kept
+    assert {s["id"] for s in reconcile.select(cid, sweep)} == {PAIR}
+    assert candidates.read(cid)["questions"] == candidates.QUESTIONS
+
+    # Once: answered uncertain again under today's shape, it stands.
+    reconcile.persist_proposals(cid, sweep, {PAIR: _proposal("uncertain", reason="")})
+    sweep = _sweep(cid, stamp=_stamp(12))
+    reconcile.persist_found(cid, sweep)
+    assert _records(cid)[PAIR]["proposal"]["decision"] == "uncertain"
+    assert reconcile.select(cid, sweep) == []
+
+
+def test_reasking_never_brings_back_a_dismissed_pair(cid, s0):
+    """The player's dismissal is a suppression in continuity.json, keyed by
+    the pair's fingerprint, which the question shape is no part of: healing
+    an older cache re-asks what it holds, never what the player set aside."""
+    sweep = _found(cid, s0)
+    reconcile.persist_found(cid, sweep)
+    reconcile.persist_proposals(cid, sweep, {PAIR: _proposal("uncertain", reason="")})
+    refs = _records(cid)[PAIR]["refs"]
+    fingerprint = pending.fingerprint(pending.Current.load(cid), "possible_duplicate", refs)
+    assert review.dismiss(cid, PAIR, "dismiss")["fingerprint"] == fingerprint
+    assert PAIR not in _records(cid)
+    _prefold(cid)
+
+    sweep = _sweep(cid, stamp=_stamp(11))
+    assert PAIR in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+    assert PAIR not in {s["id"] for s in reconcile.select(cid, sweep)}
+    assert pending.fingerprint(pending.Current.load(cid), "possible_duplicate",
+                               refs) == fingerprint
+    assert list(doc.read(cid)["suppressions"]) == [fingerprint]
+
+
+def test_reasked_keeps_a_settled_or_set_aside_answer():
+    """A declined model-only nomination is kept so it is not re-asked, and
+    one the reader set aside keeps its proposal for a restore: neither is an
+    uncertain the old shape lost."""
+    def record(**over):
+        return {"kind": "possible_relation", "refs": [OATH, "event:the-coronation"],
+                "fingerprint": "f", "signals": {}, "created": "",
+                "proposal": _proposal("uncertain", reason=""), **over}
+
+    assert reconcile._reasked(record())["proposal"] == record()["proposal"]   # temporal
+    lifecycle = {"kind": "possible_thread_closure", "refs": [MAP]}
+    touched = record(**lifecycle, signals={"reason": "touched"})
+    assert reconcile._reasked(touched) == touched
+    stale = record(**lifecycle, signals={"reason": "stale"})
+    assert reconcile._reasked(stale)["proposal"] is None
+    assert reconcile._reasked({**stale, "dismissed": "f"})["proposal"] is not None
+    pair = record(kind="possible_duplicate", refs=[LEDGER, RECOVER])
+    assert reconcile._reasked(pair)["proposal"] is None
+    for kept in (None, _proposal("distinct", reason="")):
+        assert reconcile._reasked({**pair, "proposal": kept})["proposal"] == kept
