@@ -473,9 +473,9 @@ def _connections_left() -> list[str]:
 
 # ---- the strip (ruling 6(c)) ----
 #: The legacy model fields the C migration copied into a model's facts, and
-#: how a note names each.
-_FACT_LABELS: dict[str, str] = {"vision": "image input", "prefill": "prefill",
-                                "post_process": "post-processing"}
+#: how a note names each: the labels the model panel on Providers uses.
+_FACT_LABELS: dict[str, str] = {"vision": "Reads images", "prefill": "Keep writing",
+                                "post_process": "Prompt post-processing"}
 
 
 def strip_blocked() -> str:
@@ -526,11 +526,14 @@ def _fact_notes(raw: Mapping) -> tuple[retired.Note, ...]:
         unstated = known["prefill"] is None if field == "prefill" else not known[field]
         if not unstated:
             continue
-        shown = "on" if value is True else str(value)
+        # Keep writing's legacy value is the mode the panel names ("prefill");
+        # the others are quoted values.
+        shown = "prefill" if value is True else f"“{value}”"
         name = str(raw.get("name") or conn_id)
-        text = (f"The provider “{name}” had {_FACT_LABELS[field]} set to “{shown}” for "
+        text = (f"The provider “{name}” had {_FACT_LABELS[field]} set to {shown} for "
                 f"{f'the model “{model}”' if model else 'its model'}, and that model's "
-                "settings do not say so — this was not carried over.")
+                "entry under Providers does not say so, so it no longer applies — this "
+                "was not carried over.")
         kind = "fact_not_carried"
         out.append(retired.Note(retired.note_id(legacy_plan.GLOBAL_SCOPE, field, conn_id,
                                                 "", kind),

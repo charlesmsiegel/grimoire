@@ -1627,3 +1627,29 @@ def test_an_unreadable_record_leaves_a_scope_with_nothing_written(home):
     assert "retirement record" in got.retirement["failed"]
     assert retired.path().read_text(encoding="utf-8") == "{not json"
 
+
+
+def test_the_notes_speak_the_pages_words(home):
+    """6b review M-2: the fact note names the model panel's own labels and
+    where that entry is; the stranded-effort note says why, without naming
+    a marker."""
+    _legacy()
+    _glm("glm", "high")
+    llm_connections.update_connection("glm", prefill=True, vision="on")
+    assert inference_fixtures.migrate_as_c_h().state == "done"
+    llm_connections.facts_path("glm").unlink()
+    cid = _campaign("Saltmarch")
+    _write_meta(cid, {**{k: v for k, v in _meta(cid).items() if k != FORMAT},
+                      RETIRED: "1", "route_scene": "glm"})
+    assert migrate.ensure().state == "done"
+    texts = {(n["kind"], n["subject"]): n["text"] for n in retired.read()["notes"]}
+    assert texts[("fact_not_carried", "prefill")] == (
+        "The provider “glm” had Keep writing set to prefill for the model “glm-5.3”, and "
+        "that model's entry under Providers does not say so, so it no longer applies — "
+        "this was not carried over.")
+    assert texts[("fact_not_carried", "vision")].startswith(
+        "The provider “glm” had Reads images set to “on” for the model “glm-5.3”")
+    assert texts[("unrepresentable", keys.pin_key("scene", "preset"))] == (
+        "On the Scene turns route in this campaign, the GLM provider “glm” no longer sends "
+        "its reasoning effort (high), because no preset there sets one — this was not "
+        "carried over.")

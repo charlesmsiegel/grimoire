@@ -756,9 +756,8 @@ def _stranded(view: Mapping, *, scope: str, campaign: bool, conn: Lookup,
         where = "" if scope == GLOBAL_SCOPE else " in this campaign"
         kind = "unrepresentable"
         text = (f"On {_slot_label(preset_key)}{where}, the GLM provider “{name}” no longer "
-                f"sends its reasoning effort ({effort}): these settings were already marked "
-                "retired when they were upgraded, so no preset carries it — this was not "
-                "carried over.")
+                f"sends its reasoning effort ({effort}), because no preset there sets one "
+                "— this was not carried over.")
         note = retired.Note(retired.note_id(scope, preset_key, selection.provider, effort, kind),
                             scope, preset_key, selection.provider, effort, kind, text)
         out.setdefault(note.id, note)
