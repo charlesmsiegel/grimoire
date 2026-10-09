@@ -530,13 +530,17 @@ def test_continuity_identity_is_gated_on_what_the_call_site_stores():
     assert _from_legacy(conv.legacy)
     items = conv.items()
     assert len(items) == 3
-    assert [[o.id for o in item.questions[1].options] for item in items] == [
-        ["find-the-ledger", "maras-map", "the-burned-chart"],
-        ["find-the-ledger", "winifreds-chart"], ["the-midnight-deadline"]]
+    # One question per row: each `existing` folded with the candidate it names.
+    assert [[q.id for q in item.questions] for item in items] == [["decision"]] * 3
+    assert [[o.id for o in item.questions[0].options] for item in items] == [
+        ["existing:find-the-ledger", "existing:maras-map", "existing:the-burned-chart",
+         "new", "uncertain"],
+        ["existing:find-the-ledger", "existing:winifreds-chart", "new", "uncertain"],
+        ["existing:the-midnight-deadline", "new", "uncertain"]]
     assert conv.settle(conv.legacy("I think so.")) == [
         False, [["unchecked", "hint_only", identity.UNREADABLE, None]] * 3]
     entry = gate.Entry("planted", None, "", "")
-    reply = json.dumps({"0": {"answers": {"decision": "existing", "id": "the-old-map"},
+    reply = json.dumps({"0": {"answers": {"decision": "existing:the-old-map"},
                               "rationale": "Mara's map is the old map."}})
     parsed = decisions.parse(reply, items, explain=True)
     assert conv.settle(conv.decide(parsed, entry)) == [True, [
@@ -547,15 +551,21 @@ def test_continuity_identity_is_gated_on_what_the_call_site_stores():
 
 def test_continuity_identity_decide_reads_every_entry():
     """Today's parse loses only what the slice settled by ruling: a cased or
-    spaced spelling of an offered id, and a reply in today's format to the
-    decide prompt. The structured parse loses nothing -- an item it never
-    reached stays unchecked, and a repeated key keeps its first value."""
+    spaced spelling of an offered id, a reply in today's format to the
+    decide prompt, and -- since the id is folded into the decision -- an
+    ``existing`` naming an unoffered record or none, which is a word outside
+    the options rather than a downgraded id. The structured parse loses
+    nothing -- an item it never reached stays unchecked, and a repeated key
+    keeps its first value."""
     conv = _identity_gate()
     result = gate.judge(conv)
     assert result.passed, "\n".join(result.regressions)
     assert result.decide_right == result.entries
-    assert result.legacy_right == result.entries - 2
+    ruled = [e for e in gate.load(conv) if e.ruling]
+    assert result.legacy_right == result.entries - len(ruled) == result.entries - 5
     entries = {entry.shape: entry for entry in gate.load(conv)}
+    for shape in ("unoffered-id", "other-kind-ref", "no-id"):
+        assert entries[shape].intended[1][0][:2] == ["uncertain", "accepted"], shape
     assert {"one-item-unreadable", "normalised-id", "todays-format", "alias-source",
             "ref-form", "closed-candidate", "explicit-target", "second-move",
             "no-id", "sole-candidate", "unoffered-id", "other-kind-ref"} <= set(entries)
@@ -609,21 +619,23 @@ def test_continuity_reconcile_decide_reads_every_entry():
     not show, a reply in today's format to the decide prompt, and a reply
     naming a candidate we did not send -- whose decide twin carries an index
     past the batch, which leaves the whole reply unread (slice F), real
-    verdicts beside it included. The structured parse loses nothing -- a
-    candidate it never reached gets no proposal, and a repeated key keeps its
-    first value."""
+    verdicts beside it included -- and a bare ``pays_off``, which the folded
+    choice reads as the one way it runs. The structured parse loses nothing
+    -- a candidate it never reached gets no proposal, and a repeated key
+    keeps its first value. Every directed twin answers one folded option, so
+    no twin asks a direction apart from its decision."""
     conv = _reconcile_gate()
     result = gate.judge(conv)
     assert result.passed, "\n".join(result.regressions)
     assert result.decide_right == result.entries
     ruled = [e for e in gate.load(conv) if e.ruling]
-    assert result.legacy_right == result.entries - len(ruled) == result.entries - 7
+    assert result.legacy_right == result.entries - len(ruled) == result.entries - 8
     entries = {entry.shape: entry for entry in gate.load(conv)}
     assert {"todays-format", "two-scenes-cited", "four-scenes-cited",
             "evidence-from-another-candidate", "one-item-unreadable", "null-decision",
             "related-without-letters", "closure-without-rationale",
             "unknown-keys-and-repeated-candidate", "repeated-candidate",
-            "stray-index-beside-real-answers"} <= set(entries)
+            "stray-index-beside-real-answers", "pays-off-without-letters"} <= set(entries)
     assert entries["todays-format"].intended == {}
     assert entries["unknown-keys-and-repeated-candidate"].intended == {}
     # The stray index's price, printed with something to lose: today's parse
@@ -639,6 +651,10 @@ def test_continuity_reconcile_decide_reads_every_entry():
         gate._RECONCILE_PAYLOAD["candidates"][4]["id"]]["evidence_scenes"]) == 3
     unread = entries["one-item-unreadable"].intended
     assert gate._RECONCILE_PAYLOAD["candidates"][1]["id"] not in unread and len(unread) == 5
+    for entry in entries.values():
+        if entry.shape != "todays-format":
+            assert '"from"' not in entry.decide and '"to"' not in entry.decide, entry.shape
+    assert '"decision": "continuation_b_of_a"' in entries["continuation-b-to-a"].decide
 
 
 def test_the_reconcile_sources_are_gate_entries_with_their_twins():
@@ -825,13 +841,17 @@ def test_the_corpora_mark_their_deliberate_changes():
                      ("voice-drift", "todays-format"), ("speaker", "case-folded"),
                      ("continuity-identity", "normalised-id"),
                      ("continuity-identity", "todays-format"),
+                     ("continuity-identity", "unoffered-id"),
+                     ("continuity-identity", "other-kind-ref"),
+                     ("continuity-identity", "no-id"),
                      ("continuity-reconcile", "closure-without-rationale"),
                      ("continuity-reconcile", "closure-without-rationale-spaces"),
                      ("continuity-reconcile", "four-scenes-cited"),
                      ("continuity-reconcile", "evidence-from-another-candidate"),
                      ("continuity-reconcile", "todays-format"),
                      ("continuity-reconcile", "unknown-keys-and-repeated-candidate"),
-                     ("continuity-reconcile", "stray-index-beside-real-answers")}
+                     ("continuity-reconcile", "stray-index-beside-real-answers"),
+                     ("continuity-reconcile", "pays-off-without-letters")}
     printed = gate.report([gate.judge(conv) for conv in gate.GATES])
     assert printed.count("ruling: ") == len(ruled)
     assert "ruling: entry 6 (multi-line), legacy loses: " in printed

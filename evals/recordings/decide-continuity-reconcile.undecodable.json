@@ -1,3 +1,3 @@
 {
-  "0": {"answers": {"decision": "distinct", "from": null, "to": null, "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Who bribes the harbourmaster is a separate question from who runs the smuggling."},
-  "1": {"answers": {"decision": "continuation", "from": "B", "to": "A", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "What the debt
+  "0": {"answers": {"decision": "distinct", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Who bribes the harbourmaster is a separate question from who runs the smuggling."},
+  "1": {"answers": {"decision": "continuation_b_of_a", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "What the debt

@@ -781,8 +781,8 @@ IDENTITY_INPUTS = {
                                     scenes=["saltmarch-docks"], anchors=["event:e1"]))],
             status="open", certainty=0.5)],
     # A hand-edited ledger's ``thread:`` key leaves an empty bare id, which the
-    # decision contract cannot offer: the row is asked about, with no record
-    # question to answer.
+    # decision contract cannot offer: the row is asked about, with no
+    # ``existing`` to answer.
     "no-offerable": [
         _identity_row("r1", "thread", "Recover the harbour ledger", [
             _identity_candidate("", "Find the ledger")])],
@@ -790,10 +790,11 @@ IDENTITY_INPUTS = {
 # The continuity identity check as decision items (slice G, spec 7.4):
 # `identity.build_items` over the row sets, against direct renders. Each
 # item's context is `item.j2` over its row, holding only the candidates the
-# item offers (`identity._offered`); its `decision` choice is `question.j2`'s
-# with each option described by `option.j2`; its `id` choice, asked only when
-# the row offers a candidate, is `record.j2`'s over those candidates, each
-# described by its title.
+# item offers (`identity._offered`); it asks one question, its `decision`
+# choice, `question.j2`'s: an `existing:<id>` per offered candidate, described
+# by `option.j2` under that candidate's title, then `new` and `uncertain`,
+# each described by `option.j2`. No `id` is asked apart from the decision: a
+# native endpoint answers each question alone.
 for label, rows in IDENTITY_INPUTS.items():
     items = identity.build_items(rows, {})
     for item, row in zip(items, rows, strict=True):
@@ -803,27 +804,24 @@ for label, rows in IDENTITY_INPUTS.items():
         check(f"continuity identity item context ({tag})", item.context,
               render("continuity_identity/item.j2", r=shown))
         asked = [q.id for q in item.questions]
-        wanted = [identity.DECISION_ID] + ([identity.RECORD_ID] if kept else [])
-        REPORT.require(f"continuity identity item questions ({tag})", asked == wanted,
-                       f"asks {asked}, wanted {wanted}")
+        REPORT.require(f"continuity identity item questions ({tag})",
+                       asked == [identity.DECISION_ID],
+                       f"asks {asked}, wanted {[identity.DECISION_ID]}")
         if asked[:1] != [identity.DECISION_ID]:
             continue
-        decision, *rest = item.questions
+        decision = item.questions[0]
         check(f"continuity identity decision question ({tag})", decision.instructions,
               render("continuity_identity/question.j2"))
-        for opt in decision.options:
-            check(f"continuity identity option {opt.id} ({tag})", opt.description,
-                  render("continuity_identity/option.j2", decision=opt.id))
+        wanted = [(identity.EXISTING_PREFIX + c["id"],
+                   render("continuity_identity/option.j2", decision="existing",
+                          title=c["title"] or c["id"])) for c in shown["candidates"]]
+        wanted += [(word, render("continuity_identity/option.j2", decision=word))
+                   for word in identity.DECISIONS if word != "existing"]
+        REPORT.require(f"continuity identity decision options ({tag})",
+                       [(o.id, o.description) for o in decision.options] == wanted,
+                       f"offers {[(o.id, o.description) for o in decision.options]}")
         REPORT.require(f"continuity identity decision allows no null ({tag})",
                        not decision.allow_none, "the decision question allows null")
-        for record in rest:
-            check(f"continuity identity record question ({tag})", record.instructions,
-                  render("continuity_identity/record.j2"))
-            REPORT.require(f"continuity identity record options ({tag})",
-                           [(o.id, o.description) for o in record.options]
-                           == [(c["id"], c["title"] or c["id"]) for c in shown["candidates"]]
-                           and record.allow_none,
-                           f"offers {[(o.id, o.description) for o in record.options]}")
 check("continuity identity explain", identity.explain(),
       render("continuity_identity/explain.j2"))
 
@@ -844,17 +842,15 @@ IDENTITY_CARRIED = (
       'one. A row\'s "distinguished_from" ids and the signals under each candidate are '
       "hints, not proof: shared words, characters, scenes or dates make two records worth "
       "comparing, never the same record."), "continuity_identity/question.j2"),
-    ('Give that candidate\'s "id" exactly as it is listed.', "continuity_identity/record.j2"),
     ("one short sentence", "continuity_identity/explain.j2"),
 )
 #: Each decision's description, carried out of its legacy bullet word for word
 #: after the quoted word, keyed by the decision it describes: `option.j2` must
 #: render exactly this text for exactly this decision. A description moved to
 #: another word would turn the check around, and the gate (parser-only) cannot
-#: see it. The existing bullet's id sentence is `record.j2`'s (above).
+#: see it. The existing bullet is folded with the candidate its option names,
+#: so it is IDENTITY_REWORDED's, as is its id sentence.
 IDENTITY_OPTIONS = {
-    "existing": ("only when a listed candidate is the same narrative question or "
-                 "obligation, so the row's beat simply moves that record forward."),
     "new": ("when the row is a different question, a continuation, or a related subplot: "
             "something that grew out of a listed record but is business of its own "
             "deserves a record of its own."),
@@ -879,9 +875,21 @@ IDENTITY_REWORDED = (
       "status, latest beats and the similarity signals that put it on the list."),
      "continuity_identity/question.j2",
      "decide/user.j2 renders the item's context above its questions"),
-    ('Leave "id" empty unless the decision is "existing".',
-     'Answer null for "id" unless the decision is "existing".',
-     "continuity_identity/record.j2", "an empty string is not an option; null is"),
+    (("only when a listed candidate is the same narrative question or obligation, so the "
+      "row's beat simply moves that record forward."),
+     ("{{ title }}: only when this listed candidate is the same narrative question or "
+      "obligation, so the row's beat simply moves that record forward."),
+     "continuity_identity/option.j2",
+     ("an existing option is folded with the candidate it names (spec 7.4), so its "
+      "description names that candidate")),
+    (('Give that candidate\'s "id" exactly as it is listed. Leave "id" empty unless the '
+      'decision is "existing".'),
+     ('"existing" is offered once for each listed candidate, as "existing:" followed by '
+      "that candidate's id exactly as it is listed."),
+     "continuity_identity/question.j2",
+     ("a native decisions endpoint answers each question alone, so an id asked apart "
+      "from the decision it depends on was answered without it; it is folded into the "
+      "decision instead (spec 7.4)")),
 )
 for fragment, target in IDENTITY_CARRIED:
     REPORT.require(f"continuity identity carried ({target}: {fragment[:40]}…)",
@@ -890,8 +898,8 @@ for word, text in IDENTITY_OPTIONS.items():
     check(f"continuity identity option carried ({word})",
           text, render("continuity_identity/option.j2", decision=word))
 REPORT.require("continuity identity options are the item's",
-               list(IDENTITY_OPTIONS)
-               == [o.id for o in identity.build_items(
+               ["existing", *IDENTITY_OPTIONS]
+               == [identity.unfolded(o.id)[0] for o in identity.build_items(
                    IDENTITY_INPUTS["bare"], {})[0].questions[0].options],
                f"carried descriptions for {list(IDENTITY_OPTIONS)}")
 for _old, new, target, why in IDENTITY_REWORDED:
@@ -979,11 +987,12 @@ RECONCILE_INPUTS = {
 # The reconciliation sweep as decision items (slice G, spec 7.4):
 # `reconcile.build_items` over the same payloads, against direct renders. Each
 # item's context is `item.j2` over its candidate and the scene lines it shows;
-# its `decision` choice is `question.j2`'s under its vocabulary, each option
-# labelled by its own word; a pair's `from` and `to` are `direction.j2`'s and
-# `direction_to.j2`'s over `record_option.j2`; and one evidence choice per
-# shown scene, up to `EVIDENCE_SCENES`, is `evidence.j2`'s and then
-# `evidence_more.j2`'s over `scene_option.j2`.
+# its `decision` choice is `question.j2`'s under its vocabulary (which
+# includes `direction.j2` on a pair), each option labelled by its own word,
+# and a pair's directed words folded with each direction the link rules allow,
+# described by `directed_option.j2`; no direction is asked apart from the
+# decision. Then one evidence choice per shown scene, up to `EVIDENCE_SCENES`,
+# is `evidence.j2`'s and then `evidence_more.j2`'s over `scene_option.j2`.
 for label, payload in RECONCILE_INPUTS.items():
     items = reconcile.build_items(payload)
     for item, cand in zip(items, payload["candidates"], strict=True):
@@ -994,30 +1003,31 @@ for label, payload in RECONCILE_INPUTS.items():
               render("continuity_reconcile/item.j2", now=payload["now"], chronicle=lines,
                      c={"label": reconcile.LABELS[vocab], "records": cand["records"],
                         "signal_text": cand["signal_text"]}))
-        decision, *rest = item.questions
+        decision, *evidence = item.questions
         check(f"continuity reconcile decision question ({tag})", decision.instructions,
               render("continuity_reconcile/question.j2", vocabulary=vocab))
-        # Options tied to ids: each labelled by its own word, in DECISIONS order.
+        pair = vocab in reconcile.PAIR_VOCABULARIES
+        REPORT.require(f"continuity reconcile direction said on pairs only ({tag})",
+                       (render("continuity_reconcile/direction.j2") in decision.instructions)
+                       == pair, "direction.j2 is in a question it does not belong to, "
+                       "or missing from a pair's")
+        # Options tied to ids, in DECISIONS order: a word labelled by itself, a
+        # pair's directed word once per way the link rules let it run.
+        refs = {r["letter"]: r["ref"] for r in cand["records"]}
+        wanted = []
+        for w in reconcile.DECISIONS[vocab]:
+            if not (pair and w in reconcile._DIRECTED):
+                wanted.append((w, w.replace("_", " ")))
+                continue
+            wanted += [(reconcile.folded(w, frm, to),
+                        render("continuity_reconcile/directed_option.j2", word=w, frm=frm,
+                               to=to))
+                       for frm, to in (("A", "B"), ("B", "A"))
+                       if reconcile._runs(w, refs.get(frm, ""), refs.get(to, ""))]
         REPORT.require(f"continuity reconcile decision options ({tag})",
                        decision.id == reconcile.DECISION_ID and not decision.allow_none
-                       and [(o.id, o.description) for o in decision.options]
-                       == [(w, w.replace("_", " ")) for w in reconcile.DECISIONS[vocab]],
+                       and [(o.id, o.description) for o in decision.options] == wanted,
                        f"offers {[(o.id, o.description) for o in decision.options]}")
-        # A direction on, and only on, a pair; then the evidence slots.
-        pair = vocab in reconcile.PAIR_VOCABULARIES
-        direction, evidence = (rest[:2], rest[2:]) if pair else ([], rest)
-        REPORT.require(f"continuity reconcile direction asked on pairs only ({tag})",
-                       [q.id for q in direction]
-                       == ([reconcile.FROM_ID, reconcile.TO_ID] if pair else []),
-                       f"asks {[q.id for q in item.questions]}")
-        letters = [(r["letter"], render("continuity_reconcile/record_option.j2",
-                                        letter=r["letter"])) for r in cand["records"]]
-        for q, template in zip(direction, ("direction.j2", "direction_to.j2"), strict=False):
-            check(f"continuity reconcile {q.id} question ({tag})", q.instructions,
-                  render(f"continuity_reconcile/{template}"))
-            REPORT.require(f"continuity reconcile {q.id} options ({tag})",
-                           q.allow_none and [(o.id, o.description) for o in q.options] == letters,
-                           f"offers {[(o.id, o.description) for o in q.options]}")
         count = min(len(scenes_shown), reconcile.EVIDENCE_SCENES)
         REPORT.require(f"continuity reconcile evidence slots ({tag})",
                        [q.id for q in evidence] == list(reconcile.EVIDENCE_IDS[:count]),
@@ -1032,7 +1042,7 @@ for label, payload in RECONCILE_INPUTS.items():
                            q.allow_none and [(o.id, o.description) for o in q.options]
                            == offered, f"offers {[(o.id, o.description) for o in q.options]}")
         # No option repeats its context (M1).
-        repeated = [o.description for q in rest for o in q.options
+        repeated = [o.description for q in item.questions for o in q.options
                     if len(o.description) > len(o.id) and o.description in item.context]
         REPORT.require(f"continuity reconcile options do not repeat the context ({tag})",
                        not repeated, f"{repeated} already in the context")
@@ -1043,7 +1053,7 @@ REPORT.require("continuity reconcile fixtures ask every kind of question",
                 for c in p["candidates"]} >= {0, 1, 2, 4}
                and {c["vocabulary"] for p in RECONCILE_INPUTS.values()
                     for c in p["candidates"]} & set(reconcile.PAIR_VOCABULARIES) != set(),
-               "no fixture shows two scenes, or more than EVIDENCE_SCENES, or none asks "
+               "no fixture shows two scenes, or more than EVIDENCE_SCENES, or none offers "
                "a direction")
 
 #: The sweep's criteria, carried out of its legacy one-call prompt (the
@@ -1060,9 +1070,6 @@ RECONCILE_CARRIED = (
      "continuity_reconcile/question.j2"),
     ('When what is shown cannot settle a candidate, answer "uncertain".',
      "continuity_reconcile/question.j2"),
-    (('for "duplicate", "from" is the record to fold away and "to" the one to keep; "from" '
-      'continues "to", or is a subthread of "to"; for "pays_off", "from" is the plot thread '
-      'and "to" the commitment.'), "continuity_reconcile/direction.j2"),
     ("one short sentence", "continuity_reconcile/explain.j2"),
 )
 #: Each vocabulary's legacy bullet, whole, keyed by the vocabulary it states
@@ -1100,6 +1107,10 @@ RECONCILE_BULLETS = {
 #: refers back to.
 _RECONCILE_ASKS = {vocab: (("same_thread",) if vocab == "same_commitment" else ()) + (vocab,)
                    for vocab in reconcile.DECISIONS}
+#: Why the direction is no longer asked as letters (spec 7.4).
+_FOLDED = ("a native decisions endpoint answers each question alone, so a direction "
+           "asked apart from the verdict it qualifies came back none; each directed "
+           "word is offered folded with its direction instead, which its option says")
 #: Sentences the decide prompt lays out differently, reworded rather than
 #: dropped: (old, new, the template `new` went to, why).
 RECONCILE_REWORDED = (
@@ -1121,9 +1132,19 @@ RECONCILE_REWORDED = (
      "decide/user.j2 renders the item's context above its questions"),
     (('For "duplicate", "continuation", "subthread" and "pays_off", give the direction as '
       'letters in "from" and "to":'),
-     ('For "duplicate", "continuation", "subthread" and "pays_off", give the direction as '
-      'letters in "from" and "to", and null for both when the decision has no direction:'),
-     "continuity_reconcile/direction.j2", "an empty string is not an option; null is"),
+     ('"duplicate", "continuation", "subthread" and "pays_off" are offered once for each way '
+      "they may run between the two records, and each option says which record is which."),
+     "continuity_reconcile/direction.j2", _FOLDED),
+    ('for "duplicate", "from" is the record to fold away and "to" the one to keep;',
+     "the same record: fold record {{ frm }} away into record {{ to }}, the one to keep",
+     "continuity_reconcile/directed_option.j2", _FOLDED),
+    ('"from" continues "to",', "record {{ frm }} continues record {{ to }}",
+     "continuity_reconcile/directed_option.j2", _FOLDED),
+    ('or is a subthread of "to";', "record {{ frm }} is a subthread of record {{ to }}",
+     "continuity_reconcile/directed_option.j2", _FOLDED),
+    ('for "pays_off", "from" is the plot thread and "to" the commitment.',
+     "record {{ frm }}, the plot thread, pays off record {{ to }}, the commitment",
+     "continuity_reconcile/directed_option.j2", _FOLDED),
     (('For "close", "fulfilled", "broken" and "expired", give a reason and name at least one '
       'evidence scene id from the lines shown; without both, the answer counts as '
       '"uncertain".'),
@@ -1136,10 +1157,8 @@ RECONCILE_REWORDED = (
 #: Words the decide prompt adds that the legacy prompt never said: each a
 #: pointer or a label, never a criterion. Printed, so they stay visible.
 RECONCILE_ADDED = (
-    ('The record the direction runs to; see "from".', "continuity_reconcile/direction_to.j2"),
     ("Another evidence scene id from the lines shown, or null; see the first.",
      "continuity_reconcile/evidence_more.j2"),
-    ("record {{ letter }}", "continuity_reconcile/record_option.j2"),
     ("the scene listed above as {{ sid }}", "continuity_reconcile/scene_option.j2"),
 )
 for fragment, target in RECONCILE_CARRIED:

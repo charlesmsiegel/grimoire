@@ -106,8 +106,9 @@ def _held(reply: str = "{}") -> HeldCassette:
 
 
 def _duplicate() -> dict:
-    """A possible duplicate's answers: B duplicates A."""
-    return {"decision": "duplicate", "from": "B", "to": "A"}
+    """A possible duplicate's answers: B duplicates A, folded into the one
+    decision option that carries the direction (spec 7.4)."""
+    return {"decision": "duplicate_b_into_a"}
 
 
 def _refresh(client, cid: str, attempt: str | None = None):
@@ -1668,10 +1669,10 @@ def test_a_native_close_verdict_without_a_rationale_takes_gs_mapping(client, mon
     assert proposal["evidence_scenes"] == [dated]
 
 
-#: A native endpoint's answer for the possible duplicate: B duplicates A.
-NATIVE_DUPLICATE = decisions.ItemResult({"decision": decisions.Answer("duplicate"),
-                                         "from": decisions.Answer("B"),
-                                         "to": decisions.Answer("A")})
+#: A native endpoint's answer for the possible duplicate: B duplicates A, the
+#: direction riding in the one choice it answers -- there is no `from` or `to`
+#: question for it to leave none.
+NATIVE_DUPLICATE = decisions.ItemResult({"decision": decisions.Answer("duplicate_b_into_a")})
 
 
 @pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],

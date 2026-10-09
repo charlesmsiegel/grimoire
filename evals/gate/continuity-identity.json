@@ -109,7 +109,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"Row r1\", \"decision\": \"new\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\"}}}"
   },
   {
     "shape": "padded-uppercase-key",
@@ -137,7 +137,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \" R1 \", \"decision\": \"new\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\"}}}"
   },
   {
     "shape": "bare-key",
@@ -165,7 +165,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"new\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\"}}}"
   },
   {
     "shape": "uppercase-label",
@@ -193,7 +193,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"ROW R1\", \"decision\": \"new\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\"}}}"
   },
   {
     "shape": "fenced-normalised-repeated",
@@ -221,7 +221,7 @@
       ]
     ],
     "legacy": "Here you go:\n```json\n{\"decisions\": [\"not a row\", {\"decision\": \"new\", \"id\": \"\", \"reason\": \"no row key\"}, {\"row\": \"   \", \"decision\": \"new\"}, {\"row\": 3, \"decision\": \"new\"}, {\"row\": \"Row r1\", \"decision\": \"EXISTING\", \"id\": \" find-the-ledger \", \"reason\": \" Same ledger. \"}, {\"row\": \"r2\", \"decision\": \"maybe\", \"id\": 7, \"reason\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"row\": \"r1\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"a second answer for r1\"}, {\"row\": \"r3\", \"decision\": null, \"reason\": [\"not\", \"text\"]}]}\n```",
-    "decide": "Here you go:\n```json\n{\"0\": {\"answers\": {\"decision\": \"EXISTING\", \"id\": \" find-the-ledger \"}, \"rationale\": \" Same ledger. \"}, \"1\": {\"answers\": {\"decision\": \"maybe\", \"id\": 7}, \"rationale\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, \"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"a second answer for r1\"}, \"2\": {\"answers\": {\"decision\": null}, \"rationale\": [\"not\", \"text\"]}}\n```"
+    "decide": "Here you go:\n```json\n{\"0\": {\"answers\": {\"decision\": \" EXISTING:find-the-ledger \"}, \"rationale\": \" Same ledger. \"}, \"1\": {\"answers\": {\"decision\": \"maybe\"}, \"rationale\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, \"0\": {\"answers\": {\"decision\": \"new\"}, \"rationale\": \"a second answer for r1\"}, \"2\": {\"answers\": {\"decision\": null}, \"rationale\": [\"not\", \"text\"]}}\n```"
   },
   {
     "shape": "unoffered-id",
@@ -230,8 +230,8 @@
       [
         [
           "uncertain",
-          "downgraded",
-          "named a record that was not offered",
+          "accepted",
+          "Winifred is after the same ledger.",
           null
         ],
         [
@@ -249,7 +249,8 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"nope\", \"reason\": \"Winifred is after the same ledger.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"nope\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:nope\"}, \"rationale\": \"Winifred is after the same ledger.\"}}",
+    "ruling": "an existing naming a record the row was not offered is no option of the decision, so it reads as any word outside the options does: uncertain and accepted with its reason, where today's separate id question downgraded it as not offered; the id rides in the decision as existing:<id> (spec 7.4), because a native decisions endpoint answers each question alone and an id asked apart from its decision was answered without it. The row is uncertain either way, and a strict schema can send neither"
   },
   {
     "shape": "other-kind-ref",
@@ -258,8 +259,8 @@
       [
         [
           "uncertain",
-          "downgraded",
-          "named a record that was not offered",
+          "accepted",
+          "Winifred is after the same ledger.",
           null
         ],
         [
@@ -277,7 +278,8 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"commitment:find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"commitment:find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:commitment:find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}",
+    "ruling": "an existing naming a record the row was not offered is no option of the decision, so it reads as any word outside the options does: uncertain and accepted with its reason, where today's separate id question downgraded it as not offered; the id rides in the decision as existing:<id> (spec 7.4), because a native decisions endpoint answers each question alone and an id asked apart from its decision was answered without it. The row is uncertain either way, and a strict schema can send neither"
   },
   {
     "shape": "closed-candidate",
@@ -305,7 +307,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"the-burned-chart\", \"reason\": \"It is the chart again.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"the-burned-chart\"}, \"rationale\": \"It is the chart again.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:the-burned-chart\"}, \"rationale\": \"It is the chart again.\"}}"
   },
   {
     "shape": "alias-source",
@@ -333,7 +335,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"the-old-map\", \"reason\": \"The old map is Mara's.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"the-old-map\"}, \"rationale\": \"The old map is Mara's.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:the-old-map\"}, \"rationale\": \"The old map is Mara's.\"}}"
   },
   {
     "shape": "ref-form",
@@ -361,7 +363,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"thread:maras-map\", \"reason\": \"The old map is Mara's.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"thread:maras-map\"}, \"rationale\": \"The old map is Mara's.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:thread:maras-map\"}, \"rationale\": \"The old map is Mara's.\"}}"
   },
   {
     "shape": "second-move",
@@ -389,7 +391,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}, \"1\": {\"answers\": {\"decision\": \"existing\", \"id\": \"find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}, \"1\": {\"answers\": {\"decision\": \"existing:find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
   },
   {
     "shape": "explicit-target",
@@ -417,7 +419,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r2\", \"decision\": \"existing\", \"id\": \"winifreds-chart\", \"reason\": \"The chart again.\"}]}",
-    "decide": "{\"1\": {\"answers\": {\"decision\": \"existing\", \"id\": \"winifreds-chart\"}, \"rationale\": \"The chart again.\"}}"
+    "decide": "{\"1\": {\"answers\": {\"decision\": \"existing:winifreds-chart\"}, \"rationale\": \"The chart again.\"}}"
   },
   {
     "shape": "no-id",
@@ -426,8 +428,8 @@
       [
         [
           "uncertain",
-          "downgraded",
-          "named a record that was not offered",
+          "accepted",
+          "Winifred is after the same ledger.",
           null
         ],
         [
@@ -445,7 +447,8 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"\", \"reason\": \"Winifred is after the same ledger.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": null}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\"}, \"rationale\": \"Winifred is after the same ledger.\"}}",
+    "ruling": "an existing naming no record is no option of the decision, so it reads as any word outside the options does: uncertain and accepted with its reason, where today's empty id downgraded it as not offered; the id rides in the decision as existing:<id> (spec 7.4), because a native decisions endpoint answers each question alone and an id asked apart from its decision was answered without it. The row is uncertain either way, and a strict schema cannot send it"
   },
   {
     "shape": "sole-candidate",
@@ -473,7 +476,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r3\", \"decision\": \"existing\", \"id\": \"the-midnight-deadline\", \"reason\": \"The same deadline.\"}]}",
-    "decide": "{\"2\": {\"answers\": {\"decision\": \"existing\", \"id\": \"the-midnight-deadline\"}, \"rationale\": \"The same deadline.\"}}"
+    "decide": "{\"2\": {\"answers\": {\"decision\": \"existing:the-midnight-deadline\"}, \"rationale\": \"The same deadline.\"}}"
   },
   {
     "shape": "one-item-unreadable",
@@ -501,7 +504,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A search of its own.\"}, 5, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"A search of its own.\"}, \"1\": 5, \"2\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"A second deadline.\"}}"
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\"}, \"rationale\": \"A search of its own.\"}, \"1\": 5, \"2\": {\"answers\": {\"decision\": \"new\"}, \"rationale\": \"A second deadline.\"}}"
   },
   {
     "shape": "normalised-id",
@@ -529,7 +532,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"Find The Ledger\", \"reason\": \"Winifred is after the same ledger.\"}]}",
-    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"Find The Ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing:Find The Ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}",
     "ruling": "an offered id is read through decisions.normalise, so a cased or spaced spelling of it is that id"
   },
   {
@@ -558,7 +561,7 @@
       ]
     ],
     "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"Its own search.\"}, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
-    "decide": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"Its own search.\"}, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
+    "decide": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing:find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"Its own search.\"}, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
     "ruling": "a reply ignoring the decide schema is never guessed at"
   }
 ]

@@ -109,8 +109,9 @@ def _extraction(plot=(), owed=()):
 
 def _row(decision, rid=None):
     """One examined row's answers, as the decide schema shapes them: its
-    `decision` word and the `id` of the record it names (null for none)."""
-    return {"decision": decision, "id": rid}
+    `decision`, an ``existing`` folded with the id of the record it names
+    (``existing:<id>``, spec 7.4)."""
+    return {"decision": identity.EXISTING_PREFIX + rid if rid is not None else decision}
 
 
 def _llm(client, extraction, resolver=None, *, error=None):
@@ -457,6 +458,10 @@ def test_one_batched_call_for_several_ambiguous_rows(client, scene):
 
 
 def test_resolver_naming_an_unknown_id_marks_the_row_uncertain_and_low(client, scene):
+    """An ``existing`` naming a record the row was not offered is no option
+    of its folded decision (spec 7.4), so it reads as any word outside the
+    options does: ``uncertain``, accepted, and the row stays new (the gate's
+    `unoffered-id` ruling)."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
@@ -467,7 +472,7 @@ def test_resolver_naming_an_unknown_id_marks_the_row_uncertain_and_low(client, s
     [edit] = _plot_edits(body)
     assert edit["target"]["id"] != "find-the-ledger"
     assert (edit["identity_check"]["decision"], edit["identity_check"]["status"]) == (
-        "uncertain", "downgraded")
+        "uncertain", "accepted")
     assert edit["review"]["band"] == "low"
 
 
@@ -1018,7 +1023,7 @@ def test_identity_runs_on_decide_one_item_per_row(client, scene):
     schema = fake.schemas[fake.requests.index(request)]
     assert set(schema["properties"]) == {"0", "1"}
     assert schema["properties"]["0"]["properties"]["answers"]["required"] == [
-        identity.DECISION_ID, identity.RECORD_ID]
+        identity.DECISION_ID]
     [plot] = _plot_edits(body)
     assert plot["target"] == {"kind": "plot", "id": "find-the-ledger"}
     assert plot["identity_check"]["reason"] == "the same search"
@@ -1175,8 +1180,7 @@ def test_a_native_identity_answer_maps_with_an_empty_reason(client, scene):
     inference_fixtures.decide_only(client, fallback=False)
     _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
                  decision_reply(_row("new"))),
-            decisions.ItemResult({"decision": decisions.Answer("existing"),
-                                  "id": decisions.Answer("find-the-ledger")}))
+            decisions.ItemResult({"decision": decisions.Answer("existing:find-the-ledger")}))
 
     body = _absorb(client, cid, sid)
 

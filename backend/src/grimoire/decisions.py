@@ -570,10 +570,11 @@ def _foreign_index(obj: dict[str, Any], count: int) -> bool:
     (`duplicate` A->B, `related`) lands on the wrong candidate. Strict
     structured mode cannot send that shape (the schema requires `"0"` to
     `"n-1"`); a prompt-only re-send, a fallback without the mode, or a server
-    that ignores `response_format` can. Identity is safe from it (each row's
-    `id` choice offers only that row's candidates, so a shifted one reads
-    `NOT_AN_OPTION`), and so are most of reconcile's status words (their
-    evidence scene must be one of the item's own); the pair words are not.
+    that ignores `response_format` can. Identity's ``existing`` is safe from
+    it (each row's decision offers ``existing:<id>`` for that row's
+    candidates alone, so a shifted one reads `NOT_AN_OPTION`), and so are most
+    of reconcile's status words (their evidence scene must be one of the
+    item's own); the pair words are not.
 
     It is left unguarded because no test on the keys alone tells the two
     apart. The obvious one -- index keys with no `"0"` -- also refuses a

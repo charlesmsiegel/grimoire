@@ -1340,6 +1340,21 @@ def _temporal_word(word: str, refs: dict[str, str], base: dict) -> dict:
     return {**base, "decision": word, "from": owed, "to": event, "relation": word}
 
 
+def _runs(word: str, frm: str, to: str) -> bool:
+    """Whether pair word `word` may run from ref `frm` to ref `to`: two
+    different records, and a relation `effective.RELATIONS` allows for
+    ``(from, to)`` -- or, for ``duplicate``, which proposes an alias rather
+    than a link, two records of one type. The one rule `_pair` reads a reply
+    by and `build_items` offers a folded direction by, so no option is offered
+    that `_pair` would turn into ``uncertain``."""
+    if not frm or not to or frm == to:
+        return False
+    relation = _RELATION_OF[word]
+    if relation:
+        return _allowed(relation, frm, to)
+    return frm.partition(":")[0] == to.partition(":")[0]
+
+
 def _pair(word: str, item: dict, refs: dict[str, str], base: dict) -> dict:
     """A pair word with its direction (§11.3). A directed word needs two
     different letters; ``related`` takes A to B when it was given none. A
@@ -1350,14 +1365,9 @@ def _pair(word: str, item: dict, refs: dict[str, str], base: dict) -> dict:
     frm, to = _ref_of(item.get("from"), refs), _ref_of(item.get("to"), refs)
     if word not in _DIRECTED and (not frm or not to or frm == to):
         frm, to = refs.get("A", ""), refs.get("B", "")
-    if not frm or not to or frm == to:
+    if not _runs(word, frm, to):
         return base
-    relation = _RELATION_OF[word]
-    if relation and not _allowed(relation, frm, to):
-        return base
-    if not relation and frm.partition(":")[0] != to.partition(":")[0]:
-        return base
-    return {**base, "decision": word, "from": frm, "to": to, "relation": relation}
+    return {**base, "decision": word, "from": frm, "to": to, "relation": _RELATION_OF[word]}
 
 
 def _lifecycle_word(word: str, base: dict) -> dict:
@@ -1392,17 +1402,12 @@ def _decide(item: dict, cand: dict, known: set[str]) -> dict:
 # ------------------------------------------------------- as decision items
 #
 # The adjudication as `decide()` items (spec §7.4): one per candidate, its
-# context self-contained, asking the decision, a direction for a pair, and the
-# evidence scenes it shows. These are what the sweep sends and reads
+# context self-contained, asking the decision (a pair's direction folded into
+# it) and the evidence scenes it shows. These are what the sweep sends and reads
 # (`routes.continuity._adjudicate`).
 
 #: The id of each item's first question, a choice over its vocabulary's words.
 DECISION_ID = "decision"
-
-#: The ids of a pair's direction questions, each a choice over the item's
-#: record letters (null allowed): named as today's reply fields, so the
-#: sentences carried out of the legacy prompt keep their words.
-FROM_ID, TO_ID = "from", "to"
 
 #: Evidence scenes one item may cite (I2). Today stores a list and the detail
 #: view shows every cited scene as a chip, so one is too few; three nullable
@@ -1418,6 +1423,65 @@ EVIDENCE_IDS = ("evidence_scene", "evidence_scene_2", "evidence_scene_3")
 
 #: The vocabularies whose words need a direction (`_DIRECTED`): the pairs.
 PAIR_VOCABULARIES = ("same_thread", "same_commitment", "cross")
+
+#: How a folded option joins the two letters of a directed word (§7.4), so
+#: the option reads as the proposal it makes: ``duplicate_a_into_b`` folds A
+#: into B, ``continuation_b_of_a`` and ``subthread_b_of_a`` make B a
+#: continuation or a subthread of A, and ``pays_off_b_to_a`` runs the
+#: plot thread B to the commitment A it pays off.
+_JOINS = {"duplicate": "into", "continuation": "of", "subthread": "of", "pays_off": "to"}
+
+#: The two ways a pair may run, as ``(from, to)`` letters.
+_WAYS = (("A", "B"), ("B", "A"))
+
+
+def folded(word: str, frm: str, to: str) -> str:
+    """The `decision` option that carries directed word `word` running from
+    letter `frm` to letter `to` (§7.4): ``<word>_<from>_<join>_<to>``, the
+    letters in lowercase. A native decisions endpoint answers each question
+    of an item on its own, so a direction asked as a question of its own
+    ("null when the decision has no direction") was answered without the
+    decision it depends on, and every directed verdict was lost; one choice
+    carrying both cannot be split that way."""
+    return f"{word}_{frm.lower()}_{_JOINS[word]}_{to.lower()}"
+
+
+#: Every folded option, back to its ``(word, from, to)``.
+_UNFOLDED = {folded(word, frm, to): (word, frm, to) for word in _JOINS for frm, to in _WAYS}
+
+
+def unfolded(answer: str) -> tuple[str, str, str]:
+    """`(word, from, to)` of a `decision` answer: a folded option split back
+    into its directed word and its two letters, and any other answer as
+    itself with no letters -- the decision, `from` and `to` of today's reply
+    element, which `_decide` reads."""
+    return _UNFOLDED.get(answer, (answer, "", ""))
+
+
+def _decision_options(vocab: str, records: list[dict]) -> tuple[decisions.Option, ...]:
+    """The `decision` choice's options, in `DECISIONS` order: a word that
+    needs no direction labelled by itself (ruling 6), and a directed word on
+    a pair as one folded option per way `_runs` allows it to run between the
+    item's records, described by `directed_option.j2` -- so ``pays_off``,
+    which runs from the plot thread to the commitment only, is offered once,
+    and a word no way allows is not offered. A word offered one way only
+    takes its bare spelling as an alias: today's reply naming it without
+    letters can mean nothing else. Aliases are the structured parser's; a
+    native endpoint is sent the option ids alone."""
+    refs = {r["letter"]: r["ref"] for r in records}
+    options: list[decisions.Option] = []
+    for word in DECISIONS[vocab]:
+        if vocab not in PAIR_VOCABULARIES or word not in _DIRECTED:
+            options.append(decisions.Option(word, word.replace("_", " ")))
+            continue
+        ways = [(frm, to) for frm, to in _WAYS
+                if _runs(word, refs.get(frm, ""), refs.get(to, ""))]
+        aliases = (word,) if len(ways) == 1 else ()
+        options += [decisions.Option(
+            folded(word, frm, to),
+            prompts.render("continuity_reconcile/directed_option.j2", word=word, frm=frm, to=to),
+            aliases) for frm, to in ways]
+    return tuple(options)
 
 
 def item_scenes(payload: dict, cand: dict) -> list[str]:
@@ -1458,15 +1522,7 @@ def _decision_item(payload: dict, cand: dict) -> decisions.Item:
            "signal_text": cand["signal_text"]})
     asked: list[decisions.Question] = [decisions.Choice(
         DECISION_ID, prompts.render("continuity_reconcile/question.j2", vocabulary=vocab),
-        tuple(decisions.Option(word, word.replace("_", " ")) for word in DECISIONS[vocab]))]
-    if vocab in PAIR_VOCABULARIES:
-        letters = tuple(decisions.Option(r["letter"], prompts.render(
-            "continuity_reconcile/record_option.j2", letter=r["letter"]))
-            for r in cand["records"])
-        asked += [decisions.Choice(FROM_ID, prompts.render("continuity_reconcile/direction.j2"),
-                                   letters, allow_none=True),
-                  decisions.Choice(TO_ID, prompts.render("continuity_reconcile/direction_to.j2"),
-                                   letters, allow_none=True)]
+        _decision_options(vocab, cand["records"]))]
     scenes = tuple(decisions.Option(sid, prompts.render("continuity_reconcile/scene_option.j2",
                                                         sid=sid))
                    for sid in shown)
@@ -1486,11 +1542,12 @@ def build_items(payload: dict) -> tuple[decisions.Item, ...]:
     naming what it asks, and today's record and signal block byte for byte --
     so it stands alone, as a native backend sends each item by itself. It asks
     `decision`, a choice over its vocabulary's words, each labelled by its own
-    word (the criteria stay whole in the question, ruling 6); for a pair, a
-    direction, `from` and `to`, each a choice over its record letters with
-    null allowed; and one nullable evidence choice per scene it shows
-    (`item_scenes`), up to `EVIDENCE_SCENES`, each over every scene it shows.
-    Pure, but it renders: callers run it in the threadpool."""
+    word (the criteria stay whole in the question, ruling 6), a pair's
+    directed words folded with their direction (`_decision_options`); and one
+    nullable evidence choice per scene it shows (`item_scenes`), up to
+    `EVIDENCE_SCENES`, each over every scene it shows. No question depends on
+    another's answer: a native endpoint answers each one alone. Pure, but it
+    renders: callers run it in the threadpool."""
     return tuple(_decision_item(payload, cand) for cand in payload["candidates"])
 
 
@@ -1514,7 +1571,8 @@ def proposals_of(payload: dict,
     next sweep's `select` asks it again. It is never stored as ``uncertain``.
 
     Every read item is rebuilt as today's reply element -- the decision (``""``
-    when unreadable), the `from` and `to` letters, the rationale as `reason`
+    when unreadable) and, for a folded option, the `from` and `to` letters it
+    carries (`unfolded`), the rationale as `reason`
     (``""`` when none came back), and the answered evidence slots in order --
     and run through `_decide` with the scenes the item showed as the known
     ones, so a word outside the vocabulary, a direction the link rules refuse
@@ -1540,8 +1598,8 @@ def proposals_of(payload: dict,
             continue
         read = True
         answers = result.answers
-        element = {"decision": _answered(decision), "from": _answered(answers.get(FROM_ID)),
-                   "to": _answered(answers.get(TO_ID)), "reason": result.rationale,
+        word, frm, to = unfolded(_answered(decision))
+        element = {"decision": word, "from": frm, "to": to, "reason": result.rationale,
                    "evidence_scenes": [_answered(answers.get(slot)) for slot in EVIDENCE_IDS
                                        if _answered(answers.get(slot))]}
         out[cand["id"]] = _decide(element, cand, set(item_scenes(payload, cand)))

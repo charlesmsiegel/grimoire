@@ -1197,7 +1197,15 @@ def _candidate_lines(context):
             if line.startswith("- ")]
 
 
-def test_build_items_one_per_row_asking_decision_then_id():
+def _existing(rid):
+    return identity.EXISTING_PREFIX + rid
+
+
+def _offered_ids(item):
+    return [o.id for o in item.questions[0].options]
+
+
+def test_build_items_one_per_row_asking_one_folded_decision():
     rows = [_decision_row("r1", "thread", "Recover the harbour ledger",
                           ["find-the-ledger", "maras-map"], quote="I want it back.",
                           speaker="Winifred", why_new="A second search."),
@@ -1208,17 +1216,18 @@ def test_build_items_one_per_row_asking_decision_then_id():
     decisions.validate(items)
     assert len(items) == len(rows)
     for item, row, shown in zip(items, rows, identity.template_rows(rows), strict=True):
-        assert [q.id for q in item.questions] == [identity.DECISION_ID, identity.RECORD_ID]
-        decision, record = item.questions
+        # One question: no `id` asked apart from the decision it depends on.
+        [decision] = item.questions
+        assert decision.id == identity.DECISION_ID
         assert isinstance(decision, decisions.Choice) and not decision.allow_none
-        assert [o.id for o in decision.options] == list(identity.DECISIONS)
         assert decision.instructions == prompts.render("continuity_identity/question.j2")
+        assert [o.id for o in decision.options] == [
+            *(_existing(c["id"]) for c in row["candidates"]), "new", "uncertain"]
         assert [o.description for o in decision.options] == [
-            prompts.render("continuity_identity/option.j2", decision=w)
-            for w in identity.DECISIONS]
-        assert isinstance(record, decisions.Choice) and record.allow_none
-        assert record.instructions == prompts.render("continuity_identity/record.j2")
-        assert [o.id for o in record.options] == [c["id"] for c in row["candidates"]]
+            *(prompts.render("continuity_identity/option.j2", decision="existing",
+                             title=c["title"]) for c in row["candidates"]),
+            *(prompts.render("continuity_identity/option.j2", decision=w)
+              for w in ("new", "uncertain"))]
         assert item.context == prompts.render("continuity_identity/item.j2", r=shown)
         for cand in shown["candidates"]:
             assert cand["line"] in item.context
@@ -1226,54 +1235,56 @@ def test_build_items_one_per_row_asking_decision_then_id():
         "Proposed plot thread: Recover the harbour ledger\nBeat: Winifred went looking.")
     assert items[1].context.startswith("Proposed commitment: Seraphine's midnight deadline\n")
     assert "Row r1" not in items[0].context
-    # A candidate is described by its clipped title, and spelled by its ref form.
-    assert _options(items[0].questions[1])[0] == (
-        "find-the-ledger", "Find the ledger", ("thread:find-the-ledger",))
+    # A candidate is described under its clipped title, and spelled by its ref form.
+    assert _options(items[0].questions[0])[0] == (
+        "existing:find-the-ledger",
+        ("Find the ledger: only when this listed candidate is the same narrative question "
+         "or obligation, so the row's beat simply moves that record forward."),
+        ("existing:thread:find-the-ledger",))
     assert identity.explain() == prompts.render("continuity_identity/explain.j2")
-    assert identity.RECORD_ID == "id"
+    assert identity.EXISTING_PREFIX == "existing:"
     assert identity.UNREADABLE == "the duplicate check returned no readable answer"
 
 
-def test_a_single_candidate_row_offers_one_id_and_null():
+def test_a_single_candidate_row_offers_one_existing():
     rows = [_decision_row("r1", "commitment", "Seraphine's midnight deadline",
                           ["the-midnight-deadline"])]
     items = identity.build_items(rows, {})
     decisions.validate(items)
-    record = items[0].questions[1]
-    assert [o.id for o in record.options] == ["the-midnight-deadline"] and record.allow_none
-    named = decision_reply({"decision": "existing", "id": "the-midnight-deadline"})
-    blank = decision_reply({"decision": "new", "id": None})
+    assert _offered_ids(items[0]) == ["existing:the-midnight-deadline", "new", "uncertain"]
+    named = decision_reply({"decision": "existing:the-midnight-deadline"})
     [answered] = decisions.parse(named, items, explain=True)
-    [abstained] = decisions.parse(blank, items, explain=True)
-    assert answered.answers[identity.RECORD_ID].answer == "the-midnight-deadline"
-    assert abstained.answers[identity.RECORD_ID].reason == "abstained"
+    assert answered.answers[identity.DECISION_ID].answer == "existing:the-midnight-deadline"
+    assert identity.answers_of(rows, (answered,))[0]["id"] == "the-midnight-deadline"
 
 
 def test_a_candidate_titled_blank_is_described_by_its_id():
     row = _decision_row("r1", "thread", "Recover the ledger", ["find-the-ledger"])
     row["candidates"][0]["title"] = ""
     [item] = identity.build_items([row], {})
-    assert [o.description for o in item.questions[1].options] == ["find-the-ledger"]
+    assert item.questions[0].options[0].description.startswith("find-the-ledger: ")
 
 
-def test_the_id_question_reads_alias_sources_and_ref_forms():
+def test_the_folded_existing_reads_alias_sources_and_ref_forms():
     live = {"thread:a": "thread:b", "thread:c": "thread:other", "thread:b": "thread:b"}
     rows = [_decision_row("r1", "thread", "Mara's map", ["b"])]
     items = identity.build_items(rows, live)
     decisions.validate(items)
-    assert _options(items[0].questions[1]) == [("b", "B", ("thread:b", "thread:a", "a"))]
-    for named in ("a", "thread:b", "thread:a", "b", " B "):
+    assert _options(items[0].questions[0])[0][::2] == (
+        "existing:b", ("existing:thread:b", "existing:thread:a", "existing:a"))
+    for named in ("a", "thread:b", "thread:a", "b", "B "):
         [result] = decisions.parse(
-            decision_reply({"decision": "existing", "id": named}), items, explain=True)
-        assert result.answers[identity.RECORD_ID].answer == "b", named
-        assert identity.answers_of(rows, (result,))[0]["id"] == "b"
+            decision_reply({"decision": _existing(named)}), items, explain=True)
+        assert result.answers[identity.DECISION_ID].answer == "existing:b", named
+        assert identity.answers_of(rows, (result,))[0] == {
+            "row": "r1", "decision": "existing", "id": "b", "reason": ""}
 
 
 def test_build_items_drops_a_candidate_whose_id_collides_once_normalised():
     rows = [_decision_row("r1", "thread", "The map", ["the-map", "the map"])]
     items = identity.build_items(rows, {})
     decisions.validate(items)
-    assert [o.id for o in items[0].questions[1].options] == ["the-map"]
+    assert _offered_ids(items[0]) == ["existing:the-map", "new", "uncertain"]
     assert len(_candidate_lines(items[0].context)) == 1
     assert "the-map: The map" in items[0].context
 
@@ -1281,12 +1292,12 @@ def test_build_items_drops_a_candidate_whose_id_collides_once_normalised():
 def test_build_items_drops_a_candidate_whose_id_is_the_reserved_none():
     """`<none>` is the native none's distribution key (slice H, N5), which
     `decisions.offerable` refuses: a hand-edited ledger holding it as an id
-    loses that candidate rather than failing the request."""
+    loses that candidate rather than folding it into an option that names it."""
     rows = [_decision_row("r1", "thread", "The ledger",
                           ["<none>", "find-the-ledger", "<NONE>"])]
     items = identity.build_items(rows, {})
     decisions.validate(items)
-    assert [o.id for o in items[0].questions[1].options] == ["find-the-ledger"]
+    assert _offered_ids(items[0]) == ["existing:find-the-ledger", "new", "uncertain"]
     assert len(_candidate_lines(items[0].context)) == 1
 
 
@@ -1299,50 +1310,107 @@ def test_build_items_never_builds_a_request_validate_refuses():
                           ["", "find-the-ledger", "Find The Ledger", "maras-map"])]
     items = identity.build_items(rows, live)
     decisions.validate(items)
-    record = items[0].questions[1]
-    assert _options(record) == [
-        ("find-the-ledger", "Find the ledger",
-         ("thread:find-the-ledger", "thread:maras-map")),
-        ("maras-map", "Maras map", ())]
+    assert [(o.id, o.aliases) for o in items[0].questions[0].options] == [
+        ("existing:find-the-ledger",
+         ("existing:thread:find-the-ledger", "existing:thread:maras-map")),
+        ("existing:maras-map", ()), ("new", ()), ("uncertain", ())]
     assert len(_candidate_lines(items[0].context)) == 2
-    [result] = decisions.parse(decision_reply({"decision": "existing", "id": "maras-map"}),
+    [result] = decisions.parse(decision_reply({"decision": "existing:maras-map"}),
                                items, explain=True)
-    assert result.answers[identity.RECORD_ID].answer == "maras-map"
-    # A row left with no offerable candidate still asks its decision, and
-    # never a choice of nothing: an `existing` answer is then not offered.
+    assert result.answers[identity.DECISION_ID].answer == "existing:maras-map"
+    # A row left with no offerable candidate is offered no `existing` at all
+    # -- an empty id would fold into an option naming nothing -- and one it
+    # answers anyway is a word outside the options.
     bare = [_decision_row("r1", "thread", "The ledger", [""])]
     [item] = identity.build_items(bare, {})
     decisions.validate((item,))
-    assert [q.id for q in item.questions] == [identity.DECISION_ID]
+    assert _offered_ids(item) == ["new", "uncertain"]
     assert _candidate_lines(item.context) == []
-    [result] = decisions.parse(decision_reply({"decision": "existing", "id": ""}), (item,),
+    [result] = decisions.parse(decision_reply({"decision": "existing:"}), (item,),
                                explain=True)
+    assert result.answers[identity.DECISION_ID].detail == decisions.NOT_AN_OPTION
     assert identity.answers_of(bare, (result,)) == [
-        {"row": "r1", "decision": "existing", "id": "", "reason": ""}]
+        {"row": "r1", "decision": "", "id": "", "reason": ""}]
 
 
-def _result(decision, rid=None, rationale=""):
+def _ids(n, width=0):
+    """`n` distinct candidate ids, each padded to `width` characters."""
+    return [f"record-{k:04d}".ljust(width, "x") for k in range(n)]
+
+
+def test_a_full_batch_of_the_longest_ids_fits_one_call_on_both_backends():
+    """The folded choice grows with the row's candidates. `examine` offers at
+    most `similarity.IDENTITY_TOP_K`, each with an id that fits
+    `CONTINUITY_IDENTITY_BYTES`, so a whole chunk of such rows is one call:
+    validate accepts it, it is one chunk, and a decisions endpoint takes every
+    item."""
+    width = similarity.CONTINUITY_IDENTITY_BYTES
+    rows = [_decision_row(f"r{n}", "thread", f"Row {n}", _ids(similarity.IDENTITY_TOP_K, width))
+            for n in range(decisions.MAX_ITEMS_PER_CALL)]
+    items = identity.build_items(rows, {})
+    decisions.validate(items)
+    assert len(decisions.chunks(items)) == 1
+    for item in items:
+        assert len(item.questions[0].options) == similarity.IDENTITY_TOP_K + 2
+        assert decisions.native_gap(item) == ""
+
+
+def test_the_folded_choice_stops_at_the_options_a_decision_may_offer():
+    """Past what `examine` builds, at the boundary: beside `new` and
+    `uncertain`, a row offers at most 253 `existing` options -- 255 in all,
+    which `decisions.validate` accepts and a decisions endpoint carries (the
+    decision allows no none, so no reserved none is added) -- and the rest, by
+    rank, are dropped from the options and the context alike."""
+    room = decisions.NATIVE_MAX_OPTIONS - 2
+    for count, offered in ((room, room), (room + 1, room)):
+        row = _decision_row("r1", "thread", "The ledger", _ids(count))
+        [item] = identity.build_items([row], {})
+        decisions.validate((item,))
+        assert decisions.native_gap(item) == ""
+        ids = _offered_ids(item)
+        assert len(ids) == offered + 2 == min(count + 2, decisions.NATIVE_MAX_OPTIONS)
+        assert ids[:offered] == [_existing(rid) for rid in _ids(offered)]
+        assert len(_candidate_lines(item.context)) == offered
+
+
+def test_the_folded_choice_keeps_inside_the_enum_string_budget():
+    """Past `decisions.ENUM_STRING_CHARS_ABOVE` options, strict mode caps one
+    enum's strings at `decisions.MAX_ENUM_STRING_CHARS`: long ids stop being
+    offered where the next would pass it, so the request stays one validate
+    accepts."""
+    width = 51   # `existing:` and the id: 60 characters an option
+    row = _decision_row("r1", "thread", "The ledger", _ids(decisions.NATIVE_MAX_OPTIONS, width))
+    [item] = identity.build_items([row], {})
+    decisions.validate((item,))
+    ids = _offered_ids(item)
+    kept = len(ids) - 2
+    assert len(ids) > decisions.ENUM_STRING_CHARS_ABOVE
+    assert sum(map(len, ids)) <= decisions.MAX_ENUM_STRING_CHARS
+    following = _existing(_ids(kept + 1, width)[kept])
+    assert sum(map(len, ids)) + len(following) > decisions.MAX_ENUM_STRING_CHARS
+    assert len(_candidate_lines(item.context)) == kept
+
+
+def _result(decision, rationale=""):
     answer = (decision if isinstance(decision, decisions.Answer)
               else decisions.Answer(decision))
-    record = rid if isinstance(rid, decisions.Answer) else (
-        decisions.Answer(rid) if rid is not None else decisions.Answer(None, "abstained"))
-    return decisions.ItemResult({identity.DECISION_ID: answer, identity.RECORD_ID: record},
-                                rationale)
+    return decisions.ItemResult({identity.DECISION_ID: answer}, rationale)
 
 
 _ROWS3 = [{"key": "r1"}, {"key": "r2"}, {"key": "r3"}]
 
 
 def test_answers_of_maps_each_answer_to_todays_decision_shape():
-    results = (_result("existing", "find-the-ledger", " Same ledger. "),
-               _result("new", None, "x" * 400),
-               _result("uncertain", decisions.Answer(None, "unreadable",
-                                                     detail=decisions.NOT_AN_OPTION)))
+    results = (_result("existing:find-the-ledger", " Same ledger. "),
+               _result("new", "x" * 400),
+               _result(decisions.Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION)))
     assert identity.answers_of(_ROWS3, results) == [
         {"row": "r1", "decision": "existing", "id": "find-the-ledger",
          "reason": "Same ledger."},
         {"row": "r2", "decision": "new", "id": "", "reason": "x" * identity.REASON_CHARS},
-        {"row": "r3", "decision": "uncertain", "id": "", "reason": ""}]
+        {"row": "r3", "decision": "", "id": "", "reason": ""}]
+    assert identity.unfolded("existing:thread:b") == ("existing", "thread:b")
+    assert identity.unfolded("uncertain") == ("uncertain", "")
 
 
 _NOT_READ = (decisions.Answer(None, "unreadable", detail=decisions.NO_OBJECT),
@@ -1357,8 +1425,7 @@ def test_answers_of_leaves_out_every_item_the_reply_never_reached():
                         ("thread", "Mara's map", ["maras-map"]))
     rows = exam.prompt_rows()
     for missing in _NOT_READ:
-        results = (_result("new", None, "Its own business."), _result(missing, missing),
-                   _result("new"))
+        results = (_result("new", "Its own business."), _result(missing), _result("new"))
         answers = identity.answers_of(rows, results)
         assert [a["row"] for a in answers] == ["r1", "r3"], missing
         exam.decide(answers)
@@ -1377,13 +1444,10 @@ def test_answers_of_leaves_out_every_item_the_reply_never_reached():
 
 def test_answers_of_is_none_only_when_no_item_held_an_object():
     no_object, no_item = _NOT_READ[0], _NOT_READ[1]
-    assert identity.answers_of(_ROWS3, tuple(_result(no_object, no_object)
-                                             for _ in _ROWS3)) is None
-    assert identity.answers_of(_ROWS3, tuple(_result(no_item, no_item)
-                                             for _ in _ROWS3)) == []
-    assert identity.answers_of(_ROWS3, (_result(no_object, no_object),
-                                        _result(no_item, no_item),
-                                        _result(no_object, no_object))) == []
+    assert identity.answers_of(_ROWS3, tuple(_result(no_object) for _ in _ROWS3)) is None
+    assert identity.answers_of(_ROWS3, tuple(_result(no_item) for _ in _ROWS3)) == []
+    assert identity.answers_of(_ROWS3, (_result(no_object), _result(no_item),
+                                        _result(no_object))) == []
     # The reply's own shapes, through the parser: no object, and an object
     # with no item (`{}`, or today's format).
     items = identity.build_items(_memory_exam(

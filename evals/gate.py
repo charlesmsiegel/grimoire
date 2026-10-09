@@ -444,8 +444,8 @@ SPEAKER = Conversion(
 # The fixture holds every case the guard tells apart: r1 is offered two open
 # records and a closed one, one of them the live canonical of an alias source;
 # r2 is offered a record r1 is also offered, and one an explicit row already
-# moves; r3 is a commitment with one candidate, so its `id` question offers a
-# single option beside null.
+# moves; r3 is a commitment with one candidate, so its decision offers a
+# single `existing:<id>` beside `new` and `uncertain`.
 
 _IDENTITY_SIGNALS = {"title_equal": False, "slug_equal": False, "tokens": 0.4,
                      "chars": 0.5, "cosine": None, "actors": [], "scenes": [],
@@ -772,6 +772,17 @@ def _adapt(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -
     return json.dumps({"decisions": _mapped(elements, keys, scenes)})
 
 
+def _fold(element: dict) -> object:
+    """A pair element's decision as the folded choice answers it: a directed
+    word with both its letters as `reconcile.folded` spells it, and anything
+    else as given."""
+    word, frm, to = element["decision"], element.get("from"), element.get("to")
+    if (isinstance(word, str) and word in reconcile._JOINS and isinstance(frm, str) and frm
+            and isinstance(to, str) and to):
+        return reconcile.folded(word, frm, to)
+    return word
+
+
 def _twin(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -> str:
     """The decide twin of a source: the same adapted elements in the decide
     shape. A candidate key becomes its item index, and one the fixture does
@@ -779,9 +790,15 @@ def _twin(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) ->
     slice F's rule that an index we did not send makes the reply's keys not
     ours (`decisions._foreign_index`), leaves every item of that reply unread;
     a repeated candidate becomes a repeated index key, which the parse
-    reads first-wins as today's `seen` does (I3). A letter stays a letter
-    (an empty one is null, the decide spelling of none), on a pair item only.
-    A list of cited scenes is spread over `reconcile.EVIDENCE_IDS` in order,
+    reads first-wins as today's `seen` does (I3). On a pair item a directed
+    word given both letters is folded with them into the one option that
+    carries its direction (`reconcile.folded`, spec 7.4), whatever the
+    letters are: the same letter twice, a letter the item has no record for
+    or a direction the link rules refuse folds into an option the item does
+    not offer, which reads as no option where today's parse reads it as no
+    direction, and both store ``uncertain``. A directed word missing a letter
+    stays bare, and an undirected word's letters are dropped: no question
+    asks them. A list of cited scenes is spread over `reconcile.EVIDENCE_IDS` in order,
     dropping a slot the item does not ask; a cited value that is not a list
     becomes a list-valued first slot, which no option reads. `reason` becomes
     `rationale`."""
@@ -800,11 +817,9 @@ def _twin(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) ->
         cand = cands[index_of[key]]
         answers: dict[str, object] = {}
         if "decision" in element:
-            answers[reconcile.DECISION_ID] = element["decision"]
-        if cand["vocabulary"] in reconcile.PAIR_VOCABULARIES:
-            for field in (reconcile.FROM_ID, reconcile.TO_ID):
-                if field in element:
-                    answers[field] = element[field] or None
+            answers[reconcile.DECISION_ID] = (
+                _fold(element) if cand["vocabulary"] in reconcile.PAIR_VOCABULARIES
+                else element["decision"])
         asked = reconcile.EVIDENCE_IDS[:min(len(reconcile.item_scenes(_RECONCILE_PAYLOAD,
                                                                        cand)),
                                             reconcile.EVIDENCE_SCENES)]

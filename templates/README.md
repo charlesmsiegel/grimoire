@@ -240,22 +240,29 @@ blank optional one renders nothing.
   holding only the candidates the item offers. A heading (`Proposed plot
   thread: <title>` or `Proposed commitment: <title>`), then the row's block,
   from `Beat:` to the candidates' signals.
-- `question.j2` is the first question's instructions (a choice under the id
-  `decision`, no null): the criteria of the retired one-call prompt, two
-  sentences reworded for one row shown above. No vars.
-- `option.j2` describes each of its three options. Var: `decision`
-  (`existing`, `new` or `uncertain`): each text is that decision's bullet in
-  the retired prompt, word for word after its quoted word.
-- `record.j2` is the second question's instructions (a choice under the id
-  `id`, null allowed) over the row's candidates by bare id, each described by
-  its clipped title (or its id when the title is blank). No vars. An option's
-  aliases are the spellings the acceptance guard canonicalises: the ref
-  form `<kind>:<id>`, and each live alias source of it with its bare id. A
-  candidate whose id is not offerable or collides once normalised with a
-  higher-ranked one is dropped from the options and the context, ids before
-  aliases (`identity._offered`), so a hand-edited ledger never builds a
-  request `decide` refuses; a row left with no offerable candidate asks
-  `decision` alone.
+- `question.j2` is the item's one question's instructions (a choice under
+  the id `decision`, no null): the criteria of the retired one-call prompt,
+  two sentences reworded for one row shown above, and its id instructions
+  reworded for the fold below. No vars.
+- `option.j2` describes each option. Vars: `decision` (`existing`, `new` or
+  `uncertain`) and, for `existing`, `title`. `new` and `uncertain` are each
+  that decision's bullet in the retired prompt, word for word after its
+  quoted word. `existing` is folded with the candidate it names: one option
+  `existing:<id>` (`identity.EXISTING_PREFIX`) per offered candidate, in rank
+  order and before `new` and `uncertain`, described under that candidate's
+  clipped title (or its id when the title is blank). There is no `id`
+  question: a native decisions endpoint answers each question on its own,
+  so an id asked "unless the decision is existing" was answered without the
+  decision (spec 7.4). An option's aliases, each folded the same way, are
+  the spellings the acceptance guard canonicalises: the ref form
+  `<kind>:<id>`, and each live alias source of it with its bare id. A
+  candidate whose id is not offerable, whose folded option collides once
+  normalised with a higher-ranked one's, or past the room one choice has
+  (`decisions.MAX_OPTIONS`, and strict mode's enum string budget past 250
+  options) is dropped from the options and the context, ids before aliases
+  (`identity._offered`), so a hand-edited ledger never builds a request
+  `decide` refuses; a row left with no offerable candidate is offered no
+  `existing` at all.
 - `explain.j2` is the rationale instruction (`identity.explain`): the row's
   display-only reason. No vars.
 
@@ -307,11 +314,23 @@ with an earlier one dropped from the item's options and lines.
   space). Var: `vocabulary`. The retired prompt's criteria, one sentence
   reworded for one candidate shown above, and the vocabulary's whole bullet
   (two commitments carry the plot threads' bullet too, which theirs calls
-  "the same rules").
-- `direction.j2` and `direction_to.j2` are a pair's direction questions
-  (choices under `from` and `to`, null allowed; asked only under
-  `reconcile.PAIR_VOCABULARIES`), over the record letters, each described by
-  `record_option.j2` (var: `letter`; "record A"). No vars otherwise.
+  "the same rules"); under `reconcile.PAIR_VOCABULARIES` it includes
+  `direction.j2`.
+- `direction.j2` says that a pair's directed words are offered folded with
+  their direction. No vars. There is no `from` or `to` question: a native
+  decisions endpoint answers each question on its own, so a direction asked
+  "null when the decision has no direction" was answered without the
+  decision (spec 7.4). Instead each of `duplicate`, `continuation`,
+  `subthread` and `pays_off` is offered once per way the link rules let it
+  run between the item's records (`reconcile._runs`), as
+  `reconcile.folded`'s `<word>_<from>_<join>_<to>` -- `duplicate_a_into_b`,
+  `continuation_b_of_a`, `subthread_a_of_b`, `pays_off_b_to_a` -- and
+  `reconcile.unfolded` splits the answer back into today's decision, `from`
+  and `to`. `pays_off`, which runs from the plot thread to the commitment
+  only, is offered once, with its bare word as an alias.
+- `directed_option.j2` describes one folded option. Vars: `word`, `frm` and
+  `to` (the letters): the retired prompt's direction rules, one clause per
+  word, naming the records by letter.
 - `evidence.j2` and `evidence_more.j2` are the evidence questions: one
   nullable choice per scene the item shows, up to `reconcile.EVIDENCE_SCENES`
   (`evidence_scene`, then `evidence_scene_2` and `evidence_scene_3`), each
