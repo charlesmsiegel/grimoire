@@ -1187,16 +1187,41 @@ def test_a_native_identity_answer_maps_with_an_empty_reason(client, scene):
     assert body["identity"]["status"] == "ok"
 
 
+@pytest.mark.parametrize("answer", [
+    decisions.Answer(None, "refused"), decisions.Answer(None, "abstained")],
+    ids=["refused", "abstained"])
+def test_a_native_answer_that_is_no_reading_leaves_the_row_unchecked(client, scene, answer):
+    """The plan's coordination obligation (brutal review H, 2-P3): a native
+    `refused` (or a tie, `abstained`) is an ANSWER, so it never moves to the
+    fallback -- but it is no reading of the row (`decisions.was_read`), so
+    the row is `unchecked` with its hint, never `uncertain`, and the phase
+    says the check answered none of the rows."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))),
+                   decisions.ItemResult({"decision": answer}))
+
+    body = _absorb(client, cid, sid)
+
+    assert len(fake.native_requests) == 1 and identity_requests(fake) == []
+    assert _checks(body) == [("unchecked", "hint_only")]
+    assert body["identity"]["status"] == "degraded"
+
+
 @pytest.mark.parametrize("native", ["refused", "cut"])
 def test_a_budget_stopped_native_stage_is_the_budget_through_its_fallback(
         client, scene, monkeypatch, native):
     """Task 4's parked review item, end to end, on a native-only Decision
     model: the absorb clock stops the native stage -- refusing it unsent
     (`BudgetRefused`), or sending it and cutting it off in flight -- and the
-    spent clock then refuses the fallback stage unsent too. The two compose
-    into one error whose sentence is not the clock's, and `_budget_overrun`
-    still reads the clock in its `words`: the phase reports the budget, never
-    a provider failure, worded by whether a call went out."""
+    fallback stage is never sent. Refused, the chain ends there and the
+    refusal is raised as itself (brutal review H 🟡2); cut off, the spent
+    clock refuses the fallback stage unsent, the two compose into one error
+    whose sentence is not the clock's, and `_budget_overrun` still reads the
+    clock in its `words`. Either way the phase reports the budget, never a
+    provider failure, worded by whether a call went out."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     inference_fixtures.decide_only(client, fallback=True)

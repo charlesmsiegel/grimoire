@@ -1721,6 +1721,31 @@ def test_the_sweep_on_a_decide_only_model_answers_on_the_fallback(client, on):
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
 
 
+@pytest.mark.parametrize("answer", [
+    decisions.Answer(None, "refused"), decisions.Answer(None, "abstained")],
+    ids=["refused", "abstained"])
+def test_a_native_answer_that_is_no_reading_leaves_the_candidate_unproposed(client, answer):
+    """The plan's coordination obligation (brutal review H, 2-P3): a native
+    `refused` (or a tie, `abstained`) is an answer, so the fallback is never
+    asked -- but it is no reading (`decisions.was_read`), so the finding
+    stays with no proposal and the sweep still lands `llm: "ok"`."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.decide_only(client, fallback=True)
+    fake = _install(client, FakeLLM(
+        cassette=Cassette({"entries": [_entry(_reply(_duplicate()))]}),
+        decisions=[decisions.ItemResult({"decision": answer})]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "ok"
+    assert len(fake.native_requests) == 1 and _reconcile_requests(fake) == []
+    assert PAIR in _records(cid)
+    assert _records(cid)[PAIR]["proposal"] is None
+    assert (run["result"]["adjudicated"], run["result"]["unanswered"]) == (0, 1)
+
+
 def test_the_sweep_on_a_decide_only_model_without_a_fallback_answers_natively(client):
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
