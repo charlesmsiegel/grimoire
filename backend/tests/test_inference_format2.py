@@ -14,8 +14,10 @@ Since slice I every store plays as format 2: a store the migration has not
 reached -- format 1, an unmarked campaign, a scope not yet retired -- is read
 through the planner, in memory (`legacy_plan.overlay`), including a legacy
 connection's model fields as its model's facts and its GLM effort as a derived
-reasoning preset. Nothing on that path writes. The second half of this file
-holds that.
+reasoning preset. Nothing on that path writes. (A format-1 store's reroll
+naming a provider, and its `missing_key` sentence, keep format 1's meaning:
+spec 5.6, `test_inference_override.py`.) The second half of this file holds
+that.
 
 Invented connection ids and the codebase's placeholder names only.
 """
