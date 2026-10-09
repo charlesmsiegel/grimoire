@@ -2241,11 +2241,16 @@ campaign's Fast override no longer outranks a global pin.
   decide half, by the same import bindings: every `generate` names a task on
   a `generate` route (or a registered non-route task) and passes
   `resolved=`, and is never handed around as a value. The task is a literal,
-  or a name that traces only to literals -- a turn's meter is opened where
-  the turn is streamed, so the literal is at that helper's callers -- and H's
-  `decide`/`run_stages` are never swept in. `test_usage_guard.py` holds that
-  every `generate` call passes `usage=` a meter's holder; `generate`'s own
-  facade calls forward that holder.
+  or a name that traces only to literals (a `lambda` parameter or a
+  comprehension variable never does) -- a turn's meter is opened where the
+  turn is streamed, so the literal is at that helper's callers -- and H's
+  `decide`/`run_stages` are never swept in. The eval runner's task is data
+  (`case.task`), held instead by every generate case naming a generate task.
+  `test_usage_guard.py` holds that every `generate` call passes `usage=` a
+  meter's holder; `generate`'s own facade calls forward that holder, and the
+  two unmetered callers outside the package (the eval runner, the ingest
+  script) are named exemptions. Both checks scan the package,
+  `backend/scripts/` and `evals/`.
 - `test_usage_guard.py`: decide and embed are metered.
 - `test_import_guard.py`, `test_lock_domain_guard.py`: classify the new
   modules.

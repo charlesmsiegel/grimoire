@@ -163,7 +163,9 @@ async def run_absorb(cid: str, sid: str, client: LLMClient,
         fact_snapshot=absorb.fact_snapshot(cid, sid))
     # No meter, as before: this script has never filed a ledger row, and
     # starting to is a change to what an ingest records, not to how it calls.
-    text = await operations.generate(ABSORB_TASK, messages, client=client,
+    # The task spelled as a literal, where `test_operation_guard.py` reads
+    # it; `generate` refuses a resolution of anything but ABSORB_TASK's.
+    text = await operations.generate("absorb", messages, client=client,
                                      resolved=resolved, stream=False)
     parsed = absorb.parse_output(text)
     edits = absorb.materialize(cid, sid, parsed)

@@ -39,10 +39,12 @@ Honest about its reach, the house standard:
   facade calls (`stream` and `complete`) pass its own `usage` parameter, not a meter of their own:
   the meter belongs at the call site, around the generation, where a route
   opens it. So those two calls are `FORWARDERS`, and the rule moves to the
-  door instead -- every `generate` operation call in the package (the
-  operation guard's recogniser, through a binding of `grimoire.inference`)
-  passes `usage=<meter>.usage`. Outside the package (`evals/`, the ingest
-  script) nothing is metered today, and neither is checked.
+  door instead -- every `generate` operation call (the operation guard's
+  recogniser, through a binding of `grimoire.inference`) passes
+  `usage=<meter>.usage`, in the package and outside it (`evals/`,
+  `backend/scripts/`). The two outside callers file no ledger row today and
+  are named, with why, in `UNMETERED_OUTSIDE`: an entry is an exemption, so
+  the list is capped, and a stale one fails.
 """
 
 from __future__ import annotations
@@ -54,7 +56,13 @@ import grimoire.inference as inference_mod
 import grimoire.routes as routes_pkg
 
 from . import guard_markers
-from .test_operation_guard import CLIENT_MODULE, _walk, client_calls, generate_calls
+from .test_operation_guard import (
+    CLIENT_MODULE,
+    _walk,
+    client_calls,
+    generate_calls,
+    outside_walk,
+)
 
 ROUTES = pathlib.Path(routes_pkg.__file__).parent
 #: Files outside `routes/` that hold an `LLMClient` and are scanned beside it.
@@ -319,12 +327,33 @@ def _unmetered_generates(tree: ast.AST, modname: str, is_pkg: bool = False) -> l
                        and k.value.attr == _HOLDER for k in call.keywords)]
 
 
+#: Outside the package, the modules whose generations file no ledger row, and
+#: why. Not a marker family: two modules, named here, each held to having
+#: such a call (`test_the_unmetered_outside_list_is_not_stale`).
+UNMETERED_OUTSIDE: dict[str, str] = {
+    "evals.runner": "a live eval runs against a throwaway store, never the "
+                    "library whose ledger it would describe",
+    "scripts.ingest_scene": "the ingest script has never filed a ledger row; "
+                            "starting to changes what an ingest records",
+}
+
+
 def test_every_generate_call_passes_a_meters_holder():
-    offenders = [o for modname, tree, is_pkg in _walk()
+    offenders = [o for modname, tree, is_pkg in (*_walk(), *outside_walk())
+                 if modname not in UNMETERED_OUTSIDE
                  for o in _unmetered_generates(tree, modname, is_pkg)]
     assert not offenders, (
         "generation(s) that file no ledger row -- open `with store.usage.meter(<task>, "
         "...) as m:` around the call and pass `usage=m.usage`:\n  " + "\n  ".join(offenders))
+
+
+def test_the_unmetered_outside_list_is_not_stale():
+    """Each exemption names a module that still generates unmetered, and the
+    list stays as short as it is: an exemption is a hole in the total."""
+    unmetered = {modname for modname, tree, is_pkg in outside_walk()
+                 if _unmetered_generates(tree, modname, is_pkg)}
+    assert unmetered == set(UNMETERED_OUTSIDE)
+    assert len(UNMETERED_OUTSIDE) <= 2
 
 
 def test_the_generate_holder_check_flags_planted_calls():

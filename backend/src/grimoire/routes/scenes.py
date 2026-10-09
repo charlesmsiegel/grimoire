@@ -1045,9 +1045,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     if character_turns.enabled() or turn.speaker_ref:
         return _start_round(cid, sid, turn, request, client, resolved, run, ephemeral=ephemeral,
                             posted_at=posted_at, content=content, post_id=post_id)
-    # Only the round engine is handed no resolution (a Manual-mode post that
-    # speaks to nobody), and it took the branch above.
-    assert resolved is not None
+    resolved = _resolved_for_a_turn(resolved)
     conn, primary = resolved.conn, resolved.chain.primary
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
@@ -1125,6 +1123,16 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
+def _resolved_for_a_turn(resolved: UsableInference | None) -> UsableInference:
+    """`resolved`, which a send that reaches a turn outside the round engine
+    always has: only the round engine is handed none (a Manual-mode post that
+    speaks to nobody), and `_chat_run` hands that to it first. Checked rather
+    than asserted, so the guarantee holds under `python -O` too."""
+    if resolved is None:
+        raise RuntimeError("a turn outside the round engine was handed no resolution")
+    return resolved
 
 
 def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
