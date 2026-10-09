@@ -2,9 +2,13 @@
 
 A native-only Decision model is resolved `"native"` by the resolver (Task 5),
 so these tests stand on a real decide resolution on an isolated format-2
-store; where a shape no resolver builds is the subject (a native fallback,
-an attempt both native and generating), `dataclasses.replace` lays the mode
-onto a real resolution's attempt. Every answer comes from `llm_fakes`
+store. The resolver builds a native fallback too (behind a structured or a
+native primary: `test_inference_decide.py`), unattached; a few tests here
+lay a mode onto a real resolution's attempt with `dataclasses.replace`
+instead -- a native fallback still attached behind its structured primary,
+or an attempt both native and generating -- shapes the resolver does not
+build, held here so `stages` answers them safely all the same. Every answer
+comes from `llm_fakes`
 (a `FakeLLM` scripted with `decisions=`), or from a real `LLMClient` over a
 provider double where the facade's own retry and refusal rules are the
 subject. Nothing reaches a provider.

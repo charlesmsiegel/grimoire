@@ -1735,7 +1735,7 @@ def test_the_sweep_on_a_decide_only_model_without_a_fallback_answers_natively(cl
     assert len(fake.native_requests) == 1 and _reconcile_requests(fake) == []
 
 
-def test_the_sweep_without_a_generating_fallback_lands_with_llm_off(client):
+def test_the_sweep_on_a_model_that_neither_generates_nor_decides_lands_with_llm_off(client):
     """On a model that can neither generate nor decide natively the seam
     refuses (`incapable`): the sweep lands with `llm: "off"` and the
     refusal's sentence, and persist 1's findings stand."""

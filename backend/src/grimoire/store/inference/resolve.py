@@ -395,10 +395,11 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
 #: The capabilities an operation needs of itself, as ALTERNATIVES: an attempt
 #: meets the operation when it is not known unable to do every one of them.
 #: A decision is answered natively (`decide_native`) or by structured
-#: generation (`generate`), so a model needs either.
-OPERATION_CAPABILITY: dict[str, tuple[str, ...]] = {"generate": ("generate",),
-                                                    "embed": ("embed",),
-                                                    "decide": ("decide_native", "generate")}
+#: generation (`generate`), so a model needs either. Read off
+#: `capabilities.NEEDS`, the picker's own table, so the seam and the picker
+#: hold one answer to "what does a decision need".
+OPERATION_CAPABILITY: dict[str, tuple[str, ...]] = {
+    op: capabilities.NEEDS[op] for op in ("generate", "embed", "decide")}
 
 
 def _needs(route: routing.Route | None, operation: str) -> tuple[frozenset[str], ...]:

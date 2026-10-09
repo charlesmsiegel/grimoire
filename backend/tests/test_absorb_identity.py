@@ -25,7 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, embeddings, inference, llm_errors, routes
+from grimoire import decisions, embeddings, llm_errors, routes
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
 from grimoire.store import config, llm_connections
@@ -1187,61 +1187,63 @@ def test_a_native_identity_answer_maps_with_an_empty_reason(client, scene):
     assert body["identity"]["status"] == "ok"
 
 
-@pytest.mark.parametrize("fallback", ["refused", "failed"])
-def test_a_budget_refused_native_stage_is_the_budget_through_its_fallback(
-        client, scene, monkeypatch, fallback):
-    """Task 4's parked review item, end to end: the absorb clock refuses the
-    native stage unsent (`BudgetRefused`), and the fallback stage then fails
-    too -- refused by the same spent clock, or (the clock read afresh) sent
-    and failing for a reason of its own. Either way the composed error is not
-    the clock's sentence, and `_budget_overrun` still reads the clock in its
-    `words`: the phase reports the budget, never a provider failure."""
+@pytest.mark.parametrize("native", ["refused", "cut"])
+def test_a_budget_stopped_native_stage_is_the_budget_through_its_fallback(
+        client, scene, monkeypatch, native):
+    """Task 4's parked review item, end to end, on a native-only Decision
+    model: the absorb clock stops the native stage -- refusing it unsent
+    (`BudgetRefused`), or sending it and cutting it off in flight -- and the
+    spent clock then refuses the fallback stage unsent too. The two compose
+    into one error whose sentence is not the clock's, and `_budget_overrun`
+    still reads the clock in its `words`: the phase reports the budget, never
+    a provider failure, worded by whether a call went out."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     inference_fixtures.decide_only(client, fallback=True)
-    client.put("/api/config", json={"absorb_budget": "60"})
+    assert client.put("/api/config", json={"absorb_budget": "60"}).status_code == 200
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
     real_explain = identity.explain
 
-    def spend_then_explain():
-        clock[0] = 1e6                       # the clock runs out just before decide
+    def explain_then_tick():
+        # Just before decide: the budget gone, or a sliver of it left.
+        clock[0] = 1e6 if native == "refused" else 59.95
         return real_explain()
 
-    monkeypatch.setattr(identity, "explain", spend_then_explain)
-    if fallback == "failed":
-        real_messages = inference.structured_messages
-
-        def rewind(*args, **kwargs):
-            clock[0] = 0.0                   # the fallback stage finds time left
-            return real_messages(*args, **kwargs)
-
-        monkeypatch.setattr(inference, "structured_messages", rewind)
+    monkeypatch.setattr(identity, "explain", explain_then_tick)
     fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                        error={"kind": "network", "message": "connection reset"}),
-                   NATIVE_NEW)
+                        decision_reply(_row("new"))), NATIVE_NEW)
     asked: list[str] = []
     real_native = fake.decide_native
 
-    def native(item, conn, *args, **kwargs):
+    def stalls(item, conn, *args, **kwargs):
         asked.append(conn["model"])          # the call is built; the clock decides if it goes
-        return real_native(item, conn, *args, **kwargs)
 
-    fake.decide_native = native
+        async def sent():
+            result = await real_native(item, conn, *args, **kwargs)
+            clock[0] = 1e6                   # out, and the budget runs out while it waits
+            await asyncio.sleep(30)
+            return result
+
+        return sent()
+
+    fake.decide_native = stalls
 
     body = _absorb(client, cid, sid)
 
-    assert asked == ["vendor/decider"] and fake.native_requests == []
-    assert len(identity_requests(fake)) == (1 if fallback == "failed" else 0)
+    assert asked == ["vendor/decider"]
+    assert len(fake.native_requests) == (1 if native == "cut" else 0)
+    assert identity_requests(fake) == []      # the fallback was refused unsent
     block = body["identity"]
     assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
-        "failed", True, fallback == "failed")
-    assert block["reason"] == (routes.scenes._IDENTITY_CUT_SHORT if fallback == "failed"
+        "failed", True, native == "cut")
+    assert block["reason"] == (routes.scenes._IDENTITY_CUT_SHORT if native == "cut"
                                else routes.scenes._IDENTITY_REFUSED)
     assert _checks(body) == [("unchecked", "hint_only")]
-    # The clock refused it unsent, so no row; the fallback's is its own failure.
-    assert [(r["decision_mode"], r["status"]) for r in _identity_rows(cid)] == (
-        [("structured", "error")] if fallback == "failed" else [])
+    # A refused call files no row; a cut-off one is its meter's `error/timeout`.
+    assert [(r["decision_mode"], r["status"], r.get("error"))
+            for r in _identity_rows(cid)] == (
+        [("native", "error", "timeout")] if native == "cut" else [])
 
 
 def test_identity_on_a_decide_only_model_without_a_fallback_answers_natively(client, scene):
@@ -1257,7 +1259,8 @@ def test_identity_on_a_decide_only_model_without_a_fallback_answers_natively(cli
     assert len(fake.native_requests) == 1 and identity_requests(fake) == []
 
 
-def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(client, scene):
+def test_identity_on_a_model_that_neither_generates_nor_decides_fails_the_phase(
+        client, scene):
     """On a model that can neither generate nor decide natively the seam
     refuses (`incapable`), and the phase reports that refusal as its own
     failure: the review still lands, the rows stage with their hints, and

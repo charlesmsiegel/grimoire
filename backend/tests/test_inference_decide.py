@@ -24,7 +24,7 @@ from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm import ATTEMPTED, FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
-from grimoire.store.inference import facts, migrate, settings
+from grimoire.store.inference import capabilities, facts, migrate, settings
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import (
     FailingOpenRouter,
@@ -929,6 +929,7 @@ def test_a_decide_only_model_with_a_same_provider_fallback_keeps_it(client):
     # on a generate resolution of the same role (refused)...
     generate = _resolved("generate")
     assert len(generate.attempts) == 1 and generate.missing == ("generate",)
+    assert generate.fallback_missing == ()
     assert generate.fallback_problem == inf.SAME_PROVIDER
     # ...and behind a decide primary that can generate.
     _settings(client, {"roles": {"decision": {
@@ -937,6 +938,9 @@ def test_a_decide_only_model_with_a_same_provider_fallback_keeps_it(client):
     capable = _resolved()
     assert len(capable.attempts) == 1 and FALLBACK_KEY not in capable.conn
     assert capable.fallback_problem == inf.SAME_PROVIDER
+    # The Decision card, which now reads its role as a decision, says so too.
+    card = client.get("/api/inference/settings").json()["roles"]["decision"]
+    assert card["fallback_problem"] == inf.SAME_PROVIDER and card["problem"] is None
 
 
 def test_a_same_provider_fallback_that_can_do_neither_is_reported(client):
@@ -972,6 +976,41 @@ def test_a_fallback_that_cannot_generate_either_is_a_native_stage(client):
     assert inference.stages(resolved) == (
         inference.Stage("native", resolved.conn, None),
         inference.Stage("native", resolved.attempts[1].conn, 0))
+
+
+def test_a_generating_primary_with_a_decide_only_fallback_falls_to_a_native_stage(client):
+    """Rule 3's one permitted change to a structured primary's resolution: a
+    fallback that cannot generate but may decide natively was F's
+    `fallback_missing == ("generate",)`, never sent. Now it lacks nothing: it
+    stays unattached (the primary's `conn` is F's, no `FALLBACK_KEY`) and is
+    a native stage of its own, one attempt, which a failed primary reaches."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"]}])
+    _catalog("spare", [{"id": "vendor/spare", "outputs": ["decisions"]}])
+    resolved = _resolved()
+    primary, fallback = resolved.attempts
+    assert [a.decision_mode for a in resolved.attempts] == ["structured", "native"]
+    assert resolved.missing == () and resolved.fallback_missing == ()
+    assert FALLBACK_KEY not in resolved.conn
+    assert inference.stages(resolved) == (inference.Stage("structured", primary.conn, None),
+                                          inference.Stage("native", fallback.conn, 0))
+    fake = FakeLLM([[""]], error=LLMError("network", "connection reset"), decisions=[_yes()])
+    got = _decide(fake, [_item()], resolved=resolved)
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert got.items[0].backend == "native"
+    [(_item_sent, conn, retries)] = fake.native_requests
+    assert (conn["id"], conn["model"], retries) == ("spare", "vendor/spare", 0)
+    assert [(r["status"], r["decision_mode"], r["model"]) for r in _rows()] == [
+        ("error", "structured", "vendor/active"), ("ok", "native", "vendor/spare")]
+
+
+def test_operation_capability_is_the_pickers_needs():
+    """The seam's `OPERATION_CAPABILITY` and the picker's `capabilities.NEEDS`
+    are one table: a decision needs `decide_native` or `generate` in both."""
+    assert inf.OPERATION_CAPABILITY == {"generate": ("generate",), "embed": ("embed",),
+                                        "decide": ("decide_native", "generate")}
+    assert all(inf.OPERATION_CAPABILITY[op] == capabilities.NEEDS[op]
+               for op in inf.OPERATION_CAPABILITY)
 
 
 def test_a_native_failure_falls_to_a_same_provider_generating_fallback(client):
