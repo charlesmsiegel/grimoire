@@ -20,6 +20,30 @@ roadmap bundle of 2026-10-06 (specs 04–09).
 > touches and every PR that has landed on that subsystem since `7f833e7`.
 > Preserve landed behaviour unless this spec explicitly supersedes it.
 
+**Roadmap:** 03 in `ROADMAP-CHECKLIST.md`. Lane: cache.
+
+## Depends on
+
+| Contract | Provided by | What this spec uses it for | Hard or soft |
+|---|---|---|---|
+| Embedding space id (`ResolvedInference.space_id`) | 01 (landed) | The space half of the vector key (section 2a, item 7) | Hard, and met |
+| 01h-C3: embedding options in the space identity | 01h | Embedding options added later (input type, dimensions) must change the vector key, or two different embeddings of one text would share an entry | Soft: 03 works without it, and 01h must keep existing option-less keys valid |
+
+## Required by
+
+| Contract (provided here) | Consumer | What the consumer uses it for |
+|---|---|---|
+| 03-C1 composite keys over collection digests and non-file inputs | 04, 08 | Card, Todo and shell projections; SearchDocument keys |
+| 03-C2 liveness by construction | 04, 05, 09 | No superseded version is reachable; 05's sync is a warm-up |
+| 03-C3 `materialized` record | 05, 08 | Rebuilding what was hot after an edit |
+| 03-C4 one validation primitive | 05 | Write-through and `cache sync` without a second invalidation system |
+| 03-C5 artifacts storable at write time | 04, 05 | No stale overview after Grimoire's own write |
+| 03-C6 batch lookups over a live key set; index ranking restricted to it | 08, 09 | Metadata prefilters and lexical ranking |
+| 03-C7 vectors keyed by text, never `BUILD` | 08, 09 | Upgrades re-embed only changed text |
+
+Section 2a states each contract item in full. Its numbered items map to
+C1–C7 in this order: item 1 to C1, item 2 to C2, and so on.
+
 ## 1. Goal
 
 Persist expensive, deterministic read products across requests **and across
@@ -151,11 +175,13 @@ spec.
    - 09 may rank with an index, for example SQLite FTS5 if the Android build
      carries it, but only over rows whose keys are in the caller's live set.
      Section 9 holds that rule.
-7. **Vectors are keyed by text, not by build (08, 09).** 08 keys an embedding
-   on `embedding_space + hash(exact SearchDocument text)`, which is
-   `vectors.py`'s key today. Vectors are not keyed by `BUILD` (section 6). An
-   upgrade re-derives SearchDocuments, and costs an embedding call only where
-   the rendered text actually changed.
+7. **Vectors are keyed by text, not by build (08, 09).** If 01h adds
+   embedding options (input type, dimensions), they join the space identity
+   (01h-C3) and so the key. One text embedded two ways must never share an
+   entry. 08 keys an embedding on `embedding_space + hash(exact
+   SearchDocument text)`, which is `vectors.py`'s key today. Vectors are not
+   keyed by `BUILD` (section 6). An upgrade re-derives SearchDocuments, and
+   costs an embedding call only where the rendered text actually changed.
 
 ## 3. Location: in the store, one file per device, schema in the name
 
