@@ -1,5 +1,7 @@
 """Bounded individual response orchestration over the shared fake gateway."""
 
+import json
+
 import pytest
 
 from grimoire import routes, store
@@ -627,13 +629,40 @@ def test_the_selector_capture_is_the_decide_prompt(client):
     captured = store.prompt_log.read_entry(cid, entry["id"], scene=sid)
     assert captured is not None
     sent = fake.requests[0]["messages"]
-    assert [row["text"] for row in captured["sections"]] == [m["content"] for m in sent]
+    # Every section but the last, which is the decision (below).
+    assert [row["text"] for row in captured["sections"][:-1]] == [m["content"] for m in sent]
     system, user = sent
     assert '"next"' in system["content"] and "characters:mara" in system["content"]
     assert "Observable transcript:" in user["content"]
     assert "Winifred, the lamps." in user["content"]
     assert "Choose at most one initial speaker" in user["content"]
     assert "Available NPCs:" not in system["content"] + user["content"]
+
+
+def test_the_selector_capture_records_the_decision(client):
+    """The pick's prompt-log entry ends with what the call decided (spec
+    9.4): a `decision` section holding the capture's outcome -- its mode and
+    normalised answer -- that costs no tokens, since it was never sent."""
+    cid, sid = seed(client)
+    fake = FakeLLM([[decision_reply({"next": "characters:winifred"})],
+                    ['Winifred answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid, "Winifred, the lamps.")
+    (entry,) = [e for e in store.prompt_log.list_entries(cid, sid)
+                if e["task"] == "response-selector"]
+    captured = store.prompt_log.read_entry(cid, entry["id"], scene=sid)
+    assert captured is not None
+    *sent, decision = captured["sections"]
+    assert [row["id"] for row in sent] == ["message_0", "message_1"]
+    assert {k: decision[k] for k in ("id", "label", "tier", "tokens", "dropped")} == {
+        "id": "decision", "label": "decision", "tier": "lock-in", "tokens": 0,
+        "dropped": False}
+    pick = fake.requests[0]["conn"]
+    assert json.loads(decision["text"]) == {
+        "mode": "structured", "provider": pick["id"], "model": pick["model"],
+        "items": [{"backend": "structured",
+                   "answers": {"next": {"answer": "characters:winifred"}}}]}
+    assert captured["total_tokens"] == sum(row["tokens"] for row in sent) > 0
 
 
 #: A native endpoint's pick: Mara, with no rationale.

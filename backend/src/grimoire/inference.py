@@ -18,7 +18,10 @@ Four rules this module keeps:
   per native item. A caller's time budget runs inside it through `around`, so
   an overrun is filed as an `error/timeout` row exactly as a budgeted
   `complete` is today, and `usage.Meter.done` stays the one place an LLM
-  failure is recorded. `test_usage_guard.py` scans this file.
+  failure is recorded. `test_usage_guard.py` scans this file. A caller's
+  capture (`Capture`) is handed each call once it settles, outside its
+  meter and guarded, so a capture never turns an answered call into an
+  `error` row.
 - **Nothing is written into the holder.** The operation and the decision mode
   reach the ledger through the account block (`llm_usage.ACCOUNT_KEY`), which
   `llm._stamp` files: the operation from the resolution, the mode stamped here,
@@ -38,7 +41,8 @@ Four rules this module keeps:
   thread, never on the event loop. Jinja's loader stats (and on first use
   reads) the template files, and `decide` is awaited by a detached turn (the
   speaker pick), whose loop must not block on file I/O; the render ran in the
-  threadpool before the switch, and it still does.
+  threadpool before the switch, and it still does. A native item's capture
+  (its request body, JSON-encoded) is built in a worker thread too.
 
 Nothing in `store/` or the gateway imports this module.
 """
@@ -46,8 +50,11 @@ Nothing in `store/` or the gateway imports this module.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any, NamedTuple
 
 from . import decisions, llm, llm_errors, llm_usage, prompts, store
@@ -55,6 +62,8 @@ from .llm import LLMClient
 from .llm_errors import LLMError
 from .store.inference import resolve
 from .store.inference.resolved import ResolvedInference
+
+log = logging.getLogger(__name__)
 
 STRUCTURED = decisions.STRUCTURED_BACKEND
 NATIVE = decisions.NATIVE_BACKEND
@@ -72,8 +81,16 @@ NATIVE_CONCURRENCY = 4
 #: native one; the callers' hooks (`budget.run`, `_bounded_call`) are generic.
 Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 
-#: Called with each chunk's messages before they are sent (spec 9.4).
-Capture = Callable[[list[dict]], Awaitable[None]]
+#: Handed each call once it settles (spec 9.4), answered or failed with an
+#: `LLMError` -- never a cancelled one: `(messages, outcome, conn)`. The
+#: messages are the request as sent (a structured chunk's
+#: `structured_messages`; a native item's normalised body, `llm.native_body`,
+#: as one user message), and `[]` for a call refused before anything went
+#: out; the outcome is `decisions.outcome`'s record of it; the conn is the
+#: stage's account-stamped dict, without the sampler preset a native call
+#: never sends. One structured chunk is one call, its prompt-only re-send
+#: included; each native item is one call.
+Capture = Callable[[list[dict], dict, dict], Awaitable[None]]
 
 
 def structured_messages(items: Sequence[decisions.Item], *,
@@ -200,6 +217,18 @@ def _without_mode(conn: dict) -> dict:
             if k not in (llm.STRUCTURED_KEY, llm.FALLBACK_KEY)}
 
 
+class _Reply(NamedTuple):
+    """One chunk's last word: the reply text and the holder that answered,
+    or the error -- and whether any request went out for it (`sent`: a
+    holder the facade stamped, the same test `store.usage.Meter` files a row
+    by)."""
+
+    text: str
+    holder: dict | None
+    error: LLMError | None
+    sent: bool
+
+
 def _served_by(holder: dict) -> tuple[str, str]:
     """`(provider id, effective model)` of the attempt that answered, read from
     the connection the facade stamped into `holder` (`llm.ATTEMPTED`)."""
@@ -210,10 +239,10 @@ def _served_by(holder: dict) -> tuple[str, str]:
 
 
 async def _once(call: _Call, sending: dict, messages: list[dict], schema: dict,
-                rows: list[dict]) -> tuple[str, dict | None, LLMError | None]:
-    """One metered facade call: `(text, the answering holder, None)`, or `("",
-    None, the error)`. Its ledger row, when the meter filed one, is appended
-    to `rows`."""
+                rows: list[dict]) -> _Reply:
+    """One metered facade call: its text and the answering holder, or its
+    error. Its ledger row, when the meter filed one, is appended to
+    `rows`."""
     # Named `client`, the receiver `test_usage_guard.py` recognises.
     client = call.client
     m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
@@ -234,13 +263,16 @@ async def _once(call: _Call, sending: dict, messages: list[dict], schema: dict,
         error = exc
     if m.row is not None:
         rows.append(m.row)
-    return (text, m.usage, None) if error is None else ("", None, error)
+    sent = bool(m.usage)
+    return (_Reply(text, m.usage, None, sent) if error is None
+            else _Reply("", None, error, sent))
 
 
 async def _ask(call: _Call, conn: dict, messages: list[dict], schema: dict,
-               rows: list[dict]) -> tuple[str, dict | None, LLMError | None]:
-    """One chunk's call: `(text, the answering holder, None)`, or `("", None,
-    the error)`. Each call's ledger row is appended to `rows`.
+               rows: list[dict]) -> _Reply:
+    """One chunk's call: its text and the answering holder, or its error,
+    and whether any of the calls it made went out. Each call's ledger row is
+    appended to `rows`.
 
     The attempt chain, and -- only when every route failed and a route's
     failure was its provider refusing the structured field
@@ -251,18 +283,49 @@ async def _ask(call: _Call, conn: dict, messages: list[dict], schema: dict,
     reason. Each re-send is its own metered call, and none is re-sent twice.
     Should those fail too, the error is the routes' failures composed afresh
     (`llm.routes_failed`), each re-sent route's word now its own failure."""
-    text, holder, error = await _once(call, conn, messages, schema, rows)
+    first = await _once(call, conn, messages, schema, rows)
+    error = first.error
     if not isinstance(error, llm.SchemaRefusalError) or not error.attempts:
-        return text, holder, error
+        return first
+    sent = first.sent
     words = list(error.words)
     for index, attempt in enumerate(error.attempts):
         if attempt is None:
             continue
-        text, holder, again = await _once(call, _without_mode(attempt), messages, schema, rows)
-        if again is None:
-            return text, holder, None
-        words[index] = again
-    return "", None, llm.routes_failed(words)
+        again = await _once(call, _without_mode(attempt), messages, schema, rows)
+        sent = sent or again.sent
+        if again.error is None:
+            return again._replace(sent=sent)
+        words[index] = again.error
+    return _Reply("", None, llm.routes_failed(words), sent)
+
+
+def _outcome(mode: str, conn: dict, holder: dict | None,
+             results: Sequence[decisions.ItemResult], error: LLMError | None) -> dict:
+    """A settled call's record for the capture (`decisions.outcome`): what
+    answered it and its results, or -- failed -- the route its stage sent
+    (`conn`) and its error."""
+    if error is not None:
+        return decisions.outcome(mode, str(conn.get("id", "") or ""), llm.effective_model(conn),
+                                 error=f"{error.kind}: {error.detail}")
+    provider, model = _served_by(holder or {})
+    return decisions.outcome(mode, provider, model, results)
+
+
+async def _captured(call: _Call, messages: list[dict] | Callable[[], list[dict]],
+                    outcome: Callable[[], dict], conn: dict) -> None:
+    """Hand one settled call to `call.capture` (spec 9.4): `messages` as
+    they are, or -- a callable -- built in a worker thread; `outcome` built
+    here. Called outside the call's meter, and guarded as `llm._observe` is:
+    a capture that raises costs the capture and nothing else (I4), never an
+    answered decision, and never turns its `ok` row into an error."""
+    if call.capture is None:
+        return
+    try:
+        sent = await asyncio.to_thread(messages) if callable(messages) else messages
+        await call.capture(sent, outcome(), conn)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        log.warning("could not capture a %s decision: %s", call.task, exc)
 
 
 async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
@@ -291,15 +354,19 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
             continue
         # Off the loop: the template loader touches the filesystem.
         messages = await asyncio.to_thread(structured_messages, chunk, explain=call.explain)
-        if call.capture is not None:
-            await call.capture(messages)
         schema = decisions.schema(chunk, explain=explain)
-        text, holder, error = await _ask(call, conn, messages, schema, rows)
+        text, holder, error, sent = await _ask(call, conn, messages, schema, rows)
+        answered: list[decisions.ItemResult] = []
         if holder is not None:
-            for index, result in enumerate(decisions.parse(text, chunk, explain=explain)):
-                results[offset + index] = replace(result, backend=STRUCTURED)
+            answered = [replace(result, backend=STRUCTURED)
+                        for result in decisions.parse(text, chunk, explain=explain)]
+            for index, result in enumerate(answered):
+                results[offset + index] = result
             if (by := _served_by(holder)) not in served:
                 served.append(by)
+        # Settled: what went out, if anything did (`Capture`).
+        await _captured(call, messages if sent else [],
+                        partial(_outcome, STRUCTURED, conn, holder, answered, error), conn)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
             failed.append((unit, error))
@@ -365,6 +432,9 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
     stage to take up."""
     # The mode stamped on a copy of the stage's block (`with_account`).
     conn = llm_usage.with_account(call.conn, decision_mode=NATIVE)
+    # What the capture names: the same attempt, without the sampler preset a
+    # native call never sends (M4), so the prompt log reports none.
+    named = {k: v for k, v in conn.items() if k != "sampling"}
     # Named `client`, the receiver `test_usage_guard.py` recognises.
     client = call.client
     gate = asyncio.Semaphore(NATIVE_CONCURRENCY)
@@ -395,6 +465,15 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
                     stopped.append(exc)
             finally:
                 rows[index] = m.row
+        # Settled, and out of the gate (a cancel never reaches here): the
+        # request as sent, built off the loop -- or none, when the call was
+        # refused before it went out (`Capture`).
+        answered = results[index]
+        await _captured(
+            call, partial(_native_request, item, conn) if m.usage else [],
+            partial(_outcome, NATIVE, named, holders[index],
+                    () if answered is None else (answered,), errors[index]),
+            named)
 
     try:
         async with asyncio.TaskGroup() as group:
@@ -417,6 +496,15 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
     served = tuple(dict.fromkeys(_served_by(h) for h in holders if h is not None))
     return _Answered(tuple(results), failed,
                      tuple(row for row in rows if row is not None), served)
+
+
+def _native_request(item: decisions.Item, conn: dict) -> list[dict]:
+    """A native call's request as the capture records it: the normalised
+    body (`llm.native_body`: the model, the context, the questions; no key or
+    URL) as one user message. Not `decide/user.j2`'s prose, which the model
+    never saw."""
+    return [{"role": "user",
+             "content": json.dumps(llm.native_body(item, conn), indent=2, ensure_ascii=False)}]
 
 
 def _settle(got: _Answered, pending: list[int], results: list[decisions.ItemResult | None],
@@ -530,9 +618,9 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
 
     `explain` is the rationale instruction ("" asks for none). `campaign`,
     `scene`, `post` and `round_id` attribute each call's ledger row. `capture`
-    sees each structured call's messages before they are sent; `around` is
-    handed each facade call and the meter's live holder, and returns what to
-    await instead (a caller's time budget).
+    is handed each call once it settles (`Capture`); `around` is handed each
+    facade call and the meter's live holder, and returns what to await
+    instead (a caller's time budget).
     """
     if resolved.task != task:
         raise ValueError(f"a resolution of {resolved.task!r} cannot decide {task!r}")

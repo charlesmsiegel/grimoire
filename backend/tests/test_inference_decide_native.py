@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import importlib
+import json
 from copy import deepcopy
 
 import pytest
@@ -804,3 +805,212 @@ def test_a_native_row_with_counts_and_a_rate_but_no_cost_is_unpriced(client):
     assert totals["unpriced_calls"] == 1
     assert totals["modelled_usd"] == 0.0 and totals["modelled_calls"] == 0
     assert totals["prompt_tokens"] == 420
+
+
+# ---- the capture (spec 9.4, Task 6) ----
+class _Captures(list):
+    """A capture that keeps each `(messages, outcome, conn)` it is handed."""
+
+    async def __call__(self, messages, outcome, conn):
+        self.append((messages, outcome, conn))
+
+
+def _choice_item() -> Item:
+    return Item("Seraphine looks between the two of them.",
+                (Choice("who", "Who speaks first?",
+                        (Option("mara", "Mara"), Option("winifred", "Winifred"))),))
+
+
+def test_capture_records_a_native_call_with_its_distribution(client):
+    """A native item is one call, and its capture is the request as sent --
+    the normalised body (`llm.native_body`), holding no key or URL -- with
+    its normalised answer and the distribution the endpoint reported, on
+    the stage's dict without the sampler preset it never sent (M4)."""
+    resolved = _native_resolution(client, fallback=False)
+    assert "sampling" in resolved.attempts[0].conn
+    item = _choice_item()
+    reported = ItemResult({"who": Answer("mara", distribution={"mara": 0.7,
+                                                               "winifred": 0.3})})
+    fake = FakeLLM([["unused"]], decisions=[reported])
+    captured = _Captures()
+    _decide(fake, [item], resolved=resolved, capture=captured)
+    ((messages, outcome, conn),) = captured
+    _item_sent, sent, _retries = fake.native_requests[0]
+    assert messages == [{"role": "user", "content": json.dumps(
+        llm.native_body(item, sent), indent=2, ensure_ascii=False)}]
+    body = json.loads(messages[0]["content"])
+    assert body["model"] == DECIDER[1] and body["state"] == item.context
+    assert set(body["questions"]) == {"who"}
+    key = resolved.attempts[0].conn.get("api_key")
+    assert key and key not in messages[0]["content"]
+    assert "http" not in messages[0]["content"]
+    assert outcome == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
+                       "items": [{"backend": NATIVE, "answers": {"who": {
+                           "answer": "mara",
+                           "distribution": {"mara": 0.7, "winifred": 0.3}}}}]}
+    assert "sampling" not in conn
+    assert conn[ACCOUNT]["decision_mode"] == NATIVE
+    assert {k: v for k, v in sent.items() if k != "sampling"} == conn
+    # The resolution's own dict keeps its preset.
+    assert "sampling" in resolved.attempts[0].conn
+
+
+def test_each_native_item_is_one_capture_and_a_fallback_stage_its_own(client):
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(3)
+    native: dict[str, object] = {i.context: _yes() for i in items}
+    native[items[1].context] = LLMError("network", "connection reset")
+    fake = _Endpoint([[decision_reply({"over": False})]], native)
+    captured = _Captures()
+    _decide(fake, items, resolved=resolved, capture=captured)
+    modes = sorted((o["mode"], o.get("error", "")) for _m, o, _c in captured)
+    assert modes == [(NATIVE, ""), (NATIVE, ""), (NATIVE, "network: connection reset"),
+                     (STRUCTURED, "")]
+    (failed,) = [(m, o, c) for m, o, c in captured if "error" in o]
+    # A failed call that was sent: its request, its route, its error.
+    assert json.loads(failed[0][0]["content"])["state"] == items[1].context
+    assert (failed[1]["provider"], failed[1]["model"]) == DECIDER
+    (fallen,) = [(m, o) for m, o, _c in captured if o["mode"] == STRUCTURED]
+    assert fallen[0] == fake.requests[0]["messages"]
+    assert (fallen[1]["provider"], fallen[1]["model"]) == SPARE
+
+
+def test_an_item_refused_unsent_is_captured_with_no_messages(client):
+    """The ruling for a call nothing went out for -- an item the endpoint
+    cannot represent (`decisions.native_gap`), refused before any stamp:
+    it is a failed call, so it is captured with its error, but its messages
+    are `[]`. `messages` is the request AS SENT, and none was; a body built
+    for it would record a request no provider ever saw. The structured
+    fallback that then answers it is captured as sent."""
+    wide = Item("Seraphine weighs the roster.",
+                (Choice("who", "Who steps forward?",
+                        tuple(Option(f"o{n}", f"Candidate {n}") for n in range(255)),
+                        allow_none=True),))
+    resolved = _native_resolution(client, fallback=True)
+    fake = FakeLLM([[decision_reply({"who": "o3"})]], decisions=[_yes()])
+    captured = _Captures()
+    _decide(fake, [wide], resolved=resolved, capture=captured)
+    (refused, answered) = captured
+    assert refused[0] == []
+    assert refused[1] == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
+                          "error": f"bad_response: {decisions.native_gap(wide)}"}
+    assert answered[0] == fake.requests[0]["messages"]
+    assert answered[1]["mode"] == STRUCTURED
+
+
+def test_a_call_the_clock_refused_unsent_is_captured_with_no_messages(client):
+    """The same ruling for the structured backend: a chunk absorb's clock
+    refused before it went out (`BudgetRefused`) sent nothing, so its
+    capture carries no messages, only the refusal."""
+    _structured_store(client, fallback=False)
+
+    async def around(call, holder):
+        call.close()
+        raise _budget_refused()
+
+    captured = _Captures()
+    with pytest.raises(LLMError):
+        _decide(FakeLLM([[decision_reply({"over": True})]]), [_item()],
+                resolved=_resolved(), around=around, capture=captured)
+    ((messages, outcome, _conn),) = captured
+    assert messages == [] and outcome["error"].startswith("timeout: ")
+
+
+def test_the_native_capture_renders_off_the_loop(client, monkeypatch):
+    """The capture's body is built in a worker thread, as F's prompt is
+    (`test_the_prompt_renders_off_the_event_loop`)."""
+    import threading
+
+    resolved = _native_resolution(client, fallback=False)
+    built_on: list[int] = []
+    real = llm.native_body
+
+    def spy(item, conn):
+        built_on.append(threading.get_ident())
+        return real(item, conn)
+
+    monkeypatch.setattr(llm, "native_body", spy)
+
+    async def go():
+        await inference.decide("scene-break", [_item()],
+                               client=FakeLLM([["unused"]], decisions=[_yes()]),
+                               resolved=resolved, capture=_Captures())
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(go())
+    assert len(built_on) == 1 and built_on[0] != loop_thread
+
+
+def test_no_messages_are_built_without_a_capture(client, monkeypatch):
+    resolved = _native_resolution(client, fallback=False)
+    built: list[Item] = []
+    monkeypatch.setattr(llm, "native_body", lambda item, conn: built.append(item) or {})
+    got = _decide(FakeLLM([["unused"]], decisions=[_yes()]), _items(3), resolved=resolved)
+    assert len(got.items) == 3 and built == []
+
+
+class _Held(FakeLLM):
+    """A gateway whose structured call goes out and never answers."""
+
+    def __init__(self):
+        super().__init__([["unused"]], decisions=[_yes()])
+        self.out = asyncio.Event()
+
+    async def complete(self, messages, conn, usage=None, *, schema=None, retries=None):
+        self._stamp(usage, llm._without_fallback(conn))
+        self.out.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.parametrize("mode", [NATIVE, STRUCTURED])
+def test_a_cancelled_call_is_not_captured(client, mode):
+    """A cancel is the player's own act, not a failure to diagnose: nothing
+    is captured for a call it cut off, on either backend."""
+    if mode == NATIVE:
+        resolved = _native_resolution(client, fallback=True)
+        items = _items(6)
+        fake = _Endpoint([["unused"]], {i.context: HOLD for i in items})
+        out = fake.full
+    else:
+        _structured_store(client, fallback=False)
+        resolved, items = _resolved(), [_item()]
+        fake = _Held()
+        out = fake.out
+    captured = _Captures()
+
+    async def main():
+        task = asyncio.create_task(inference.decide("scene-break", items, client=fake,
+                                                    resolved=resolved, capture=captured))
+        await out.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    assert captured == []
+    assert {r["status"] for r in _rows()} == {"aborted"}
+
+
+@pytest.mark.parametrize("mode", [NATIVE, STRUCTURED])
+def test_a_raising_capture_leaves_the_decision_and_the_ok_row(client, mode, caplog):
+    """I4: the capture runs outside the meter and is guarded, so a capture
+    that raises neither fails the answered decision nor turns its `ok` row
+    into an error; it is logged as a warning."""
+    if mode == NATIVE:
+        resolved = _native_resolution(client, fallback=False)
+    else:
+        _structured_store(client, fallback=False)
+        resolved = _resolved()
+
+    async def capture(messages, outcome, conn):
+        raise RuntimeError("the prompt log is full")
+
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
+    with caplog.at_level("WARNING", logger="grimoire.inference"):
+        got = _decide(fake, [_item()], resolved=resolved, capture=capture)
+    assert got.items[0].answers["over"] == Answer(True)
+    assert got.items[0].backend == mode
+    (row,) = _rows()
+    assert (row["status"], row["decision_mode"]) == ("ok", mode)
+    assert any("the prompt log is full" in r.getMessage() for r in caplog.records
+               if r.levelname == "WARNING")

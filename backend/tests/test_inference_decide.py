@@ -387,19 +387,95 @@ def test_the_first_error_is_raised_after_every_chunk_was_tried(client):
     assert exc.value.kind == "auth" and fake.calls == 2
 
 
-def test_capture_sees_each_chunks_messages_before_it_is_sent(client):
+class _Captures(list):
+    """A capture (spec 9.4) that keeps each `(messages, outcome, conn)` it is
+    handed, with how many calls `fake` had made by then."""
+
+    def __init__(self, fake=None):
+        super().__init__()
+        self.fake = fake
+
+    async def __call__(self, messages, outcome, conn):
+        self.append((messages, outcome, conn, getattr(self.fake, "calls", None)))
+
+
+def test_capture_records_each_structured_call_once_it_settles(client):
+    """One capture per chunk, handed over after that chunk's call has
+    returned: the messages it sent, its mode and normalised answers
+    (`decisions.outcome`), and the stage's account-stamped dict it was sent
+    on."""
     _store(client)
     items = [_item(f"Mara counts to {n}.") for n in range(9)]
     fake = FakeLLM([[decision_reply(*[{"over": False}] * 8)],
                     [decision_reply({"over": True})]])
-    captured: list[tuple[list[dict], int]] = []
+    captured = _Captures(fake)
+    got = _decide(fake, items, capture=captured)
+    assert [calls for *_, calls in captured] == [1, 2]
+    assert [m for m, *_ in captured] == [r["messages"] for r in fake.requests]
+    assert [conn for _m, _o, conn, _c in captured] == [r["conn"] for r in fake.requests]
+    for _m, _o, conn, _c in captured:
+        assert conn[ACCOUNT]["decision_mode"] == "structured"
+        assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
+    first, second = (outcome for _m, outcome, _conn, _c in captured)
+    assert first == decisions.outcome("structured", "openrouter", "vendor/active",
+                                      got.items[:8])
+    assert first["mode"] == second["mode"] == "structured"
+    assert first["items"][0] == {"backend": "structured",
+                                 "answers": {"over": {"answer": False}}}
+    assert second["items"] == [{"backend": "structured",
+                                "answers": {"over": {"answer": True}}}]
 
-    async def capture(messages):
-        captured.append((messages, fake.calls))
 
-    _decide(fake, items, capture=capture)
-    assert [calls for _, calls in captured] == [0, 1]
-    assert [m for m, _ in captured] == [r["messages"] for r in fake.requests]
+def test_a_schema_refusal_retry_is_one_capture(client):
+    """M9: a chunk whose provider refused the structured field and which
+    `_ask` sent once more without the mode is one call to the capture, with
+    the final outcome -- the answer the re-send got."""
+    _store(client, fallback=False)
+    _catalog("openrouter", [{"id": "vendor/active",
+                             "params": ["temperature", "structured_outputs"]}])
+    provider = SequencedProvider([_refused_schema(), [decision_reply({"over": True})]])
+    captured = _Captures()
+    _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+            capture=captured)
+    assert len(provider.requests) == 2
+    ((messages, outcome, _conn, _calls),) = captured
+    assert messages == provider.requests[1]["messages"]
+    assert outcome == {"mode": "structured", "provider": "openrouter",
+                       "model": "vendor/active",
+                       "items": [{"backend": "structured",
+                                  "answers": {"over": {"answer": True}}}]}
+
+
+def test_capture_records_a_failed_call_with_its_error(client):
+    _store(client, fallback=False)
+    fake = FakeLLM([[""]], error=LLMError("rate_limit", "slow down"))
+    captured = _Captures(fake)
+    with pytest.raises(LLMError):
+        _decide(fake, [_item()], capture=captured)
+    ((messages, outcome, conn, calls),) = captured
+    assert calls == 1 and messages == fake.requests[0]["messages"]
+    assert outcome == {"mode": "structured", "provider": "openrouter",
+                       "model": "vendor/active", "error": "rate_limit: slow down"}
+    assert conn is fake.requests[0]["conn"]
+
+
+def test_a_timed_out_pick_is_captured_with_its_error(client):
+    """A caller's budget (`around`) that cuts the call off raises inside the
+    call, so the call settles failed and is captured with the timeout."""
+    _store(client)
+
+    async def budget(call, holder):
+        await call
+        raise LLMError("timeout", "the decision ran past its budget")
+
+    fake = FakeLLM([[decision_reply({"over": True})]])
+    captured = _Captures(fake)
+    with pytest.raises(LLMError):
+        _decide(fake, [_item()], around=budget, capture=captured)
+    ((messages, outcome, _conn, _calls),) = captured
+    assert messages == fake.requests[0]["messages"]
+    assert outcome["error"] == "timeout: the decision ran past its budget"
+    assert "items" not in outcome
 
 
 def test_the_prompt_renders_off_the_event_loop(client, monkeypatch):
