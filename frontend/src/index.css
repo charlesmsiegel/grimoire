@@ -5297,8 +5297,14 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .decision-tasks { margin-block: 8px; color: var(--muted); }
 /* A Link wearing a button's class: an `<a>` is inline and underlined where a
    `<button>` is neither, and the Add provider / Presets actions are links. */
-a.column-primary { text-align: center; text-decoration: none; }
-a.subtle, a.button { display: inline-block; text-decoration: none; }
+a.column-primary { display: flex; align-items: center; justify-content: center;
+                   text-align: center; text-decoration: none; }
+a.subtle, a.button { display: inline-flex; align-items: center; justify-content: center;
+                     text-decoration: none; }
+/* No global `a` rule exists: a bare Link is the browser's blue. These are the
+   ones on the Models page, which sit in no container that colours them. */
+.role-row-body a, .decision-tasks a, .models-overrides a,
+.models-actions > a:not(.button) { color: var(--accent); }
 @media (max-width: 640px) {
   .role-row { grid-template-columns: 1fr; gap: 4px; }
   .model-select select { min-width: 0; width: 100%; }
