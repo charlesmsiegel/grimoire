@@ -833,7 +833,7 @@ def put_connection(id: str, body: ConnectionUpdate,
         # the record it replaced.
         with store.llm_connections.LOCK:
             stored = store.llm_connections.read_connection_raw(id)
-            _check_preset_field(fields, stored.get("sampler_preset", ""))
+            _check_preset_field(fields, store.llm_connections.own_preset(stored))
             repointed = _apply_preset_update(fields, stored)
             before = stored["rev"]
             prefill_before = bool(stored.get("prefill"))

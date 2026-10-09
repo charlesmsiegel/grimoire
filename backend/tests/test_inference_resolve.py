@@ -24,7 +24,7 @@ from grimoire.llm import effective_model
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import capabilities
+from grimoire.store.inference import capabilities, migrate
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
@@ -618,17 +618,27 @@ def _write_campaign_meta(cid: str, fields: dict) -> None:
     assert all(str(got.get(k)) == str(v) for k, v in fields.items()), got
 
 
-@pytest.mark.parametrize(("fields", "expected"), [
-    # A campaign marker beside LEGACY keys: the legacy keys still route it.
-    ({keys.FORMAT_KEY: 2, "route_scene": "local"}, "local"),
-    # A campaign marker beside NEW-style keys, in a legacy store: since slice
-    # I every scope is read as format 2 sees it (`legacy_plan.overlay`), and
-    # the migration leaves a marked campaign as it stands -- so those keys
-    # route it, in memory as they will once migrated.
+#: A marked campaign in a legacy store, and where its scene turns run. Since
+#: slice I a campaign plays as the migration will persist it (planned equals
+#: persisted, spec 15): `migrate.campaign` leaves a marked campaign exactly
+#: as it stands, so its own format-2 keys route it and its legacy `route_<k>`
+#: keys -- frozen for older builds -- route nothing, whatever `config.md`'s
+#: format.
+MARKED_CAMPAIGNS = [
+    # A marker beside LEGACY keys only: they route nothing; the global role does.
+    ({keys.FORMAT_KEY: 2, "route_scene": "local"}, "openrouter"),
+    # A marker beside NEW-style keys: those route it.
     ({keys.FORMAT_KEY: 2, keys.use_key("scene"): keys.PIN,
       keys.pin_key("scene", "provider"): "local",
       keys.pin_key("scene", "model"): "local-model"}, "local"),
-])
+    # Both, disagreeing: the format-2 pin, never the legacy key mapped over it.
+    ({keys.FORMAT_KEY: 2, "route_scene": "local", keys.use_key("scene"): keys.PIN,
+      keys.pin_key("scene", "provider"): "spare",
+      keys.pin_key("scene", "model"): "vendor/spare"}, "spare"),
+]
+
+
+@pytest.mark.parametrize(("fields", "expected"), MARKED_CAMPAIGNS)
 def test_a_campaign_marker_alone_never_switches_the_layout(at_state, fields, expected):
     ctx = at_state("whitespace")
     cid = ctx["cid"]
@@ -636,6 +646,20 @@ def test_a_campaign_marker_alone_never_switches_the_layout(at_state, fields, exp
     assert not keys.is_current(store.config.read_config())
     resolved = inf.resolve("chat", cid)
     assert resolved.conn["id"] == expected
+
+
+@pytest.mark.parametrize(("fields", "expected"), MARKED_CAMPAIGNS)
+def test_a_marked_campaign_plays_as_the_migration_persists_it(at_state, fields, expected):
+    """Fix round 1, I5 (the review's probe): what a marked campaign in a
+    legacy store plays in memory is what it plays once the store is
+    migrated."""
+    ctx = at_state("whitespace")
+    cid = ctx["cid"]
+    _write_campaign_meta(cid, fields)
+    before = inf.resolve("chat", cid).conn["id"]
+    assert migrate.ensure().state == "done"
+    assert keys.is_current(store.config.read_config())
+    assert inf.resolve("chat", cid).conn["id"] == before == expected
 
 
 # ---- a resolution reads only what its task can reach ----

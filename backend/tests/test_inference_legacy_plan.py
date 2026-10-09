@@ -713,7 +713,8 @@ def test_the_facts_overlay_is_step_3s(home):
     """`Plan.facts` holds, as values, what the migration's step 3 writes into
     each model's facts: the legacy `vision`, `prefill` and `post_process`
     that differ from the defaults, keyed by the model they run (`opus` for
-    an unset Claude model)."""
+    an unset Claude model) -- and `{}` for a connection that states nothing,
+    which step 3 visits too, to take back an interrupted run's copies."""
     llm_connections.update_connection("openrouter", api_key="sk-test", model="vendor/active",
                                       vision="off", prefill=True, post_process="strict")
     llm_connections.update_connection("claude", model="", vision="on")
@@ -725,6 +726,7 @@ def test_the_facts_overlay_is_step_3s(home):
         "openrouter": {"vendor/active": {"vision": "off", "prefill": True,
                                          "post_process": "strict"}},
         "claude": {"opus": {"vision": "on"}},
+        "glm": {"glm-5.3": {}},
     }
     assert migrate.ensure().state == "done"
     for conn_id, by_model in plan.facts.items():
@@ -960,15 +962,18 @@ def test_a_whitespace_only_fallback_id_is_kept_raw():
         assert view[keys.fallback_key(role, "provider")] == "  "
 
 
-def test_a_campaign_marker_alone_never_switches_the_layout():
-    """Spec 11.1: under a legacy `config.md` a marked campaign's legacy keys
-    are still mapped -- its own marker does not stop the planner."""
+def test_a_marked_campaign_is_planned_as_the_migration_persists_it():
+    """Planned equals persisted (spec 15; fix round 1, I5): `migrate.campaign`
+    leaves a marked campaign as it stands, so the planner maps nothing of it
+    -- its legacy keys, frozen for older builds, route nothing -- whether or
+    not `config.md` is current. An unmarked one is mapped either way."""
     meta = {keys.FORMAT_KEY: "2", "route_scene": "local"}
-    plan = _campaign(meta, global_current=False, lookup=_conns,
-                     presets=lambda _pid: None)
-    assert plan.mapped[keys.pin_key("scene", "provider")] == "local"
-    # Under a current one, a marked campaign is read as it stands.
-    assert _campaign(meta, lookup=_conns, presets=lambda _pid: None).mapped == {}
+    for global_current in (False, True):
+        assert _campaign(meta, global_current=global_current, lookup=_conns,
+                         presets=lambda _pid: None).mapped == {}
+        unmarked = _campaign({"route_scene": "local"}, global_current=global_current,
+                             lookup=_conns, presets=lambda _pid: None)
+        assert unmarked.mapped[keys.pin_key("scene", "provider")] == "local"
 
 
 # ---- the overlay: play's read, in memory ----

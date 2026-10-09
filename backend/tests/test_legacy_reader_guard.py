@@ -18,8 +18,10 @@ The claims, each held against the AST of `backend/src/grimoire`:
   `inference_keys.LEGACY_GLOBAL_KEYS`, or any `route_<k>` spelling of a
   route), names `routing.CONFIG_KEYS` or `routing.legacy_key`, or reads a
   connection's legacy `reasoning_effort` / `sampler_preset` -- `X.get(...)` or
-  `X[...]` with that literal, where `X` is a name spelled `conn`, `raw` or
-  `connection`. `ALLOWED` is the planner, retirement and its record
+  `X[...]` with that literal. `sampler_preset` is matched on the key alone,
+  whatever `X` is called (only a connection record carries it);
+  `reasoning_effort` where `X` is a name spelled `conn`, `raw` or
+  `connection`, because a preset's `params` carry it legitimately. `ALLOWED` is the planner, retirement and its record
   (`retire.py` and `retired.py`, allowed by path before they exist), and the
   modules that own the spelling or the storage of those keys: the key lists
   (`inference_keys`, `routing`), `config.md`'s reader and its write refusals
@@ -83,6 +85,9 @@ ECHOES: dict[str, dict[str, str]] = {
                                   "move at format 1, confirmed first",
         "_refuse_unconfirmed_config_reembed": "names the provider a legacy "
                                               "embedding move would re-embed through",
+        "_check_preset_field": "validates the `sampler_preset` a legacy connection "
+                               "editor's write sends (refused at format 2 as a "
+                               "model field before it gets here)",
     },
 }
 
@@ -94,6 +99,9 @@ LEGACY_KEYS = frozenset({*inference_keys.LEGACY_GLOBAL_KEYS,
 LEGACY_FIELDS = frozenset({"reasoning_effort", "sampler_preset"})
 #: The names a raw connection goes by in this tree.
 CONNECTION_NAMES = frozenset({"conn", "raw", "connection"})
+#: The legacy fields matched on the key alone, whatever the receiver is
+#: called: nothing but a connection record spells this one.
+KEYED_FIELDS = frozenset({"sampler_preset"})
 #: `routing`'s legacy spelling helpers.
 ROUTING_LEGACY = frozenset({"CONFIG_KEYS", "legacy_key"})
 
@@ -130,17 +138,26 @@ def _owners(tree: ast.Module) -> dict[int, str]:
     return owner
 
 
+def _receiver_reads(receiver: ast.AST, key: ast.AST) -> bool:
+    """Whether reading `key` off `receiver` reads a legacy connection field:
+    `sampler_preset` off anything (no preset or setting is spelled so; only a
+    connection record carries it), `reasoning_effort` off a name a connection
+    goes by (a preset's `params` legitimately carry that one)."""
+    if not isinstance(key, ast.Constant) or key.value not in LEGACY_FIELDS:
+        return False
+    if key.value in KEYED_FIELDS:
+        return True
+    return isinstance(receiver, ast.Name) and receiver.id in CONNECTION_NAMES
+
+
 def _legacy_field(node: ast.AST) -> bool:
-    """`X.get("<field>"...)` or `X["<field>"]`, `X` a connection's name."""
+    """`X.get("<field>"...)` or `X["<field>"]` reading a legacy connection
+    field (`_receiver_reads`)."""
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-            and node.func.attr == "get" and isinstance(node.func.value, ast.Name) \
-            and node.func.value.id in CONNECTION_NAMES and node.args:
-        key = node.args[0]
-        return isinstance(key, ast.Constant) and key.value in LEGACY_FIELDS
-    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
-            and node.value.id in CONNECTION_NAMES:
-        key = node.slice
-        return isinstance(key, ast.Constant) and key.value in LEGACY_FIELDS
+            and node.func.attr == "get" and node.args:
+        return _receiver_reads(node.func.value, node.args[0])
+    if isinstance(node, ast.Subscript):
+        return _receiver_reads(node.value, node.slice)
     return False
 
 
@@ -225,7 +242,8 @@ def test_the_guard_flags_a_planted_reader(tmp_path):
     planted.write_text('def active(cfg):\n    return cfg.get("active_connection_id")\n\n'
                        'def effort(conn):\n    return conn["reasoning_effort"]\n\n'
                        'def preset(raw):\n    return raw.get("sampler_preset", "")\n\n'
-                       'def routes():\n    return routing.CONFIG_KEYS\n',
+                       'def routes():\n    return routing.CONFIG_KEYS\n\n'
+                       'def editor(stored):\n    return stored.get("sampler_preset", "")\n',
                        encoding="utf-8")
     found = scan("routes/planted.py", ast.parse(planted.read_text(encoding="utf-8")))
     assert [hit.split(": ", 1)[1] for hit in found] == [
@@ -233,6 +251,8 @@ def test_the_guard_flags_a_planted_reader(tmp_path):
         "reads a connection's legacy model field",
         "reads a connection's legacy model field",
         "names routing.CONFIG_KEYS",
+        # `sampler_preset` whatever the record is called.
+        "reads a connection's legacy model field",
     ], found
     # A preset's own params are not a connection's legacy field.
     clean = ast.parse('def own(preset):\n    return preset["params"].get("reasoning_effort")\n')

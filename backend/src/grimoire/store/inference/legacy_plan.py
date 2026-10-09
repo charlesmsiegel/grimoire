@@ -120,7 +120,8 @@ class Plan(NamedTuple):
     #: The derived presets' ids, by the preset key of each slot they replace,
     #: applied over `mapped`.
     repoint: dict[str, str]
-    #: provider -> model -> the facts its legacy fields state (format 1 only).
+    #: provider -> model -> the facts its legacy fields state, `{}` for none:
+    #: every connection the store lists, below format 2 only.
     facts: dict[str, dict[str, dict]]
     #: The presets `repoint` names, each once.
     presets: tuple[Derived, ...]
@@ -439,16 +440,17 @@ def stated(conn: Mapping) -> dict[str, object]:
 
 def _facts_overlay(conn: Lookup) -> dict[str, dict[str, dict]]:
     """`stated` of every connection the store lists, by provider and then by
-    the model it runs (`facts.model_of`). A connection that states nothing is
-    left out. In memory only: the migration's step 3 makes the writes."""
+    the model it runs (`facts.model_of`) -- one that states nothing too, as
+    `{}`, because the migration's step 3 visits every connection and takes
+    back what an earlier, interrupted run copied whatever it states now
+    (`facts.adopt_legacy`; read so by `facts.adopted`). In memory only: step 3
+    makes the writes."""
     out: dict[str, dict[str, dict]] = {}
     for listed in llm_connections.list_connections():
         raw = conn(listed["id"])
         if raw is None:
             continue
-        got = stated(raw)
-        if got:
-            out.setdefault(listed["id"], {})[facts.model_of(raw)] = got
+        out.setdefault(listed["id"], {})[facts.model_of(raw)] = stated(raw)
     return out
 
 
@@ -662,10 +664,7 @@ def _route_note(scope: str, route: routing.Route, provider: str, provider_name: 
 
 
 def _planned(view: Mapping, *, glob: Mapping, mapped: dict[str, str], model_facts: dict,
-             scope: str, campaign: bool, conn: Lookup, presets: PresetRead,
-             derive_too: bool = True) -> Plan:
-    if not derive_too:
-        return Plan(mapped, {}, model_facts, (), ())
+             scope: str, campaign: bool, conn: Lookup, presets: PresetRead) -> Plan:
     repoint, made = _derivation(view, campaign=campaign, conn=conn, presets=presets)
     notes = _route_notes(view, glob=glob, scope=scope, campaign=campaign, conn=conn,
                          presets=presets)
@@ -698,29 +697,32 @@ def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_cu
                   lookup: Lookup, presets: PresetRead, cid: str) -> Plan:
     """Campaign `cid`'s plan (`cid` names its notes' scope).
 
-    The layout is decided globally (spec 11.1): `global_current` is whether
-    `config.md` is at format 2. `glob` is the global settings as format 2 sees
-    them (`planned(cfg, global_plan(cfg, ...))`): what the campaign inherits,
-    which its notes are judged against.
+    The campaign is planned as the migration will persist it (planned equals
+    persisted, spec 15; ratification item 10): `migrate.campaign` maps an
+    unmarked campaign and leaves a marked one -- or a newer build's -- exactly
+    as it stands, whatever `config.md`'s format. So a marked campaign's legacy
+    `route_<k>` keys, frozen for older builds, are never mapped over its own
+    format-2 keys, even under a legacy `config.md`. `glob` is the global
+    settings as format 2 sees them (`planned(cfg, global_plan(cfg, ...))`):
+    what the campaign inherits, which its notes are judged against.
+    `global_current` (whether `config.md` is at format 2) is the caller's to
+    say and decides nothing here any more; it is kept for the callers that
+    pass it.
 
-    - `global_current` false: `mapped` is the mapping, whatever the campaign's
-      own marker says (the layout is decided globally below format 2);
-      the derivation too, unless the campaign is retired or a newer build's.
-    - Global current, campaign unmarked: `mapped` and the derivation.
+    - Unmarked: `mapped` and the derivation.
     - Marked, not retired: the derivation only.
     - Retired, or a newer build's: nothing, and nothing read.
     """
+    del global_current  # the campaign's own marker decides (see above)
     scope = campaign_scope(cid)
-    own_out = _retired(meta) or keys.is_newer(meta)
-    if global_current and own_out:
+    if _retired(meta) or keys.is_newer(meta):
         return empty()
-    if global_current and keys.is_current(meta):
+    if keys.is_current(meta):
         return _planned(meta, glob=glob, mapped={}, model_facts={}, scope=scope,
                         campaign=True, conn=lookup, presets=presets)
     mapped = campaign_mapped(meta, lookup)
     return _planned({**meta, **mapped}, glob=glob, mapped=mapped, model_facts={},
-                    scope=scope, campaign=True, conn=lookup, presets=presets,
-                    derive_too=not own_out)
+                    scope=scope, campaign=True, conn=lookup, presets=presets)
 
 
 # ---- the in-memory overlay (play's read) ----
@@ -735,10 +737,30 @@ class Overlay(NamedTuple):
     #: The derived presets, by id, in `sampler_presets.read_preset`'s shape:
     #: virtual until retirement writes them.
     presets: Mapping[str, dict]
-    #: provider -> model -> the facts its legacy fields state (below format 2).
+    #: provider -> model -> the facts its legacy fields state, `{}` for none
+    #: (below format 2): what the migration's step 3 will adopt, which a
+    #: reader lays over the facts file as `facts.adopted` does.
     facts: Mapping[str, Mapping[str, dict]]
     #: What no preset can carry, global first, then the campaign's.
     notes: tuple[retired.Note, ...]
+    #: `config.md`'s settings as the migration will persist them: `mapped`
+    #: without `repoint`, so every preset id in it names a preset file (N2).
+    #: What a settings view shows as stored, and so what a write can name back.
+    stored: dict[str, str]
+    #: The campaign's, likewise ({} with no campaign).
+    stored_meta: dict[str, str]
+    #: The Embedding role's `(provider, model)` as `config.md` holds it, both
+    #: stripped and never judged (`embedding_role`): a legacy pair below
+    #: format 2, even one the mapping turns off. What a guard that asks
+    #: whether an edit moves the role's space compares (`embed_space.moved_by`).
+    embedding: tuple[str, str]
+
+
+class OverlayError(ValueError):
+    """The overlay planned one derived preset id with two bodies. `derive`
+    reads the global derived presets before the store's, so this cannot
+    happen; raised rather than asserted, so a regression fails loudly under
+    `-O` too, and as a ValueError rather than an AssertionError."""
 
 
 def _virtual(made: Derived) -> dict:
@@ -755,6 +777,12 @@ def _as_current(meta: Mapping[str, str], plan: Plan) -> dict[str, str]:
     if plan.mapped and not keys.is_current(meta):
         out[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
     return out
+
+
+def _persisted(meta: Mapping[str, str], plan: Plan) -> dict[str, str]:
+    """`_as_current` without the repoint: the scope as the migration persists
+    it, before retirement writes the derived presets."""
+    return _as_current(meta, plan._replace(repoint={}))
 
 
 def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -> Overlay:
@@ -775,7 +803,8 @@ def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -
     as format 2, best effort: its `config.md` plans nothing, and its
     campaigns are planned as they would be under a current one."""
     if _retired(cfg) and (not meta or _retired(meta)):
-        return Overlay(dict(cfg), dict(meta), {}, {}, ())
+        return Overlay(dict(cfg), dict(meta), {}, {}, (), dict(cfg), dict(meta),
+                       embedding_role(cfg))
     conn = lookup(mode="soft")
     virtual: dict[str, dict] = {}
     seen: dict[str, dict | None] = {}
@@ -793,16 +822,20 @@ def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -
             held = virtual.setdefault(made.id, got)
             # `derive` reads `presets`, which answers with `virtual` first, so
             # an id it hands back is free or holds this very preset.
-            assert (held["name"], held["params"]) == (got["name"], got["params"]), made.id
+            if (held["name"], held["params"]) != (got["name"], got["params"]):
+                raise OverlayError(f"derived preset {made.id!r} planned with two bodies")
 
     gplan = global_plan(cfg, conn, presets)
     keep(gplan)
     glob = _as_current(cfg, gplan)
+    stored = _persisted(cfg, gplan)
     if not meta:
-        return Overlay(glob, {}, virtual, gplan.facts, gplan.notes)
+        return Overlay(glob, {}, virtual, gplan.facts, gplan.notes, stored, {},
+                       embedding_role(cfg))
     cplan = campaign_plan(meta, glob=glob,
                           global_current=keys.is_current(cfg) or keys.is_newer(cfg),
                           lookup=conn, presets=presets, cid=cid)
     keep(cplan)
     return Overlay(glob, _as_current(meta, cplan), virtual, gplan.facts,
-                   gplan.notes + cplan.notes)
+                   gplan.notes + cplan.notes, stored, _persisted(meta, cplan),
+                   embedding_role(cfg))

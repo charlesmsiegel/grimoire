@@ -546,7 +546,8 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
         # `migrate.campaign` needs too, so a marker cannot land between the
         # check and the write -- or once the store is. A switch of the store
         # landing after this read leaves an UNMARKED campaign, which still
-        # resolves through the translation and is migrated, key and all. A
+        # resolves through the planner, in memory, and is migrated, key and
+        # all. A
         # marked campaign on a store still at format 1 is refused as
         # `unmigrated` rather than as moved: the migration stopped part-way.
         config.refuse_legacy_campaign(meta, config.read_config(), legacy)

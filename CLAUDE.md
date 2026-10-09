@@ -806,11 +806,14 @@ would answer neither question.
   roles and their fallbacks, each route's choice, pin and preset, a campaign's
   own overrides of both, and the facts of the chosen model -- `vision`,
   `prefill` and `post_process`, which the lowering lays over the connection
-  dict in place of the connection's legacy fields. A layout the migration or
-  retirement has not reached is read through the planner, in memory
-  (`resolve._overlay`, the one call of `legacy_plan.overlay`): the legacy keys
-  seen as that same layout, a legacy GLM effort as a derived reasoning preset,
-  and nothing written, so a call site never asks which one it is on. The fallback rides on
+  dict in place of the connection's legacy fields. A layout the migration has
+  not reached is read through the planner, in memory (`resolve._overlay`, the
+  one call of `legacy_plan.overlay`): the legacy keys seen as that same
+  layout, a legacy GLM effort as a derived reasoning preset, and nothing
+  written, so a call site never asks which one it is on. The derived presets
+  stay in memory on a migrated store too, until retirement (inference slice
+  I, Task 6) writes them and marks each scope retired; a retired scope will
+  read nothing of the planner. The fallback rides on
   the resolved conn: the primary's dict carries the fallback attempt, lowered
   (wearing the route's preset when the route has one), under `FALLBACK_KEY`,
   and the facade sends that one. A fallback *known* unable to do what the route needs is reported

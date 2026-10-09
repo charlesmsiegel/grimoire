@@ -286,3 +286,38 @@ def test_embedding_view_strips_at_both_formats():
                                              "embeddings_model": " b "}) == (conn, "b")
     assert inference_resolve.embedding_role({"embeddings_connection_id": " gone ",
                                              "embeddings_model": " b "}) == ("", "")
+
+
+def test_a_format_1_edit_that_turns_the_legacy_embedding_on_asks_first():
+    """The same edit on a store still at format 1 (fix round 1, I3): the
+    legacy choice is off by the old rev's catalog `no` -- the planner maps it
+    to no role -- and the key edit turns it on. `moved_by` judges the role as
+    STORED, not as the mapping judged the record the edit replaces, so the
+    edit is a move and asks (CLAUDE.md: a settings surface never spends
+    unasked)."""
+    from tests.inference_fixtures import legacy_store
+
+    legacy_store()
+    conn = _local()
+    llm_connections.set_cached_models(conn, [{"id": "m", "outputs": ["text"]}], _rev(conn))
+    config.write_config(embeddings_connection_id=conn, embeddings_model="m")
+    assert not keys.is_current(config.read_config())
+    assert embed_space.endpoint() is None
+    moved = _guarded_edit(conn, api_key="sk-fake-2")
+    assert embed_space.endpoint() is not None
+    assert moved is True
+
+
+def test_a_format_1_edit_of_a_legacy_openrouter_embedding_moves_nothing():
+    """A legacy OpenRouter Embedding choice has always meant "off", before and
+    after any edit of the provider: its key edit is no move, and asks
+    nothing -- as at the base, where the endpoint rule took the format."""
+    from tests.inference_fixtures import legacy_store
+
+    legacy_store()
+    router = llm_connections.create_connection("openrouter", "Router", api_key="sk-or-fake",
+                                               model="", post_process="none")
+    config.write_config(embeddings_connection_id=router, embeddings_model="vec-small")
+    assert not keys.is_current(config.read_config())
+    assert _guarded_edit(router, api_key="sk-or-fake-2") is False
+    assert embed_space.endpoint() is None

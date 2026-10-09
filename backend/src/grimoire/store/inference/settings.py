@@ -276,13 +276,18 @@ def view(scope: str, cid: str = "") -> dict:
         raise ValueError(f"no such scope: {scope!r}")
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
+    # What each row STORES is the layout as the migration persists it
+    # (`stored`): every preset id in it names a preset file, so a save that
+    # sends a row back unchanged names what a write accepts. The derived
+    # reasoning preset a GLM slot plays on (in memory, until retirement
+    # writes it) is what the row `resolves` to.
     if scope == "campaign":
         seen = resolve.current_view(cfg, in_use.campaign_meta(cid, strict=False), cid=cid)
-        glob, own = seen.cfg, seen.meta
+        glob, own = seen.stored, seen.stored_meta
     else:
         cid = ""
         seen = resolve.current_view(cfg)
-        glob = own = seen.cfg
+        glob = own = seen.stored
 
     def uses(route: routing.Route) -> str:
         return cascade.walked_role(route, campaign=own if scope == "campaign" else {},

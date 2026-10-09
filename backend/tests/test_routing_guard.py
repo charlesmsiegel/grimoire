@@ -22,23 +22,22 @@ The claims, each held against the AST of `routes/`:
   argument nothing here reads;
 - a second argument handed to `require_inference` is `cid`, and a decorated
   handler passing one is mounted under `/campaigns/{cid}`;
-- nothing in `routes/` -- nor in `backend/scripts/` or `evals/` -- reaches
-  for `get_active()`, and a direct
-  `store.inference.resolve.resolve(...)` is marked and capped;
+- a direct `store.inference.resolve.resolve(...)` is marked and capped
+  (`llm_connections.get_active()`, the other way round the seam this used to
+  scan for, was deleted in inference slice I);
 - every task literal `routes/` names (resolved, overridden, metered or
   streamed) is claimed by a route, and every claimed task is named somewhere.
 
 Honest about its reach, in the house style:
 
 - **It sees `require_inference`, not "a call to a provider".** A route that
-  reached for `llm_connections.get_active()` itself, or hand-built a connection
-  dict, would route nothing and this would not notice. A direct
+  read a connection record itself, or hand-built a connection dict, would
+  route nothing and this would not notice. A direct
   `store.inference.resolve.resolve(...)` is pinned the same way: the seam's own
   calls and the display-only reads that ask "what would chat run on" (which
   must never refuse) are marked and capped, and anything else fails. That seam is the one
-  every existing call site uses, and `test_the_only_way_into_a_provider_is_the_
-  seam` below pins it so a second seam has to be declared rather than
-  discovered.
+  every existing call site uses, and the resolver-call cap below pins it so a
+  second seam has to be declared rather than discovered.
 - **A campaign override only reaches a call that hands over a campaign id**,
   and `cid` is not proof of one: `routes/characters.py` spells a CHARACTER id
   `cid`, so `require_inference("tagline", cid)` there would apply some other
@@ -85,10 +84,9 @@ MARKER = "# routing-ok:"
 
 
 #: Outside the app, but making LLM calls all the same: the scripts a skill
-#: drives (`ingest_scene.py`) and the live eval runner. Scanned for
-#: `get_active()` only -- they hold no `require_inference` tasks to inventory,
-#: and the eval runner's task is a variable (`Case.task`, held to a route by
-#: `test_evals.py`).
+#: drives (`ingest_scene.py`) and the live eval runner. They hold no
+#: `require_inference` tasks to inventory, and the eval runner's task is a
+#: variable (`Case.task`, held to a route by `test_evals.py`).
 REPO = pathlib.Path(__file__).resolve().parents[2]
 OUTSIDE_DIRS = (REPO / "backend" / "scripts", REPO / "evals")
 
@@ -215,23 +213,6 @@ def test_the_walk_finds_the_call_sites_and_not_the_definition():
     assert definitions == 1, f"expected one definition of the seam, found {definitions}"
 
 
-def test_the_only_way_into_a_provider_is_the_seam_this_guard_watches():
-    """No route resolves a connection behind `require_inference`'s back.
-
-    `get_active()` in `routes/` would be a generation the routing page cannot
-    reach, and this guard would report nothing at all about it -- the exact
-    invisibility the module docstring above admits to.
-    """
-    offenders = []
-    for path, text in [*_sources(), *_outside_sources()]:
-        calls = list(_calls(ast.parse(text), "get_active"))
-        offenders.extend(f"{path.name}:{call.lineno}" for call in calls
-                         if _reason(text, call, [c for c in calls if c is not call]) is None)
-    assert not offenders, (
-        "these reach for the active connection directly instead of "
-        f"require_inference, so no route setting applies to them: {offenders}")
-
-
 def test_the_guard_reaches_the_scripts_and_the_evals():
     """The outside scan sees the two callers it was extended for."""
     names = {path.name for path, _ in _outside_sources()}
@@ -290,7 +271,7 @@ def test_the_resolver_is_reached_only_through_the_seam_or_a_marked_display():
     That is right for a display ("what WOULD chat run on") and wrong for a
     generation, which would then run on a keyless connection or none at all
     -- and its task would be invisible to every check above. So each one says
-    why, like `get_active`, and they stay few."""
+    why, and they stay few."""
     unmarked, marked = [], []
     for path, text in _sources():
         got_unmarked, got_marked = _unmarked_resolver_calls(text, path.name)
@@ -327,7 +308,7 @@ def test_the_marker_is_not_a_rubber_stamp():
     marked = []
     for path, text in _sources():
         tree = ast.parse(text)
-        for name in ("require_inference", "get_active"):
+        for name in ("require_inference",):
             calls = list(_calls(tree, name))
             for call in calls:
                 reason = _reason(text, call, [c for c in calls if c is not call])

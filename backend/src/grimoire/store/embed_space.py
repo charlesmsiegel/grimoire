@@ -23,6 +23,7 @@ from __future__ import annotations
 import zlib
 
 from . import config, llm_connections
+from . import inference_keys as keys
 from .inference import resolve as inference_resolve
 from .inference import resolved as inference_resolved
 
@@ -96,12 +97,18 @@ def resolve(cfg: dict | None = None) -> dict | None:
     return {k: got[k] for k in ("model", "base_url", "key", "space")}
 
 
-def _space(conn: dict, model: str, *, catalog: bool = True) -> str | None:
+def _space(cfg: dict, conn: dict, model: str, *, catalog: bool = True) -> str | None:
     """The space connection record `conn` would embed `model` in, or None when
     it would embed nothing -- no endpoint, or a model it is known not to embed
     with -- for `moved_by`, whose `after` is a record not (yet) on disk. The
     rule is `resolve.embedding`'s own (`resolve.embed_attempt`); `catalog`
-    False judges it without the cached catalog row (see there)."""
+    False judges it without the cached catalog row (see there).
+
+    Below format 2 an OpenRouter record embeds nothing: a legacy choice of
+    one has always meant "off", and the planner maps it to no role
+    (`legacy_plan.legacy_embeds`), so no edit of it moves anything."""
+    if not keys.is_current(cfg) and conn.get("kind") == "openrouter":
+        return None
     return inference_resolve.embed_attempt(str(conn["id"]), model, conn,
                                            catalog=catalog).space_id
 
@@ -171,13 +178,16 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
     embedded from scratch. Never raises.
     """
     try:
-        conn_id, model = inference_resolve.embedding_role(cfg)
+        # The role as STORED, not as the mapping judges it: below format 2
+        # the mapping turns off a legacy choice whose record, as it stands,
+        # does not embed -- which is the record this edit replaces.
+        conn_id, model = inference_resolve.stored_embedding_role(cfg)
         if not model or not conn_id or conn_id != after.get("id"):
             return False
-        new = _space(after, model, catalog=after.get("rev") == before.get("rev"))
+        new = _space(cfg, after, model, catalog=after.get("rev") == before.get("rev"))
         if new is None:
             return False
-        old = _space(before, model)
+        old = _space(cfg, before, model)
         return old is None or old != new
     except (OSError, KeyError, TypeError, ValueError):
         return False
@@ -196,7 +206,7 @@ def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
     `moved_by`. Turning it off re-embeds nothing. False when the role does
     not name this provider and model. Never raises."""
     try:
-        conn_id, role_model = inference_resolve.embedding_role(cfg)
+        conn_id, role_model = inference_resolve.stored_embedding_role(cfg)
         if not role_model or conn_id != provider_id or role_model != model:
             return False
         raw = llm_connections.read_connection_raw(provider_id)

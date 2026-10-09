@@ -435,6 +435,27 @@ def _take_back_copies(doc: dict[str, dict]) -> None:
             doc.pop(name)
 
 
+def adopted(provider_id: str, model: str, rev: str, *, adopting: str,
+            stated: dict[str, object]) -> dict:
+    """`of(provider_id, model, rev)` as it will read once the migration's
+    step 3 has run `adopt_legacy(provider_id, adopting, stated)`: every copy an
+    earlier, interrupted run recorded on this provider taken back first
+    (`_take_back_copies`), then the fields of `stated` the writer takes laid
+    over `adopting`'s entry. A read: nothing is written, and a file that
+    cannot be read is empty, as for `of`.
+
+    What play reads at format 1 (`resolve`, through the planner's
+    `Overlay.facts`), so a field the user set back to its default since an
+    interrupted run copied it is not sent as the stale copy -- the in-memory
+    answer is the one the migration persists."""
+    doc = {name: dict(entry) for name, entry in _load(provider_id).items()}
+    _take_back_copies(doc)
+    valid, _refused = _checked_legacy(stated)
+    if valid:
+        doc.setdefault(adopting, {}).update(valid)
+    return _view(doc.get(model, {}), rev)
+
+
 def adopt_legacy(provider_id: str, model: str, stated: dict[str, object]) -> dict[str, str]:
     """The migration's copy of a connection's legacy model fields: `stated`
     (`{field: value}`, the fields of `LEGACY_FIELDS` the record sets to

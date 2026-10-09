@@ -22,18 +22,15 @@ Invented connection ids and the codebase's placeholder names only.
 
 from __future__ import annotations
 
-import importlib
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import llm, llm_sampling, routes
-from grimoire.main import create_app
 from grimoire.store import post_images
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, legacy_plan, migrate
@@ -49,7 +46,10 @@ MODEL = "vendor/active"
 
 
 @pytest.fixture
-def client(tmp_path):
+def legacy(tmp_path):
+    """A client on a format-1 store (`inference_baseline.client_at`): what the
+    frozen baselines build on. A test of a store born at format 2 takes
+    `conftest.client` instead."""
     with base.client_at(tmp_path) as c:
         yield c
 
@@ -72,8 +72,8 @@ def _primary(task: str = "chat", cid: str = "") -> dict:
     return conn
 
 
-def test_format_2_prefill_and_post_process_come_from_facts(client):
-    base._fresh(client)
+def test_format_2_prefill_and_post_process_come_from_facts(legacy):
+    base._fresh(legacy)
     _migrate()
     # The legacy connection says neither; the model's facts now say both.
     raw = store.llm_connections.read_connection_raw("openrouter")
@@ -96,11 +96,11 @@ def test_format_2_prefill_and_post_process_come_from_facts(client):
     assert not llm.prefill_capable(conn)
 
 
-def test_format_2_unstated_facts_map_to_the_defaults(client):
+def test_format_2_unstated_facts_map_to_the_defaults(legacy):
     """A model nothing was stated about runs with prefill off, no post
     processing and post images on auto -- not the connection's flags. That is
     what a reroll onto another model gets (per-model facts, spec 4.2)."""
-    base._fresh(client)
+    base._fresh(legacy)
     store.llm_connections.update_connection("openrouter", prefill=True,
                                             post_process="strict", vision="on")
     _migrate()
@@ -112,11 +112,11 @@ def test_format_2_unstated_facts_map_to_the_defaults(client):
     assert (conn["prefill"], conn["post_process"], conn["vision"]) == (False, "none", "")
 
 
-def test_format_1_reads_the_facts_as_format_2_does(client):
+def test_format_1_reads_the_facts_as_format_2_does(legacy):
     """A legacy store resolves as format 2 in memory (slice I): its model's
     facts drive the wire, as they will once it is migrated -- the connection
     states nothing here, so the migration copies nothing over them."""
-    base._fresh(client)
+    base._fresh(legacy)
     facts.set_stated("openrouter", MODEL, prefill=True, post_process="strict",
                      vision="off")
     assert not store.inference_keys.is_current(store.read_config())
@@ -124,8 +124,8 @@ def test_format_1_reads_the_facts_as_format_2_does(client):
     assert (conn["prefill"], conn["post_process"], conn["vision"]) == (True, "strict", "off")
 
 
-def test_format_2_post_images_read_the_model_facts(client):
-    base._fresh(client)
+def test_format_2_post_images_read_the_model_facts(legacy):
+    base._fresh(legacy)
     base._config(send_images="on")
     _catalog(vision=False)
     _migrate()
@@ -135,11 +135,11 @@ def test_format_2_post_images_read_the_model_facts(client):
     assert conn["vision"] == "on"
     assert post_images.capability(conn) == "yes"
     assert post_images.images_for(conn) > 0
-    assert client.get("/api/config").json()["send_images_reach"] == "yes"
+    assert legacy.get("/api/config").json()["send_images_reach"] == "yes"
 
 
-def test_vision_off_stops_post_images_but_not_image_descriptions(client):
-    base._fresh(client)
+def test_vision_off_stops_post_images_but_not_image_descriptions(legacy):
+    base._fresh(legacy)
     base._config(send_images="on")
     _catalog(vision=True)
     _migrate()
@@ -150,7 +150,7 @@ def test_vision_off_stops_post_images_but_not_image_descriptions(client):
     assert conn["vision"] == "off"
     assert post_images.capability(conn) == "no"
     assert post_images.images_for(conn) == 0
-    assert client.get("/api/config").json()["send_images_reach"] == "no"
+    assert legacy.get("/api/config").json()["send_images_reach"] == "no"
 
     # "off" is the post-image preference, not a capability `no` (ruling 2):
     # the catalog's yes still serves image descriptions.
@@ -159,8 +159,8 @@ def test_vision_off_stops_post_images_but_not_image_descriptions(client):
     assert usable.missing == ()
 
 
-def test_vision_on_is_a_user_yes(client):
-    base._fresh(client)
+def test_vision_on_is_a_user_yes(legacy):
+    base._fresh(legacy)
     base._config(send_images="on")
     _catalog(vision=False)
     _migrate()
@@ -175,13 +175,13 @@ def test_vision_on_is_a_user_yes(client):
     assert post_images.capability(usable.conn) == "yes"
 
 
-def test_a_legacy_images_on_is_a_user_yes_until_the_facts_say_otherwise(client):
+def test_a_legacy_images_on_is_a_user_yes_until_the_facts_say_otherwise(legacy):
     """A legacy "Images: on" is read into the model's facts in memory at
     format 1 (the planner's facts overlay), where it is the user's `yes` over
     a catalog's vision `no`. Once migrated the connection's flag is frozen
     legacy and says nothing: the model's facts do, and a cleared `vision`
     there is refused like any `no`."""
-    base._fresh(client)
+    base._fresh(legacy)
     store.llm_connections.update_connection("openrouter", vision="on")
     _catalog(vision=False)
     routes.common.require_inference("image-description")  # format 1: the facts, in memory
@@ -222,13 +222,13 @@ def test_refusal_is_one_pure_decision():
         409, {"detail": "No LLM connection selected", "kind": "missing_key"})
 
 
-def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(client):
+def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(legacy):
     """Ratification item 3: a route preset that sets no reasoning effort is
     shared with the route's fallback, so it is not derived -- the GLM
     connection's legacy effort stops riding there, at format 1 (in memory) and
     once migrated alike, and the planner notes it rather than dropping it
     silently. The Primary's own slot still carries it, on its derived preset."""
-    ctx = base_c.STATES["glm_max_under_route_preset"](client)
+    ctx = base_c.STATES["glm_max_under_route_preset"](legacy)
     for migrated in (False, True):
         if migrated:
             _migrate()
@@ -246,10 +246,10 @@ def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(client):
                              ("scene_break", "glm", "max", "route_preset")}, migrated
 
 
-def test_an_unreadable_facts_sidecar_lowers_to_the_defaults(client):
+def test_an_unreadable_facts_sidecar_lowers_to_the_defaults(legacy):
     """A corrupt `<id>.facts.json` is no facts: resolve and lower keep working,
     every behaviour unstated, and the store's own dict is never mutated."""
-    base._fresh(client)
+    base._fresh(legacy)
     _migrate()
     store.llm_connections.facts_path("openrouter").write_text("{not json", encoding="utf-8")
     conn = _primary()
@@ -276,18 +276,6 @@ def test_the_facts_model_key_is_the_effective_model():
 
 # ---- slice I: a layout the migration has not reached plays in memory ----
 REPLY = 'The tide turns.\n```handoff\n{"next":null}\n```'
-
-
-@pytest.fixture
-def born(monkeypatch, tmp_path):
-    """A client on a store born at format 2 (the suite's upgraded default
-    library) -- `conftest.client`, which this file's `client` shadows."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[REPLY]])
-    with TestClient(app) as c:
-        yield c
 
 
 def _settings_digest(home: Path) -> dict[str, object]:
@@ -337,16 +325,16 @@ def _sent(fake: FakeLLM) -> dict:
     return turns[-1]["conn"]
 
 
-def test_a_format_1_store_plays_in_memory_and_writes_nothing(client, tmp_path):
+def test_a_format_1_store_plays_in_memory_and_writes_nothing(legacy, tmp_path):
     home = store.home()
-    _legacy_active(client)
-    cid, sid = _cast_scene(client)
+    _legacy_active(legacy)
+    cid, sid = _cast_scene(legacy)
     assert not store.inference_keys.is_current(store.read_config())
     before = _settings_digest(home)
 
     turn = FakeLLM([[REPLY]])
-    client.app.dependency_overrides[routes.get_llm] = lambda: turn
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+    legacy.app.dependency_overrides[routes.get_llm] = lambda: turn
+    r = legacy.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                     json={"content": "Hi", "speaker_ref": "characters:mara"})
 
     assert r.status_code == 200, r.text
@@ -376,10 +364,10 @@ def _spare(client) -> None:
     assert got.status_code == 200 and got.json()["id"] == "spare", got.text
 
 
-def test_an_unmarked_campaign_resolves_its_overrides_in_memory(born):
+def test_an_unmarked_campaign_resolves_its_overrides_in_memory(client):
     assert store.inference_keys.is_current(store.read_config())
-    _spare(born)
-    cid, _sid = _cast_scene(born)
+    _spare(client)
+    cid, _sid = _cast_scene(client)
     _unmark(cid, route_scene="spare")
     path = store.campaigns.campaign_root(cid) / "campaign.md"
     before = path.read_bytes()
@@ -391,12 +379,12 @@ def test_an_unmarked_campaign_resolves_its_overrides_in_memory(born):
     assert path.read_bytes() == before
 
 
-def test_a_busy_unmarked_campaign_still_resolves_and_nothing_is_written(born):
+def test_a_busy_unmarked_campaign_still_resolves_and_nothing_is_written(client):
     """I3, inverted: another writer holds the campaign's lock, and the turn
     still resolves its legacy override -- the planner reads, and takes no
     lock, so nothing waits and nothing is written."""
-    _spare(born)
-    cid, _sid = _cast_scene(born)
+    _spare(client)
+    cid, _sid = _cast_scene(client)
     _unmark(cid, route_scene="spare")
     path = store.campaigns.campaign_root(cid) / "campaign.md"
     before = path.read_bytes()
@@ -418,10 +406,10 @@ def test_a_busy_unmarked_campaign_still_resolves_and_nothing_is_written(born):
     assert path.read_bytes() == before
 
 
-def test_a_newer_store_still_plays_and_refuses_settings_writes(born):
+def test_a_newer_store_still_plays_and_refuses_settings_writes(client):
     """I1: a store a newer build switched resolves best effort, as format 2,
     and its model-settings writes stay refused as `newer_format`."""
-    got = born.put("/api/llm-connections/openrouter", json={"api_key": "sk-test-active"})
+    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test-active"})
     assert got.status_code == 200, got.text
     path = store.home() / "config.md"
     meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -431,16 +419,16 @@ def test_a_newer_store_still_plays_and_refuses_settings_writes(born):
 
     served = routes.common.require_inference("chat")
     assert (served.conn["id"], served.conn["model"]) == ("openrouter", store.config.DEFAULT_MODEL)
-    refused = born.put("/api/inference/settings", json={"roles": {"primary": {
+    refused = client.put("/api/inference/settings", json={"roles": {"primary": {
         "selection": {"provider": "openrouter", "model": "vendor/bigger"}}}})
     assert refused.status_code == 409, refused.text
     assert refused.json()["kind"] == "newer_format"
 
 
-def test_a_format_1_glm_store_still_sends_its_effort(client):
+def test_a_format_1_glm_store_still_sends_its_effort(legacy):
     """The legacy GLM effort rides on a derived preset, virtual until
     retirement writes it: the wire is what the legacy connection sent."""
-    ctx = base_c.STATES["glm_reasoning"](client)
+    ctx = base_c.STATES["glm_reasoning"](legacy)
     for cid in ("", ctx["cid"]):
         conn = _primary("chat", cid)
         assert conn["sampling"]["preset_id"] == "warm-reasoning-low"
@@ -461,8 +449,8 @@ def _retire_by_hand(cid: str) -> None:
                     encoding="utf-8")  # atomic-ok: test fixture
 
 
-def test_a_retired_scope_never_reads_the_legacy_effort(client):
-    ctx = base_c.STATES["glm_reasoning"](client)
+def test_a_retired_scope_never_reads_the_legacy_effort(legacy):
+    ctx = base_c.STATES["glm_reasoning"](legacy)
     _migrate()
     _retire_by_hand(ctx["cid"])
     raw = store.llm_connections.read_connection_raw("glm")
@@ -499,3 +487,48 @@ def test_overlay_is_free_on_a_retired_store(monkeypatch):
         seen = legacy_plan.overlay(cfg, campaign, cid="saltmarch")
         assert (seen.cfg, seen.meta) == (cfg, campaign)
         assert (dict(seen.presets), dict(seen.facts), seen.notes) == ({}, {}, ())
+
+
+@pytest.mark.parametrize(("field", "copied", "default"), [
+    ("prefill", True, False), ("vision", "off", ""), ("post_process", "strict", "none")])
+def test_a_format_1_store_reads_its_facts_as_the_migration_will_leave_them(
+        legacy, field, copied, default):
+    """Fix round 1, I1: an interrupted migration copied a legacy field into
+    the model's facts, then the user set the field back to its default at
+    format 1. The migration's step 3 takes that copy back
+    (`facts.adopt_legacy`); play reads it the same way in memory, so the stale
+    copy is never sent -- and what plays now is what plays once migrated."""
+    base._fresh(legacy)
+    store.llm_connections.update_connection("openrouter", **{field: copied})
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    facts.adopt_legacy("openrouter", facts.model_of(raw), legacy_plan.stated(raw))
+    assert facts.of("openrouter", MODEL, raw["rev"])[field] == copied   # the copy, on disk
+    store.llm_connections.update_connection("openrouter", **{field: default})
+    assert not store.inference_keys.is_current(store.read_config())
+
+    in_memory = _primary()[field]
+    _migrate()
+    assert in_memory == _primary()[field] == default
+
+
+def test_a_glm_role_saved_back_unchanged_is_accepted_and_sends_the_same(legacy):
+    """Fix round 1, I2: on a migrated, unretired GLM store the Models page
+    shows each role as STORED -- the base preset the migration persisted, a
+    preset file -- and the derived reasoning preset only as what it resolves
+    to. Sending the stored selection back unchanged is a 200, and the wire
+    does not move."""
+    base_c.STATES["glm_reasoning"](legacy)
+    _migrate()
+    before = llm_sampling.effective(_primary())["effective"]
+    assert before == {"temperature": 0.9, "reasoning_effort": "low"}
+
+    view = legacy.get("/api/inference/settings").json()
+    card = view["roles"]["primary"]
+    assert card["stored"]["preset"] == "warm"
+    assert card["stored"]["preset"] in {p["id"] for p in view["presets"]}
+    assert card["resolves"]["preset"] == "warm-reasoning-low"
+    saved = legacy.put("/api/inference/settings",
+                       json={"roles": {"primary": {"selection": card["stored"]}}})
+    assert saved.status_code == 200, saved.text
+    assert llm_sampling.effective(_primary())["effective"] == before
+    assert not (store.home() / "sampler_presets" / "warm-reasoning-low.json").exists()

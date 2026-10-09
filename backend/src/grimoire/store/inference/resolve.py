@@ -243,7 +243,20 @@ def _preset_lookup(virtual: Mapping[str, dict] | None = None) -> Callable[[str],
 def _overlay(cfg: Mapping[str, str], meta: Mapping[str, str],
              cid: str = "") -> legacy_plan.Overlay:
     """The one call into the planner: `cfg` and `meta` as format 2 sees them,
-    in memory (`legacy_plan.overlay`). Free on a retired store."""
+    in memory (`legacy_plan.overlay`). Free on a retired store.
+
+    Not memoised, on purpose, and that has a cost until retirement lands
+    (slice I, Task 6). On a store not yet retired every call plans from
+    scratch: the derivation and the route notes (a cascade per route, and a
+    soft read of each connection a slot names, memoised for the call only),
+    and below format 2 the whole mapping plus a read of every listed
+    connection for the facts. Every resolution pays it, and so does
+    `embed_space.endpoint` on every turn and `settings.view` on each of its
+    rows. A memo would have to be keyed on every file the plan reads -- each
+    connection record, its facts and catalog, every preset -- and an in-place
+    rewrite moves no directory stamp, so one that was obviously safe would
+    stat as much as the plan reads. Retirement marks each scope, and a
+    retired scope plans nothing: the cost goes with it."""
     return legacy_plan.overlay(cfg, meta, cid=cid)
 
 
@@ -274,30 +287,41 @@ def _embedding_view(cfg: Mapping[str, str]) -> dict[str, str]:
 
 
 def embedding_role(cfg: Mapping[str, str]) -> tuple[str, str]:
-    """`(provider, model)` as stored for the Embedding role, read as format 2
-    sees `cfg` (`_overlay`): the stored pair, not the resolution
-    (`embedding`)."""
+    """`(provider, model)` for the Embedding role as format 2 sees `cfg`
+    (`_overlay`): what the role is set to, not the resolution (`embedding`).
+    Below format 2 that is the planner's mapping, which turns off a legacy
+    choice that never embedded."""
     view = _embedding_view(_overlay(cfg, {}).cfg)
     return (view[keys.role_key("embedding", "provider")],
             view[keys.role_key("embedding", "model")])
 
 
-def _stated_over(model_facts: dict, stated: Mapping | None) -> dict:
-    """`model_facts` (`facts.of`'s shape) with the legacy fields the planner
-    read off the connection laid over it (`Overlay.facts`, below format 2):
-    the facts the migration's step 3 would write, in memory. Only a value the
-    facts module would take (`facts.adopt_legacy`)."""
-    if not stated:
-        return model_facts
-    out = dict(model_facts)
-    vision = stated.get("vision")
-    if vision in ("on", "off"):
-        out["vision"] = vision
-    if stated.get("prefill") is True:
-        out["prefill"] = True
-    if stated.get("post_process") in facts.POST_PROCESS_VALUES:
-        out["post_process"] = stated["post_process"]
-    return out
+def stored_embedding_role(cfg: Mapping[str, str]) -> tuple[str, str]:
+    """`(provider, model)` for the Embedding role exactly as `cfg` stores it,
+    stripped and NOT judged (`Overlay.embedding`): below format 2 the legacy
+    pair, even one the mapping turns off because its record, as it stands,
+    does not embed. What a guard asking whether an EDIT of that record moves
+    the role's space must compare (`embed_space.moved_by`): the mapping's
+    verdict is about the record being replaced."""
+    return _overlay(cfg, {}).embedding
+
+
+def _read_facts(provider_id: str, model: str, rev: str,
+                stated: Mapping[str, Mapping[str, dict]] | None) -> dict:
+    """`model`'s facts on `provider_id`, never raising. Below format 2 the
+    planner lists the provider in `stated` (`Overlay.facts`: the legacy fields
+    its connection states, by the connection's own model), and the facts are
+    read as the migration's step 3 will leave them (`facts.adopted`): an
+    interrupted run's copies taken back, the connection's fields laid over.
+    Otherwise they are the file's (`_model_facts`)."""
+    planned = (stated or {}).get(provider_id)
+    if not planned:
+        return _model_facts(provider_id, model, rev)
+    adopting, fields = next(iter(planned.items()))
+    try:
+        return facts.adopted(provider_id, model, rev, adopting=adopting, stated=dict(fields))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
 
 
 # ---- lowering ----
@@ -504,8 +528,8 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
     model's facts, once -- never by `capabilities.caps_for`, which would read
     the same sidecar again. The facts are read under the model the attempt
     runs (`facts.model_of`: an unset Claude model is `opus`, where the
-    migration wrote them), with what the planner read off a legacy
-    connection laid over them (`stated`, `Overlay.facts`).
+    migration wrote them) -- below format 2, as the migration will leave them
+    (`stated`, `Overlay.facts`; `_read_facts`).
 
     Those same facts are overlaid onto the connection (`with_facts`), so an
     attempt carries ITS model's prefill, post-processing and post-image
@@ -520,9 +544,7 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
     preset = providers.infer(conn)
     rev = _rev(conn)
     if model_facts is None:
-        effective = facts.model_of(conn)
-        model_facts = _stated_over(_model_facts(provider_id, effective, rev),
-                                   (stated or {}).get(provider_id, {}).get(effective))
+        model_facts = _read_facts(provider_id, facts.model_of(conn), rev, stated)
     conn = with_facts(conn, model_facts)
     base_url = conn.get("base_url", "")
     caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
