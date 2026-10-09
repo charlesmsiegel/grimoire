@@ -158,7 +158,6 @@ async function openSummary(at = "/models") {
 }
 const putBody = (n = 0) => (api.putInferenceSettings as any).mock.calls[n];
 
-void putBody; // the edit form tests (Task 6) read it
 afterEach(cleanup);
 
 
@@ -556,4 +555,184 @@ test("the page unlocks once the upgrade lands, without leaving it", async () => 
   } finally {
     vi.useRealTimers();
   }
+});
+
+// ---- the edit form ----
+const form = () => within(main().getByRole("form", { name: "Edit models" }));
+/** The form; `hash` opens part of it (`#advanced` unfolds the per-task rows,
+ *  which a test must do before it can reach them -- folded is the default). */
+async function openForm(hash = "") {
+  open(`/models/edit${hash}`);
+  await main().findByRole("form", { name: "Edit models" });
+}
+/** A role's own fieldset: its ModelSelect is a group of the same name too,
+ *  nested inside, so the outer one is the first in document order. */
+const roleBox = (name: string) => within(form().getAllByRole("group", { name })[0]);
+const pick = (name: string, value: string) =>
+  fireEvent.change(form().getByRole("combobox", { name }), { target: { value } });
+
+test("every role has provider, model and preset on one form", async () => {
+  await openForm();
+  for (const role of ["Primary", "Fast", "Decision"]) {
+    expect(form().getByRole("combobox", { name: `${role} provider` })).toBeInTheDocument();
+  }
+  expect(form().getByRole("combobox", { name: "Primary model" })).toHaveValue("vendor/m");
+  expect(form().getByRole("combobox", { name: "Primary preset" })).toHaveValue("balanced");
+  expect(form().getByRole("combobox", { name: "Embedding provider" })).toBeInTheDocument();
+  expect(form().queryByRole("combobox", { name: "Embedding preset" })).toBeNull();
+});
+
+test("saving nothing sends nothing and goes back to the summary", async () => {
+  await openForm();
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/models$/));
+  expect(api.putInferenceSettings).not.toHaveBeenCalled();
+});
+
+test("one changed role is all a save sends", async () => {
+  await openForm();
+  pick("Fast provider", "realm");
+  await form().findAllByRole("option", { name: "Vendor M" });
+  pick("Fast model", "vendor/m");
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()).toEqual([{ roles: { fast: { selection: sel("realm", "vendor/m", "") } } }]);
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/models$/));
+});
+
+test("Same as Fast clears provider, model and preset alike", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles, decision: card({ stored: sel("saltmarch", "vendor/m", "tight") }) } }));
+  await openForm();
+  pick("Decision provider", "");
+  expect(form().queryByRole("combobox", { name: "Decision preset" })).toBeNull();
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalled());
+  expect(putBody()[0]).toEqual({ roles: { decision: { selection: sel("", "", "") } } });
+});
+
+test("a provider with no model holds Save and says why", async () => {
+  await openForm();
+  pick("Fast provider", "realm");
+  expect(form().getAllByText("Choose a model for this provider to save.").length).toBeGreaterThan(0);
+  expect(form().getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+test("a fallback is added, sent, and removed as an empty one", async () => {
+  await openForm();
+  fireEvent.click(form().getByRole("button", { name: "+ Fallback for Fast" }));
+  pick("Fast fallback provider", "realm");
+  await form().findAllByRole("option", { name: "Vendor M" });
+  pick("Fast fallback model", "vendor/m");
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ roles: { fast: { fallback: sel("realm", "vendor/m", "") } } });
+});
+
+test("removing a stored fallback writes an empty one", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles, fast: card({ fallback: sel("realm", "vendor/m", "") }) } }));
+  await openForm();
+  fireEvent.click(form().getByRole("button", { name: "Remove Fast fallback" }));
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ roles: { fast: { fallback: sel("", "", "") } } });
+});
+
+test("an Embedding that would re-embed asks first, then sends the yes", async () => {
+  await openForm();
+  pick("Embedding provider", "saltmarch");
+  await form().findAllByRole("option", { name: "Vendor Embed" });
+  pick("Embedding model", "vendor/embed");
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  const ask = await form().findByRole("group", { name: "Confirm the re-embedding" });
+  expect(api.putInferenceSettings).not.toHaveBeenCalled();
+  fireEvent.click(within(ask).getByRole("button", { name: "Re-embed and save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()).toEqual([{ roles: { embedding: { selection: { provider: "saltmarch", model: "vendor/embed" } } } },
+                             { confirmEmbedding: true }]);
+});
+
+test("turning Embedding off asks nothing up front", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
+                 resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null } } }));
+  await openForm();
+  pick("Embedding provider", "");
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()).toEqual([{ roles: { embedding: { selection: { provider: "", model: "" } } } }]);
+});
+
+test("the server's re-embedding question is asked in its words, and the resend carries the yes", async () => {
+  (api.putInferenceSettings as any).mockRejectedValueOnce({
+    detail: "Changing the embedding model re-embeds your library through Saltmarch Router, "
+            + "which may cost money — confirm to change it.",
+    kind: "confirm_embedding" });
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
+                 resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null } } }));
+  await openForm();
+  pick("Embedding provider", "");
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  const ask = await form().findByRole("group", { name: "Confirm the re-embedding" });
+  expect(ask).toHaveTextContent(/re-embeds your library through Saltmarch Router/);
+  fireEvent.click(within(ask).getByRole("button", { name: "Re-embed and save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(2));
+  expect(putBody(1)[1]).toEqual({ confirmEmbedding: true });
+});
+
+test("any other refusal is shown above the form in the server's words, the form kept", async () => {
+  (api.putInferenceSettings as any).mockRejectedValueOnce({ detail: "no such preset: tight", kind: "" });
+  await openForm();
+  pick("Primary preset", "tight");
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  expect(await main().findByText(/no such preset: tight/)).toBeInTheDocument();
+  expect(form().getByRole("combobox", { name: "Primary preset" })).toHaveValue("tight");
+  expect(screen.getByTestId("where")).toHaveTextContent("/models/edit");
+});
+
+test("Cancel discards the draft and lands on the summary, even from a direct load", async () => {
+  await openForm();
+  pick("Primary preset", "tight");
+  fireEvent.click(form().getByRole("button", { name: "Cancel" }));
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/models$/);
+  expect(api.putInferenceSettings).not.toHaveBeenCalled();
+});
+
+test("an edit row carries the role's problem, and a fallback row why it is dropped", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    primary: card({ stored: sel("saltmarch", "vendor/embed"), problem: "vendor/embed cannot generate text." }),
+    fast: card({ fallback: sel("realm", "vendor/embed"), fallback_missing: ["generate"] }),
+    decision: card({ fallback: sel("realm", "vendor/m"), fallback_problem: "Realm Local has no key set" }),
+  } }));
+  await openForm();
+  expect(roleBox("Primary")
+    .getByText("vendor/embed cannot generate text.")).toBeInTheDocument();
+  expect(roleBox("Fast fallback")
+    .getByText(/is known not to fit Fast \(it cannot generate text\)/)).toBeInTheDocument();
+  expect(roleBox("Decision fallback")
+    .getByText(/cannot be sent \(Realm Local has no key set\)/)).toBeInTheDocument();
+});
+
+test("an Embedding model known not to embed is warned of on the form", async () => {
+  await openForm();
+  pick("Embedding provider", "saltmarch");
+  fireEvent.change(form().getByRole("combobox", { name: "Embedding model" }),
+                   { target: { value: "\u0000other" } });
+  fireEvent.change(form().getByRole("textbox", { name: "Embedding model id" }),
+                   { target: { value: "vendor/m" } });
+  fireEvent.click(form().getByRole("button", { name: "Use this id" }));
+  expect(await roleBox("Embedding")
+    .findByText("This model can't create embeddings.")).toBeInTheDocument();
+});
+
+test("a newer build's store holds the whole form", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ newer: true }));
+  await openForm();
+  expect(form().getByRole("combobox", { name: "Primary provider" })).toBeDisabled();
+  expect(form().getByRole("button", { name: "Save" })).toBeDisabled();
 });
