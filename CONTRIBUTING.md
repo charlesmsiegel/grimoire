@@ -209,7 +209,7 @@ cannot fail a test run.
 | `test_paths_guard.py` | filesystem access goes through the resolvers | `# paths-ok:` |
 | `test_lock_order_guard.py` | only `locks.hold_all` holds more than one campaign lock | `# lock-order-ok:` |
 | `test_lock_domain_guard.py` | campaign-scoped mutators take `locks.campaign_lock(cid)` | `# lock-domain-ok:` |
-| `test_usage_guard.py` | every generation route meters what it spends, and every embeddings request passes a meter's holder | `# usage-ok:` |
+| `test_usage_guard.py` | every generation route meters what it spends -- `decide_native` included, one meter per item -- and every embeddings request passes a meter's holder | `# usage-ok:` |
 | `test_routing_guard.py` | every generation names a task, and every task belongs to a route in `store/routing.py` | `# routing-ok:` |
 | `test_operation_guard.py` | every embed names a registered embed task, its `space=` traces to `embed_space.endpoint`, and only the operation and the model test reach the embeddings client; every decide names a task on a decide route | — |
 | `test_regex_prompt_guard.py` | every LLM reader of transcript text reads the prompt view (`store.regex.view`) | `# regex-ok:` |
