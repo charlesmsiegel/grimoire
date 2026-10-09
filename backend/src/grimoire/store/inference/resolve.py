@@ -550,17 +550,42 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
     rev = _rev(conn)
     if model_facts is None:
         model_facts = _read_facts(provider_id, facts.model_of(conn), rev, stated)
-    conn = with_facts(conn, model_facts)
+    conn, caps, target = _typed(conn, row, preset, model, model_facts)
     base_url = conn.get("base_url", "")
-    caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
     return Attempt(
         provider_id, model, sampling["preset_id"], conn,
         provider_kind=str(conn.get("kind", "") or ""),
         base_url=(base_url if isinstance(base_url, str) and base_url else preset.base_url),
         rev=rev, billing=providers.billing(conn), provider_preset=preset.id,
         facts=model_facts, capabilities=caps,
-        controls=llm_sampling.effective(conn), retries=retries,
-        target=_target(conn, caps, model_facts))
+        controls=llm_sampling.effective(conn), retries=retries, target=target)
+
+
+def _typed(conn: dict, row: dict | None, preset: providers.Preset, model: str,
+           model_facts: dict) -> tuple[dict, dict[str, capabilities.Cap], wire.Target]:
+    """A lowered dict made an attempt's: its model's stated behaviour laid on
+    (`with_facts`), its capabilities resolved from the catalog row the
+    lowering read and those facts -- never by `capabilities.caps_for`, which
+    would read the same sidecar again -- and its target built from both. The
+    one builder `_attempt` and `target_for` share."""
+    conn = with_facts(conn, model_facts)
+    caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
+    return conn, caps, _target(conn, caps, model_facts)
+
+
+def target_for(raw: dict, model: str, sampling: dict, *, model_facts: dict) -> wire.Target:
+    """The `wire.Target` for `raw` (a connection record) sending `model` with
+    `sampling` (`_sampling`'s shape), its model's stated behaviour taken from
+    `model_facts` (`facts.of`'s shape): a target outside any route, built by
+    the builder a resolved attempt's is (`_typed`), so the two cannot
+    disagree.
+
+    For what sends or describes one attempt without resolving a task: the
+    controls preview, the settings view's effective controls and the model
+    test's probes. Its account block is the billing alone, and it is never
+    flagged structured: those are a resolution's stamps (`_stamp`)."""
+    conn, row = _lowered(raw, sampling, model)
+    return _typed(conn, row, providers.infer(conn), model, model_facts)[2]
 
 
 #: The capabilities an operation needs of itself, as ALTERNATIVES: an attempt

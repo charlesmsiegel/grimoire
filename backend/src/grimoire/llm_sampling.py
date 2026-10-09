@@ -28,7 +28,7 @@ import re
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-from . import llm_reasoning
+from . import llm_reasoning, wire
 
 
 class Param(NamedTuple):
@@ -222,10 +222,18 @@ def validate(params: object) -> dict:
     return {name: out[name] for name in CONTROLS if name in out}
 
 
-def _stored(conn: dict) -> dict:
-    sampling = conn.get("sampling") if isinstance(conn, dict) else None
-    params = sampling.get("params") if isinstance(sampling, dict) else None
-    return params if isinstance(params, dict) else {}
+def _target(x: wire.Target | dict | None) -> wire.Target:
+    """`x` as the target this module reads: a `Target` as it is; a lowered
+    connection dict through `wire.from_lowered` -- the dict door, which Task
+    10 closes with the lowering -- and anything else as an empty dict, read
+    as OpenRouter with nothing set."""
+    if isinstance(x, wire.Target):
+        return x
+    return wire.from_lowered(x if isinstance(x, dict) else {}).primary
+
+
+def _stored(t: wire.Target) -> dict:
+    return t.sampling.params
 
 
 def _why_not(kind: str, extended: bool, listed: set | None, name: str, value: object) -> str:
@@ -287,18 +295,14 @@ class _Conn(NamedTuple):
     openai: bool
 
 
-def _context(conn: dict) -> _Conn:
-    listed = conn.get("model_params")
+def _context(t: wire.Target) -> _Conn:
     # Strings only: a hand-edited or sync-mangled catalog with an object in the
     # list must cost that entry, not the turn (`set` of a dict raises).
-    listed = {x for x in listed if isinstance(x, str)} if isinstance(listed, list) else None
-    features = conn.get("model_features")
-    kind = conn.get("kind", "openrouter")
-    model = conn.get("model")
-    return _Conn(kind, model if isinstance(model, str) else "",
-                 conn.get("sampler_support") == "extended", listed,
-                 features if isinstance(features, dict) else {},
-                 kind == "openai_compatible" and _openai_api(conn.get("base_url")))
+    listed = ({x for x in t.model_params if isinstance(x, str)}
+              if t.model_params is not None else None)
+    return _Conn(t.kind, t.model, t.sampler_support == "extended", listed,
+                 t.model_features if t.model_features is not None else {},
+                 t.kind == "openai_compatible" and _openai_api(t.base_url))
 
 
 def _sampler(c: _Conn, name: str, value: object) -> _Control:
@@ -406,7 +410,7 @@ def _openrouter_reasoning(c: _Conn, value: str | None) -> _Control:
                     "catalog", fields)
 
 
-def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
+def _openai_reasoning(c: _Conn, value: str | None) -> _Control:
     """`openai_compatible`: GLM by `llm_reasoning`'s rule (the preset's value
     only: with none, nothing is sent -- a legacy connection's effort rides on a
     derived reasoning preset, slice I), the OpenAI API by the model's family
@@ -414,13 +418,13 @@ def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
     endpoint by the strict-endpoint rule the samplers follow (spec 8): it is not
     an OpenAI chat parameter, so it is held back unless extended samplers are
     on, and then sent unverified."""
-    if llm_reasoning.is_glm(conn):
+    if llm_reasoning.is_glm({"model": c.model}):
         if value is None:
             return _Control(SUPPORTED, "reasoning_effort", "", "name", {})
         if value == "off":
             # GLM takes low, high or max; off is a level it has not got.
             return _Control(UNSUPPORTED, None, WHY_GLM, "name")
-        effort = llm_reasoning.glm_effort(str(conn.get("model", "") or ""), value)
+        effort = llm_reasoning.glm_effort(c.model, value)
         if not effort:
             return _Control(UNSUPPORTED, None, WHY_GLM, "name")
         return _Control(SUPPORTED, "reasoning_effort", "", "name", {"reasoning_effort": effort})
@@ -515,22 +519,23 @@ def _thinking(c: _Conn, value: str | None, max_tokens: int) -> _Control:
                     "catalog", {"thinking": {"type": "enabled", "budget_tokens": budget}})
 
 
-def _reasoning(c: _Conn, conn: dict, value: str | None, max_tokens: int) -> _Control:
+def _reasoning(c: _Conn, value: str | None, max_tokens: int) -> _Control:
     """`reasoning_effort` per adapter (spec 8). `value` None: the preset sets
     none, and the answer describes what setting one would do. `max` is GLM's
     level alone: every other adapter answers it unsupported, sending nothing."""
-    if value == "max" and not (c.kind == "openai_compatible" and llm_reasoning.is_glm(conn)):
+    if value == "max" and not (c.kind == "openai_compatible"
+                               and llm_reasoning.is_glm({"model": c.model})):
         return _Control(UNSUPPORTED, None, WHY_MAX, "adapter")
     if c.kind == "claude":
         return _Control(UNSUPPORTED, None, WHY_CLAUDE, "adapter")
     if c.kind == "anthropic":
         return _thinking(c, value, max_tokens)
     if c.kind == "openai_compatible":
-        return _openai_reasoning(c, conn, value)
+        return _openai_reasoning(c, value)
     return _openrouter_reasoning(c, value)
 
 
-def effective(conn: dict) -> dict:
+def effective(conn: wire.Target | dict) -> dict:
     """What `conn` is sent from its attached preset, control by control.
 
     `{"requested": {name: stored value}, "effective": {wire name: value},
@@ -542,15 +547,16 @@ def effective(conn: dict) -> dict:
     Anthropic API's `max_tokens`, which it is always sent. `why` is a sentence
     for every state but `supported` (and on a `supported` value it changed).
 
-    Reads only the connection dict: `kind`, `model`, `base_url`,
-    `sampling.params`, `sampler_support`, `model_params`, `model_features` and
-    the legacy `reasoning_effort`. Never raises: this runs per attempt on the
-    generation path, and a preset file edited by hand into nonsense costs that
-    one control, reported as unsupported (`WHY_INVALID`), rather than the turn.
+    Reads only the target's `kind`, `model`, `base_url`, `sampling.params`,
+    `sampler_support`, `model_params` and `model_features` -- a lowered dict's
+    through `wire.from_lowered` (`_target`). Never raises: this runs per
+    attempt on the generation path, and a preset file edited by hand into
+    nonsense costs that one control, reported as unsupported (`WHY_INVALID`),
+    rather than the turn.
     """
-    conn = conn if isinstance(conn, dict) else {}
-    stored = _stored(conn)
-    c = _context(conn)
+    t = _target(conn)
+    stored = _stored(t)
+    c = _context(t)
     requested = {name: stored[name] for name in CONTROLS if name in stored}
     values: dict = {}
     invalid: set[str] = set()
@@ -563,7 +569,7 @@ def effective(conn: dict) -> dict:
                           if c.kind == "anthropic" else (0, ""))
     reasoning = (_Control(UNSUPPORTED, None, WHY_INVALID, "user")
                  if "reasoning_effort" in invalid
-                 else _reasoning(c, conn, values.get("reasoning_effort"), max_tokens))
+                 else _reasoning(c, values.get("reasoning_effort"), max_tokens))
     # Whether thinking is ON: `disabled` is the reasoning control's field too,
     # and a model that takes sampling takes it with thinking turned off.
     wired = (reasoning.fields or {}).get("thinking")
@@ -599,13 +605,12 @@ def effective(conn: dict) -> dict:
     return {"requested": requested, "effective": sent, "controls": controls}
 
 
-def not_applicable(conn: dict, why: str) -> dict:
+def not_applicable(conn: wire.Target | dict, why: str) -> dict:
     """`effective`'s answer for an operation that takes no sampling at all (a
     native decision): what `conn`'s preset stores is still `requested`, as
     `effective` reports it, nothing is sent, and every control in `CONTROLS`
     is `n/a` for `why`."""
-    conn = conn if isinstance(conn, dict) else {}
-    stored = _stored(conn)
+    stored = _stored(_target(conn))
     return {"requested": {name: stored[name] for name in CONTROLS if name in stored},
             "effective": {},
             "controls": {name: {"state": NOT_APPLICABLE, "wire": "", "why": why,
@@ -630,7 +635,7 @@ def _dropped(eff: dict, names: tuple[str, ...]) -> list[dict]:
             if name in eff["requested"] and eff["controls"][name]["state"] == UNSUPPORTED]
 
 
-def split(conn: dict) -> tuple[dict, list[dict]]:
+def split(conn: wire.Target | dict) -> tuple[dict, list[dict]]:
     """What this connection will be sent from its attached preset's SAMPLER
     parameters, and what not -- a view over `effective`.
 
@@ -651,13 +656,13 @@ def split(conn: dict) -> tuple[dict, list[dict]]:
     return applied, _dropped(eff, NAMES)
 
 
-def sent_names(conn: dict) -> list[str]:
+def sent_names(conn: wire.Target | dict) -> list[str]:
     """The preset controls this connection actually sends, canonical names."""
     eff = effective(conn)
     return [name for name in CONTROLS if _sent(eff, name)]
 
 
-def sent_fields(conn: dict) -> dict[str, dict]:
+def sent_fields(conn: wire.Target | dict) -> dict[str, dict]:
     """`{canonical name: that control's share of the wire body}` for every
     control `sent_names` lists, in the same order.
 
