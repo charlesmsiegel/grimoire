@@ -217,6 +217,21 @@ def record_fields(conn_id: str, values: Mapping[str, str]) -> None:
         _write(doc)
 
 
+def forget_fields(conn_id: str) -> bool:
+    """Drop what the record holds for connection `conn_id` -- called in the
+    hold that deletes that connection (`llm_connections.delete_connection`),
+    so a provider later created under the same slug is never answered with
+    the dead one's fields (N20). Returns whether it wrote. Strict: a record
+    that cannot be read raises, and the delete with it."""
+    with _lock:
+        doc = read(strict=True)
+        if conn_id not in doc["fields"]:
+            return False
+        del doc["fields"][conn_id]
+        _write(doc)
+        return True
+
+
 def record_notes(notes: Iterable[Note]) -> None:
     """Merge `notes` into the record by id: a new one is added, a known one
     keeps its `dismissed` -- merging never un-dismisses -- and takes the

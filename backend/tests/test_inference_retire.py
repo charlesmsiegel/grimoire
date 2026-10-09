@@ -1060,11 +1060,24 @@ def test_strip_model_fields_refuses_an_unparseable_connection(home, damage):
     llm_connections.list_connections()
     path = _conn_file("held")
     path.write_bytes(damage)
-    seen: list = []
     with pytest.raises(frontmatter.RecordUnreadableError):
-        llm_connections.strip_model_fields("held", lambda c, v: seen.append((c, v)))
+        llm_connections.strip_model_fields("held", retired.record_fields)
     assert path.read_bytes() == damage
-    assert seen == [] and not retired.path().exists()
+    assert not retired.path().exists()
+
+
+def test_strip_model_fields_records_through_the_record_only(home):
+    """6b review M-5: a strip that recorded anywhere but the retirement
+    record would lose the values the planner falls back to; any other
+    recorder is refused before anything is read."""
+    _legacy()
+    _glm("glm", "high")
+    before = _conn_file("glm").read_bytes()
+    for other in (lambda c, v: None, retired.record_notes, print):
+        with pytest.raises(TypeError):
+            llm_connections.strip_model_fields("glm", other)
+    assert _conn_file("glm").read_bytes() == before
+    assert not retired.path().exists()
 
 
 def test_a_connection_edit_during_the_strip_survives(client, monkeypatch):
@@ -1185,9 +1198,33 @@ def test_an_empty_legacy_field_still_falls_back_to_the_record(home):
 def test_the_record_never_answers_for_a_deleted_connection(home):
     _spare_stripped()
     llm_connections.delete_connection("spare")
-    assert "spare" in retired.read()["fields"]
+    assert "spare" not in retired.read()["fields"]
     for mode in ("soft", "migrate", "retire"):
         assert legacy_plan.lookup(mode=mode)("spare") is None, mode
+
+
+def test_a_recreated_slug_never_inherits_the_dead_ones_model(home):
+    """6b review M-6: the delete forgets the record's entry in its own
+    hold, so a provider created later under the same slug answers with its
+    own (empty) model, not the stripped one's."""
+    _spare_stripped()
+    llm_connections.delete_connection("spare")
+    assert llm_connections.create_connection("openrouter", "spare", api_key="sk-2") == "spare"
+    for mode in ("soft", "migrate", "retire"):
+        assert legacy_plan.lookup(mode=mode)("spare")["model"] == "", mode
+
+
+def test_a_delete_over_an_unreadable_record_deletes_nothing(client):
+    llm_connections.create_connection("openrouter", "spare", api_key="sk-spare",
+                                      model="vendor/spare")
+    assert retire.strip() == []
+    good = _corrupt_record()
+    got = client.delete("/api/llm-connections/spare")
+    assert got.status_code == 409 and got.json()["kind"] == "retirement_unreadable"
+    assert _conn_file("spare").exists()
+    retired.path().write_bytes(good)
+    assert client.delete("/api/llm-connections/spare").status_code == 200
+    assert "spare" not in retired.read()["fields"]
 
 
 def test_the_first_recorded_fields_win(home):

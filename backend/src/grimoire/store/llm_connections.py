@@ -11,6 +11,7 @@ import errno
 import functools
 import json
 import secrets
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -374,6 +375,22 @@ def legacy_fields_on_disk() -> dict[str, tuple[str, ...]]:
     return out
 
 
+#: The retirement record's module (`inference.retired`): the strip's one
+#: recorder, and what a delete forgets the connection in.
+_RECORD_MODULE = "grimoire.store.inference.retired"
+
+
+def _record_module():
+    """`inference.retired`, from `sys.modules`: never imported here, since
+    importing `store.inference` from this module closes a cycle through its
+    `resolve`. Always there by the time anything calls into this module:
+    `grimoire.store`'s own `__init__` imports `inference`, which binds it."""
+    module = sys.modules.get(_RECORD_MODULE)
+    if module is None:
+        raise RuntimeError("the retirement record's module is not loaded")
+    return module
+
+
 def strip_model_fields(conn_id: str,
                        record: Callable[[str, dict[str, str]], None]) -> bool:
     """Take the legacy model fields (`MODEL_FIELDS`) off connection `conn_id`
@@ -395,7 +412,17 @@ def strip_model_fields(conn_id: str,
        every verified test and every vector space survive.
 
     A connection that holds no legacy key at all writes nothing; one holding
-    only empty ones is rewritten without them, recording nothing."""
+    only empty ones is rewritten without them, recording nothing.
+
+    `record` must BE the retirement record's writer -- whatever
+    `grimoire.store.inference.retired.record_fields` is bound to when this
+    runs -- or this raises `TypeError` before reading anything: a strip that
+    recorded elsewhere, or nowhere, would lose the values the planner falls
+    back to for good. It is looked up in `sys.modules` rather than imported:
+    importing `store.inference` here closes a cycle through its `resolve`."""
+    if record is not getattr(_record_module(), "record_fields", None):
+        raise TypeError("strip_model_fields records through inference.retired.record_fields "
+                        "only")
     if not safe_id(conn_id):
         raise ConnectionNotFound(conn_id)
     with LOCK, config.format_hold():
@@ -572,6 +599,11 @@ def _delete(conn_id: str) -> None:
             # already correctly cleared even though the file still exists (a
             # retriable "delete didn't finish" state, not a dangling reference).
             config.write_config(**dangling)
+    # The retirement record's fields for this id go in the same hold, before
+    # the unlink (N20, 6b review M-6): a provider created later under the
+    # same slug must not be answered with this one's legacy model. A record
+    # that cannot be read refuses the delete here, with nothing unlinked.
+    _record_module().forget_fields(conn_id)
     p.unlink()
     _sidecar_path(conn_id).unlink(missing_ok=True)
     regex_path(conn_id).unlink(missing_ok=True)

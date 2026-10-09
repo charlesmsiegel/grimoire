@@ -28,7 +28,7 @@ from .. import (
 )
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store.inference import capabilities, controls, facts, providers
+from ..store.inference import capabilities, controls, facts, providers, retired
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
 from ..store.inference import settings as inference_settings
@@ -882,6 +882,11 @@ def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(g
         store.llm_connections.delete_connection(id)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
+    except retired.RecordUnreadableError:
+        # Its retirement-record entry cannot be forgotten: nothing deleted.
+        raise HTTPException(status_code=409, detail={
+            "kind": "retirement_unreadable",
+            "detail": inference_settings.RETIREMENT_UNREADABLE}) from None
     # Ids are slugs, and a slug is reusable: deleting "Endpoint" and creating
     # another connection by that name lands on the same id, which would
     # otherwise inherit the dead connection's last failure.
