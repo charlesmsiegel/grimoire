@@ -69,6 +69,17 @@ def test_without_sampling_drops_only_the_preset():
     assert dataclasses.replace(bare, sampling=sampled) == t
 
 
+def test_defaulted_targets_share_no_mutable_block():
+    """Each default is built per target: `frozen` does not stop a write into
+    `sampling.params`, so a shared one would reach every defaulted target."""
+    a, b = wire.Target("a", "openrouter", "m"), wire.Target("b", "openrouter", "m")
+    assert a.sampling == b.sampling and a.sampling is not b.sampling
+    assert a.sampling.params is not b.sampling.params
+    a.sampling.params["temperature"] = 0.5
+    assert b.sampling.params == {} and wire.Target("c", "k", "m").sampling.params == {}
+    assert a.account is not b.account
+
+
 def test_a_label_is_the_name_else_the_id():
     assert wire_kit.target().label == "OpenRouter"
     assert wire_kit.target(provider_name="").label == "openrouter"

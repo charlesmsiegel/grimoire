@@ -21,6 +21,7 @@ import grimoire.store as store
 from grimoire import llm, routes, wire
 from grimoire.store import post_images, routing
 from grimoire.store.inference import capabilities, resolve, resolved
+from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
@@ -147,6 +148,26 @@ def test_a_target_reads_images_by_the_post_image_preference(tmp_path):
         store.llm_connections.update_connection("openrouter", vision="on")
         (a,) = resolve.resolve("chat").attempts
         _assert_mirrors("chat", a)
+        assert a.target.reads_images == "yes"
+
+
+def test_a_target_reads_images_by_the_model_facts_at_format_2(tmp_path):
+    """At format 2 the post-image preference is the model's facts, laid on by
+    `with_facts`: `vision: on` there reads "yes" over a catalog `no`, with the
+    connection's own (frozen) field left blank."""
+    with baseline.client_at(tmp_path) as client:
+        baseline._fresh(client)
+        assert baseline.migrate_state("fresh").state == "done"
+        (before,) = resolve.resolve("chat").attempts
+        model, rev = before.target.model, before.target.rev
+        store.llm_connections.set_cached_models(
+            "openrouter", [{"id": model, "vision": False}], rev)
+        assert resolve.resolve("chat").attempts[0].target.reads_images == "no"
+        inference_facts.set_stated("openrouter", model, vision="on")
+        (a,) = resolve.resolve("chat").attempts
+        _assert_mirrors("chat", a)
+        assert store.llm_connections.read_connection_raw("openrouter")["vision"] == ""
+        assert a.conn["vision"] == "on"
         assert a.target.reads_images == "yes"
 
 

@@ -68,7 +68,7 @@ class Target:
     #: What the call asks for, which the usage holder keeps beside the model a
     #: provider reports having answered on (`requested_model`).
     requested_model: str = ""
-    sampling: Sampling = Sampling()
+    sampling: Sampling = field(default_factory=Sampling)
     #: The connection's `sampler_support` ("extended" or "").
     sampler_support: str = ""
     #: The request parameters the model takes, from its catalog; None when
@@ -88,7 +88,7 @@ class Target:
     #: The post-image degrade sibling: the same attempt, sent its images as
     #: their descriptions (#377).
     degrade: bool = False
-    account: Account = Account()
+    account: Account = field(default_factory=Account)
 
     @property
     def label(self) -> str:
