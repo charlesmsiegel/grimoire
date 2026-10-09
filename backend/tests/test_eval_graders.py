@@ -508,8 +508,9 @@ def test_identity_decision_unoffered_id_fails_known_ids():
     for unoffered in ("existing:maras-map", "existing", "Existing: maras-map"):
         assert _identity_decided({"decision": unoffered}, _D2, _D3) == {
             "identity.known_ids", "identity.same_obligation"}, unoffered
-    # The ref form and a cased spelling are the offered id, as the app reads them.
-    for named in ("thread:find-the-ledger", "Find The Ledger"):
+    # The ref form, a cased spelling and a space after the colon are the
+    # offered id, as the app reads them.
+    for named in ("thread:find-the-ledger", "Find The Ledger", " find-the-ledger"):
         assert _identity_decided({"decision": f"existing:{named}"}, _D2, _D3) == set()
 
 

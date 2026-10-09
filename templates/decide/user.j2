@@ -4,7 +4,10 @@
                 `questions`. A question is a Predicate (`id`, `instructions`),
                 a Choice (also `options`, each `id` and `description`, and
                 `allow_none`) or a Score (also `levels`, ordered descriptions).
-                Option `aliases` are the parser's and are never shown.
+                Option `aliases` are the parser's and are never shown. An
+                option's id is quoted, so where it ends is plain whatever it
+                holds: a folded id carries a colon of its own
+                (`existing:<id>`), and a description may hold another.
       explain — str: the rationale instruction ("" when none is asked for). -#}
 {%- for item in items %}
 {%- if not loop.first %}
@@ -19,7 +22,7 @@ Questions:
 {%- if q.options is defined %}
 - {{ q.id }} (choice{% if q.allow_none %}, or null for none of these{% endif %}): {{ q.instructions }}
 {%- for opt in q.options %}
-  - {{ opt.id }}: {{ opt.description }}
+  - "{{ opt.id }}": {{ opt.description }}
 {%- endfor %}
 {%- elif q.levels is defined %}
 - {{ q.id }} (scale): {{ q.instructions }}

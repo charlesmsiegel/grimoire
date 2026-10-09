@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, embeddings, prompts
+from grimoire import decisions, embeddings, inference, prompts
 from grimoire.main import create_app
 from grimoire.store import absorb, config, embed_space, llm_connections, vectors
 from grimoire.store.absorb import materializer
@@ -1236,11 +1236,18 @@ def test_build_items_one_per_row_asking_one_folded_decision():
     assert items[1].context.startswith("Proposed commitment: Seraphine's midnight deadline\n")
     assert "Row r1" not in items[0].context
     # A candidate is described under its clipped title, and spelled by its ref form.
+    # The title is quoted and followed by a comma, so the option line keeps one
+    # colon between the id and its description (`decide/user.j2` quotes the
+    # id); each spelling is also offered with a space after "existing:".
     assert _options(items[0].questions[0])[0] == (
         "existing:find-the-ledger",
-        ("Find the ledger: only when this listed candidate is the same narrative question "
+        ('"Find the ledger", only when this listed candidate is the same narrative question '
          "or obligation, so the row's beat simply moves that record forward."),
-        ("existing:thread:find-the-ledger",))
+        ("existing:thread:find-the-ledger", "existing: find-the-ledger",
+         "existing: thread:find-the-ledger"))
+    user = inference.structured_messages(items[:1], explain="")[1]["content"]
+    assert ('  - "existing:find-the-ledger": "Find the ledger", only when this listed '
+            "candidate") in user
     assert identity.explain() == prompts.render("continuity_identity/explain.j2")
     assert identity.EXISTING_PREFIX == "existing:"
     assert identity.UNREADABLE == "the duplicate check returned no readable answer"
@@ -1262,7 +1269,7 @@ def test_a_candidate_titled_blank_is_described_by_its_id():
     row = _decision_row("r1", "thread", "Recover the ledger", ["find-the-ledger"])
     row["candidates"][0]["title"] = ""
     [item] = identity.build_items([row], {})
-    assert item.questions[0].options[0].description.startswith("find-the-ledger: ")
+    assert item.questions[0].options[0].description.startswith('"find-the-ledger", ')
 
 
 def test_the_folded_existing_reads_alias_sources_and_ref_forms():
@@ -1271,8 +1278,9 @@ def test_the_folded_existing_reads_alias_sources_and_ref_forms():
     items = identity.build_items(rows, live)
     decisions.validate(items)
     assert _options(items[0].questions[0])[0][::2] == (
-        "existing:b", ("existing:thread:b", "existing:thread:a", "existing:a"))
-    for named in ("a", "thread:b", "thread:a", "b", "B "):
+        "existing:b", ("existing:thread:b", "existing:thread:a", "existing:a", "existing: b",
+                       "existing: thread:b", "existing: thread:a", "existing: a"))
+    for named in ("a", "thread:b", "thread:a", "b", "B ", " b", " thread:a", "  a "):
         [result] = decisions.parse(
             decision_reply({"decision": _existing(named)}), items, explain=True)
         assert result.answers[identity.DECISION_ID].answer == "existing:b", named
@@ -1310,14 +1318,18 @@ def test_build_items_never_builds_a_request_validate_refuses():
                           ["", "find-the-ledger", "Find The Ledger", "maras-map"])]
     items = identity.build_items(rows, live)
     decisions.validate(items)
+    # The later candidate's spaced id is taken before the earlier one's spaced
+    # alias source, which would otherwise spell it.
     assert [(o.id, o.aliases) for o in items[0].questions[0].options] == [
         ("existing:find-the-ledger",
-         ("existing:thread:find-the-ledger", "existing:thread:maras-map")),
-        ("existing:maras-map", ()), ("new", ()), ("uncertain", ())]
+         ("existing:thread:find-the-ledger", "existing:thread:maras-map",
+          "existing: find-the-ledger", "existing: thread:find-the-ledger",
+          "existing: thread:maras-map")),
+        ("existing:maras-map", ("existing: maras-map",)), ("new", ()), ("uncertain", ())]
     assert len(_candidate_lines(items[0].context)) == 2
-    [result] = decisions.parse(decision_reply({"decision": "existing:maras-map"}),
-                               items, explain=True)
-    assert result.answers[identity.DECISION_ID].answer == "existing:maras-map"
+    for named in ("existing:maras-map", "existing: maras-map", "EXISTING: Maras-Map "):
+        [result] = decisions.parse(decision_reply({"decision": named}), items, explain=True)
+        assert result.answers[identity.DECISION_ID].answer == "existing:maras-map", named
     # A row left with no offerable candidate is offered no `existing` at all
     # -- an empty id would fold into an option naming nothing -- and one it
     # answers anyway is a word outside the options.
@@ -1472,3 +1484,9 @@ def test_take_hint_onlys_an_unreadable_reply():
     assert identity.take(exam, []) is True
     assert [(e.decision, e.status, e.reason) for e in exam.rows] == [
         ("unchecked", "hint_only", identity.NO_ANSWER)] * 2
+
+
+def test_unfolded_strips_the_space_around_the_id():
+    assert identity.unfolded("existing: find-the-ledger ") == ("existing", "find-the-ledger")
+    assert identity.unfolded("existing:find-the-ledger") == ("existing", "find-the-ledger")
+    assert identity.unfolded("new") == ("new", "")

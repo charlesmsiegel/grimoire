@@ -23,6 +23,8 @@ from pathlib import Path
 import pytest
 
 from grimoire import decisions
+from grimoire.store.continuity import identity
+from tests.llm_fakes import decision_reply
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -873,3 +875,26 @@ def test_gate_refuses_live_record_and_case(extra, capsys):
         run_mod.main(["--gate", *extra])
     assert exc.value.code == 2
     assert "--gate" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("spelled", [
+    "existing: find-the-ledger", "EXISTING: find-the-ledger ", "existing:  find-the-ledger",
+    " existing: thread:find-the-ledger ", "Existing: Find-The-Ledger"])
+def test_existing_with_a_space_after_the_colon_names_the_offered_id(spelled):
+    """Off strict mode (a prompt-only re-send, a fallback without the mode, a
+    server that ignores `response_format`), "existing:" followed by the id is
+    as naturally written with a space as without, and both name the record:
+    the spaced spelling is an alias of the option, so the row merges as the
+    unspaced one does, where it used to read as no option and fall to
+    ``uncertain``."""
+    items = gate._identity_items()
+    exam = gate._identity_exam()
+    reply = decision_reply({"decision": spelled}, {"decision": "new"}, {"decision": "new"})
+    results = decisions.parse(reply, items, explain=True)
+    assert results[0].answers[identity.DECISION_ID].answer == "existing:find-the-ledger"
+    answers = identity.answers_of(exam.prompt_rows(), results)
+    assert answers[0]["decision"] == "existing" and answers[0]["id"] == "find-the-ledger"
+    assert identity.take(exam, answers)
+    assert (exam.rows[0].decision, exam.rows[0].status, exam.rows[0].target) == (
+        "existing", "accepted", "find-the-ledger")
+

@@ -678,7 +678,13 @@ def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decis
     on a row it built. Then aliases, the spellings today's `_existing`
     canonicalises, each folded: the ref form ``<kind>:<id>``, and each live
     alias source of that ref with its bare id (a source of another kind,
-    which `_existing` would never reach, is not one). An alias that is not
+    which `_existing` would never reach, is not one) -- and every spelling
+    again, the id included, with one space after the colon
+    (``existing: <id>``), the most natural way to follow "existing:"
+    followed by the id, which `decisions.normalise` would otherwise read as
+    no option (it folds spaces into ``_``, never away). Each kept id's spaced
+    form is taken before any other alias, so it is shadowed by nothing but
+    an id. An alias that is not
     offerable, or collides with any kept option or an earlier alias, is
     dropped alone, so an earlier candidate's alias source never shadows a
     later candidate's id *in the options*: that holds up to the parse.
@@ -699,15 +705,19 @@ def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decis
         _spelled(seen, option)
         kept.append(c)
         chars += len(option)
+    spaced = [f"{EXISTING_PREFIX} {c['id']}" for c in kept]
+    spaced_ids = [s if _spelled(seen, s) else "" for s in spaced]
     options = []
-    for c in kept:
+    for c, spaced_id in zip(kept, spaced_ids, strict=True):
         ref = f"{kind}:{c['id']}"
         spellings = [ref]
         for src, to in live.items():
             if to == ref and src != to and src.startswith(f"{kind}:"):
                 spellings += [src, src.removeprefix(f"{kind}:")]
-        aliases = tuple(EXISTING_PREFIX + s for s in spellings
-                        if _spelled(seen, EXISTING_PREFIX + s))
+        plain = tuple(s for s in (EXISTING_PREFIX + s for s in spellings) if _spelled(seen, s))
+        rest = tuple(s for s in (f"{EXISTING_PREFIX} {s}" for s in spellings)
+                     if _spelled(seen, s))
+        aliases = (*plain, *((spaced_id,) if spaced_id else ()), *rest)
         options.append(decisions.Option(
             EXISTING_PREFIX + c["id"],
             prompts.render("continuity_identity/option.j2", decision="existing",
@@ -747,7 +757,7 @@ def unfolded(answer: str) -> tuple[str, str]:
     itself with no id -- the decision and `id` of today's decision dict, which
     `Examination.decide` reads."""
     if answer.startswith(EXISTING_PREFIX):
-        return "existing", answer.removeprefix(EXISTING_PREFIX)
+        return "existing", answer.removeprefix(EXISTING_PREFIX).strip()
     return answer, ""
 
 

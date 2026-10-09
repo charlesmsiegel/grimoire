@@ -877,7 +877,7 @@ IDENTITY_REWORDED = (
      "decide/user.j2 renders the item's context above its questions"),
     (("only when a listed candidate is the same narrative question or obligation, so the "
       "row's beat simply moves that record forward."),
-     ("{{ title }}: only when this listed candidate is the same narrative question or "
+     ('"{{ title }}", only when this listed candidate is the same narrative question or '
       "obligation, so the row's beat simply moves that record forward."),
      "continuity_identity/option.j2",
      ("an existing option is folded with the candidate it names (spec 7.4), so its "

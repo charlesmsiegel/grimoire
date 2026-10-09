@@ -250,12 +250,17 @@ blank optional one renders nothing.
   quoted word. `existing` is folded with the candidate it names: one option
   `existing:<id>` (`identity.EXISTING_PREFIX`) per offered candidate, in rank
   order and before `new` and `uncertain`, described under that candidate's
-  clipped title (or its id when the title is blank). There is no `id`
+  clipped title (or its id when the title is blank), quoted and followed by
+  a comma, so the option line keeps one colon between the id and its
+  description. There is no `id`
   question: a native decisions endpoint answers each question on its own,
   so an id asked "unless the decision is existing" was answered without the
   decision (spec 7.4). An option's aliases, each folded the same way, are
   the spellings the acceptance guard canonicalises: the ref form
-  `<kind>:<id>`, and each live alias source of it with its bare id. A
+  `<kind>:<id>`, and each live alias source of it with its bare id, and
+  every one of them, the id included, again with a space after the colon
+  (`existing: <id>`), which `decisions.normalise` would otherwise read as no
+  option; the spaced id is taken before any other alias. A
   candidate whose id is not offerable, whose folded option collides once
   normalised with a higher-ranked one's, or past the room one choice has
   (`decisions.MAX_OPTIONS`, and strict mode's enum string budget past 250
@@ -482,7 +487,9 @@ context and its ordered questions, and the reply is the JSON object
 `user.j2` vars:
 - `items` -- `decisions.Item`s, numbered from 0; each question renders its id,
   its type (yes/no, choice, scale) and its instructions, a choice its options
-  (`id: description`, and whether null is allowed), a score its levels
+  (`"id": description`, the id quoted so where it ends is plain whatever it
+  holds -- a folded `existing:<id>` carries a colon of its own -- and whether
+  null is allowed), a score its levels
   (`index: description`). Option aliases are the parser's and never shown
 - `explain` -- the rationale instruction, rendered last; "" renders nothing
 
