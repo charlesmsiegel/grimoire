@@ -877,11 +877,13 @@ IDENTITY_REWORDED = (
      "decide/user.j2 renders the item's context above its questions"),
     (("only when a listed candidate is the same narrative question or obligation, so the "
       "row's beat simply moves that record forward."),
-     ('the listed candidate "{{ title }}", only when this candidate is the same narrative '
-      "question or obligation, so the row's beat simply moves that record forward."),
+     ('the listed candidate "{{ title }}" itself, only when the row is that same narrative '
+      "question or obligation, so its beat simply moves that record forward; a narrower "
+      'question, a continuation or a related subplot of it is "new".'),
      "continuity_identity/option.j2",
      ("an existing option is folded with the candidate it names (spec 7.4), so its "
-      "description names that candidate")),
+      "description names that candidate, and says what of that candidate is still new, "
+      "since each candidate is offered on its own")),
     (('Give that candidate\'s "id" exactly as it is listed. Leave "id" empty unless the '
       'decision is "existing".'),
      ('"existing" is offered once for each listed candidate, as "existing:" followed by '

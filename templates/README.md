@@ -251,8 +251,9 @@ blank optional one renders nothing.
   `existing:<id>` (`identity.EXISTING_PREFIX`) per offered candidate, in rank
   order and before `new` and `uncertain`, described under that candidate's
   clipped title (or its id when the title is blank): "the listed candidate
-  "<title>", only when …", the title quoted and followed by a comma, so the
-  rendered line (`- existing:<id>: …`) chains no further colon after the
+  "<title>" itself, only when …; a narrower question, a continuation or a
+  related subplot of it is "new"", the title quoted with no colon after it, so
+  the rendered line (`- existing:<id>: …`) chains no further colon after the
   id's own. There is no `id`
   question: a native decisions endpoint answers each question on its own,
   so an id asked "unless the decision is existing" was answered without the
