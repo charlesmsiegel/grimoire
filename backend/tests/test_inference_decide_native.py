@@ -923,6 +923,29 @@ def test_a_connection_wide_stop_still_runs_a_stage_on_another_connection(client)
     assert fake.calls == 1 and fake.requests[0]["target"].provider_id == SPARE[0]
 
 
+def test_an_id_less_stage_is_never_the_stopped_stages_connection(client):
+    """`_same_connection`: an empty provider id matches nothing, not even
+    another empty one. A native stage on an id-less target that stops on a
+    connection-wide failure (a refused key) therefore skips no later stage
+    for being "the same connection": the id-less structured stage after it
+    runs, and answers. (The resolver builds no id-less attempt; a hand-built
+    chain, or an unbuilt target, has one.)"""
+    assert not inference._same_connection("", "")
+    assert inference._same_connection("openrouter", "openrouter")
+    resolved = _native_resolution(client, fallback=True)
+    native = dataclasses.replace(resolved.attempts[0].target, provider_id="")
+    fallback = dataclasses.replace(resolved.attempts[1].target, provider_id="")
+    assert native.kind == fallback.kind
+    items = _items(2)
+    fake = FakeLLM([[decision_reply({"over": False}, {"over": False})]],
+                   decisions=[LLMError("auth", "invalid key", status=401)])
+    got = asyncio.run(inference.run_stages(
+        "scene-break", items, (Stage(NATIVE, wire.Chain(native), None),
+                               Stage(STRUCTURED, wire.Chain(fallback), 0)), client=fake))
+    assert fake.calls == 1
+    assert {r.backend for r in got.items} == {STRUCTURED} and got.errors == ()
+
+
 # ---- a hung decisions endpoint (brutal review H 🟣5) ----
 def _timed_out() -> LLMError:
     return LLMError("timeout", "the call timed out")

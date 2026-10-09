@@ -674,11 +674,46 @@ def test_the_selector_capture_records_the_decision(client):
 #: A native endpoint's pick: Mara, with no rationale.
 NATIVE_MARA = ItemResult({"next": Answer("characters:mara")})
 
+#: Mara's turn once she is picked.
+MARA_ANSWERS = 'Mara answers.\n```handoff\n{"next":null}\n```'
+
+
+def _pick_capture(client, cid, sid) -> dict:
+    """The speaker pick's prompt-log entry."""
+    (entry,) = [e for e in store.prompt_log.list_entries(cid, sid)
+                if e["task"] == "response-selector"]
+    captured = store.prompt_log.read_entry(cid, entry["id"], scene=sid)
+    assert captured is not None
+    return captured
+
+
+@pytest.mark.parametrize("model,mode", [("vendor/decider", "native"),
+                                        ("vendor/active", "structured")])
+def test_a_native_pick_captures_no_sampler_preset(client, model, mode):
+    """A native decision is sent no sampler preset (spec 8), so its capture
+    reports none -- though the Decision role has one -- where a structured
+    pick's names the preset it was sent. The rule reads the outcome's mode
+    (`character_turns._capture`): a target sent without sampling looks the
+    same as one with no preset, so the target alone cannot say it."""
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": model, "preset": pid}}}})
+    fake = FakeLLM([[decision_reply({"next": "characters:mara"})], [MARA_ANSWERS]],
+                   decisions=[NATIVE_MARA])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    captured = _pick_capture(client, cid, sid)
+    assert json.loads(captured["sections"][-1]["text"])["mode"] == mode
+    if mode == "native":
+        assert "sampling" not in captured
+    else:
+        assert captured["sampling"]["preset_id"] == pid
+
 #: What a native endpoint answers for a model it has no decisions for.
 NO_ENDPOINT = LLMError("bad_response", "no decisions endpoint for this model", status=404)
 
-#: Mara's turn once she is picked.
-MARA_ANSWERS = 'Mara answers.\n```handoff\n{"next":null}\n```'
 
 
 @pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
