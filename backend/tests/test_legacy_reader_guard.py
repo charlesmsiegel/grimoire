@@ -22,7 +22,7 @@ The claims, each held against the AST of `backend/src/grimoire`:
   whatever `X` is called (only a connection record carries it);
   `reasoning_effort` where `X` is a name spelled `conn`, `raw` or
   `connection`, because a preset's `params` carry it legitimately. `ALLOWED` is the planner, retirement and its record
-  (`retire.py` and `retired.py`, allowed by path before they exist), and the
+  (`inference/retire.py` and the store-level `inference_retired.py`), and the
   modules that own the spelling or the storage of those keys: the key lists
   (`inference_keys`, `routing`), `config.md`'s reader and its write refusals
   (`config`), the connection store (`llm_connections`, which owns the model
@@ -63,7 +63,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
 ALLOWED = frozenset({
     "store/inference/legacy_plan.py",
     "store/inference/retire.py",
-    "store/inference/retired.py",
+    "store/inference_retired.py",
     "store/inference_keys.py",
     "store/config.py",
     "store/llm_connections.py",
@@ -194,9 +194,9 @@ def test_only_the_planner_reads_the_legacy_layout():
 
 def test_every_echo_and_allowed_path_is_real():
     """A stale entry would exempt a file or a function that no longer exists
-    -- and whatever later takes its name. `retire.py` and `retired.py` are
-    allowed by path before Task 6 writes them, so only they may be absent."""
-    for rel in ALLOWED - {"store/inference/retire.py", "store/inference/retired.py"}:
+    -- and whatever later takes its name. Every one exists now that Task 6
+    has written retirement and its record."""
+    for rel in ALLOWED:
         assert (SRC / rel).is_file(), rel
     for rel, names in ECHOES.items():
         owners = set(_owners(ast.parse((SRC / rel).read_text(encoding="utf-8"))).values())

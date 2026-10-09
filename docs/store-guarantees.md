@@ -1228,7 +1228,7 @@ read it as retired, and the connections' legacy fields are not stripped while
 any campaign is unretired.
 
 **The retirement record**, `<home>/inference-retired.json` at the store root
-(`store/inference/retired.py`) — not under `.cache/`, so it is in every
+(`store/inference_retired.py`) — not under `.cache/`, so it is in every
 backup and every synced copy. It holds two things:
 
 - **`fields`**: each stripped connection's legacy model fields, written before

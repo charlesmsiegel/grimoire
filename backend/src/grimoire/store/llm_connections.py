@@ -11,12 +11,11 @@ import errno
 import functools
 import json
 import secrets
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import atomic, config, inference_keys, locks, routing
+from . import atomic, config, inference_keys, inference_retired, locks, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter, read_record
 from .paths import home, now_iso, safe_id, slugify, uniquify
 
@@ -90,7 +89,7 @@ Lookup = Callable[[str], dict | None]
 #: -> check -> write span whole, and `config.format_hold` is it with the
 #: format read inside. Taken inside a campaign lock (the campaign settings
 #: write), never around one. `inference.facts`' own `_lock` is taken under it,
-#: and so is `inference.retired._lock` (the retirement record): both
+#: and so is `inference_retired._lock` (the retirement record): both
 #: process-local and innermost.
 LOCK = locks.config_lock()
 
@@ -383,24 +382,7 @@ def legacy_fields_on_disk(conn_id: str | None = None) -> dict[str, tuple[str, ..
     return out
 
 
-#: The retirement record's module (`inference.retired`): the strip's one
-#: recorder, and what a delete forgets the connection in.
-_RECORD_MODULE = "grimoire.store.inference.retired"
-
-
-def _record_module():
-    """`inference.retired`, from `sys.modules`: never imported here, since
-    importing `store.inference` from this module closes a cycle through its
-    `resolve`. Always there by the time anything calls into this module:
-    `grimoire.store`'s own `__init__` imports `inference`, which binds it."""
-    module = sys.modules.get(_RECORD_MODULE)
-    if module is None:
-        raise RuntimeError("the retirement record's module is not loaded")
-    return module
-
-
-def strip_model_fields(conn_id: str,
-                       record: Callable[[str, dict[str, str]], None]) -> bool:
+def strip_model_fields(conn_id: str) -> bool:
     """Take the legacy model fields (`MODEL_FIELDS`) off connection `conn_id`
     for good (inference slice I, retirement's strip); returns whether it wrote.
 
@@ -412,25 +394,14 @@ def strip_model_fields(conn_id: str,
     1. the file's RAW frontmatter, read strictly
        (`frontmatter.read_record(..., require="kind")`): a file that is there
        but holds no record is never written over;
-    2. `record(conn_id, values)` with its non-empty legacy fields -- the
-       retirement record (`inference.retired.record_fields`), handed in
-       because this module sits below `inference` in the import graph;
+    2. its non-empty legacy fields into the retirement record
+       (`inference_retired.record_fields`), read strictly there;
     3. the same frontmatter minus those fields, written atomically: every
        other key, `rev` included, kept as it was, so the cached catalog,
        every verified test and every vector space survive.
 
     A connection that holds no legacy key at all writes nothing; one holding
-    only empty ones is rewritten without them, recording nothing.
-
-    `record` must BE the retirement record's writer -- whatever
-    `grimoire.store.inference.retired.record_fields` is bound to when this
-    runs -- or this raises `TypeError` before reading anything: a strip that
-    recorded elsewhere, or nowhere, would lose the values the planner falls
-    back to for good. It is looked up in `sys.modules` rather than imported:
-    importing `store.inference` here closes a cycle through its `resolve`."""
-    if record is not getattr(_record_module(), "record_fields", None):
-        raise TypeError("strip_model_fields records through inference.retired.record_fields "
-                        "only")
+    only empty ones is rewritten without them, recording nothing."""
     if not safe_id(conn_id):
         raise ConnectionNotFound(conn_id)
     with LOCK, config.format_hold():
@@ -442,7 +413,7 @@ def strip_model_fields(conn_id: str,
             return False
         values = {f: meta[f] for f in MODEL_FIELDS if str(meta.get(f, "") or "").strip()}
         if values:
-            record(conn_id, values)
+            inference_retired.record_fields(conn_id, values)
         kept = {k: v for k, v in meta.items() if k not in MODEL_FIELDS}
         atomic.write_text(p, dump_frontmatter(kept, body))
     return True
@@ -592,6 +563,12 @@ def _delete(conn_id: str) -> None:
     #
     # Read and cleared in one `config_lock` hold: a role written between the
     # read and the write would otherwise be merged over by a stale sweep.
+    #
+    # The retirement record is read strictly FIRST, before anything is
+    # written (6b re-review N-1): its entry for this id must be forgotten in
+    # this hold (below), and a record that cannot be read refuses the whole
+    # delete -- the references, the record and the file all as they were.
+    inference_retired.read(strict=True)
     with locks.config_lock():
         cfg = config.read_config()
         dangling = _dangling(cfg, conn_id)
@@ -607,11 +584,11 @@ def _delete(conn_id: str) -> None:
             # already correctly cleared even though the file still exists (a
             # retriable "delete didn't finish" state, not a dangling reference).
             config.write_config(**dangling)
-    # The retirement record's fields for this id go in the same hold, before
-    # the unlink (N20, 6b review M-6): a provider created later under the
-    # same slug must not be answered with this one's legacy model. A record
-    # that cannot be read refuses the delete here, with nothing unlinked.
-    _record_module().forget_fields(conn_id)
+    # The retirement record's fields for this id go in the same hold, after
+    # the references and before the unlink (N20, 6b review M-6): a provider
+    # created later under the same slug must not be answered with this one's
+    # legacy model.
+    inference_retired.forget_fields(conn_id)
     p.unlink()
     _sidecar_path(conn_id).unlink(missing_ok=True)
     regex_path(conn_id).unlink(missing_ok=True)

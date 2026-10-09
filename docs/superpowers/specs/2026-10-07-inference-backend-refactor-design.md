@@ -920,8 +920,10 @@ automatically, and the server refuses that check without `confirm: true`
   cascade), `capabilities.py`, `controls.py` (§8), `migrate.py`, and from
   slice I `legacy_plan.py` (the one reader of the legacy layout: the legacy →
   new mapping, the model-facts overlay, the derived presets and the notes,
-  §11), `retire.py` (retirement, §11.4) and `retired.py` (the retirement
-  record and its `Note`, a leaf the planner imports). `legacy_plan.py`
+  §11) and `retire.py` (retirement, §11.4); the retirement record and its
+  `Note` are the store-level leaf `store/inference_retired.py`, which the
+  planner and `llm_connections` (the strip, a delete) both import, beside
+  `inference_keys.py` and for the same import-graph reason. `legacy_plan.py`
   replaces `translate.py`, which slice I deletes. It must respect
   `test_import_guard.py` (module-scope imports, submodule bindings across
   packages, acyclic).
@@ -2081,7 +2083,7 @@ a restore point. A fresh install never takes one, because it is born retired.
   C–H writers keep it, since they keep unknown frontmatter keys.
 
 **The retirement record** (ruling 16; ratified as new storage).
-`<home>/inference-retired.json`, owned by `store/inference/retired.py`,
+`<home>/inference-retired.json`, owned by `store/inference_retired.py`,
 written through `store.atomic` under its own lock (innermost, after
 `llm_connections.LOCK`) and resolved through `store.paths`. It sits at the
 store root, not under `<home>/.cache/`, so it is in every backup and every

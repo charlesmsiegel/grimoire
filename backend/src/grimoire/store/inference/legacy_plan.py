@@ -68,7 +68,8 @@ from typing import Literal, NamedTuple
 from ... import llm_reasoning, llm_sampling
 from .. import config, llm_connections, locks, paths, routing, sampler_presets
 from .. import inference_keys as keys
-from . import capabilities, cascade, facts, providers, retired
+from .. import inference_retired as retired
+from . import capabilities, cascade, facts, providers
 
 #: A raw connection by id (legacy fields included), or None. What
 #: `lookup(mode=...)` builds; a plain function will do in a test.

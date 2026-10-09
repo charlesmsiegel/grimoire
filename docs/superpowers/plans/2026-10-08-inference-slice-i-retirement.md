@@ -16,6 +16,7 @@
 - **Task 9a** absorbs H's `llm.NATIVE_DECISION_KINDS` table. **Task 9c** re-expresses four more H dependencies on `FALLBACK_KEY` and the conn id. **Tasks 9b/9c** pin the native ledger row (`decision_mode="native"`, `usage_rollup.VERSION` 6).
 - **Task 10's guard** bans `without_fallback` and `NATIVE_DECISION_KINDS`, and follows tuple-unpacked `override_inference` bindings.
 - **Ratification items 5, 6 and 7** have their factual references corrected. Their substance is unchanged.
+- **The record's module (2026-10-09, Task 6b re-review N-2).** The retirement record lives at the store level, `store/inference_retired.py` (beside `inference_keys.py`, for the same import-graph reason), not `store/inference/retired.py`: `llm_connections` imports it at module scope for the strip and a delete, and `store/inference/` cannot be imported from there without a cycle. Path references below are updated; a bare `retired.py` means that module.
 
 **Goal:** Retire the legacy settings layout and the connection-dict lowering, with no change a user can see except those listed under "Needs user ratification before Task 2". The legacy GLM reasoning effort becomes derived presets. The legacy keys and connection fields are deleted from format-2 stores. The translation layer is deleted as a second runtime read path. Every generation goes through `inference.generate` and an adapter registry that takes typed targets instead of connection dicts, and `FALLBACK_KEY` and `STRUCTURED_KEY` are deleted with the lowering.
 
@@ -433,7 +434,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
     - It gates the in-memory derivation (ruling 1), so a legacy field an older build writes after retirement changes nothing here (§11.3).
     - It is how retirement knows a scope is verified retired (ruling 6c).
     - It is in `config._CONFIG_KEYS` (default `""`). C–H writers keep unknown frontmatter keys, which `test_a_c_era_writer_keeps_the_retired_marker` checks (N17).
-16. **The retirement record** `<home>/inference-retired.json`, owned by the new `store/inference/retired.py`, written through `store.atomic` under its own lock, and resolved through `store.paths`.
+16. **The retirement record** `<home>/inference-retired.json`, owned by the new `store/inference_retired.py`, written through `store.atomic` under its own lock, and resolved through `store.paths`.
     - `fields`: `{conn_id: {MODEL_FIELDS: value}}`, written before the strip. `MODEL_FIELDS` holds no key or URL, so the record never holds a credential (§9.4).
       - Only the planner's lookup reads it. It is the fallback for a connection whose file exists and holds no **non-empty** `MODEL_FIELDS` value, so a campaign that arrives unmarked after the strip still resolves (C3, N6).
       - It never answers for a connection whose file is absent, so a deleted provider does not come back as a selection (N20).
@@ -460,7 +461,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
 | `tests/test_legacy_reader_guard.py` (new) | only the planner reads the legacy layout | 5 |
 | `tests/fixtures/frozen_campaign/sweep.py`, `tests/frozen_copy.py` (new helper) | the sweep and the tests prepare their copy identically | 5 |
 | `store/inference/retire.py` (new), `store/frontmatter.py` (`RecordUnreadableError`, `read_record`: C's, moved from `migrate`), `store/inference/migrate.py` (imports them), `store/backups.py` (`RETIRE_PREFIX`), `store/sampler_presets.py` (`put_derived`), `store/locks.py` | retirement writes, fail closed, archive | 6a |
-| `store/inference/retired.py` (new in Task 4 with `Note`), `store/llm_connections.py` (`strip_model_fields`, `_write_raw`, `ensure_migrated`, `_dangling`), `routes/inference.py` or the settings route module (dismiss) | record, strip, I2, notes, facts check | 4, 6b |
+| `store/inference_retired.py` (new in Task 4 with `Note`), `store/llm_connections.py` (`strip_model_fields`, `_write_raw`, `ensure_migrated`, `_dangling`), `routes/inference.py` or the settings route module (dismiss) | record, strip, I2, notes, facts check | 4, 6b |
 | `store/campaigns/lifecycle.py` (`publish_birth`'s create-only keyword, passed by `create_campaign` alone), `store/config.py` (`birth_fields`) | born retired (N3, R2-1) | 6a |
 | `frontend/src/components/inference/RetiredNotes.tsx` (+ test), `frontend/src/routes/ModelsView.tsx`, `frontend/src/api/types.ts`, `client.ts`, `routes/ConfigView.tsx` | the notice; legacy fields out of the types | 6b |
 | `wire.py` (new), `tests/wire_kit.py` (new) | `Target`, `Account`, `Sampling`, `Chain`; test builders | 7 |
@@ -603,7 +604,7 @@ Each hit is converted one of two ways:
 The mapping moves into `legacy_plan.py`, and the derivation and the notes are added there, pure. `translate` and `migrate` delegate to it, so the runtime is unchanged and every existing equivalence test still passes. Task 5 makes play use it.
 
 **Files:**
-- Create: `backend/src/grimoire/store/inference/legacy_plan.py`, `backend/src/grimoire/store/inference/retired.py` (only `Note` and `note_id` in this task; N10), `backend/tests/test_inference_legacy_plan.py`.
+- Create: `backend/src/grimoire/store/inference/legacy_plan.py`, `backend/src/grimoire/store/inference_retired.py` (only `Note` and `note_id` in this task; N10), `backend/tests/test_inference_legacy_plan.py`.
 - Modify:
   - `store/inference/translate.py`: `global_view`/`campaign_view`/`embedding_view` call the planner (deleted in Task 5).
   - `store/inference/migrate.py`: `global_fields`, `campaign_fields`, `_enriched` and `_stated` call the planner, and persist `Plan.mapped` only (N2). `_lookup` and `connection_reader()` (the lookup `fork._translated` hands `campaign_fields`; ruling 15) return `legacy_plan.lookup(mode="migrate")`.
@@ -840,7 +841,7 @@ def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
     - any reference to `routing.CONFIG_KEYS` or `routing.legacy_key`;
     - `X.get("reasoning_effort"|"sampler_preset")` or `X["reasoning_effort"|"sampler_preset"]` where the receiver's name is `conn`, `raw` or `connection`.
 
-    These may appear only in `ALLOWED = {"store/inference/legacy_plan.py", "store/inference/retire.py", "store/inference/retired.py", "store/inference_keys.py", "store/config.py", "store/llm_connections.py", "store/routing.py", "store/campaigns/lifecycle.py"}`. (`retire.py` and `retired.py` arrive in Task 6; the guard allows them by path.)
+    These may appear only in `ALLOWED = {"store/inference/legacy_plan.py", "store/inference/retire.py", "store/inference_retired.py", "store/inference_keys.py", "store/config.py", "store/llm_connections.py", "store/routing.py", "store/campaigns/lifecycle.py"}`. (`retire.py` and `retired.py` arrive in Task 6; the guard allows them by path.)
   - `test_only_resolve_migrate_and_retire_import_the_planner`. Three rules:
     - only `resolve.py`, `migrate.py` and `retire.py` import it (`settings.py` does not, N11);
     - `resolve.py` names exactly one function of `legacy_plan`, `overlay`;
@@ -1062,7 +1063,7 @@ Two commits. **CI checkpoint after 6b.**
 **Files:**
 - Create: `frontend/src/components/inference/RetiredNotes.tsx` (+ `.test.tsx`).
 - Modify:
-  - `store/inference/retired.py` (created in Task 4 with `Note`): the record.
+  - `store/inference_retired.py` (created in Task 4 with `Note`): the record.
   - `store/inference/retire.py`: `strip`; `left` widened; the facts check (N9).
   - `store/inference/legacy_plan.py`: `lookup` falls back to the record's `fields` for a connection whose file exists and holds no non-empty `MODEL_FIELDS` value. The `retire` mode, and the `migrate` mode whenever the record holds an entry for that connection, read the record strictly (N6, N20, R2-2). Per R3-2, the entry proves a strip happened; `config.md`'s retirement marker is not consulted. *(2026-10-09: this read "the `migrate` mode once `config.md` is retired", which R3-2 replaced.)*
   - `store/inference/migrate.py`: step 8 (`_campaign_step` → `migrate.campaign`) and the §11.1 write path build their lookup with `mode="migrate"`, which now reaches the record for any connection the record holds (R3-2).

@@ -83,7 +83,8 @@ from .. import (
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
-from . import facts, legacy_plan, retired
+from .. import inference_retired as retired
+from . import facts, legacy_plan
 
 #: The retirement marker (ruling 15), "1" once a scope is retired.
 RETIRED_KEY = keys.RETIRED_KEY
@@ -576,7 +577,7 @@ def strip_connection(conn_id: str, *, archived: bool = True) -> tuple[retired.No
             return ()
         found = _fact_notes(raw)
         retired.record_notes(found)
-        llm_connections.strip_model_fields(conn_id, retired.record_fields)
+        llm_connections.strip_model_fields(conn_id)
     return found
 
 

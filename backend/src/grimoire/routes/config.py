@@ -28,7 +28,8 @@ from .. import (
 )
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store.inference import capabilities, controls, facts, providers, retired
+from ..store import inference_retired as retired
+from ..store.inference import capabilities, controls, facts, providers
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
 from ..store.inference import settings as inference_settings
@@ -883,7 +884,8 @@ def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(g
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
     except retired.RecordUnreadableError:
-        # Its retirement-record entry cannot be forgotten: nothing deleted.
+        # The retirement record, read before anything is written, cannot be
+        # read: nothing was written -- no reference cleared, no file removed.
         raise HTTPException(status_code=409, detail={
             "kind": "retirement_unreadable",
             "detail": inference_settings.RETIREMENT_UNREADABLE}) from None

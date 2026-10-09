@@ -82,7 +82,8 @@ from .. import (
     sampler_presets,
 )
 from .. import inference_keys as keys
-from . import capabilities, cascade, facts, legacy_plan, providers, retired
+from .. import inference_retired as retired
+from . import capabilities, cascade, facts, legacy_plan, providers
 from .cascade import Selection
 from .resolved import Attempt, ResolvedInference
 

@@ -36,7 +36,8 @@ from grimoire.store import (
 )
 from grimoire.store.campaigns import lifecycle as campaign_lifecycle
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import legacy_plan, migrate, retire, retired
+from grimoire.store import inference_retired as retired
+from grimoire.store.inference import legacy_plan, migrate, retire
 from grimoire.store.inference import resolve as inference
 from grimoire.store.inference import settings as inference_settings
 from tests import inference_baseline_c as base_c
@@ -110,7 +111,7 @@ def _stripped() -> None:
     recorded), as a pass that already ran the strip left them -- for a test
     about a scope's own work, with no strip left to do."""
     for conn_id in llm_connections.legacy_fields_on_disk():
-        llm_connections.strip_model_fields(conn_id, retired.record_fields)
+        llm_connections.strip_model_fields(conn_id)
     assert not llm_connections.legacy_fields_on_disk()
 
 
@@ -1061,22 +1062,8 @@ def test_strip_model_fields_refuses_an_unparseable_connection(home, damage):
     path = _conn_file("held")
     path.write_bytes(damage)
     with pytest.raises(frontmatter.RecordUnreadableError):
-        llm_connections.strip_model_fields("held", retired.record_fields)
+        llm_connections.strip_model_fields("held")
     assert path.read_bytes() == damage
-    assert not retired.path().exists()
-
-
-def test_strip_model_fields_records_through_the_record_only(home):
-    """6b review M-5: a strip that recorded anywhere but the retirement
-    record would lose the values the planner falls back to; any other
-    recorder is refused before anything is read."""
-    _legacy()
-    _glm("glm", "high")
-    before = _conn_file("glm").read_bytes()
-    for other in (lambda c, v: None, retired.record_notes, print):
-        with pytest.raises(TypeError):
-            llm_connections.strip_model_fields("glm", other)
-    assert _conn_file("glm").read_bytes() == before
     assert not retired.path().exists()
 
 
@@ -1215,13 +1202,23 @@ def test_a_recreated_slug_never_inherits_the_dead_ones_model(home):
 
 
 def test_a_delete_over_an_unreadable_record_deletes_nothing(client):
+    """6b re-review N-1: the record is read before anything is written, so a
+    refused delete of the Primary's provider leaves `config.md` -- the
+    Primary included -- byte for byte, and the file in place."""
     llm_connections.create_connection("openrouter", "spare", api_key="sk-spare",
                                       model="vendor/spare")
     assert retire.strip() == []
+    inference_fixtures.put_settings(client, {"roles": {"primary": {"selection": {
+        "provider": "spare", "model": "vendor/spare"}}}})
+    cfg_before = (store.home() / "config.md").read_bytes()
+    conn_before = _conn_file("spare").read_bytes()
     good = _corrupt_record()
     got = client.delete("/api/llm-connections/spare")
     assert got.status_code == 409 and got.json()["kind"] == "retirement_unreadable"
-    assert _conn_file("spare").exists()
+    assert (store.home() / "config.md").read_bytes() == cfg_before
+    assert _raw_config()[keys.role_key("primary", "provider")] == "spare"
+    assert _conn_file("spare").read_bytes() == conn_before
+    assert retired.path().read_text(encoding="utf-8") == "{not json"
     retired.path().write_bytes(good)
     assert client.delete("/api/llm-connections/spare").status_code == 200
     assert "spare" not in retired.read()["fields"]
@@ -1264,10 +1261,10 @@ def test_a_fact_the_migration_skipped_is_noted_before_the_strip(home, monkeypatc
     real = llm_connections.strip_model_fields
     order: list[tuple[str, list[str]]] = []
 
-    def watched(conn_id, record):
+    def watched(conn_id):
         order.append((conn_id, [n["kind"] for n in retired.read()["notes"]
                                 if n["provider_id"] == conn_id]))
-        return real(conn_id, record)
+        return real(conn_id)
 
     monkeypatch.setattr(llm_connections, "strip_model_fields", watched)
     assert migrate.ensure().state == "done"

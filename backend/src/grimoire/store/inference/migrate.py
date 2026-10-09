@@ -136,7 +136,8 @@ from .. import (
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
-from . import facts, legacy_plan, providers, retire, retired
+from .. import inference_retired as retired
+from . import facts, legacy_plan, providers, retire
 
 log = logging.getLogger(__name__)
 

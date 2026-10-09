@@ -25,7 +25,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from .. import store
-from ..store.inference import retired, settings
+from ..store import inference_retired as retired
+from ..store.inference import settings
 from .common import refuse_newer, refuse_unmigrated
 
 router = APIRouter()

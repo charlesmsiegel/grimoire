@@ -67,7 +67,8 @@ from .. import inference_keys as keys
 from ..campaigns import lifecycle as campaign_lifecycle
 from ..campaigns import read as campaign_read
 from ..frontmatter import breaks_line
-from . import capabilities, cascade, facts, in_use, migrate, providers, resolve, retired
+from .. import inference_retired as retired
+from . import capabilities, cascade, facts, in_use, migrate, providers, resolve
 from .resolved import ResolvedInference
 
 SCOPES: tuple[str, ...] = ("global", "campaign")

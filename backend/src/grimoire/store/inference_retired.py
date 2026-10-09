@@ -41,8 +41,13 @@ retirement's writes, the strip and the dismiss route all do -- which is what
 makes a read-modify-write of this file whole across processes. Order:
 `llm_connections.LOCK` -> `_lock`, never the reverse (N4).
 
-A leaf of `store/inference/`: the planner imports it, and it imports nothing of
-the planner's (N10).
+A store-level leaf, as `inference_keys` is and for the same reason: the
+planner (`inference.legacy_plan`), retirement and the settings view import it,
+and so does `llm_connections` -- the strip records into it, and a delete
+forgets a connection in it -- which `store/inference/` cannot be imported
+from without a cycle (its `__init__` imports `resolve`, which imports
+`llm_connections`). It imports nothing but `atomic`, `frontmatter` and
+`paths`, and nothing of the planner's (N10).
 """
 
 from __future__ import annotations
@@ -54,7 +59,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
-from .. import atomic, frontmatter, paths
+from . import atomic, frontmatter, paths
 
 #: The record's file name, at the store root.
 FILENAME = "inference-retired.json"

@@ -14,8 +14,7 @@ from . import (
     providers,
     resolve,
     resolved,
-    retired,
 )
 
 __all__ = ["capabilities", "cascade", "controls", "embed", "facts", "in_use", "legacy_plan",
-           "probes", "providers", "resolve", "resolved", "retired"]
+           "probes", "providers", "resolve", "resolved"]

@@ -1048,7 +1048,7 @@ def config_lock() -> _ProcessScopedLock:
     same object -- one cross-process lock over every model-settings
     read-modify-write, rather than a process-local one taken before it -- and
     the only locks taken under it are `inference.facts`' process-local file
-    lock and `inference.retired`'s, the retirement record's -- both
+    lock and `inference_retired`'s, the retirement record's -- both
     process-local and innermost: nothing that holds either takes another.
 
     `config.format_hold` is this lock with the store's format read inside it,
