@@ -68,7 +68,7 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
           )}
         </section>
         {n > 0 && (
-          <p><Link to={`/models/edit${ADVANCED_HASH}`}>
+          <p className="models-overrides"><Link to={`/models/edit${ADVANCED_HASH}`}>
             {n} task override{n === 1 ? "" : "s"} active
           </Link></p>
         )}
