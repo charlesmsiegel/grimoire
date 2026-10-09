@@ -55,7 +55,7 @@ double-charge ordinary users merely to collect telemetry"), against the landed
   `usage.ledger_dir()` is `paths.home() / "usage"`
   (`store/usage.py:241-242`), so during a case the row lands in the temp
   home's ledger and `temp_home` deletes it. `Meter.done` also files error rows
-  into that temp home's error store (`store/usage.py:575-586`), which is
+  into that temp home's error store (`store/usage.py:567-582`), which is
   deleted too. The rows come back on `Decision.usage`
   (`inference.py:655`, `:679-681`), but the runner reads only `backend` and
   `errors` (`runner.backend_note`, `evals/runner.py:283-299`).
@@ -201,7 +201,7 @@ and 01d's escalation accounting (01d-C2).
 **Rates are read once, in the real store**, next to `resolve_connections`:
 `rates = store.usage.Rates.current()` before the first isolate. Every eval row
 is priced against that one table, so a run has one set of rates, as a rollup
-has (`store/usage.py:796-799`). A native decision row stays unmodellable
+has (`store/usage.py:792-794`). A native decision row stays unmodellable
 (`Rates.estimate` → `_modellable`, `:884-896`) with no special case here.
 
 **Rows are harvested before the isolate is deleted.** At the end of each case,
