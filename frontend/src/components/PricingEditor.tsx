@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, api, type PricingEntry } from "../api/client";
 import { RATE_FIELDS, RateFields, complete as completeRates, emptyRates, formOf, typed,
          type RateForm } from "./RateFields";
@@ -123,7 +123,7 @@ function unnamed(row: Row): boolean {
   return !row.isDefault && row.id.trim() === "" && started(row);
 }
 
-export function PricingEditor() {
+export function PricingEditor({ addModel, onSaved }: { addModel?: string; onSaved?: () => void } = {}) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +138,12 @@ export function PricingEditor() {
    *  say so and refuse to write over what it could not read. */
   const [unread, setUnread] = useState(false);
   const [reload, setReload] = useState(0);
+  /** The Input box Set rate puts the caret in (spec 3.5). */
+  const focusRef = useRef<HTMLInputElement>(null);
+  const [focusKey, setFocusKey] = useState<number | null>(null);
+  /** The Set rate model already placed, so a re-run places a NEW one (a
+   *  second Set rate while the editor is open) and never the same one twice. */
+  const placed = useRef<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -147,12 +153,32 @@ export function PricingEditor() {
         // `unreadable` is a 200 carrying no rates: the file is there and could
         // not be parsed. Same refusal as a rejected request, because saving an
         // empty form would replace what is in that file with nothing.
-        setRows(t.unreadable ? [] : toRows(t.rates));
+        const loaded = t.unreadable ? [] : toRows(t.rates);
+        // Set rate: edit the model's own entry when it has one, else add a
+        // row for it -- never a second row claiming the same model.
+        if (addModel && !t.unreadable && placed.current !== addModel) {
+          placed.current = addModel;
+          const at = loaded.find((r) => !r.isDefault && r.id === addModel);
+          if (at) {
+            setFocusKey(at.key);
+          } else {
+            const row = { key: nextKey++, id: addModel, isDefault: false, rates: emptyRates() };
+            loaded.push(row);
+            setFocusKey(row.key);
+          }
+        }
+        setRows(loaded);
         setUnread(Boolean(t.unreadable));
       })
       .catch(() => { if (!live) return; setRows([]); setUnread(true); });
     return () => { live = false; };
-  }, [reload]);
+  }, [reload, addModel]);
+
+  useEffect(() => {
+    if (focusKey === null || !focusRef.current) return;
+    focusRef.current.focus();
+    setFocusKey(null);
+  }, [focusKey, rows]);
 
   function edit(index: number, rates: RateForm) {
     setSaved(false);
@@ -169,6 +195,7 @@ export function PricingEditor() {
       // it back and the two would disagree forever.
       setRows(toRows(answer.rates));
       setSaved(true);
+      onSaved?.();
     } catch (err) {
       // `ApiError` carries the server's own `detail`; anything else is a
       // transport failure with nothing better to show than its message.
@@ -255,6 +282,7 @@ export function PricingEditor() {
               response that never saw it. */}
           <RateFields value={row.rates} onChange={(rates) => edit(i, rates)}
                       idPrefix={`pricing-${row.key}`} disabled={busy}
+                      inputRef={row.key === focusKey ? focusRef : undefined}
                       subject={row.isDefault ? "every other model" : row.id || "a new model"} />
         </div>
       ))}
