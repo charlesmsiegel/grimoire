@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -20,7 +22,14 @@ from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import DECISIONS_URL, OpenRouterClient, decision_body, decision_result
+from grimoire.store.continuity import identity, reconcile
 from tests.llm_fakes import FIXTURES, FakeLLM
+
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from evals import gate  # noqa: E402
 
 BODIES = FIXTURES / "native" / "openrouter"
 KEY = "sk-or-secret-key"
@@ -848,3 +857,101 @@ async def test_fake_decide_native_accepts_openai_compatible():
     assert result.answers["over"].answer is True
     assert holder["provider"] == "openai_compatible"
     assert fake.native_requests == [(Item(CONTEXT, (OVER,)), OPENAI_CONN, None)]
+
+
+# ---- continuity's folded choices on the native path ------------------------
+#
+# The investigation that found slice G's direction bug, reproduced: a native
+# decisions endpoint answers each question of an item on its own, so G's
+# `from` / `to` ("null for both when the decision has no direction") and
+# identity's `id` ("null unless the decision is existing") came back none, and
+# every directed pair verdict and every native `existing` was lost. Each
+# dependent answer is folded into the one choice it depends on now (spec 7.4),
+# so the none that lost it cannot be sent: there is no such question.
+
+def _native_reply(provider: str, item: Item, chosen: dict[str, str],
+                  stale: dict[str, str] | None = None) -> dict:
+    """A decisions response answering every question `item` asks -- `chosen`
+    by key, the rest with the reserved none (or the first option) -- plus
+    `stale` answers to questions the item no longer asks, in either wire
+    shape."""
+    answers: dict[str, str] = {}
+    for q in item.questions:
+        assert isinstance(q, Choice)
+        keys = decisions.native_choice_keys(q)
+        answers[q.id] = chosen.get(q.id, keys[-1][0])
+    answers.update(stale or {})
+    if provider == "openrouter":
+        return {"answers": {qid: {"type": "choice", "choice": key, "confidence": 0.9}
+                            for qid, key in answers.items()}}
+    return {"answers": [{"type": "choice", "name": qid, "choice": key, "confidence": 0.9}
+                        for qid, key in answers.items()]}
+
+
+def _sent_questions(provider: str, item: Item) -> list[str]:
+    if provider == "openrouter":
+        return list(decision_body(item, MODEL)["questions"])
+    return [q["name"] for q in openai_compatible.decision_body(item, OPENAI_MODEL)["questions"]]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_pair_verdict_carries_its_direction_in_its_one_choice(provider):
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    for item in items:
+        sent = _sent_questions(provider, item)
+        assert "from" not in sent and "to" not in sent
+        assert sent == [q.id for q in item.questions]
+    # Only the folded decision is answered (evidence none), and a stale `from`
+    # and `to` of none ride beside it, as the bug's replies did: the adapter
+    # reads only the questions the item asked, so nothing can lose the
+    # direction the decision already carries.
+    want = {0: "continuation_b_of_a", 1: "duplicate_a_into_b", 2: "pays_off_b_to_a"}
+    results = tuple(
+        read(provider)(_native_reply(provider, item, {"decision": want.get(n, "uncertain")},
+                                     stale={"from": "none", "to": "none"}), item)
+        for n, item in enumerate(items))
+    for result in results:
+        assert set(result.answers) == {q.id for q in items[results.index(result)].questions}
+        assert result.backend == decisions.NATIVE_BACKEND
+    proposals = reconcile.proposals_of(payload, results)
+    got = [(proposals[c["id"]]["decision"], proposals[c["id"]]["from"],
+            proposals[c["id"]]["to"], proposals[c["id"]]["relation"])
+           for c in payload["candidates"][:3]]
+    assert got == [
+        ("continuation", "thread:winifreds-chart", "thread:maras-map", "continues"),
+        ("duplicate", "commitment:maras-oath", "commitment:winifreds-debt", ""),
+        ("pays_off", "thread:maras-map", "commitment:maras-oath", "pays_off")]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_every_offered_direction_round_trips_a_native_endpoint(provider):
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    pair = items[0]
+    refs = {r["letter"]: r["ref"] for r in payload["candidates"][0]["records"]}
+    for option in pair.questions[0].options:
+        word, frm, to = reconcile.unfolded(option.id)
+        if not frm:
+            continue
+        results = tuple(read(provider)(_native_reply(provider, item, {
+            "decision": option.id if item is pair else "uncertain"}), item) for item in items)
+        proposal = reconcile.proposals_of(payload, results)[payload["candidates"][0]["id"]]
+        assert (proposal["decision"], proposal["from"], proposal["to"]) == (
+            word, refs[frm], refs[to]), option.id
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_existing_names_its_record_in_its_one_choice(provider):
+    items = gate._identity_items()
+    for item in items:
+        assert _sent_questions(provider, item) == [identity.DECISION_ID]
+    want = ("existing:find-the-ledger", "new", "existing:the-midnight-deadline")
+    results = tuple(read(provider)(_native_reply(provider, item, {"decision": word},
+                                                 stale={"id": "none"}), item)
+                    for item, word in zip(items, want, strict=True))
+    exam = gate._identity_exam()
+    assert identity.take(exam, identity.answers_of(exam.prompt_rows(), results))
+    assert [(e.decision, e.status, e.target) for e in exam.rows] == [
+        ("existing", "accepted", "find-the-ledger"), ("new", "accepted", None),
+        ("existing", "accepted", "the-midnight-deadline")]

@@ -5,7 +5,9 @@ Two ways to obtain output:
 
   replay (default)  read the checked-in recordings. Offline, deterministic, no
                     API key — this is the mode pytest runs, and the one that
-                    guards prompt-template edits.
+                    guards prompt-template edits. A native recording holds a
+                    decisions endpoint's response bodies, read through its
+                    adapter as a live native run reads them.
   live              call the model the app routes each case's task to, once per
                     case -- a decide case (one with a `schema`) down the chain
                     `inference.decide` would send it on (`inference.stages`
@@ -23,12 +25,13 @@ inheriting the other's setup.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import Counter
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from grimoire import decisions, inference, llm
+from grimoire import decisions, inference, llm, openai_compatible, openrouter
 from grimoire.store.inference import providers
 from grimoire.store.inference import resolve as inference_resolve
 
@@ -73,8 +76,34 @@ def prepare(case: Case) -> dict:
     return ctx
 
 
-def score(case: Case, variant: str, output: str) -> Result:
+#: The adapter a native recording's response bodies are read through, by
+#: `Recording.native`.
+NATIVE_ADAPTERS = {"openrouter": openrouter, "openai": openai_compatible}
+
+
+def native_output(ctx: dict, native: str, text: str) -> str:
+    """A native recording read as a live native run reads its replies: `text`
+    is a JSON list of decisions response bodies, one per item of the case, in
+    order, each read through the `native` adapter's `decision_result` -- the
+    production mapping -- and written back as the structured reply its graders
+    read (`decisions.render`). Every item is marked answered natively, so a
+    rationale is graded n/a, as it is live. A body the adapter refuses raises:
+    a native recording is hand-authored, and one that no longer reads is a
+    broken fixture, not a failed check."""
+    bodies = json.loads(text)
+    adapter = NATIVE_ADAPTERS[native]
+    results = tuple(adapter.decision_result(body, item)
+                    for body, item in zip(bodies, ctx["items"], strict=True))
+    ctx["native_items"] = frozenset(range(len(results)))
+    return decisions.render(results, ctx["items"], explain=bool(ctx.get("explain")))
+
+
+def score(case: Case, variant: str, output: str, native: str = "") -> Result:
+    """`output` scored by `case`'s graders; with `native`, first read as that
+    adapter's response bodies (`native_output`)."""
     ctx = prepare(case)
+    if native:
+        output = native_output(ctx, native, output)
     return Result(case, variant, list(case.grade(ctx, output)), output)
 
 
@@ -95,7 +124,8 @@ def replay(case: Case, recording) -> Result:
     if not path.exists():
         return Result(case, recording.variant, [], "", f"missing recording: {path}")
 
-    result = score(case, recording.variant, path.read_text(encoding="utf-8"))
+    result = score(case, recording.variant, path.read_text(encoding="utf-8"),
+                   recording.native)
     if recording.expect_pass:
         return result
 

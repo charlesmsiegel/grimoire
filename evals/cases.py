@@ -109,6 +109,11 @@ class Recording:
     variant: str
     expect_fail: tuple[str, ...] = ()
     ext: str = "md"
+    #: For a decide case, the native adapter (`runner.NATIVE_ADAPTERS`) whose
+    #: decisions response bodies the recording holds, one per item; replay
+    #: reads them through it, as a live native run reads its replies. Empty
+    #: for a reply the graders read as written.
+    native: str = ""
 
     @property
     def expect_pass(self) -> bool:
@@ -1773,7 +1778,12 @@ CASES: tuple[Case, ...] = (
              Recording("unfounded", ("reconcile.evidence",), "json"),
              # §28.10 cases 4, 5 and 7 held back, as case 8's `timid`.
              Recording("timid", ("reconcile.cross_type", "reconcile.close",
-                                 "reconcile.fulfilled"), "json"))),
+                                 "reconcile.fulfilled"), "json"),
+             # The compliant verdicts from OpenRouter's decisions endpoint,
+             # which answers each question alone: every directed verdict
+             # rides on the decision it is folded into, so the two pair
+             # checks pass on that answer and no other (spec 7.4).
+             Recording("native", (), "json", native="openrouter"))),
     Case(id="scene-suggestions",
          task="suggestions",
          hypothesis="with two focused drivers and a batch anchor in a custom calendar, "
@@ -1869,7 +1879,11 @@ CASES: tuple[Case, ...] = (
              # An id offered nowhere: no option, so `existing` names nothing,
              # and the row it was given on gets the wrong verdict.
              Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
-                       "json"))),
+                       "json"),
+             # The compliant verdicts from OpenAI's decisions endpoint, each
+             # row answering its one folded decision: the duplicate names its
+             # record in the `existing:<id>` it chose (spec 7.4).
+             Recording("native", (), "json", native="openai"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "

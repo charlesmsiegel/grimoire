@@ -25,7 +25,7 @@ stake in:
 | `decide-scene-break` | asked through `decide()` whether a scene whose beat has resolved is over, the reply is the schema's object, answers yes, and says why; the prompt carries the question, the transcript, the schema and the rationale instruction |
 | `decide-voice-drift` | asked through `decide()` whether a character with a clipped, contraction-free anchor and a standing correction drifted when she chattered in contractions, the reply is the schema's object, answers `drift`, and gives a corrective no longer than `MAX_NOTE`; the prompt carries the question, every verdict with its description, the transcript and anchor, the correction and the schema |
 | `decide-continuity-identity` | asked through `decide()` about each row the duplicate check examines, the reply is the schema's object, maps a reworded duplicate to the existing record by an offered id, and keeps a same-topic question and a concrete continuation new; the prompt carries the question, every examined row's title, the rationale instruction and the schema |
-| `decide-continuity-reconcile` | asked through `decide()` about each candidate the reconciliation sweep sends, the reply is the schema's object, keeps a same-topic question distinct, reads a concrete question as a continuation, never merges a thread with a commitment, closes or resolves only on a scene its item shows, and keeps an old or overdue record open when nothing settles it; the prompt carries each vocabulary's question, the direction and evidence questions, every candidate's records, the rationale instruction and the schema |
+| `decide-continuity-reconcile` | asked through `decide()` about each candidate the reconciliation sweep sends, the reply is the schema's object, keeps a same-topic question distinct, reads a concrete question as a continuation, never merges a thread with a commitment, closes or resolves only on a scene its item shows, and keeps an old or overdue record open when nothing settles it; the prompt carries each vocabulary's question with a pair's directed words folded with their direction, the evidence questions, every candidate's records, the rationale instruction and the schema |
 | `decide-speaker` | asked through `decide()` who opens a round in which the player has just put a question to one of two NPCs by name, the reply is the schema's object and picks that NPC (no rationale is asked for); the prompt carries the question, every eligible ref with its name and `grimoire` with its description, null allowed, the observable transcript (gathered by the store helpers the route calls, so a director note in the scene never reaches it) and the schema |
 
 ## Running it
@@ -321,7 +321,10 @@ section added to absorb is graded from the day it lands.
 `decide-continuity-identity` scores the duplicate check's reply the same way:
 `identity.answers_of` turns a word outside the decisions into `uncertain`, so
 `identity.enum` is scored on the parsed answers' `NOT_AN_OPTION` detail rather
-than on the mapping. Its `build` pins which records `identity.examine` offers
+than on the mapping. An `existing` is folded with the id it names
+(`existing:<id>`, spec 7.4), so one naming an unoffered record is no option
+either; `identity.known_ids` tells it from an unknown word by its raw
+spelling. Its `build` pins which records `identity.examine` offers
 each row, and through which clause, so a change to the similarity floors fails
 there rather than leaving the case asking about nothing.
 `decide-continuity-reconcile` follows the same rule for the same reason:
@@ -334,9 +337,21 @@ the parsed answers. Its candidates are specified by hand, one per §28.10 case
 `c1`). Its `prompt` asserts that each case is sent under the vocabulary it
 needs and that every scene is known evidence, so a change there fails at build
 rather than leaving a recording citing a scene the item would not offer. A
-verdict check reads the decision word alone, and `reconcile.evidence` judges
-the citation, so "the wrong call" and "the right call, unfounded" stay
-separable.
+verdict check reads the decision answer alone -- a pair's directed word folded
+with its direction (`continuation_b_of_a`), which `reconcile.unfolded` splits
+back -- and `reconcile.evidence` judges the citation, so "the wrong call" and
+"the right call, unfounded" stay separable.
+
+**Both continuity cases carry a native recording** (`native`), the compliant
+verdicts as a decisions endpoint returns them: a JSON list of response
+bodies, one per item, in the adapter's wire shape (`Recording.native` names
+it), which replay reads through that adapter's `decision_result` and writes
+back with `decisions.render`, as a live native run does. A native endpoint
+answers each question of an item on its own, which is why no continuity
+question depends on another's answer: G's `from` / `to` and `id` did, came
+back none natively, and lost every directed pair verdict and every native
+`existing` -- what these recordings, answering only the folded choice, would
+have shown.
 `scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`,
 keeps only the entries `suggest.is_card` keeps (a title and a premise, the
 cards the player is shown), and judges claims and dates with `suggest.claim`
@@ -366,7 +381,9 @@ and renders the drivers and controls addenda whole.
   `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`,
   `eager`, `unfounded`, `timid`, `cloned`, `bad-date`, `unknown-ref`,
   `wrong`, `no-reason`, `no-note`, `long-note`, `off-roster`, `abstained`)
-  and is never touched by a live run.
+  and is never touched by a live run. So is a `native` recording, which is
+  hand-authored and passes: response bodies of a native decisions endpoint
+  (above).
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —
 renaming a case without deleting its old files would otherwise leave dead
