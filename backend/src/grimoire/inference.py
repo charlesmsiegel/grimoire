@@ -75,6 +75,17 @@ NATIVE = decisions.NATIVE_BACKEND
 #: against real prompts later.
 NATIVE_CONCURRENCY = 4
 
+#: How many native items in a row may time out before the stage starts no
+#: more (`_native`): one full wave. A timeout is not `_connection_wide` --
+#: one slow item says nothing of the next, and the facade does not retry it
+#: -- but a decisions endpoint that accepts connections and never answers
+#: would otherwise cost every item the whole ceiling, `NATIVE_CONCURRENCY`
+#: at a time: a continuity sweep's ceil(n / NATIVE_CONCURRENCY) full
+#: ceilings for nothing. Any answer, or any other failure, resets the count.
+#: Stage-local: a hung decisions endpoint is no reason to skip a generating
+#: stage on the same connection (`run_stages`).
+NATIVE_TIMEOUT_STOP = NATIVE_CONCURRENCY
+
 #: Given the facade call and the meter's live holder, what to await instead --
 #: how a caller's time budget runs inside the meter `decide` opens (I2). The
 #: call yields the reply text on a structured stage and an `ItemResult` on a
@@ -190,12 +201,15 @@ class _Answered(NamedTuple):
     unit -- a chunk on a structured stage, an item on a native one -- as its
     items' positions and its final error, in order, and the stage's ledger
     rows and what answered (`decisions.Decision.served`). Every unanswered
-    item is in exactly one failed unit."""
+    item is in exactly one failed unit. `stopped` is the failure that made
+    the stage start nothing more, or None -- `run_stages` reads it to skip a
+    later stage that would only meet it again."""
 
     results: tuple[decisions.ItemResult | None, ...]
     failed: tuple[tuple[tuple[int, ...], LLMError], ...]
     rows: tuple[dict, ...]
     served: tuple[tuple[str, str], ...]
+    stopped: LLMError | None = None
 
 
 #: A backend: one stage's attempt at every item it is given.
@@ -381,7 +395,7 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
             failed.append((unit, error))
             if _stops_chunks(error, conn):
                 stopped = error
-    return _Answered(tuple(results), tuple(failed), tuple(rows), tuple(served))
+    return _Answered(tuple(results), tuple(failed), tuple(rows), tuple(served), stopped)
 
 
 def _connection_wide(exc: LLMError) -> bool:
@@ -397,7 +411,14 @@ def _connection_wide(exc: LLMError) -> bool:
     A failure composed from several routes' (`LLMError.words`: a primary and
     the fallback the facade sent, or a structured chunk's prompt-only
     re-sends) is connection-wide only when every route's own failure is: one
-    route that failed for a reason of its own may serve the next call."""
+    route that failed for a reason of its own may serve the next call.
+
+    A `timeout` is not one, whether the provider's read bound or the
+    caller's ceiling (`around`) raised it: one slow item says nothing of the
+    next, and a chat endpoint on the same connection is not the decisions
+    endpoint that hung. A native stage stops on a run of them instead
+    (`NATIVE_TIMEOUT_STOP`), and only itself. The absorb clock's own overrun
+    is the clock's, and its next call is refused unsent, which is."""
     if exc.words:
         return all(_connection_wide(word) for word in exc.words)
     return (exc.kind in ("auth", "missing_key", "rate_limit")
@@ -433,16 +454,22 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
 
     Each item catches only `LLMError`, which leaves that item unanswered with
     its error; anything else propagates and the group cancels the other
-    items, so no request outlives the batch, and each open meter files
-    `aborted` -- as a cancel does. Once an item fails with an error every
-    other item would meet (`_connection_wide`), no further item is started:
-    those in flight finish, and the rest are never sent, file no row, and
-    leave the stage carrying the failure that stopped them, for the next
-    stage to take up."""
+    items, and each open meter files `aborted` -- as a cancel does. No
+    request the group owns outlives the batch; an `around` that detaches its
+    call into a task of its own (`routes.common._bounded_call`) abandons
+    that task when cancelled rather than awaiting it, so its request may
+    unwind after the batch has returned -- `_bounded_call`'s documented
+    trade, and its meter still files `aborted`. Once an item fails with an
+    error every other item would meet (`_connection_wide`), or once
+    `NATIVE_TIMEOUT_STOP` items in a row have timed out, no further item is
+    started: those in flight finish, and the rest are never sent, file no
+    row, and leave the stage carrying the failure that stopped them, for the
+    next stage to take up."""
     # The mode stamped on a copy of the stage's block (`with_account`).
     conn = llm_usage.with_account(call.conn, decision_mode=NATIVE)
-    # What the capture names: the same attempt, without the sampler preset a
-    # native call never sends (M4), so the prompt log reports none.
+    # The same attempt, without the sampler preset a native call never sends
+    # (M4): what the capture names, so the prompt log reports none, and what
+    # is sent, so the ledger row files none (`llm_usage.account`).
     named = {k: v for k, v in conn.items() if k != "sampling"}
     # Named `client`, the receiver `test_usage_guard.py` recognises.
     client = call.client
@@ -453,6 +480,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
     holders: list[dict | None] = [None] * len(items)
     started = [False] * len(items)
     stopped: list[LLMError] = []
+    timeouts = [0]      # how many items in a row have timed out
 
     async def one(index: int, item: decisions.Item) -> None:
         async with gate:
@@ -463,14 +491,18 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
             started[index] = True
             try:
                 with m:
-                    pending = client.decide_native(item, conn, m.usage, retries=call.retries)
+                    pending = client.decide_native(item, named, m.usage,
+                                                   retries=call.retries)
                     results[index] = await (call.around(pending, m.usage) if call.around
                                             else pending)
                     holders[index] = m.usage
+                timeouts[0] = 0
             except LLMError as exc:
                 # Filed by the meter already; the item's fate waits on the chain.
                 errors[index] = exc
-                if not stopped and _connection_wide(exc):
+                timeouts[0] = timeouts[0] + 1 if exc.kind == "timeout" else 0
+                if not stopped and (_connection_wide(exc)
+                                    or timeouts[0] >= NATIVE_TIMEOUT_STOP):
                     stopped.append(exc)
             finally:
                 rows[index] = m.row
@@ -479,7 +511,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
         # refused before it went out (`Capture`).
         answered = results[index]
         await _captured(
-            call, partial(_native_request, item, conn) if m.usage else [],
+            call, partial(_native_request, item, named) if m.usage else [],
             partial(_outcome, NATIVE, named, holders[index],
                     () if answered is None else (answered,), errors[index]),
             named)
@@ -504,7 +536,8 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
                    for index, result in enumerate(results) if result is None)
     served = tuple(dict.fromkeys(_served_by(h) for h in holders if h is not None))
     return _Answered(tuple(results), failed,
-                     tuple(row for row in rows if row is not None), served)
+                     tuple(row for row in rows if row is not None), served,
+                     stopped[0] if stopped else None)
 
 
 def _native_request(item: decisions.Item, conn: dict) -> list[dict]:
@@ -514,6 +547,26 @@ def _native_request(item: decisions.Item, conn: dict) -> list[dict]:
     never saw."""
     return [{"role": "user",
              "content": json.dumps(llm.native_body(item, conn), indent=2, ensure_ascii=False)}]
+
+
+def _final(words: Sequence[LLMError]) -> LLMError:
+    """One unit's final error from its failure on each stage it reached:
+    `llm.routes_failed`'s composition -- except when every one of them is the
+    caller's clock refusing the call unsent (`_refused_unsent`), which is the
+    first of them as it is. A composed error is a plain `LLMError`, and a
+    phase that tells "never sent" from "failed" by type (absorb's `except
+    BudgetRefused`) would read the clock's refusal as a provider failure."""
+    if all(_refused_unsent(word) for word in words):
+        return words[0]
+    return llm.routes_failed(words)
+
+
+def _same_connection(conn: dict, other: dict) -> bool:
+    """Whether two stages send to the same connection, by store id --
+    `llm._same_route`'s rule (two dicts are never the same object, so the
+    id decides)."""
+    ident = conn.get("id", "")
+    return bool(ident) and ident == other.get("id", "")
 
 
 def _settle(got: _Answered, pending: list[int], results: list[decisions.ItemResult | None],
@@ -554,12 +607,21 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     chain a `ValueError`, both before any meter opens. A
     `llm.PresetRefusalError` ends the chain where it is met, as it stops the
     facade (ruling 7): the preset is the user's to fix, and a native stage
-    that takes no sampling would only hide it.
+    that takes no sampling would only hide it. So does the caller's clock
+    refusing a call unsent (`_refused_unsent`, absorb's `BudgetRefused`):
+    it refuses every later call too, so a later stage could only add another
+    refusal, and the one it has keeps its type. A stage that stopped on a
+    failure every call on its connection would meet (`_connection_wide`:
+    the key, the account's money, an exhausted rate limit) skips each later
+    stage on that SAME connection (`_same_connection`): its items keep the
+    failures they have, as items held back inside a stage do.
 
     When no item answered, the first failed unit's final error is raised
     (F's ruling 8): its failures on every stage it reached, composed
     (`llm.routes_failed`) -- the first stage's kind and window, the later
-    stages' failures named after it (M3), and each kept in `words`.
+    stages' failures named after it (M3), and each kept in `words` -- or,
+    when every one of them is the clock's refusal, the first of them as it
+    is (`_final`), so a caller's `except BudgetRefused` still sees it.
     Otherwise each unanswered item is `None` with reason `error`, and
     `Decision.errors` holds each failed unit's final error.
 
@@ -580,9 +642,14 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     served: dict[tuple[str, str], None] = {}     # ordered, each once
     failed: list[tuple[tuple[int, ...], LLMError]] = []
     pending = list(range(len(items)))
+    #: Each connection a stage stopped on with a connection-wide failure.
+    dead: list[dict] = []
     for stage in chain:
         if not pending:
             break
+        if any(_same_connection(stage.conn, conn) for conn in dead):
+            # It would meet the failure that stopped the stage before it.
+            continue
         got = await _BACKENDS[stage.mode](
             tuple(items[i] for i in pending),
             replace(call, conn=stage.conn, retries=stage.retries))
@@ -590,12 +657,15 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
         served.update(dict.fromkeys(got.served))
         failed = _settle(got, pending, results, words)
         pending = [i for i in pending if results[i] is None]
-        if any(isinstance(error, llm.PresetRefusalError) for _unit, error in failed):
+        if any(isinstance(error, llm.PresetRefusalError) or _refused_unsent(error)
+               for _unit, error in failed):
             break
+        if got.stopped is not None and _connection_wide(got.stopped):
+            dead.append(stage.conn)
     # Each failed unit of the last stage its items reached, with the failures
     # of every stage before it: a chunk's earlier failures are its first
     # item's (a native stage before it failed each item on its own).
-    errors = tuple(llm.routes_failed(words[unit[0]]) for unit, _error in failed)
+    errors = tuple(_final(words[unit[0]]) for unit, _error in failed)
     # Each backend stamps the items it answered (`ItemResult.backend`).
     answered_by = list(dict.fromkeys(r.backend for r in results if r is not None))
     if not answered_by:

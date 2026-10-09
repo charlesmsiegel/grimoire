@@ -628,6 +628,38 @@ def test_native_rows_carry_operation_and_mode(client):
     assert resolved.attempts[0].conn[ACCOUNT] is block and "decision_mode" not in block
 
 
+def test_a_native_row_files_no_preset_it_never_sent(client):
+    """Brutal reviews H (🟣3, P1): a native call sends no sampling (spec 8),
+    so its ledger row names no `preset`, even with one on the role --
+    `llm_usage.account` documents `preset` as the one actually sent. The
+    resolution's own dict still carries the preset it resolved."""
+    fx.decide_only(client, fallback=False)
+    pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
+    fx.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": DECIDER[0], "model": DECIDER[1], "preset": pid}}}})
+    resolved = _resolved()
+    assert resolved.attempts[0].conn["sampling"]["preset_id"] == pid
+    fake = FakeLLM([["unused"]], decisions=[_yes()])
+    _decide(fake, [_item()], resolved=resolved)
+    (row,) = _rows()
+    assert row["decision_mode"] == NATIVE and "preset" not in row
+    assert "sampling" not in fake.native_requests[0][1]
+
+
+def test_the_facade_drops_the_preset_from_a_native_call_it_is_handed(client):
+    """The same at the facade, for a caller that hands `decide_native` a dict
+    with a preset on it (the model test's probe): the holder it stamps, which
+    the meter files, names none."""
+    fx.decide_only(client, fallback=False)
+    conn = {**_resolved().attempts[0].conn,
+            "sampling": {"preset_id": "warm", "params": {}, "scope": "global"}}
+    holder: dict = {}
+    wire = _Wire(decides=[_yes()])
+    asyncio.run(_real(wire).decide_native(_item(), conn, holder))
+    assert holder["provider_id"] == DECIDER[0]     # the account was filed
+    assert "preset" not in holder and "sampling" not in holder[llm.ATTEMPTED]
+
+
 def test_decision_names_the_one_backend_and_route_that_answered(client):
     """`backend`, `provider` and `model` name the one stage that answered, and
     are empty when stages with different routes answered one batch; `served`
@@ -756,30 +788,144 @@ def test_a_chunk_sent_with_a_fallback_stops_only_when_both_routes_would(client, 
     assert len(provider.streamed) == requests
 
 
-def test_a_budget_refused_native_stage_is_still_the_clocks_through_a_failed_fallback(client):
-    """Ruling 3: the absorb's clock refused the native stage, and the fallback
-    stage then failed for its own reason. The two compose into one error,
-    whose sentence is no longer the clock's -- but the stages are kept as
-    `words`, so G's identity call site (`routes.scenes._budget_overrun`)
-    still reads its own clock as the cause."""
+def test_a_clock_refusal_ends_the_chain_and_keeps_its_type(client):
+    """Brutal review H 🟡2: the absorb clock that refused the native stage
+    refuses every later call too, so the chain stops there -- the fallback
+    stage is never invoked -- and the refusal is raised as the
+    `BudgetRefused` it is, never composed into a plain `LLMError` that a
+    phase's `except BudgetRefused` would read as a provider failure."""
     resolved = _native_resolution(client, fallback=True)
-    fake = FakeLLM([[""]], error=LLMError("network", "connection reset"), decisions=[_yes()])
-    calls: list[object] = []
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
+    refused: list[LLMError] = []
 
     async def around(call, holder):
-        calls.append(call)
-        if len(calls) == 1:
-            call.close()       # the native call: the clock refuses it unsent
-            raise _budget_refused()
-        return await call
+        call.close()           # the clock is out: nothing is sent
+        refused.append(_budget_refused())
+        raise refused[-1]
+
+    with pytest.raises(routes.scenes.BudgetRefused) as exc:
+        _decide(fake, [_item()], resolved=resolved, around=around)
+    assert exc.value is refused[0] and len(refused) == 1
+    assert fake.native_requests == [] and fake.calls == 0 and _rows() == []
+
+
+def test_the_reviewers_two_stage_clock_script_raises_budget_refused(client):
+    """The reviewer's own script: `run_stages` over (native, structured at 0
+    retries) with an `around` that always refuses -- `BudgetRefused` comes out
+    as itself, not as an `LLMError` composed of two refusals."""
+    resolved = _native_resolution(client, fallback=True)
+    chain = (Stage(NATIVE, resolved.attempts[0].conn, None),
+             Stage(STRUCTURED, resolved.attempts[1].conn, 0))
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
+
+    async def around(call, holder):
+        call.close()
+        raise _budget_refused()
 
     with pytest.raises(LLMError) as exc:
-        _decide(fake, [_item()], resolved=resolved, around=around)
-    assert fake.native_requests == []
+        asyncio.run(inference.run_stages("scene-break", [_item()], chain, client=fake,
+                                         around=around))
+    assert isinstance(exc.value, routes.scenes.BudgetRefused)
+    assert exc.value.detail == routes.scenes.BUDGET_EXHAUSTED and exc.value.words == ()
+    assert fake.calls == 0
+
+
+def test_a_unit_refused_on_every_stage_is_the_first_refusal_itself():
+    """Should a unit's failures all be the clock's refusal (a chain an eval
+    builds by hand, say), its final error is the first of them as it is."""
+    first, second = _budget_refused(), _budget_refused()
+    assert inference._final([first, second]) is first
+    composed = inference._final([LLMError("network", "connection reset"), second])
+    assert not isinstance(composed, routes.scenes.BudgetRefused)
+    assert composed.words[1] is second
+
+
+# ---- a stop carried to a later stage on the same connection ----
+@pytest.mark.parametrize("stop", [
+    LLMError("auth", "invalid key", status=401),
+    LLMError("missing_key", "no API key"),
+    LLMError("rate_limit", "slow down", retry_after=90.0, status=429),
+    LLMError("bad_response", "insufficient credits", status=402),
+], ids=["auth", "missing_key", "rate_limit", "spend"])
+def test_a_connection_wide_stop_skips_a_later_stage_on_the_same_connection(client, stop):
+    """Brutal review H 🟣4: a native-only model with a generating fallback on
+    the same OpenRouter account. The native stage stops on a failure every
+    call on that connection would meet, so the structured stage on the same
+    connection is never sent: its items keep the failures they have, as
+    items held back inside a stage do."""
+    fx.decide_only(client, fallback=True, on=fx.SAME_PROVIDER)
+    resolved = _resolved()
+    assert [(a.provider_id, a.decision_mode) for a in resolved.attempts] == [
+        ("openrouter", NATIVE), ("openrouter", STRUCTURED)]
+    items = _items(6)
+    fake = _Endpoint([[decision_reply(*({"over": False},) * 6)]],
+                     {i.context: stop for i in items})
+    with pytest.raises(LLMError) as exc:
+        _decide(fake, items, resolved=resolved)
+    assert exc.value is stop
+    assert fake.calls == 0
+    assert fake.sent <= NATIVE_CONCURRENCY and len(_rows()) == fake.sent
+
+
+def test_a_connection_wide_stop_still_runs_a_stage_on_another_connection(client):
+    """The same stop with the fallback on another provider: that stage runs,
+    and answers every item the native stage left."""
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(6)
+    fake = _Endpoint([[decision_reply(*({"over": False},) * 6)]],
+                     {i.context: LLMError("auth", "invalid key", status=401) for i in items})
+    got = _decide(fake, items, resolved=resolved)
+    assert {r.backend for r in got.items} == {STRUCTURED} and got.errors == ()
+    assert fake.calls == 1 and fake.requests[0]["conn"]["id"] == SPARE[0]
+
+
+# ---- a hung decisions endpoint (brutal review H 🟣5) ----
+def _timed_out() -> LLMError:
+    return LLMError("timeout", "the call timed out")
+
+
+def test_a_run_of_native_timeouts_stops_the_stage(client):
+    """A decisions endpoint that accepts connections and never answers: once
+    `NATIVE_TIMEOUT_STOP` items in a row have timed out, no further item is
+    started -- those already in flight finish -- so a hung endpoint costs
+    about two waves of the ceiling, not one per `NATIVE_CONCURRENCY` items.
+    The rest are never sent, file no row, and carry the timeout."""
+    resolved = _native_resolution(client, fallback=False)
+    items = _items(24)
+    fake = _Endpoint([["unused"]], {i.context: _timed_out() for i in items})
+    with pytest.raises(LLMError) as exc:
+        _decide(fake, items, resolved=resolved)
     assert exc.value.kind == "timeout"
-    assert exc.value.detail != routes.scenes.BUDGET_EXHAUSTED
-    assert isinstance(exc.value.words[0], routes.scenes.BudgetRefused)
-    assert routes.scenes._budget_overrun(exc.value)
+    assert NATIVE_CONCURRENCY <= fake.sent <= 2 * NATIVE_CONCURRENCY - 1
+    assert len(_rows()) == fake.sent
+
+
+def test_timeouts_broken_by_an_answer_stop_nothing(client):
+    """One slow item says nothing of the next: a run of timeouts that an
+    answer breaks resets the count, and every item is sent."""
+    resolved = _native_resolution(client, fallback=False)
+    items = _items(12)
+    fake = _Endpoint([["unused"]], {
+        i.context: (_yes() if n % NATIVE_CONCURRENCY == 0 else _timed_out())
+        for n, i in enumerate(items)})
+    got = _decide(fake, items, resolved=resolved)
+    assert fake.sent == 12
+    assert len(got.errors) == 12 - 12 // NATIVE_CONCURRENCY
+
+
+def test_a_native_timeout_stop_does_not_skip_a_generating_stage_on_its_connection(client):
+    """A hung decisions endpoint is not a hung chat endpoint: the timeout
+    stop is the native stage's own, so the structured fallback on the same
+    connection still answers the items it left."""
+    fx.decide_only(client, fallback=True, on=fx.SAME_PROVIDER)
+    resolved = _resolved()
+    items = _items(10)
+    fake = _Endpoint([[decision_reply(*({"over": False},) * 10)]],
+                     {i.context: _timed_out() for i in items})
+    got = _decide(fake, items, resolved=resolved)
+    assert fake.sent < 10
+    assert {r.backend for r in got.items} == {STRUCTURED} and got.errors == ()
+    assert fake.calls == 2   # ten items, chunks of at most MAX_ITEMS_PER_CALL
 
 
 # ---- the usage guard, end to end (Task 3, ruling 10) ----

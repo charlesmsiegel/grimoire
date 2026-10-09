@@ -7583,6 +7583,39 @@ def test_voice_drift_on_a_decide_only_model_answers_on_the_fallback(client, on):
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
 
 
+def test_a_voice_check_the_clock_refused_on_both_stages_is_skipped_not_failed(
+        client, monkeypatch):
+    """Brutal review H 🟡2: on a two-stage chain (a decide-only model with a
+    generating fallback), the absorb clock refusing the native call refuses
+    every call after it too. The refusal comes out of `decide` as the
+    `BudgetRefused` it is -- never composed into a plain `LLMError` with the
+    fallback's refusal -- so the NPC is one the clock never reached
+    (`skipped`), not a failed check, and the fallback stage is never sent."""
+    cid, sid = _voice_scene(client)
+    decide_only(client, fallback=True, on=SPARE)
+    real_run = routes.scenes._Budget.run
+    spent = [False]
+
+    async def run_out_at_the_native_call(self, coro, on_start=None, on_timeout=None):
+        if spent[0] or getattr(coro, "cr_code", None) is not None \
+                and coro.cr_code.co_name == "decide_native":
+            spent[0] = True
+            coro.close()
+            raise routes.scenes.BudgetRefused("timeout", routes.scenes.BUDGET_EXHAUSTED)
+        return await real_run(self, coro, on_start, on_timeout)
+
+    monkeypatch.setattr(routes.scenes._Budget, "run", run_out_at_the_native_call)
+    fake = _native_judge(decisions=[_NATIVE_IN_VOICE])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    voice = body["voice"]
+    assert voice["skipped"] == ["aese"] and voice["failed"] == []
+    assert voice["budget_exhausted"] is True and voice["attempted"] is False
+    assert voice["reason"] == ("the absorb time budget ran out before any voice check "
+                               "could be run")
+    assert fake.native_requests == [] and _voice_requests(fake) == []
+
+
 _NATIVE_DRIFT = ItemResult({"verdict": Answer("drift")}, backend="native")
 
 

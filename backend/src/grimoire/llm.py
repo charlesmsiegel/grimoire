@@ -1505,10 +1505,14 @@ class LLMClient:
         Each attempt is stamped and captured like a generation's; none is
         estimated (no `Estimate`, no `note_prompt`), because a native row's
         billing unit is not a chat prompt, and none is sent sampling, which a
-        decision takes none of (spec 8). A status in
+        decision takes none of (spec 8) -- nor stamped with it: `conn`'s
+        `sampling` is dropped, so the row files no `preset`. A status in
         `NATIVE_REJECTED_STATUSES` is not reported to the observer.
         """
-        conn = _without_fallback(conn)
+        # Neither the fallback (the chain's) nor the sampler preset (a native
+        # call sends none, spec 8), so the ledger row `_stamp` files names no
+        # preset that was never sent (`llm_usage.account`).
+        conn = {k: v for k, v in _without_fallback(conn).items() if k != "sampling"}
         kind = _native_kind(conn)
         entry = NATIVE_DECISION_KINDS[kind]
         adapter = getattr(self, entry.client)
