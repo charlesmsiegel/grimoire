@@ -658,8 +658,10 @@ covers that.
 - **Frames**: the turn stream emits `{"type": "status", "phase":
   "investigating"}` while E1 runs, and `{"type": "status", "phase":
   "investigated", "selected": n}` when it ends, so the composer can say
-  "Searching history…". The client ignores unknown frame types today, and the
-  plan must confirm that and add a test.
+  "Searching history…". This spec has not verified that the client ignores
+  an unknown frame type. The plan must check `api.streamDraft` and the turn
+  stream reader, and add the frame type to both, with a test, before the
+  server emits it.
 - **Metering**: each loop turn meters under `investigation-turn` with the
   turn's `campaign`, `scene` and `post` (the player post being answered), so
   the investigation's cost is charged to the post as a reroll's is
