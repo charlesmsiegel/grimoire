@@ -1635,6 +1635,47 @@ def test_a_refused_delete_names_the_record_and_what_will_fix_it(client, record, 
     assert dismissed.status_code == 409 and dismissed.json()["detail"] == detail
 
 
+def test_an_entry_that_never_arrives_has_a_way_out_that_brings_nothing_back(client):
+    """Brutal re-review 🟢C: the record removed by hand leaves a stripped
+    provider's entry missing for good. The 409 names the way out; taking it
+    -- add the provider again, remove the old one -- unblocks the campaign,
+    and a record that arrives after all resurrects nothing: the old id's file
+    is gone, and the new provider has another id."""
+    llm_connections.create_connection("openrouter", "spare", api_key="sk-test-spare",
+                                      model="vendor/spare")
+    assert retire.strip() == []
+    cid = _late_unmarked()
+    record = retired.path().read_bytes()
+    retired.path().unlink()
+    body = {"roles": {"fast": {"selection": {"provider": "openrouter", "model": "vendor/fast"}}}}
+
+    got = client.put(f"/api/campaigns/{cid}/inference", json=body)
+    assert got.status_code == 409, got.text
+    detail = got.json()["detail"]
+    assert "“spare”" in detail and "add that provider again on Providers" in detail, detail
+    assert "remove “spare”" in detail
+
+    made = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
+                                                    "api_key": "sk-test-spare2"})
+    assert made.status_code == 200, made.text
+    fresh = made.json()["id"]
+    assert fresh != "spare"
+    assert client.delete("/api/llm-connections/spare").status_code == 200
+    got = client.put(f"/api/campaigns/{cid}/inference", json=body)
+    assert got.status_code == 200, got.text
+    after = _meta(cid)
+    assert after[keys.pin_key("scene", "provider")] == "spare"
+    assert after.get(keys.pin_key("scene", "model"), "") == ""
+
+    retired.path().write_bytes(record)          # it arrives after all
+    migrate.ensure()
+    pins = [keys.pin_key("scene", part) for part in keys.PARTS]
+    assert {k: _meta(cid).get(k, "") for k in pins} == {k: after.get(k, "") for k in pins}
+    assert _retired(_meta(cid))
+    assert legacy_plan.lookup(mode="retire")("spare") is None
+    assert legacy_plan.lookup(mode="retire")(fresh)["model"] == ""
+
+
 def test_a_missing_entry_says_which_provider_it_waits_for(home):
     _spare_stripped()
     retired.path().unlink()

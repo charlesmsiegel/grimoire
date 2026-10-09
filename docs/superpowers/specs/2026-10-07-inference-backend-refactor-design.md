@@ -2136,7 +2136,12 @@ synced copy.
   the record, or a record restored apart from them. The scope or campaign
   that names it writes nothing and is retried on the next start, so no plan
   is persisted from a connection read as having no model and no effort. Play's
-  soft lookup reads it as it stands. A C–H edit of the file drops the mark,
+  soft lookup reads it as it stands. An entry that will never arrive (the
+  record removed by hand, or a crash between a delete's `forget_fields` and
+  its unlink) has a way out the refusal names: add the provider again under a
+  new id, remove the old one, and choose the new one where the old was chosen.
+  A record that arrives afterwards resurrects nothing — it never answers for a
+  connection whose file is gone. A C–H edit of the file drops the mark,
   and that residue is accepted (§11.3).
 - `notes`: the route-preset notes of §11.2 step 4 and the `fact_not_carried`
   notes, each `{id, scope, subject, provider_id, effort, kind, text,

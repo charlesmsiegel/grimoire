@@ -338,7 +338,8 @@ def retirement_unreadable(exc: retired.RecordUnreadableError) -> str:
     if isinstance(exc, retired.EntryMissingError):
         return (f"The record of retired model settings ({retired.FILENAME}, at the "
                 f"library's root) holds nothing yet for the provider “{exc.conn_id}”, "
-                "whose old model settings it keeps; try again once it has synced.")
+                "whose old model settings it keeps; try again once it has synced. "
+                + retired.EntryMissingError.WAY_OUT.format(conn=exc.conn_id))
     return RETIREMENT_UNREADABLE
 
 

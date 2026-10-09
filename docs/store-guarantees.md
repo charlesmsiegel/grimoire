@@ -1210,7 +1210,13 @@ same write), and every read that feeds a write refuses a marked file whose
 record entry is not there yet (`EntryMissingError`). Nothing is written from
 it — no scope retired, no campaign migrated, no `config.md` switched — and the
 next start tries again, so the record's arrival finishes the pass as the
-first device did.
+first device did. An entry that will never arrive — the record removed by
+hand, or lost to a crash between a delete's record write and its unlink —
+has one way out, which the refusal names: add the provider again (a new id,
+while the old one exists), remove the old one, and choose the new one where
+the old was chosen. Nothing comes back if the record turns up after all: it
+never answers for a provider whose file is gone, and the new one has another
+id.
 
 **The markers.** `inference_retired: "1"` in `config.md` and in each
 `campaign.md` says the scope's legacy layout is gone; the planner reads a
