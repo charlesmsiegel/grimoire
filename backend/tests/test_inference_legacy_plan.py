@@ -531,6 +531,57 @@ def test_a_global_note_is_not_repeated_per_campaign(home):
     assert _campaign(meta, glob=glob).notes == ()
 
 
+#: I-A: one `openai_compatible` provider, `glm` (legacy effort `low`), run on a
+#: model that is not GLM at the global scope and on GLM at the campaign, under
+#: a global route preset that sets no effort. The global plan notes nothing
+#: (its model never took the effort), so the campaign's loss is the
+#: campaign's to note -- in each of the three shapes a campaign reaches it by.
+_SHARED_PROVIDER = {
+    "campaign pin": (
+        {"role_primary_provider": "glm", "role_primary_model": "qwen3", "preset_tracker": "cold"},
+        {"use_tracker": keys.PIN, "use_tracker_provider": "glm", "use_tracker_model": "glm-5.3"},
+        "tracker"),
+    "campaign role override": (
+        {"role_primary_provider": "glm", "role_primary_model": "qwen3", "preset_scene": "cold"},
+        {"role_primary_provider": "glm", "role_primary_model": "glm-5.3"},
+        "scene"),
+    "inherited global fallback": (
+        {"role_primary_provider": "openrouter", "role_primary_model": "vendor/active",
+         "role_fast_fallback_provider": "glm", "role_fast_fallback_model": "qwen3",
+         "preset_tracker": "cold"},
+        {"use_tracker": keys.PIN, "use_tracker_provider": "glm", "use_tracker_model": "glm-5.3"},
+        "tracker"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_SHARED_PROVIDER))
+def test_a_provider_the_global_scope_runs_off_glm_is_noted_for_the_campaign(home, shape):
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "low")
+    glob_fields, meta_fields, route = _SHARED_PROVIDER[shape]
+    glob = _format2(**glob_fields)
+
+    assert _plan(glob).notes == ()
+    camp = _campaign(_format2(**meta_fields), glob=glob)
+
+    assert [(n.scope, n.subject, n.provider_id, n.effort) for n in camp.notes] == [
+        ("campaign:saltmarch", route, "glm", "low")]
+
+
+@pytest.mark.parametrize("shape", sorted(_SHARED_PROVIDER))
+def test_a_provider_the_global_scope_runs_on_glm_is_noted_once(home, shape):
+    """The same shapes with the global scope on GLM as well: the global plan
+    notes the provider on that route, and the campaign adds nothing."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "low")
+    glob_fields, meta_fields, route = _SHARED_PROVIDER[shape]
+    glob = _format2(**{k: ("glm-5.3" if v == "qwen3" else v) for k, v in glob_fields.items()})
+
+    assert [(n.scope, n.subject, n.provider_id) for n in _plan(glob).notes
+            if n.subject == route] == [("global", route, "glm")]
+    assert _campaign(_format2(**meta_fields), glob=glob).notes == ()
+
+
 def test_a_campaign_plan_names_its_campaign():
     """M-1: `cid` is required -- a defaulted scope would give every
     campaign's notes one shared id."""

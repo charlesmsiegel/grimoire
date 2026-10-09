@@ -575,12 +575,18 @@ def _route_preset(view: Mapping, route: routing.Route,
 
 def _under_route_preset(route: routing.Route, view: Mapping, glob: Mapping, *,
                         campaign: bool, from_global: bool,
-                        exists: Callable[[str], bool]) -> list[cascade.Selection]:
+                        conn: Lookup) -> list[cascade.Selection]:
     """The selection and fallback `route` runs on at this scope, both under
     its route preset: the cascade over the scope (a campaign's over it and
     `glob`). When a campaign runs under the GLOBAL route preset, a provider
-    the global scope runs that route on as well is left out -- the global
-    plan notes it."""
+    the global plan NOTES on that route is left out -- the global note (one
+    per route and provider, and a provider's legacy effort is the provider's)
+    already says it. Only a noted one: whether a selection is noted turns on
+    its model too, so a provider the global scope runs on a model that is not
+    GLM is noted for the campaign that runs it on one that is."""
+    def exists(provider: str) -> bool:
+        return conn(provider) is not None
+
     if campaign:
         choice = cascade.choose(route, campaign=dict(view), glob=dict(glob), exists=exists)
     else:
@@ -589,7 +595,8 @@ def _under_route_preset(route: routing.Route, view: Mapping, glob: Mapping, *,
     if from_global:
         alone = cascade.choose(route, campaign={}, glob=dict(glob), exists=exists)
         noted_globally = {s.provider for s in (alone.selection, alone.fallback)
-                          if s is not None}
+                          if s is not None
+                          and _legacy_effort(s, conn, llm_reasoning.GLM_EFFORTS)}
     return [s for s in (choice.selection, choice.fallback)
             if s is not None and s.provider not in noted_globally]
 
@@ -609,9 +616,6 @@ def _route_notes(view: Mapping, *, glob: Mapping, scope: str, campaign: bool,
     is a campaign's own selection under a global preset. A global preset
     over a selection the global scope chooses as well is the global plan's
     note, and is not noted again per campaign."""
-    def exists(provider: str) -> bool:
-        return conn(provider) is not None
-
     out: dict[str, retired.Note] = {}
     for route in routing.ROUTES:
         if campaign and not route.campaign_scoped:
@@ -623,7 +627,7 @@ def _route_notes(view: Mapping, *, glob: Mapping, scope: str, campaign: bool,
         if found is None or found.sets_effort:
             continue
         for selection in _under_route_preset(route, view, glob, campaign=campaign,
-                                             from_global=from_global, exists=exists):
+                                             from_global=from_global, conn=conn):
             effort = _legacy_effort(selection, conn, llm_reasoning.GLM_EFFORTS)
             if not effort:
                 continue
