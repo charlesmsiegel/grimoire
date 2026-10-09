@@ -1,8 +1,7 @@
-import { act, cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { Link, MemoryRouter } from "react-router-dom";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import ConfigView from "./ConfigView";
 import { EMBEDDINGS_COPY } from "../components/inference/copy";
-import { configChanged } from "../appEvents";
 
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
@@ -10,7 +9,7 @@ vi.mock("../api/client", () => ({
     getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
     listBackups: vi.fn(), createBackup: vi.fn(), createImageBackup: vi.fn(),
     getStoreConflicts: vi.fn(),
-    listStyles: vi.fn(), getInferenceSettings: vi.fn(),
+    listStyles: vi.fn(),
     listCampaigns: vi.fn(), listScenes: vi.fn(),
     listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
     getPromptLayout: vi.fn(), putPromptLayout: vi.fn(),
@@ -64,14 +63,6 @@ const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
 };
-/** `GET /inference/settings`, which this page reads for the migration status
- *  alone; the rest is only the shape. */
-const inferenceSettings = (over: Record<string, unknown> = {}) => ({
-  format: "2", newer: false,
-  migration: { state: "done", reason: "", skipped: [] },
-  roles: {}, routes: [], providers: [], presets: [], preset_clear: "",
-  ...over,
-});
 beforeEach(() => {
   vi.clearAllMocks();
   (api.getConfig as any).mockResolvedValue(cfg);
@@ -83,7 +74,6 @@ beforeEach(() => {
     { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
     { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
   ]);
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings());
   (api.listBackups as any).mockResolvedValue({
     dir: "/home/u/.grimoire/backups", backups: [], image_backups: [],
   });
@@ -114,33 +104,24 @@ async function open(name: RegExp) {
 
 const save = () => fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
-/** Open Models and wait for the read of the upgrade status it starts to land:
- *  the roles are drawn at once, so an assertion straight after the click would
- *  race that read. The card says it is busy until then. The click is an async
- *  `act` because the read starts in the effect the click commits and answers
- *  a microtask later -- after a synchronous `act` has already closed. */
-async function openModels() {
-  const row = await screen.findByRole("button", { name: /^Models/ });
-  await act(async () => { fireEvent.click(row); });
-  const card = await screen.findByRole("region", { name: "Models in use" });
-  await waitFor(() => expect(card).toHaveAttribute("aria-busy", "false"));
-}
-
-test("the column indexes every section in three groups", async () => {
+test("the column leads with Inference's three pages, then every section in three groups", async () => {
   renderView();
   await screen.findByRole("button", { name: /^Storage/ });
-  // Queried by selector rather than by text: a group heading and the head that
-  // wraps it have the same text content, so getByText matches both.
   const groups = [...document.querySelectorAll(".column-section-head .section-label")];
   expect(groups.map((g) => g.textContent))
-    .toEqual(["The install", "What the model sees", "What you see"]);
+    .toEqual(["Inference", "The install", "What the model sees", "What you see"]);
+  expect(screen.getByRole("link", { name: /^Providers/ })).toHaveAttribute("href", "/providers");
+  expect(screen.getByRole("link", { name: /^Models/ })).toHaveAttribute("href", "/models");
+  expect(screen.getByRole("link", { name: /^Presets/ })).toHaveAttribute("href", "/presets");
   for (const label of [
-    /^Storage/, /^Backups/, /^Models/, /^Timeouts/, /^Context/,
-    /^Prompt layout/, /^Scene tracker/,
-    /^System prompt/, /^Response targets/, /^Presets/, /^Transcript/,
-    /^Output processing/, /^While playing/, /^Appearance/,
+    /^Storage/, /^Backups/, /^Logging/, /^Timeouts & retries/, /^First-run setup/, /^Context/,
+    /^Prompt layout/, /^Scene tracker/, /^System prompt/, /^Response targets/,
+    /^Transcript/, /^Output processing/, /^While playing/, /^Appearance/,
   ]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
+  for (const gone of [/^Models/, /^Presets/, /^Token rates/]) {
+    expect(screen.queryByRole("button", { name: gone })).toBeNull();
   }
 });
 
@@ -150,39 +131,9 @@ test("the Output processing section mounts the global rule editor", async () => 
   expect(screen.getByTestId("regex-rules")).toHaveAttribute("data-scope", '{"kind":"global"}');
 });
 
-// ---- Models: a summary of the roles, not an editor of connections ---------
-
-test("the models summary shows each role's resolved model", async () => {
-  renderView();
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  const line = (role: string) =>
-    within(card).getByText(role, { selector: "dt" }).nextElementSibling!.textContent;
-  // Named as the server named them: provider ▸ model ▸ preset.
-  expect(line("Primary")).toBe("OpenRouter ▸ vendor/model-x ▸ Warm");
-  expect(line("Fast")).toBe("Local vectors ▸ small-1 ▸ no preset");
-  expect(line("Decision")).toBe("Local vectors ▸ small-1 ▸ no preset");
-  expect(line("Embedding")).toMatch(/^off/);
-  // ...and the two pages where they are changed.
-  expect(within(card).getByRole("link", { name: /^Models/ })).toHaveAttribute("href", "/models");
-  expect(within(card).getByRole("link", { name: /^Providers/ }))
-    .toHaveAttribute("href", "/providers");
-});
-
-test("a role nothing selects says so rather than naming a model", async () => {
-  (api.getConfig as any).mockResolvedValue({
-    ...cfg, inference: { roles: { primary: null, fast: null, decision: null }, embedding_on: false },
-  });
-  renderView();
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  expect(within(card).getByText("Primary", { selector: "dt" }).nextElementSibling!.textContent)
-    .toBe("not set");
-});
-
 test("no legacy connection or routing controls remain", async () => {
   renderView();
-  await openModels();
+  await open(/^Timeouts & retries/);
   for (const label of [/LLM connection/i, /Fallback connection/i, /Embeddings connection/i,
                        /Embedding model/i]) {
     expect(screen.queryByLabelText(label)).toBeNull();
@@ -195,107 +146,11 @@ test("no legacy connection or routing controls remain", async () => {
   // Nothing this page sends names a legacy inference key: at format 2 the
   // server refuses every one of them.
   fireEvent.change(screen.getByLabelText(/^retries$/i), { target: { value: "0" } });
+  await open(/^Context/);
   fireEvent.change(screen.getByLabelText(/recalled entries/i), { target: { value: "4" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     { llm_retries: "0", semantic_recall_depth: "4" }));
-});
-
-test("a failed upgrade shows its reason", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "1",
-    migration: { state: "failed", reason: "the safety backup failed: disk full", skipped: [] },
-  }));
-  renderView();
-  await openModels();
-  expect(await screen.findByText(/Upgrade pending: the safety backup failed: disk full/))
-    .toBeInTheDocument();
-});
-
-test("a pending upgrade says so before the layout has switched", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "1", migration: { state: "pending", reason: "", skipped: [] },
-  }));
-  renderView();
-  await openModels();
-  expect(await screen.findByText(/Upgrade pending: model settings are being moved/))
-    .toBeInTheDocument();
-});
-
-// What the server puts in `skipped` (`migrate.py`): "campaign <cid>: <why>"
-// or "provider <id>: <why>". The campaign Models section parses that prefix,
-// so the fixtures keep its shape.
-const BUSY = "campaign saltmarch: busy; finished on the next start";
-
-test("an upgrade still finishing after the switch is a quiet line, not the banner", async () => {
-  // At format 2 the library's settings are already writable; what is left is
-  // a campaign the move has not reached, which is information, not a lock.
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "2",
-    migration: { state: "pending", reason: "", skipped: [BUSY] },
-  }));
-  renderView();
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  expect(await within(card).findByText(`The upgrade left 1 thing for later (${BUSY}).`))
-    .toBeInTheDocument();
-  expect(screen.queryByText(/Upgrade pending/)).toBeNull();
-});
-
-test("a stopped upgrade's reason is not hidden by what it skipped", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "2",
-    migration: { state: "failed", reason: "the store is busy", skipped: [BUSY] },
-  }));
-  renderView();
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  expect(within(card).getByText(
-    `The upgrade has not finished: the store is busy. It left 1 thing for later (${BUSY}).`,
-  )).toBeInTheDocument();
-});
-
-test("a finished upgrade still names what it skipped", async () => {
-  const provider = "provider local: the preset could not be written";
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "2",
-    migration: { state: "done", reason: "", skipped: [BUSY, provider] },
-  }));
-  renderView();
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  expect(within(card).getByText(`The upgrade left 2 things for later (${BUSY}; ${provider}).`))
-    .toBeInTheDocument();
-});
-
-test("a finished upgrade with nothing skipped says nothing", async () => {
-  renderView();
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  expect(within(card).queryByText(/upgrad/i)).toBeNull();
-});
-
-test("the upgrade status is read again when the settings change", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "1", migration: { state: "pending", reason: "", skipped: [] },
-  }));
-  renderView();
-  await openModels();
-  expect(screen.getByText(/Upgrade pending/)).toBeInTheDocument();
-
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings());
-  await act(async () => { configChanged(); });
-  await waitFor(() => expect(screen.queryByText(/Upgrade pending/)).toBeNull());
-  expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
-});
-
-test("a newer library says its model settings belong to the newer build", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-    format: "3", newer: true,
-  }));
-  renderView();
-  await openModels();
-  expect(await screen.findByText(/upgraded by a newer Grimoire/)).toBeInTheDocument();
 });
 
 test("the image store card is part of Storage and nothing else", async () => {
@@ -363,7 +218,7 @@ test("editing a field marks the draft dirty and writes nothing", async () => {
   expect(api.putConfig).not.toHaveBeenCalled();
   expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
   // …and the column says which section is holding it.
-  expect(screen.getByRole("button", { name: /^Timeouts unsaved/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Timeouts & retries unsaved/ })).toBeInTheDocument();
 });
 
 test("Save commits every dirty field, across sections, in one call", async () => {
@@ -422,7 +277,7 @@ test("Revert discards every edit; the theme is not one of them", async () => {
 
 test("saves the retry count", async () => {
   renderView();
-  await openModels();
+  await open(/^Timeouts & retries/);
   const retries = screen.getByLabelText(/^retries$/i);
   expect((retries as HTMLInputElement).value).toBe("2");
   fireEvent.change(retries, { target: { value: "0" } });
@@ -504,11 +359,11 @@ test("edits the lore recursion depth beside the scan depth", async () => {
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ lore_recursion_depth: "2" }));
 });
 
-// ---- embeddings, inside Models ----------------------------------------------
+// ---- recall, inside Context ----------------------------------------------
 
 test("recall depth and threshold stay, and save together", async () => {
   renderView();
-  await openModels();
+  await open(/^Context/);
   expect(screen.getByLabelText(/recalled entries/i)).toHaveValue("0");
   expect(screen.getByLabelText(/similarity threshold/i)).toHaveValue("0.4");
   fireEvent.change(screen.getByLabelText(/recalled entries/i), { target: { value: "4" } });
@@ -519,48 +374,9 @@ test("recall depth and threshold stay, and save together", async () => {
   }));
 });
 
-/** The Embedding role's line on the summary card: the chip. */
-async function embeddingChip() {
-  await openModels();
-  const card = screen.getByRole("region", { name: "Models in use" });
-  return within(card).getByText("Embedding", { selector: "dt" }).nextElementSibling!;
-}
-
-test("the embeddings chip reports embedding separately from recall depth", async () => {
-  // Embedding on and recall off are two answers, because they are two
-  // switches: depth 0 stops recall and nothing else, so the other embedders
-  // (the art catalogue, search by meaning, the continuity checks) still send.
-  (api.getConfig as any).mockResolvedValue({
-    ...cfg, semantic_recall_depth: "0",
-    inference: { ...cfg.inference, embedding_on: true },
-  });
-  renderView();
-  expect((await embeddingChip()).textContent).toBe("on · recall off");
-});
-
-test("the embeddings state is the server's", async () => {
-  // The legacy keys say nothing either way: `embedding_on` is the backend's
-  // own resolve, and it is the whole of the answer.
-  (api.getConfig as any).mockResolvedValue({
-    ...cfg, embeddings_connection_id: "local", embeddings_model: "text-embedding-3-small",
-    semantic_recall_depth: "4",
-    inference: { ...cfg.inference, embedding_on: false },
-  });
-  renderView();
-  expect((await embeddingChip()).textContent).toBe("off");
-  cleanup();
-
-  (api.getConfig as any).mockResolvedValue({
-    ...cfg, embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "4",
-    inference: { ...cfg.inference, embedding_on: true },
-  });
-  renderView();
-  expect((await embeddingChip()).textContent).toBe("on · recall 4");
-});
-
 test("the embeddings copy is a paragraph of its own", async () => {
   renderView();
-  await openModels();
+  await open(/^Context/);
   // An exact, whole-string match: the sentence is its own paragraph.
   expect(screen.getByText(EMBEDDINGS_COPY).tagName).toBe("P");
 });
@@ -570,14 +386,14 @@ test("the privacy copy points at the control that exists", async () => {
   // the Embedding role's, on Models, and nothing on this page is a
   // connection control or an endpoint field for the old words to mean.
   renderView();
-  await openModels();
+  await open(/^Context/);
   expect(EMBEDDINGS_COPY)
     .toMatch(/Clear the Embedding role on the Models page to stop all embedding\.$/);
   const p = screen.getByText(/This sends text to the Embedding role's provider/).closest("p")!;
   expect(p.textContent)
     .toMatch(/Choose a local provider for the Embedding role to keep it on your machine\./);
   expect(within(p).getByRole("link", { name: "Embedding role" }))
-    .toHaveAttribute("href", "/models/role/embedding");
+    .toHaveAttribute("href", "/models/edit");
   const page = document.body.textContent;
   for (const gone of ["endpoint above", "Set the connection to Off", "LLM connection",
                       "local endpoint to keep"]) {
@@ -587,7 +403,7 @@ test("the privacy copy points at the control that exists", async () => {
 
 test("the disclosure names every embedded payload", async () => {
   renderView();
-  await openModels();
+  await open(/^Context/);
   const p = screen.getByText(/This sends text to the Embedding role's provider/).closest("p")!;
   for (const payload of [
     "recent scene text", "world info", "image descriptions", "search the library by meaning",
@@ -1011,38 +827,42 @@ describe("sending post images (#377)", () => {
 
 // ---- ?section= (a link from elsewhere can open one section) ----------------
 //
-// Embeddings used to be a section of its own, and `/config?section=semantic`
-// is the address older links carry ("Semantic matching is not configured" is
-// only useful if it lands where it is fixed). It opens Models, which is where
-// the embedding state and recall sit now.
+// Three panes became pages of their own, and `/config?section=semantic` is the
+// address older links carry. MOVED sends each old id to the page that answers
+// for it.
 
+function Where() {
+  const l = useLocation();
+  return <div data-testid="where">{l.pathname + l.search + l.hash}</div>;
+}
 function renderAt(entry: string) {
   render(
     <MemoryRouter initialEntries={[entry]}>
-      <ConfigView />
-      <Link to="/config?section=semantic">to embeddings</Link>
+      <Where />
+      <Routes>
+        <Route path="/config" element={<><ConfigView /><Link to="/config?section=timeouts">to timeouts</Link></>} />
+        <Route path="/models" element={<div>the models page</div>} />
+        <Route path="/models/edit" element={<div>the models form</div>} />
+        <Route path="/presets" element={<div>the presets page</div>} />
+      </Routes>
     </MemoryRouter>,
   );
 }
 
-test("?section=semantic opens the models section", async () => {
-  renderAt("/config?section=semantic");
-  expect(await screen.findByRole("heading", { level: 1, name: "Models" }))
-    .toBeInTheDocument();
-  expect(await screen.findByText(EMBEDDINGS_COPY)).toBeInTheDocument();
-});
-
-test("the retired connection and routing sections open Models too", async () => {
-  for (const id of ["connection", "routing"]) {
+test("an old pane's address goes to the page that replaced it", async () => {
+  const moved: [string, string][] = [
+    ["models", "/models"], ["semantic", "/models"], ["connection", "/models"],
+    ["routing", "/models/edit"], ["samplers", "/presets"], ["pricing", "/models#rates"],
+  ];
+  for (const [id, to] of moved) {
     renderAt(`/config?section=${id}`);
-    expect(await screen.findByRole("heading", { level: 1, name: "Models" }))
-      .toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe(to));
     cleanup();
   }
 });
 
 test("a section named like an object's own member falls back to Storage", async () => {
-  // The retired ids are a lookup table, and a plain object answers
+  // The moved ids are a lookup table, and a plain object answers
   // `toString` with a function -- which once left a blank page.
   for (const id of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
     renderAt(`/config?section=${id}`);
@@ -1060,91 +880,24 @@ test("an unknown section falls back to Storage", async () => {
 test("a changed query follows", async () => {
   renderAt("/config");
   expect(await screen.findByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("link", { name: "to embeddings" }));
-  expect(await screen.findByRole("heading", { level: 1, name: "Models" }))
+  fireEvent.click(screen.getByRole("link", { name: "to timeouts" }));
+  expect(await screen.findByRole("heading", { level: 1, name: "Timeouts & retries" }))
     .toBeInTheDocument();
 });
 
-// ---- what the settings view adds to the summary ----
-const viewSel = (provider_name: string, model: string) => ({
-  provider: provider_name.toLowerCase(), provider_name, model, preset: "", preset_name: "",
-  via: "role", scope: "global",
-});
-const viewRole = (stored: { provider: string; model: string; preset: string }) => ({
-  stored, fallback: { provider: "", model: "", preset: "" }, resolves: null, inherits: null,
-  problem: null,
-});
-const NOTHING = { provider: "", model: "", preset: "" };
-
-/** One summary line, read off the card. */
-function summaryLine(role: string) {
-  const card = screen.getByRole("region", { name: "Models in use" });
-  return within(card).getByText(role, { selector: "dt" }).nextElementSibling!.textContent;
-}
-
-test("the summary names what the Embedding role embeds with, and where", async () => {
-  (api.getConfig as any).mockResolvedValue({
-    ...cfg, semantic_recall_depth: "4", inference: { ...cfg.inference, embedding_on: true } });
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({ roles: {
-    embedding: { stored: { provider: "saltmarch", model: "vendor/embed-large" }, on: true,
-                 problem: null, resolves: viewSel("Saltmarch Router", "vendor/embed-large") },
-  } }));
+test("Retries lives with the timeouts, with what a retry is", async () => {
   renderView();
-  await openModels();
-  expect(summaryLine("Embedding")).toBe("on · recall 4 Saltmarch Router ▸ vendor/embed-large");
+  await open(/^Timeouts & retries/);
+  expect(screen.getByLabelText(/^retries$/i)).toHaveValue("2");
+  expect(screen.getByText(/Only ever\s+the reply starts arriving/)).toBeInTheDocument();
 });
 
-test("an Embedding role that is off says why, in the server's words", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({ roles: {
-    embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: false,
-                 problem: "Saltmarch Router has no key set", resolves: null },
-  } }));
+test("recall lives with the context, privacy sentence and all", async () => {
   renderView();
-  await openModels();
-  expect(summaryLine("Embedding")).toBe("off Saltmarch Router has no key set");
-});
-
-test("the models summary follows a model-settings change without losing the draft", async () => {
-  // A preset renamed in the editor on this page (or anything else that moves
-  // what `GET /config` names) announces; the summary reads it again.
-  renderView();
-  await openModels();
-  expect(summaryLine("Primary")).toBe("OpenRouter ▸ vendor/model-x ▸ Warm");
-  (api.getConfig as any).mockResolvedValue({ ...cfg, inference: { ...cfg.inference, roles: {
-    ...cfg.inference.roles,
-    primary: { provider_name: "OpenRouter", model: "vendor/model-x", preset_name: "Brisk" },
-  } } });
-  await act(async () => { configChanged(); });
-  await waitFor(() => expect(summaryLine("Primary")).toBe("OpenRouter ▸ vendor/model-x ▸ Brisk"));
-});
-
-test("an unset Fast or Decision says it is the same as the role it follows", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({ roles: {
-    primary: viewRole({ provider: "openrouter", model: "vendor/model-x", preset: "warm" }),
-    fast: viewRole({ provider: "local", model: "small-1", preset: "" }),
-    decision: viewRole(NOTHING),
-  } }));
-  renderView();
-  await openModels();
-  expect(summaryLine("Primary")).toBe("OpenRouter ▸ vendor/model-x ▸ Warm");
-  // An explicit choice is not "same as" anything; an unset one says what it follows.
-  expect(summaryLine("Fast")).toBe("Local vectors ▸ small-1 ▸ no preset");
-  expect(summaryLine("Decision")).toBe("Same as Fast — Local vectors ▸ small-1 ▸ no preset");
-});
-
-test("the upgrade banner goes once the upgrade lands, with the page left open", async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  try {
-    (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings({
-      format: "1", migration: { state: "running", reason: "", skipped: [] } }));
-    renderView();
-    await openModels();
-    expect(screen.getByText(/Upgrade pending/)).toBeInTheDocument();
-
-    (api.getInferenceSettings as any).mockResolvedValue(inferenceSettings());
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    await waitFor(() => expect(screen.queryByText(/Upgrade pending/)).toBeNull());
-  } finally {
-    vi.useRealTimers();
-  }
+  await open(/^Context/);
+  expect(screen.getByLabelText(/^recalled entries$/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/^similarity threshold$/i)).toBeInTheDocument();
+  expect(screen.getByText("This sends text to the Embedding role's provider.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Embedding role" })).toHaveAttribute("href", "/models/edit");
+  expect(screen.getByText(EMBEDDINGS_COPY)).toBeInTheDocument();
 });
