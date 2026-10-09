@@ -113,7 +113,6 @@ from .. import (
     locks,
     paths,
     revision,
-    sampler_presets,
 )
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
@@ -333,16 +332,17 @@ def connection_reader() -> legacy_plan.Lookup:
 def global_fields(cfg: dict, lookup: legacy_plan.Lookup) -> dict[str, str]:
     """The format-2 keys a legacy `config.md` migrates to (steps 5-7): every
     one of `OWNED_GLOBAL_KEYS`, "" where it is unset -- the planner's
-    `mapped`, and never its derived-preset repoints (N2): a persisted preset
-    key always names a preset file that exists."""
-    return legacy_plan.global_plan(cfg, lookup, sampler_presets.read_preset).mapped
+    `mapped` (`legacy_plan.global_mapped`, which `global_plan` plans it with),
+    and never its derived-preset repoints (N2): a persisted preset key always
+    names a preset file that exists."""
+    return legacy_plan.global_mapped(cfg, lookup)
 
 
 def campaign_fields(meta: dict, lookup: legacy_plan.Lookup) -> dict[str, str]:
     """The format-2 keys a legacy `campaign.md` migrates to (steps 6-7): the
-    planner's `mapped`, never its repoints (N2)."""
-    return legacy_plan.campaign_plan(meta, global_current=False, lookup=lookup,
-                                     presets=sampler_presets.read_preset).mapped
+    planner's `mapped` (`legacy_plan.campaign_mapped`), never its repoints
+    (N2)."""
+    return legacy_plan.campaign_mapped(meta, lookup)
 
 
 # ---- one campaign ----

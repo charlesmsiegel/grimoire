@@ -24,10 +24,16 @@ layout, planned once per scope as a `Plan`:
   sets no reasoning effort over such a provider, which is shared with the
   route's fallback and so is left alone (ratification item 3).
 
-Pure but for what it reads through the lookup and the preset reader it is
-handed, plus a scope's connection listing for the facts and each model's
-cached catalog and facts for the Embedding role (`legacy_embeds`). It writes
-nothing. A scope carrying `RETIRED_KEY` plans nothing and reads nothing.
+A plan reads through the lookup and the preset reader it is handed, plus the
+store's connection listing for the facts and each model's cached catalog and
+facts for the Embedding role (`legacy_embeds`). The planner itself writes no
+setting. Its connection reads do not promise that: every one of them
+(`read_connection_raw`, `read_connection_strict`, `list_connections`) runs
+`llm_connections.ensure_migrated()` first, which on a store whose
+connections were never seeded writes `llm_connections/` and can write
+`active_connection_id` into `config.md` -- the format-1 seeding every
+connection read has always done. A scope carrying `RETIRED_KEY` plans nothing
+and reads nothing.
 
 How strictly a plan reads is its lookup's (`lookup(mode=...)`): play reads
 fail-soft, as the translation always has; the migration and retirement read
@@ -112,12 +118,17 @@ class Plan(NamedTuple):
     notes: tuple[retired.Note, ...]
 
 
-#: What a retired scope (or one this build does not own) plans.
-EMPTY = Plan({}, {}, {}, (), ())
-
-
-def _empty() -> Plan:
+def empty() -> Plan:
+    """What a retired scope (or one this build does not own) plans: nothing.
+    A fresh plan on every call, so no caller can mutate one another holds."""
     return Plan({}, {}, {}, (), ())
+
+
+def planned(meta: Mapping[str, str], plan: Plan) -> dict[str, str]:
+    """A scope's settings as format 2 sees them under `plan`: `meta`, then
+    `mapped`, then `repoint` over both. For a campaign plan's `glob`, pass
+    `config.md`'s raw settings and its `global_plan`."""
+    return {**meta, **plan.mapped, **plan.repoint}
 
 
 def _retired(meta: Mapping) -> bool:
@@ -305,9 +316,10 @@ def _persistable(view: dict) -> dict[str, str]:
             if k not in SHARED_PRESET_KEYS and str(v) != ""}
 
 
-def _global_mapped(cfg: Mapping, conn: Lookup) -> dict[str, str]:
+def global_mapped(cfg: Mapping, conn: Lookup) -> dict[str, str]:
     """The format-2 keys a legacy `config.md` migrates to (steps 5-7): every
-    one of `OWNED_GLOBAL_KEYS`, "" where it is unset."""
+    one of `OWNED_GLOBAL_KEYS`, "" where it is unset. `global_plan`'s
+    `mapped` below format 2, and what `migrate.global_fields` persists."""
     view = global_mapping(cfg, conn)
     fields = dict.fromkeys(OWNED_GLOBAL_KEYS, "")
     fields.update((k, str(view[k])) for k in OWNED_GLOBAL_KEYS if k in view)
@@ -318,8 +330,10 @@ def _global_mapped(cfg: Mapping, conn: Lookup) -> dict[str, str]:
     return enriched(fields, conn)
 
 
-def _campaign_mapped(meta: Mapping, conn: Lookup) -> dict[str, str]:
-    """The format-2 keys a legacy `campaign.md` migrates to (steps 6-7)."""
+def campaign_mapped(meta: Mapping, conn: Lookup) -> dict[str, str]:
+    """The format-2 keys a legacy `campaign.md` migrates to (steps 6-7).
+    `campaign_plan`'s `mapped` for an unmarked campaign, and what
+    `migrate.campaign_fields` persists."""
     return enriched(_persistable(campaign_mapping(meta, conn)), conn)
 
 
@@ -444,9 +458,12 @@ def derive(base: dict | None, effort: str, existing: PresetRead) -> Derived:
     is repointed at to carry `effort`: `base`'s params plus that effort.
 
     Its id is the name's slug. When a preset by that id already holds a
-    different name or different params, it is the slug plus the first eight
-    hex digits of the params' digest instead -- so identical derivations
-    collapse to one file, and two devices pick the same id."""
+    different name or different params, the slug takes a suffix: the first
+    eight hex digits of a digest over the derived NAME and params. So
+    identical derivations (one name, one set of params) collapse to one file
+    whatever base they came from, two devices pick the same id, and two
+    different derivations whose names slug alike ("Warm", "Warm!") never
+    share one."""
     name = derived_name(str(base.get("name") or "") if base else "", effort)
     own = base.get("params") if base else None
     merged = {**(own if isinstance(own, dict) else {}), "reasoning_effort": effort}
@@ -454,7 +471,8 @@ def derive(base: dict | None, effort: str, existing: PresetRead) -> Derived:
     pid = paths.slugify(name)
     taken = existing(pid)
     if taken is not None and (taken.get("name") != name or taken.get("params") != params):
-        digest = hashlib.sha256(_canonical(params).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(_canonical({"name": name, "params": params})
+                                .encode("utf-8")).hexdigest()
         pid = f"{pid}-{digest[:8]}"
     return Derived(pid, name, params)
 
@@ -531,13 +549,66 @@ def _derivation(view: Mapping, *, campaign: bool, conn: Lookup,
     return repoint, tuple(derived.values())
 
 
-def _route_notes(view: Mapping, *, scope: str, campaign: bool, conn: Lookup,
-                 presets: PresetRead) -> tuple[retired.Note, ...]:
-    """Ruling 5: a route-level preset at this scope (`PRESET_CLEAR` included)
-    that sets no reasoning effort, on a route whose selection -- or whose
-    fallback, which the route's preset follows -- is a GLM provider with a
-    legacy effort. Not derived (ratification item 3), so noted, once per
-    (scope, route, provider)."""
+class _RoutePreset(NamedTuple):
+    """The route-level preset a route runs under: its name ("" for
+    `PRESET_CLEAR`, no preset at all) and whether it sets a reasoning effort."""
+
+    name: str
+    sets_effort: bool
+
+
+def _route_preset(view: Mapping, route: routing.Route,
+                  presets: PresetRead) -> _RoutePreset | None:
+    """`view`'s opinion on `route`'s preset, by `cascade.preset_for`'s rule:
+    None for none (absent, blank, or an id that names no preset, which the
+    walk passes)."""
+    chosen = str(view.get(keys.preset_key(route.key), "") or "").strip()
+    if chosen == sampler_presets.PRESET_CLEAR:
+        return _RoutePreset("", False)
+    preset = presets(chosen) if chosen else None
+    if preset is None:
+        return None
+    params = preset.get("params")
+    return _RoutePreset(str(preset.get("name") or chosen),
+                        isinstance(params, dict) and "reasoning_effort" in params)
+
+
+def _under_route_preset(route: routing.Route, view: Mapping, glob: Mapping, *,
+                        campaign: bool, from_global: bool,
+                        exists: Callable[[str], bool]) -> list[cascade.Selection]:
+    """The selection and fallback `route` runs on at this scope, both under
+    its route preset: the cascade over the scope (a campaign's over it and
+    `glob`). When a campaign runs under the GLOBAL route preset, a provider
+    the global scope runs that route on as well is left out -- the global
+    plan notes it."""
+    if campaign:
+        choice = cascade.choose(route, campaign=dict(view), glob=dict(glob), exists=exists)
+    else:
+        choice = cascade.choose(route, campaign={}, glob=dict(view), exists=exists)
+    noted_globally: set[str] = set()
+    if from_global:
+        alone = cascade.choose(route, campaign={}, glob=dict(glob), exists=exists)
+        noted_globally = {s.provider for s in (alone.selection, alone.fallback)
+                          if s is not None}
+    return [s for s in (choice.selection, choice.fallback)
+            if s is not None and s.provider not in noted_globally]
+
+
+def _route_notes(view: Mapping, *, glob: Mapping, scope: str, campaign: bool,
+                 conn: Lookup, presets: PresetRead) -> tuple[retired.Note, ...]:
+    """Ruling 5: a route whose route-level preset (`PRESET_CLEAR` included)
+    sets no reasoning effort, and whose selection -- or whose fallback, which
+    the route's preset follows -- is a GLM provider with a legacy effort. Not
+    derived (ratification item 3), so noted, once per (scope, route,
+    provider).
+
+    At a campaign, the route is judged as the campaign runs it: its preset
+    by the campaign-then-global walk, its selection by the cascade over the
+    campaign and `glob` (the global settings as format 2 sees them). So a
+    campaign preset over a selection the campaign inherits is noted, and so
+    is a campaign's own selection under a global preset. A global preset
+    over a selection the global scope chooses as well is the global plan's
+    note, and is not noted again per campaign."""
     def exists(provider: str) -> bool:
         return conn(provider) is not None
 
@@ -545,29 +616,21 @@ def _route_notes(view: Mapping, *, scope: str, campaign: bool, conn: Lookup,
     for route in routing.ROUTES:
         if campaign and not route.campaign_scoped:
             continue
-        chosen = str(view.get(keys.preset_key(route.key), "") or "").strip()
-        if not chosen:
+        found = _route_preset(view, route, presets)
+        from_global = False
+        if found is None and campaign:
+            found, from_global = _route_preset(glob, route, presets), True
+        if found is None or found.sets_effort:
             continue
-        if chosen == sampler_presets.PRESET_CLEAR:
-            preset_name = ""
-        else:
-            preset = presets(chosen)
-            params = preset.get("params") if preset is not None else None
-            if preset is None or (isinstance(params, dict) and "reasoning_effort" in params):
-                continue        # a dangling id is no opinion; one with an effort keeps it
-            preset_name = str(preset.get("name") or chosen)
-        choice = cascade.choose(route, campaign=dict(view) if campaign else {},
-                                glob={} if campaign else dict(view), exists=exists)
-        for selection in (choice.selection, choice.fallback):
-            if selection is None:
-                continue
+        for selection in _under_route_preset(route, view, glob, campaign=campaign,
+                                             from_global=from_global, exists=exists):
             effort = _legacy_effort(selection, conn, llm_reasoning.GLM_EFFORTS)
             if not effort:
                 continue
             raw = conn(selection.provider) or {}
             note = _route_note(scope, route, selection.provider,
                                str(raw.get("name") or selection.provider), effort,
-                               preset_name)
+                               found.name)
             out.setdefault(note.id, note)
     return tuple(out.values())
 
@@ -585,13 +648,14 @@ def _route_note(scope: str, route: routing.Route, provider: str, provider_name: 
                         scope, route.key, provider, effort, kind, text)
 
 
-def _planned(view: Mapping, *, mapped: dict[str, str], model_facts: dict,
+def _planned(view: Mapping, *, glob: Mapping, mapped: dict[str, str], model_facts: dict,
              scope: str, campaign: bool, conn: Lookup, presets: PresetRead,
              derive_too: bool = True) -> Plan:
     if not derive_too:
         return Plan(mapped, {}, model_facts, (), ())
     repoint, made = _derivation(view, campaign=campaign, conn=conn, presets=presets)
-    notes = _route_notes(view, scope=scope, campaign=campaign, conn=conn, presets=presets)
+    notes = _route_notes(view, glob=glob, scope=scope, campaign=campaign, conn=conn,
+                         presets=presets)
     return Plan(mapped, repoint, model_facts, made, notes)
 
 
@@ -600,27 +664,31 @@ def global_plan(cfg: Mapping[str, str], lookup: Lookup, presets: PresetRead) -> 
     """`config.md`'s plan.
 
     - Below format 2: `mapped` is the whole mapping as the migration persists
-      it (`OWNED_GLOBAL_KEYS`, "" where unset), `facts` the model-facts
-      overlay, and the derivation and notes are over the mapped slots.
+      it (`global_mapped`: `OWNED_GLOBAL_KEYS`, "" where unset), `facts` the
+      model-facts overlay, and the derivation and notes are over the mapped
+      slots.
     - At format 2 and not retired: the derivation and notes only.
     - Retired (`RETIRED_KEY`), or a newer build's: nothing, and nothing read.
     """
     if _retired(cfg) or keys.is_newer(cfg):
-        return _empty()
+        return empty()
     if keys.is_current(cfg):
-        return _planned(cfg, mapped={}, model_facts={}, scope=GLOBAL_SCOPE,
+        return _planned(cfg, glob={}, mapped={}, model_facts={}, scope=GLOBAL_SCOPE,
                         campaign=False, conn=lookup, presets=presets)
-    mapped = _global_mapped(cfg, lookup)
-    return _planned({**cfg, **mapped}, mapped=mapped, model_facts=_facts_overlay(lookup),
-                    scope=GLOBAL_SCOPE, campaign=False, conn=lookup, presets=presets)
+    mapped = global_mapped(cfg, lookup)
+    return _planned({**cfg, **mapped}, glob={}, mapped=mapped,
+                    model_facts=_facts_overlay(lookup), scope=GLOBAL_SCOPE,
+                    campaign=False, conn=lookup, presets=presets)
 
 
-def campaign_plan(meta: Mapping[str, str], *, global_current: bool, lookup: Lookup,
-                  presets: PresetRead, cid: str = "") -> Plan:
-    """A campaign's plan; `cid` names its notes' scope.
+def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_current: bool,
+                  lookup: Lookup, presets: PresetRead, cid: str) -> Plan:
+    """Campaign `cid`'s plan (`cid` names its notes' scope).
 
     The layout is decided globally (spec 11.1): `global_current` is whether
-    `config.md` is at format 2.
+    `config.md` is at format 2. `glob` is the global settings as format 2 sees
+    them (`planned(cfg, global_plan(cfg, ...))`): what the campaign inherits,
+    which its notes are judged against.
 
     - `global_current` false: `mapped` is the mapping, whatever the campaign's
       own marker says (as `translate.campaign_view` reads it below format 2);
@@ -632,10 +700,11 @@ def campaign_plan(meta: Mapping[str, str], *, global_current: bool, lookup: Look
     scope = campaign_scope(cid)
     own_out = _retired(meta) or keys.is_newer(meta)
     if global_current and own_out:
-        return _empty()
+        return empty()
     if global_current and keys.is_current(meta):
-        return _planned(meta, mapped={}, model_facts={}, scope=scope, campaign=True,
-                        conn=lookup, presets=presets)
-    mapped = _campaign_mapped(meta, lookup)
-    return _planned({**meta, **mapped}, mapped=mapped, model_facts={}, scope=scope,
-                    campaign=True, conn=lookup, presets=presets, derive_too=not own_out)
+        return _planned(meta, glob=glob, mapped={}, model_facts={}, scope=scope,
+                        campaign=True, conn=lookup, presets=presets)
+    mapped = campaign_mapped(meta, lookup)
+    return _planned({**meta, **mapped}, glob=glob, mapped=mapped, model_facts={},
+                    scope=scope, campaign=True, conn=lookup, presets=presets,
+                    derive_too=not own_out)

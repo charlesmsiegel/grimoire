@@ -183,6 +183,15 @@ def _plan(cfg: dict | None = None, mode: str = "migrate") -> legacy_plan.Plan:
                                    sampler_presets.read_preset)
 
 
+def _campaign(meta: dict, *, glob: dict | None = None, global_current: bool = True,
+              cid: str = "saltmarch", lookup=None, presets=None) -> legacy_plan.Plan:
+    """`campaign_plan` for `meta` under the global view `glob` (none set)."""
+    return legacy_plan.campaign_plan(
+        meta, glob={} if glob is None else glob, global_current=global_current,
+        lookup=legacy_plan.lookup(mode="migrate") if lookup is None else lookup,
+        presets=sampler_presets.read_preset if presets is None else presets, cid=cid)
+
+
 def _glm(name: str, effort: str, preset: str = "", model: str = "glm-5.3") -> str:
     return llm_connections.create_connection(
         "openai_compatible", name, base_url=GLM_URL, api_key="sk-test-glm", model=model,
@@ -232,6 +241,47 @@ def test_an_id_holding_the_same_preset_is_reused():
     assert d.id == "warm-reasoning-high"
 
 
+def test_bases_whose_names_slug_alike_get_distinct_stable_ids():
+    """M-4: three bases with equal params whose derived names slugify to one
+    slug ("Warm", "Warm!", "Warm?"). The first takes the slug; the others are
+    suffixed by a digest that includes their own name, so neither takes the
+    other's id, and every id is the same on a second plan."""
+    bases = [{"id": pid, "name": name, "params": {"temperature": 0.9}}
+             for pid, name in (("warm", "Warm"), ("warm-2", "Warm!"), ("warm-3", "Warm?"))]
+
+    def run() -> list[legacy_plan.Derived]:
+        made: dict[str, legacy_plan.Derived] = {}
+
+        def existing(pid: str) -> dict | None:
+            got = made.get(pid)
+            return {"name": got.name, "params": got.params} if got else None
+
+        out = []
+        for each in bases:
+            d = legacy_plan.derive(each, "high", existing)
+            made.setdefault(d.id, d)
+            out.append(d)
+        return out
+
+    first, second = run(), run()
+    assert first == second
+    assert len({d.id for d in first}) == 3
+    assert first[0].id == "warm-reasoning-high"
+    assert all(d.id.startswith("warm-reasoning-high-") for d in first[1:])
+
+
+def test_identical_derivations_from_two_bases_share_one_id():
+    """The suffix is keyed on what the preset IS (its name and params), so
+    two bases that derive the same preset collapse even when the slug is held
+    by another preset."""
+    foreign = {"warm-reasoning-high": {"name": "Someone else's", "params": {}}}
+    one = legacy_plan.derive({"id": "warm", "name": "Warm", "params": {"temperature": 0.9}},
+                             "high", foreign.get)
+    two = legacy_plan.derive({"id": "warm-2", "name": "Warm",
+                              "params": {"temperature": 0.9}}, "high", foreign.get)
+    assert one == two and one.id.startswith("warm-reasoning-high-")
+
+
 def test_representable_is_computed_from_the_two_vocabularies():
     computed = tuple(e for e in llm_reasoning.GLM_EFFORTS if e in llm_sampling.REASONING)
     assert computed == legacy_plan.REPRESENTABLE
@@ -249,7 +299,8 @@ def test_derived_presets_keep_the_wire_in_memory(home):
     _glm("glm2", "low")
     config.write_config(active_connection_id="glm", fallback_connection_id="glm2")
 
-    plan = _plan()
+    cfg = config.read_config()
+    plan = _plan(cfg)
 
     assert plan.mapped[keys.role_key("primary", "preset")] == "warm"     # N2: the base kept
     assert plan.repoint[keys.role_key("primary", "preset")] == "warm-reasoning-high"
@@ -267,9 +318,7 @@ def test_derived_presets_keep_the_wire_in_memory(home):
                  keys.pin_key("scene", "provider"): "glm",
                  keys.pin_key("scene", "model"): "glm-5.3",
                  keys.pin_key("scene", "preset"): "gone"}
-    camp = legacy_plan.campaign_plan(saltmarch, global_current=True,
-                                     lookup=legacy_plan.lookup(mode="migrate"),
-                                     presets=sampler_presets.read_preset, cid="saltmarch")
+    camp = _campaign(saltmarch, glob=legacy_plan.planned(cfg, plan))
     assert camp.mapped == {}
     assert camp.repoint == {keys.pin_key("scene", "preset"): "reasoning-high"}
     assert _derived(camp)["reasoning-high"].params == {"reasoning_effort": "high"}
@@ -419,13 +468,75 @@ def test_a_campaign_route_preset_is_noted_in_the_campaigns_scope(home):
     meta = _format2(use_tracker=keys.PIN, use_tracker_provider="glm",
                     use_tracker_model="glm-5.3", preset_tracker="cold")
 
-    plan = legacy_plan.campaign_plan(meta, global_current=True,
-                                     lookup=legacy_plan.lookup(mode="migrate"),
-                                     presets=sampler_presets.read_preset, cid="saltmarch")
+    plan = _campaign(meta)
 
     [note] = plan.notes
     assert (note.scope, note.subject, note.provider_id) == (
         "campaign:saltmarch", "tracker", "glm")
+
+
+def test_a_campaign_route_preset_over_an_inherited_selection_is_noted(home):
+    """I-1 (a): a legacy campaign that sets only `preset_scene: cold`, under a
+    global Primary on GLM at `high`. The campaign's scene route (and
+    `speaker`, split from it) runs on the inherited Primary under the
+    campaign's preset, which sets no effort -- a loss noted in the campaign's
+    scope, which the global plan cannot see."""
+    sampler_presets.create_preset("Warm", {"temperature": 0.9})
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high", preset="warm")
+    config.write_config(active_connection_id="glm")
+    cfg = config.read_config()
+    glob_plan = _plan(cfg)
+    assert glob_plan.notes == ()
+
+    camp = _campaign({"preset_scene": "cold"}, glob=legacy_plan.planned(cfg, glob_plan),
+                     global_current=False)
+
+    assert [(n.scope, n.subject, n.provider_id, n.effort, n.kind) for n in camp.notes] == [
+        ("campaign:saltmarch", "scene", "glm", "high", "route_preset"),
+        ("campaign:saltmarch", "speaker", "glm", "high", "route_preset")]
+
+
+def test_a_campaign_pin_under_a_global_route_preset_is_noted(home):
+    """I-1 (b): a campaign pins `tracker` to a GLM provider, and only
+    `config.md` sets a no-effort `preset_tracker`, which the pin runs under.
+    The global scope's own tracker selection is not GLM, so only the campaign
+    loses anything, and the note is the campaign's."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "low")
+    glob = _format2(role_primary_provider="openrouter", role_primary_model="vendor/active",
+                    preset_tracker="cold")
+    meta = _format2(use_tracker=keys.PIN, use_tracker_provider="glm",
+                    use_tracker_model="glm-5.3")
+
+    assert _plan(glob).notes == ()
+    camp = _campaign(meta, glob=glob)
+
+    assert [(n.scope, n.subject, n.provider_id, n.effort) for n in camp.notes] == [
+        ("campaign:saltmarch", "tracker", "glm", "low")]
+
+
+def test_a_global_note_is_not_repeated_per_campaign(home):
+    """A global route preset over the global scope's own GLM selection is the
+    global plan's note; a campaign that runs that same selection under it
+    adds none of its own."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    glob = _format2(role_primary_provider="glm", role_primary_model="glm-5.3",
+                    preset_tracker="cold")
+    meta = _format2(use_tracker=keys.PIN, use_tracker_provider="glm",
+                    use_tracker_model="glm-5.3")
+
+    assert [(n.scope, n.subject) for n in _plan(glob).notes] == [("global", "tracker")]
+    assert _campaign(meta, glob=glob).notes == ()
+
+
+def test_a_campaign_plan_names_its_campaign():
+    """M-1: `cid` is required -- a defaulted scope would give every
+    campaign's notes one shared id."""
+    with pytest.raises(TypeError):
+        legacy_plan.campaign_plan({}, glob={}, global_current=True,  # type: ignore[call-arg]
+                                  lookup=_forbid, presets=_forbid)
 
 
 def test_notes_have_stable_ids(home):
@@ -448,12 +559,18 @@ def test_notes_have_stable_ids(home):
 def test_a_retired_scope_plans_nothing(home):
     cfg = _format2(**{legacy_plan.RETIRED_KEY: "1"}, role_primary_provider="glm",
                    role_primary_model="glm-5.3", preset_summary="cold")
-    assert legacy_plan.global_plan(cfg, _forbid, _forbid) == legacy_plan.EMPTY
+    assert legacy_plan.global_plan(cfg, _forbid, _forbid) == legacy_plan.empty()
     meta = _format2(**{legacy_plan.RETIRED_KEY: "1"}, use_scene=keys.PIN,
                     use_scene_provider="glm", use_scene_model="glm-5.3")
-    assert legacy_plan.campaign_plan(meta, global_current=True, lookup=_forbid,
-                                     presets=_forbid) == legacy_plan.EMPTY
-    assert legacy_plan.Plan({}, {}, {}, (), ()) == legacy_plan.EMPTY
+    assert _campaign(meta, glob=cfg, lookup=_forbid, presets=_forbid) == legacy_plan.empty()
+    assert legacy_plan.Plan({}, {}, {}, (), ()) == legacy_plan.empty()
+
+
+def test_the_empty_plan_is_fresh_every_time():
+    """M-2: no caller can mutate the empty plan another holds."""
+    first = legacy_plan.empty()
+    first.mapped["role_primary_provider"] = "glm"
+    assert legacy_plan.empty() == legacy_plan.Plan({}, {}, {}, (), ())
 
 
 def test_a_marked_unretired_scope_plans_the_derivation_only(home):
@@ -464,9 +581,7 @@ def test_a_marked_unretired_scope_plans_the_derivation_only(home):
     assert plan.repoint == {keys.role_key("primary", "preset"): "reasoning-high"}
 
     meta = _format2(use_scene=keys.PIN, use_scene_provider="glm", use_scene_model="glm-5.3")
-    camp = legacy_plan.campaign_plan(meta, global_current=True,
-                                     lookup=legacy_plan.lookup(mode="migrate"),
-                                     presets=sampler_presets.read_preset)
+    camp = _campaign(meta, glob=cfg)
     assert camp.mapped == {}
     assert camp.repoint == {keys.pin_key("scene", "preset"): "reasoning-high"}
 
@@ -476,9 +591,7 @@ def test_an_unmarked_campaign_under_a_current_store_is_mapped_and_derived(home):
     _glm("glm", "high", preset="warm")
     meta = {"route_scene": "glm"}
 
-    plan = legacy_plan.campaign_plan(meta, global_current=True,
-                                     lookup=legacy_plan.lookup(mode="migrate"),
-                                     presets=sampler_presets.read_preset)
+    plan = _campaign(meta)
 
     assert plan.mapped[keys.pin_key("scene", "preset")] == "warm"
     assert plan.repoint[keys.pin_key("scene", "preset")] == "warm-reasoning-high"
@@ -525,9 +638,8 @@ def test_the_global_mapping_is_translates(state, tmp_path):
         assert {k: v for k, v in plan.mapped.items() if v != ""} == want["global"]
         assert migrate.global_fields(cfg, migrate._lookup()) == plan.mapped
         meta = store.campaigns.read_campaign(ctx["cid"])["meta"]
-        camp = legacy_plan.campaign_plan(meta, global_current=False,
-                                         lookup=legacy_plan.lookup(mode="migrate"),
-                                         presets=sampler_presets.read_preset)
+        camp = _campaign(meta, glob=legacy_plan.planned(cfg, plan), global_current=False,
+                         cid=ctx["cid"])
         assert camp.mapped == want["campaign"]
         assert migrate.campaign_fields(meta, migrate._lookup()) == camp.mapped
 
