@@ -1607,3 +1607,23 @@ def test_models_shows_a_campaigns_planner_note_before_retirement(legacy_client):
     assert on_models[0]["id"] not in [n["id"] for n in _notes(legacy_client)]
     assert on_models[0]["id"] not in [n["id"] for n in _notes(legacy_client, cid)]
 
+
+def test_an_unreadable_record_leaves_a_scope_with_nothing_written(home):
+    """6b review M-1: a scope with notes to record and a preset to derive,
+    over a record that cannot be read, writes neither the preset nor its
+    settings: the notes are recorded first, strictly."""
+    _legacy()
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    config.write_config(active_connection_id="glm", preset_summary="cold")
+    _c_era()
+    retired.path().write_text("{not json", encoding="utf-8")
+    before = (store.home() / "config.md").read_bytes()
+
+    got = migrate.ensure()
+
+    assert not (store.home() / "sampler_presets" / "reasoning-high.json").exists()
+    assert (store.home() / "config.md").read_bytes() == before
+    assert "retirement record" in got.retirement["failed"]
+    assert retired.path().read_text(encoding="utf-8") == "{not json"
+

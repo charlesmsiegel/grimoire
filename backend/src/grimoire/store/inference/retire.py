@@ -217,8 +217,10 @@ def retire_global(lookup: legacy_plan.Lookup, *,
     GLM slots, deleting every legacy key and stamping `RETIRED_KEY`. Returns
     the global plan's notes (what was not carried over), () when there was
     nothing to do. The notes are recorded in the retirement record
-    (`retired.record_notes`) before the write, so what was not carried over
-    is on `/models` from the moment the scope stops being planned.
+    (`retired.record_notes`) before anything else is written -- the derived
+    presets, then the write -- so what was not carried over is on `/models`
+    from the moment the scope stops being planned, and a record that cannot
+    be read leaves the scope untouched.
 
     All of it in one hold of `llm_connections.LOCK`, which is `config_lock`:
     `config.retire_write`'s `format_hold` and each `put_derived`'s re-enter
@@ -239,9 +241,13 @@ def retire_global(lookup: legacy_plan.Lookup, *,
             return ()
         if change.replaces and not archived:
             raise ArchiveNeededError("config.md")
+        # The notes first: they read the record strictly, and a record that
+        # cannot be read must leave the scope with nothing written -- not
+        # even a derived preset (review M-1). `put_derived` and the notes are
+        # both idempotent by id, so a run killed between them resumes clean.
+        retired.record_notes(change.plan.notes)
         for made in change.plan.presets:
             sampler_presets.put_derived(made.id, made.name, made.params)
-        retired.record_notes(change.plan.notes)
         config.retire_write({**change.plan.mapped, **change.plan.repoint, RETIRED_KEY: "1"},
                             drop=LEGACY_GLOBAL_KEYS)
     return change.plan.notes
@@ -263,8 +269,8 @@ def retire_campaign(cid: str, lookup: legacy_plan.Lookup, *,
     - marked: derived;
     - retired: its `route_<k>` keys deleted, if one holds a value again (N5).
 
-    Its derived presets first, under `config_lock` (the hold above, N19), its
-    notes into the retirement record, then one atomic `campaign.md` write with `updated` left alone, then the write
+    Its notes into the retirement record first, then its derived presets
+    under `config_lock` (the hold above, N19), then one atomic `campaign.md` write with `updated` left alone, then the write
     token. `archived` is `retire_global`'s."""
     if not locks.holds_campaign(cid):
         raise RuntimeError(f"retire.retire_campaign({cid!r}) needs the caller to hold its lock")
@@ -279,9 +285,13 @@ def retire_campaign(cid: str, lookup: legacy_plan.Lookup, *,
             return ()
         if change.replaces and not archived:
             raise ArchiveNeededError(f"campaign {cid}")
+        # The notes first: they read the record strictly, and a record that
+        # cannot be read must leave the scope with nothing written -- not
+        # even a derived preset (review M-1). `put_derived` and the notes are
+        # both idempotent by id, so a run killed between them resumes clean.
+        retired.record_notes(change.plan.notes)
         for made in change.plan.presets:
             sampler_presets.put_derived(made.id, made.name, made.params)
-        retired.record_notes(change.plan.notes)
         atomic.write_text(mp, frontmatter.dump_frontmatter(change.after, body))
     revision.bump(cid)
     return change.plan.notes
