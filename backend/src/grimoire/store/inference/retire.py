@@ -554,11 +554,20 @@ def strip_connection(conn_id: str, *, archived: bool = True) -> tuple[retired.No
     retirement record and rewrites the file without them, `rev` kept. A file
     that cannot be read -- the connection, its facts, the record -- raises
     and nothing is written over it. `archived` is `retire_global`'s:
-    `ArchiveNeededError` without one."""
+    `ArchiveNeededError` without one.
+
+    Cost (6b review M-9): this connection's own file is read once for its
+    fields, but the precondition reads every `campaign.md` and every
+    connection file again inside each connection's hold -- O(connections x
+    (campaigns + connections)) under `config_lock`. That stays: the
+    precondition must be true in the hold that strips (N4), and one hold
+    across the whole strip, which would read it once, would hold every
+    model-settings write behind it (the plan's N4 ruling keeps the holds per
+    connection). Each re-check reads small frontmatter files only."""
     with llm_connections.LOCK:
         if strip_blocked():
             return None
-        if not llm_connections.legacy_fields_on_disk().get(conn_id):
+        if not llm_connections.legacy_fields_on_disk(conn_id):
             return ()
         if not archived:
             raise ArchiveNeededError(f"connection {conn_id}")

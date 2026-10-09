@@ -356,18 +356,26 @@ def unreadable_connections() -> dict[str, str]:
     return out
 
 
-def legacy_fields_on_disk() -> dict[str, tuple[str, ...]]:
+def legacy_fields_on_disk(conn_id: str | None = None) -> dict[str, tuple[str, ...]]:
     """Connection id -> the legacy model fields (`MODEL_FIELDS`) its file
-    holds with a non-empty value, for every connection that holds any: what
-    retirement's strip has left to do. Reads only, and never seeds; a file
-    that cannot be read is left out (`unreadable_connections` names it)."""
+    holds with a non-empty value, for every connection that holds any (or
+    only `conn_id`'s, which reads that one file): what retirement's strip
+    has left to do. Reads only, and never seeds; a file that cannot be read,
+    or holds no connection, is left out (`unreadable_connections` names the
+    first kind)."""
+    if conn_id is not None:
+        if not safe_id(conn_id):
+            return {}
+        found = [_path(conn_id)]
+    else:
+        found = _files()
     out: dict[str, tuple[str, ...]] = {}
-    for p in _files():
+    for p in found:
         try:
-            if _read(p.stem, strict=True) is None:
-                continue
             meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
+            continue
+        if meta.get("kind") not in KINDS:
             continue
         held = tuple(f for f in MODEL_FIELDS if str(meta.get(f, "") or "").strip())
         if held:

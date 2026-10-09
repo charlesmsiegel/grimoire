@@ -1690,3 +1690,21 @@ def test_the_notes_speak_the_pages_words(home):
         "On the Scene turns route in this campaign, the GLM provider “glm” no longer sends "
         "its reasoning effort (high), because no preset there sets one — this was not "
         "carried over.")
+
+
+def test_a_retired_but_unmarked_config_notes_its_lost_effort_at_the_switch(home):
+    """6b review M-7: a format-1 `config.md` already carrying the retirement
+    marker, its Primary on a GLM provider at high, is switched with no
+    derivation -- and the switch records the lost effort first."""
+    _legacy()
+    _glm("glm", "high")
+    config.write_config(active_connection_id="glm", inference_retired="1")
+    assert not keys.is_current(config.read_config())
+    assert migrate.ensure().state == "done"
+    noted = [(n["scope"], n["kind"], n["subject"], n["provider_id"], n["effort"])
+             for n in retired.read()["notes"]]
+    assert ("global", "unrepresentable", keys.role_key("primary", "preset"), "glm",
+            "high") in noted
+    cfg = _raw_config()
+    assert cfg[keys.role_key("primary", "provider")] == "glm"
+    assert not cfg.get(keys.role_key("primary", "preset"))

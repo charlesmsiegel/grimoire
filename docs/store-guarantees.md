@@ -1265,7 +1265,9 @@ Collected, so that nothing here has to be inferred from an absence.
   migration sees no model settings once retirement has stripped the
   connections: their legacy `model` is gone, so it sends requests with an
   empty model. A build from between the migration and retirement keeps
-  playing, and can write `active_connection_id` back once; this build ignores
+  playing, and loses only a GLM `max` reasoning effort: it reads a preset
+  set to `max` — a derived one included — as invalid, and sends no effort
+  there. It can write `active_connection_id` back once; this build ignores
   it and removes it again on its next start. See
   [Retirement](#retirement).
 
