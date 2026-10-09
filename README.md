@@ -93,8 +93,8 @@ threads, and character state — so the next scene starts from an up-to-date wor
   fallback. Under **Advanced**, any single route can be sent to another role or
   a specific model of its own; a route left to inherit runs on its role. All of
   it is set on the
-  **Models** page (linked from Settings → Models), the providers it names on
-  **Library → Providers**, and a campaign overrides Primary, Fast, Decision and
+  **Models** page (Settings → Inference → Models, `/models`; `/models/edit` to change it), the providers it names on
+  **Settings → Inference → Providers**, and a campaign overrides Primary, Fast, Decision and
   its routes from the scene inspector's Models section. An upgraded install has
   its old connections and routing moved into these once, so it keeps the models
   it had.
