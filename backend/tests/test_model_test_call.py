@@ -31,7 +31,7 @@ import httpx
 import pytest
 
 import grimoire.store as store
-from grimoire import catalog, embeddings, routes
+from grimoire import catalog, decisions, embeddings, routes
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -1163,3 +1163,157 @@ def test_a_model_test_row_carries_its_probe_operation(client, monkeypatch):
     assert all(r["provider_id"] == conn for r in rows)
     assert all(r["billing"] == "metered" for r in rows)
     assert all("role" not in r for r in rows)
+
+
+# ---- the decide_native probe (slice H, spec 6.4) -------------------------------
+
+def _native_answer() -> decisions.ItemResult:
+    return decisions.ItemResult({"probe": decisions.Answer(True)})
+
+
+def _openai(client) -> str:
+    """The OpenAI preset: the one `openai_compatible` provider with a native
+    endpoint, and one that does not report its own price (rates may price it)."""
+    return _connection(client, kind="openai_compatible", name="Realm OpenAI",
+                       base_url="https://api.openai.com/v1", api_key="sk-fake-openai",
+                       model=MODEL)
+
+
+def test_the_decide_native_probe_has_one_predicate_and_no_price():
+    item = probes.PROBE_ITEM
+    assert item == decisions.Item("The lamp in the window is lit.",
+                                  (decisions.Predicate("probe", "Is the lamp lit?"),))
+    assert probes.PROBES["decide_native"].priceable is False
+    assert all(p.priceable for c, p in probes.PROBES.items() if c != "decide_native")
+    assert probes.describe("decide_native", True) == (
+        "One native decision request: the statement “The lamp in the window is lit.” "
+        "and the yes/no question “Is the lamp lit?”.")
+
+
+def test_the_decide_native_probe_sends_one_native_request(client):
+    fake = FakeLLM([["unused"]], decisions=[_native_answer()])
+    _use(client, fake)
+    conn = _connection(client)
+    rev = _rev(conn)
+
+    run = _run(client, conn, ["decide_native"])
+
+    assert run["result"]["results"]["decide_native"] == {"ok": True}
+    assert len(fake.native_requests) == 1
+    item, sent, retries = fake.native_requests[0]
+    assert item == probes.PROBE_ITEM
+    assert retries == 0
+    assert sent["model"] == MODEL
+    assert fake.calls == 0   # nothing generated
+    rows = _rows()
+    assert [(r["task"], r["operation"], r["decision_mode"]) for r in rows] == [
+        ("model-test", "decide", "native")]
+    assert not rows[0].get("campaign")
+    assert facts.of(conn, MODEL, rev)["verified"]["decide_native"]["ok"] is True
+
+
+def test_the_decide_native_probe_row_stays_unpriced_in_the_ledger(client):
+    """A rate on file prices a chat call; it must not price a native decision
+    (ruling 10), so the probe's row is unpriced, not modelled."""
+    fake = FakeLLM([["unused"]], decisions=[_native_answer()],
+                   usage={"prompt_tokens": 30, "completion_tokens": 0})
+    _use(client, fake)
+    conn = _openai(client)
+    store.pricing.write_pricing({MODEL: RATES})
+    facts.state(conn, MODEL, rates=RATES)
+
+    _run(client, conn, ["decide_native"])
+
+    totals = store.usage.summary(days=1)["totals"]
+    assert totals["modelled_usd"] == 0.0 and totals["modelled_calls"] == 0
+    assert totals["unpriced_calls"] == 1
+
+
+def test_a_refused_decide_native_probe_is_recorded_unverified(client):
+    refusal = LLMError("bad_response", "decisions endpoint refused the request", status=400)
+    _use(client, FakeLLM([["unused"]], decisions=[refusal]))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["decide_native"])
+
+    got = run["result"]["results"]["decide_native"]
+    assert got["ok"] is False and "refused" in got["error"]
+    stored = facts.of(conn, MODEL, _rev(conn))["verified"]["decide_native"]
+    assert stored["ok"] is False and stored["error"] == got["error"]
+    cap = store.inference.capabilities.caps_for(
+        store.llm_connections.read_connection_raw(conn), MODEL)["decide_native"]
+    assert (cap.value, cap.source, cap.error) == ("unknown", "test", got["error"])
+
+
+def test_a_403_refuses_the_decide_native_probe_and_is_recorded(client):
+    forbidden = LLMError("auth", "this key may not use decisions", status=403)
+    _use(client, FakeLLM([["unused"]], decisions=[forbidden]))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["decide_native"])
+
+    assert run["result"]["recorded"] is True
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["decide_native"]["ok"] is False
+
+
+def test_a_decide_native_failure_with_no_status_is_not_recorded(client):
+    _use(client, FakeLLM([["unused"]], decisions=[
+        LLMError("bad_response", "the decisions body did not parse")]))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["decide_native"])
+
+    assert run["result"]["results"]["decide_native"]["ok"] is False
+    assert run["result"]["recorded"] is False
+    assert "decide_native" not in facts.of(conn, MODEL, _rev(conn)).get("verified", {})
+
+
+@pytest.mark.parametrize("path", ["test", "test/preview"])
+def test_the_decide_native_probe_is_refused_on_presets_that_cannot(client, path):
+    fake = FakeLLM([["unused"]], decisions=[_native_answer()])
+    _use(client, fake)
+    conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
+                       api_key="sk-ant-fake-0001", model="claude-model-x")
+
+    r = client.post(f"/api/llm-connections/{conn}/{path}",
+                    json={"model": "claude-model-x", "capabilities": ["decide_native"],
+                          "confirm": True})
+
+    assert r.status_code == 400
+    assert "decide_native" in r.json()["detail"]
+    assert fake.native_requests == [] and fake.calls == 0
+    assert _rows() == []
+
+
+def test_the_preview_says_cost_unknown_for_a_decision_probe(client):
+    _use(client, FakeLLM([["unused"]], decisions=[_native_answer()]))
+    conn = _connection(client)
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003", "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+
+    body = _preview(client, conn, ["decide_native"])
+
+    assert body["estimated_cost_usd"] is None
+    assert body["estimate_basis"] is None
+    assert [s["capability"] for s in body["sends"]] == ["decide_native"]
+    # Alongside a priceable probe the whole estimate is unknown, not the
+    # priceable half: a sum that left a probe out would be a floor shown as a price.
+    both = _preview(client, conn, ["generate", "decide_native"])
+    assert both["estimated_cost_usd"] is None and both["estimate_basis"] is None
+    assert probes.estimate_usd(row, ["generate"]) is not None
+
+
+def test_a_pricing_wildcard_does_not_price_the_decision_probe(client):
+    """I6: a `pricing.json` entry would price a 0-token probe at 0.0 and the
+    confirmation would read $0.00 at the moment it asks for consent."""
+    _use(client, FakeLLM([["unused"]], decisions=[_native_answer()]))
+    conn = _openai(client)
+    store.pricing.write_pricing({"vendor/*": RATES})
+    assert _preview(client, conn, ["generate"])["estimate_basis"] == "rates"
+
+    body = _preview(client, conn, ["decide_native"])
+
+    assert body["estimated_cost_usd"] is None
+    assert body["estimate_basis"] is None
+    assert probes.estimate_from_rates(dict(RATES), ["decide_native"]) is None
+    assert probes.estimate_from_rates(dict(RATES), ["generate", "decide_native"]) is None

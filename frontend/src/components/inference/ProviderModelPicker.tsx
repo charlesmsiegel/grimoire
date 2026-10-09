@@ -55,13 +55,19 @@ export function combine(answers: ModelCapabilities[]): {
 
 /** The probes a Test… sends for `needs` on `row`: each need it does not
  *  already answer yes to. A need names its own probe, except `decide`: a
- *  decision is answered by structured generation wherever no native endpoint
- *  exists (spec 7.4), and the native probe lands with slice H, so it tests
- *  `generate`. The server refuses anything it has no probe for, with a reason
- *  the dialog shows. */
+ *  decision is answered by structured generation wherever a model generates
+ *  (spec 7.4), so it tests `generate`. It tests `decide_native` as well only
+ *  for a row that is KNOWN unable to generate and not known unable to decide
+ *  natively: a model that generates stays structured whatever that probe
+ *  finds, so the probe would spend and change nothing. The server refuses
+ *  anything it has no probe for, with a reason the dialog shows. */
 function probesFor(needs: CapabilityNeed[], row: CapabilityModel | null): TestableCapability[] {
   const all = [...new Set(needs.map((n) => (n === "decide" ? "generate" : n)))] as
     TestableCapability[];
+  if (needs.includes("decide") && row?.capabilities.generate?.value === "no"
+      && row.capabilities.decide_native?.value !== "no") {
+    all.push("decide_native");
+  }
   const open = all.filter((c) => row?.capabilities[c]?.value !== "yes");
   return open.length ? open : all;
 }

@@ -420,7 +420,7 @@ export type ModelFactsUpdate = {
   rates?: PricingEntry | Record<string, never>;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
-export type TestableCapability = "generate" | "vision" | "embed";
+export type TestableCapability = "generate" | "vision" | "embed" | "decide_native";
 /** `POST /api/llm-connections/{id}/test/preview`: what a test would send.
  *  `estimated_cost_usd` is `null` when no source (catalog, rates) states a price; 0 is only
  *  ever a stated free model. */

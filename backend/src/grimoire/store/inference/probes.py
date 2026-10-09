@@ -21,9 +21,13 @@ The cap travels as a sampler parameter (`sampling`), so
 preset's -- `max_completion_tokens` at the OpenAI API, the required
 `max_tokens` on the Anthropic API -- rather than this module knowing any wire.
 
-`decide_native` has no probe until the native adapters land (slice H), and the
-capabilities a preset states outright (`stream`, ...) are not probed at all:
-`PROBES` is the whole list of what can be tested.
+- `decide_native` -- one native decision request: a one-line statement and one
+  yes/no question, through the native endpoint and not a chat call. It is the
+  one probe with no price (`Probe.priceable`): its size is not a token count
+  anybody states, so no estimator will put a number on it.
+
+The capabilities a preset states outright (`stream`, ...) are not probed at
+all: `PROBES` is the whole list of what can be tested.
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ import zlib
 from collections.abc import Iterable
 from typing import NamedTuple
 
-from ... import content_parts
+from ... import content_parts, decisions
 from .. import pricing
 from .capabilities import NAMES
 
@@ -45,6 +49,9 @@ MAX_TOKENS = 64
 GENERATE_PROMPT = "Reply with the single word: ok"
 VISION_PROMPT = "What colour is this image? One word."
 EMBED_TEXT = "A short sentence to embed."
+DECIDE_CONTEXT = "The lamp in the window is lit."
+DECIDE_QUESTION = "Is the lamp lit?"
+PROBE_ITEM = decisions.Item(DECIDE_CONTEXT, (decisions.Predicate("probe", DECIDE_QUESTION),))
 #: The vision probe's picture is this many pixels on a side.
 PROBE_EDGE = 64
 
@@ -71,7 +78,7 @@ PROBE_DATA_URI = "data:image/png;base64," + base64.b64encode(PROBE_PNG).decode("
 class Probe(NamedTuple):
     capability: str
     #: `generate` goes through `LLMClient.single`; `embed` through the
-    #: embeddings client.
+    #: embeddings client; `decide` through `LLMClient.decide_native`.
     operation: str
     #: A stated GUESS at what one probe costs in tokens, for the preview's
     #: estimate -- not a measurement. The completion side is the cap, so it is
@@ -86,12 +93,18 @@ class Probe(NamedTuple):
     #: by the image rather than as tokens, the token guess alone would
     #: understate it.
     images: int = 0
+    #: Whether any estimate may put a number on this probe. A native decision
+    #: is not billed like a chat call (no token guess describes it), and pricing
+    #: its 0-token stand-in from a rate would read $0.00 -- "a price nobody
+    #: reported is never rendered as zero". A test with one is unknown whole.
+    priceable: bool = True
 
 
 PROBES: dict[str, Probe] = {p.capability: p for p in (
     Probe("generate", "generate", 20, MAX_TOKENS),
     Probe("vision", "generate", 300, MAX_TOKENS, images=1),
     Probe("embed", "embed", 10, 0),
+    Probe("decide_native", "decide", 0, 0, priceable=False),
 )}
 
 
@@ -140,6 +153,9 @@ def describe(cap: str, capped: bool = True) -> str:
                 f"({PROBE_EDGE}x{PROBE_EDGE}) and “{VISION_PROMPT}”{cap_clause}.")
     if cap == "embed":
         return f"One embeddings request for the text “{EMBED_TEXT}”."
+    if cap == "decide_native":
+        return (f"One native decision request: the statement “{DECIDE_CONTEXT}” "
+                f"and the yes/no question “{DECIDE_QUESTION}”.")
     raise ValueError(f"no probe for {cap!r}")
 
 
@@ -167,6 +183,9 @@ def estimate_usd(row: dict | None, caps: Iterable[str]) -> float | None:
     leaves the vision probe, and so the whole estimate, unknown. A row stating
     `0` is a free model, which is a reported price and estimates to 0.0."""
     if not isinstance(row, dict):
+        return None
+    caps = tuple(caps)
+    if not all(PROBES[cap].priceable for cap in caps):
         return None
     total = 0.0
     for cap in caps:
@@ -196,7 +215,14 @@ def estimate_from_rates(entry: dict | None, caps: Iterable[str]) -> float | None
     and None when any one of them is None: no entry, or an entry that cannot
     price both halves of a call. The vision probe is priced from its token
     guess alone, because user rates price an image as prompt tokens, as the
-    ledger does; the per-image price is a catalog row's (`estimate_usd`)."""
+    ledger does; the per-image price is a catalog row's (`estimate_usd`).
+
+    None as well when any probe is not `priceable`: a rate times a native
+    decision's 0-token guess is `0.0`, which the confirmation would show as a
+    price."""
+    caps = tuple(caps)
+    if not all(PROBES[cap].priceable for cap in caps):
+        return None
     total = 0.0
     for cap in caps:
         probe = PROBES[cap]

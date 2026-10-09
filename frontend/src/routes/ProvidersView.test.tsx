@@ -323,6 +323,18 @@ test("a catalog's no is offered to a test; only the adapter's rules a probe out"
     "saltmarch", { model: "vendor/m", capabilities: ["vision", "embed"] });
 });
 
+test("Test… lists decide_native for a model whose native decisions are unknown", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+    ...CAPS, decide_native: { value: "unknown", source: "unknown" },
+  } }));
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Test…" }));
+  expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "vendor/m", capabilities: ["generate", "vision", "embed", "decide_native"] });
+});
+
 test("a model the adapter rules out of every probe has nothing to test", async () => {
   const never = { value: "no", source: "adapter" };
   (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
