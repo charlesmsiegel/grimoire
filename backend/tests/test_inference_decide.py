@@ -712,13 +712,14 @@ def test_a_chain_whose_primary_refused_reports_the_fallbacks_failure(client):
     provider = SequencedProvider([_refused_schema(), _busy()])
     fake = LLMClient(openrouter=provider, timeout=0, retries=0)
     with pytest.raises(llm.SchemaRefusalError) as exc:
-        asyncio.run(fake.complete([{"role": "user", "content": "x"}], _resolved().conn,
+        asyncio.run(fake.complete([{"role": "user", "content": "x"}], _resolved().chain,
                                   schema=decisions.schema([_item()], explain=False)))
     assert (exc.value.kind, exc.value.retry_after) == ("rate_limit", 30.0)
     assert "json_schema strict mode" in exc.value.detail and "slow down" in exc.value.detail
     primary, fallback = exc.value.attempts
-    assert primary is not None and primary["model"] == "vendor/active"
-    assert primary[llm.STRUCTURED_KEY] is True and FALLBACK_KEY not in primary
+    # The refused attempt, as the target it was sent: one attempt, no chain.
+    assert isinstance(primary, wire.Target) and primary.model == "vendor/active"
+    assert primary.structured is True
     assert fallback is None
     assert [w.kind for w in exc.value.words] == ["bad_response", "rate_limit"]
 

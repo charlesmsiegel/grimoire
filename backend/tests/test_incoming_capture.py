@@ -1,20 +1,20 @@
 """Capture the provider boundary, including fields no consumer recognizes."""
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 import pytest
 
-from grimoire import routes
-from grimoire.llm import FALLBACK_KEY, LLMClient
+from grimoire import routes, wire
+from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import OpenRouterClient
 from grimoire.store import logs, usage
 from tests.test_claude_agent import install_fake_sdk
 
-CONN = {"kind": "openai_compatible", "model": "m", "api_key": "secret-key",
-        "base_url": "https://example.test/v1"}
+CONN = wire.Target(provider_id="", kind="openai_compatible", model="m", requested_model="m",
+                   api_key="secret-key", base_url="https://example.test/v1")
 FRAMES = [': keep-alive', '', 'event: extension',
           'data: {"choices":[{"delta":{"reasoning_content":"考える", "future":{"x":[null,false,0]}}}],"vendor":42}',
           '', 'data: {bad json', '',
@@ -36,7 +36,7 @@ async def test_all_lines_survive_before_content_and_usage_filtering(kind):
     events = []
     client = client_for(lambda r: httpx.Response(200, text="\n".join(FRAMES) + "\n"), events.append)
     try:
-        assert await client.complete([], {**CONN, "kind": kind}) == "Hello"
+        assert await client.complete([], replace(CONN, kind=kind)) == "Hello"
     finally:
         await client.aclose()
     assert [e["payload"] for e in events if e["event"] == "sse_line"] == FRAMES
@@ -55,7 +55,7 @@ async def test_failed_attempt_and_fallback_keep_distinct_frames():
             return httpx.Response(400, text='{"error":{"message":"bad","future":17}}')
         return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"}}]}\n')
     client = client_for(handler, events.append)
-    chain = {**CONN, FALLBACK_KEY: {**CONN, "model": "fallback"}}
+    chain = wire.Chain(CONN, replace(CONN, model="fallback", requested_model="fallback"))
     try:
         assert await client.complete([], chain) == "ok"
     finally:
@@ -100,7 +100,8 @@ async def test_sdk_fields_survive_before_text_block_filtering(monkeypatch):
     events = []
     client = LLMClient(capture=lambda: events.append)
     try:
-        assert await client.complete([], {"kind": "claude", "model": "m"}) == ""
+        assert await client.complete([], wire.Target(provider_id="", kind="claude", model="m",
+                                                     requested_model="m")) == ""
     finally:
         await client.aclose()
     captured, = [e for e in events if e["event"] == "sdk_message"]

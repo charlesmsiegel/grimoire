@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import logging
 import random
@@ -18,9 +19,7 @@ from .. import content_parts, decisions, llm_reasoning, prompts, store, wire
 from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
-    FALLBACK_KEY,
     LLMClient,
-    effective_model,
     fallback_sampling,
     prefill_capable,
 )
@@ -490,7 +489,7 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended):
                     sid,
                     "continuation" if round_record.get("continuation") else "retry",
                     messages,
-                    resolved.conn,
+                    resolved.chain,
                 )
                 if record.get("resume_snapshot"):
                     return record, messages, "resume", record.get("resume_settings")
@@ -514,7 +513,7 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended):
                 cid, sid, round_record["id"], actor, speaker, messages.snapshot(),
                 getattr(messages, "settings", None),
             )
-        _capture(cid, sid, "continuation" if appended else "chat", messages, resolved.conn)
+        _capture(cid, sid, "continuation" if appended else "chat", messages, resolved.chain)
         if pending and appended:
             return record, messages, "resume", getattr(messages, "settings", None)
         return record, messages, "primary", None
@@ -623,15 +622,20 @@ def _normalise(cid, sid, record, text, connection=""):
 OUTCOME_SECTION_ID = "decision"
 
 
-def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
+def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
+             outcome: dict | None = None, *, vouched: bool = True):
     """Record one call's prompt in the prompt log. `outcome` is a decision's
     record of what it decided (`inference.Capture`), filed as a last
     `decision` section beside the messages built from plain ones, and left
     out of `total_tokens`: it was never sent.
 
-    `conn` is the attempt the call was sent on: a generation's lowered dict,
-    or -- a decision's -- its `wire.Target`. A native decision is sent no
-    sampler preset, so its capture reports none (`outcome`'s `mode`)."""
+    `sent` is what the call was sent on: a generation's chain -- whose
+    fallback, should it answer, is captured as the variant it was sent
+    (`_variant_target`) -- or one attempt's `wire.Target` (a decision's, or
+    that fallback variant's own). A native decision is sent no sampler
+    preset, so its capture reports none (`outcome`'s `mode`); nor does a
+    variant whose sampling nobody can vouch for (`vouched`, `_variant_target`'s
+    relabel)."""
     if not store.prompt_log.capturing():
         return
     # A prompt that carries its own breakdown (`PreparedMessages`) is filed
@@ -668,39 +672,45 @@ def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
-    if isinstance(conn, wire.Target):
+    if isinstance(sent, wire.Target):
+        # One attempt: a decision, or a fallback variant (below), whose
+        # messages are a plain list -- there is no variant of it to hook.
         native = (outcome or {}).get("mode") == decisions.NATIVE_BACKEND
-        _record_prompt(cid, sid, task, breakdown, model=conn.model, kind=conn.kind,
-                       messages=messages, conn=None if native else conn)
+        _record_prompt(cid, sid, task, breakdown, model=sent.model, kind=sent.kind,
+                       messages=messages, conn=sent if vouched and not native else None)
         return
-    _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), kind=conn["kind"], messages=messages,
-                   conn=conn)
+    primary = sent.primary
+    _record_prompt(cid, sid, task, breakdown, model=primary.model, kind=primary.kind,
+                   messages=messages, conn=sent)
     if isinstance(messages, PreparedMessages):
         # Steered frozen variants have no historical section accounting. Capture
         # their exact rendered messages at actual fallback dispatch instead.
-        # `for_connection`: a tailed prompt (Keep writing) ends the way the
-        # fallback's own connection was sent; for any other it is `for_model`.
+        # `for_target`: a tailed prompt (Keep writing) ends the way the
+        # fallback's own attempt was sent; for any other it is `for_model`.
         def capture_variant(model, _breakdown):
-            variant = _variant_conn(conn, model)
-            _capture(cid, sid, task, messages.for_connection(variant, model), variant)
+            variant = _variant_target(sent, model)
+            _capture(cid, sid, task, messages.for_target(variant), variant,
+                     vouched=sent.fallback is not None)
         messages.on_variant = capture_variant
 
 
-def _variant_conn(conn: dict, model: str) -> dict:
-    """The connection a fallback variant was sent on, as its capture names it.
+def _variant_target(chain: wire.Chain, model: str) -> wire.Target:
+    """The attempt a fallback variant was sent on, as its capture names it.
 
-    The fallback this call carries (`llm.FALLBACK_KEY`, the resolver's own),
-    with the route's sampler preset under `llm.fallback_sampling`'s rule --
-    not the primary relabelled with the fallback's model, which would record
-    the primary's preset and catalog list against a request that never carried
-    them. Falls back to that relabel only when the call carries no fallback (a
-    connection built by hand), minus the sampling block it cannot vouch for.
+    The fallback this call carries (`wire.Chain.fallback`, the resolver's
+    own), with the route's sampler preset under `llm.fallback_sampling`'s
+    rule -- not the primary relabelled with the fallback's model, which would
+    record the primary's preset and catalog list against a request that never
+    carried them. Falls back to that relabel only when the call carries no
+    fallback (a chain built by hand), minus the sampling and the catalog list
+    it cannot vouch for -- and its capture files no sampler report
+    (`_capture`'s `vouched`).
     """
-    fallback = conn.get(FALLBACK_KEY)
-    if fallback is not None:
-        return {**fallback_sampling(conn, fallback), "model": model}
-    return {**{k: v for k, v in conn.items() if k not in ("sampling", "model_params")},
-            "model": model}
+    if chain.fallback is not None:
+        return dataclasses.replace(fallback_sampling(chain.primary, chain.fallback),
+                                   model=model, requested_model=model)
+    return dataclasses.replace(chain.primary, model=model, requested_model=model,
+                               sampling=wire.Sampling(), model_params=None)
 
 
 def _round_state(cid, sid, round_record, **fields):
@@ -1182,7 +1192,7 @@ def _made_by(
     try:
         usage = meter.usage
         served = {
-            "connection_id": (usage.get(ATTEMPTED) or {}).get("id"),
+            "connection_id": _attempted_id(usage),
             "connection": usage.get("connection"),
             "model": usage.get("model"),
             "provider": usage.get("provider"),
@@ -1199,6 +1209,13 @@ def _made_by(
     except Exception:  # noqa: BLE001 - provenance must never fail a turn
         _log.exception("could not record what made a %s response", task)
         return None
+
+
+def _attempted_id(usage: dict) -> str | None:
+    """The provider id of the attempt the facade stamped into `usage`
+    (`llm.ATTEMPTED`), or None when it stamped none."""
+    attempted = usage.get(ATTEMPTED)
+    return attempted.provider_id if isinstance(attempted, wire.Target) else None
 
 
 def _abort_meter(meter):
@@ -1599,7 +1616,7 @@ def extend_response(
             plan = _extend_target(cid, sid, rid)
             token = streaming._claim_turn(cid, sid)
             note = store.responses.round_typed_note(cid, sid, plan.record["round_id"])
-            messages = _extend_messages(plan.snapshot, resolved.conn, plan.partial, guidance,
+            messages = _extend_messages(plan.snapshot, resolved.chain.primary, plan.partial, guidance,
                                         plan.words, campaign=cid)
             if guidance:
                 # Last in the hold, after every refusal, as a reroll's steer.
@@ -1623,10 +1640,10 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
     where the model is mid-reply), the `extend.seed` the live bubble grows from,
     and how the result lands (`_accept_extend` joins it onto the reply).
     `resolved` is the reroll's own resolution of `task` (`override_inference`)."""
-    conn = resolved.conn
+    chain = resolved.chain
     perception = record["actor_ref"] != "grimoire"
     if extend is not None:
-        perception = perception and not _prefills(conn)
+        perception = perception and not _prefills(chain.primary)
     watcher = store.response_protocol.ResponseWatcher(perception=perception)
     meter = store.usage.meter(
         task,
@@ -1641,7 +1658,7 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
     # variant's record is kept, so swiping back to it is free.
     tracked: list[tracker_routes.Mark] = []
     try:
-        await run_in_threadpool(_capture, cid, sid, task, messages, conn)
+        await run_in_threadpool(_capture, cid, sid, task, messages, chain)
         yield streaming._sse(
             {
                 "response_start": {
@@ -1669,7 +1686,7 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
             refusal = None if accepted else (
                 "replacement_incomplete", "The previous response was retained.")
         else:
-            mode = _served_mode(messages, meter, conn)
+            mode = _served_mode(messages, meter, chain.primary)
             made_by = _made_by(
                 meter, task, extend.composed, note, guidance,
                 settings=extend.settings if extend.composed == "resume" else None,
@@ -1863,10 +1880,13 @@ def _extend_views(cid: str, messages: list[dict], rid: str) -> dict[str, list[st
     return out
 
 
-def _served_mode(messages, meter, conn) -> str:
+def _served_mode(messages, meter, primary: wire.Target) -> str:
     """The tail the attempt that ANSWERED was sent -- a fallback picks its own,
-    so the primary's mode is not evidence of what the model continued."""
-    attempted = (meter.usage.get(ATTEMPTED) if meter is not None else None) or conn
+    so the primary's mode is not evidence of what the model continued. The
+    attempt the facade stamped (`llm.ATTEMPTED`), else `primary`."""
+    attempted = meter.usage.get(ATTEMPTED) if meter is not None else None
+    if not isinstance(attempted, wire.Target):
+        attempted = primary
     return messages.mode_for(attempted) or _extend_mode(attempted)
 
 
@@ -1968,8 +1988,8 @@ def _extends_record(message: dict, first: dict, records: dict[str, dict],
 _EXTEND_CLOSERS = frozenset(".,;:!?)]\u201d\u2019'*\u2026\u2014")
 
 
-def _prefills(conn: dict) -> bool:
-    """Whether a "Keep writing" attempt on `conn` is sent as a prefill.
+def _prefills(target: wire.Target) -> bool:
+    """Whether a "Keep writing" attempt on `target` is sent as a prefill.
 
     The connection's own opt-in (`llm.prefill_capable`, a gateway rule that
     cannot read the store), unless its provider preset rules prefill out: the
@@ -1977,22 +1997,25 @@ def _prefills(conn: dict) -> bool:
     with a 400 (`never_for`), so an opt-in there would fail every Keep writing. `claude` lists prefill
     under `never` too, and is exempt: its SDK path has sent an opted-in
     connection the prefill tail since play controls IV, and slice B changes
-    nothing an existing store does."""
-    if not prefill_capable(conn):
+    nothing an existing store does.
+
+    A target carries no explicit provider preset, so it is placed by its kind
+    and URL -- the answer its own preset gives, while every preset of a kind
+    agrees on prefill (`test_no_provider_preset_changes_a_vision_or_prefill_answer`)."""
+    if not prefill_capable(target):
         return False
-    preset = inference_providers.infer(conn)
+    preset = inference_providers.infer({"kind": target.kind, "base_url": target.base_url})
     if preset.kind == "claude":
         return True
-    return "prefill" not in inference_providers.never_for(preset,
-                                                          str(conn.get("model") or ""))
+    return "prefill" not in inference_providers.never_for(preset, target.model)
 
 
-def _extend_mode(conn: dict) -> str:
-    """The tail a "Keep writing" attempt on `conn` is sent."""
-    return "prefill" if _prefills(conn) else "instruction"
+def _extend_mode(target: wire.Target) -> str:
+    """The tail a "Keep writing" attempt on `target` is sent."""
+    return "prefill" if _prefills(target) else "instruction"
 
 
-def _extend_messages(snapshot: dict, conn: dict, partial: str, guidance: str,
+def _extend_messages(snapshot: dict, primary: wire.Target, partial: str, guidance: str,
                      words: int | None, campaign: str = "") -> PreparedMessages:
     """The extend prompt: the frozen snapshot, then the partial reply as the
     model's own turn, ending one of two ways per attempt (`with_tails`).
@@ -2015,8 +2038,8 @@ def _extend_messages(snapshot: dict, conn: dict, partial: str, guidance: str,
                                       guidance=guidance or ""),
         }],
     }
-    return PreparedMessages.from_snapshot(snapshot, effective_model(conn), campaign=campaign) \
-        .with_tails(tails, _extend_mode, conn)
+    return PreparedMessages.from_snapshot(snapshot, primary.model, campaign=campaign) \
+        .with_tails(tails, _extend_mode, primary)
 
 
 def _extend_joiner(lead: str, text: str, mode: str) -> str:

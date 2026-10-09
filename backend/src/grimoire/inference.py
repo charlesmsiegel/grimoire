@@ -5,7 +5,7 @@ A generation is free text, streamed or joined. `generate` is the only door
 to it: it takes the resolution a call site already made (`require_inference`
 or `override_inference`), refuses one made for another task or operation, or
 one that resolved nothing, before any client call, and hands the facade
-`resolved.conn` -- the facade itself is unchanged. `test_routing_guard.py`
+`resolved.chain`, the resolution's typed targets. `test_routing_guard.py`
 holds that `client.stream`/`complete` are spelled only in this module; the
 caller's meter, and the holder it hands in as `usage=`, stay at the call
 site, where `test_usage_guard.py` reads them.
@@ -253,9 +253,6 @@ def _served_by(holder: dict) -> tuple[str, str]:
     target = holder.get(llm.ATTEMPTED)
     if isinstance(target, wire.Target):
         return target.provider_id, target.model
-    if isinstance(target, dict):
-        # A double that stamps the dict it was handed.
-        return str(target.get("id", "") or ""), llm.effective_model(target)
     return "", ""
 
 
@@ -719,17 +716,18 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
 
 # ---- generate (spec 7.2) ----
 
-def _generating(task: str, resolved: ResolvedInference) -> dict:
-    """The connection dict `resolved` sends for `task`'s generation, or the
-    `ValueError` `generate` raises for a resolution it cannot send."""
+def _generating(task: str, resolved: ResolvedInference) -> wire.Chain:
+    """The chain `resolved` sends for `task`'s generation (its primary's
+    target, and the fallback's where it rides), or the `ValueError`
+    `generate` raises for a resolution it cannot send."""
     if resolved.task != task:
         raise ValueError(f"a resolution of {resolved.task!r} cannot generate {task!r}")
     if resolved.operation != "generate":
         raise ValueError(f"a {resolved.operation!r} resolution cannot generate")
-    conn = resolved.conn
-    if conn is None:
+    chain = resolved.chain
+    if chain is None:
         raise ValueError(f"{task!r} resolved to no connection")
-    return conn
+    return chain
 
 
 @overload
@@ -767,26 +765,27 @@ def generate(task: str, messages: list[dict], *, client: LLMClient,
     facade sends structured mode only on an attempt flagged for it, which a
     generate resolution never is.
 
-    The facade is sent `resolved.conn` exactly as a call site sent it before
-    this door existed: positionally, with `schema=` only when one is given --
-    so every request, ledger row and capture is what it was."""
-    conn = _generating(task, resolved)
+    The facade is sent `resolved.chain` -- the primary's target, and the
+    fallback's where the resolution attaches it -- positionally, with
+    `schema=` only when one is given, so every request, ledger row and
+    capture is what the connection dict it describes sent."""
+    chain = _generating(task, resolved)
     if stream:
-        return (client.stream(messages, conn, usage) if schema is None
-                else client.stream(messages, conn, usage, schema=schema))
-    return (client.complete(messages, conn, usage) if schema is None
-            else client.complete(messages, conn, usage, schema=schema))
+        return (client.stream(messages, chain, usage) if schema is None
+                else client.stream(messages, chain, usage, schema=schema))
+    return (client.complete(messages, chain, usage) if schema is None
+            else client.complete(messages, chain, usage, schema=schema))
 
 
 def note_outcome(client: LLMClient, resolved: ResolvedInference,
                  error: LLMError | None) -> None:
     """File an outcome the facade did not itself observe (#146) -- a bounded
     call's ceiling, which cancels the call from outside -- against the attempt
-    `resolved` sends first (`LLMClient.note_outcome`, which takes the fallback
-    off). A resolution of nothing has no attempt to file it against."""
-    conn = resolved.conn
-    if conn is not None:
-        client.note_outcome(conn, error)
+    `resolved` sends first: its chain's primary target, alone. A resolution of
+    nothing has no attempt to file it against."""
+    chain = resolved.chain
+    if chain is not None:
+        client.note_outcome(chain.primary, error)
 
 
 def for_task(resolved: ResolvedInference, task: str) -> ResolvedInference:

@@ -16,7 +16,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from concurrent.futures import Executor, Future
-from typing import NamedTuple, overload
+from typing import NamedTuple
 
 from . import (
     adapters,
@@ -206,12 +206,11 @@ ROUTE_SCOPES = frozenset({"campaign", "global"})
 #: attached to the primary's dict by `store.inference.resolve` -- absent when
 #: there is none, or when it is known unable to do the job (spec 5.3).
 #:
-#: The facade's to read, and nobody else's. A dict handed to `LLMClient` is
-#: read as the chain it describes at the boundary (`_as_chain`), and the
-#: fallback rides on `wire.Chain.fallback` from there; each attempt's own
-#: dict, as callbacks are handed it (`_spelled`), is taken off the key, so no
-#: capture, health record, `ATTEMPTED` stamp or preset refusal sees a dict
-#: describing a chain. Deleted with the lowering (Task 10).
+#: The facade never reads it: `LLMClient` is sent a `wire.Chain` (or a lone
+#: `wire.Target`) and refuses a dict, so the fallback rides on
+#: `wire.Chain.fallback`. The resolver's lowered dicts still carry it, which
+#: is where `ResolvedInference.chain` reads whether the fallback rides, and
+#: `wire.from_lowered` reads the same key. Deleted with the lowering (Task 10).
 FALLBACK_KEY = "_fallback"
 
 #: The key under which a call's connection dict says THIS attempt may be asked
@@ -220,20 +219,11 @@ FALLBACK_KEY = "_fallback"
 #: `store.inference.resolve` and absent everywhere else -- so a generate
 #: resolution's dicts are what they were before slice F.
 #:
-#: Read per attempt, from the dict each attempt already carries, so a fallback
-#: without the mode is sent the same prompt (the schema rides in it) and no
-#: structured envelope, without the facade importing the store. Unlike
-#: `FALLBACK_KEY` it is about one attempt, so nothing strips it.
+#: The facade reads it per attempt as `wire.Target.structured` (what
+#: `wire.from_lowered` and the resolver's targets read from this key), so a
+#: fallback without the mode is sent the same prompt (the schema rides in it)
+#: and no structured envelope, without the facade importing the store.
 STRUCTURED_KEY = "_structured"
-
-
-def _without_fallback(conn: dict) -> dict:
-    """`conn` as one attempt: without the fallback it carries (`FALLBACK_KEY`).
-    The same dict when it carries none, so identity survives for a caller that
-    never had one; a copy otherwise, so the caller's dict is left as it was."""
-    if FALLBACK_KEY not in conn:
-        return conn
-    return {k: v for k, v in conn.items() if k != FALLBACK_KEY}
 
 
 def _backoff_delay(attempt: int) -> float:
@@ -258,14 +248,11 @@ def _backoff_delay(attempt: int) -> float:
     return ceiling / 2 + random.uniform(0, ceiling / 2)
 
 
-def _label(attempt: wire.Target | dict) -> str:
+def _label(attempt: wire.Target) -> str:
     """How an attempt's connection is named in a log line and the ledger's
     `connection`: what the user called it, or whatever identifies it at all
-    for one that has no name. A dict is read as its caller spelled it (a
-    `kind` left off names nothing here)."""
-    if isinstance(attempt, wire.Target):
-        return attempt.provider_name or attempt.provider_id or attempt.kind or "?"
-    return attempt.get("name") or attempt.get("id") or attempt.get("kind") or "?"
+    for one that has no name."""
+    return attempt.provider_name or attempt.provider_id or attempt.kind or "?"
 
 
 #: Connection kinds whose client cannot carry OpenAI-style content PARTS: the
@@ -290,9 +277,7 @@ TEXT_ONLY_KINDS = adapters.TEXT_ONLY_KINDS
 LISTABLE_KINDS = adapters.LISTABLE_KINDS
 
 #: Key under which `_stamp` records the attempt the *current* one is running
-#: on, in the usage holder the caller already threads down: its `Target`, or
-#: -- for a call handed a dict, through the shim (`_as_chain`) -- that
-#: attempt's own dict, as the caller spelled it (`_spelled`).
+#: on, in the usage holder the caller already threads down: its `Target`.
 #:
 #: For the one caller that has to file an outcome this facade cannot see — a
 #: route whose ceiling cancels the call (`routes.common._noting`). Without it
@@ -331,10 +316,10 @@ def _carries_parts(messages: list[dict]) -> bool:
                and not content_parts.lowerable(m["content"]) for m in messages)
 
 
-#: The route marker for a DEGRADE sibling (#377) on a dict: the same
+#: The route marker for a DEGRADE sibling (#377) on a lowered dict: the same
 #: connection, sent the text lowering of a prompt whose images it just
-#: refused. Never persisted and never sent -- `_dispatch` strips it. A target
-#: says the same with `wire.Target.degrade`.
+#: refused. The facade marks one with `wire.Target.degrade`, and only
+#: `wire.from_lowered` reads this spelling (a test holds the two equal).
 DEGRADE = "_degrade"
 
 #: The HTTP statuses that mean "not this request" -- a provider refusing an
@@ -357,40 +342,23 @@ NATIVE_REJECTED_STATUSES = REJECTED_STATUSES | {403}
 
 class _Route(NamedTuple):
     """One attempt a generation may make, as the pair a route always was:
-    the attempt and its retry budget (the primary's; 0 for a fallback or a
-    degrade sibling).
+    the attempt's target and its retry budget (the primary's; 0 for a
+    fallback or a degrade sibling). The target is what every callback, the
+    `ATTEMPTED` stamp and a schema refusal are handed."""
 
-    The attempt is as the caller spelled it (`said`): a target, for a call
-    handed a chain; for a call handed a dict through the shim (`_as_chain`),
-    that attempt's own dict (`_spelled`). It is what every callback, the
-    `ATTEMPTED` stamp and a schema refusal hand back, so a dict caller is
-    handed back what it was before the facade sent targets. What is SENT is
-    always its `target`."""
-
-    said: wire.Target | dict
+    target: wire.Target
     retries: int
 
-    @property
-    def target(self) -> wire.Target:
-        """The target this route sends: its attempt, or what its dict reads
-        as (`_attempt_of`). Read once per use; a route is never mutated."""
-        return _attempt_of(self.said)
-
-    def sent(self) -> wire.Target | dict:
-        """`said`, less the degrade marker: what an image budget, a tail
+    def sent(self) -> wire.Target:
+        """`target`, less the degrade marker: what an image budget, a tail
         chooser and a schema refusal are handed."""
-        if isinstance(self.said, wire.Target):
-            return dataclasses.replace(self.said, degrade=False)
-        return {k: v for k, v in self.said.items() if k != DEGRADE}
+        return dataclasses.replace(self.target, degrade=False)
 
 
 def _degraded(route: _Route) -> _Route:
     """`route`'s degrade sibling (#377): the same attempt, sent its images as
     text, with no retries of its own."""
-    said = route.said
-    if isinstance(said, wire.Target):
-        return _Route(dataclasses.replace(said, degrade=True), 0)
-    return _Route({**said, DEGRADE: True}, 0)
+    return _Route(dataclasses.replace(route.target, degrade=True), 0)
 
 
 def _with_degrades(routes: list[_Route]) -> list[_Route]:
@@ -398,35 +366,21 @@ def _with_degrades(routes: list[_Route]) -> list[_Route]:
     return [r for route in routes for r in (route, _degraded(route))]
 
 
-def _as_chain(attempt: wire.Chain | wire.Target | dict) -> wire.Chain:
-    """What the facade is sent, as a chain: a `Chain` as it is, a `Target` as
-    a chain of one, and a lowered connection dict read as the chain it
-    describes (`wire.from_lowered`). The shim, and the facade's one dict door:
-    every entry point passes what it was handed through here. Task 9d deletes
-    it, and a dict then raises."""
+def _chain_of(attempt: wire.Chain | wire.Target) -> wire.Chain:
+    """What a generation is sent, as a chain: a `Chain` as it is, and a
+    `Target` as a chain of one. Anything else -- a lowered connection dict
+    included -- is a `TypeError`: the facade sends typed targets only."""
     if isinstance(attempt, wire.Chain):
         return attempt
+    return wire.Chain(_target_of(attempt))
+
+
+def _target_of(attempt: wire.Target) -> wire.Target:
+    """`attempt`, when it is one attempt's `Target`; a `TypeError` for
+    anything else, a lowered connection dict included."""
     if isinstance(attempt, wire.Target):
-        return wire.Chain(attempt)
-    if isinstance(attempt, dict):
-        return wire.from_lowered(attempt)
+        return attempt
     raise TypeError(f"the facade sends a wire.Chain or wire.Target, not {type(attempt).__name__}")
-
-
-def _attempt_of(attempt: wire.Target | dict) -> wire.Target:
-    """One attempt's target: `_as_chain`'s primary."""
-    return _as_chain(attempt).primary
-
-
-def _spelled(attempt: wire.Chain | wire.Target | dict) -> tuple[dict | None, dict | None]:
-    """A dict's own attempts, as callbacks are handed them: the primary's dict
-    without the fallback it carries, and that fallback's -- `(None, None)`
-    for a chain or a target, whose callbacks are handed targets."""
-    if not isinstance(attempt, dict):
-        return None, None
-    fallback = attempt.get(FALLBACK_KEY)
-    return (_without_fallback(attempt),
-            _without_fallback(fallback) if isinstance(fallback, dict) and fallback else None)
 
 
 def _may_send_refs(messages: list[dict]) -> bool:
@@ -619,7 +573,7 @@ async def _guard(agen, timeout: float, tick: float | None = None, pending=None) 
             await _aclose(it)
 
 
-def _stamp(usage: dict | None, route: _Route | wire.Target | dict, attempts: int) -> None:
+def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> None:
     """Start one attempt's accounting: which route is about to run, and how many
     have been tried (#152).
 
@@ -652,7 +606,7 @@ def _stamp(usage: dict | None, route: _Route | wire.Target | dict, attempts: int
     if usage is None:
         return
     if not isinstance(route, _Route):
-        # One attempt handed alone, as its target or its dict.
+        # One attempt handed alone, as its target.
         route = _Route(route, 0)
     target = route.target
     reasoning = usage.get(llm_reasoning.KEY)
@@ -660,16 +614,16 @@ def _stamp(usage: dict | None, route: _Route | wire.Target | dict, attempts: int
     if isinstance(reasoning, llm_reasoning.Buffer):
         reasoning.begin()
         usage[llm_reasoning.KEY] = reasoning
-    usage.update({"model": target.model, "connection": _label(route.said),
+    usage.update({"model": target.model, "connection": _label(target),
                   "provider": target.kind, "attempts": attempts,
                   # Which attempt is live, for the route that may have to
                   # report an outcome this facade never sees. See `ATTEMPTED`.
-                  ATTEMPTED: route.said})
+                  ATTEMPTED: target})
     usage["requested_model"] = target.requested_model or target.model
     llm_usage.account(usage, target)
 
 
-async def _estimate(usage: dict | None, conn: wire.Target | dict, counter) -> None:
+async def _estimate(usage: dict | None, conn: wire.Target, counter) -> None:
     """Mark the attempt as ended on its own, and count what its provider did
     not (spec 9.1, ruling 14).
 
@@ -710,7 +664,7 @@ async def _estimate(usage: dict | None, conn: wire.Target | dict, counter) -> No
                         _label(conn), type(exc).__name__)
 
 
-def _observe(observer, conn: wire.Target | dict, error: LLMError | None) -> None:
+def _observe(observer, conn: wire.Target, error: LLMError | None) -> None:
     """Report one attempt's outcome, without letting the report break the call.
 
     The observer is how a provider's own verdict reaches the health registry
@@ -731,12 +685,7 @@ def _observe(observer, conn: wire.Target | dict, error: LLMError | None) -> None
         log.warning("could not record connection health for %r: %s", _label(conn), exc)
 
 
-@overload
-def fallback_sampling(primary: dict, fallback: dict) -> dict: ...
-@overload
-def fallback_sampling(primary: wire.Target, fallback: wire.Target) -> wire.Target: ...
-def fallback_sampling(primary: wire.Target | dict, fallback: wire.Target | dict
-                      ) -> wire.Target | dict:
+def fallback_sampling(primary: wire.Target, fallback: wire.Target) -> wire.Target:
     """`fallback` as it will be sent when it serves `primary`'s generation.
 
     A preset chosen for the ROUTE follows it onto the fallback; only a
@@ -745,20 +694,7 @@ def fallback_sampling(primary: wire.Target | dict, fallback: wire.Target | dict
     would get that cap back the moment the primary rate-limited and a fallback
     carrying it took the call. Public because the prompt capture of a fallback
     attempt (`routes.common._record_prompt`) has to describe the same request.
-
-    Two targets, or -- for the callers that still hold them, until Task 10 --
-    two lowered dicts, each answered in its own kind.
     """
-    if not (isinstance(primary, dict) and isinstance(fallback, dict)):
-        return _fallback_target(_attempt_of(primary), _attempt_of(fallback))
-    sampling = primary.get("sampling")
-    if isinstance(sampling, dict) and sampling.get("scope") in ROUTE_SCOPES:
-        return {**fallback, "sampling": sampling}
-    return fallback
-
-
-def _fallback_target(primary: wire.Target, fallback: wire.Target) -> wire.Target:
-    """`fallback_sampling` for two targets."""
     if primary.sampling.scope in ROUTE_SCOPES:
         return dataclasses.replace(fallback, sampling=primary.sampling)
     return fallback
@@ -798,7 +734,7 @@ def _wire_spellings(share: dict, prefix: str = "") -> set[str]:
     return names
 
 
-def _structured_share(conn: wire.Target | dict) -> dict:
+def _structured_share(target: wire.Target) -> dict:
     """The structured-output envelope this attempt puts on the wire, as a share
     `_wire_spellings` reads: `{}` unless the attempt is flagged
     (`STRUCTURED_KEY`), and `{}` for `claude`, which never takes it.
@@ -810,7 +746,6 @@ def _structured_share(conn: wire.Target | dict) -> dict:
     keys are named. Read from the flag rather than from
     whether a schema was sent, because only a decide resolution carries the
     flag and `decide` always sends one."""
-    target = _attempt_of(conn)
     if not target.structured:
         return {}
     kind = target.kind
@@ -823,7 +758,7 @@ def _structured_share(conn: wire.Target | dict) -> dict:
     return {"response_format": {"type": None, "json_schema": None}}
 
 
-def _preset_refusal(exc: LLMError, conn: wire.Target | dict) -> PresetRefusalError | None:
+def _preset_refusal(exc: LLMError, target: wire.Target) -> PresetRefusalError | None:
     """The error to raise in place of `exc` when it is a preset being refused.
 
     None when it is not: `exc` carries no refusal status, or this attempt sent
@@ -839,7 +774,6 @@ def _preset_refusal(exc: LLMError, conn: wire.Target | dict) -> PresetRefusalErr
     if exc.status not in PRESET_REFUSAL_STATUSES or llm_errors.account_limit(exc):
         # A spend limit's 400 is the account refused, whatever its prose says.
         return None
-    target = _attempt_of(conn)
     shares = llm_sampling.sent_fields(target)
     sent = list(shares)
     # Only when the provider's message NAMES something that was sent. A 400 is
@@ -892,15 +826,14 @@ class SchemaRefusalError(LLMError):
     route then did. Every `except LLMError` still catches it.
 
     `words` is what each route the call ran failed with -- the primary, then
-    the fallback when there was one -- and `attempts[i]` is route i's attempt
-    as it was sent, when its failure was the refusal, else None: its target,
-    or its connection dict for a call handed one through the shim
-    (`_as_chain`). The error itself is `routes_failed(words)`: a lone route's own
-    failure (with its kind and status), or the two composed."""
+    the fallback when there was one -- and `attempts[i]` is route i's target
+    as it was sent, when its failure was the refusal, else None. The error
+    itself is `routes_failed(words)`: a lone route's own failure (with its
+    kind and status), or the two composed."""
 
     def __init__(self, kind: str, detail: str = "", retry_after: float | None = None,
                  status: int | None = None, code: str | None = None, *,
-                 attempts: tuple[wire.Target | dict | None, ...] = (),
+                 attempts: tuple[wire.Target | None, ...] = (),
                  words: tuple[LLMError, ...] = ()):
         super().__init__(kind, detail, retry_after, status=status, code=code, words=words)
         self.attempts = attempts
@@ -948,8 +881,8 @@ def _said(exc: LLMError) -> str:
     return f"{detail}: {upstream}" if isinstance(upstream, str) and upstream else detail
 
 
-def _schema_refusal(exc: LLMError, conn: wire.Target | dict) -> bool:
-    """Whether `exc` is the structured envelope `conn` was sent being refused:
+def _schema_refusal(exc: LLMError, target: wire.Target) -> bool:
+    """Whether `exc` is the structured envelope `target` was sent being refused:
     an attempt flagged for the mode, a refusal status, and a message that
     names one of the envelope's own spellings and nothing else that was sent.
 
@@ -958,7 +891,6 @@ def _schema_refusal(exc: LLMError, conn: wire.Target | dict) -> bool:
     bare words: "format" and "schema" are in plenty of 400s that are about
     something else. A message that also names a sent sampler is that
     sampler's business (`_preset_refusal` reads it first on a primary)."""
-    target = _attempt_of(conn)
     envelope = _wire_spellings(_structured_share(target))
     if (not envelope or exc.status not in PRESET_REFUSAL_STATUSES
             or llm_errors.account_limit(exc)):
@@ -1053,10 +985,10 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
     tries = 0
     first: LLMError | None = None
     last: LLMError | None = None
-    #: Route (0 the primary, 1 the fallback) -> its attempt as sent (as the
-    #: caller spelled it, `_Route.sent`), while that route's failure is its
-    #: structured field refused.
-    schema_refused: dict[int, wire.Target | dict] = {}
+    #: Route (0 the primary, 1 the fallback) -> its target as sent
+    #: (`_Route.sent`), while that route's failure is its structured field
+    #: refused.
+    schema_refused: dict[int, wire.Target] = {}
     fell_back = False
     sent_images = 0
     previous: _Route | None = None
@@ -1068,12 +1000,12 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
             # `fell_back` reads, and its failure is that connection's word.
             if not (last is not None and last.status in REJECTED_STATUSES and sent_images > 0):
                 continue
-            log.warning("images refused by %r; retried as text", _label(route.said))
+            log.warning("images refused by %r; retried as text", _label(target))
         elif index > 0:
             fell_back = True
             log.warning("LLM connection %r gave up (%s: %s); falling back to %r",
-                        _label((previous or route).said), last.kind, last.detail,
-                        _label(route.said))
+                        _label((previous or route).target), last.kind, last.detail,
+                        _label(target))
         if not target.degrade:
             previous = route
         retryable = True
@@ -1117,7 +1049,7 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                         llm_usage.note_reply(usage, chunk)
                     yield chunk
                 outcome = "complete"
-                _observe(observer, route.said, None)
+                _observe(observer, target, None)
                 # The reply has been yielded in full, but the call is not
                 # over until this returns: a cancel landing here (a
                 # disconnect, a detached run's cancel) or `_bounded_call`'s
@@ -1131,7 +1063,7 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                 # "What is not promised"): `_estimate` stays here, where the
                 # attempt ended on its own, until a meter files its row
                 # asynchronously.
-                await _estimate(usage, route.said, counter)
+                await _estimate(usage, target, counter)
                 return
             except LLMError as exc:
                 outcome = "error"
@@ -1156,10 +1088,10 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                     # prompt, is tried as for any failure; should every route
                     # fail, the error carries this attempt, for `decide` to
                     # re-send once without the mode.
-                    log.warning("structured output refused by %r: %s", _label(route.said),
+                    log.warning("structured output refused by %r: %s", _label(target),
                                 _said(exc))
                 else:
-                    _observe(observer, route.said, exc)
+                    _observe(observer, target, exc)
                 if sent:
                     raise
                 # Keyed by route (a degrade sibling is its primary's), and
@@ -1215,24 +1147,20 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                              words=words)
 
 
-def _native_route(target: wire.Target | dict) -> _Route:
+def _native_route(target: wire.Target) -> _Route:
     """The one route a native decision makes: `target` alone and without its
     sampler preset, which a decision is never sent (spec 8) -- so neither the
-    wire nor the ledger's `preset` names one. A dict is handed back as itself
-    (`_spelled`), less its fallback and its `sampling`."""
-    said, _fallback = _spelled(target)
-    if said is None:
-        return _Route(_attempt_of(target).without_sampling(), 0)
-    return _Route({k: v for k, v in said.items() if k != "sampling"}, 0)
+    wire nor the ledger's `preset` names one."""
+    return _Route(_target_of(target).without_sampling(), 0)
 
 
-def native_body(item: decisions.Item, target: wire.Target | dict) -> dict:
+def native_body(item: decisions.Item, target: wire.Target) -> dict:
     """The body a native decision on `target` sends for `item`: its kind's
     adapter's `decision_body`, on the model the call runs on. Pure, and holds
     no key or URL, so a capture can record what was asked. A kind with no
     native endpoint is refused with the `bad_response` a call on it gets,
-    unsent. A dict is read through the shim (`_as_chain`)."""
-    return adapters.decision_body(item, _attempt_of(target))
+    unsent."""
+    return adapters.decision_body(item, _target_of(target))
 
 
 class LLMClient:
@@ -1313,7 +1241,7 @@ class LLMClient:
             raise LLMError("bad_response", f"{kind} connections have no native decisions endpoint")
         return self._adapters[kind]
 
-    def _routes(self, attempt: wire.Chain | wire.Target | dict,
+    def _routes(self, attempt: wire.Chain | wire.Target,
                 retries: int | None = None) -> list[_Route]:
         """The attempts one generation may make, in order.
 
@@ -1326,19 +1254,15 @@ class LLMClient:
         The fallback is dropped when it is the connection that is already
         primary -- see `_same_route`.
         """
-        chain = _as_chain(attempt)
-        said, said_fallback = _spelled(attempt)
-        routes = [_Route(chain.primary if said is None else said,
+        chain = _chain_of(attempt)
+        routes = [_Route(chain.primary,
                          self._retry_count() if retries is None else max(0, retries))]
         fallback = chain.fallback
         if fallback is not None and not _same_route(chain.primary, fallback):
-            routes.append(_Route(
-                _fallback_target(chain.primary, fallback)
-                if said is None or said_fallback is None
-                else fallback_sampling(said, said_fallback), 0))
+            routes.append(_Route(fallback_sampling(chain.primary, fallback), 0))
         return routes
 
-    def _usable_routes(self, messages: list[dict], attempt: wire.Chain | wire.Target | dict,
+    def _usable_routes(self, messages: list[dict], attempt: wire.Chain | wire.Target,
                        retries: int | None = None) -> list[_Route]:
         """`_routes`, minus a FALLBACK that cannot carry these messages.
 
@@ -1378,8 +1302,7 @@ class LLMClient:
             # ("Keep writing") ends the way THIS attempt can take -- a
             # fallback that cannot continue a prefill is sent the instruction
             # instead. Untailed prompts are `for_model`.
-            messages = (messages.for_target(sent) if isinstance(sent, wire.Target)
-                        else messages.for_connection(sent, target.model))
+            messages = messages.for_target(sent)
         if usage is not None:
             usage["images"] = 0
         # After `_stamp` cleared the holder, so each attempt counts only itself.
@@ -1440,13 +1363,13 @@ class LLMClient:
         """How many images `route` may be sent now. Never more than 0 for a kind
         whose client cannot carry a part, and 0 when the resolver is missing or
         raises: a broken lookup must not fail a turn the text would serve. The
-        resolver is handed the attempt as the caller spelled it."""
+        resolver is handed the attempt's target, less the degrade marker."""
         if self._images is None or route.target.kind in TEXT_ONLY_KINDS:
             return 0
         try:
             return max(0, int(self._images(route.sent())))
         except Exception as exc:  # noqa: BLE001 - see the docstring
-            log.warning("could not resolve whether %r reads images: %s", _label(route.said), exc)
+            log.warning("could not resolve whether %r reads images: %s", _label(route.target), exc)
             return 0
 
     def _load(self, campaign: str, part: dict) -> str | None:
@@ -1458,7 +1381,7 @@ class LLMClient:
             log.warning("could not load a post image to send: %s", exc)
             return None
 
-    def stream(self, messages: list[dict], chain: wire.Chain | dict,
+    def stream(self, messages: list[dict], chain: wire.Chain | wire.Target,
                usage: dict | None = None, *, schema: dict | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place
         the bound is provider-independent (the Claude SDK has no httpx client
@@ -1484,13 +1407,13 @@ class LLMClient:
         caller puts the schema in the prompt too, so an unflagged attempt can
         still answer it.
 
-        `chain` is the primary and the fallback it may fail over to; a lowered
-        connection dict is read as the chain it describes (`_as_chain`, the
-        shim, until Task 9d).
+        `chain` is the primary and the fallback it may fail over to (a lone
+        `Target` is a chain of one). A lowered connection dict is a
+        `TypeError`: the facade sends typed targets only.
         """
         return self._streamed(messages, chain, usage, schema, None)
 
-    def _streamed(self, messages: list[dict], chain: wire.Chain | dict, usage: dict | None,
+    def _streamed(self, messages: list[dict], chain: wire.Chain | wire.Target, usage: dict | None,
                   schema: dict | None, retries: int | None):
         """`stream`'s body, with the primary's retry count `complete` may
         name (`_routes`)."""
@@ -1503,7 +1426,7 @@ class LLMClient:
                           usage=usage, observer=self._observer, capture=sink,
                           counter=self._count_tokens)
 
-    async def complete(self, messages: list[dict], chain: wire.Chain | dict,
+    async def complete(self, messages: list[dict], chain: wire.Chain | wire.Target,
                        usage: dict | None = None, *, schema: dict | None = None,
                        retries: int | None = None) -> str:
         """`stream`, joined. `schema` is `stream`'s; slice F's only caller is
@@ -1517,7 +1440,7 @@ class LLMClient:
         return "".join([chunk async for chunk in self._streamed(messages, chain, usage,
                                                                 schema, retries)])
 
-    async def single(self, messages: list[dict], target: wire.Target | dict,
+    async def single(self, messages: list[dict], target: wire.Target,
                      usage: dict | None = None) -> str:
         """Exactly one attempt on `target`, joined: the model test call's way in.
 
@@ -1540,28 +1463,23 @@ class LLMClient:
         model (this one reads no images), not about whether the connection
         serves, and a status dot turned red by a vision probe would send the
         reader to fix a connection that works.
-
-        A fallback a dict carries (`FALLBACK_KEY`) is never read: the chain the
-        shim reads it as is taken alone.
         """
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
             sink = None
-        said, _fallback = _spelled(target)
         agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
-                          [_Route(_attempt_of(target) if said is None else said, 0)],
+                          [_Route(_target_of(target), 0)],
                           self._timeout_seconds(),
                           usage=usage, capture=sink, counter=self._count_tokens)
         return "".join([chunk async for chunk in agen])
 
-    async def decide_native(self, item: decisions.Item, target: wire.Target | dict,
+    async def decide_native(self, item: decisions.Item, target: wire.Target,
                             usage: dict | None = None, *,
                             retries: int | None = None) -> decisions.ItemResult:
         """Ask `item` of `target`'s native decisions endpoint (spec 7.4), through
         its kind's adapter: one attempt, retried, and never fallen back -- the
-        chain of stages is `inference.decide`'s, so a fallback a dict carries
-        is not read.
+        chain of stages is `inference.decide`'s.
 
         Refused unsent, before any stamp (so a meter files no row, and still
         records the failure): a kind with no native endpoint
@@ -1578,10 +1496,6 @@ class LLMClient:
         decision takes none of (spec 8) -- nor stamped with it: the target is
         sent `without_sampling`, so the row files no `preset`. A status in
         `NATIVE_REJECTED_STATUSES` is not reported to the observer.
-
-        A dict is read through the shim (`_as_chain`); what is handed back
-        for it (the observer, `ATTEMPTED`) is that dict, without its fallback
-        and its sampler preset, as before the facade sent targets.
         """
         route = _native_route(target)
         attempt = route.target
@@ -1614,7 +1528,7 @@ class LLMClient:
             except LLMError as exc:
                 outcome = "error"
                 if exc.status not in NATIVE_REJECTED_STATUSES:
-                    _observe(self._observer, route.said, exc)
+                    _observe(self._observer, attempt, exc)
                 retryable = (exc.kind in RETRYABLE_KINDS
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
                 if not retryable or tries == attempts:
@@ -1623,11 +1537,11 @@ class LLMClient:
                 continue
             finally:
                 llm_capture.emit(usage, "end", {"status": outcome})
-            _observe(self._observer, route.said, None)
+            _observe(self._observer, attempt, None)
             return result
         raise AssertionError("unreachable: the last attempt returns or raises")
 
-    def note_outcome(self, target: wire.Target | dict, error: LLMError | None) -> None:
+    def note_outcome(self, target: wire.Target, error: LLMError | None) -> None:
         """File an outcome this facade did not itself observe (#146).
 
         There is exactly one such outcome, and it is the reason this is public.
@@ -1644,14 +1558,11 @@ class LLMClient:
         holder of the ceiling knows which of the two just happened, so only it
         can say.
 
-        Filed for the attempt alone: a caller falling back on the dict it
-        resolved hands one that carries its fallback (`FALLBACK_KEY`), which
-        is taken off; a target is filed as it is.
+        Filed for the attempt alone, as it is: a target names no fallback.
         """
-        said, _fallback = _spelled(target)
-        _observe(self._observer, _attempt_of(target) if said is None else said, error)
+        _observe(self._observer, _target_of(target), error)
 
-    async def list_models(self, target: wire.Target | dict) -> list[dict]:
+    async def list_models(self, target: wire.Target) -> list[dict]:
         """The catalog `target`'s provider offers, normalized (#149).
 
         On the facade because the answer depends on the connection's kind, and
@@ -1667,7 +1578,7 @@ class LLMClient:
         named connection, and answering it from a different provider's models
         would hand the reader a list of ids their connection cannot run.
         """
-        attempt = _attempt_of(target)
+        attempt = _target_of(target)
         adapter = self._adapters.get(attempt.kind)
         if adapter is None or not adapter.lists_models:
             # Unreachable through the API — the route refuses these before it
@@ -1678,7 +1589,7 @@ class LLMClient:
             raise LLMError("bad_response", f"{attempt.kind} connections have no model catalog")
         return await adapter.models(attempt)
 
-    async def check(self, target: wire.Target | dict) -> None:
+    async def check(self, target: wire.Target) -> None:
         """Ask `target`'s provider whether it can serve. Returns on yes, raises
         the same `LLMError` a generation would on no (#146).
 
@@ -1693,7 +1604,7 @@ class LLMClient:
         rate-limited provider as healthy after waiting out the window the
         reader is asking about.
         """
-        attempt = _attempt_of(target)
+        attempt = _target_of(target)
         await self._adapter(attempt.kind).check(attempt)
 
     async def aclose(self) -> None:

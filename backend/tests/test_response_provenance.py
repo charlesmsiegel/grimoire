@@ -1,7 +1,7 @@
 """What produced a response is recorded on it: the response settings its prompt
 rendered (on the record) and the call that wrote each variant (`made_by`)."""
 
-from grimoire import llm, routes, store
+from grimoire import llm, llm_sampling, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from tests.inference_fixtures import endpoint, primary_falling_back
@@ -179,6 +179,41 @@ def test_fallback_records_the_served_connection(client):
     assert made_by["model"] == "vendor/fallback"
     assert made_by["connection_id"] == "backup"
     assert made_by["provider"] == "openai_compatible"
+
+
+def test_a_fallback_turn_captures_what_each_attempt_was_sent(client):
+    """The prompt log holds the primary's prompt, captured against the chain
+    the turn was sent, and -- once the primary failed and the fallback
+    answered -- the fallback's own, captured against the target the facade
+    sent it (`llm.fallback_sampling`'s preset rule included), not the primary
+    relabelled."""
+    cid, sid = seed(client)
+    backup = endpoint(client, "backup")
+    primary_falling_back(client, ("openrouter", store.config.DEFAULT_MODEL),
+                         (backup, "vendor/fallback"))
+    chain = routes.common.require_inference("chat", cid).chain
+    assert chain is not None and chain.fallback is not None
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=(HANDOFF,))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
+    client.app.dependency_overrides[routes.get_llm] = lambda: facade
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    response = client.post(base + "/chat", json={"content": "Hello",
+                                                 "speaker_ref": "characters:mara"})
+    assert "error" not in response.text, response.text
+    assert (len(primary.requests), len(fallback.requests)) == (1, 1)
+
+    entries = store.prompt_log.list_entries(cid, sid)
+    by_model = {e["model"]: store.prompt_log.read_entry(cid, e["id"], scene=sid)
+                for e in entries}
+    assert set(by_model) == {store.config.DEFAULT_MODEL, "vendor/fallback"}
+    sent = llm.fallback_sampling(chain.primary, chain.fallback)
+    assert by_model[store.config.DEFAULT_MODEL]["sampling"] == llm_sampling.report(chain.primary)
+    assert by_model["vendor/fallback"]["sampling"] == llm_sampling.report(sent)
+    assert by_model["vendor/fallback"]["sampling"]["kind"] == "openai_compatible"
+    # What the fallback's capture holds is the prompt the fallback was sent.
+    captured = [row["text"] for row in by_model["vendor/fallback"]["sections"]]
+    assert captured == [m["content"] for m in fallback.requests[0]["messages"]]
 
 
 def test_holder_without_a_model_leaves_model_absent(client):

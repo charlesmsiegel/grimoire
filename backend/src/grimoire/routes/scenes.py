@@ -1073,7 +1073,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
                               after_turn=_follow_up_hook(request.app, cid, sid, client))
         _record_prompt(cid, sid, "director", breakdown,
                        model=primary.model, kind=primary.kind, messages=messages,
-                       conn=conn)
+                       conn=resolved.chain)
         # DETACHED, like the ordinary send below. This branch used to return the
         # response directly, which left its reservation running forever -- the
         # scene answered `run_in_flight` from then on -- while the generation
@@ -1119,7 +1119,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     # records_nothing`).
     _record_prompt(cid, sid, "chat", breakdown,
                    model=primary.model, kind=primary.kind, messages=messages,
-                   conn=conn)
+                   conn=resolved.chain)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -1212,7 +1212,7 @@ def _retry_run(cid: str, sid: str, body, request: Request,
                           after_turn=_follow_up_hook(request.app, cid, sid, client))
     _record_prompt(cid, sid, "retry", breakdown,
                    model=primary.model, kind=primary.kind, messages=messages,
-                   conn=conn)
+                   conn=resolved.chain)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -1539,7 +1539,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # ordinary turn independently, so a one-shot override cannot leak into it.
     _record_prompt(cid, sid, "regenerate", breakdown,
                    model=primary.model, kind=primary.kind, messages=messages,
-                   conn=conn)
+                   conn=resolved.chain)
     # `on_unstarted` is `restore` again, for the one path the stream's own hooks
     # cannot cover: a Stop that arrived while this route was still in the
     # synchronous setup above. The runner honours it with a checkpoint BEFORE
@@ -6045,7 +6045,7 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
                           identity=run.scene_identity, outcome=outcome)
     _record_prompt(cid, sid, "replay", breakdown,
                    model=primary.model, kind=primary.kind, messages=messages,
-                   conn=conn)
+                   conn=resolved.chain)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))

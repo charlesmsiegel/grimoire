@@ -330,11 +330,11 @@ def _legacy_active(client) -> None:
     store.write_config(active_connection_id="openrouter")
 
 
-def _sent(fake: FakeLLM) -> dict:
+def _sent(fake: FakeLLM):
     turns = [r for r in fake.requests
              if "You maintain the scene state tracker" not in r["messages"][0]["content"]]
     assert turns, fake.requests
-    return turns[-1]["conn"]
+    return turns[-1]["target"]
 
 
 def test_a_format_1_store_plays_in_memory_and_writes_nothing(legacy, tmp_path):
@@ -351,7 +351,7 @@ def test_a_format_1_store_plays_in_memory_and_writes_nothing(legacy, tmp_path):
 
     assert r.status_code == 200, r.text
     assert "error" not in r.text, r.text
-    assert (_sent(turn)["id"], _sent(turn)["model"]) == ("openrouter", MODEL)
+    assert (_sent(turn).provider_id, _sent(turn).model) == ("openrouter", MODEL)
     assert _settings_digest(home) == before
     assert not store.inference_keys.is_current(store.read_config())
 

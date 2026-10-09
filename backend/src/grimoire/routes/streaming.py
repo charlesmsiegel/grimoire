@@ -43,7 +43,7 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .. import inference as operations
-from .. import store
+from .. import store, wire
 from ..llm import ATTEMPTED, LLMClient
 from ..llm_errors import LLMError
 
@@ -185,7 +185,7 @@ def _served(meter, asked: str) -> str:
     resolution's `chain.primary.provider_id`). "" for a connection with no
     id."""
     attempted = ((meter.usage if meter else None) or {}).get(ATTEMPTED)
-    return attempted.get("id", "") if attempted else asked
+    return attempted.provider_id if isinstance(attempted, wire.Target) else asked
 
 
 def _asked(resolved) -> str:

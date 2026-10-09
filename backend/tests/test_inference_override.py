@@ -294,9 +294,9 @@ def test_an_override_preset_outranks_the_route_preset_on_the_primary_only(at):
     # What the facade will send is what the resolver says: the fallback this
     # call carries.
     assert resolved.conn[routes.common.llm.FALLBACK_KEY] is resolved.fallback
-    sent = routes.common.build_llm()._routes(resolved.conn)
-    assert [conn["id"] for conn, _ in sent] == ["openrouter", "local"]
-    assert sent[1][0]["sampling"]["preset_id"] == "cold"
+    sent = routes.common.build_llm()._routes(resolved.chain)
+    assert [route.target.provider_id for route in sent] == ["openrouter", "local"]
+    assert sent[1].target.sampling.preset_id == "cold"
 
 
 def test_an_override_preset_composes_with_a_provider_and_a_model(at):
@@ -320,8 +320,8 @@ def test_preset_clear_in_an_override(at):
     assert routed is True    # the standing route runs `cold`
     # Still the primary alone: the fallback keeps the route's preset.
     assert resolved.fallback["sampling"]["preset_id"] == "cold"
-    sent = routes.common.build_llm()._routes(resolved.conn)
-    assert sent[1][0]["sampling"]["preset_id"] == "cold"
+    sent = routes.common.build_llm()._routes(resolved.chain)
+    assert sent[1].target.sampling.preset_id == "cold"
 
 
 def test_an_unknown_override_preset_is_400(at):

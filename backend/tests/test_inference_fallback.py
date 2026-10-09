@@ -112,21 +112,23 @@ def _facade(provider, **kw) -> LLMClient:
                      timeout=0, retries=0, **kw)
 
 
-def _route(conn_id: str, model: str, **fields) -> dict:
-    return {"id": conn_id, "name": f"conn-{conn_id}", "kind": "openrouter", "model": model,
-            "api_key": "k", **fields}
+def _route(conn_id: str, model: str, **fields) -> wire.Target:
+    return wire.Target(**{"provider_id": conn_id, "provider_name": f"conn-{conn_id}",
+                          "kind": "openrouter", "model": model, "requested_model": model,
+                          "api_key": "k", **fields})
 
 
 # ---- the facade sends the resolver's fallback ----
 async def test_the_facade_sends_the_resolved_fallback(at):
     at()
     _format2(**_spare_fallback())
-    conn = routes.common.require_inference("chat").conn
+    resolved = routes.common.require_inference("chat")
+    conn = resolved.conn
     assert conn[KEY]["id"] == "spare" and conn[KEY]["model"] == "vendor/spare"
     # The shipped client holds no fallback of its own: it has none to hold.
     assert not hasattr(routes.common.build_llm(), "_fallback")
     provider = Recorder(failing={"vendor/active"})
-    assert await _facade(provider).complete([], conn) == "from vendor/spare"
+    assert await _facade(provider).complete([], resolved.chain) == "from vendor/spare"
     assert provider.models == ["vendor/active", "vendor/spare"]
 
 
@@ -135,12 +137,12 @@ async def test_a_campaign_role_fallback_is_used_in_that_campaign(at):
     _format2(**_spare_fallback())
     _campaign_keys(ctx["cid"], {"role_primary_fallback_provider": "local",
                                 "role_primary_fallback_model": "local-model"})
-    in_campaign = routes.common.require_inference("chat", ctx["cid"]).conn
-    assert in_campaign[KEY]["id"] == "local"
+    in_campaign = routes.common.require_inference("chat", ctx["cid"])
+    assert in_campaign.conn[KEY]["id"] == "local"
     # Everywhere else the global role's fallback stands.
     assert routes.common.require_inference("chat").conn[KEY]["id"] == "spare"
     provider = Recorder(failing={"vendor/active"})
-    assert await _facade(provider).complete([], in_campaign) == "from local-model"
+    assert await _facade(provider).complete([], in_campaign.chain) == "from local-model"
     assert provider.models == ["vendor/active", "local-model"]
 
 
@@ -155,15 +157,15 @@ async def test_an_incapable_fallback_is_not_sent_and_is_reported(at):
     assert image.missing == () and image.fallback_missing == ("vision",)
     assert image.fallback["id"] == "spare"          # reported
     assert KEY not in image.conn                      # never sent
-    sent = routes.common.build_llm()._routes(image.conn)
-    assert [conn["id"] for conn, _ in sent] == ["openrouter"]
+    sent = routes.common.build_llm()._routes(image.chain)
+    assert [route.target.provider_id for route in sent] == ["openrouter"]
     # The seam does not refuse over a fallback.
     assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
     # A route that needs nothing the fallback lacks still carries it.
     assert routes.common.require_inference("chat").conn[KEY]["id"] == "spare"
     provider = Recorder(failing={"vendor/active"})
     with pytest.raises(LLMError):
-        await _facade(provider).complete([], image.conn)
+        await _facade(provider).complete([], image.chain)
     assert provider.models == ["vendor/active"]
 
 
@@ -216,8 +218,8 @@ def test_an_override_preset_leaves_the_fallback_the_route_preset(at):
             fallback["sampling"]["scope"]) == ("spare", "cold", "global")
     assert resolved.attempts[1].preset_id == "cold"
     # And the facade sends that.
-    sent = routes.common.build_llm()._routes(resolved.conn)
-    assert sent[1][0]["sampling"]["preset_id"] == "cold"
+    sent = routes.common.build_llm()._routes(resolved.chain)
+    assert sent[1].target.sampling.preset_id == "cold"
 
 
 def test_an_override_preset_with_no_route_preset_leaves_the_fallback_its_own(at):
@@ -231,12 +233,11 @@ def test_an_override_preset_with_no_route_preset_leaves_the_fallback_its_own(at)
         "warm", "connection")
 
 
-# ---- the key stops at the facade's boundary ----
-async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monkeypatch):
+# ---- the chain stops at the facade's boundary ----
+async def test_the_fallback_reaches_no_adapter_capture_or_health_record_but_its_own(monkeypatch):
     """Every consumer of an attempt sees the attempt, never the chain: an
-    adapter and the preset refusal are handed a `wire.Target`, which has no
-    room for a fallback, and what is handed back as the caller spelled it --
-    the stamp, the observer -- is that attempt's own dict, off the key."""
+    adapter, the preset refusal, the stamp and the observer are each handed
+    that attempt's `wire.Target`, which has no room for a fallback."""
     seen: dict[str, list] = {"adapter": [], "observer": [], "stamp": [],
                              "sent_fields": []}
     events: list[dict] = []
@@ -249,7 +250,7 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
         return real_generate(self, messages, target, usage, schema)
 
     def stamp_spy(usage, route, attempts):
-        seen["stamp"].append(route.said)
+        seen["stamp"].append(route.target)
         real_stamp(usage, route, attempts)
 
     def sent_spy(target):
@@ -267,29 +268,23 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
     facade = _facade(provider, observer=lambda conn, err: seen["observer"].append(conn),
                      capture=lambda: events.append)
     fallback = _route("b", "backup")
-    conn = {**_route("a", "primary"),
-            "sampling": {"preset_id": "warm", "preset_name": "Warm", "scope": "connection",
-                         "params": {"temperature": 0.7}},
-            KEY: fallback}
+    conn = wire.Chain(_route("a", "primary", sampling=wire.Sampling(
+        preset_id="warm", preset_name="Warm", scope="connection",
+        params={"temperature": 0.7})), fallback)
     usage: dict = {}
     assert await facade.complete([], conn, usage) == "from backup"
     assert provider.models == ["primary", "backup"]
 
     assert [t.provider_id for t in seen["adapter"]] == ["a", "b"]
-    assert [c["id"] for c in seen["stamp"]] == ["a", "b"]
-    assert [c["id"] for c in seen["observer"]] == ["a", "b"]
+    assert [t.provider_id for t in seen["stamp"]] == ["a", "b"]
+    assert [t.provider_id for t in seen["observer"]] == ["a", "b"]
     assert [t.provider_id for t in seen["sent_fields"]] == ["a"]
-    assert usage[llm.ATTEMPTED]["id"] == "b"
-    for where in ("adapter", "sent_fields"):
+    assert usage[llm.ATTEMPTED] == fallback
+    for where in ("adapter", "sent_fields", "stamp", "observer"):
         assert all(isinstance(t, wire.Target) for t in seen[where]), where
-    for where in ("stamp", "observer"):
-        assert all(KEY not in c for c in seen[where]), where
-    assert KEY not in usage[llm.ATTEMPTED]
     assert events and "_fallback" not in json.dumps(events, default=str)
-    # The caller's dict is left as it was handed in.
-    assert conn[KEY] is fallback
 
-    # A preset refusal, on a dict that carries a fallback: refused, and the
+    # A preset refusal, on a chain that carries a fallback: refused, and the
     # fallback never tried.
     refusing = Recorder(failing={"primary"},
                         error=LLMError("bad_response", "temperature is not supported",
@@ -301,8 +296,11 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
 
     # And an outcome filed from outside the facade is filed for the attempt.
     seen["observer"].clear()
-    facade.note_outcome(conn, LLMError("timeout", "overran"))
-    assert seen["observer"] and KEY not in seen["observer"][0]
+    facade.note_outcome(conn.primary, LLMError("timeout", "overran"))
+    assert seen["observer"] == [conn.primary]
+    with pytest.raises(TypeError):
+        facade.note_outcome(conn, LLMError("timeout", "overran"))  # type: ignore[arg-type]
+    assert seen["observer"] == [conn.primary]
 
 
 async def test_single_never_uses_a_fallback(monkeypatch):
@@ -315,11 +313,15 @@ async def test_single_never_uses_a_fallback(monkeypatch):
 
     monkeypatch.setattr(LLMClient, "_generate", generate_spy)
     provider = Recorder(failing={"primary"})
-    conn = {**_route("a", "primary"), KEY: _route("b", "backup")}
     with pytest.raises(LLMError):
-        await _facade(provider).single([], conn)
+        await _facade(provider).single([], _route("a", "primary"))
     assert provider.models == ["primary"]
     assert [t.provider_id for t in adapter] == ["a"]
+    # A chain carrying a fallback is refused unsent: `single` takes one target.
+    with pytest.raises(TypeError):
+        await _facade(provider).single([], wire.Chain(_route("a", "primary"),  # type: ignore[arg-type]
+                                                      _route("b", "backup")))
+    assert provider.models == ["primary"] and len(adapter) == 1
 
 
 async def test_a_call_carrying_a_fallback_is_sent_that_one():
@@ -327,7 +329,7 @@ async def test_a_call_carrying_a_fallback_is_sent_that_one():
     carries, and a call that carries none has none."""
     provider = Recorder(failing={"primary"})
     facade = _facade(provider)
-    conn = {**_route("a", "primary"), KEY: _route("c", "carried")}
+    conn = wire.Chain(_route("a", "primary"), _route("c", "carried"))
     assert await facade.complete([], conn) == "from carried"
     assert provider.models == ["primary", "carried"]
     provider.models.clear()

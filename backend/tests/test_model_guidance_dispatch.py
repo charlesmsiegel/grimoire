@@ -5,9 +5,14 @@ import json
 import httpx
 import pytest
 
-from grimoire import llm, model_guidance, openai_compatible
+from grimoire import llm, model_guidance, openai_compatible, wire
 from grimoire.llm_errors import LLMError
 from tests.llm_fakes import ScriptedProvider, carrying
+
+
+def _t(model: str, kind: str = "openrouter", **fields) -> wire.Target:
+    """An anonymous attempt of `kind` on `model`."""
+    return wire.Target(provider_id="", kind=kind, model=model, requested_model=model, **fields)
 
 
 def _prepared(model):
@@ -34,8 +39,7 @@ async def test_each_dispatch_uses_its_own_model(primary_model, fallback_model):
     captured = []
     messages.on_variant = lambda model, breakdown: captured.append((model, breakdown))
 
-    chain = carrying({"model": primary_model},
-                     {"kind": "openai_compatible", "model": fallback_model})
+    chain = carrying(_t(primary_model), _t(fallback_model, "openai_compatible"))
     assert await facade.complete(messages, chain) == "Mara nods."
 
     assert ("GLM profile." in primary.requests[0]["messages"][0]["content"]) == (
@@ -54,7 +58,7 @@ async def test_same_model_retry_uses_identical_prompt_without_fallback_capture(m
     captured = []
     messages.on_variant = lambda model, breakdown: captured.append(model)
     with pytest.raises(LLMError):
-        await facade.complete(messages, {"model": "glm-5.3"})
+        await facade.complete(messages, _t("glm-5.3"))
     assert len(primary.requests) == 2
     assert primary.requests[0]["messages"] == primary.requests[1]["messages"]
     assert captured == []
@@ -67,8 +71,7 @@ async def test_no_fallback_or_capture_after_visible_output():
     messages = _prepared("glm-5.3")
     captured = []
     messages.on_variant = lambda model, breakdown: captured.append(model)
-    chain = carrying({"model": "glm-5.3"},
-                     {"kind": "openai_compatible", "model": "vendor/unknown"})
+    chain = carrying(_t("glm-5.3"), _t("vendor/unknown", "openai_compatible"))
     with pytest.raises(LLMError):
         await facade.complete(messages, chain)
     assert fallback.calls == 0
@@ -80,8 +83,7 @@ async def test_plain_utility_messages_never_acquire_scene_guidance():
     fallback = ScriptedProvider(chunks=("{}",))
     facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     messages = [{"role": "system", "content": "Return a JSON object."}]
-    chain = carrying({"model": "vendor/unknown"},
-                     {"kind": "openai_compatible", "model": "glm-5.3"})
+    chain = carrying(_t("vendor/unknown"), _t("glm-5.3", "openai_compatible"))
     assert await facade.complete(messages, chain) == "{}"
     assert primary.requests[0]["messages"] == fallback.requests[0]["messages"] == messages
 
@@ -103,9 +105,9 @@ async def test_strict_endpoint_receives_selected_profile_and_final_content_only(
         facade = llm.LLMClient(openai_compatible=provider, retries=0)
         messages = _prepared("vendor/unknown")
         # Dispatch is authoritative even if the prepared primary names another model.
-        result = await facade.complete(messages, {
-            "kind": "openai_compatible", "model": "glm-5.3",
-            "base_url": "https://example.test/v1", "post_process": "strict"})
+        result = await facade.complete(messages, _t(
+            "glm-5.3", "openai_compatible", base_url="https://example.test/v1",
+            post_process="strict"))
 
     assert result == "Mara nods."
     payload, = payloads
@@ -120,13 +122,13 @@ async def test_a_prefill_prompt_falls_back_with_the_instruction_tail():
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(" and left.",))
     facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
-    conn = {"model": "vendor/unknown", "prefill": True}
+    conn = _t("vendor/unknown", prefill=True)
     messages = _prepared("vendor/unknown").with_tails(
         {"prefill": [{"role": "assistant", "content": "Mara paused"}],
          "instruction": [{"role": "assistant", "content": "Mara paused"},
                          {"role": "user", "content": "Continue exactly where your last message stops."}]},
         lambda c: "prefill" if llm.prefill_capable(c) else "instruction", conn)
-    chain = carrying(conn, {"kind": "openai_compatible", "model": "vendor/unknown"})
+    chain = carrying(conn, _t("vendor/unknown", "openai_compatible"))
     assert await facade.complete(messages, chain) == " and left."
     assert primary.requests[0]["messages"][-1] == {"role": "assistant", "content": "Mara paused"}
     assert fallback.requests[0]["messages"][-2] == {"role": "assistant", "content": "Mara paused"}
@@ -140,7 +142,7 @@ async def test_a_same_model_fallback_with_another_tail_is_still_recorded():
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(" and left.",))
     facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
-    conn = {"model": "vendor/unknown", "prefill": True}
+    conn = _t("vendor/unknown", prefill=True)
     messages = _prepared("vendor/unknown").with_tails(
         {"prefill": [{"role": "assistant", "content": "Mara paused"}],
          "instruction": [{"role": "assistant", "content": "Mara paused"},
@@ -150,12 +152,11 @@ async def test_a_same_model_fallback_with_another_tail_is_still_recorded():
 
     def capture(model, _breakdown):
         # As `character_turns._capture` does: read the variant back through the
-        # fallback's own connection.
-        fallback_conn = {"kind": "openai_compatible", "model": model}
-        captured.append((model, messages.for_connection(fallback_conn, model)))
+        # fallback's own target.
+        captured.append((model, messages.for_target(_t(model, "openai_compatible"))))
     messages.on_variant = capture
 
-    chain = carrying(conn, {"kind": "openai_compatible", "model": "vendor/unknown"})
+    chain = carrying(conn, _t("vendor/unknown", "openai_compatible"))
     assert await facade.complete(messages, chain) == " and left."
     assert len(captured) == 1
     model, sent = captured[0]

@@ -405,7 +405,7 @@ def _turn_override(body) -> dict | None:
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
                    messages: list[dict] | None = None,
-                   conn: dict | wire.Target | None = None) -> None:
+                   conn: wire.Chain | wire.Target | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -423,10 +423,11 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     variant callback is handed a model id only -- so its counts read as
     estimates, which is the safe direction.
 
-    `conn` is the connection this attempt is sent on -- its lowered dict, or a
-    decision's target -- and what the snapshot records about its sampler
-    preset -- `llm_sampling.report`, the same split the facade sends -- so a
-    past turn says what it was sent WITH, and what its backend could not take.
+    `conn` is what this call is sent on -- a generation's chain, or one
+    attempt's target -- and what the snapshot records about its sampler
+    preset is its first attempt's (`llm_sampling.report`, the same split the
+    facade sends), so a past turn says what it was sent WITH, and what its
+    backend could not take.
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -445,18 +446,19 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     # off. Nothing to record, and nothing was built to record.
     if breakdown is None:
         return
-    report = llm_sampling.report(conn)
+    chain = conn if isinstance(conn, wire.Chain) else None
+    report = llm_sampling.report(conn.primary if isinstance(conn, wire.Chain) else conn)
     if report is not None:
         breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):
         def on_variant(selected: str, variant: dict | None) -> None:
             # The fallback as the facade sends it: the one this call carries
-            # (`llm.FALLBACK_KEY`), with the route's preset carried onto it
+            # (`wire.Chain.fallback`), with the route's preset carried onto it
             # under the same rule.
-            fallback = conn.get(llm.FALLBACK_KEY) if isinstance(conn, dict) else None
+            fallback = chain.fallback if chain is not None else None
             _record_prompt(cid, sid, task, variant, model=selected,
-                           conn=llm.fallback_sampling(conn, fallback)
-                           if isinstance(conn, dict) and fallback is not None else None)
+                           conn=llm.fallback_sampling(chain.primary, fallback)
+                           if chain is not None and fallback is not None else None)
         messages.on_variant = on_variant
     # The scene check and the append are ONE critical section, on the same lock
     # `record` uses. Another client can rename or delete the scene between the

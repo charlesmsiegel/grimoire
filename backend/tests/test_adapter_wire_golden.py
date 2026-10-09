@@ -34,8 +34,11 @@ It is stored packed (`_pack`, `_encode`): each distinct record once, each
 resolution's record keys as one list in `CASES` order, and each distinct
 per-state index once, which the states name. `_unpack` reads it back.
 
-Each attempt is driven twice where both spellings exist: as the resolver's
-dict (through the facade's shim, until 9d deletes it) and as its chain.
+Each attempt was recorded driven twice, as the resolver's dict (through the
+facade's shim) and as its chain, and every record held both to agree. Task
+9d deleted the shim, so each attempt is now driven once, as its chain (the
+target alone for `single` and a native decision), and still matches the
+record both spellings wrote.
 """
 
 from __future__ import annotations
@@ -52,7 +55,7 @@ import pytest
 from grimoire import adapters, decisions, llm, wire
 from grimoire.llm_errors import LLMError
 
-from .test_adapter_registry import HAND_BUILT, ITEM, NATIVE, STATES, _resolved
+from .test_adapter_registry import HAND_BUILT, ITEM, NATIVE, PASSES, STATES, _resolved
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "adapter_wire_golden.json"
 
@@ -124,11 +127,9 @@ class _Wire:
 
 
 def _named(attempt) -> list:
-    """An attempt the facade handed back, either spelling: its id and model."""
+    """An attempt the facade handed back: its id and model."""
     if isinstance(attempt, wire.Target):
         return [attempt.provider_id, attempt.model]
-    if isinstance(attempt, dict):
-        return [attempt.get("id", ""), llm.effective_model(attempt)]
     return [repr(attempt)]
 
 
@@ -169,21 +170,23 @@ def _cases(conn: dict) -> list[tuple[str, frozenset[str]]]:
 
 
 def _spellings(conn: dict, chain: wire.Chain | None, case: str) -> list:
-    """The attempt, as each caller may hand it: the dict and its chain (the
-    target alone, for `single` and a native decision)."""
+    """The attempt, as the facade takes it: its chain (the target alone, for
+    `single` and a native decision). The resolver's own chain for a resolved
+    attempt; an edge's dict read as one (`wire.from_lowered`)."""
     if chain is None:
         chain = wire.from_lowered(conn)
-    return [conn, chain.primary if case in ("single", "native") else chain]
+    return [chain.primary if case in ("single", "native") else chain]
 
 
 def _key(record: dict) -> str:
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def _observe_state(state: str, migrated: bool, tmp_path) -> dict[str, list[dict]]:
-    """`{where/case: [the record per spelling]}` for one state."""
+def _observe_state(state: str, stage: str, tmp_path) -> dict[str, list[dict]]:
+    """`{where/case: [the record per spelling]}` for one state, in the pass
+    `stage` names (`test_adapter_registry.PASSES`)."""
     out: dict[str, list[dict]] = {}
-    for where, resolved in _resolved(state, tmp_path, migrated=migrated):
+    for where, resolved in _resolved(state, tmp_path, stage=stage):
         if resolved.operation == "embed" or not resolved.conn:
             continue
         for case, failing in _cases(resolved.conn):
@@ -276,12 +279,20 @@ def _check(index: dict[str, str], records: dict[str, dict], seen: dict[str, list
             assert record == records[index[where]], where
 
 
+def _recorded_as(stage: str) -> str:
+    """The golden's name for the pass `stage` is held to. It was recorded in
+    memory and migrated (before Task 6, when the migration retired nothing);
+    a retired store sends what the migrated one did, so it is held to that
+    pass's records."""
+    return "memory" if stage == "memory" else "migrated"
+
+
 @pytest.mark.parametrize("state", sorted(STATES))
-@pytest.mark.parametrize("migrated", [False, True])
-def test_every_baseline_attempt_sends_the_frozen_wire(state, migrated, tmp_path):
+@pytest.mark.parametrize("stage", PASSES)
+def test_every_baseline_attempt_sends_the_frozen_wire(state, stage, tmp_path):
     golden = _golden()
-    _check(golden["states"][f"{state}|{'migrated' if migrated else 'memory'}"],
-           golden["records"], _observe_state(state, migrated, tmp_path))
+    _check(golden["states"][f"{state}|{_recorded_as(stage)}"],
+           golden["records"], _observe_state(state, stage, tmp_path))
 
 
 def test_every_edge_attempt_sends_the_frozen_wire():
@@ -318,8 +329,8 @@ def test_record_the_wire_golden(tmp_path):
 
     states = {}
     for n, state in enumerate(sorted(STATES)):
-        for migrated in (False, True):
-            states[f"{state}|{'migrated' if migrated else 'memory'}"] = index(
-                _observe_state(state, migrated, tmp_path / f"{n}-{migrated}"))
+        for stage in ("memory", "migrated"):
+            states[f"{state}|{stage}"] = index(
+                _observe_state(state, stage, tmp_path / f"{n}-{stage}"))
     GOLDEN.write_text(_encode(_pack({"states": states, "edges": index(_observe_edges()),
                                      "records": records})), encoding="utf-8")

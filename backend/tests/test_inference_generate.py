@@ -2,10 +2,10 @@
 
 It takes the call site's resolution, refuses one for another task or
 operation, or one that resolved nothing, before any client call, and hands the
-facade the dict it was always handed (`resolved.conn`) -- positionally, with
-`schema=` only when one is given, so a fake sees the request it always saw.
-`note_outcome` files a ceiling's timeout against the resolution's primary,
-and `for_task` relabels a resolution for a sibling task on its own route.
+facade the resolution's chain of targets (`resolved.chain`, Task 9d) --
+positionally, with `schema=` only when one is given. `note_outcome` files a
+ceiling's timeout against the resolution's primary target, and `for_task`
+relabels a resolution for a sibling task on its own route.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import fields
 
 import pytest
 
-from grimoire import inference, llm_reasoning
+from grimoire import inference, llm, llm_reasoning, wire
 from grimoire.llm_errors import LLMError
 from grimoire.store.inference.resolved import ResolvedInference
 from tests import wire_kit
@@ -23,6 +23,10 @@ from tests.llm_fakes import FakeLLM
 
 CONN = {"id": "openrouter", "kind": "openrouter", "model": "vendor/active",
         "api_key": "sk-test"}
+#: `CONN` carrying a fallback, as a resolution's primary dict does.
+FALLING_BACK = {**CONN, llm.FALLBACK_KEY: {"id": "spare", "kind": "openai_compatible",
+                                           "model": "local/spare", "api_key": "sk-spare",
+                                           "base_url": "http://localhost:1234/v1"}}
 
 
 def _nothing() -> ResolvedInference:
@@ -39,16 +43,26 @@ def _drain(agen) -> list[str]:
     return asyncio.run(go())
 
 
-def test_a_stream_yields_the_facades_deltas_and_sends_the_dict():
+def test_a_stream_yields_the_facades_deltas_and_sends_the_chain():
     fake = FakeLLM([["The tide ", "turns."]])
     holder: dict = {}
+    resolved = wire_kit.resolution(CONN)
     deltas = _drain(inference.generate("chat", [{"role": "user", "content": "go"}],
-                                       client=fake, resolved=wire_kit.resolution(CONN),
-                                       usage=holder))
+                                       client=fake, resolved=resolved, usage=holder))
     assert deltas == ["The tide ", "turns."]
     assert fake.calls == 1
-    assert fake.conn is CONN
+    assert fake.requests[0]["chain"] == resolved.chain
+    assert fake.target == wire.from_lowered(CONN).primary
     assert fake.requests[0]["messages"] == [{"role": "user", "content": "go"}]
+
+
+def test_the_chain_carries_the_fallback_the_resolution_attaches():
+    fake = FakeLLM([["Mara nods."]])
+    resolved = wire_kit.resolution(FALLING_BACK)
+    _drain(inference.generate("chat", [], client=fake, resolved=resolved))
+    chain = fake.requests[0]["chain"]
+    assert chain == wire.from_lowered(FALLING_BACK)
+    assert chain.fallback is not None and chain.fallback.provider_id == "spare"
 
 
 def test_a_joined_generation_completes_with_no_schema():
@@ -89,8 +103,9 @@ def test_a_resolution_it_cannot_send_is_refused_before_any_client_call(resolved,
 def test_note_outcome_files_against_the_primary():
     fake = FakeLLM([["x"]])
     error = LLMError("timeout", "the reply did not finish")
-    inference.note_outcome(fake, wire_kit.resolution(CONN), error)
-    assert fake.noted == [(CONN, error)]
+    inference.note_outcome(fake, wire_kit.resolution(FALLING_BACK), error)
+    # The primary's target alone: never the chain, never the fallback.
+    assert fake.noted == [(wire.from_lowered(CONN).primary, error)]
     inference.note_outcome(fake, _nothing(), error)
     assert len(fake.noted) == 1
 

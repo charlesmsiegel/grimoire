@@ -89,7 +89,7 @@ def with_fallback(primary) -> tuple[str, str]:
     return primary, fb
 
 
-def _filed(conn: dict | wire.Chain, provider, task: str = "chat") -> dict:
+def _filed(conn: wire.Chain | wire.Target, provider, task: str = "chat") -> dict:
     """The ledger row one call through a REAL facade files."""
     client = LLMClient(openai_compatible=provider)
 
@@ -163,8 +163,7 @@ def test_meter_done_files_the_row_when_gathering_raises(home):
 
 # ---- through the resolver and the real facade ----
 def test_a_resolved_call_files_operation_role_provider_preset_and_billing(primary):
-    conn = require_inference("chat", "").conn
-    row = _filed(conn, ScriptedProvider(["hi"]))
+    row = _filed(require_inference("chat", "").chain, ScriptedProvider(["hi"]))
     assert row["operation"] == "generate"
     assert row["role"] == "primary"
     assert row["provider_id"] == primary
@@ -177,9 +176,8 @@ def test_a_resolved_call_files_operation_role_provider_preset_and_billing(primar
 
 def test_the_fallback_row_names_the_fallbacks_provider_and_billing(with_fallback):
     _primary, fb = with_fallback
-    conn = require_inference("chat", "").conn
     refusing = RefusingProvider(failing={MODEL_A})
-    row = _filed(conn, refusing)
+    row = _filed(require_inference("chat", "").chain, refusing)
     assert [model for model, _ in refusing.calls] == [MODEL_A, MODEL_B]
     assert row["provider_id"] == fb
     assert row["billing"] == "subscription"
@@ -193,16 +191,16 @@ def test_the_fallback_row_names_the_fallbacks_provider_and_billing(with_fallback
 def test_a_fallback_row_files_the_route_preset_it_was_sent(with_fallback):
     assert store.sampler_presets.create_preset("p2", {"temperature": 0.7}) == "p2"
     store.write_config(**{keys.preset_key("scene"): "p2"})
-    conn = require_inference("chat", "").conn
-    assert conn[llm.FALLBACK_KEY]["sampling"]["preset_id"] == "p2"
-    row = _filed(conn, RefusingProvider(failing={MODEL_A}))
+    resolved = require_inference("chat", "")
+    assert resolved.conn[llm.FALLBACK_KEY]["sampling"]["preset_id"] == "p2"
+    row = _filed(resolved.chain, RefusingProvider(failing={MODEL_A}))
     assert row["model"] == MODEL_B
     assert row["preset"] == "p2"
 
 
 def test_a_dated_snapshot_reply_keeps_the_requested_model(primary):
-    conn = require_inference("chat", "").conn
-    row = _filed(conn, ScriptedProvider(["hi"], usage={"model": "vendor/model-a-2026-08"}))
+    row = _filed(require_inference("chat", "").chain,
+                 ScriptedProvider(["hi"], usage={"model": "vendor/model-a-2026-08"}))
     assert row["model"] == "vendor/model-a-2026-08"
     assert row["requested_model"] == MODEL_A
 
@@ -215,7 +213,7 @@ def test_a_pinned_route_files_no_role(home):
                 keys.pin_key("scene", "model"): MODEL_B})
     resolved = require_inference("chat", "")
     assert resolved.via == "route"
-    row = _filed(resolved.conn, ScriptedProvider(["hi"]))
+    row = _filed(resolved.chain, ScriptedProvider(["hi"]))
     assert row["model"] == MODEL_B
     assert row["provider_id"] == pid
     assert row["operation"] == "generate"
@@ -225,7 +223,7 @@ def test_a_pinned_route_files_no_role(home):
 def test_an_override_that_changes_the_model_files_no_role(primary):
     resolved = resolve.resolve("chat", "", override=Selection(primary, MODEL_B, ""))
     assert resolved.attempts[0].conn["model"] == MODEL_B
-    row = _filed(resolved.attempts[0].conn, ScriptedProvider(["hi"]))
+    row = _filed(resolved.attempts[0].target, ScriptedProvider(["hi"]))
     assert row["model"] == MODEL_B
     assert row["operation"] == "generate"
     assert "role" not in row
@@ -241,9 +239,8 @@ def test_an_override_that_changes_the_provider_files_no_role(primary):
 def test_a_preset_only_override_keeps_the_role(primary):
     assert store.sampler_presets.create_preset("p3", {"temperature": 0.1}) == "p3"
     resolved = resolve.resolve("chat", "", override=Selection("", "", "p3"))
-    conn = resolved.attempts[0].conn
-    assert conn["sampling"]["preset_id"] == "p3"
-    row = _filed(conn, ScriptedProvider(["hi"]))
+    assert resolved.attempts[0].conn["sampling"]["preset_id"] == "p3"
+    row = _filed(resolved.attempts[0].target, ScriptedProvider(["hi"]))
     assert row["role"] == "primary"
     assert row["preset"] == "p3"
 
@@ -309,11 +306,11 @@ def test_account_blocks_are_never_mutated_in_place(with_fallback):
     assert stamped.account == wire.Account(**{**before, "decision_mode": "native"})
 
     # 3. `_stamp` and `account` read the attempt they are handed and write
-    # nothing to it.
-    one = llm._without_fallback(conn)
+    # nothing to it (a target is frozen; `account` still reads a dict).
+    one = {k: v for k, v in conn.items() if k != resolve.FALLBACK_KEY}
     snapshot = deepcopy(one)
     holder: dict = {}
-    llm._stamp(holder, one, 1)
+    llm._stamp(holder, target, 1)
     llm_usage.account(holder, one)
     assert one == snapshot
     assert holder["operation"] == "generate"

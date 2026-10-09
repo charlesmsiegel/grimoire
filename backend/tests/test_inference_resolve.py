@@ -13,13 +13,14 @@ file.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import llm, llm_sampling, routes
+from grimoire import llm, llm_sampling, routes, wire
 from grimoire.llm import effective_model
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
@@ -152,13 +153,18 @@ def _fallback(resolved: ResolvedInference) -> dict | None:
     return _normalised({"id": got["id"], "sampling": got["sampling"]})
 
 
-def _facade_fallback(conn: dict) -> dict | None:
-    """What the facade would send as the fallback for a generation on `conn`:
-    `LLMClient._routes`, on a client built as the app builds one -- which holds
-    no fallback, so this is the one `conn` carries (`llm.FALLBACK_KEY`).
-    Building one opens nothing."""
-    attempts = routes.common.build_llm()._routes(conn)
-    return attempts[1][0] if len(attempts) > 1 else None
+def _facade_fallback(resolved: ResolvedInference) -> wire.Target | None:
+    """What the facade would send as the fallback for a generation on
+    `resolved`'s chain: `LLMClient._routes`, on a client built as the app
+    builds one -- which holds no fallback, so this is the one the chain
+    carries. Building one opens nothing."""
+    attempts = routes.common.build_llm()._routes(resolved.chain)
+    return attempts[1].target if len(attempts) > 1 else None
+
+
+def _resolver_fallback(resolved: ResolvedInference) -> wire.Target | None:
+    """The resolver's fallback attempt, as its target, or None."""
+    return resolved.attempts[1].target if resolved.fallback is not None else None
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
@@ -188,8 +194,8 @@ def test_the_resolved_fallback_is_what_the_facade_sent(state, at_state):
             if "status" in recorded:
                 continue
             assert _fallback(resolved) == recorded["fallback"], where
-            # And the live facade agrees, on the dict the resolver lowered.
-            assert resolved.fallback == _facade_fallback(resolved.conn), where
+            # And the live facade agrees, on the chain the resolver built.
+            assert _facade_fallback(resolved) == _resolver_fallback(resolved), where
             if resolved.fallback is not None:
                 fb = resolved.attempts[1]
                 got = resolved.fallback
@@ -274,7 +280,7 @@ def test_every_override_resolves_as_the_baseline_recorded(state, at_state):
             assert got == {k: v for k, v in recorded.items() if k != "routed"}, where
             # An override picks the primary; the fallback stays standing
             # policy, sent as the facade sends it for that primary.
-            assert resolved.fallback == _facade_fallback(resolved.conn), where
+            assert _facade_fallback(resolved) == _resolver_fallback(resolved), where
 
 
 # ---- the brief's named cases ----
@@ -817,8 +823,8 @@ def test_an_incapable_fallback_is_reported_and_the_facade_does_not_send_it(at_st
     image = inf.resolve("image-description")
     assert image.conn["id"] == "openrouter" and image.fallback["id"] == "spare"
     assert image.missing == () and image.fallback_missing == ("vision",)
-    sent = routes.common.build_llm()._routes(image.conn)
-    assert [conn["id"] for conn, _ in sent] == ["openrouter"]
+    sent = routes.common.build_llm()._routes(image.chain)
+    assert [route.target.provider_id for route in sent] == ["openrouter"]
     # And the seam does not refuse over a fallback.
     assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
 
@@ -962,11 +968,11 @@ def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
             # And what it served is what was recorded: the connection, model,
             # sampling and catalog parameters, and the fallback the facade sends.
             conn = served.conn
-            fallback = _facade_fallback(conn)
+            fallback = _facade_fallback(served)
             assert _normalised({
                 **baseline._resolved(conn),
                 "fallback": None if fallback is None
-                else {"id": fallback["id"], "sampling": fallback["sampling"]},
+                else {"id": fallback.provider_id, "sampling": asdict(fallback.sampling)},
             }) == recorded, where
 
 

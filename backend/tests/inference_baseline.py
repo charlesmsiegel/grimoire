@@ -31,6 +31,7 @@ invented connection ids; nothing here describes a real library.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import importlib
 import json
 import os
@@ -311,14 +312,17 @@ def _task(client: TestClient, task: str, cid: str) -> dict:
     try:
         resolved = inference.resolve(task, cid)
         routes.common._refuse_unusable(resolved)
-        conn = routes.common._narrowed(resolved).conn
+        narrowed = routes.common._narrowed(resolved)
     except HTTPException as exc:
         return _failure(exc)
-    attempts = client.app.state.llm._routes(conn)
-    fallback = attempts[1][0] if len(attempts) > 1 else None
+    conn = narrowed.conn
+    # The routes the facade builds from the chain it is sent: the fallback's
+    # target, read back as the id and sampling block its dict carried.
+    attempts = client.app.state.llm._routes(narrowed.chain)
+    fallback = attempts[1].target if len(attempts) > 1 else None
     return {**_resolved(conn),
             "fallback": None if fallback is None
-            else {"id": fallback["id"], "sampling": fallback["sampling"]}}
+            else {"id": fallback.provider_id, "sampling": dataclasses.asdict(fallback.sampling)}}
 
 
 #: Each body is what a reroll request carries; only the two override fields are

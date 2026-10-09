@@ -32,18 +32,21 @@ def chain(primary: wire.Target, fallback: wire.Target | None = None) -> wire.Cha
 
 def resolution(conn: dict, task: str = "chat", *,
                operation: str = "generate") -> UsableInference:
-    """A hand-built resolution of `task` whose one attempt sends `conn`, as
-    is: the dict a test used to hand the helper, now handed to
-    `inference.generate` inside it, so a fake still sees `request["conn"]`
-    unchanged. Its target carries the dict's display facts (`provider_id`,
-    `kind` and the effective model) and nothing else."""
+    """A hand-built resolution of `task` whose attempts send `conn`, as is:
+    the dict a test used to hand the helper, now handed to
+    `inference.generate` inside it as the chain it describes. Its targets are
+    the dict's own and the fallback's it carries (`llm.FALLBACK_KEY`), read
+    the way the resolver lowers them (`wire.from_lowered`), so a fake sees
+    `request["target"]` say what the dict said."""
     route = routing.route(task)
-    provider = str(conn.get("id", "") or "")
-    model = llm.effective_model(conn) if conn.get("kind") else str(conn.get("model", "") or "")
+    chain = wire.from_lowered(conn)
+    attempts = [Attempt(chain.primary.provider_id, str(conn.get("model", "") or ""), "", conn,
+                        target=chain.primary)]
+    if chain.fallback is not None:
+        fallback = conn[llm.FALLBACK_KEY]
+        attempts.append(Attempt(chain.fallback.provider_id,
+                                str(fallback.get("model", "") or ""), "", fallback,
+                                target=chain.fallback))
     return UsableInference(
         task=task, operation=operation, route=route.key if route else "",
-        role="", via="", scope="none",
-        attempts=(Attempt(provider, str(conn.get("model", "") or ""), "", conn,
-                          target=wire.Target(provider_id=provider,
-                                             kind=str(conn.get("kind", "") or ""),
-                                             model=model)),))
+        role="", via="", scope="none", attempts=tuple(attempts))

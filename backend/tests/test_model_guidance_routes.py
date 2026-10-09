@@ -2,8 +2,9 @@
 
 import pytest
 
-from grimoire import llm, routes, store
+from grimoire import llm, llm_sampling, routes, store
 from grimoire.llm_errors import LLMError
+from grimoire.routes import character_turns
 from tests.inference_fixtures import endpoint, primary_falling_back, put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
 
@@ -99,7 +100,13 @@ def test_reroll_override_keeps_frozen_prompt_and_does_not_change_next_turn(clien
     assert _profile_rows(live) == []
 
 
-def test_fallback_captures_matching_profile_only_when_attempted(client):
+@pytest.mark.parametrize("rounds", [True, False], ids=["character_turns", "legacy_stream"])
+def test_fallback_captures_matching_profile_only_when_attempted(client, monkeypatch, rounds):
+    """On both turn paths: a character turn captures through
+    `character_turns._capture`, the legacy stream through
+    `common._record_prompt`'s own variant hook."""
+    if not rounds:
+        monkeypatch.setattr(character_turns, "enabled", lambda: False)
     cid, sid = _scene(client)
     backup = endpoint(client, "Winifred Endpoint")
     primary_falling_back(client, ("openrouter", "glm-5.3"), (backup, "vendor/unknown"))
@@ -116,3 +123,12 @@ def test_fallback_captures_matching_profile_only_when_attempted(client):
     row, = _profile_rows(captures[1])
     assert row["text"] in primary.requests[0]["messages"][0]["content"]
     assert row["text"] not in fallback.requests[0]["messages"][0]["content"]
+    # Each capture names the attempt it was sent on: the primary's report is
+    # the chain's primary, the fallback's is the target the facade sent it.
+    chain = routes.common.require_inference("chat", cid).chain
+    assert chain is not None and chain.fallback is not None
+    assert captures[1]["sampling"] == llm_sampling.report(chain.primary)
+    assert captures[0]["sampling"] == llm_sampling.report(
+        llm.fallback_sampling(chain.primary, chain.fallback))
+    assert (captures[1]["sampling"]["kind"], captures[0]["sampling"]["kind"]) == (
+        "openrouter", "openai_compatible")

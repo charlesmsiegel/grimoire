@@ -31,7 +31,7 @@ import httpx
 import pytest
 
 import grimoire.store as store
-from grimoire import catalog, decisions, embeddings, routes
+from grimoire import catalog, decisions, embeddings, routes, wire
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -39,6 +39,7 @@ from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
 from grimoire.store.inference import facts, probes
 from grimoire.store.inference import resolve as inference
+from tests import wire_kit
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
 
 REFUSAL = ("This test sends a request to the provider and may cost money — "
@@ -584,11 +585,13 @@ def _sse(*chunks: dict) -> str:
 
 
 class _Offering(LLMClient):
-    """A REAL facade that hands every call it is sent a fallback (`offer`, as
-    the call's own: `llm.FALLBACK_KEY`), so whatever the route sends has one
-    within reach -- and only the route's choice of call keeps it unused."""
+    """A REAL facade that hands every chain it is sent a fallback (`offer`,
+    as the call's own: `wire.Chain.fallback`), so a route that generates
+    through `stream` or `complete` has one within reach -- and only the
+    route's choice of `single`, whose one target can carry no fallback (a
+    chain is refused), keeps it unused."""
 
-    def __init__(self, offer: dict | None, **llm) -> None:
+    def __init__(self, offer: wire.Target | None, **llm) -> None:
         super().__init__(**llm)
         self._offer = offer
 
@@ -598,11 +601,9 @@ class _Offering(LLMClient):
     async def complete(self, messages, chain, usage=None, **kwargs):
         return await super().complete(messages, carrying(chain, self._offer), usage, **kwargs)
 
-    async def single(self, messages, target, usage=None):
-        return await super().single(messages, carrying(target, self._offer), usage)
 
-
-def _wire_client(client, handler, *, offer: dict | None = None, **llm) -> list[httpx.Request]:
+def _wire_client(client, handler, *, offer: wire.Target | None = None,
+                 **llm) -> list[httpx.Request]:
     """A REAL facade, with retries configured and -- given `offer` -- a
     fallback handed every call, whose OpenAI-compatible adapter talks to a
     `MockTransport`."""
@@ -627,8 +628,8 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     from grimoire import llm as llm_mod
     monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
     conn = _endpoint(client, "Mara Endpoint", "primary.example")
-    backup = store.llm_connections.read_connection_raw(
-        _endpoint(client, "Winifred Endpoint", "backup.example"))
+    backup = wire.from_lowered(inference.lower(store.llm_connections.read_connection_raw(
+        _endpoint(client, "Winifred Endpoint", "backup.example")), probes.sampling(), MODEL)).primary
     seen = _wire_client(
         client, lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
         retries=3, offer=backup)
@@ -652,7 +653,7 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     probe_conn = inference.lower(store.llm_connections.read_connection_raw(conn),
                                  probes.sampling(), MODEL)
     with pytest.raises(LLMError):
-        asyncio.run(facade.complete(probes.messages("generate"), probe_conn))
+        asyncio.run(facade.complete(probes.messages("generate"), wire.from_lowered(probe_conn)))
     assert [r.url.host for r in seen] == ["primary.example"] * 4 + ["backup.example"]
 
 
@@ -1138,11 +1139,11 @@ def test_the_gateway_fake_answers_single_like_complete():
     import asyncio
     fake = FakeLLM([["o", "k"]], error=None)
     usage: dict = {}
-    assert asyncio.run(fake.single([], {"kind": "openrouter", "model": "m"}, usage)) == "ok"
+    assert asyncio.run(fake.single([], wire_kit.target(model="m"), usage)) == "ok"
     assert usage["attempts"] == 1
     failing = FakeLLM([["x"]], error=LLMError("auth", "no"))
     with pytest.raises(LLMError):
-        asyncio.run(failing.single([], {"kind": "openrouter", "model": "m"}))
+        asyncio.run(failing.single([], wire_kit.target(model="m")))
 
 
 def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(

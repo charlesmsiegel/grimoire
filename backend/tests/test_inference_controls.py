@@ -14,13 +14,14 @@ import itertools
 import pytest
 
 from grimoire import llm_sampling as ls
-from grimoire.llm import FALLBACK_KEY, LLMClient
+from grimoire import wire
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store import llm_connections, sampler_presets
 from grimoire.store.inference import capabilities, controls, providers, resolve
 from tests.llm_fakes import RefusingProvider
 
-#: The fallback a refused call carries (`FALLBACK_KEY`), which a preset
+#: The fallback a refused call carries (`wire.Chain.fallback`), which a preset
 #: refusal must never reach.
 BACKUP = {"id": "b", "kind": "openrouter", "model": "backup", "api_key": "k"}
 
@@ -34,6 +35,17 @@ CURRENT = {"adaptive_thinking": True, "enabled_thinking": False,
 #: An older Claude's row: budgeted thinking. Whether it takes sampling
 #: parameters is its model id's question, not this row's.
 OLDER = {"adaptive_thinking": False, "enabled_thinking": True, "max_tokens": 64000}
+
+
+def _chain(conn) -> wire.Chain:
+    """What the facade is sent for `conn`: a lowered dict here (the shape
+    `llm_sampling`'s dict door still reads), as the chain it describes."""
+    return conn if isinstance(conn, wire.Chain) else wire.from_lowered(conn)
+
+
+def _falling_back(conn: dict) -> wire.Chain:
+    """`conn`, carrying `BACKUP` as its fallback."""
+    return wire.Chain(_chain(conn).primary, _chain(BACKUP).primary)
 
 
 def _conn(kind, params=None, **fields):
@@ -232,7 +244,7 @@ async def test_the_openai_endpoint_receives_max_completion_tokens():
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openai_compatible", {"max_tokens": 300}, base_url="https://api.openai.com/v1",
                  api_key="k")
-    [c async for c in client.stream([], conn)]
+    [c async for c in client.stream([], _chain(conn))]
     assert oc.calls[0][1]["sampling"] == {"max_completion_tokens": 300}
 
 
@@ -241,10 +253,10 @@ async def test_a_refusal_naming_the_translated_spelling_is_a_preset_refusal():
                                 why="Unsupported value: 'max_completion_tokens' too large")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        timeout=0, retries=0)
-    conn = {**_conn("openai_compatible", {"max_tokens": 99999}, id="a", model="primary",
-                    base_url="https://api.openai.com/v1"), FALLBACK_KEY: BACKUP}
+    conn = _falling_back(_conn("openai_compatible", {"max_tokens": 99999}, id="a",
+                               model="primary", base_url="https://api.openai.com/v1"))
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], conn)]
+        [c async for c in client.stream([], _chain(conn))]
     assert "fallback connection was not tried" in exc.value.detail
     assert [m for m, _ in provider.calls] == ["primary"]
 
@@ -295,7 +307,7 @@ async def test_a_non_reasoning_openai_model_never_sees_reasoning_effort_on_the_w
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = {**_openai_model("gpt-4.1"), "api_key": "k"}
-    [c async for c in client.stream([], conn)]
+    [c async for c in client.stream([], _chain(conn))]
     sent = oc.calls[0][1]
     assert sent["sampling"] == {"temperature": 0.5}
     assert "reasoning_effort" not in repr(sent)
@@ -659,7 +671,7 @@ async def test_disabled_thinking_reaches_the_anthropic_request():
                        openai_compatible=FakeProvider("oc"), anthropic=an)
     conn = _claude_api({"reasoning_effort": "off"}, OPUS_5, model="claude-opus-5",
                        api_key="k")
-    [c async for c in client.stream([], conn)]
+    [c async for c in client.stream([], _chain(conn))]
     assert an.calls[0][1]["effective"]["thinking"] == {"type": "disabled"}
 
 
@@ -800,7 +812,7 @@ async def test_an_openrouter_effort_reaches_the_request():
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openrouter", {"temperature": 0.5, "reasoning_effort": "high"},
                  api_key="k", model_params=["temperature", "reasoning"])
-    [c async for c in client.stream([], conn)]
+    [c async for c in client.stream([], _chain(conn))]
     assert op.calls[0][1]["sampling"] == {"temperature": 0.5, "reasoning": {"effort": "high"}}
 
 
@@ -810,7 +822,7 @@ async def test_an_openai_effort_reaches_the_request_as_a_keyword():
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openai_compatible", {"reasoning_effort": "low", "temperature": 1},
                  base_url="https://api.openai.com/v1", api_key="k")
-    [c async for c in client.stream([], conn)]
+    [c async for c in client.stream([], _chain(conn))]
     assert oc.calls[0][1]["reasoning_effort"] == "low"
     assert oc.calls[0][1]["sampling"] == {"temperature": 1}
 
@@ -820,10 +832,10 @@ async def test_a_refused_effort_is_a_preset_refusal():
                                 why="Unrecognized request argument: reasoning")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        timeout=0, retries=0)
-    conn = {**_conn("openrouter", {"reasoning_effort": "high"}, id="a", model="primary",
-                    api_key="k"), FALLBACK_KEY: BACKUP}
+    conn = _falling_back(_conn("openrouter", {"reasoning_effort": "high"}, id="a",
+                               model="primary", api_key="k"))
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], conn)]
+        [c async for c in client.stream([], _chain(conn))]
     assert "fallback connection was not tried" in exc.value.detail
 
 
@@ -831,9 +843,9 @@ def _adaptive_refusal(why):
     provider = RefusingProvider(failing={"claude-opus-4-7"}, status=400, why=why)
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        anthropic=provider, timeout=0, retries=0)
-    conn = {**_claude_api({"reasoning_effort": "high"}, CURRENT, id="a", api_key="k"),
-            FALLBACK_KEY: BACKUP}
-    assert ls.effective(conn)["effective"]["output_config"] == {"effort": "high"}
+    conn = _falling_back(_claude_api({"reasoning_effort": "high"}, CURRENT, id="a",
+                                     api_key="k"))
+    assert ls.effective(conn.primary)["effective"]["output_config"] == {"effort": "high"}
     return provider, client, conn
 
 
@@ -846,14 +858,14 @@ async def test_an_adaptive_effort_refused_by_its_effort_field_is_a_preset_refusa
     refusal naming only the second is still this preset's control refused."""
     provider, client, conn = _adaptive_refusal(why)
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], conn)]
+        [c async for c in client.stream([], _chain(conn))]
     assert "fallback connection was not tried" in exc.value.detail
     assert [m for m, _ in provider.calls] == ["claude-opus-4-7"]
 
 
 async def test_an_unrelated_400_beside_an_adaptive_effort_still_falls_back():
     provider, client, conn = _adaptive_refusal("prompt is too long: 300000 tokens")
-    chunks = [c async for c in client.stream([], conn)]
+    chunks = [c async for c in client.stream([], _chain(conn))]
     assert "from backup" in "".join(chunks)
     assert [m for m, _ in provider.calls] == ["claude-opus-4-7", "backup"]
 
@@ -867,7 +879,8 @@ async def test_an_unrelated_400_beside_an_adaptive_effort_still_falls_back():
 def test_a_spend_limit_400_is_never_a_preset_refusal(why):
     from grimoire.llm import _preset_refusal
     conn = _claude_api({"reasoning_effort": "high", "max_tokens": 900, "stop": ["x"]}, CURRENT)
-    assert _preset_refusal(LLMError("bad_response", why, status=400), conn) is None
+    assert _preset_refusal(LLMError("bad_response", why, status=400),
+                           _chain(conn).primary) is None
 
 
 def test_a_thinking_type_is_not_a_spelling_of_its_own():
@@ -876,7 +889,8 @@ def test_a_thinking_type_is_not_a_spelling_of_its_own():
     exc = LLMError("bad_response", "messages.0.content.0.type: Input should be 'text'",
                    status=400)
     from grimoire.llm import _preset_refusal
-    assert _preset_refusal(exc, _claude_api({"reasoning_effort": "high"}, CURRENT)) is None
+    assert _preset_refusal(
+        exc, _chain(_claude_api({"reasoning_effort": "high"}, CURRENT)).primary) is None
 
 
 # ---- the preset store ----

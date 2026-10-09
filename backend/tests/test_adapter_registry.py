@@ -7,14 +7,17 @@ What is held here:
   agree with the store's own facts about each kind (`providers.PRESETS`'
   `never`, `resolve.embed_endpoint`, `image_drafts.SUPPORTED_KINDS`) and with
   slice H's native table;
-- an adapter sends exactly what the facade sends today for the same attempt
-  -- every resolved attempt of every frozen baseline state, in memory and
-  after the migration, and a hand-built attempt of each kind;
+- an adapter sends exactly what the facade sends for the same attempt --
+  every resolved attempt of every frozen baseline state, in memory, after
+  the migration (as a C-H build left it) and after retirement (Task 6), and
+  a hand-built attempt of each kind. What the facade sent for the lowered
+  dict, before Task 9d took the dict door away, is frozen in
+  `test_adapter_wire_golden`;
 - `resolve.target_for` builds the target a resolved attempt carries;
 - `wire.from_lowered` reads a resolved attempt's dict back as its chain, and
   `llm_sampling` answers the same for a dict and its target;
-- the facade, on chains, takes a dict only through its shim (`_as_chain`),
-  and files the same ledger row for a dict and its chain (Task 9b).
+- the facade takes chains of targets and no dict (Task 9d), and files the
+  ledger row the lowered dict filed (Task 9b).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import ast
 import asyncio
 import dataclasses
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -40,11 +44,12 @@ from grimoire import (
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm_errors import LLMError
 from grimoire.store import image_drafts, usage_rollup
-from grimoire.store.inference import capabilities, providers, resolve
+from grimoire.store.inference import capabilities, migrate, providers, resolve
 
 from . import inference_baseline as baseline
 from . import inference_baseline_c as baseline_c
 from . import inference_fixtures as fx
+from . import wire_kit
 from .test_inference_target import _resolutions
 
 #: Every frozen baseline state, both families, keyed `<family>:<state>`.
@@ -109,14 +114,32 @@ def _states():
     return pytest.mark.parametrize("state", sorted(STATES))
 
 
-def _resolved(state: str, tmp_path, *, migrated: bool):
-    """Every resolution `state` produces (`test_inference_target`'s), in
-    memory or after the settings migration."""
+#: The passes each state is resolved in: in memory (format 1, the legacy
+#: keys read through `translate`), after the settings migration as a C-H
+#: build left it (format 2, nothing retired), and after retirement (Task 6:
+#: migrated, retired and stripped).
+PASSES = ("memory", "migrated", "retired")
+
+
+def _passes():
+    return pytest.mark.parametrize("stage", PASSES)
+
+
+def _resolved(state: str, tmp_path, *, stage: str):
+    """Every resolution `state` produces (`test_inference_target`'s), in the
+    pass `stage` names (`PASSES`)."""
+    assert stage in PASSES, stage
     family, name = STATES[state]
     with baseline.client_at(tmp_path) as client:
         ctx = family.STATES[name](client)
-        if migrated:
+        if stage == "migrated":
+            with mock.patch.object(migrate, "_retire", lambda *_args: None):
+                assert baseline.migrate_state(name).state == "done"
+            assert not store.read_config()[store.inference_keys.RETIRED_KEY]
+        elif stage == "retired":
             assert baseline.migrate_state(name).state == "done"
+            assert store.read_config()[store.inference_keys.RETIRED_KEY] == "1"
+            assert migrate.status().retirement["left"] == []
         yield from _resolutions(ctx["cid"])
 
 
@@ -189,31 +212,31 @@ def test_the_wire_spells_the_dict_keys_as_their_owners_do():
 
 
 # ---- an adapter sends what the facade sends ----
-async def _sends(attempt_conn: dict, target: wire.Target, schema: dict | None) -> None:
-    """The facade sends the same wire call for an attempt's dict (through
-    the shim) as for its chain, and both are the adapter's own, handed the
-    target. (Before the facade moved onto the registry this held the adapter
-    to the facade's per-kind `_provider`, which it copied.)"""
-    via_adapter, via_dict, via_chain = _clients(), _clients(), _clients()
+async def _sends(target: wire.Target, schema: dict | None) -> None:
+    """The facade sends, for an attempt's chain, the adapter's own wire call
+    handed its target. (Before the facade moved onto the registry this held
+    the adapter to the facade's per-kind `_provider`, which it copied; until
+    Task 9d it held the dict spelling to it too, whose wire is frozen in
+    `test_adapter_wire_golden`.)"""
+    via_adapter, via_chain = _clients(), _clients()
     _registry(via_adapter)[target.kind].generate(
         MESSAGES, target, None, schema=schema if target.structured else None)
-    await _facade(via_dict).complete(MESSAGES, attempt_conn, schema=schema)
     await _facade(via_chain).complete(MESSAGES, wire.Chain(target), schema=schema)
     calls = [{k: [(m, a, {**kw, "usage": None}) for m, a, kw in c.calls]
-              for k, c in clients.items()} for clients in (via_adapter, via_dict, via_chain)]
-    assert calls[0] == calls[1] == calls[2], target.provider_id
+              for k, c in clients.items()} for clients in (via_adapter, via_chain)]
+    assert calls[0] == calls[1], target.provider_id
     assert sum(len(c.calls) for c in via_adapter.values()) == 1
 
 
 @_states()
-@pytest.mark.parametrize("migrated", [False, True])
-async def test_a_chain_sends_what_the_lowered_dict_sent(state, migrated, tmp_path):
-    attempts = [attempt for _where, resolved in _resolved(state, tmp_path, migrated=migrated)
+@_passes()
+async def test_a_chain_sends_what_its_adapter_sends(state, stage, tmp_path):
+    attempts = [attempt for _where, resolved in _resolved(state, tmp_path, stage=stage)
                 if resolved.operation != "embed" for attempt in resolved.attempts]
     assert attempts
     for attempt in attempts:
         for schema in (None, SCHEMA):
-            await _sends(attempt.conn, attempt.target, schema)
+            await _sends(attempt.target, schema)
 
 
 HAND_BUILT = [
@@ -248,8 +271,8 @@ HAND_BUILT = [
 
 @pytest.mark.parametrize("conn", HAND_BUILT, ids=[c["id"] for c in HAND_BUILT])
 @pytest.mark.parametrize("schema", [None, SCHEMA])
-async def test_a_hand_built_attempt_of_each_kind_sends_what_its_dict_sent(conn, schema):
-    await _sends(conn, wire.from_lowered(conn).primary, schema)
+async def test_a_hand_built_attempt_of_each_kind_sends_what_its_adapter_sends(conn, schema):
+    await _sends(wire.from_lowered(conn).primary, schema)
 
 
 def _target(conn: dict) -> wire.Target:
@@ -263,16 +286,16 @@ async def test_models_and_check_ask_what_the_facade_asks(conn):
     registry = _registry(adapter)
     if target.kind in adapters.LISTABLE_KINDS:
         await registry[target.kind].models(target)
-        await _facade(facade).list_models(conn)
+        await _facade(facade).list_models(target)
     else:
         with pytest.raises(LLMError) as by_adapter:
             await registry[target.kind].models(target)
         with pytest.raises(LLMError) as by_facade:
-            await _facade(facade).list_models(conn)
+            await _facade(facade).list_models(target)
         assert (by_adapter.value.kind, by_adapter.value.detail) == (
             by_facade.value.kind, by_facade.value.detail)
     await registry[target.kind].check(target)
-    await _facade(facade).check(conn)
+    await _facade(facade).check(target)
     assert ({k: c.calls for k, c in adapter.items()}
             == {k: c.calls for k, c in facade.items()})
 
@@ -291,7 +314,7 @@ async def test_a_native_decide_asks_what_the_facade_asks(conn):
     # No holder: the facade stamps the one it is given, which the adapter
     # (a single POST) never does.
     await _registry(adapter)[target.kind].decide(ITEM, target, None, bound=7.0)
-    await _facade(facade).decide_native(ITEM, conn, None)
+    await _facade(facade).decide_native(ITEM, target, None)
     assert ({k: c.calls for k, c in adapter.items()}
             == {k: c.calls for k, c in facade.items()})
 
@@ -305,40 +328,42 @@ async def test_a_kind_with_no_native_endpoint_refuses_it(kind):
     with pytest.raises(LLMError) as built:
         registry[kind].decision_body(ITEM, target)
     with pytest.raises(LLMError) as by_facade:
-        llm.native_body(ITEM, {"kind": kind, "model": "m"})
+        llm.native_body(ITEM, wire_kit.target(kind=kind, model="m"))
     for exc in (asked.value, built.value):
         assert (exc.kind, exc.detail) == (by_facade.value.kind, by_facade.value.detail)
 
 
-def test_a_native_body_is_the_same_from_a_target(tmp_path):
+@_passes()
+def test_a_native_body_is_its_adapters(stage, tmp_path):
     registry = _registry(_clients())
     for conn in NATIVE:
         target = _target(conn)
-        assert registry[target.kind].decision_body(ITEM, target) == llm.native_body(ITEM, conn)
+        assert registry[target.kind].decision_body(ITEM, target) == llm.native_body(ITEM, target)
     seen = 0
-    for _where, resolved in _resolved("base:routed", tmp_path, migrated=True):
+    for _where, resolved in _resolved("base:routed", tmp_path, stage=stage):
         for attempt in resolved.attempts:
             if adapters.decides_natively(attempt.target.kind):
                 assert (registry[attempt.target.kind].decision_body(ITEM, attempt.target)
-                        == llm.native_body(ITEM, attempt.conn))
+                        == llm.native_body(ITEM, attempt.target)
+                        == llm.native_body(ITEM, _target(attempt.conn)))
                 seen += 1
     assert seen
 
 
 # ---- the dict, read as its chain ----
 @_states()
-@pytest.mark.parametrize("migrated", [False, True])
-def test_from_lowered_round_trips_every_baseline_attempt(state, migrated, tmp_path):
-    for where, resolved in _resolved(state, tmp_path, migrated=migrated):
+@_passes()
+def test_from_lowered_round_trips_every_baseline_attempt(state, stage, tmp_path):
+    for where, resolved in _resolved(state, tmp_path, stage=stage):
         if resolved.chain is None:
             continue
         assert wire.from_lowered(resolved.conn) == resolved.chain, where
 
 
 @_states()
-@pytest.mark.parametrize("migrated", [False, True])
-def test_effective_answers_the_same_for_a_dict_and_its_target(state, migrated, tmp_path):
-    for where, resolved in _resolved(state, tmp_path, migrated=migrated):
+@_passes()
+def test_effective_answers_the_same_for_a_dict_and_its_target(state, stage, tmp_path):
+    for where, resolved in _resolved(state, tmp_path, stage=stage):
         for attempt in resolved.attempts:
             for answer in (llm_sampling.effective, llm_sampling.split,
                            llm_sampling.sent_fields, llm_sampling.sent_names):
@@ -371,13 +396,13 @@ def test_from_lowered_reads_a_dict_as_the_facade_does():
 
 # ---- `resolve.target_for` ----
 @_states()
-@pytest.mark.parametrize("migrated", [False, True])
-def test_target_for_matches_the_attempt_target(state, migrated, tmp_path):
+@_passes()
+def test_target_for_matches_the_attempt_target(state, stage, tmp_path):
     """A target built outside any route is the one the resolver builds, but
     for the two stamps only a resolution lays on: the account block's
     `operation`/`role`/`decision_mode`, and the structured flag."""
     lookup = None
-    for where, resolved in _resolved(state, tmp_path, migrated=migrated):
+    for where, resolved in _resolved(state, tmp_path, stage=stage):
         lookup = lookup or resolve.connection_lookup()
         if resolved.operation == "embed":
             continue
@@ -392,24 +417,43 @@ def test_target_for_matches_the_attempt_target(state, migrated, tmp_path):
                                        structured=attempt.target.structured) == attempt.target, where
 
 
-# ---- the facade on chains, behind the shim (Task 9b) ----
-def test_the_shim_is_the_only_dict_door():
-    """In `llm.py`, only `_as_chain` reads a dict as a chain: every other
-    reader of a dict a caller hands in goes through it."""
+# ---- the facade on chains, with no dict door (Tasks 9b, 9d) ----
+_DICT = {"id": "a", "kind": "openrouter", "model": "m", "api_key": "sk-test",
+         llm.FALLBACK_KEY: {"id": "b", "kind": "openrouter", "model": "n"}}
+
+
+async def test_the_facade_takes_no_dict():
+    """Every door of the facade refuses a lowered connection dict with a
+    `TypeError`, before any provider is asked or any holder stamped."""
+    clients = _clients()
+    facade = _facade(clients)
+    usage: dict = {}
+    calls = [
+        lambda: facade.complete(MESSAGES, _DICT, usage),
+        lambda: facade.single(MESSAGES, _DICT, usage),
+        lambda: facade.decide_native(ITEM, _DICT, usage),
+        lambda: facade.list_models(_DICT),
+        lambda: facade.check(_DICT),
+    ]
+    for call in calls:
+        with pytest.raises(TypeError):
+            await call()
+    with pytest.raises(TypeError):
+        [c async for c in facade.stream(MESSAGES, _DICT, usage)]
+    with pytest.raises(TypeError):
+        facade.note_outcome(_DICT, None)
+    with pytest.raises(TypeError):
+        llm.native_body(ITEM, _DICT)
+    assert usage == {}
+    assert all(not c.calls for c in clients.values())
+
+
+def test_the_facade_reads_no_dict_as_a_chain():
+    """`llm.py` no longer reads a lowered dict as a chain anywhere."""
     tree = ast.parse(Path(llm.__file__).read_text(encoding="utf-8"))
-    callers = set()
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for node in ast.walk(fn):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "from_lowered"):
-                callers.add(fn.name)
-    assert callers == {"_as_chain"}
-    mentions = [node for node in ast.walk(tree)
+    assert not [node for node in ast.walk(tree)
                 if isinstance(node, (ast.Attribute, ast.Name))
                 and getattr(node, "attr", getattr(node, "id", "")) == "from_lowered"]
-    assert len(mentions) == 1
 
 
 class _Answering:
@@ -438,11 +482,12 @@ def _filed(conn_or_chain, task: str, schema: dict | None) -> dict:
     return {k: v for k, v in m.row.items() if k not in ("ts", "duration_ms")}
 
 
-def test_the_ledger_row_is_unchanged_through_the_shim(tmp_path):
+def test_the_ledger_row_is_the_lowered_dicts(tmp_path):
     """A generate call and a structured decide call file the same row, field
-    for field, whether the facade is handed the resolution's dict or its
-    chain -- `operation`, `role`, `billing` and `decision_mode` included, so
-    `usage_rollup.VERSION` stays where it is."""
+    for field, from the resolution's chain as from the chain its lowered
+    dict reads as (`wire.from_lowered`, which the facade's shim read until
+    Task 9d) -- `operation`, `role`, `billing` and `decision_mode` included,
+    so `usage_rollup.VERSION` stays where it is."""
     assert usage_rollup.VERSION == 6
     with baseline.client_at(tmp_path) as client:
         fx.format2(client)
@@ -463,7 +508,7 @@ def test_the_ledger_row_is_unchanged_through_the_shim(tmp_path):
         for resolved, conn, chain, schema in (
                 (generate, generate.conn, generate.chain, None),
                 (decide, stamped, decide.chain.with_account(decision_mode="structured"), SCHEMA)):
-            by_dict = _filed(conn, resolved.task, schema)
+            by_dict = _filed(wire.from_lowered(conn), resolved.task, schema)
             by_chain = _filed(chain, resolved.task, schema)
             assert by_dict == by_chain
             assert by_dict["provider_id"] == "openrouter"
@@ -473,7 +518,7 @@ def test_the_ledger_row_is_unchanged_through_the_shim(tmp_path):
 async def test_a_chain_hands_its_targets_back():
     """Handed a chain, the facade hands targets to what it calls back -- the
     observer, the image budget, the `ATTEMPTED` stamp -- and the fallback it
-    sent is the one named; handed the same as a dict, those are the dicts."""
+    sent is the one named; the same chain as a dict is refused unsent."""
     provider = _Failing({"primary"})
     seen: list = []
     images: list = []
@@ -489,12 +534,13 @@ async def test_a_chain_hands_its_targets_back():
     assert all(not x.degrade for x in images)
 
     seen.clear()
+    images.clear()
     as_dict = {"id": "a", "kind": "openrouter", "model": "primary",
                llm.FALLBACK_KEY: {"id": "b", "kind": "openrouter", "model": "backup"}}
     usage = {}
-    assert await client.complete(_REFS, as_dict, usage) == "from backup"
-    assert [x["id"] for x in seen] == ["a", "b"] and usage[llm.ATTEMPTED]["id"] == "b"
-    assert llm.FALLBACK_KEY not in seen[0]
+    with pytest.raises(TypeError):
+        await client.complete(_REFS, as_dict, usage)
+    assert seen == [] and images == [] and usage == {}
 
 
 class _Failing:
@@ -513,25 +559,31 @@ _REFS = [{"role": "user", "content": [
     content_parts.ref("/api/campaigns/c/images/chart", "the chart", False)]}]
 
 
-def test_a_dict_or_a_chain_and_nothing_else():
-    with pytest.raises(TypeError):
-        llm._as_chain("openrouter")  # type: ignore[arg-type]
-    target = wire.from_lowered({"id": "a", "model": "m"}).primary
-    assert llm._as_chain(target) == wire.Chain(target)
+def test_a_chain_or_a_target_and_nothing_else():
+    for other in ("openrouter", {"id": "a", "model": "m"}, None):
+        with pytest.raises(TypeError):
+            llm._chain_of(other)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            llm._target_of(other)  # type: ignore[arg-type]
+    target = wire_kit.target(provider_id="a", model="m")
+    assert llm._chain_of(target) == wire.Chain(target)
+    assert llm._target_of(target) is target
     chain = wire.Chain(target)
-    assert llm._as_chain(chain) is chain
+    assert llm._chain_of(chain) is chain
+    with pytest.raises(TypeError):
+        llm._target_of(chain)  # type: ignore[arg-type]
 
 
 @_states()
-@pytest.mark.parametrize("migrated", [False, True])
-def test_what_reads_an_attempt_reads_a_target_as_its_dict(state, migrated, tmp_path):
+@_passes()
+def test_what_reads_an_attempt_reads_a_target_as_its_dict(state, stage, tmp_path):
     """The readers the facade hands a target to -- the image budget, the
     health registry, the ledger's account, the prefill rule -- answer for it
-    what they answer for its dict, whether the target is the resolver's or
-    the one the shim reads from the dict."""
-    for where, resolved in _resolved(state, tmp_path, migrated=migrated):
+    what they answered for its dict, whether the target is the resolver's or
+    the one `wire.from_lowered` reads from the dict."""
+    for where, resolved in _resolved(state, tmp_path, stage=stage):
         for attempt in resolved.attempts:
-            conn = llm._without_fallback(attempt.conn)
+            conn = {k: v for k, v in attempt.conn.items() if k != llm.FALLBACK_KEY}
             for target in (attempt.target, wire.from_lowered(conn).primary):
                 assert (store.post_images.capability(target)
                         == store.post_images.capability(conn)), where

@@ -35,8 +35,9 @@ from grimoire.store import tokens, usage
 from tests.llm_fakes import ScriptedProvider
 
 MODEL_A = "vendor/model-a"
-CONN = {"kind": "openai_compatible", "model": MODEL_A,
-        "base_url": "https://saltmarch.test/v1", "api_key": "sk-fake"}
+CONN = wire.Target(provider_id="", kind="openai_compatible", model=MODEL_A,
+                   requested_model=MODEL_A, base_url="https://saltmarch.test/v1",
+                   api_key="sk-fake")
 PROMPT = [{"role": "user", "content": "Mara asks the ferryman about the tide."}]
 PROMPT_TEXT = "Mara asks the ferryman about the tide."
 CHUNKS = ["The ferryman ", "points at the ", "drowned stair."]
@@ -534,7 +535,7 @@ def test_a_retried_attempt_counts_only_the_attempt_that_answered(home):
 
 # ---- embed rows ----
 def test_an_embed_operation_never_gets_a_completion_estimate(home):
-    conn = wire.from_lowered(CONN).with_account(operation="embed")
+    conn = wire.Chain(CONN).with_account(operation="embed")
     _text, row, _m = _filed(_client(ScriptedProvider(CHUNKS)), conn=conn)
     assert row["operation"] == "embed"
     assert row["prompt_tokens"] == tokens.count_tokens(PROMPT_TEXT)

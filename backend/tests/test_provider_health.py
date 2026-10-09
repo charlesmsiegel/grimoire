@@ -14,8 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import health, routes
-from grimoire.llm import FALLBACK_KEY, LLMClient
+from grimoire import health, routes, wire
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests import draft_runs as drafts
@@ -39,6 +39,12 @@ def client(monkeypatch, tmp_path):
 def _conn(**fields):
     return {"id": "openrouter", "kind": "openrouter", "name": "OpenRouter",
             "model": "m", "api_key": "k", "base_url": "", **fields}
+
+
+def _target(provider_id: str = "openrouter", kind: str = "openrouter") -> wire.Target:
+    """`_conn`'s attempt as the facade is sent it."""
+    return wire.Target(provider_id=provider_id, kind=kind, model="m", provider_name="OpenRouter",
+                       api_key="k", requested_model="m")
 
 
 # ---- the registry ----
@@ -154,19 +160,19 @@ def _client(provider, observer, **kwargs):
 
 async def test_a_finished_generation_reports_success():
     seen = []
-    client = _client(ScriptedProvider(), lambda conn, err: seen.append((conn["id"], err)))
+    client = _client(ScriptedProvider(), lambda conn, err: seen.append((conn.provider_id, err)))
 
-    assert [c async for c in client.stream([], _conn())] == ["hi"]
+    assert [c async for c in client.stream([], _target())] == ["hi"]
     assert seen == [("openrouter", None)]
 
 
 async def test_a_failed_generation_reports_the_error_it_failed_with():
     seen = []
     boom = LLMError("auth", "bad key")
-    client = _client(ScriptedProvider(error=boom), lambda conn, err: seen.append((conn["id"], err)))
+    client = _client(ScriptedProvider(error=boom), lambda conn, err: seen.append((conn.provider_id, err)))
 
     with pytest.raises(LLMError):
-        [c async for c in client.stream([], _conn())]
+        [c async for c in client.stream([], _target())]
     assert seen == [("openrouter", boom)]
 
 
@@ -175,7 +181,7 @@ async def test_a_fallback_is_reported_under_its_own_connection():
     served are different facts about different providers, and the Connections
     page shows each beside the connection it belongs to."""
     seen = []
-    fallback = _conn(id="local", kind="openai_compatible")
+    fallback = _target("local", "openai_compatible")
     # One instance across all three kinds, so "the first attempt" is the
     # primary's and "the second" is the fallback's however they dispatch.
     provider = FlakyProvider(LLMError("network", "connection refused"))
@@ -183,9 +189,9 @@ async def test_a_fallback_is_reported_under_its_own_connection():
     client = LLMClient(openrouter=provider, claude=provider,
                        openai_compatible=provider, retries=0,
                        observer=lambda conn, err: seen.append(
-                           (conn["id"], err.kind if err else None)))
+                           (conn.provider_id, err.kind if err else None)))
 
-    assert [c async for c in client.stream([], {**_conn(), FALLBACK_KEY: fallback})] == ["hi"]
+    assert [c async for c in client.stream([], wire.Chain(_target(), fallback))] == ["hi"]
     assert seen == [("openrouter", "network"), ("local", None)]
 
 
@@ -195,7 +201,7 @@ async def test_an_observer_that_raises_cannot_fail_a_working_generation():
         raise RuntimeError("registry is on fire")
 
     client = _client(ScriptedProvider(), explode)
-    assert [c async for c in client.stream([], _conn())] == ["hi"]
+    assert [c async for c in client.stream([], _target())] == ["hi"]
 
 
 async def test_an_observer_that_raises_cannot_replace_a_providers_error():
@@ -204,7 +210,7 @@ async def test_an_observer_that_raises_cannot_replace_a_providers_error():
 
     client = _client(ScriptedProvider(error=LLMError("rate_limit", "slow down")), explode)
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], _conn())]
+        [c async for c in client.stream([], _target())]
     assert exc.value.kind == "rate_limit"
 
 
@@ -215,7 +221,7 @@ async def test_a_generation_the_caller_walks_away_from_reports_nothing():
     seen = []
     client = _client(ScriptedProvider(), lambda conn, err: seen.append(err))
 
-    agen = client.stream([], _conn())
+    agen = client.stream([], _target())
     assert await agen.__anext__() == "hi"
     await agen.aclose()
 
@@ -300,7 +306,7 @@ def test_a_generation_cut_off_by_its_ceiling_is_recorded_against_its_connection(
     r = drafts.post(client, f"/api/worlds/{wid}/characters/mara/tagline/generate")
 
     assert r.status_code == 504
-    assert [(c["id"], e.kind) for c, e in stalled.noted] == [("openrouter", "timeout")]
+    assert [(c.provider_id, e.kind) for c, e in stalled.noted] == [("openrouter", "timeout")]
 
 
 def test_check_404s_for_a_connection_that_does_not_exist(client):
@@ -316,7 +322,7 @@ def test_check_asks_about_the_connection_named_in_the_path(client):
 
     client.post(f"/api/llm-connections/{cid}/health")
 
-    assert [(c["id"], c["base_url"]) for c in fake.checked] == [
+    assert [(c.provider_id, c.base_url) for c in fake.checked] == [
         (cid, "http://127.0.0.1:8080/v1")]
 
 

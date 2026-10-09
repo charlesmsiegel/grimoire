@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from grimoire import content_parts, llm, routes, store
+from grimoire import content_parts, llm, routes, store, wire
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
@@ -31,22 +31,27 @@ def test_extend_joiner(lead, text, mode, joiner):
     assert character_turns._extend_joiner(lead, text, mode) == joiner
 
 
+def _t(kind: str = "openrouter", model: str = "m", **fields) -> wire.Target:
+    """An anonymous attempt of `kind` on `model`, as the facade is sent it."""
+    return wire.Target(provider_id=fields.pop("provider_id", ""), kind=kind, model=model,
+                       requested_model=model, **fields)
+
+
 _SNAP = {"version": 1, "primary_model": "m",
          "unprofiled": [[{"role": "user", "content": "Go."}], None], "profiles": {}}
 
 
 @pytest.mark.parametrize("conn, mode", [
-    ({"kind": "anthropic", "model": "m", "prefill": True}, "instruction"),
-    ({"kind": "anthropic", "model": "claude-opus-4-6", "prefill": True}, "instruction"),
+    (_t("anthropic", prefill=True), "instruction"),
+    (_t("anthropic", "claude-opus-4-6", prefill=True), "instruction"),
     # Claude 4.5 and earlier take a prefill; 4.6 and later refuse one.
-    ({"kind": "anthropic", "model": "claude-haiku-4-5-20251001", "prefill": True}, "prefill"),
-    ({"kind": "openrouter", "model": "m", "prefill": True}, "prefill"),
-    ({"kind": "openai_compatible", "model": "m", "base_url": "http://localhost:11434/v1",
-      "prefill": True}, "prefill"),
+    (_t("anthropic", "claude-haiku-4-5-20251001", prefill=True), "prefill"),
+    (_t(prefill=True), "prefill"),
+    (_t("openai_compatible", base_url="http://localhost:11434/v1", prefill=True), "prefill"),
     # `claude`'s preset lists prefill under `never` too, but an existing store's
     # opt-in keeps today's answer (slice B changes no existing store).
-    ({"kind": "claude", "model": "", "prefill": True}, "prefill"),
-    ({"kind": "openrouter", "model": "m"}, "instruction"),
+    (_t("claude", llm.CLAUDE_DEFAULT_MODEL, prefill=True), "prefill"),
+    (_t(), "instruction"),
 ])
 def test_keep_writing_prefills_only_where_the_provider_does_not_rule_it_out(conn, mode):
     """The user's opt-in is not enough on the Anthropic API, whose models from
@@ -58,14 +63,14 @@ def test_keep_writing_prefills_only_where_the_provider_does_not_rule_it_out(conn
 
 
 def test_extend_tails_carry_the_partial_reply_and_the_steer():
-    m = character_turns._extend_messages(_SNAP, {"model": "m", "prefill": True},
+    m = character_turns._extend_messages(_SNAP, _t(prefill=True),
                                          "Mara ![a lamp](/api/x.png) waits", "colder", 150)
     assert m[0] == {"role": "user", "content": "Go."}
     assert list(m)[-2]["role"] == "system" and "colder" in list(m)[-2]["content"]
     assert "continuing" in list(m)[-2]["content"]
     assert list(m)[-1] == {"role": "assistant", "content": "Mara a lamp waits"}
-    assert m.mode_for({"prefill": True}) == "prefill"
-    instr = m.for_connection({"model": "m"}, "m")
+    assert m.mode_for(_t(prefill=True)) == "prefill"
+    instr = m.for_target(_t())
     assert instr[-2] == {"role": "assistant", "content": "Mara a lamp waits"}
     assert instr[-1]["role"] == "user"
     assert "Continue exactly where" in instr[-1]["content"]
@@ -74,7 +79,7 @@ def test_extend_tails_carry_the_partial_reply_and_the_steer():
 
 
 def test_extend_instruction_without_words_or_steer():
-    m = character_turns._extend_messages(_SNAP, {"model": "m"}, "Mara waits", "", None)
+    m = character_turns._extend_messages(_SNAP, _t(), "Mara waits", "", None)
     assert [x["role"] for x in m] == ["user", "assistant", "user"]
     assert "words" not in m[-1]["content"] and "Direction" not in m[-1]["content"]
 
@@ -167,7 +172,7 @@ def test_instruction_extend_on_a_non_prefill_connection(client, kind):
     result, fake = _extend(client, base, rid, "Then the door opened.",
                            {"connection_id": conn_id, "model": model})
     assert result.status_code == 200 and "error" not in result.text, result.text
-    assert fake.conn["id"] == conn_id
+    assert fake.target.provider_id == conn_id
     assert fake.messages[-1]["role"] == "user"
     assert "Continue exactly where" in fake.messages[-1]["content"]
     assert fake.messages[-2] == {"role": "assistant", "content": "Original."}
@@ -300,7 +305,7 @@ def test_a_multi_part_response_extends_from_its_resume_snapshot(client):
     assert record["resume_snapshot"]
     result, fake = _extend(client, base, rid, "Then she sat.")
     assert "error" not in result.text, result.text
-    model = fake.conn["model"]
+    model = fake.target.model
     resumed = list(character_turns.PreparedMessages.from_snapshot(record["resume_snapshot"], model))
     assert list(fake.messages)[:-2] == resumed
     assert fake.messages[-2] == {"role": "assistant", "content": "No roll."}
@@ -361,13 +366,12 @@ def test_steer_rides_before_the_partial_in_prefill(client):
 
 
 def test_served_mode_follows_the_attempt_that_answered():
-    tailed = character_turns._extend_messages(_SNAP, {"model": "m", "prefill": True},
-                                              "Mara waits", "", None)
-    meter = SimpleNamespace(usage={ATTEMPTED: {"kind": "openai_compatible"}})
-    assert character_turns._served_mode(tailed, meter, {"prefill": True}) == "instruction"
-    assert character_turns._served_mode(tailed, None, {"prefill": True}) == "prefill"
-    assert character_turns._served_mode(tailed, SimpleNamespace(usage={}),
-                                        {"prefill": True}) == "prefill"
+    primary = _t(prefill=True)
+    tailed = character_turns._extend_messages(_SNAP, primary, "Mara waits", "", None)
+    meter = SimpleNamespace(usage={ATTEMPTED: _t("openai_compatible")})
+    assert character_turns._served_mode(tailed, meter, primary) == "instruction"
+    assert character_turns._served_mode(tailed, None, primary) == "prefill"
+    assert character_turns._served_mode(tailed, SimpleNamespace(usage={}), primary) == "prefill"
 
 
 def test_extend_is_metered_as_extend_and_not_counted_as_a_reroll(client):
@@ -534,13 +538,18 @@ def test_a_fallback_capture_records_the_tail_that_fallback_was_sent(monkeypatch,
     monkeypatch.setattr(character_turns, "_record_prompt",
                         lambda cid, sid, task, breakdown, **kw: recorded.append((task, kw)))
     # The fallback this call carries, as the resolver attaches it.
-    conn = {"kind": "openrouter", "model": "m", "prefill": True,
-            llm.FALLBACK_KEY: {"kind": "openai_compatible", "model": "fb", "prefill": False}}
-    tailed = character_turns._extend_messages(_SNAP, conn, "Mara waits", "", None)
-    character_turns._capture("c", "s", "extend", tailed, conn)
+    fallback = _t("openai_compatible", "fb", provider_id="local",
+                  sampling=wire.Sampling(preset_id="own", scope="connection",
+                                         params={"temperature": 0.4}))
+    chain = wire.Chain(_t(prefill=True, provider_id="openrouter"), fallback)
+    tailed = character_turns._extend_messages(_SNAP, chain.primary, "Mara waits", "", None)
+    character_turns._capture("c", "s", "extend", tailed, chain)
     assert recorded[-1][1]["messages"][-1] == {"role": "assistant", "content": "Mara waits"}
-    tailed.for_model("fb")          # what dispatch does on the fallback attempt
+    assert recorded[-1][1]["conn"] == chain          # the primary's capture: its chain
+    tailed.for_target(fallback)     # what dispatch does on the fallback attempt
     task, kw = recorded[-1]
-    assert task == "extend" and kw["model"] == "fb"
+    assert task == "extend" and (kw["model"], kw["kind"]) == ("fb", "openai_compatible")
     assert kw["messages"][-2] == {"role": "assistant", "content": "Mara waits"}
     assert kw["messages"][-1]["role"] == "user"
+    # Captured as the fallback was sent: its own target and its own preset.
+    assert kw["conn"] == fallback

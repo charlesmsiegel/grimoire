@@ -300,7 +300,7 @@ def test_models_refresh_asks_the_connections_own_provider(client):
     r = drafts.post(client, f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
     assert r.json()["models"] == fake.models
-    assert [(c["kind"], c["base_url"], c["api_key"]) for c in fake.listed] == [
+    assert [(c.kind, c.base_url, c.api_key) for c in fake.listed] == [
         ("openai_compatible", "https://x", "sk-x")]
 
     # persisted: a plain GET now shows the cached list without another fetch
@@ -319,7 +319,7 @@ def test_models_refresh_for_openrouter_presents_the_stored_key(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-live"})
 
     assert drafts.post(client, "/api/llm-connections/openrouter/models/refresh").status_code == 200
-    assert [(c["kind"], c["api_key"]) for c in fake.listed] == [("openrouter", "sk-or-live")]
+    assert [(c.kind, c.api_key) for c in fake.listed] == [("openrouter", "sk-or-live")]
 
 
 def test_models_refresh_upstream_error_normalized(client):
@@ -4789,8 +4789,8 @@ def test_a_reroll_with_no_override_still_runs_on_the_active_connection(client):
 
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 200
 
-    assert fake.conn["id"] == "openrouter"
-    assert fake.conn["model"] == "campaign/model"
+    assert fake.target.provider_id == "openrouter"
+    assert fake.target.model == "campaign/model"
 
 
 def test_a_reroll_may_name_a_model_without_naming_a_connection(client):
@@ -4800,8 +4800,8 @@ def test_a_reroll_may_name_a_model_without_naming_a_connection(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"model": "vendor/bigger"}).status_code == 200
 
-    assert fake.conn["id"] == "openrouter"          # still the active connection
-    assert fake.conn["model"] == "vendor/bigger"
+    assert fake.target.provider_id == "openrouter"          # still the active connection
+    assert fake.target.model == "vendor/bigger"
     # A one-shot: the stored selection is untouched, so the next turn is back
     # on the campaign's model.
     assert _stored_primary(client) == ("openrouter", "campaign/model")
@@ -4819,10 +4819,10 @@ def test_a_reroll_may_name_a_whole_connection(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"connection_id": other}).status_code == 200
 
-    assert fake.conn["kind"] == "openai_compatible"
-    assert fake.conn["base_url"] == "http://localhost:11434/v1"
-    assert fake.conn["api_key"] == "sk-local"        # the named connection's own
-    assert fake.conn["model"] == "campaign/model"    # at the standing model
+    assert fake.target.kind == "openai_compatible"
+    assert fake.target.base_url == "http://localhost:11434/v1"
+    assert fake.target.api_key == "sk-local"        # the named connection's own
+    assert fake.target.model == "campaign/model"    # at the standing model
 
 
 def test_a_reroll_may_name_a_connection_and_a_model_together(client):
@@ -4832,8 +4832,8 @@ def test_a_reroll_may_name_a_connection_and_a_model_together(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"connection_id": other, "model": "qwen3"}).status_code == 200
 
-    assert fake.conn["kind"] == "openai_compatible"
-    assert fake.conn["model"] == "qwen3"
+    assert fake.target.kind == "openai_compatible"
+    assert fake.target.model == "qwen3"
     # Nothing about the override is stored: not on the provider it named, and
     # not on the standing selection.
     assert client.get(f"/api/llm-connections/{other}").json().get("model", "") == ""
@@ -4848,12 +4848,12 @@ def test_an_override_steers_one_reroll_and_not_the_turn_after_it(client):
     other = _local_endpoint(client)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                 json={"connection_id": other, "model": "qwen3"})
-    assert fake.conn["kind"] == "openai_compatible"
+    assert fake.target.kind == "openai_compatible"
 
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
 
-    assert fake.conn["id"] == "openrouter"
-    assert fake.conn["model"] == "campaign/model"
+    assert fake.target.provider_id == "openrouter"
+    assert fake.target.model == "campaign/model"
 
 
 def test_an_override_naming_no_connection_is_a_400_and_touches_nothing(client):
@@ -4913,7 +4913,7 @@ def test_an_override_works_while_the_active_connection_is_unusable(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 409
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"connection_id": other}).status_code == 200
-    assert fake.conn["kind"] == "openai_compatible"
+    assert fake.target.kind == "openai_compatible"
 
 
 def test_the_alternate_a_reroll_produces_is_stamped_with_the_model_that_ran(client):
@@ -5080,8 +5080,8 @@ def test_a_blank_override_is_the_standing_configuration_rather_than_a_refusal(cl
                        json={"connection_id": "  ", "model": " ",
                              "guidance": ""}).status_code == 200
 
-    assert fake.conn["id"] == "openrouter"
-    assert fake.conn["model"] == "campaign/model"
+    assert fake.target.provider_id == "openrouter"
+    assert fake.target.model == "campaign/model"
 
 
 def test_an_absurd_model_override_is_refused_at_the_boundary(client):
@@ -5121,7 +5121,7 @@ def test_a_route_with_no_model_is_not_filed_under_the_campaigns(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"connection_id": modelless}).status_code == 200
 
-    assert fake.conn["id"] == modelless          # it really ran there
+    assert fake.target.provider_id == modelless          # it really ran there
     rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     latest = next(r for r in rows if r["task"] == "regenerate")
     assert latest["model"] == ""                 # no model named, not the campaign's

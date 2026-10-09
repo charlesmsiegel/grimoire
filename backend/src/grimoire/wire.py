@@ -8,10 +8,11 @@ may be what this module imports. `test_wire.py` holds that by the AST.
 Slice I builds them BESIDE the dict for now. Each resolved attempt carries
 both (`Attempt.conn`, `Attempt.target`), from the same lowered values, and a
 resolution's `chain` carries the fallback's target exactly where the
-primary's dict carries it under `FALLBACK_KEY`. The facade sends a `Target`
-through the adapter registry (`adapters`); a caller that still hands it the
-dict is read through `from_lowered`, which reads a dict as the chain it
-describes -- the one dict door, deleted with the lowering.
+primary's dict carries it under `FALLBACK_KEY`. The facade is sent a
+`Chain` (or a lone `Target`), sends each `Target` through the adapter
+registry (`adapters`), and refuses a dict. A caller that still holds the dict
+reads it through `from_lowered`, which reads a dict as the chain it describes
+-- the one dict door, deleted with the lowering.
 
 Every class is frozen. A change is a new value (`with_account`,
 `without_sampling`, `Chain.alone`), never a write into a shared one -- the
@@ -216,9 +217,10 @@ def from_lowered(conn: dict) -> Chain:
     the fallback it carries under `_fallback` (a falsy one is none).
 
     The dict door, and a temporary one: callers that still hold a dict --
-    the facade's shim (`llm._as_chain`), `llm_sampling`'s dict callers, and
-    the model test's probes -- go through here until Task 10 deletes the
-    lowering, and this with it."""
+    `llm_sampling`'s dict callers, and the model test's probes and the
+    catalog and health routes (`routes.config`), which hand the facade the
+    target this reads -- go through here until Task 10 deletes the lowering,
+    and this with it. The facade itself takes no dict (Task 9d)."""
     fallback = conn.get(_FALLBACK)
     return Chain(_target_of(conn),
                  _target_of(fallback) if isinstance(fallback, dict) and fallback else None)

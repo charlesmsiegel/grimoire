@@ -19,7 +19,7 @@ from grimoire import decisions, inference, prompts
 from grimoire.llm_errors import LLMError
 from grimoire.store import routing, suggest, voice_drift
 from grimoire.store.continuity import identity, reconcile
-from tests import llm_fakes
+from tests import llm_fakes, wire_kit
 from tests.llm_fakes import (
     Cassette,
     CassetteMiss,
@@ -30,7 +30,7 @@ from tests.llm_fakes import (
     from_cassette,
 )
 
-CONN = {"kind": "openrouter", "model": "m", "api_key": "k"}
+CONN = wire_kit.target(model="m", api_key="k")
 
 
 async def _drain(fake, messages=None) -> list[str]:
@@ -58,7 +58,24 @@ async def test_every_request_is_recorded():
     await _drain(fake, [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}])
     assert fake.calls == 1
     assert fake.messages[-1] == {"role": "user", "content": "U"}
-    assert fake.conn == CONN
+    assert fake.target == CONN
+    assert fake.requests[-1]["chain"].primary == CONN
+
+
+async def test_a_fake_takes_no_dict():
+    """Like the facade, a fake refuses a lowered connection dict, at every
+    door, before it records or answers anything."""
+    fake = FakeLLM([["ok"]], decisions=[decisions.ItemResult(answers={})])
+    as_dict = {"kind": "openrouter", "model": "m", "api_key": "k"}
+    with pytest.raises(TypeError):
+        [d async for d in fake.stream([], as_dict)]
+    for call in (lambda: fake.complete([], as_dict), lambda: fake.single([], as_dict),
+                 lambda: fake.list_models(as_dict), lambda: fake.check(as_dict)):
+        with pytest.raises(TypeError):
+            await call()
+    with pytest.raises(TypeError):
+        fake.note_outcome(as_dict, None)
+    assert fake.calls == 0 and fake.requests == [] and fake.listed == fake.checked == []
 
 
 async def test_an_injected_error_arrives_after_the_deltas_it_was_given():
@@ -385,8 +402,8 @@ def test_a_decide_entry_never_answers_another_decision():
 
 
 # ---- an entry's `model` is honoured, never ignored ----
-_PRIMARY = {"kind": "openrouter", "model": "m/primary", "api_key": "k"}
-_FALLBACK = {"kind": "openrouter", "model": "m/fallback", "api_key": "k"}
+_PRIMARY = wire_kit.target(model="m/primary", api_key="k")
+_FALLBACK = wire_kit.target(model="m/fallback", api_key="k")
 
 
 async def test_a_fake_honours_an_entrys_model():

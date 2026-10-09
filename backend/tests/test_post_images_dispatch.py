@@ -1,13 +1,14 @@
 """The facade's share of #377: lowering image references per route, the
 degrade-to-text sibling, and the guarantees around both."""
 
+import dataclasses
 import json
 
 import httpx
 import pytest
 
 from grimoire import content_parts as cp
-from grimoire import llm
+from grimoire import llm, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.model_guidance import PreparedMessages
@@ -35,12 +36,16 @@ def _prepared(msgs=None, campaign="c"):
     return PreparedMessages("m", lambda _model: (msgs, None), campaign=campaign)
 
 
-def _conn(id_="a", kind="openrouter", vision="on", model="m"):
-    return {"id": id_, "kind": kind, "model": model, "api_key": "k", "vision": vision}
+def _conn(id_="a", kind="openrouter", vision="on", model="m", api_key="k"):
+    """An attempt whose post-image preference is `vision` ("on" reads images
+    on a kind that carries them, "off" never)."""
+    reads = "no" if kind == "claude" else {"on": "yes", "off": "no"}.get(vision, "unknown")
+    return wire.Target(provider_id=id_, kind=kind, model=model, requested_model=model,
+                       api_key=api_key, reads_images=reads)
 
 
-def _images(conn):
-    return 3 if conn.get("vision") == "on" and conn.get("kind") != "claude" else 0
+def _images(target):
+    return 3 if target.reads_images == "yes" and target.kind != "claude" else 0
 
 
 loaded: list = []
@@ -131,7 +136,7 @@ async def test_a_claude_fallback_is_kept_and_sent_text():
     primary = SequencedProvider([LLMError("network", "down")])
     claude = SequencedProvider([("from claude",)])
     client = _client(primary, claude=claude)
-    chain = carrying(_conn(), {"id": "b", "kind": "claude", "model": "opus"})
+    chain = carrying(_conn(), _conn("b", kind="claude", model="opus", api_key=""))
     assert await _run(client, _prepared(), chain) == "from claude"
     assert claude.requests[0]["messages"] == cp.as_text(_msgs())
 
@@ -139,8 +144,9 @@ async def test_a_claude_fallback_is_kept_and_sent_text():
 async def test_a_drafts_own_image_parts_still_exclude_claude():
     draft = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "d"}}]}]
     client = _client(SequencedProvider([("x",)]))
-    routes = client._usable_routes(draft, carrying(_conn(), {"id": "b", "kind": "claude"}))
-    assert [c["id"] for c, _n in routes] == ["a"]
+    routes = client._usable_routes(draft, carrying(_conn(), _conn("b", kind="claude", model="opus",
+                                                                  api_key="")))
+    assert [route.target.provider_id for route in routes] == ["a"]
 
 
 @pytest.mark.parametrize("status", [400, 404, 413, 415, 422])
@@ -238,8 +244,8 @@ async def test_a_fallback_that_kept_an_image_the_primary_packed_away_degrades():
 async def test_a_preset_refused_on_the_text_retry_is_still_the_primarys():
     """The degrade sibling is the primary connection re-sent as text, so a
     preset it refuses is reported as the preset, not handed to the fallback."""
-    conn = {**_conn(), "sampling": {"preset_id": "p", "preset_name": "Warm",
-                                    "scope": "connection", "params": {"temperature": 1.5}}}
+    conn = dataclasses.replace(_conn(), sampling=wire.Sampling(
+        preset_id="p", preset_name="Warm", scope="connection", params={"temperature": 1.5}))
     provider = SequencedProvider([
         LLMError("bad_response", "image input is not supported", status=400),
         LLMError("bad_response", "temperature must be at most 1", status=400),
@@ -279,8 +285,8 @@ async def test_strict_folding_of_a_carrier_keeps_alternation():
     oc = OpenAICompatibleClient(http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     client = LLMClient(openrouter=ScriptedProvider(), claude=ScriptedProvider(),
                        openai_compatible=oc, retries=0, images=_images, load_image=_load)
-    conn = {"id": "s", "kind": "openai_compatible", "model": "m", "base_url": "https://x/v1",
-            "post_process": "strict", "vision": "on"}
+    conn = dataclasses.replace(_conn("s", kind="openai_compatible", api_key=""),
+                               base_url="https://x/v1", post_process="strict")
     assert await _run(client, _prepared(), conn) == "ok"
     roles = [m["role"] for m in bodies[0]["messages"]]
     assert roles == ["user", "assistant", "user"]

@@ -691,17 +691,22 @@ def test_a_native_row_still_files_decision_mode_native(client):
 
 
 def test_the_facade_drops_the_preset_from_a_native_call_it_is_handed(client):
-    """The same at the facade, for a caller that hands `decide_native` a dict
-    with a preset on it (the model test's probe): the holder it stamps, which
-    the meter files, names none."""
+    """The same at the facade, for a caller that hands `decide_native` a
+    target with a preset on it (the model test's probe): the holder it stamps,
+    which the meter files, names none, and the attempt it names carries none."""
     fx.decide_only(client, fallback=False)
-    conn = {**_resolved().attempts[0].conn,
-            "sampling": {"preset_id": "warm", "params": {}, "scope": "global"}}
+    target = dataclasses.replace(
+        _resolved().attempts[0].target,
+        sampling=wire.Sampling(preset_id="warm", preset_name="Warm", scope="global",
+                               params={"temperature": 0.4}))
     holder: dict = {}
-    wire = _Wire(decides=[_yes()])
-    asyncio.run(_real(wire).decide_native(_item(), conn, holder))
+    sent = _Wire(decides=[_yes()])
+    asyncio.run(_real(sent).decide_native(_item(), target, holder))
     assert holder["provider_id"] == DECIDER[0]     # the account was filed
-    assert "preset" not in holder and "sampling" not in holder[llm.ATTEMPTED]
+    assert "preset" not in holder
+    assert holder[llm.ATTEMPTED] == target.without_sampling()
+    assert holder[llm.ATTEMPTED].sampling == wire.Sampling()
+    assert target.sampling.preset_id == "warm"     # the caller's target is untouched
 
 
 def test_decision_names_the_one_backend_and_route_that_answered(client):

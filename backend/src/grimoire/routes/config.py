@@ -941,7 +941,7 @@ def post_connection_models_refresh(
 
     async def work():
         try:
-            models = await client.list_models(conn)
+            models = await client.list_models(wire.from_lowered(conn).primary)
         except LLMError as exc:
             return {"state": "failed", "error": run_error(_llm_http_error(exc))}
         fetched_at = store.now_iso()
@@ -982,7 +982,8 @@ async def post_model_catalog(body: CatalogProbe, client: LLMClient = Depends(get
     if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     try:
-        return {"models": catalog.listable(await client.list_models(conn))}
+        return {"models": catalog.listable(
+            await client.list_models(wire.from_lowered(conn).primary))}
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
 
@@ -1055,7 +1056,8 @@ async def post_connection_health(
         # and the reader's spinner — open forever, on exactly the connection
         # they already suspect. Bounded here at a value nobody can switch off,
         # and an overrun arrives as `timeout`: a health verdict like any other.
-        await _bounded_call(client.check(conn), ceiling=HEALTH_CHECK_CEILING)
+        await _bounded_call(client.check(wire.from_lowered(conn).primary),
+                            ceiling=HEALTH_CHECK_CEILING)
     except LLMError as exc:
         return _health_body(registry.record(conn, exc))
     return _health_body(registry.record(conn))

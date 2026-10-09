@@ -109,7 +109,7 @@ def test_preview_lists_an_unsaved_connections_provider(client):
 
     assert r.status_code == 200
     assert r.json() == {"models": fake.models}
-    assert [(c["kind"], c["api_key"]) for c in fake.listed] == [("openrouter", "sk-typed")]
+    assert [(c.kind, c.api_key) for c in fake.listed] == [("openrouter", "sk-typed")]
 
 
 def test_preview_carries_a_typed_base_url(client):
@@ -119,7 +119,7 @@ def test_preview_carries_a_typed_base_url(client):
     client.post("/api/model-catalog", json={
         "kind": "openai_compatible", "base_url": "http://127.0.0.1:8080/v1", "api_key": ""})
 
-    assert [(c["kind"], c["base_url"]) for c in fake.listed] == [
+    assert [(c.kind, c.base_url) for c in fake.listed] == [
         ("openai_compatible", "http://127.0.0.1:8080/v1")]
 
 
@@ -131,7 +131,7 @@ def test_preview_needs_no_key_at_all(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     assert client.post("/api/model-catalog", json={"kind": "openrouter"}).status_code == 200
-    assert fake.listed[0]["api_key"] == ""
+    assert fake.listed[0].api_key == ""
 
 
 def test_preview_refuses_the_kind_with_no_catalog(client):
@@ -182,7 +182,7 @@ def test_preview_does_not_touch_a_stored_key(client):
 
     client.post("/api/model-catalog", json={"kind": "openrouter", "api_key": "sk-typed"})
 
-    assert fake.listed[0]["api_key"] == "sk-typed"
+    assert fake.listed[0].api_key == "sk-typed"
 
 
 def test_an_entry_keeps_the_parameters_a_model_takes():
