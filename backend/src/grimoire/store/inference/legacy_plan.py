@@ -196,7 +196,17 @@ class _Reader:
     absent file: a deleted provider does not come back (N20). A strict lookup
     reads the record strictly, and an unreadable record raises
     `retired.RecordUnreadableError` rather than answering with an empty
-    pin."""
+    pin.
+
+    A file with no legacy field and no entry is either one created at format
+    2 with none -- answered as it is -- or one the strip took them off whose
+    entry has not arrived (a partial sync, a record restored apart from the
+    connections). The strip's marker (`llm_connections.STRIPPED_KEY`) tells
+    the two apart: a strict lookup raises `retired.EntryMissingError` for a
+    marked file with no entry, so nothing is persisted from a connection read
+    as having no model and no effort, and the scope is retried on the next
+    start. A soft lookup -- play, which persists nothing -- answers it as it
+    stands."""
 
     def __init__(self, read: Callable[[str], dict | None], *, strict: bool):
         self._read = read
@@ -215,6 +225,8 @@ class _Reader:
             return raw
         recorded = self._fields(conn_id)
         if not recorded:
+            if self.strict and llm_connections.stripped(conn_id):
+                raise retired.EntryMissingError(conn_id)
             return raw
         out = dict(raw)
         for field, value in recorded.items():
@@ -244,7 +256,8 @@ def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup:
     Every mode falls back to the retirement record for a stripped connection
     (`_Reader`): `soft` reads the record fail-soft; `migrate` and `retire`
     read it strictly whenever they consult it (R2-2, R3-2) -- an entry there
-    proves a strip happened, whatever `config.md` says."""
+    proves a strip happened, whatever `config.md` says -- and refuse a file
+    the strip marked whose entry has not arrived (`retired.EntryMissingError`)."""
     if mode == "soft":
         return _Reader(_soft_read, strict=False)
     if mode in ("migrate", "retire"):

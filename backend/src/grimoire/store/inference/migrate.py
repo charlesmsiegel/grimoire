@@ -719,10 +719,22 @@ def _facts(run: _Run) -> str:
     others still land. Returns why it stopped early, or "". A connection that
     cannot be read fails the run, as in `_providers` -- and so does a facts
     file that cannot be read (`facts.FactsUnreadableError`): skipped, its
-    copy would be switched past and never made."""
-    for conn in llm_connections.list_connections_strict():
+    copy would be switched past and never made.
+
+    Each connection is read through the migration's lookup (`_lookup`), as
+    the switch's mapping and play's overlay read it: a connection retirement
+    stripped answers with the fields the retirement record holds for it, so
+    a copy made from them is never taken back as "now states nothing", and
+    one whose record entry has not arrived raises
+    (`retired.EntryMissingError`) and fails the run, which the next start
+    retries."""
+    lookup = _lookup()
+    for listed in llm_connections.list_connections_strict():
         if why := run.halted():
             return why
+        conn = lookup(listed["id"])
+        if conn is None:
+            continue
         model = facts.model_of(conn)
         label = f"facts {conn['id']} {model or '(no model)'}"
         try:

@@ -1934,8 +1934,14 @@ bytes.
 - **Older builds after retirement** (slice I; ratified 2026-10-09). A build
   from before C sees no model settings: its connections have no `model`, so it
   sends requests with an empty model. A build from C to H keeps playing and
-  loses only the `max` effort (§8), which it reads as an invalid preset value
-  and sends no effort for; it can write `active_connection_id` back, because
+  loses the `max` effort (§8), which it reads as an invalid preset value
+  and sends no effort for. It also loses the model of a campaign that arrives
+  unmarked after the strip (a restore, an old folder copied in), and of a
+  fork of one: it knows no retirement record, so it plays and migrates that
+  campaign from the stripped connection file, with an empty pinned model and
+  no preset, for good (*corrected 2026-10-09 after the code review; awaiting
+  the user's ratification* — nothing a C–H build reads can stop it). It can
+  write `active_connection_id` back, because
   its `llm_connections.ensure_migrated` seeds it wherever
   `llm_connections/.migrated` is absent, so at most once per library. This
   build ignores a legacy key or field in a retired scope (the retirement
@@ -2112,6 +2118,17 @@ synced copy.
   campaign that arrives unmarked after the strip still resolves. It never
   answers for an absent file, so a deleted provider does not come back. A
   later strip keeps the first recorded values, the ones C translated.
+- The strip marks each connection file it recorded fields for
+  (`inference_stripped: "1"`, `llm_connections.STRIPPED_KEY`) in the write
+  that strips it, and this build's own connection writes keep the mark. A
+  strict lookup (`migrate`, `retire`) refuses a marked file whose entry the
+  record does not hold (`inference_retired.EntryMissingError`, an
+  `RecordUnreadableError`): a sync that delivered the connection files before
+  the record, or a record restored apart from them. The scope or campaign
+  that names it writes nothing and is retried on the next start, so no plan
+  is persisted from a connection read as having no model and no effort. Play's
+  soft lookup reads it as it stands. A C–H edit of the file drops the mark,
+  and that residue is accepted (§11.3).
 - `notes`: the route-preset notes of §11.2 step 4 and the `fact_not_carried`
   notes, each `{id, scope, subject, provider_id, effort, kind, text,
   dismissed}`. `id` is a digest of everything but `text`, so a wording change

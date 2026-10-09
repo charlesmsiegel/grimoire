@@ -50,7 +50,9 @@ write is made for it alone -- and a write made anyway drops it with the rest.
 `campaign.md` through `frontmatter.read_record` (a file that holds no record
 raises `RecordUnreadableError`; `config.md` must hold its format marker), each
 connection through `legacy_plan.lookup(mode="retire")` (a file that is there
-but cannot be read raises `ConnectionUnreadableError`, never "absent"), and
+but cannot be read raises `ConnectionUnreadableError`, never "absent"; one the
+strip marked whose record entry has not arrived raises
+`retired.EntryMissingError`, never "no model"), and
 each sampler preset through `sampler_presets.read_preset_strict`. Planning
 comes before any write, so a scope whose plan raises writes nothing -- not a
 preset, not a marker -- and is left for the next start. `left` is the

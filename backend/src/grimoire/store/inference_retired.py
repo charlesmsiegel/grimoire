@@ -24,7 +24,10 @@ The record::
   the fallback for a connection whose file is there and holds no legacy
   field -- so a campaign that arrives unmarked after the strip still
   resolves. `MODEL_FIELDS` names no key or URL, so the record never holds a
-  credential.
+  credential. The strip marks each file it recorded fields for
+  (`llm_connections.STRIPPED_KEY`), so a strict lookup that finds a marked
+  file with no entry here raises `EntryMissingError` (the record has not
+  arrived) rather than reading the file as a connection with no model.
 - `notes`: merged by id; merging never un-dismisses a note.
 
 Reading: `read()` is fail-soft (display). `read(strict=True)` is for every
@@ -115,6 +118,23 @@ class RecordUnreadableError(frontmatter.RecordUnreadableError):
     so nothing that persists from it -- the strip, a dismiss, the migration's
     or retirement's lookup -- writes on a guess. The settings write that
     reaches it answers 409 `retirement_unreadable`."""
+
+
+class EntryMissingError(RecordUnreadableError):
+    """A connection retirement stripped -- its file carries
+    `llm_connections.STRIPPED_KEY` -- whose legacy fields the record does not
+    hold: the record has not arrived yet (a sync still in flight, which
+    delivers files in no particular order), or was restored or removed apart
+    from the connection files. Raised by a strict lookup
+    (`legacy_plan._Reader`), so the migration and retirement leave the scope
+    that names the connection for the next start rather than persisting a
+    selection with no model and no effort, for good."""
+
+    def __init__(self, conn_id: str):
+        super().__init__(
+            f"connection {conn_id} was stripped by retirement, but {FILENAME} holds no "
+            "entry for it yet (not synced?); it is left for the next start")
+        self.conn_id = conn_id
 
 
 def note_id(scope: str, subject: str, provider_id: str, effort: str, kind: str) -> str:

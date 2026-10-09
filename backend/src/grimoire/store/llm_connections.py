@@ -42,6 +42,17 @@ _FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reas
 #: on write there (spec 11.3).
 MODEL_FIELDS: tuple[str, ...] = ("model", "vision", "prefill", "post_process",
                                  "reasoning_effort", "sampler_preset")
+#: Written by retirement's strip into the frontmatter it rewrites, in the same
+#: atomic write that takes the legacy fields off (inference slice I), and only
+#: when it recorded some: "this file's legacy model fields are in the
+#: retirement record". A file whose legacy fields are absent may have been
+#: stripped, or may have been created at format 2 with none -- only this says
+#: which, so a strict planner lookup can refuse a stripped file whose record
+#: entry has not arrived (`stripped`; `legacy_plan._Reader`) rather than plan
+#: it as a connection with no model. Never part of a record as `_read` returns
+#: it; kept by every write this module makes over the file (`_write_raw`). A
+#: C-H build drops it on its own edits (it keeps only the fields it knows).
+STRIPPED_KEY = "inference_stripped"
 #: The fields describing how this connection SAMPLES rather than what it is.
 #: An edit touching only these keeps the connection's `rev` (see
 #: `update_connection`): the rev exists to invalidate the cached model catalog
@@ -206,10 +217,46 @@ def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     # seen: the sidecar and the rev both survive it (see `REV_NEUTRAL_FIELDS`).
     meta["rev"] = keep_rev or secrets.token_hex(8)
     with LOCK:
+        # Retirement's strip marker outlives an edit: the fields it says the
+        # record holds are still there, whatever else changed (`STRIPPED_KEY`).
+        if _carries_strip_marker(_path(id)):
+            meta[STRIPPED_KEY] = "1"
         _dir().mkdir(parents=True, exist_ok=True)
         if not keep_rev:
             _sidecar_path(id).unlink(missing_ok=True)
         atomic.write_text(_path(id), dump_frontmatter(meta, ""))
+
+
+def _carries_strip_marker(p: Path) -> bool:
+    """Whether the file at `p` carries `STRIPPED_KEY`, fail-soft: a file that
+    is absent or cannot be read carries none (what `_write_raw` keeps)."""
+    try:
+        if not p.exists():
+            return False
+        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    return str(meta.get(STRIPPED_KEY, "") or "").strip() == "1"
+
+
+def stripped(conn_id: str) -> bool:
+    """Whether connection `conn_id`'s file carries retirement's strip marker
+    (`STRIPPED_KEY`): its legacy model fields were taken off and recorded in
+    the retirement record. Strict: a file that is there and cannot be read
+    raises `ConnectionUnreadableError`; an absent one, or an unsafe id, is
+    not stripped. Reads only, and never seeds."""
+    if not safe_id(conn_id):
+        return False
+    p = _path(conn_id)
+    try:
+        if not p.exists():
+            return False
+        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        if getattr(exc, "errno", None) == errno.ENAMETOOLONG:
+            return False
+        raise ConnectionUnreadableError(conn_id, exc) from exc
+    return str(meta.get(STRIPPED_KEY, "") or "").strip() == "1"
 
 
 def _read(id: str, *, strict: bool = False) -> dict | None:
@@ -398,10 +445,14 @@ def strip_model_fields(conn_id: str) -> bool:
        (`inference_retired.record_fields`), read strictly there;
     3. the same frontmatter minus those fields, written atomically: every
        other key, `rev` included, kept as it was, so the cached catalog,
-       every verified test and every vector space survive.
+       every verified test and every vector space survive -- and, when step 2
+       recorded anything, `STRIPPED_KEY` added in that same write, so a
+       device that has the file but not yet the record's entry for it can
+       tell (`stripped`).
 
     A connection that holds no legacy key at all writes nothing; one holding
-    only empty ones is rewritten without them, recording nothing."""
+    only empty ones is rewritten without them, recording nothing and marking
+    nothing (there is no entry for a lookup to wait for)."""
     if not safe_id(conn_id):
         raise ConnectionNotFound(conn_id)
     with LOCK, config.format_hold():
@@ -415,6 +466,8 @@ def strip_model_fields(conn_id: str) -> bool:
         if values:
             inference_retired.record_fields(conn_id, values)
         kept = {k: v for k, v in meta.items() if k not in MODEL_FIELDS}
+        if values:
+            kept[STRIPPED_KEY] = "1"
         atomic.write_text(p, dump_frontmatter(kept, body))
     return True
 

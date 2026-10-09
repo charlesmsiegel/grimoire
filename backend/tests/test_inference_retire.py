@@ -1245,6 +1245,145 @@ def test_the_planners_record_read_is_strict_for_writers_only(home):
             legacy_plan.lookup(mode=mode)("spare")
 
 
+# ---- a stripped connection whose record entry has not arrived (brutal review 1, 🟡1) ----
+def _arrived_before_the_record(root: Path) -> bytes:
+    """A device's state mid-sync after another device retired the store: the
+    stripped connection files are here, the record and the scope files the
+    pass rewrote are not. Retires `root` first, then puts `config.md`, every
+    `campaign.md` and the sampler presets back as they were before, and
+    removes the record. Returns the record's bytes."""
+    before = {p.relative_to(root).as_posix(): p.read_bytes()
+              for p in [root / "config.md", *root.glob("campaigns/*/campaign.md"),
+                        *root.glob("sampler_presets/*")] if p.is_file()}
+    assert migrate.ensure().retirement == {"left": [], "failed": ""}
+    assert not llm_connections.legacy_fields_on_disk()
+    record = retired.path().read_bytes()
+    retired.path().unlink()
+    for path in root.glob("sampler_presets/*"):
+        if path.relative_to(root).as_posix() not in before:
+            path.unlink()
+    for rel, data in before.items():
+        (root / rel).write_bytes(data)
+    shutil.rmtree(root / ".cache", ignore_errors=True)
+    return record
+
+
+def test_the_strip_marks_what_it_recorded_and_an_edit_keeps_the_mark(home):
+    """The strip writes `STRIPPED_KEY` in the write that takes the fields
+    off -- only where it recorded some -- and this build's own edit of the
+    connection keeps it. A connection created at format 2 carries none."""
+    _spare_stripped()
+    assert _conn_meta("spare")[llm_connections.STRIPPED_KEY] == "1"
+    assert llm_connections.stripped("spare")
+    llm_connections.update_connection("spare", name="Spare Again")
+    assert _conn_meta("spare")[llm_connections.STRIPPED_KEY] == "1"
+    fresh = llm_connections.create_connection("openrouter", "Mara", api_key="sk-mara")
+    assert llm_connections.STRIPPED_KEY not in _conn_meta(fresh)
+    assert not llm_connections.stripped(fresh)
+    # Never part of the record as read, so no API body carries it.
+    assert llm_connections.STRIPPED_KEY not in llm_connections.read_connection_raw("spare")
+
+
+def test_a_stripped_connection_with_no_entry_refuses_a_strict_lookup(home):
+    """The marker tells "stripped, entry not here yet" from "created at
+    format 2 with no legacy field": a strict lookup raises for the first and
+    answers the second; play's soft lookup answers both as they stand."""
+    _spare_stripped()
+    fresh = llm_connections.create_connection("openrouter", "Mara", api_key="sk-mara")
+    retired.path().unlink()
+    for mode in ("migrate", "retire"):
+        with pytest.raises(retired.EntryMissingError):
+            legacy_plan.lookup(mode=mode)("spare")
+        assert legacy_plan.lookup(mode=mode)(fresh)["model"] == ""
+    assert legacy_plan.lookup(mode="soft")("spare")["model"] == ""
+
+
+def test_a_partial_sync_ahead_of_the_record_retires_nothing_until_it_arrives(home):
+    """Path 1: another device retired and stripped the store, and this one
+    has the stripped connection files but not yet the record, the retired
+    `config.md` and `campaign.md` or the derived presets. Its pass writes
+    nothing -- no scope is marked retired with its GLM efforts read as
+    absent -- and says why; once the record arrives the next start retires
+    every scope as the first device did."""
+    cid = _legacy_glm()
+    _c_era()
+    root = store.home()
+    record = _arrived_before_the_record(root)
+    digest = _digest(root)
+
+    got = migrate.ensure()
+    assert _digest(root) == digest
+    assert got.state == "done"
+    assert "holds no entry" in got.retirement["failed"], got.retirement
+    assert "config.md: not retired yet" in got.retirement["left"]
+    assert not _retired(_raw_config()) and not _retired(_meta(cid))
+    # The same again on the next start: never marked, never "done" by default.
+    migrate.ensure()
+    assert _digest(root) == digest
+
+    retired.path().write_bytes(record)
+    assert migrate.ensure().retirement == {"left": [], "failed": ""}
+    done_cfg = _raw_config()
+    assert _retired(done_cfg)
+    assert done_cfg[keys.role_key("primary", "preset")] == "warm-reasoning-high"
+    assert done_cfg[keys.fallback_key("primary", "preset")] == "reasoning-low"
+    meta = _meta(cid)
+    assert _retired(meta) and meta[keys.pin_key("scene", "model")] == "glm-5.3"
+    assert meta[keys.pin_key("scene", "preset")] == "warm-reasoning-high"
+    assert inference.resolve("chat").chain.primary.sampling.params["reasoning_effort"] == "high"
+
+
+def test_a_format_1_config_ahead_of_the_record_is_not_switched(home):
+    """Path 1 on a device whose `config.md` is still format 1: the switch
+    reads every connection through the migration's lookup -- the facts step
+    included -- so it fails rather than switching (or taking back the facts
+    copies) from connections read as having no model."""
+    _legacy_glm()
+    root = store.home()
+    legacy_cfg = (root / "config.md").read_bytes()
+    assert migrate.ensure().retirement == {"left": [], "failed": ""}
+    facts_before = {p.name: p.read_bytes() for p in root.glob("llm_connections/*.facts.json")}
+    record = retired.path().read_bytes()
+    retired.path().unlink()
+    (root / "config.md").write_bytes(legacy_cfg)
+
+    got = migrate.ensure()
+    assert got.state == "failed" and "holds no entry" in got.reason, got
+    assert (root / "config.md").read_bytes() == legacy_cfg
+    assert {p.name: p.read_bytes()
+            for p in root.glob("llm_connections/*.facts.json")} == facts_before
+
+    retired.path().write_bytes(record)
+    assert migrate.ensure().state == "done"
+    cfg = _raw_config()
+    assert cfg[keys.role_key("primary", "model")] == "glm-5.3"
+    assert cfg[keys.role_key("primary", "preset")] == "warm-reasoning-high"
+
+
+def test_a_late_campaign_waits_for_a_stripped_connections_record(home):
+    """Path 2: a late unmarked campaign (a restore, an old folder copied in)
+    pins a stripped connection whose record entry is not here. It is neither
+    migrated nor retired -- never persisted with an empty model -- and is
+    finished, with the recorded model, once the record is back."""
+    _spare_stripped()
+    cid = _late_unmarked()
+    before = campaigns.paths.campaign_meta_path(cid).read_bytes()
+    record = retired.path().read_bytes()
+    retired.path().unlink()
+
+    got = migrate.ensure()
+    assert campaigns.paths.campaign_meta_path(cid).read_bytes() == before
+    assert any(cid in item and "holds no entry" in item for item in got.skipped), got
+    assert f"campaign {cid}: not migrated yet" in got.retirement["left"]
+
+    retired.path().write_bytes(record)
+    assert migrate.ensure().state == "done"
+    meta = _meta(cid)
+    assert meta[keys.pin_key("scene", "model")] == "vendor/spare"
+    assert meta[keys.pin_key("scene", "preset")] == "warm"
+    assert _retired(meta)
+
+
 # ---- the facts check (N9) ----
 def test_a_fact_the_migration_skipped_is_noted_before_the_strip(home, monkeypatch):
     """C's facts copy for `glm` did not land (its write raised), so glm

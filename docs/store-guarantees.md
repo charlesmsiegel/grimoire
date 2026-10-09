@@ -1203,7 +1203,14 @@ over.
 its legacy fields, so every `rev` — and with it every cached catalog,
 verified test and vector space — survives. Every value is derived deterministically, so two devices retiring
 one synced store write the same bytes (the write tokens aside, which are
-unique by design).
+unique by design). A sync delivers files in no order, so a device can hold the
+stripped connection files before the record that holds their fields; the
+strip marks each file it took fields off (`inference_stripped: "1"`, in the
+same write), and every read that feeds a write refuses a marked file whose
+record entry is not there yet (`EntryMissingError`). Nothing is written from
+it — no scope retired, no campaign migrated, no `config.md` switched — and the
+next start tries again, so the record's arrival finishes the pass as the
+first device did.
 
 **The markers.** `inference_retired: "1"` in `config.md` and in each
 `campaign.md` says the scope's legacy layout is gone; the planner reads a
@@ -1235,7 +1242,10 @@ backup and every synced copy. It holds two things:
   the strip, and never a key or a URL. Only the planner reads them, as the
   fallback for a connection whose file is there and holds no legacy field —
   so a campaign that arrives unmarked after the strip (a restore, an older
-  build) still migrates to the model it named. It never answers for a
+  build) still migrates to the model it named — on this build, and once the
+  record has arrived: a stripped file carries the strip's marker, and a
+  migration that finds it with no entry leaves the campaign unmigrated until
+  the entry is there. It never answers for a
   connection whose file is gone, and the first values recorded for a
   connection are the ones kept. Deleting a connection forgets its entry, in
   the same hold, before the file goes, so a provider created later under the
@@ -1269,11 +1279,19 @@ Collected, so that nothing here has to be inferred from an absence.
   migration sees no model settings once retirement has stripped the
   connections: their legacy `model` is gone, so it sends requests with an
   empty model. A build from between the migration and retirement keeps
-  playing, and loses only a GLM `max` reasoning effort: it reads a preset
-  set to `max` — a derived one included — as invalid, and sends no effort
-  there. It can write `active_connection_id` back once; this build ignores
-  it and removes it again on its next start. See
-  [Retirement](#retirement).
+  playing, and loses a GLM `max` reasoning effort: it reads a preset set to
+  `max` — a derived one included — as invalid, and sends no effort there. It
+  can write `active_connection_id` back once; this build ignores it and
+  removes it again on its next start. It also loses the model of a campaign
+  that arrives unmarked after the strip (a restore, an old library folder
+  copied in), and of a fork of one: it knows no retirement record, reads the
+  stripped connection as naming no model, plays the campaign so, and
+  migrates it with an empty pinned model (a Claude provider's default model,
+  for a Claude pin) and no preset, for good — nothing that build reads can
+  stop it, and this build then reads that campaign as set that way on
+  purpose. An edit that build makes to a stripped connection drops the
+  strip's marker, so if that device also lacks the record, this build reads
+  the file as one created with no model. See [Retirement](#retirement).
 
 - **Frontmatter is not validated, by design.** `store/frontmatter.py` is a
   minimal `---`-fenced format with **string scalars only** — no types, no
