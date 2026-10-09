@@ -2176,6 +2176,11 @@ export type VoiceCheck = PhaseAttempt & {
    *  voice" for a character nobody actually heard — and silence never clears a
    *  standing corrective. */
   unjudged: string[];
+  /** The subset of `flagged` whose verdict came without a note, because the
+   *  Decision model answers natively and a native answer has no rationale.
+   *  Shown, but nothing is stored for them. Optional: reviews stored before
+   *  this existed lack it. */
+  noteless?: string[];
   failed: DossierFailure[];
   /** Anchored NPCs the absorb budget ran out before reaching — never attempted. */
   skipped: string[];

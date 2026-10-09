@@ -372,7 +372,7 @@ def test_the_two_synonyms_still_mean_not_enough():
     item = voice_drift.build_item("Mara", "Clipped.", "Mara: Fine.")
     for word in ("insufficient", "unclear", "  Unclear ", "not enough", "not-enough"):
         assert voice_drift.finding_of(_parse(_reply(word), item)) == {
-            "verdict": voice_drift.NOT_ENOUGH, "note": ""}, word
+            "verdict": voice_drift.NOT_ENOUGH, "note": "", "native": False}, word
     # An alias may never stand for a second option once normalised: `validate`
     # refuses the item before anything is sent.
     (q,) = item.questions
@@ -397,10 +397,46 @@ def test_an_unreadable_answer_is_unknown_not_in_voice():
     # A reason other than unreadable is no answer either.
     for reason in decisions.REASONS:
         result = decisions.ItemResult({"verdict": decisions.Answer(None, reason)})
-        assert voice_drift.finding_of(result) == {"verdict": voice_drift.UNKNOWN, "note": ""}
+        assert voice_drift.finding_of(result) == {"verdict": voice_drift.UNKNOWN, "note": "",
+                                                  "native": False}
     # A readable verdict carries its rationale as the note.
     assert voice_drift.finding_of(_parse(_reply("drift", " She used contractions. "), item)) == {
-        "verdict": voice_drift.DRIFT, "note": "She used contractions."}
+        "verdict": voice_drift.DRIFT, "note": "She used contractions.", "native": False}
+
+
+def test_finding_of_says_which_backend_answered():
+    """A native answer has no rationale, so `native` is what lets the route
+    tell a drift with no corrective from a drift the judge forgot to explain."""
+    native = decisions.ItemResult({"verdict": decisions.Answer("drift")},
+                                  backend=decisions.NATIVE_BACKEND)
+    assert voice_drift.finding_of(native) == {"verdict": voice_drift.DRIFT, "note": "",
+                                              "native": True}
+    structured = decisions.ItemResult({"verdict": decisions.Answer("drift")},
+                                      "She hedged.", backend=decisions.STRUCTURED_BACKEND)
+    assert voice_drift.finding_of(structured)["native"] is False
+
+
+def test_check_failure_accepts_a_native_drift_without_a_note():
+    """A native backend gives a verdict and never a rationale: a drift with
+    no note is what it always sends, and is shown rather than failed."""
+    finding = {"verdict": voice_drift.DRIFT, "note": "", "native": True}
+    assert voice_drift.check_failure(finding) is None
+
+
+def test_structured_drift_without_a_note_still_fails():
+    for finding in ({"verdict": voice_drift.DRIFT, "note": "", "native": False},
+                    {"verdict": voice_drift.DRIFT, "note": ""}):
+        assert voice_drift.check_failure(finding) == "drift reported with no corrective"
+
+
+def test_a_native_note_over_the_cap_still_fails():
+    long_note = "She hedged. " * 100
+    assert voice_drift.check_failure(
+        {"verdict": voice_drift.DRIFT, "note": long_note, "native": True}
+    ).startswith("the voice judge returned a corrective over")
+    assert voice_drift.check_failure(
+        {"verdict": voice_drift.UNKNOWN, "note": "", "native": True}
+    ) == "unreadable verdict from the voice judge"
 
 
 def _route_source():

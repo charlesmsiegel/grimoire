@@ -6927,8 +6927,9 @@ def test_absorb_stages_voice_drift_without_writing_it(client):
     assert edit["target"] == {"kind": "characters", "id": "aese"}
     assert edit["before"] == "" and "never does" in edit["after"]
     assert body["voice"] == {"status": "ok", "reason": None, "checked": ["aese"],
-                             "flagged": ["aese"], "unjudged": [], "failed": [],
-                             "skipped": [], "attempted": True, "budget_exhausted": False}
+                             "flagged": ["aese"], "unjudged": [], "noteless": [],
+                             "failed": [], "skipped": [], "attempted": True,
+                             "budget_exhausted": False}
     assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == ""
 
 
@@ -7580,6 +7581,46 @@ def test_voice_drift_on_a_decide_only_model_answers_on_the_fallback(client, on):
     (sent,) = _voice_requests(fake)
     assert (sent["conn"]["id"], sent["conn"]["model"]) == on
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+
+
+_NATIVE_DRIFT = ItemResult({"verdict": Answer("drift")}, backend="native")
+
+
+def test_native_drift_without_a_note_keeps_the_standing_flag(client):
+    """A native verdict carries no rationale. A drift with no corrective is
+    shown (`flagged` and `noteless`), the phase is ok, and nothing is staged:
+    the standing flag is neither replaced nor cleared, here or on save."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    decide_only(client, fallback=False)
+    fake = _native_judge(decisions=[_NATIVE_DRIFT])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    voice = body["voice"]
+    assert voice["status"] == "ok" and voice["failed"] == []
+    assert voice["checked"] == voice["flagged"] == voice["noteless"] == ["aese"]
+    assert len(fake.native_requests) == 1
+    croot = store.campaigns.campaign_root(cid)
+    flag = croot / "characters" / "aese" / "voice_drift.md"
+    before = flag.read_text(encoding="utf-8")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": body["edits"]})
+    assert r.status_code == 200, r.text
+    assert flag.read_text(encoding="utf-8") == before
+    assert store.voice_drift.read(croot, "aese") == "She hedged."
+
+
+def test_native_in_voice_still_proposes_the_clear(client):
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    decide_only(client, fallback=False)
+    fake = _native_judge(decisions=[_NATIVE_IN_VOICE])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
+    assert edit["before"] == "She hedged." and edit["after"] == ""
+    assert body["voice"]["flagged"] == [] and body["voice"]["noteless"] == []
+    assert body["voice"]["status"] == "ok"
 
 
 def test_voice_drift_on_a_decide_only_model_without_a_fallback_answers_natively(client):
