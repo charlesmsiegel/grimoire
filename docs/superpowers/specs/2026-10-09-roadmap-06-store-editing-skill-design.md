@@ -19,7 +19,7 @@ guards, and against 05 (`2026-10-09-roadmap-05-direct-edit-cache-sync-design.md`
 |---|---|---|---|
 | 05-C2 | 05 | The `python -m grimoire.cache sync` command and its flags, exit status and report, which the skill's procedure ends with. The drift test checks every flag the skill names against the real parser. | Hard |
 | 05-C1 / 05-C4 | 05 | `cache_sync.collecting()`, the in-process form for an agent that writes through `grimoire.store` from Python. | Soft (the skill can fall back to the CLI alone) |
-| 05-C2 (API) | 05 | `POST /api/cache/sync`, for a store the agent cannot run Python against (a phone), and for a running server whose first paint the CLI cannot retire (05 Open question 1). | Soft |
+| 05-C2 (API) | 05 | `POST /api/cache/sync`, for a store the agent cannot run Python against (a phone). A tab that observes the API run end also forgets its remembered overview reads (05 section 3.2, 04-C2b). | Soft |
 
 ## Required by
 
@@ -248,9 +248,9 @@ deciding whether it applies does not have to open the file.
 
      ```
      PYTHONPATH=backend/src backend/.venv/bin/python -m grimoire.cache sync \
-         worlds/realm/lore/harbour-law.md worlds/realm/characters/seraphine/voice_anchor.md \
-         --deleted worlds/realm/lore/old-tide-tables.md \
-         --renamed worlds/realm/items/lantern.md=worlds/realm/items/storm-lantern.md
+         worlds/realm/lore/pact.md worlds/realm/characters/seraphine/voice_anchor.md \
+         --deleted worlds/realm/lore/tidewatch.md \
+         --renamed worlds/realm/items/lantern.md=worlds/realm/items/tide-lantern.md
      PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync ...   # Windows
      ```
 
@@ -277,10 +277,11 @@ deciding whether it applies does not have to open the file.
    edited record back through its store function, or open the page in the app.
    For a bulk pass, run the sync again with `--verify`.
 
-9. **A store on a phone, or a running server** (about 5 lines). With no
-   Python against the store, call `POST /api/cache/sync` on the running app
-   (the desktop backend's default port is in the `verify` skill), and poll the
-   run it returns. Otherwise do nothing: the app rebuilds lazily.
+9. **A store you cannot run Python against** (about 5 lines). On a phone,
+   call `POST /api/cache/sync` on the running app, and poll the run it
+   returns. Otherwise do nothing: the app rebuilds lazily. An open app page
+   may show the old answer for one frame of the next visit and then replace
+   it, with or without a sync (04-C2b). That is expected, not a failure.
 
 10. **Report back** (about 4 lines). Tell the user which files changed and the
     sync counts. Anything committed **to this repository** about the work
@@ -426,7 +427,7 @@ that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
 - **A dry run of the skill.** In a session with an isolated store (the
   `verify` skill's isolation rules, `GRIMOIRE_HOME` set to a scratch
   directory), an agent asked to "rewrite the voice anchor for Seraphine in
-  Realm and delete the old tide-tables lore entry" follows the skill: it
+  Realm and delete the old tidewatch lore entry" follows the skill: it
   writes through `voice_anchors.write`, deletes through `entities.delete_entity`
   inside `collecting(deleted=...)` or runs one CLI sync, gets exit status 0,
   and reports counts without record text. This is checked by a person, not CI.
