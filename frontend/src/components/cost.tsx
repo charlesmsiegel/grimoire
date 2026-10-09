@@ -298,6 +298,7 @@ export function Footnotes({ bucket, showRatesHint = true }: {
    *  transcript is not a place to send someone to Configuration. */
   showRatesHint?: boolean;
 }) {
+  const native = n(bucket.unpriced_native_calls);
   return (
     <>
       {n(bucket.subscription_calls) > 0 && (
@@ -326,16 +327,26 @@ export function Footnotes({ bucket, showRatesHint = true }: {
           At least: {plural(n(bucket.unpriced_calls), "call")} came back with no
           price.{" "}
           {/* Only offered where it would actually help. A call whose provider
-              reported no token counts cannot be priced by any rate, and telling
+              reported no token counts cannot be priced by any rate, nor can a
+              native decision (never modelled, `usage._modellable`), and telling
               a reader to go and set one sends them to an action that cannot
-              resolve the warning they are reading. */}
-          {showRatesHint && n(bucket.unpriced_calls) > n(bucket.unmetered_calls)
+              resolve the warning they are reading. The two counts are
+              disjoint slices of `unpriced_calls`. */}
+          {showRatesHint
+            && n(bucket.unpriced_calls) > n(bucket.unmetered_calls) + native
             && "Set per-token rates in Settings to estimate them. "}
           {n(bucket.unmetered_calls) > 0 && (
             n(bucket.unmetered_calls) === n(bucket.unpriced_calls)
               ? "No rate can price these — their provider reported no token counts."
               : `${n(bucket.unmetered_calls)} of them reported no token counts, `
-                + "which no rate can price."
+                + "which no rate can price. "
+          )}
+          {native > 0 && (
+            native === n(bucket.unpriced_calls)
+              ? "No rate can price these — a native decision is priced by its provider "
+                + "or not at all."
+              : `${native} of them ${native === 1 ? "was a native decision" : "were native decisions"}, `
+                + "which no rate prices."
           )}
         </div>
       )}

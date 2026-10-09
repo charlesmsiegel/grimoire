@@ -2515,7 +2515,7 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
     renders, mirroring _stage_dossiers' shape -- including `attempted` and
     `budget_exhausted`, the two flags a phase row is built from."""
     out: dict = {"status": "skipped", "reason": None, "checked": [], "flagged": [],
-                 "unjudged": [], "failed": [], "skipped": [],
+                 "unjudged": [], "noteless": [], "failed": [], "skipped": [],
                  "attempted": False, "budget_exhausted": False}
     if resolved is None:
         return [], {**out, "status": "failed", "reason": unroutable or "no connection"}
@@ -2678,6 +2678,12 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             out["checked"].append(aid)
             if finding["verdict"] == store.voice_drift.DRIFT:
                 out["flagged"].append(aid)
+                if not finding["note"].strip():
+                    # Only a native drift reaches here with no note
+                    # (`check_failure`). Shown, and `stage_edit` proposes
+                    # nothing for it: a standing flag is neither replaced nor
+                    # cleared by a verdict that has no corrective to store.
+                    out["noteless"].append(aid)
             elif finding["verdict"] == store.voice_drift.NOT_ENOUGH:
                 # A real judgment that produces no edit -- like a dossier that
                 # came back unchanged. Named so "checked, not flagged" does not

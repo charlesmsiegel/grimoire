@@ -2830,7 +2830,10 @@ export const api = {
       undefined, { fresh: true }),
   /** What a sampler preset ("" for none) sends on a connection's model ("" for
    *  its own), control by control. */
-  previewControls: (body: { preset_id: string; provider: string; model: string }) =>
+  /** `operation: "decide"` previews it as a decision: on a model answered
+   *  natively, every control is `n/a`. */
+  previewControls: (body: { preset_id: string; provider: string; model: string;
+                            operation?: "decide" }) =>
     request<ControlsPreview>("POST", "/api/inference/controls", body),
   /** A SillyTavern preset file, already parsed by the browser. */
   importSamplerPreset: (body: { name: string; data: unknown; include_max_tokens: boolean }) =>

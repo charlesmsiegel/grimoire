@@ -22,15 +22,23 @@ from . import capabilities, resolve
 CAPABILITY: dict[str, str] = {}
 
 
-def preview(preset_id: str, conn: dict, model: str | None) -> dict:
+def preview(preset_id: str, conn: dict, model: str | None, operation: str = "") -> dict:
     """`llm_sampling.effective` for sampler preset `preset_id` on `conn` serving
     `model` (its own model when empty): `{requested, effective, controls}`, each
     control `{state, wire, why, source}`.
+
+    On a decision (`operation` "decide") a model `resolve.native_only` would
+    answer natively is sent no sampling, so every control is `n/a`
+    (`llm_sampling.not_applicable`) -- the resolver's own rule, so the preview
+    and a resolved attempt never disagree. Any other operation previews as
+    generation.
 
     Never raises: an unreadable preset is no preset, and an unreadable catalog
     is a model nothing is known of -- both read by `resolve`'s own lowering.
     """
     lowered = resolve.lower(conn, resolve.preset_sampling(preset_id), model or None)
+    if operation == "decide" and resolve.native_only(capabilities.caps_for(lowered)):
+        return llm_sampling.not_applicable(lowered, llm_sampling.WHY_NATIVE)
     out = llm_sampling.effective(lowered)
     mapped = {name: cap for name, cap in CAPABILITY.items() if name in out["controls"]}
     if mapped:

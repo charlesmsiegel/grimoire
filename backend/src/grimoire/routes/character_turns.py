@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import random
 from collections.abc import Callable
@@ -399,7 +400,7 @@ def _may_pick(cid, sid, kind):
 
 def refuse_an_unanswerable_pick(cid, sid, *, kind, actor_ref):
     """The speaker pick's 409 (spec 5.3's `incapable`: the Decision role on a
-    model that cannot answer it, with no generating fallback), raised while
+    model that can neither generate nor decide natively), raised while
     the request is here to be told and BEFORE `post_chat` reserves or writes
     anything -- a refusal after its first mutator would tell the player
     nothing happened when the post, a retired roll proposal and a started
@@ -611,9 +612,23 @@ def _normalise(cid, sid, record, text, connection=""):
     return (stored.strip(), issue, (text, fired)) if fired else (text, issue, None)
 
 
-def _capture(cid, sid, task, messages, conn):
+#: The prompt-log section a decision's outcome is filed under. The frontend
+#: draws a section with this id as the outcome, "not sent", rather than as a
+#: prompt section (`frontend/src/components/ContextBreakdown.tsx`,
+#: `OUTCOME_ID`): change both together, which `test_character_turns` pins.
+OUTCOME_SECTION_ID = "decision"
+
+
+def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
+    """Record one call's prompt in the prompt log. `outcome` is a decision's
+    record of what it decided (`inference.Capture`), filed as a last
+    `decision` section beside the messages built from plain ones, and left
+    out of `total_tokens`: it was never sent."""
     if not store.prompt_log.capturing():
         return
+    # A prompt that carries its own breakdown (`PreparedMessages`) is filed
+    # as it is, and `outcome` is dropped: `decide` never hands one over (its
+    # messages are plain), so only the plain branch below files a decision.
     breakdown = getattr(messages, "breakdown", None)
     if breakdown is None:
         rows = [
@@ -633,9 +648,15 @@ def _capture(cid, sid, task, messages, conn):
             }
             for i, m in enumerate(messages)
         ]
+        total = sum(row["tokens"] for row in rows)
+        if outcome is not None:
+            rows.append({"id": OUTCOME_SECTION_ID, "label": "decision",
+                         "text": json.dumps(outcome, indent=2, ensure_ascii=False),
+                         "tier": "lock-in", "dropped": False, "pinned": False,
+                         "trimmed": 0, "tokens": 0})
         breakdown = {
             "sections": rows,
-            "total_tokens": sum(row["tokens"] for row in rows),
+            "total_tokens": total,
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
@@ -687,7 +708,8 @@ async def _select(cid, sid, client, round_record):
     of one or none needs no question. The seam's 409 comes first, as before;
     an `LLMError` propagates as before, filed by the meter `decide` opens.
 
-    The capture records the decide prompt as it is sent (spec 9.4). Nothing
+    The capture records each call once it settles (spec 9.4): the decide
+    prompt as it was sent, the attempt it ran on, and what it decided. Nothing
     here reads a file on the event loop: the resolution, the scene read, the
     regex view and the item's own templates run in the threadpool, `decide`
     renders its prompt in a worker thread, and the capture is handed back to
@@ -707,8 +729,8 @@ async def _select(cid, sid, client, round_record):
         decision = await operations.decide(
             "response-selector", [item], client=client, resolved=resolved,
             campaign=cid, scene=sid, post=round_record["post"], round_id=round_record["id"],
-            capture=lambda msgs: run_in_threadpool(
-                _capture, cid, sid, "response-selector", msgs, resolved.conn))
+            capture=lambda msgs, outcome, conn: run_in_threadpool(
+                _capture, cid, sid, "response-selector", msgs, conn, outcome))
     except decisions.DecideRequestError as exc:
         _log.warning("speaker pick refused for %s/%s, control returns to the player: %s",
                      cid, sid, exc)

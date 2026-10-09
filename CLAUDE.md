@@ -270,6 +270,27 @@ a threadpool worker for every caller today -- the model test's probe hands it
 to one. `Meter.done` never counts, and a bucket says how many of its
 calls rest on such counts in `estimated_token_calls`.
 
+**`modelled_usd` is never computed for a native decision row.** A row whose
+`decision_mode` is `decisions.NATIVE_BACKEND` is not modellable
+(`store/usage.Rates.estimate` returns nothing for it, whatever rate exists and
+whatever counts the row carries). A provider's decisions endpoint is not billed
+like a chat call -- OpenAI bills decisions on input tokens only, and neither
+provider documents a price for both sides -- so a chat rate times a native row's
+counts would be a figure for a call nobody sold that way. Such a row is
+`cost_usd` when the provider reported a cost (OpenRouter's `usage.cost`) and
+unpriced otherwise; its reported token counts are filed and still sum into the
+totals, and it never carries a count this side made. The guard sits at read
+time, so a rate the user sets later cannot model one either, and every figure
+that passes through the estimator inherits it: the rollups, the per-turn rows,
+and the rail's aggregate (`usage_rollup.VERSION = 6`, so an older build's
+rollup file is never read with a native row folded in at chat rates). An
+unpriced native row is counted in `unpriced_native_calls`, apart from
+`unmetered_calls`, so the cost card does not tell a reader to set per-token
+rates for calls no rate could price. Housekeeping's `in_use.unpriced` skips
+every generative use of a model that is native-only for the same reason: its
+decisions are native and its generations are refused unsent, so no rate prices
+either.
+
 Attribution is per *player post*: a turn's ledger row carries the transcript
 index it was answering, so a post and every reroll of it bucket together and
 the transcript can say what getting one reply actually cost. The index is only
@@ -501,7 +522,9 @@ Four rules that are easy to undo by accident:
 
 Incoming LLM response capture also uses this writer, at Debug level. Adapters
 record decoded SSE lines or SDK messages before selecting content and usage
-fields. Long payloads are split into numbered parts rather than clipped; the
+fields; a native decisions adapter, which has no stream, records the whole
+reply as one `decision_body` event before reading any field of it. Long
+payloads are split into numbered parts rather than clipped; the
 monthly cap still applies. Request bodies, URLs and headers are never passed
 to the sink. Response bodies can include private prose and reasoning, so the
 Settings page describes that sharing boundary. See
@@ -781,8 +804,8 @@ would answer neither question.
   and the facade sends that one. A fallback *known* unable to do what the route needs is reported
   (`fallback_missing`) and never attached, so the facade never sends it -- nor
   one that names the primary's own connection (a retry, which the retry budget
-  covers; the decide skip below is the exception), nor one that cannot carry
-  the call's images. A reroll's connection override goes through `override_inference`, and
+  covers -- except behind a Decision model that cannot generate, where it is a
+  decide stage of its own), nor one that cannot carry the call's images. A reroll's connection override goes through `override_inference`, and
   absorb's secondary phases hand `_soft_inference` a thunk (voice drift and the
   duplicate check hand one to `_soft_resolved`, which keeps the whole
   resolution `decide` takes), so a phase that cannot resolve reports itself
@@ -807,9 +830,13 @@ would answer neither question.
   badly is `uncertain`. A status word stands on its known evidence scene
   alone; the rationale is display text and nothing stands on it. Each chunk
   runs under the full `llm_call_budget` ceiling (each prompt-only re-send of
-  a route that refused the schema too), so a full sweep can hold the
-  campaign's background run for up to three times as long as the one call it
-  replaced, and up to nine with both routes of every chunk re-sent.
+  a route that refused the schema too), so a full sweep on a structured
+  Decision model can hold the campaign's background run for up to three times
+  as long as the one call it replaced, and up to nine with both routes of
+  every chunk re-sent. On a native one each candidate is its own call under
+  that ceiling, four in flight, so n candidates take up to ceil(n/4)
+  ceilings, and a fallback stage of its own adds up to two per chunk: a full
+  sweep with a fallback is up to twelve (`routes/continuity.py` argues it).
   `test_operation_guard.py` finds the call by import binding (a continuity
   `Examination.decide` is not one), fails a task literal that is not on a
   decide route or a call with no `resolved=`, and holds the safety rule both
@@ -828,12 +855,104 @@ would answer neither question.
   the primary failed -- once per attempt, as its own metered call
   (`llm.SchemaRefusalError` carries the refusing attempts). The refusal is
   never a health failure, nor the kind a both-failed error reports
-  (`llm.routes_failed`). Until slice H, a decide-only Decision model is
-  skipped for a role fallback that can generate -- on its own provider too,
-  since the skipped primary is never sent -- and the route row's `problem`
-  says so (`resolve.skip_text`); with no such fallback the 409 `incapable`
-  stands, and for the speaker pick `post_chat` raises it before it writes
-  anything (`refuse_an_unanswerable_pick`). The four decide routes (`speaker`,
+  (`llm.routes_failed`).
+  **A decide call is answered down a chain** (`inference.stages`, run by
+  `inference.run_stages`): the selection's one backend, then the role
+  fallback's, which gets a single attempt with no retry budget of its own,
+  native or structured alike. The backend is native only for a model that
+  cannot generate (`resolve.native_only`: `generate` a known `no` from
+  something other than the name rule, `decide_native` not a known `no` --
+  `unknown` is allowed), served by its provider's decisions endpoint
+  (`decision_mode == "native"`), one request per item. A user marks a
+  decisions-only model the catalog cannot place (an OpenAI-preset one, whose
+  preset says every model generates) with the model-facts override
+  `generate: no`, which outranks the preset. A model that can
+  generate stays on structured generation whatever its `decide_native` says:
+  trying native first for one is a later decision, to be made on the
+  same-model comparison `evals/run.py --live --decide-backend` exists to
+  give (it grades a native item's rationale n/a, and refuses `native` before
+  sending for a primary with no native endpoint, a preset that never decides
+  natively, or a known `no`), and the chain does not do it today. A model that can do neither is
+  refused with 409 `incapable`, and for the speaker pick `post_chat` raises
+  it before it writes anything (`refuse_an_unanswerable_pick`). **What moves
+  an item on to the next stage is a failed call, never an answer**: an
+  `LLMError` (a 2xx body that is not the documented envelope, or an envelope
+  that answers none of the item's questions, is `bad_response`), or an item
+  refused unsent. A native `refused`, an abstention and a `None` from a
+  well-formed body are answers; re-asking them elsewhere would be asking until
+  something agreed. A `llm.PresetRefusalError` ends the chain where it is met,
+  as it ends the facade's: the preset is the user's to fix, and a native stage
+  that takes no sampling would only hide it. So does the caller's clock
+  refusing a call unsent: the refusal comes out as the `BudgetRefused` it is,
+  never composed with a later stage's, so a phase still reports it skipped.
+  A fallback on the primary's own connection AND model is dropped with
+  `SAME_PROVIDER` even behind a native primary: that is a second send of
+  the call that failed, whatever stage it sits in (#144).
+  `decide_native` is metered per item (`store.usage.meter`, opened in
+  `inference._native` with `decision_mode` stamped on a copy of the stage's
+  account block), at most `NATIVE_CONCURRENCY` in flight inside one
+  `asyncio.TaskGroup`, so an unexpected exception or a cancel leaves no
+  request the group owns running (an `around` that detaches its call, as
+  `_bounded_call` does, abandons it to unwind on its own). It sends no
+  `sampling`, so its ledger row files no `preset`. An item `decisions.native_gap` says a decisions endpoint
+  cannot carry (today a nullable choice whose options plus the reserved none
+  pass 255) is refused unsent with `bad_response` and the code
+  `native_unrepresentable`, and its reason is a sentence: it moves on like any
+  failed call, and with no stage after it the reason reaches the caller and
+  the error store. A native 4xx in `llm.NATIVE_REJECTED_STATUSES` does not mark
+  the connection failing: the connection answered, and it was that model, key
+  or request the decisions endpoint refused. A native stage starts **no
+  further item** after a connection-wide failure -- auth, `missing_key`, a
+  `rate_limit` the facade has already retried as far as it will, a spend
+  refusal, or absorb's `BudgetRefused` -- and a structured stage sends no
+  further chunk after one (`inference._connection_wide`); items in flight
+  finish, and those never sent carry the failure that stopped them. A call
+  with a fallback behind it is the exception: a bare error from one stops
+  nothing, because the facade never tried the fallback, unless the clock refused
+  it unsent. A stage that stopped that way skips a later stage on the same
+  connection. A native stage also stops after `NATIVE_TIMEOUT_STOP` items in a
+  row time out -- a hung decisions endpoint -- but that stop is its own: a
+  generating stage on the same connection still runs.
+  **Who answered is only named when one did.** `Decision.backend`, `provider`
+  and `model` are empty when answers came from more than one backend or route
+  (the fallback took the items the primary failed): `ItemResult.backend` is the
+  per-item truth, `Decision.served` lists every `(provider, model)` that
+  answered across the stages, and `Decision.errors` holds each failed unit's
+  final error -- a chunk on a structured stage, an item on a native one -- with
+  an item that answered on a later stage contributing none.
+  **A native answer carries no rationale to any caller**, because neither
+  provider's endpoint has a field for one and the contract forbids a synthetic
+  one. A native item that answered reaches G's continuity mapping as *read*:
+  `backend == "native"`, an empty `rationale`, no `NO_ITEM` detail and no
+  error, so a status verdict stands on its evidence scene with an empty reason
+  rather than being mistaken for an item the reply never reached. A native
+  `refused` or `abstained` on a `decision` question is *not* read, which leaves
+  its row `unchecked` or its candidate unproposed. Voice drift's native branch:
+  a drift verdict with no note is usable, stages nothing, keeps any standing
+  flag, and is listed in `noteless` (the note *is* the corrective, so there is
+  nothing to store); the over-cap and unknown checks apply as they do to a
+  structured verdict (`store/voice_drift.py`, `routes/scenes._stage_voice_drift`).
+  **The prompt log's capture runs after each call settles** and outside its
+  meter, guarded, so it can never fail an answered decision or file an error
+  row. It is handed the request as sent -- a structured chunk's messages, or a
+  native item's normalised body as one JSON message, built off the loop and only
+  when a capture was asked for -- with the outcome (`decisions.outcome`) and the
+  dict that was actually sent (`llm.ATTEMPTED`) when the call answered, so a
+  fallback that answered is the one the log names. A call that never went out
+  (`native_unrepresentable`, a refused clock) is captured with `messages=[]`
+  and its error; an adapter's `missing_key` is raised after the attempt is
+  stamped, so it is captured with the request it would have sent and files an
+  `error` row; a cancelled call, and a chunk or item held back
+  after a connection-wide failure, are not captured at all. The outcome is
+  filed as a zero-token section whose id is
+  `routes/character_turns.OUTCOME_SECTION_ID` (`"decision"`), which the prompt
+  viewer draws as "outcome · not sent" rather than as a prompt section; the
+  scene-break, voice-drift and continuity decisions capture nothing. The
+  settings view carries `decision_mode` and `decides_natively` (`yes`, `no` or
+  `unknown`, `no` only when known) on the Decision card and on every decide
+  route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
+  runs, so the Models page's decide note is the server's sentence and the
+  frontend keeps no capability rule of its own. The four decide routes (`speaker`,
   `scene_break`, `voice_drift` and `continuity`) use the Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which

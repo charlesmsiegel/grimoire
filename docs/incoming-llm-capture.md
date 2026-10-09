@@ -12,6 +12,17 @@ message and field exposed by the Agent SDK; this cannot recover fields the
 SDK itself discarded. This is decoded response capture, not a byte-level
 network trace. Request bodies, request URLs, and HTTP headers are not captured.
 
+A native decision (a provider's own decisions endpoint, used for a model that
+cannot generate text) has no stream. Its adapter records the whole reply as one
+`decision_body` event, before any field is read, so the answers, the usage
+block and any field the contract does not use are all in it; an error response
+is recorded as `http_error_body`, as for a chat call. One native item is one
+call with its own `call_id` (its retries are attempts of that call), so a batch
+of N items is N calls here, and an item refused before it was sent records
+nothing. The request body is not captured, as for every other call; where a
+decision is also kept in the prompt log (a separate record, not this file), that
+shows the normalised request the item was sent.
+
 Rows carry a logical `call_id`, `attempt`, requested `model`, `provider`,
 per-attempt `sequence`, and `elapsed_ms` since that attempt started. The
 provider's actual model field remains in the captured body. Start/end events

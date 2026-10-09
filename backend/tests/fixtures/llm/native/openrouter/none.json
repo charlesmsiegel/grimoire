@@ -1,0 +1,14 @@
+{
+  "id": "gen-dec-1789738315-handAuthoredNone",
+  "model": "typesafe/jev-1.13-20260917",
+  "provider": "TypeSafe",
+  "answers": {
+    "speaker": {
+      "type": "choice",
+      "choice": "none",
+      "confidence": 0.6,
+      "probabilities": {"characters:mara": 0.15, "characters:winifred": 0.25, "none": 0.6}
+    }
+  },
+  "usage": {"cost": 0.0000121, "input_tokens": 266, "output_tokens": 31}
+}

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  api, type CapabilityNeed, type EmbeddingCard, type GenerativeRole, type InferenceRole,
-  type InferenceSelection, type InferenceSettings, type InferenceWrite, type ModelCapabilities,
-  type RoleCard, type RouteRow, type RouteUse,
+  api, type CapabilityNeed, type DecidesNatively, type DecisionMode, type EmbeddingCard,
+  type GenerativeRole, type InferenceRole, type InferenceSelection, type InferenceSettings,
+  type InferenceWrite, type ModelCapabilities, type RoleCard, type RouteRow, type RouteUse,
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { onConfigChanged } from "../appEvents";
@@ -42,6 +42,16 @@ export const WARNINGS = {
   embed: "This model can't create embeddings.",
 };
 
+/** How a decision is answered, by the resolution's `decision_mode` (spec 10,
+ *  I9) -- what it says, not a warning: `native` is the provider's decisions
+ *  endpoint, and `structured` on a model whose native API is there or
+ *  unknown is no missing API. Structured on one KNOWN to have none
+ *  (`decides_natively: "no"`) is `WARNINGS.decide`. */
+export const DECIDE_WORDS = {
+  native: "Answered by the provider's decisions endpoint.",
+  structured: "Answered by structured generation.",
+};
+
 const rolePath = (role: InferenceRole) => `/models/role/${role}`;
 const routePath = (key: string) => `/models/route/${encodeURIComponent(key)}`;
 
@@ -50,7 +60,9 @@ function isRole(value: string): value is InferenceRole {
 }
 
 /** The warning one capabilities answer gives for a model, or null. Reads
- *  only what the server grouped: a hidden model is one it knows cannot. */
+ *  only what the server grouped: a hidden model is one it knows cannot. How a
+ *  decision is answered is the resolution's to say (`DecideNote`), so a
+ *  decide answer warns only of a model that can do neither. */
 function warningOf(answer: ModelCapabilities, model: string, role: string): string | null {
   const hidden = answer.reason !== null || answer.hidden.some((h) => h.id === model);
   switch (answer.need) {
@@ -60,11 +72,8 @@ function warningOf(answer: ModelCapabilities, model: string, role: string): stri
       return hidden ? WARNINGS.embed : null;
     case "vision":
       return answer.groups.unverified.some((r) => r.id === model) ? WARNINGS.vision : null;
-    case "decide": {
-      if (hidden) return WARNINGS.generate(role);
-      const row = [...answer.groups.fits, ...answer.groups.unverified].find((r) => r.id === model);
-      return row && row.capabilities.decide_native?.value !== "yes" ? WARNINGS.decide : null;
-    }
+    case "decide":
+      return hidden ? WARNINGS.generate(role) : null;
   }
 }
 
@@ -96,6 +105,23 @@ function Warning({ text }: { text: string | null }) {
 
 function Problem({ text }: { text: string | null }) {
   return text ? <p className="field-hint problem">{text}</p> : null;
+}
+
+/** How a card's or row's model answers a decision: the server's
+ *  `decision_mode` and `decides_natively` (I9), and nothing read here. A
+ *  refused one (`""`) says nothing: its `problem` is the refusal's own
+ *  sentence. A structured one always says which kind it is, and warns of
+ *  no native API only when that is known (`"no"`): an `unknown` one -- a
+ *  catalog that says nothing, or a preset whose models nobody has marked --
+ *  is simply answered by structured generation. */
+function DecideNote({ mode, decidesNatively }: {
+  mode: DecisionMode; decidesNatively: DecidesNatively;
+}) {
+  if (mode === "native") return <p className="field-hint">{DECIDE_WORDS.native}</p>;
+  if (mode !== "structured") return null;
+  return decidesNatively === "no"
+    ? <Warning text={WARNINGS.decide} />
+    : <p className="field-hint">{DECIDE_WORDS.structured}</p>;
 }
 
 /** The routes that use Decision (the view's `uses`), and for each one that
@@ -135,8 +161,10 @@ function RoleSummary({ role, settings }: { role: InferenceRole; settings: Infere
 function GenerativeSummary({ role, card, routes, fallbackName }:
   { role: GenerativeRole; card: RoleCard; routes: RouteRow[]; fallbackName: string }) {
   const sel = card.resolves;
-  const warning = useWarning(sel?.provider ?? "", sel?.model ?? "", ROLE_NEEDS[role][0],
-                             ROLE_LABEL[role]);
+  const decision = role === "decision";
+  // Decision's own line is `DecideNote`, keyed on how it resolved.
+  const warning = useWarning(sel?.provider ?? "", sel?.model ?? "",
+                             decision ? null : ROLE_NEEDS[role][0], ROLE_LABEL[role]);
   // The resolver's own verdict (`fallback_missing`), never a picker's: a
   // model the capabilities API hides on a guess (the name rule) is still sent.
   const { provider: fbProvider, model: fbModel } = card.fallback;
@@ -152,11 +180,12 @@ function GenerativeSummary({ role, card, routes, fallbackName }:
         <p>{sel ? describe(sel) : "Not set."}</p>
       )}
       <Problem text={card.problem} />
-      <Problem text={card.decide_skip} />
       <Warning text={warning} />
+      {decision && <DecideNote mode={card.decision_mode} decidesNatively={card.decides_natively} />}
       <Problem text={dropped} />
-      {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />}
-      {role === "decision" && <DecisionRoutes routes={routes} />}
+      {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
+                               operation={decision ? "decide" : undefined} />}
+      {decision && <DecisionRoutes routes={routes} />}
     </>
   );
 }
@@ -430,7 +459,8 @@ function SelectionFields({ label, needs, sel, onChange, settings, blocked, withP
               A preset with no provider is not used. Choose a provider, or clear it.
             </p>
           )}
-          <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />
+          <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
+                           operation={needs.includes("decide") ? "decide" : undefined} />
         </>
       )}
     </fieldset>
@@ -576,6 +606,7 @@ function RouteDetail({ row, settings, blocked, onEdit, onOpen }:
   const warning = useWarning(sel?.provider ?? "", sel?.model ?? "",
                              row.requires.includes("vision") ? "vision" : null, row.label);
   const preset = routePresetWords(row, settings);
+  const decides = row.operation === "decide";
   return (
     <div className="detail-view">
       <div className="detail-main">
@@ -585,9 +616,11 @@ function RouteDetail({ row, settings, blocked, onEdit, onOpen }:
           <p>Runs on {describe(sel)}</p>
           <Problem text={row.problem} />
           <Warning text={warning} />
+          {decides && <DecideNote mode={row.decision_mode} decidesNatively={row.decides_natively} />}
           <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "",
                                                    row.fallback_problem)} />
-          {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />}
+          {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
+                                   operation={decides ? "decide" : undefined} />}
         </div>
       </div>
       <aside className="detail-sidebar" aria-label={row.label}>

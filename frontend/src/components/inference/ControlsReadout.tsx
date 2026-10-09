@@ -18,9 +18,11 @@ function spoken(name: string): string {
  *  not sent exactly as written, and computes nothing itself -- the frontend
  *  keeps no capability table, so the readout and what a turn sends cannot
  *  disagree. `presetId` "" is no preset; `model` "" is the provider's own.
- *  Draws nothing until a provider is chosen. */
-export function ControlsReadout({ presetId, provider, model }:
-  { presetId: string; provider: string; model: string }) {
+ *  `operation="decide"` asks about a decision, which a model answered natively
+ *  sends no sampling for: the server then calls every control `n/a`, and that
+ *  is one line, in the server's words, rather than ten. Draws nothing until a provider is chosen. */
+export function ControlsReadout({ presetId, provider, model, operation }:
+  { presetId: string; provider: string; model: string; operation?: "decide" }) {
   const [preview, setPreview] = useState<ControlsPreview | null>(null);
   const [error, setError] = useState<unknown>(null);
 
@@ -31,15 +33,22 @@ export function ControlsReadout({ presetId, provider, model }:
     // The newest question only: a reader flicking through models must not be
     // shown the answer about the one before.
     let current = true;
-    api.previewControls({ preset_id: presetId, provider, model })
+    api.previewControls({ preset_id: presetId, provider, model, ...(operation && { operation }) })
       .then((p) => { if (current) setPreview(p); })
       .catch((err: unknown) => { if (current) setError(err); });
     return () => { current = false; };
-  }, [presetId, provider, model]);
+  }, [presetId, provider, model, operation]);
 
   if (!provider) return null;
   if (error) return <p className="field-hint">Couldn't read what this sends: {errorText(error)}</p>;
   if (!preview) return null;
+  // A decision answered natively: the server says why nothing is sent, once
+  // per control and the same for each, so it is said once.
+  const controls = Object.values(preview.controls);
+  if (operation === "decide" && controls.length > 0
+      && controls.every((c) => c.state === "n/a")) {
+    return <p className="field-hint">Not sent: {controls[0].why}.</p>;
+  }
   const notAsWritten = Object.entries(preview.controls)
     .filter(([, c]) => c.state !== "supported");
   if (notAsWritten.length === 0) {

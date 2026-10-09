@@ -132,37 +132,43 @@ def _sel(resolved: ResolvedInference) -> dict | None:
 
 def _problem(resolved: ResolvedInference) -> str | None:
     """The seam's refusal of `resolved`, as the sentence it would answer with;
-    else, for a decide resolution whose primary was skipped (spec 5.5), the
-    sentence saying so (`resolve.skip_text`), so the row shows why its model
-    is not the one answering."""
+    None when the seam would serve it."""
     refused = resolve.refusal(resolved)
     if refused is None:
-        return resolve.skip_text(resolved)
+        return None
     body = refused[1]
     return str(body["detail"]) if isinstance(body, dict) else body
 
 
+def _decides_natively(resolved: ResolvedInference) -> str:
+    """What the resolved primary's `decide_native` is -- `yes`, `no` or
+    `unknown`, read off the capabilities the resolver itself decided on -- so
+    the Models page can word a structured decision without a second read that
+    could disagree with the mode (I9). `no` only when it is KNOWN
+    (`resolve.decides_natively`: a name-rule guess is no knowledge), so "No
+    native decision API" is never said of a model nobody has checked."""
+    if not resolved.attempts:
+        return capabilities.UNKNOWN
+    first = resolved.attempts[0]
+    cap = first.capabilities.get("decide_native")
+    if cap is not None and cap.value == capabilities.YES:
+        return capabilities.YES
+    return capabilities.UNKNOWN if resolve.decides_natively(first) else capabilities.NO
+
+
 def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
     silence = resolve.Silence(scope, frozenset(keys.role_key(role, p) for p in keys.PARTS))
-    resolved = resolve.resolve("", cid, role=role)
-    # The card reads the role as a generation, which is right for a generate
-    # route that uses it -- and wrong, for the fallback, on the decide routes
-    # the Decision card lists: a decide-only Decision model is skipped for its
-    # fallback there (spec 5.5), so a same-provider fallback that a generation
-    # would drop as a retry is the one call those routes send. Until slice H
-    # gives the card an operation of its own, it reads Decision both ways and
-    # says what the decide routes do (`decide_skip`, `skip_text`'s sentence)
-    # rather than "never tried" about the fallback answering them.
-    decided = (resolve.resolve("", cid, role=role, operation="decide")
-               if role == "decision" else None)
-    skip = resolve.skip_text(decided) if decided is not None else None
-    fallback_problem = resolved.fallback_problem
-    if skip is not None and fallback_problem == resolve.SAME_PROVIDER:
-        fallback_problem = None
+    # The Decision card reads its role as the decide routes it serves do
+    # (spec 12, one decision): a model that cannot generate is answered
+    # natively there, and a same-provider fallback behind it is a stage of
+    # its own rather than a retry -- so the card says what those routes do.
+    operation = "decide" if role == "decision" else "generate"
+    resolved = resolve.resolve("", cid, role=role, operation=operation)
     return {"stored": _stored(own, functools.partial(keys.role_key, role)),
             "fallback": _stored(own, functools.partial(keys.fallback_key, role)),
             "resolves": _sel(resolved),
-            "inherits": _sel(resolve.resolve("", cid, role=role, silence=silence)),
+            "inherits": _sel(resolve.resolve("", cid, role=role, operation=operation,
+                                             silence=silence)),
             "problem": _problem(resolved),
             # What the fallback is KNOWN unable to do, so it is never sent
             # (spec 5.3) -- the seam does not refuse over it, so without this
@@ -170,10 +176,12 @@ def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
             "fallback_missing": list(resolved.fallback_missing),
             # Why the fallback cannot send at all (no key, no base URL), so it
             # is left out: as silent at the seam as a dropped one.
-            "fallback_problem": fallback_problem,
-            # On Decision: that the decide routes skip its decide-only model
-            # for the fallback; None otherwise, and on every other role.
-            "decide_skip": skip}
+            "fallback_problem": resolved.fallback_problem,
+            # The backend the Decision role's model is answered by -- "native",
+            # "structured", or "" when it can do neither (`decision_mode`);
+            # "" on every other role.
+            "decision_mode": resolved.decision_mode or "",
+            "decides_natively": _decides_natively(resolved)}
 
 
 def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
@@ -193,6 +201,11 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             "problem": _problem(resolved),
             "fallback_missing": list(resolved.fallback_missing),
             "fallback_problem": resolved.fallback_problem,
+            # On a decide route, the backend its model is answered by
+            # (`decision_mode`): "native", "structured", or "" when it can do
+            # neither; "" on every other route.
+            "decision_mode": resolved.decision_mode or "",
+            "decides_natively": _decides_natively(resolved),
             # The role that supplied the selection; None for a pin, or nothing.
             "role": resolved.role or None,
             # The role the route walks to get there (`cascade.walked_role`):

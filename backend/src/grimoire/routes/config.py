@@ -15,7 +15,17 @@ from typing import Literal, NamedTuple
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import catalog, embeddings, health, llm, llm_errors, llm_sampling, llm_usage, store
+from .. import (
+    catalog,
+    decisions,
+    embeddings,
+    health,
+    llm,
+    llm_errors,
+    llm_sampling,
+    llm_usage,
+    store,
+)
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference import capabilities, controls, facts, providers
@@ -1181,7 +1191,7 @@ _HALTING_KINDS = frozenset({"auth", "missing_key", "missing_dependency", "networ
 _HALTING_STATUSES = frozenset({402, 408})
 
 
-def _records(exc: LLMError) -> bool:
+def _records(exc: LLMError, *, native: bool = False) -> bool:
     """Whether a probe's failure is a verdict on the MODEL, and may be filed.
 
     Only a provider refusing THIS request (`llm.REJECTED_STATUSES`, the set
@@ -1198,8 +1208,14 @@ def _records(exc: LLMError) -> bool:
     400 naming a parameter the request sent -- here the reply cap, the only
     one a probe sends -- as that parameter refused, and raises it as
     `llm.PresetRefusalError`; a provider that refused the cap has said nothing
-    about whether the model can do what was asked."""
-    return (exc.status in llm.REJECTED_STATUSES and not isinstance(exc, llm.PresetRefusalError)
+    about whether the model can do what was asked.
+
+    `native` is a native decision probe, whose endpoint also refuses with 403
+    (`llm.NATIVE_REJECTED_STATUSES`, ruling 11): a key without access to that
+    endpoint is a refusal of the probe, not a verdict on the key, which a
+    chat probe's 403 would be."""
+    refused = llm.NATIVE_REJECTED_STATUSES if native else llm.REJECTED_STATUSES
+    return (exc.status in refused and not isinstance(exc, llm.PresetRefusalError)
             and not llm_errors.account_limit(exc))
 
 
@@ -1230,20 +1246,31 @@ async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str)
     fallen back. A success is always a verdict; a failure only when `_records`
     says so."""
     probes = store.inference.probes
+    probe = probes.PROBES[cap]
     try:
-        probe = probes.PROBES[cap]
         if probe.operation == "embed":
             return _Outcome(await _embed_probe(raw, conn, model), True, False)
         with store.usage.meter("model-test") as m:
             # Completed is accepted; the text is not read. The row names the
             # probe's operation (M9) on a copy: `conn` serves every probe.
-            await _bounded_call(client.single(
-                probes.messages(cap), llm_usage.with_account(conn, operation=probe.operation),
-                m.usage), ceiling=MODEL_TEST_CEILING)
+            if probe.operation == "decide":
+                # One native request, one attempt: any `ItemResult` is a body
+                # the endpoint accepted and the adapter normalised. The row
+                # says it was native, which the ledger never models.
+                await _bounded_call(client.decide_native(
+                    probes.PROBE_ITEM,
+                    llm_usage.with_account(conn, operation=probe.operation,
+                                           decision_mode=decisions.NATIVE_BACKEND),
+                    m.usage, retries=0), ceiling=MODEL_TEST_CEILING)
+            else:
+                await _bounded_call(client.single(
+                    probes.messages(cap),
+                    llm_usage.with_account(conn, operation=probe.operation),
+                    m.usage), ceiling=MODEL_TEST_CEILING)
     except LLMError as exc:
         return _Outcome({"ok": False, "kind": exc.kind,
                          "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},
-                        _records(exc), _halts(exc))
+                        _records(exc, native=probe.operation == "decide"), _halts(exc))
     return _Outcome({"ok": True}, True, False)
 
 
@@ -1526,11 +1553,14 @@ def delete_sampler_preset(pid: str):
 class InferenceControlsBody(BaseModel):
     """A sampler preset previewed on a provider's model. Defined beside its one
     route, not in `models.py`, so this block stays in one place. `preset_id` ""
-    is no preset (provider defaults); `model` "" is the provider's own."""
+    is no preset (provider defaults); `model` "" is the provider's own.
+    `operation` "decide" previews it as a decision, which a model answered
+    natively takes no sampling for; anything else previews generation."""
 
     preset_id: str = ""
     provider: str
     model: str = ""
+    operation: str = ""
 
 
 @router.get("/llm-connections/{conn_id}/capabilities")
@@ -1664,14 +1694,15 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
 def post_inference_controls(body: InferenceControlsBody):
     """What sampler preset `preset_id` sends on `provider` serving `model`:
     `{requested, effective, controls}` (`controls.preview`), the same answer an
-    attempt resolved for that provider, model and preset carries."""
+    attempt resolved for that provider, model and preset carries -- for
+    `operation`, so a decision on a model answered natively is all `n/a`."""
     try:
         conn = store.llm_connections.read_connection_raw(body.provider)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
     if body.preset_id and store.sampler_presets.read_preset(body.preset_id) is None:
         raise HTTPException(status_code=404, detail="sampler preset not found")
-    return controls.preview(body.preset_id, conn, body.model)
+    return controls.preview(body.preset_id, conn, body.model, body.operation)
 
 
 # ---- the entity kinds an import may route a row to (#138) ----

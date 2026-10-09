@@ -122,6 +122,7 @@ from datetime import date, timedelta
 from functools import partial
 from pathlib import Path
 
+from .. import decisions
 from . import atomic, errors, paths, pricing, statcache
 
 #: The row kinds this ledger holds. ``llm`` is the only one written today;
@@ -210,7 +211,10 @@ _SESSION_START = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 #: no rate could ever cover, because the provider reported no token counts
 #: either. The split exists so a view can tell a reader whether typing a rate
 #: would help: for an unmetered call it would not, and sending them to do it is
-#: sending them to an action that cannot resolve the warning.
+#: sending them to an action that cannot resolve the warning. A native decision
+#: no rate may model (`_modellable`) is the other such slice, counted apart
+#: (the lazy `unpriced_native_calls`) and never in `unmetered_calls`, because
+#: its reason is not missing counts.
 _ZERO = {"calls": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
          "total_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
          "cost_usd": 0.0, "estimated_usd": 0.0, "modelled_usd": 0.0,
@@ -838,7 +842,13 @@ class Rates:
         an absent count into 0, and 0 is exactly the value that must stay
         distinguishable from "not counted" here. The one exception is
         structural rather than a guess: an embed row's completion (`_counts`).
+
+        None, too, for a native decision row (`_modellable`), whatever its
+        counts and whatever the rates: every read that models a row comes
+        through here, so this one check is the whole of that rule.
         """
+        if not _modellable(row):
+            return None
         entry = self.entry(row.get("model"), provider_id=row.get("provider_id"),
                            requested_model=row.get("requested_model"))
         if entry is None:
@@ -867,6 +877,21 @@ def _counts(row: dict) -> tuple[int | None, int | None]:
     still unmetered (`_metered`).
     """
     return _count(row.get("prompt_tokens")), _completion_count(row)
+
+
+def _modellable(row: dict) -> bool:
+    """Whether any rate may model this row: every row but a native decision.
+
+    A native decisions endpoint is not billed like a chat call -- OpenAI bills
+    its decisions on input tokens only, and neither provider documents a
+    per-token price for both sides -- so a chat rate times its counts would be
+    a figure for a call nobody sold that way (slice H, ruling 10). Such a row
+    is spend when its provider reported a cost and unpriced when it did not;
+    its counts are filed as reported and still sum into the token totals.
+    Decided at read time, so a rate the user sets later cannot model one
+    either. The mode is the backend's own name (`decisions.BACKENDS`), which
+    is what the decide chain stamps on the row."""
+    return row.get("decision_mode") != decisions.NATIVE_BACKEND
 
 
 def _metered(row: dict) -> bool:
@@ -960,16 +985,7 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
     if cost is None:
         modelled = rates.estimate(row) if rates is not None else None
         if modelled is None:
-            bucket["unpriced_calls"] += 1
-            if subscription:
-                _bump(bucket, "unpriced_subscription_calls")
-            # Counted whether or not a rate exists, and read straight off the
-            # row rather than from the estimator's verdict: the question is
-            # "could ANY rate have priced this", and the answer is no whenever
-            # a count is missing -- see `pricing.estimate`, which requires both,
-            # and `_counts`, which knows an embedding completes nothing.
-            if not _metered(row):
-                bucket["unmetered_calls"] += 1
+            _add_unpriced(bucket, row, subscription)
         else:
             bucket["modelled_calls"] += 1
             bucket["modelled_usd"] += modelled
@@ -985,6 +1001,25 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
         bucket["estimated_usd"] += cost
     else:
         bucket["cost_usd"] += cost
+
+
+def _add_unpriced(bucket: dict, row: dict, subscription: bool) -> None:
+    """`_add`'s share for a row nothing priced: `unpriced_calls`, and the
+    slices of it that say why."""
+    bucket["unpriced_calls"] += 1
+    if subscription:
+        _bump(bucket, "unpriced_subscription_calls")
+    # Counted whether or not a rate exists, and read straight off the row
+    # rather than from the estimator's verdict: the question is "could ANY
+    # rate have priced this". A native decision never could (`_modellable`),
+    # whatever its counts, and is counted apart so a view can say so in its
+    # own words; otherwise the answer is no whenever a count is missing -- see
+    # `pricing.estimate`, which requires both, and `_counts`, which knows an
+    # embedding completes nothing.
+    if not _modellable(row):
+        _bump(bucket, "unpriced_native_calls")
+    elif not _metered(row):
+        bucket["unmetered_calls"] += 1
 
 
 def _bump(bucket: dict, key: str) -> None:
@@ -1737,7 +1772,8 @@ def unpriced_models(months: int = 2) -> list[dict]:
     both token counts present (an embed row's completion is 0, `_counts`). A
     call nobody metered cannot be rescued by a rate (rates times nothing is
     zero), so listing its model here would send the reader to write an entry
-    that changes nothing.
+    that changes nothing. Nor is a native decision row, which no rate models
+    (`_modellable`).
 
     Bounded to the newest `months` ledger files rather than the whole history:
     this backs a chore and a hint, both opened casually, and `lifetime_since`
@@ -1806,7 +1842,10 @@ def _month_unpriced(path: Path) -> tuple[tuple[tuple[str, str, str], int], ...]:
                     continue
                 if not isinstance(row, dict) or _float(row.get("cost_usd")) is not None:
                     continue
-                if not _metered(row):
+                # A native decision row is never modelled, so naming its
+                # model here would send the reader to set a rate that prices
+                # nothing (`_modellable`).
+                if not _metered(row) or not _modellable(row):
                     continue
                 model = str(row.get("model") or "")
                 if model:

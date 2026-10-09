@@ -1623,31 +1623,153 @@ def test_a_closure_without_a_rationale_is_stored_with_an_empty_reason(client):
     assert proposal["evidence_scenes"] == [dated]
 
 
-@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
-                         ids=["spare", "same-provider"])
-def test_the_sweep_on_a_decide_only_model_answers_on_the_fallback(client, on):
-    _wid, cid, sid = _campaign(client)
-    _threads(cid, sid)
-    inference_fixtures.decide_only(client, fallback=True, on=on)
-    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+def test_a_native_close_verdict_without_a_rationale_takes_gs_mapping(client, monkeypatch):
+    """G's review I4, on the native backend: a native-only Decision model
+    answers `close` citing the scene its item showed, with no rationale -- a
+    native backend never has one. The item is read (`backend == "native"`,
+    `rationale == ""`, no `NO_ITEM`), and G's merged mapping
+    (`reconcile._lifecycle_word`) lets a status word stand on its known
+    evidence scene alone: the closure is PROPOSED (`close`, `closed`) with
+    `reason: ""`, nothing invented in its place, and the sweep lands."""
+    _wid, cid, _sid = _campaign(client)
+    dated = store.scenes.set_datetime(
+        cid, store.scenes.create_scene(cid, "Saltmarch quay"), "2026-05-01")["id"]
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "The map turned up in Saltmarch.", dated)
+    store.clock.advance(cid, to="2026-07-15")
+    closure = canon.candidate_id("possible_thread_closure", ["thread:mara-s-map"])
+    inference_fixtures.decide_only(client, fallback=False)
+    fake = _install(client, FakeLLM(
+        cassette=Cassette({"entries": [_entry(_reply())]}),
+        decisions=[decisions.ItemResult({
+            "decision": decisions.Answer("close"),
+            "evidence_scene": decisions.Answer(dated)})]))
+    seen: list = []
+    real = continuity_routes.reconcile.proposals_of
+
+    def spy(payload, results):
+        seen.extend(results)
+        return real(payload, results)
+
+    monkeypatch.setattr(continuity_routes.reconcile, "proposals_of", spy)
 
     run = _settled(client, cid, _refresh(client, cid))
 
     assert run["state"] == "landed", run
     assert run["result"]["llm"] == "ok"
+    [(_item, conn, _retries)] = fake.native_requests
+    assert conn["model"] == "vendor/decider" and _reconcile_requests(fake) == []
+    [result] = seen
+    assert (result.backend, result.rationale) == ("native", "")
+    assert all(a.detail != decisions.NO_ITEM for a in result.answers.values())
+    proposal = _records(cid)[closure]["proposal"]
+    assert (proposal["decision"], proposal["status"], proposal["reason"]) == (
+        "close", "closed", "")
+    assert proposal["evidence_scenes"] == [dated]
+
+
+#: A native endpoint's answer for the possible duplicate: B duplicates A.
+NATIVE_DUPLICATE = decisions.ItemResult({"decision": decisions.Answer("duplicate"),
+                                         "from": decisions.Answer("B"),
+                                         "to": decisions.Answer("A")})
+
+
+@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
+                         ids=["spare", "same-provider"])
+def test_the_sweep_on_a_decide_only_model_answers_natively(client, on):
+    """Slice H: a Decision model that cannot generate is answered by its
+    provider's native decisions endpoint, the role fallback is not asked,
+    and no sweep prompt is completed on any model."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.decide_only(client, fallback=True, on=on)
+    fake = _install(client, FakeLLM(cassette=Cassette({"entries": [_entry(_reply())]}),
+                                    decisions=[NATIVE_DUPLICATE]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "ok"
+    [(_item, conn, _retries)] = fake.native_requests
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert _reconcile_requests(fake) == []
+    assert _records(cid)[PAIR]["proposal"]["decision"] == "duplicate"
+    assert [(r["operation"], r["decision_mode"]) for r in _sweep_rows(cid)] == [
+        ("decide", "native")]
+
+
+@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
+                         ids=["spare", "same-provider"])
+def test_the_sweep_on_a_decide_only_model_answers_on_the_fallback(client, on):
+    """When the native endpoint fails, the role fallback that generates
+    answers the sweep, on another provider or the decide-only model's own (a
+    stage of its own rather than a retry)."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.decide_only(client, fallback=True, on=on)
+    fake = _install(client, FakeLLM(
+        cassette=Cassette({"entries": [_entry(_reply(_duplicate()))]}),
+        decisions=[LLMError("bad_response", "no decisions endpoint", status=404)]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "ok"
+    assert len(fake.native_requests) == 1
     [sent] = _reconcile_requests(fake)
     assert (sent["conn"]["id"], sent["conn"]["model"]) == on
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
 
 
-def test_the_sweep_without_a_generating_fallback_lands_with_llm_off(client):
-    """With no generating fallback the seam refuses (`incapable`): the sweep
-    lands with `llm: "off"` and the refusal's sentence, and persist 1's
-    findings stand."""
+@pytest.mark.parametrize("answer", [
+    decisions.Answer(None, "refused"), decisions.Answer(None, "abstained")],
+    ids=["refused", "abstained"])
+def test_a_native_answer_that_is_no_reading_leaves_the_candidate_unproposed(client, answer):
+    """The plan's coordination obligation (brutal review H, 2-P3): a native
+    `refused` (or a tie, `abstained`) is an answer, so the fallback is never
+    asked -- but it is no reading (`decisions.was_read`), so the finding
+    stays with no proposal and the sweep still lands `llm: "ok"`."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.decide_only(client, fallback=True)
+    fake = _install(client, FakeLLM(
+        cassette=Cassette({"entries": [_entry(_reply(_duplicate()))]}),
+        decisions=[decisions.ItemResult({"decision": answer})]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "ok"
+    assert len(fake.native_requests) == 1 and _reconcile_requests(fake) == []
+    assert PAIR in _records(cid)
+    assert _records(cid)[PAIR]["proposal"] is None
+    assert (run["result"]["adjudicated"], run["result"]["unanswered"]) == (0, 1)
+
+
+def test_the_sweep_on_a_decide_only_model_without_a_fallback_answers_natively(client):
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
     inference_fixtures.decide_only(client, fallback=False)
-    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+    fake = _install(client, FakeLLM(cassette=Cassette({"entries": [_entry(_reply())]}),
+                                    decisions=[NATIVE_DUPLICATE]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "ok"
+    assert len(fake.native_requests) == 1 and _reconcile_requests(fake) == []
+
+
+def test_the_sweep_on_a_model_that_neither_generates_nor_decides_lands_with_llm_off(client):
+    """On a model that can neither generate nor decide natively the seam
+    refuses (`incapable`): the sweep lands with `llm: "off"` and the
+    refusal's sentence, and persist 1's findings stand."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.neither(client)
+    fake = _install(client, FakeLLM(
+        cassette=Cassette({"entries": [_entry(_reply(_duplicate()))]}),
+        decisions=[NATIVE_DUPLICATE]))
 
     resp = _refresh(client, cid)
     run = _settled(client, cid, resp)
@@ -1656,11 +1778,12 @@ def test_the_sweep_without_a_generating_fallback_lands_with_llm_off(client):
     assert run["state"] == "landed", run
     assert run["result"]["llm"] == "off"
     assert run["result"]["reason"].startswith(
-        "The Continuity checks route runs on the Decision role (vendor/decider on "
-        "OpenRouter)"), run["result"]["reason"]
+        "The Continuity checks route runs on the Decision role (vendor/neither on "
+        "OpenRouter), which cannot generate text or make native decisions"), \
+        run["result"]["reason"]
     assert run["result"]["reason_kind"] == "incapable"
     assert PAIR in _records(cid)
-    assert fake.requests == []
+    assert fake.requests == [] and fake.native_requests == []
 
 
 def test_no_connection_lands_with_its_reason_kind(client):

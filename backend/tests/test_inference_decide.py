@@ -16,6 +16,7 @@ import dataclasses
 from copy import deepcopy
 
 import pytest
+from fastapi import HTTPException
 
 import grimoire.store as store
 from grimoire import decisions, inference, llm, llm_usage, prompts, routes
@@ -23,7 +24,7 @@ from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm import ATTEMPTED, FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
-from grimoire.store.inference import migrate, settings
+from grimoire.store.inference import capabilities, facts, migrate, settings
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import (
     FailingOpenRouter,
@@ -34,6 +35,7 @@ from tests.llm_fakes import (
 )
 
 from . import inference_baseline as base
+from . import inference_fixtures as fx
 
 ACCOUNT = llm_usage.ACCOUNT_KEY
 
@@ -385,19 +387,129 @@ def test_the_first_error_is_raised_after_every_chunk_was_tried(client):
     assert exc.value.kind == "auth" and fake.calls == 2
 
 
-def test_capture_sees_each_chunks_messages_before_it_is_sent(client):
+class _Captures(list):
+    """A capture (spec 9.4) that keeps each `(messages, outcome, conn)` it is
+    handed, with how many calls `fake` had made by then."""
+
+    def __init__(self, fake=None):
+        super().__init__()
+        self.fake = fake
+
+    async def __call__(self, messages, outcome, conn):
+        self.append((messages, outcome, conn, getattr(self.fake, "calls", None)))
+
+
+def test_capture_records_each_structured_call_once_it_settles(client):
+    """One capture per chunk, handed over after that chunk's call has
+    returned: the messages it sent, its mode and normalised answers
+    (`decisions.outcome`), and the stage's account-stamped dict it was sent
+    on."""
     _store(client)
     items = [_item(f"Mara counts to {n}.") for n in range(9)]
     fake = FakeLLM([[decision_reply(*[{"over": False}] * 8)],
                     [decision_reply({"over": True})]])
-    captured: list[tuple[list[dict], int]] = []
+    captured = _Captures(fake)
+    got = _decide(fake, items, capture=captured)
+    assert [calls for *_, calls in captured] == [1, 2]
+    assert [m for m, *_ in captured] == [r["messages"] for r in fake.requests]
+    # The dict the facade stamped as sent (`llm.ATTEMPTED`): this fake
+    # stamps the one it was handed.
+    assert all(conn is r["conn"] for (_m, _o, conn, _c), r in zip(captured, fake.requests,
+                                                                   strict=True))
+    for _m, _o, conn, _c in captured:
+        assert conn[ACCOUNT]["decision_mode"] == "structured"
+        assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
+    first, second = (outcome for _m, outcome, _conn, _c in captured)
+    assert first == decisions.outcome("structured", "openrouter", "vendor/active",
+                                      got.items[:8])
+    assert first["mode"] == second["mode"] == "structured"
+    assert first["items"][0] == {"backend": "structured",
+                                 "answers": {"over": {"answer": False}}}
+    assert second["items"] == [{"backend": "structured",
+                                "answers": {"over": {"answer": True}}}]
 
-    async def capture(messages):
-        captured.append((messages, fake.calls))
 
-    _decide(fake, items, capture=capture)
-    assert [calls for _, calls in captured] == [0, 1]
-    assert [m for m, _ in captured] == [r["messages"] for r in fake.requests]
+def test_a_schema_refusal_retry_is_one_capture(client):
+    """M9: a chunk whose provider refused the structured field and which
+    `_ask` sent once more without the mode is one call to the capture, with
+    the final outcome -- the answer the re-send got."""
+    _store(client, fallback=False)
+    _catalog("openrouter", [{"id": "vendor/active",
+                             "params": ["temperature", "structured_outputs"]}])
+    provider = SequencedProvider([_refused_schema(), [decision_reply({"over": True})]])
+    captured = _Captures()
+    _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+            capture=captured)
+    assert len(provider.requests) == 2
+    ((messages, outcome, conn, _calls),) = captured
+    assert messages == provider.requests[1]["messages"]
+    # Named as re-sent: the same attempt, without the structured mode.
+    assert llm.STRUCTURED_KEY not in conn and FALLBACK_KEY not in conn
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
+    assert outcome == {"mode": "structured", "provider": "openrouter",
+                       "model": "vendor/active",
+                       "items": [{"backend": "structured",
+                                  "answers": {"over": {"answer": True}}}]}
+
+
+def test_a_capture_names_the_fallback_that_answered(client):
+    """The facade's fallback answered: the capture's conn is the dict it was
+    sent (`llm.ATTEMPTED`), so the prompt log's model, kind and preset name
+    the fallback, as the outcome does -- and a preset scoped to the
+    primary's connection, which stayed with it, is not reported."""
+    _store(client)
+    resolved = _resolved()
+    warm = {"preset_id": "warm", "preset_name": "Warm", "scope": "connection",
+            "params": {"temperature": 0.9}}
+    primary = dataclasses.replace(resolved.attempts[0],
+                                  conn={**resolved.conn, "sampling": warm})
+    resolved = dataclasses.replace(resolved, attempts=(primary, *resolved.attempts[1:]))
+    assert resolved.conn[FALLBACK_KEY]["id"] == "spare"
+    provider = SequencedProvider([LLMError("network", "connection reset"),
+                                  [decision_reply({"over": True})]])
+    captured = _Captures()
+    _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+            resolved=resolved, capture=captured)
+    assert [r["model"] for r in provider.requests] == ["vendor/active", "vendor/spare"]
+    ((messages, outcome, conn, _calls),) = captured
+    assert messages == provider.requests[1]["messages"]
+    assert (outcome["provider"], outcome["model"]) == ("spare", "vendor/spare")
+    assert (conn["id"], conn["model"]) == ("spare", "vendor/spare")
+    assert FALLBACK_KEY not in conn
+    assert conn.get("sampling") != warm
+    assert conn[ACCOUNT]["decision_mode"] == "structured"
+
+
+def test_capture_records_a_failed_call_with_its_error(client):
+    _store(client, fallback=False)
+    fake = FakeLLM([[""]], error=LLMError("rate_limit", "slow down"))
+    captured = _Captures(fake)
+    with pytest.raises(LLMError):
+        _decide(fake, [_item()], capture=captured)
+    ((messages, outcome, conn, calls),) = captured
+    assert calls == 1 and messages == fake.requests[0]["messages"]
+    assert outcome == {"mode": "structured", "provider": "openrouter",
+                       "model": "vendor/active", "error": "rate_limit: slow down"}
+    assert conn is fake.requests[0]["conn"]
+
+
+def test_a_timed_out_pick_is_captured_with_its_error(client):
+    """A caller's budget (`around`) that cuts the call off raises inside the
+    call, so the call settles failed and is captured with the timeout."""
+    _store(client)
+
+    async def budget(call, holder):
+        await call
+        raise LLMError("timeout", "the decision ran past its budget")
+
+    fake = FakeLLM([[decision_reply({"over": True})]])
+    captured = _Captures(fake)
+    with pytest.raises(LLMError):
+        _decide(fake, [_item()], around=budget, capture=captured)
+    ((messages, outcome, _conn, _calls),) = captured
+    assert messages == fake.requests[0]["messages"]
+    assert outcome["error"] == "timeout: the decision ran past its budget"
+    assert "items" not in outcome
 
 
 def test_the_prompt_renders_off_the_event_loop(client, monkeypatch):
@@ -691,19 +803,26 @@ def test_a_chunk_answered_on_its_second_re_send_did_not_fail(client):
 
 
 def test_the_first_failed_chunks_error_is_the_batchs(client):
-    """Review 2 #5: three chunks -- a rate limit, a garbled reply, a network
-    failure. `errors` holds the two failures in chunk order, and with nothing
+    """Review 2 #5: three chunks -- a network failure, a garbled reply, a rate
+    limit. `errors` holds the two failures in chunk order, and with nothing
     read the batch reports the FIRST, which is what `decide` itself raises
-    when no chunk answers -- never the last one, nor the garbled chunk."""
+    when no chunk answers -- never the last one, nor the garbled chunk.
+
+    Network first, not the rate limit: since slice H a rate limit the facade
+    gave up on stops the stage's later chunks (they would meet it too), so a
+    rate limit first would leave nothing after it to be reported over."""
     _store(client, fallback=False)
     items = [_item(f"Mara counts to {n}.") for n in range(2 * decisions.MAX_ITEMS_PER_CALL + 1)]
-    provider = SequencedProvider([_busy(), ["no json"], LLMError("network", "connection reset")])
+    provider = SequencedProvider([LLMError("network", "connection reset"), ["no json"],
+                                  _busy()])
     got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
     assert len(provider.requests) == 3
-    assert [e.kind for e in got.errors] == ["rate_limit", "network"]
+    assert [e.kind for e in got.errors] == ["network", "rate_limit"]
     error = common._decide_error(got, "over")
     assert error is got.errors[0]
-    assert (error.kind, error.retry_after) == ("rate_limit", 30.0)
+    assert (error.kind, error.retry_after) == ("network", None)
+    # The rate limit is still the chunk's own, window and all.
+    assert (got.errors[1].kind, got.errors[1].retry_after) == ("rate_limit", 30.0)
 
 
 def _clock_after_the_first_call(monkeypatch):
@@ -807,52 +926,100 @@ def test_each_refusing_route_is_retried_once_only(client):
     assert len(_rows()) == 3
 
 
-def test_resolve_skips_a_decide_only_primary_for_a_generating_fallback(client):
-    """I5: a Decision model that only decides natively is skipped for a role
-    fallback that generates, until slice H can answer it natively."""
+# ---- a model that cannot generate is answered natively (slice H, Task 5) ----
+def _yes() -> decisions.ItemResult:
+    return decisions.ItemResult({"over": decisions.Answer(True)})
+
+
+def _row_of(view: dict, key: str) -> dict:
+    (row,) = [r for r in view["routes"] if r["key"] == key]
+    return row
+
+
+def test_resolve_serves_a_decide_only_primary_natively(client):
+    """Ruling 1: a Decision model whose catalog says it only decides is
+    served by its provider's decisions endpoint -- nothing missing, nothing
+    refused -- and the generating fallback on another provider rides nothing:
+    it is a stage of its own."""
     _store(client)
     _catalog("openrouter", [{"id": "vendor/active", "outputs": ["decisions"]}])
     resolved = _resolved()
-    assert resolved.skipped == ("generate",) and resolved.missing == ()
-    assert inf.refusal(resolved) is None
-    assert resolved.conn is resolved.attempts[1].conn and resolved.conn["id"] == "spare"
-    assert resolved.fallback is None and FALLBACK_KEY not in resolved.attempts[0].conn
-    assert resolved.decision_mode == "structured"
-    assert resolved.attempts[0].decision_mode == ""
-    assert routes.common._usable(resolved).conn is resolved.attempts[1].conn
-    text = inf.skip_text(resolved)
-    assert text == (
-        "The Scene-break checks route runs on the Decision role (vendor/active on "
-        f"{resolved.attempts[0].conn['name']}), which cannot generate; until native "
-        "decisions arrive it is answered by the fallback (vendor/spare on spare).")
-    assert settings._problem(resolved) == text
-    # What decide sends is the fallback, and nothing behind it.
-    fake = FakeLLM([[decision_reply({"over": True})]])
-    _decide(fake, [_item()], resolved=resolved)
-    assert fake.conn["id"] == "spare" and FALLBACK_KEY not in fake.conn
-    # A generate resolution of the same role is unchanged: refused, not skipped.
+    assert resolved.decision_mode == "native"
+    assert resolved.missing == () and inf.refusal(resolved) is None
+    assert settings._problem(resolved) is None
+    assert resolved.conn is resolved.attempts[0].conn
+    assert routes.common._usable(resolved).conn is resolved.attempts[0].conn
+    # The fallback is attached to nothing, and is its own stage.
+    fallback = resolved.attempts[1]
+    assert (fallback.provider_id, fallback.decision_mode) == ("spare", "structured")
+    assert resolved.fallback_missing == () and resolved.fallback_problem is None
+    assert FALLBACK_KEY not in resolved.conn
+    assert inference.stages(resolved) == (
+        inference.Stage("native", resolved.conn, None),
+        inference.Stage("structured", fallback.conn, 0))
+    # The settings view reads it the same way: no problem on the route row or
+    # on the Decision card, and both say the model is answered natively.
+    view = client.get("/api/inference/settings").json()
+    row, card = _row_of(view, "scene_break"), view["roles"]["decision"]
+    assert row["problem"] is None and card["problem"] is None
+    assert row["decision_mode"] == card["decision_mode"] == "native"
+    # What decide sends is the native request, and nothing is completed.
+    fake = FakeLLM([["unused"]], decisions=[_yes()])
+    got = _decide(fake, [_item()], resolved=resolved)
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert got.backend == "native" and fake.calls == 0
+    [(_item_sent, conn, retries)] = fake.native_requests
+    assert (conn["id"], conn["model"], retries) == ("openrouter", "vendor/active", None)
+    # A generate resolution of the same role is unchanged: refused.
     generate = _resolved("generate")
-    assert generate.skipped == () and generate.missing == ("generate",)
-    assert generate.conn is generate.attempts[0].conn
+    assert generate.missing == ("generate",) and generate.decision_mode is None
     assert inf.refusal(generate)[1]["kind"] == "incapable"
-    assert inf.skip_text(generate) is None
-
-    # Without a fallback the 409 stands.
+    # Without a fallback it is still served: natively, and alone.
     _settings(client, {"roles": {"decision": {"fallback": {"provider": ""}}}})
     alone = _resolved()
-    assert alone.skipped == () and alone.missing == ("generate",)
-    status, body = inf.refusal(alone)
-    assert status == 409 and body["kind"] == "incapable"
-    assert settings._problem(alone) == body["detail"]
+    assert alone.decision_mode == "native" and alone.missing == ()
+    assert inf.refusal(alone) is None
+    assert inference.stages(alone) == (inference.Stage("native", alone.conn, None),)
 
 
-def test_a_same_provider_fallback_answers_for_a_decide_only_primary(client):
-    """Spec I-1: the same-provider drop (#144: a second attempt on the
-    primary's provider is a retry) is about not sending one connection twice
-    after a failure. A decide-only primary is never sent, so a generating
-    fallback on its own provider is the only call, and the skip reaches it --
-    one OpenRouter account with a decide-only Decision model and one of its
-    generating models behind it is the likeliest shape of this store."""
+def test_an_openrouter_non_text_model_on_decision_resolves_native(client):
+    """I8: an OpenRouter catalog row whose `outputs` lacks `text` (here an
+    embedding model) is `generate: no`, and says nothing of `decide_native`
+    -- a list without `decisions` is unknown, not `no`. So it resolves
+    `native` with no refusal: the deliberate consequence of spec 5.3's
+    "unknown is allowed". The native request it makes may fail, and then the
+    role fallback answers; refusing it here would refuse on a guess."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["embeddings"]}])
+    resolved = _resolved()
+    caps = resolved.attempts[0].capabilities
+    assert (caps["generate"].value, caps["generate"].source) == ("no", "catalog")
+    assert caps["decide_native"].value == "unknown"
+    assert resolved.decision_mode == "native"
+    assert resolved.missing == () and inf.refusal(resolved) is None
+
+
+def test_an_unknown_native_capability_is_not_refused(client):
+    """`generate` known `no` -- here the user's own word, with no catalog --
+    and `decide_native` unknown: native, and not refused (spec 5.3)."""
+    _store(client)
+    got = client.put("/api/llm-connections/openrouter/facts",
+                     json={"model": "vendor/active", "overrides": {"generate": "no"}})
+    assert got.status_code == 200, got.text
+    resolved = _resolved()
+    caps = resolved.attempts[0].capabilities
+    assert (caps["generate"].value, caps["generate"].source) == ("no", "user")
+    assert caps["decide_native"].value == "unknown"
+    assert inf.native_only(caps)
+    assert resolved.decision_mode == "native"
+    assert resolved.missing == () and inf.refusal(resolved) is None
+
+
+def test_a_decide_only_model_with_a_same_provider_fallback_keeps_it(client):
+    """The single-provider store -- one OpenRouter account, a decide-only
+    Decision model and one of its generating models behind it -- keeps its
+    fallback: behind a primary that cannot generate it is a stage of its own
+    on another backend, never a retry of the call that failed (`_apart`)."""
     _store(client)
     _catalog("openrouter", [{"id": "vendor/decider", "outputs": ["decisions"]},
                             {"id": "vendor/active", "outputs": ["text"]}])
@@ -860,20 +1027,16 @@ def test_a_same_provider_fallback_answers_for_a_decide_only_primary(client):
         "selection": {"provider": "openrouter", "model": "vendor/decider"},
         "fallback": {"provider": "openrouter", "model": "vendor/active"}}}})
     resolved = _resolved()
-    assert resolved.skipped == ("generate",) and resolved.missing == ()
+    assert [a.decision_mode for a in resolved.attempts] == ["native", "structured"]
+    assert resolved.fallback_problem is None and resolved.fallback_missing == ()
     assert inf.refusal(resolved) is None
-    assert (resolved.conn["id"], resolved.conn["model"]) == ("openrouter", "vendor/active")
-    assert resolved.fallback is None and FALLBACK_KEY not in resolved.conn
-    assert resolved.decision_mode == "structured"
-    # The same-provider reason is lifted exactly where the drop is: the row the
-    # skip lands on names no problem with the fallback that answers it.
-    assert resolved.fallback_problem is None
-    fake = FakeLLM([[decision_reply({"over": True})]])
-    _decide(fake, [_item()], resolved=resolved)
-    assert (fake.conn["id"], fake.conn["model"]) == ("openrouter", "vendor/active")
-
+    primary, fallback = resolved.attempts
+    assert (fallback.provider_id, fallback.model) == ("openrouter", "vendor/active")
+    assert FALLBACK_KEY not in primary.conn
+    assert inference.stages(resolved) == (inference.Stage("native", primary.conn, None),
+                                          inference.Stage("structured", fallback.conn, 0))
     # Everywhere else a same-provider fallback is still a retry, and dropped:
-    # on a generate resolution of the same role (refused, not skipped)...
+    # on a generate resolution of the same role (refused)...
     generate = _resolved("generate")
     assert len(generate.attempts) == 1 and generate.missing == ("generate",)
     assert generate.fallback_missing == ()
@@ -883,73 +1046,188 @@ def test_a_same_provider_fallback_answers_for_a_decide_only_primary(client):
         "selection": {"provider": "openrouter", "model": "vendor/active"},
         "fallback": {"provider": "openrouter", "model": "vendor/decider"}}}})
     capable = _resolved()
-    assert len(capable.attempts) == 1 and capable.skipped == ()
-    assert FALLBACK_KEY not in capable.conn
+    assert len(capable.attempts) == 1 and FALLBACK_KEY not in capable.conn
     assert capable.fallback_problem == inf.SAME_PROVIDER
+    # The Decision card, which now reads its role as a decision, says so too.
+    card = client.get("/api/inference/settings").json()["roles"]["decision"]
+    assert card["fallback_problem"] == inf.SAME_PROVIDER and card["problem"] is None
 
 
-def test_the_decision_card_says_the_fallback_answers_its_decide_routes(client):
-    """Brutal-2 #1: the card reads the role as a generation, which drops a
-    same-provider fallback as a retry -- and so said it "is never tried", right
-    above the decide routes it answers. Read as `decide` too, the card says
-    what those routes do, the same sentence their rows show, and names no
-    problem with the fallback that answers them."""
+def test_a_same_provider_fallback_that_can_do_neither_is_reported(client):
+    """Kept behind a primary that cannot generate, a same-provider fallback
+    that cannot serve either backend is reported in `fallback_missing` like
+    any other incapable fallback, and is no stage (spec 5.3)."""
+    fx.neither(client)
+    _catalog("openrouter", [{"id": "vendor/decider", "outputs": ["decisions"]},
+                            {"id": fx.NEITHER[1], "outputs": ["image"]}])
+    _settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/decider"},
+        "fallback": {"provider": fx.NEITHER[0], "model": fx.NEITHER[1]}}},
+        "routes": {"scene_break": {"use": "decision"}}})
+    resolved = _resolved()
+    assert len(resolved.attempts) == 2 and resolved.fallback_problem is None
+    assert resolved.fallback_missing == ("generate", "decide_native")
+    assert resolved.attempts[1].decision_mode == ""
+    assert inf.refusal(resolved) is None
+    assert inference.stages(resolved) == (inference.Stage("native", resolved.conn, None),)
+
+
+def test_a_fallback_that_cannot_generate_either_is_a_native_stage(client):
+    """F refused this store (nothing could answer either model). Under H a
+    fallback that cannot generate is served natively like the primary: its
+    own stage, one attempt, attached to nothing."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["decisions"]}])
+    _catalog("spare", [{"id": "vendor/spare", "outputs": ["embeddings"]}])
+    resolved = _resolved()
+    assert [a.decision_mode for a in resolved.attempts] == ["native", "native"]
+    assert resolved.missing == () and resolved.fallback_missing == ()
+    assert inf.refusal(resolved) is None and FALLBACK_KEY not in resolved.conn
+    assert inference.stages(resolved) == (
+        inference.Stage("native", resolved.conn, None),
+        inference.Stage("native", resolved.attempts[1].conn, 0))
+
+
+def test_a_generating_primary_with_a_decide_only_fallback_falls_to_a_native_stage(client):
+    """Rule 3's one permitted change to a structured primary's resolution: a
+    fallback that cannot generate but may decide natively was F's
+    `fallback_missing == ("generate",)`, never sent. Now it lacks nothing: it
+    stays unattached (the primary's `conn` is F's, no `FALLBACK_KEY`) and is
+    a native stage of its own, one attempt, which a failed primary reaches."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"]}])
+    _catalog("spare", [{"id": "vendor/spare", "outputs": ["decisions"]}])
+    resolved = _resolved()
+    primary, fallback = resolved.attempts
+    assert [a.decision_mode for a in resolved.attempts] == ["structured", "native"]
+    assert resolved.missing == () and resolved.fallback_missing == ()
+    assert FALLBACK_KEY not in resolved.conn
+    assert inference.stages(resolved) == (inference.Stage("structured", primary.conn, None),
+                                          inference.Stage("native", fallback.conn, 0))
+    fake = FakeLLM([[""]], error=LLMError("network", "connection reset"), decisions=[_yes()])
+    got = _decide(fake, [_item()], resolved=resolved)
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert got.items[0].backend == "native"
+    [(_item_sent, conn, retries)] = fake.native_requests
+    assert (conn["id"], conn["model"], retries) == ("spare", "vendor/spare", 0)
+    assert [(r["status"], r["decision_mode"], r["model"]) for r in _rows()] == [
+        ("error", "structured", "vendor/active"), ("ok", "native", "vendor/spare")]
+
+
+def test_operation_capability_is_the_pickers_needs():
+    """The seam's `OPERATION_CAPABILITY` and the picker's `capabilities.NEEDS`
+    are one table: a decision needs `decide_native` or `generate` in both."""
+    assert inf.OPERATION_CAPABILITY == {"generate": ("generate",), "embed": ("embed",),
+                                        "decide": ("decide_native", "generate")}
+    assert all(inf.OPERATION_CAPABILITY[op] == capabilities.NEEDS[op]
+               for op in inf.OPERATION_CAPABILITY)
+
+
+def test_a_native_failure_falls_to_a_same_provider_generating_fallback(client):
+    """Review Focus 1, end to end: the decide-only model's native endpoint
+    answers 404, and the generating model on the same provider answers in its
+    place -- one attempt, structured, alone."""
     _store(client)
     _catalog("openrouter", [{"id": "vendor/decider", "outputs": ["decisions"]},
                             {"id": "vendor/active", "outputs": ["text"]}])
     _settings(client, {"roles": {"decision": {
         "selection": {"provider": "openrouter", "model": "vendor/decider"},
         "fallback": {"provider": "openrouter", "model": "vendor/active"}}}})
-    view = client.get("/api/inference/settings").json()
-    card = view["roles"]["decision"]
-    assert card["fallback_problem"] is None
-    assert card["decide_skip"] == (
-        "This decision runs on the Decision role (vendor/decider on OpenRouter), which "
-        "cannot generate; until native decisions arrive it is answered by the fallback "
-        "(vendor/active on OpenRouter).")
-    # The generate reading stands: a generate route using Decision is refused.
-    assert "cannot generate text" in card["problem"]
-    (row,) = [r for r in view["routes"] if r["key"] == "scene_break"]
-    assert row["problem"].endswith(
-        "until native decisions arrive it is answered by the fallback "
-        "(vendor/active on OpenRouter).")
-    assert row["fallback_problem"] is None
-    # No skip, no sentence, and the drop is reported as it always was.
-    _settings(client, {"roles": {"decision": {
-        "selection": {"provider": "openrouter", "model": "vendor/active"},
-        "fallback": {"provider": "openrouter", "model": "vendor/decider"}}}})
-    card = client.get("/api/inference/settings").json()["roles"]["decision"]
-    assert card["decide_skip"] is None
-    assert card["fallback_problem"] == inf.SAME_PROVIDER
-    # Every other role carries the field, empty.
-    roles = client.get("/api/inference/settings").json()["roles"]
-    assert all(roles[r]["decide_skip"] is None for r in ("primary", "fast"))
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[
+        LLMError("bad_response", "no decisions endpoint", status=404)])
+    got = _decide(fake, [_item()], resolved=_resolved())
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert got.items[0].backend == "structured"
+    assert [(c["model"]) for _i, c, _r in fake.native_requests] == ["vendor/decider"]
+    assert (fake.conn["id"], fake.conn["model"]) == ("openrouter", "vendor/active")
+    assert FALLBACK_KEY not in fake.conn and fake.retries == [0]
+    assert [(r["status"], r["decision_mode"], r["model"]) for r in _rows()] == [
+        ("error", "native", "vendor/decider"), ("ok", "structured", "vendor/active")]
 
 
-def test_a_same_provider_fallback_that_cannot_generate_is_still_dropped(client):
-    """Admitted only for the skip: one that cannot answer either is dropped as
-    it always was (not reported), and the primary's 409 stands."""
+def _dual_capable(how: str) -> None:
+    """`vendor/active` made `decide_native: yes` (spec 16's §16 guard): from
+    the OpenRouter catalog (`outputs: ["text", "decisions"]`), or from a
+    passed probe."""
+    if how == "catalog":
+        _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text", "decisions"],
+                                 "params": ["temperature", "structured_outputs"]}])
+        return
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    assert facts.record_verified("openrouter", "vendor/active", rev,
+                                                 {"decide_native": {"ok": True}})
+
+
+@pytest.mark.parametrize("how", ["catalog", "probe"])
+def test_a_dual_capable_primary_stays_structured(client, how):
+    """C1: a model that can generate stays on structured generation whatever
+    its `decide_native` says, until native wins on evals (spec 16). Its
+    resolution is F's, byte for byte -- `conn`, the attached fallback and the
+    structured flag -- and deciding on it sends no native request."""
     _store(client)
-    _catalog("openrouter", [{"id": "vendor/decider", "outputs": ["decisions"]},
-                            {"id": "vendor/embedder", "outputs": ["embeddings"]}])
-    _settings(client, {"roles": {"decision": {
-        "selection": {"provider": "openrouter", "model": "vendor/decider"},
-        "fallback": {"provider": "openrouter", "model": "vendor/embedder"}}}})
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"],
+                             "params": ["temperature", "structured_outputs"]}])
+    before = deepcopy(_resolved().conn)
+    assert before[llm.STRUCTURED_KEY] is True and FALLBACK_KEY in before
+    _dual_capable(how)
     resolved = _resolved()
-    assert len(resolved.attempts) == 1
-    assert resolved.skipped == () and resolved.missing == ("generate",)
-    assert resolved.fallback_missing == ()
-    # Dropped for the reason it always was, and said so.
-    assert resolved.fallback_problem == inf.SAME_PROVIDER
-    assert inf.refusal(resolved)[1]["kind"] == "incapable"
+    caps = resolved.attempts[0].capabilities
+    assert (caps["decide_native"].value, caps["decide_native"].source) == (
+        "yes", "catalog" if how == "catalog" else "test")
+    assert resolved.decision_mode == "structured"
+    assert resolved.conn == before
+    assert resolved.conn[FALLBACK_KEY] is resolved.attempts[1].conn
+    assert resolved.conn[llm.STRUCTURED_KEY] is True
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
+    _decide(fake, [_item()], resolved=resolved)
+    assert fake.native_requests == [] and fake.calls == 1
 
 
-def test_a_fallback_that_cannot_generate_either_skips_nothing(client):
+def test_a_structured_primary_is_unchanged(client):
+    """A generating primary's decide resolution is F's, byte for byte: the
+    generate resolution's dicts with the operation stamped `decide` and the
+    structured flag where the model takes it -- on the primary and on the
+    fallback it carries -- and one structured stage that sends it whole."""
     _store(client)
-    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["decisions"]}])
-    _catalog("spare", [{"id": "vendor/spare", "outputs": ["embeddings"]}])
+    _catalog("openrouter", [{"id": "vendor/active",
+                             "params": ["temperature", "structured_outputs"]}])
+    decide, generate = _resolved(), _resolved("generate")
+
+    def as_decided(conn: dict, flagged: bool) -> dict:
+        out = {**conn, ACCOUNT: {**conn[ACCOUNT], "operation": "decide"}}
+        out.pop(FALLBACK_KEY, None)
+        if flagged:
+            out[llm.STRUCTURED_KEY] = True
+        return out
+
+    expected = as_decided(generate.conn, True)
+    expected[FALLBACK_KEY] = as_decided(generate.conn[FALLBACK_KEY], False)
+    assert decide.conn == expected
+    assert [a.decision_mode for a in decide.attempts] == ["structured", "structured"]
+    assert inference.stages(decide) == (inference.Stage("structured", decide.conn, None),)
+
+
+def test_a_model_that_neither_generates_nor_decides_is_refused(client):
+    """I8: both capabilities known `no` -- the catalog's `generate` and the
+    user's `decide_native` -- is the one decide resolution refused, 409
+    `incapable` with both phrases composed, on the Decision card and on the
+    route row alike."""
+    fx.neither(client)
+    _settings(client, {"routes": {"scene_break": {"use": "decision"}}})
     resolved = _resolved()
-    assert resolved.skipped == () and resolved.missing == ("generate",)
-    assert resolved.fallback_missing == ("generate",)
-    assert inf.refusal(resolved)[1]["kind"] == "incapable"
+    assert resolved.missing == ("generate", "decide_native")
     assert resolved.decision_mode is None
+    status, body = inf.refusal(resolved)
+    assert (status, body["kind"]) == (409, "incapable")
+    assert body["detail"] == (
+        "The Scene-break checks route runs on the Decision role (vendor/neither on "
+        "OpenRouter), which cannot generate text or make native decisions — choose "
+        "another Decision model or pin this route.")
+    view = client.get("/api/inference/settings").json()
+    assert _row_of(view, "scene_break")["problem"] == body["detail"]
+    assert view["roles"]["decision"]["problem"] == (
+        "This decision runs on the Decision role (vendor/neither on OpenRouter), which "
+        "cannot generate text or make native decisions — choose another Decision model.")
+    with pytest.raises(HTTPException) as exc:
+        common.require_inference("scene-break", operation="decide")
+    assert (exc.value.status_code, exc.value.detail) == (409, body)

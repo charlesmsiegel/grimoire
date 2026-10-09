@@ -37,3 +37,50 @@ its cassette entry matches on is really in it. That is the link that would
 otherwise rot: without it, a reworded system prompt would leave every matcher
 silently dead, and the tests would go on passing against replies the code would
 never have asked for.
+
+## Native decisions bodies (`native/`)
+
+`native/<provider>/*.json` are whole response bodies of a provider's decisions
+endpoint (slice H), replayed through `httpx.MockTransport` by
+`tests/test_native_decisions.py`. They are not cassettes: the adapter is handed
+the body as the endpoint would send it, and nothing matches on a prompt.
+
+`native/openrouter/` -- hand-authored from OpenRouter's API reference,
+https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
+(its `DecisionsResponse` schema and example response), and from the Jev
+tutorial, https://openrouter.ai/blog/tutorials/how-to-use-jev/, both checked
+2026-10-08; never recorded.
+
+- `answered` -- one `noul`, one `choice` with the reserved `none` offered, and
+  one `score` whose probability-weighted `score` (1.4) is fractional and whose
+  argmax level (2) is not its rounding (1).
+- `none` -- a `choice` answered with the reserved `none` key.
+- `nullable_one` -- a one-option nullable choice answered with its option.
+- `wrong_type` -- a `choice` question answered with a `noul`-typed answer.
+- `unanswered` -- the envelope, with an empty `answers`.
+- `malformed` -- a 200 with no `answers` envelope.
+- `error_400` -- the error body: from the reference's error schema
+  (`{"error": {"code", "message", "metadata"}, "user_id"}`), which is the
+  chat API's documented error shape.
+
+`native/openai/` -- hand-authored from OpenAI's API reference,
+https://developers.openai.com/api/reference/resources/decisions/methods/create
+(its `Decision` schema and example response), and from the Decisions guide,
+https://developers.openai.com/api/docs/guides/decisions, both checked
+2026-10-08; never recorded. Every body carries the reference's `usage` block.
+
+- `answered` -- one `predicate`, one `choice` with the reserved `none` offered,
+  and one `score` whose probability-weighted `score` (1.1, the guide's own
+  example value) is fractional and whose argmax level (2) is not its rounding
+  (1). Its `usage` reports a cache hit beside the input count.
+- `none` -- a `choice` answered with the reserved `none` value.
+- `nullable_one` -- a one-option nullable choice answered with its option.
+- `refused` -- three questions, the `choice` among them answered
+  `{"type": "refusal", "name"}` (the reference's per-answer refusal) and the
+  other two answered.
+- `unanswered` -- the envelope, with an empty `answers` array.
+- `malformed` -- a 200 with no `answers` array.
+- `error_400` -- the error body. Neither page documents one for this
+  endpoint, so it is OpenAI's standard API error shape
+  (`{"error": {"message", "type", "param", "code"}}`), which `_extract_error`
+  reads.

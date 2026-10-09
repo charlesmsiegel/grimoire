@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
+from grimoire import inference as inference_ops
 from grimoire import routes
 from grimoire.store import embed_space, locks, revision, routing
 from grimoire.store import inference_keys as keys
@@ -27,6 +28,7 @@ from grimoire.store.inference import resolve as inference
 
 from . import inference_baseline as base
 from . import inference_baseline_c as base_c
+from . import inference_fixtures as fx
 
 WAIT = 10
 CLEAR = store.sampler_presets.PRESET_CLEAR
@@ -520,6 +522,142 @@ def test_a_fallback_on_the_primarys_own_provider_says_why_on_its_rows(client):
     assert _row(got, "scene")["fallback_problem"] == inference.SAME_PROVIDER
     assert inference.resolve("chat").fallback is None
     assert _row(_campaign(client, cid), "scene")["fallback_problem"] == inference.SAME_PROVIDER
+
+
+# ---- the Decision card reads its role as a decision (slice H) ----
+def _resolution_of(resolved) -> dict:
+    first = resolved.attempts[0]
+    return {"provider": first.provider_id, "model": first.model, "preset": first.preset_id,
+            "via": resolved.via, "scope": resolved.scope}
+
+
+def test_the_decision_card_resolves_as_a_decision(client):
+    """Spec 12, one decision: the Decision card resolves its role as the
+    decide routes it serves do, so a decide-only model with a same-provider
+    fallback reads on the card exactly as on those rows -- no problem
+    (ruling 2), and the fallback a stage of its own rather than a retry. Read
+    as a generation it would be refused ("cannot generate text") and its
+    fallback dropped as one on the primary's own provider."""
+    fx.decide_only(client, fallback=True, on=fx.SAME_PROVIDER)
+    got = _global(client)
+    card, row = got["roles"]["decision"], _row(got, "scene_break")
+    decided = inference.resolve("", role="decision", operation="decide")
+    assert _cut(card["resolves"]) == _resolution_of(decided)
+    assert card["problem"] is None and row["problem"] is None
+    assert card["fallback_problem"] is None and row["fallback_problem"] is None
+    assert card["fallback_missing"] == row["fallback_missing"] == []
+    # The generate reading the card used to make says otherwise.
+    generated = inference.resolve("", role="decision")
+    assert generated.fallback_problem == inference.SAME_PROVIDER
+    assert inference.refusal(generated)[1]["kind"] == "incapable"
+    # Every other role still reads as a generation.
+    assert got["roles"]["primary"]["fallback_problem"] is None
+    assert got["roles"]["primary"]["problem"] is None
+
+
+def test_a_decide_only_models_fallback_on_itself_is_dropped_and_said(client):
+    """#144 behind a native primary: a fallback on the primary's own
+    connection AND model is not a stage apart but a second send of the very
+    call that failed -- two identical native stages, the second re-sending
+    every failure into the endpoint (and the refusal) the first just met. It
+    is dropped as C drops a same-provider fallback, and the Decision card and
+    its rows say why rather than showing a retry as a working fallback."""
+    fx.decide_only(client, fallback=True, on=("openrouter", "vendor/decider"))
+    decided = inference.resolve("", role="decision", operation="decide")
+    assert [(a.provider_id, a.model) for a in decided.attempts] == [
+        ("openrouter", "vendor/decider")]
+    assert decided.fallback_problem == inference.SAME_PROVIDER
+    assert [s.mode for s in inference_ops.stages(decided)] == ["native"]
+    got = _global(client)
+    card, row = got["roles"]["decision"], _row(got, "scene_break")
+    assert card["fallback_problem"] == row["fallback_problem"] == inference.SAME_PROVIDER
+    assert card["problem"] is None and row["problem"] is None
+    assert card["decision_mode"] == "native"
+
+
+def test_the_settings_view_carries_decision_mode(client):
+    """I9: the Decision card and each decide route row say which backend
+    answers -- `native`, `structured`, or `""` on a model that can do neither
+    (refused) -- read off the resolution, so the Models page keeps no
+    capability rule of its own. Every other card and row says `""`."""
+    deciding = {r.key for r in routing.ROUTES if r.operation == "decide"}
+    fx.format2(client)
+    got = _global(client)
+    assert got["roles"]["decision"]["decision_mode"] == "structured"
+    assert {_row(got, k)["decision_mode"] for k in deciding} == {"structured"}
+    assert {r["decision_mode"] for r in got["routes"] if r["key"] not in deciding} == {""}
+    assert {got["roles"][r]["decision_mode"] for r in ("primary", "fast")} == {""}
+
+    fx.decide_only(client, fallback=False)
+    got = _global(client)
+    assert got["roles"]["decision"]["decision_mode"] == "native"
+    assert {_row(got, k)["decision_mode"] for k in deciding} == {"native"}
+
+    fx.neither(client)
+    got = _global(client)
+    card = got["roles"]["decision"]
+    assert card["decision_mode"] == ""
+    assert "cannot generate text or make native decisions" in card["problem"]
+    assert {_row(got, k)["decision_mode"] for k in deciding} == {""}
+
+
+def test_the_settings_view_says_whether_the_model_decides_natively(client):
+    """I9: `decides_natively` is the resolved primary's own `decide_native`
+    -- the capabilities the resolver decided on -- so the page words a
+    structured decision without a second read that could disagree. It says
+    `yes`, `no` or `unknown`, and `no` only when it is known (brutal review
+    H, 2-Y1): "No native decision API" is never said of a model nobody has
+    checked."""
+    deciding = {r.key for r in routing.ROUTES if r.operation == "decide"}
+    fx.format2(client)
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    # Generates, and its catalog says it decides natively too: structured
+    # (ruling 1), on a model that could also decide natively.
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active", "outputs": ["text", "decisions"]}], rev)
+    got = _global(client)
+    card = got["roles"]["decision"]
+    assert (card["decision_mode"], card["decides_natively"]) == ("structured", "yes")
+    assert {(_row(got, k)["decision_mode"], _row(got, k)["decides_natively"])
+            for k in deciding} == {("structured", "yes")}
+
+    # The same model with no word on a native API: an OpenRouter row without
+    # `decisions` says nothing (`capabilities._listed`), so it is unknown on
+    # the card and every row -- never a missing API.
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active", "outputs": ["text"]}], rev)
+    got = _global(client)
+    assert got["roles"]["decision"]["decides_natively"] == "unknown"
+    assert {_row(got, k)["decides_natively"] for k in deciding} == {"unknown"}
+
+    # The user says it cannot: a known `no`.
+    got = client.put("/api/llm-connections/openrouter/facts",
+                     json={"model": "vendor/active", "overrides": {"decide_native": "no"}})
+    assert got.status_code == 200, got.text
+    got = _global(client)
+    assert (got["roles"]["decision"]["decision_mode"],
+            got["roles"]["decision"]["decides_natively"]) == ("structured", "no")
+
+    # A model the user says cannot decide natively (and that cannot generate).
+    fx.neither(client)
+    got = _global(client)
+    assert got["roles"]["decision"]["decides_natively"] == "no"
+
+
+def test_an_unmarked_openai_model_is_structured_with_its_native_api_unknown(client):
+    """The OpenAI preset says every model generates and its `/models` rows
+    say nothing of outputs, so a decisions-only model there is structured
+    until the user marks it -- and its card says that its native API is
+    unknown, not missing. Marked `generate: no`, it is answered natively."""
+    conn_id = fx.openai_decides_only(client)
+    card = _global(client)["roles"]["decision"]
+    assert (card["decision_mode"], card["decides_natively"]) == ("structured", "unknown")
+    got = client.put(f"/api/llm-connections/{conn_id}/facts",
+                     json={"model": fx.OPENAI_DECIDER, "overrides": {"generate": "no"}})
+    assert got.status_code == 200, got.text
+    card = _global(client)["roles"]["decision"]
+    assert (card["decision_mode"], card["decides_natively"]) == ("native", "unknown")
+    assert card["problem"] is None
 
 
 def _deleted_after_validation(monkeypatch, delete) -> None:

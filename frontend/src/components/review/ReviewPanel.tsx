@@ -136,6 +136,15 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
               Never attempted, skipped: {absorb.voice.skipped.join(", ")}
             </p>)}
         </div>)}
+      {(absorb.voice.noteless ?? []).length > 0 && (
+        <div className="mechanics-notice">
+          {/* A native verdict is an answer with no rationale, so a drift comes
+              back without the corrective the note would have been. It is
+              named rather than hidden, and nothing is staged for it. */}
+          <p>Out of voice, with no corrective to store: {(absorb.voice.noteless ?? []).join(", ")}.
+            {" "}The Decision model answers natively and gives no note, so any standing
+            correction is left as it is.</p>
+        </div>)}
       {targetClashRows.length > 0 && (
         <div className="mechanics-notice">
           <p>{targetClashRows.map((idx) => idx.map((i) => editRows[i].label).join(" and "))

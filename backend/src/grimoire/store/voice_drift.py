@@ -235,7 +235,7 @@ UNKNOWN = "unknown"          # no usable verdict came back at all -- never an op
 #
 # `build_item` is the judge's request as a decision item, `explain` the
 # corrective it asks for, and `finding_of` maps the answer back to the
-# `{"verdict", "note"}` finding `stage_edit` and the route read.
+# `{"verdict", "note", "native"}` finding `stage_edit` and the route read.
 # `check_failure` is the route's per-finding refusal, with its words.
 
 #: The choice's id.
@@ -334,8 +334,13 @@ def explain() -> str:
 
 
 def finding_of(result: decisions.ItemResult) -> dict:
-    """`{"verdict", "note"}` from the item's result: the finding `stage_edit`
-    and `check_failure` read.
+    """`{"verdict", "note", "native"}` from the item's result: the finding
+    `stage_edit` and `check_failure` read.
+
+    `native` is whether the native decisions endpoint answered. It gives a
+    verdict and never a rationale, so its drift always comes with no note --
+    which is a drift with no corrective to store, not a judge that failed to
+    explain (`check_failure`).
 
     An answer of `None`, whatever its reason, is UNKNOWN -- the failed check --
     and NOT "in voice". That distinction is the whole reason the verdict is not
@@ -347,7 +352,8 @@ def finding_of(result: decisions.ItemResult) -> dict:
     object would render Python source that reads as a usable corrective."""
     answer = result.answers.get(QUESTION_ID)
     verdict = answer.answer if answer is not None and isinstance(answer.answer, str) else None
-    return {"verdict": verdict or UNKNOWN, "note": result.rationale}
+    return {"verdict": verdict or UNKNOWN, "note": result.rationale,
+            "native": result.backend == decisions.NATIVE_BACKEND}
 
 
 def check_failure(finding: dict) -> str | None:
@@ -364,13 +370,16 @@ def check_failure(finding: dict) -> str | None:
       a chatty note would leave an obsolete corrective standing.
     - A drift with no note is unusable -- the note IS the corrective -- and one
       over MAX_NOTE would be charged against every later generation from the
-      post-history message, which the packer cannot trim.
+      post-history message, which the packer cannot trim. The first applies
+      to a structured answer only: a native one never has a note, so its
+      drift is reported (`noteless`) and stores nothing, and a failure for it
+      would hide a verdict the reviewer should see.
     """
     verdict, note = finding.get("verdict"), finding.get("note", "")
     if verdict == UNKNOWN:
         return "unreadable verdict from the voice judge"
     if verdict == DRIFT:
-        if not note:
+        if not note and not finding.get("native"):
             return "drift reported with no corrective"
         if len(note) > MAX_NOTE:
             return (f"the voice judge returned a corrective over {MAX_NOTE} characters, "

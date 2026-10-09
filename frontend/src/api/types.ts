@@ -291,12 +291,22 @@ export type RoleCard = {
   /** Why the stored fallback cannot send at all (no key, no base URL), so it
    *  is left out of the chain as silently; null when it can, or there is none. */
   fallback_problem: string | null;
-  /** On Decision only: that the decide routes skip its decide-only model for
-   *  the fallback (spec 5.5) -- the sentence their rows show. The card reads
-   *  the role as a generation, so without this its fallback line would say
-   *  "never tried" about the fallback answering those routes. Null otherwise. */
-  decide_skip: string | null;
+  /** On the Decision card, the backend its model is answered by: `native`
+   *  (the provider's decisions endpoint), `structured` (generation against a
+   *  schema), or `""` when it can do neither and is refused. `""` on every
+   *  other role. The server's resolution, never re-derived here. */
+  decision_mode: DecisionMode;
+  /** The resolved model's `decide_native` -- the capabilities the resolver
+   *  decided on -- so a `structured` decision is worded without a read of
+   *  its own. `no` only when it is KNOWN (a name-rule guess is `unknown`):
+   *  the one value under which "no native decision API" may be said. */
+  decides_natively: DecidesNatively;
 };
+/** Which backend answers a decision (`RoleCard.decision_mode`). */
+export type DecisionMode = "native" | "structured" | "";
+/** What is known of a resolved model's native decisions
+ *  (`RoleCard.decides_natively`). */
+export type DecidesNatively = "yes" | "no" | "unknown";
 /** The Embedding role (global scope only). `on` is whether anything embeds;
  *  `problem` is null when it does, else the server's short reason it does not
  *  ("No provider chosen", "<provider> has no key set", ...). */
@@ -330,6 +340,10 @@ export type RouteRow = {
   fallback_missing: CapabilityName[];
   /** As on `RoleCard`: why the route's fallback cannot send at all. */
   fallback_problem: string | null;
+  /** As on `RoleCard`, for a decide route; `""` on a generate one. */
+  decision_mode: DecisionMode;
+  /** As on `RoleCard`. */
+  decides_natively: DecidesNatively;
   role: GenerativeRole | null;
   /** The role the route walks (its own `use`, else its default), whichever
    *  role ends up supplying it -- a route can use Decision while Decision
@@ -425,7 +439,7 @@ export type ModelFactsUpdate = {
   rates?: PricingEntry | Record<string, never>;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
-export type TestableCapability = "generate" | "vision" | "embed";
+export type TestableCapability = "generate" | "vision" | "embed" | "decide_native";
 /** `POST /api/llm-connections/{id}/test/preview`: what a test would send.
  *  `estimated_cost_usd` is `null` when no source (catalog, rates) states a price; 0 is only
  *  ever a stated free model. */
@@ -1739,12 +1753,15 @@ export type UsageBucket = {
   /** Breakdown counts, each a slice of a count above and never money (spec
    *  9.1): `modelled_subscription_calls` sits inside `modelled_calls`,
    *  `unpriced_subscription_calls` inside `unpriced_calls` -- calls a
-   *  subscription served that no provider billed -- and `estimated_token_calls`
+   *  subscription served that no provider billed -- `unpriced_native_calls`
+   *  inside `unpriced_calls` too -- native decisions, which no rate prices,
+   *  and never also counted in `unmetered_calls` -- and `estimated_token_calls`
    *  inside `calls`, the ones whose token counts were counted here because the
    *  provider reported none. `/usage` omits each while it is zero, so a reader
    *  takes absent as 0. */
   modelled_subscription_calls?: number;
   unpriced_subscription_calls?: number;
+  unpriced_native_calls?: number;
   estimated_token_calls?: number;
   duration_ms: number;
 };
@@ -2181,6 +2198,11 @@ export type VoiceCheck = PhaseAttempt & {
    *  voice" for a character nobody actually heard — and silence never clears a
    *  standing corrective. */
   unjudged: string[];
+  /** The subset of `flagged` whose verdict came without a note, because the
+   *  Decision model answers natively and a native answer has no rationale.
+   *  Shown, but nothing is stored for them. Optional: reviews stored before
+   *  this existed lack it. */
+  noteless?: string[];
   failed: DossierFailure[];
   /** Anchored NPCs the absorb budget ran out before reaching — never attempted. */
   skipped: string[];
@@ -3251,6 +3273,7 @@ export type ShellMoney = {
    *  them; optional because a response from an older build does not. */
   modelled_subscription_calls?: number;
   unpriced_subscription_calls?: number;
+  unpriced_native_calls?: number;
   estimated_token_calls?: number;
   partial: boolean;
 };

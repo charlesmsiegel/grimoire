@@ -27,9 +27,10 @@ resolution, each attempt whose `structured_output` is `yes` is flagged on its
 own dict (`STRUCTURED_KEY`, slice F), which is how the facade asks that
 attempt, and only that one, for its provider's structured mode. Each attempt
 of a decide resolution also says which backend would answer it
-(`decision_mode`), and a primary known unable to generate is skipped for a
-fallback that can (`ResolvedInference.skipped`, spec 5.5) -- until slice H's
-native backend can answer it.
+(`decision_mode`, slice H): its provider's native decisions endpoint for a
+model known unable to generate that may decide natively (`native_only`),
+structured generation for one that can generate, whatever its
+`decide_native` says.
 
 Each attempt's dict carries an account block (`ACCOUNT_KEY`): what the ledger
 files about the attempt that the wire does not say -- its `billing`, its
@@ -86,9 +87,11 @@ FALLBACK_KEY = "_fallback"
 
 #: Why a fallback on the primary's own provider is left out of `attempts`
 #: (`fallback_problem`): a second try on the connection that just failed is not
-#: a fallback (`llm._same_route`). A name of its own, so a route that may come
-#: to reach such a fallback -- a decide-only skip -- can lift this reason where
-#: it lifts the drop, and leave the credential ones (`problem`) alone.
+#: a fallback (`llm._same_route`). A name of its own, so the one resolution
+#: that keeps such a fallback -- a decide primary that cannot generate, whose
+#: fallback on another model is a stage apart (`_apart`) -- lifts this reason
+#: where it lifts the drop, and leaves the credential ones (`problem`) alone.
+#: The same model there is still a second try, and still dropped with it.
 SAME_PROVIDER = "it is on the primary's own provider"
 
 #: Where an attempt's connection dict says it may be asked for structured
@@ -390,16 +393,22 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
         controls=llm_sampling.effective(conn), retries=retries)
 
 
-#: The capability an operation needs of itself. `decide` is not an operation
-#: the facade runs yet: a decide route still generates.
-OPERATION_CAPABILITY: dict[str, str] = {"generate": "generate", "embed": "embed",
-                                        "decide": "generate"}
+#: The capabilities an operation needs of itself, as ALTERNATIVES: an attempt
+#: meets the operation when it is not known unable to do every one of them.
+#: A decision is answered natively (`decide_native`) or by structured
+#: generation (`generate`), so a model needs either. Read off
+#: `capabilities.NEEDS`, the picker's own table, so the seam and the picker
+#: hold one answer to "what does a decision need".
+OPERATION_CAPABILITY: dict[str, tuple[str, ...]] = {
+    op: capabilities.NEEDS[op] for op in ("generate", "embed", "decide")}
 
 
-def _needs(route: routing.Route | None, operation: str) -> frozenset[str]:
-    """What an attempt must be able to do for this route and operation."""
-    own = OPERATION_CAPABILITY.get(operation, "generate")
-    return frozenset({own, *(route.requires if route is not None else ())})
+def _needs(route: routing.Route | None, operation: str) -> tuple[frozenset[str], ...]:
+    """What an attempt must be able to do for this route and operation, as
+    groups of alternatives: the operation's own (`OPERATION_CAPABILITY`) as
+    one group, and each of the route's `requires` as a group of its own."""
+    own = frozenset(OPERATION_CAPABILITY.get(operation, ("generate",)))
+    return (own, *(frozenset({cap}) for cap in (route.requires if route is not None else ())))
 
 
 #: The sources whose `no` is a guess rather than knowledge: the name rule
@@ -409,12 +418,21 @@ def _needs(route: routing.Route | None, operation: str) -> frozenset[str]:
 _GUESSES = frozenset({"name"})
 
 
-def _missing(attempt: Attempt, needs: frozenset[str]) -> tuple[str, ...]:
-    """The needs `attempt` is known (`no`) not to meet, in `capabilities.NAMES`
-    order. `unknown` is never missing, and neither is a guess (`_GUESSES`)."""
-    known_no = {cap for cap, found in attempt.capabilities.items()
-                if found.value == capabilities.NO and found.source not in _GUESSES}
-    return tuple(cap for cap in capabilities.NAMES if cap in needs and cap in known_no)
+def _known_no(found: capabilities.Cap | None) -> bool:
+    """Whether `found` is a `no` that is knowledge rather than a guess."""
+    return (found is not None and found.value == capabilities.NO
+            and found.source not in _GUESSES)
+
+
+def _missing(attempt: Attempt, needs: tuple[frozenset[str], ...]) -> tuple[str, ...]:
+    """Every member of every group in `needs` whose members `attempt` is ALL
+    known (`no`) not to have, in `capabilities.NAMES` order -- a group with
+    one member it may have is met. `unknown` is never missing, and neither is
+    a guess (`_GUESSES`)."""
+    caps = attempt.capabilities
+    unmet = {cap for group in needs if all(_known_no(caps.get(c)) for c in group)
+             for cap in group}
+    return tuple(cap for cap in capabilities.NAMES if cap in unmet)
 
 
 def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple[str, str]]:
@@ -537,8 +555,10 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     dropped when it cannot be read or cannot send (so a misconfigured fallback
     never replaces the primary's real error) and when it names the primary's
     own connection (`llm._same_route`: a second try on the connection that just
-    failed is not a fallback; kept only where the decide skip lands on it,
-    whose primary is never sent) -- either says why in `fallback_problem`
+    failed is not a fallback; kept behind a decide primary that cannot
+    generate when it names another model, where it is a stage of its own,
+    `_apart`) -- either says why in
+    `fallback_problem`
     (`problem`'s reason, or `SAME_PROVIDER`), which nothing refuses on; and
     when the route has a
     preset -- campaign or global scope, a `PRESET_CLEAR` included -- the
@@ -546,7 +566,10 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     (`llm.fallback_sampling`). Its
     `model_params` stay its own model's. A fallback KNOWN unable to do what
     the route needs is kept in `attempts` and reported (`fallback_missing`) but
-    not attached, so it is never sent (spec 5.3).
+    not attached, so it is never sent (spec 5.3). On a decide resolution the
+    fallback is attached only where both attempts are structured (`_rides`);
+    otherwise it stays in `attempts`, unattached, and `inference.stages` sends
+    it as a stage of its own.
 
     A per-call preset (`override.preset`, scope `override`) is the primary's
     alone. The fallback gets what it would have had without it: the route's
@@ -632,11 +655,16 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
         # A fallback on the primary's own provider is a retry (#144), which
-        # the retry budget already covers -- except for the decide skip,
-        # whose primary is never sent: there the fallback is the only call,
-        # so it is built and `resolve` keeps it only if the skip lands on it.
-        # The reason is lifted exactly where the drop is (`SAME_PROVIDER`).
-        fallback_problem = (problem(fb_raw) if fb_raw is not None and _skippable(first, operation)
+        # the retry budget already covers -- except behind a decide primary
+        # that cannot generate (`_apart`) when it names ANOTHER model: that
+        # fallback is a stage of its own, never a second try of the call that
+        # failed. The same model on the same connection is that second try
+        # whatever the stage is called, so it is dropped as C drops it. The
+        # reason is lifted exactly where the drop is (`SAME_PROVIDER`).
+        fallback_problem = (problem(fb_raw)
+                            if fb_raw is not None and fallback is not None
+                            and _apart(first, operation)
+                            and not _same_model(conn, fb_raw, fallback.model)
                             else _fallback_problem(conn, fb_raw))
         if fallback is not None and fb_raw is not None and fallback_problem is None:
             # A copy, so the two attempts never share a mutable block.
@@ -648,13 +676,6 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
 
     tail = _chain(attempts, operation, _needs(route, operation), current=current,
                   choice=choice, selection=selection)
-    if (len(tail.attempts) > 1 and not tail.skipped
-            and _same_provider(tail.attempts[0].conn, tail.attempts[1].conn)):
-        # Built for a skip that did not land (the fallback cannot answer
-        # either): a retry again, dropped as it always was, and said so.
-        tail = tail._replace(attempts=tail.attempts[:1], fallback_missing=())
-        tail.attempts[0].conn.pop(FALLBACK_KEY, None)
-        fallback_problem = SAME_PROVIDER
     return ResolvedInference(
         task=task, operation=operation,
         route=route.key if route is not None else "",
@@ -662,8 +683,7 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         role=choice.role, via=choice.via, scope=choice.scope,
         attempts=tail.attempts, standing=choice.selection, current=current,
         standing_preset=standing_preset, missing=tail.missing,
-        fallback_missing=tail.fallback_missing, fallback_problem=fallback_problem,
-        skipped=tail.skipped)
+        fallback_missing=tail.fallback_missing, fallback_problem=fallback_problem)
 
 
 class _Tail(NamedTuple):
@@ -672,15 +692,14 @@ class _Tail(NamedTuple):
     attempts: tuple[Attempt, ...]
     missing: tuple[str, ...]
     fallback_missing: tuple[str, ...]
-    skipped: tuple[str, ...]
 
 
-def _chain(attempts: list[Attempt], operation: str, needs: frozenset[str], *,
+def _chain(attempts: list[Attempt], operation: str, needs: tuple[frozenset[str], ...], *,
            current: bool, choice: cascade.Choice, selection: Selection | None) -> _Tail:
     """The tail of `resolve`: stamp each attempt's account block, flag the
-    structured-capable ones, say what each is known to lack, apply the decide
-    skip, attach the fallback the facade sends, and give a decide
-    resolution's attempts their `decision_mode`."""
+    structured-capable ones, say what each is known to lack, give a decide
+    resolution's attempts their `decision_mode`, and attach the fallback the
+    facade sends (`_rides`)."""
     # Stamped BEFORE the fallback is attached, so the dict the facade sends
     # is the stamped one.
     _account(attempts, operation, choice, selection)
@@ -690,55 +709,92 @@ def _chain(attempts: list[Attempt], operation: str, needs: frozenset[str], *,
     fallback_missing = (_bridged(_missing(attempts[1], needs), attempts[1], current=current)
                         if len(attempts) > 1 else ())
     missing = _missing(attempts[0], needs) if attempts else ()
-    skipped = _skipped(attempts, operation, missing, needs)
-    if skipped:
-        missing = ()
-    elif len(attempts) > 1 and not fallback_missing:
+    if operation == "decide":
+        # Before the attach, which reads them. The same dict objects, so the
+        # attach below writes into the dicts the attempts carry.
+        attempts = [_decide_attempt(a) for a in attempts]
+    if len(attempts) > 1 and not fallback_missing and _rides(attempts, operation):
         # The facade sends what the primary's dict carries (spec 5.3: a
         # fallback known incapable is dropped from the chain, never sent). The
         # dict is this resolution's own copy (`_lowered`), so nothing the store
         # handed back is touched.
         attempts[0].conn[FALLBACK_KEY] = attempts[1].conn
-    if operation == "decide":
-        # The same dict objects, so the attach above still names them.
-        attempts = [dataclasses.replace(a, decision_mode=decision_mode(a)) for a in attempts]
-    return _Tail(tuple(attempts), missing, fallback_missing, skipped)
+    return _Tail(tuple(attempts), missing, fallback_missing)
+
+
+def _decide_attempt(attempt: Attempt) -> Attempt:
+    """`attempt` on a decide resolution: its `decision_mode`, and -- when that
+    is "native" -- its controls all `n/a` (spec 8), since its provider's
+    decisions endpoint takes no sampling. Under ruling 1 a native attempt is
+    always one that cannot generate, so there is no sampling to keep."""
+    mode = decision_mode(attempt)
+    if mode != "native":
+        return dataclasses.replace(attempt, decision_mode=mode)
+    return dataclasses.replace(
+        attempt, decision_mode=mode,
+        controls=llm_sampling.not_applicable(attempt.conn, llm_sampling.WHY_NATIVE))
+
+
+def _rides(attempts: list[Attempt], operation: str) -> bool:
+    """Whether the fallback rides the facade behind the primary
+    (`FALLBACK_KEY`): always on a generate resolution; on a decide one only
+    when both are structured -- the primary `generates` and the fallback's
+    mode is "structured". A native attempt, on either side, is a stage of its
+    own (`inference.stages`), which a structured call cannot carry. Under
+    ruling 1 a generating primary is structured, so every attach slice F
+    made is still made."""
+    if operation != "decide":
+        return True
+    return attempts[1].decision_mode == "structured" and generates(attempts[0])
+
+
+def generates(attempt: Attempt) -> bool:
+    """Whether `attempt` can generate: `generate` is not among what it is
+    KNOWN (`_missing`) not to do, so `unknown` and a name-rule guess both
+    still generate. What `decision_mode`, the same-provider rule (`_apart`)
+    and the decide chain (`inference.stages`) ask."""
+    return not _missing(attempt, (frozenset({"generate"}),))
+
+
+def decides_natively(attempt: Attempt) -> bool:
+    """Whether `attempt` may decide natively: `decide_native` is not among
+    what it is KNOWN (`_missing`) not to do, so `unknown` and a name-rule
+    guess both still may (spec 5.3). `generates`' twin, asked where a native
+    decision is forced on an attempt (`evals/runner.chain`)."""
+    return not _missing(attempt, (frozenset({"decide_native"}),))
+
+
+def native_only(caps: dict[str, capabilities.Cap]) -> bool:
+    """Whether a model with these capabilities is answered natively: it is
+    known (`no`, from a source other than the name rule) unable to
+    `generate`, and not known unable to `decide_native` -- `unknown` is
+    allowed (spec 5.3). The one rule the resolver and the controls preview
+    both ask, so the two never disagree."""
+    return _known_no(caps.get("generate")) and not _known_no(caps.get("decide_native"))
 
 
 def decision_mode(attempt: Attempt) -> str:
-    """The backend that would answer `attempt` first on a decide resolution:
-    "structured" (`generate(schema=)` and the parser) unless the attempt is
-    KNOWN unable to generate -- the `_missing` rule, so `unknown` and a
-    name-rule guess both still generate. "" for an attempt that cannot.
-    Slice H returns "native" where `decide_native` is `yes`."""
-    return "" if _missing(attempt, frozenset({"generate"})) else "structured"
+    """The backend that would answer `attempt` on a decide resolution (ruling
+    1, C1): "native" (its provider's decisions endpoint) when it is
+    `native_only`; else "structured" (`generate(schema=)` and the parser)
+    when it `generates`, whatever its `decide_native` says -- a model that
+    can generate stays structured until native wins on evals (spec 16); else
+    "", for an attempt that can do neither."""
+    if native_only(attempt.capabilities):
+        return "native"
+    return "structured" if generates(attempt) else ""
 
 
-def _skippable(primary: Attempt, operation: str) -> bool:
-    """Whether `primary` is a decide primary known unable to generate -- the
-    one the decide skip passes over, if its fallback can answer."""
-    return operation == "decide" and bool(_missing(primary, frozenset({"generate"})))
-
-
-def _skipped(attempts: list[Attempt], operation: str, missing: tuple[str, ...],
-             needs: frozenset[str]) -> tuple[str, ...]:
-    """The decide skip (spec 5.5, I5): the primary's `missing`, when this is a
-    decide resolution whose primary cannot generate and whose fallback is
-    known to lack nothing the route needs; else ().
-
-    Until native decisions arrive (slice H) nothing can answer a decide-only
-    model, so the fallback answers in its place. With no fallback, or one that
-    cannot generate either, nothing is skipped and the primary's `incapable`
-    409 stands (spec 5.3).
-
-    A skipped primary is never checked for a key: `unusable` reads `conn`,
-    which is the fallback's, so a decide-only primary with no key is skipped
-    silently. Nothing is sent to it, and its missing key surfaces once slice H
-    serves it natively."""
-    if (operation != "decide" or "generate" not in missing or len(attempts) < 2
-            or _missing(attempts[1], needs)):
-        return ()
-    return missing
+def _apart(primary: Attempt, operation: str) -> bool:
+    """Whether a fallback on `primary`'s own provider may be kept (`resolve`):
+    on a decide resolution whose primary cannot generate, and only when it
+    names another model (`_same_model`, checked by the caller). That
+    fallback is never a retry of the primary's call -- it is a stage of its
+    own, on another model (`inference.stages`) -- so the same-provider drop
+    (#144) does not apply. The same model on the same connection IS that
+    retry, and is dropped with `SAME_PROVIDER`. Kept like any other fallback:
+    one that cannot serve either backend is reported in `fallback_missing`."""
+    return operation == "decide" and not generates(primary)
 
 
 def _flag_structured(attempts: list[Attempt], operation: str) -> None:
@@ -800,7 +856,7 @@ def space_of(conn: dict, model: str) -> str:
 
 
 #: What the Embedding role's one attempt must be able to do.
-_EMBED_NEEDS = frozenset({OPERATION_CAPABILITY["embed"]})
+_EMBED_NEEDS = (frozenset(OPERATION_CAPABILITY["embed"]),)
 
 
 class EmbedAttempt(NamedTuple):
@@ -946,6 +1002,15 @@ def _account(attempts: list[Attempt], operation: str, choice: cascade.Choice,
         attempt.conn[ACCOUNT_KEY] = {**attempt.conn.get(ACCOUNT_KEY, {}), **stamp}
 
 
+def _same_model(primary: dict, fallback: dict, model: str) -> bool:
+    """Whether a fallback on record `fallback`, at `model`, is the primary's
+    own connection AND model (`facts.model_of`, so an unset Claude model is
+    the default it runs): a second send of the very call that failed, which
+    no stage boundary turns into a fallback (#144)."""
+    return (_same_provider(primary, fallback)
+            and facts.model_of({**fallback, "model": model}) == facts.model_of(primary))
+
+
 def _same_provider(primary: dict, fallback: dict) -> bool:
     """Whether the fallback is the primary's own connection, by store id --
     `llm._same_route`'s rule (two dicts read from disk are never the same
@@ -1029,7 +1094,9 @@ def incapable(resolved: ResolvedInference) -> Refusal | None:
     `no` (the bridge, below); at format 2 that word is the model's facts, a
     user `yes` the capability resolution already ranks above the catalog.
     Anything else is `incapable` (`incapable_text`), naming the first missing
-    capability in `capabilities.NAMES` order. A name-rule guess is never
+    capability in `capabilities.NAMES` order -- with its alternatives, on a
+    decide resolution whose primary can neither generate nor decide natively
+    (`_cannot`). A name-rule guess is never
     missing (`_GUESSES`), and a failed test call is `unknown`, so neither can
     refuse here.
     """
@@ -1075,8 +1142,8 @@ def refusal(resolved: ResolvedInference) -> Refusal | None:
 
 def incapable_text(resolved: ResolvedInference, cap: str) -> str:
     """The `incapable` sentence (spec 5.3): the route, the role when one
-    supplied the model, the model on its provider, what it cannot do, and
-    what to do about it.
+    supplied the model, the model on its provider, what it cannot do
+    (`_cannot`), and what to do about it.
 
     "The <label> route ..." rather than "<label> runs ...", because half the
     route labels are plural ("Scene turns", "Image descriptions"). The role
@@ -1087,8 +1154,22 @@ def incapable_text(resolved: ResolvedInference, cap: str) -> str:
     the one the connection runs (`facts.model_of`, `llm.effective_model`'s
     rule)."""
     subject, where, remedy = _primary_phrases(resolved)
-    return (f"{subject} {where}, which cannot "
-            f"{capabilities.CANNOT.get(cap, cap)} — {remedy}.")
+    return f"{subject} {where}, which cannot {_cannot(resolved, cap)} — {remedy}."
+
+
+def _cannot(resolved: ResolvedInference, cap: str) -> str:
+    """What the primary cannot do, as `incapable_text` says it: `cap`'s
+    phrase (`capabilities.CANNOT`), or -- when `cap` is one of its
+    operation's alternatives (`OPERATION_CAPABILITY`) and the primary is
+    missing them all -- every alternative's, joined by "or" in
+    `capabilities.NAMES` order ("generate text or make native decisions").
+    `CANNOT` stays keyed by capability, so a picker's reasons
+    (`capabilities.group_for`) are unchanged."""
+    group = OPERATION_CAPABILITY.get(resolved.operation, ())
+    if len(group) > 1 and cap in group and all(c in resolved.missing for c in group):
+        return " or ".join(capabilities.CANNOT.get(c, c) for c in capabilities.NAMES
+                           if c in group)
+    return capabilities.CANNOT.get(cap, cap)
 
 
 def _on(attempt: Attempt) -> str:
@@ -1102,8 +1183,7 @@ def _on(attempt: Attempt) -> str:
 
 def _primary_phrases(resolved: ResolvedInference) -> tuple[str, str, str]:
     """`(subject, where, remedy)` for the primary attempt -- what the route
-    is, what it runs on, and what to do about it -- shared by
-    `incapable_text` and `skip_text` so both say it the same way."""
+    is, what it runs on, and what to do about it (`incapable_text`)."""
     primary = resolved.attempts[0]
     on = _on(primary)
     standing = resolved.standing
@@ -1122,15 +1202,3 @@ def _primary_phrases(resolved: ResolvedInference) -> tuple[str, str, str]:
     else:
         where, remedy = f"runs on {on}", f"choose another model{pin}"
     return subject, where, remedy
-
-
-def skip_text(resolved: ResolvedInference) -> str | None:
-    """The sentence for a `skipped` resolution (spec 5.5), in
-    `incapable_text`'s register: what the route runs on, that it cannot
-    generate, and which fallback answers in its place until native decisions
-    arrive. None when nothing was skipped."""
-    if not resolved.skipped or len(resolved.attempts) < 2:
-        return None
-    subject, where, _ = _primary_phrases(resolved)
-    return (f"{subject} {where}, which cannot generate; until native decisions "
-            f"arrive it is answered by the fallback ({_on(resolved.attempts[1])}).")

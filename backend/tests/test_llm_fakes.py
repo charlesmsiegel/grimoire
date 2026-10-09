@@ -371,7 +371,7 @@ def test_the_voice_drift_body_is_a_decision_the_judge_reads():
     reply = _shipped().reply(_as_messages(_decide_prompts()["voice-drift"]))
     (result,) = decisions.parse("".join(reply), (item,), explain=True)
     finding = voice_drift.finding_of(result)
-    assert finding == {"verdict": voice_drift.IN_VOICE, "note": ""}
+    assert finding == {"verdict": voice_drift.IN_VOICE, "note": "", "native": False}
     assert voice_drift.check_failure(finding) is None
 
 

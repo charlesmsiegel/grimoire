@@ -280,7 +280,6 @@ function RoleDetail({ role, card, settings, blocked, onEdit }:
       <h5>{label}</h5>
       <p>{overridden(card) ? `Runs on ${describe(card.resolves)}` : inheritWords(card.inherits)}</p>
       <Problem text={card.problem} />
-      <Problem text={card.decide_skip} />
       <Problem text={droppedFallbackWords(card.fallback_missing, label, named,
                                                 card.fallback_problem)} />
       <div className="campaign-models-meta">
@@ -332,7 +331,8 @@ function SelectionFields({ label, needs, sel, onChange, settings, blocked, prese
           A preset with no provider is not used. Choose a provider, or clear it.
         </p>
       )}
-      <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />
+      <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
+                       operation={needs.includes("decide") ? "decide" : undefined} />
     </fieldset>
   );
 }

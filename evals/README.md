@@ -51,6 +51,10 @@ backend\.venv\Scripts\python.exe evals\run.py --live
 backend/.venv/bin/python evals/run.py --live --record
 backend\.venv\Scripts\python.exe evals\run.py --live --record
 
+# live on another model, and with one decide backend forced (below)
+backend/.venv/bin/python evals/run.py --live --provider ID --model NAME --decide-backend native
+backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME --decide-backend native
+
 # the decide gate: today's parse against the structured one. Offline.
 backend/.venv/bin/python evals/run.py --gate
 backend\.venv\Scripts\python.exe evals\run.py --gate
@@ -62,17 +66,21 @@ backend\.venv\Scripts\python.exe evals\run.py --gate
   replies to today's parser and to `decide()`'s, and scores what the call site
   would store from each. It says the structured parse reads every shape
   today's did; it says nothing about what a model would write. Offline, no
-  key, and it refuses `--live`, `--record` and `--case`.
+  key, and it refuses `--live`, `--record`, `--case`, `--provider`,
+  `--model` and `--decide-backend`.
 - **Replay grades recorded output.** It holds the prompt contract (every
   `prompt.*` check runs on the freshly assembled prompt) and the graders,
   against a fixed recording (below).
 - **`--live` measures whether a model follows the prompt** on the model the
   app routes each case's task to. For a decide case (one with a `schema`)
-  that is the decide resolution -- the Decision role, unless the Models page
-  routed the task elsewhere -- sent with the schema, in the provider's
-  structured mode wherever that model is known to support it: exactly what
-  production sends. It **costs money**, and is never run without the user's
-  explicit approval; `--record` too, since it is a live run.
+  that is the full decide chain of its decide resolution -- the Decision
+  role, unless the Models page routed the task elsewhere -- answered by
+  `inference.run_stages` down `inference.stages`, exactly as `decide` sends
+  it: the selection's own backend (natively for a model that cannot
+  generate, structured with the schema otherwise), then the role fallback
+  where it is a stage of its own. It **costs money**, and is never run
+  without the user's explicit approval; `--record` too, since it is a live
+  run.
 
 Replay also runs under pytest (`backend/tests/test_evals.py`), and so does the
 decide gate (`backend/tests/test_decide_gate.py`): both are part of `make
@@ -119,6 +127,67 @@ template's semantic instructions — the rule of three, redundant adjective
 pairs, explaining an emotion just shown, decorative metaphor, and the three
 qualifier-dependent phrases — are not gradable by regex and are listed as
 ungraded in the design spec. A green case means the graded subset held.
+
+### A live decide case, and comparing its backends
+
+A decide case's answers are written back as the structured reply its graders
+read (`decisions.render`), whichever backend answered, so one grader scores
+both. The report names what answered on the case's line: `(backend:
+native)` or `(backend: structured)`, or -- when a fallback stage answered
+the items the primary failed -- each backend with how many items it
+answered, in item order: `(backend: native 3, structured 4)`. Where a stage
+failed some items of a batch, each failure's cause follows (`; failed:
+bad_response: ...`), so a failed answer check says why.
+
+A native endpoint is asked for answers only, never a rationale. So on a
+case whose prompt asks for one (`decide-scene-break`, `decide-voice-drift`)
+an item a native endpoint answered passes `decide.rationale` as `n/a:
+answered natively`, listed under the case in the report rather than
+dropped; an item answered structured keeps the real check, and fails it
+without a rationale.
+
+The `prompt.*` checks of a live decide case grade the case's own prompt,
+built fresh -- what a structured stage sends. A native item sends no such
+prompt (its request is the decisions endpoint's own body), so on a native
+run those checks say nothing about what was sent; the answer checks are
+the measurement.
+
+Two flags change what a live run sends, and both need `--live`:
+
+- **`--provider ID --model NAME`** runs every case on that selection instead
+  of the routed one, through the seam a reroll uses (`override_inference`):
+  the same meanings and the same refusals. It is a per-run override and
+  writes nothing to settings -- `config.md`, the connections and the model
+  facts are as they were.
+- **`--decide-backend chain|native|structured`** says how a decide case is
+  answered. `chain` (the default) is what production sends, above. `native`
+  and `structured` force that one backend on the resolution's primary,
+  without its fallback. `native` is refused for a connection kind with no
+  native decisions endpoint, a provider preset that never decides natively,
+  or a model known (not guessed) unable to decide natively; `structured`
+  for a model known unable to generate. An `unknown` refuses neither. A
+  chain with no stage at all (`chain` on a model that can do neither) is
+  refused too. A refusal is one sentence and exit 2, before any case is
+  sent.
+
+To compare the two backends, compare them **on one model**: a model that
+both generates and decides natively, run twice --
+
+```sh
+backend/.venv/bin/python evals/run.py --live --provider ID --model NAME --decide-backend native --case decide-scene-break --case decide-voice-drift --case decide-speaker --case decide-continuity-identity --case decide-continuity-reconcile
+backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME --decide-backend native --case decide-scene-break --case decide-voice-drift --case decide-speaker --case decide-continuity-identity --case decide-continuity-reconcile
+```
+
+-- then the same with `--decide-backend structured`. A native-only model
+against a structured one would compare the models as well as the backends.
+That comparison is the measurement the later "native first" decision (spec
+16) waits on: the chain serves a model that can generate structured until
+native wins on evals. Like every live run it **costs money**, and is never
+run without the user's explicit approval; point it at a throwaway
+`GRIMOIRE_HOME` holding only the chosen provider's connection and key,
+rather than repointing your real store's Decision role.
+
+### What a live run reads
 
 `--live` reads model settings and credentials from your **real** store while
 every case still builds its campaign in a throwaway `GRIMOIRE_HOME`. Each case

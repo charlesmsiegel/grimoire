@@ -3,6 +3,8 @@
     backend/.venv/Scripts/python.exe evals/run.py                 # replay
     backend/.venv/Scripts/python.exe evals/run.py --live          # one real call per case
     backend/.venv/Scripts/python.exe evals/run.py --live --record # ...and save as baseline
+    backend/.venv/Scripts/python.exe evals/run.py --live --provider ID --model NAME \
+        --decide-backend native                                   # force one decide backend
     backend/.venv/Scripts/python.exe evals/run.py --case roll-fence
     backend/.venv/Scripts/python.exe evals/run.py --gate          # the decide gate, offline
 
@@ -49,7 +51,11 @@ def run_gate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # Offline and whole: anything that would spend money or narrow the gate to
     # some of its conversions is refused before anything runs.
     clash = [flag for flag, on in (("--live", args.live), ("--record", args.record),
-                                   ("--case", bool(args.case))) if on]
+                                   ("--case", bool(args.case)),
+                                   ("--provider", bool(args.provider)),
+                                   ("--model", bool(args.model)),
+                                   ("--decide-backend", args.decide_backend is not None))
+             if on]
     if clash:
         ap.error(f"--gate is offline and judges every conversion; "
                  f"it takes no {', '.join(clash)}")
@@ -63,6 +69,48 @@ def run_gate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0 if all(r.passed for r in results) else 1
 
 
+def run_live(args: argparse.Namespace, selected: tuple) -> list[runner.Result] | int:
+    """`--live`: resolve every case in the REAL store, build every decide
+    case's chain, then run each case in a throwaway one. An exit code instead
+    of results when the run is refused before anything is sent."""
+    backend = args.decide_backend or runner.CHAIN
+    # Before any temp_home(): the settings live in the REAL store.
+    try:
+        conns = runner.resolve_connections(selected, provider=args.provider,
+                                           model=args.model)
+    except RuntimeError as exc:
+        print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+        return 1
+    # Every decide case's chain is built before anything is sent, so a forced
+    # backend the model cannot take refuses the whole run unsent.
+    modes: dict[str, str] = {}
+    for case in selected:
+        key = runner.conn_key(case)
+        target = conns[key]
+        if key in modes or isinstance(target, dict):
+            continue
+        try:
+            stages = runner.chain(target, backend)
+        except runner.BackendRefusedError as exc:
+            print(runner.ascii_safe(f"live: {key}: {exc}"), file=sys.stderr)
+            return 2
+        modes[key] = f" [{' then '.join(s.mode for s in stages)}]"
+    # ascii_safe: the model id is user-configured free text and may not
+    # encode in the console's code page (see runner.report).
+    for key, target in conns.items():
+        conn = target if isinstance(target, dict) else target.conn
+        if conn is None:   # the seam refuses a resolution of nothing; never sent
+            print(runner.ascii_safe(f"live: {key} resolved to no connection"),
+                  file=sys.stderr)
+            return 1
+        print(runner.ascii_safe(
+            f"live: {key} -> {conn['kind']} / {conn.get('model') or '(default)'}"
+            f"{modes.get(key, '')}"))
+    if args.record:
+        print("  [recording baselines]")
+    return runner.live_all(selected, conns, temp_home, record=args.record, backend=backend)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Score grimoire's LLM output against the eval suite.")
     ap.add_argument("--live", action="store_true",
@@ -74,6 +122,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--gate", action="store_true",
                     help="compare each decide conversion's structured parse with "
                          "today's on its recorded corpus; offline, never a call")
+    ap.add_argument("--provider", metavar="ID", default="",
+                    help="with --live, run on this provider instead of the routed one "
+                         "(a per-run override, as a reroll's; nothing is saved)")
+    ap.add_argument("--model", metavar="NAME", default="",
+                    help="with --live, run on this model instead of the routed one")
+    ap.add_argument("--decide-backend", choices=runner.DECIDE_BACKENDS, default=None,
+                    help="with --live, how a decide case is answered: 'chain' (the "
+                         "default) is what the app sends; 'native' or 'structured' "
+                         "forces that backend on the resolved model alone")
     args = ap.parse_args(argv)
 
     if args.gate:
@@ -81,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.record and not args.live:
         ap.error("--record only means anything with --live")
+    live_only = [flag for flag, on in (("--provider", bool(args.provider)),
+                                       ("--model", bool(args.model)),
+                                       ("--decide-backend", args.decide_backend is not None))
+                 if on]
+    if live_only and not args.live:
+        ap.error(f"{', '.join(live_only)} only means anything with --live")
 
     selected = case_mod.CASES
     if args.case:
@@ -91,20 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         selected = tuple(case_mod.BY_ID[c] for c in args.case)
 
     if args.live:
-        # Before any temp_home(): the settings live in the REAL store.
-        try:
-            conns = runner.resolve_connections(selected)
-        except RuntimeError as exc:
-            print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
-            return 1
-        # ascii_safe: the model id is user-configured free text and may not
-        # encode in the console's code page (see runner.report).
-        for key, conn in conns.items():
-            print(runner.ascii_safe(
-                f"live: {key} -> {conn['kind']} / {conn.get('model') or '(default)'}"))
-        if args.record:
-            print("  [recording baselines]")
-        results = runner.live_all(selected, conns, temp_home, record=args.record)
+        results = run_live(args, selected)
+        if isinstance(results, int):
+            return results
     else:
         print(f"replay: {sum(len(c.recordings) for c in selected)} recordings")
         results = runner.replay_all(selected, temp_home)

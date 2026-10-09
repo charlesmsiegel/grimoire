@@ -62,3 +62,44 @@ test("asks nothing without a provider", () => {
   expect(api.previewControls).not.toHaveBeenCalled();
   expect(container).toBeEmptyDOMElement();
 });
+
+test("a native decision reads as one line: nothing is sent", async () => {
+  const na = { state: "n/a" as const, wire: "", why: "a native decision takes no sampling",
+               source: "adapter" as const };
+  vi.mocked(api.previewControls).mockResolvedValue({
+    requested: { temperature: 0.8 }, effective: {},
+    controls: { temperature: na, top_k: na, reasoning_effort: na },
+  });
+  render(<ControlsReadout presetId="warm" provider="or" model="vendor/decider"
+                          operation="decide" />);
+  expect(await screen.findByText("Not sent: a native decision takes no sampling."))
+    .toBeInTheDocument();
+  // It asks about a decision, and lists no control one by one.
+  expect(api.previewControls).toHaveBeenCalledWith(
+    { preset_id: "warm", provider: "or", model: "vendor/decider", operation: "decide" });
+  expect(screen.queryByRole("list", { name: "Controls" })).toBeNull();
+});
+
+test("the one line is a decision's only: elsewhere each n/a control is listed", async () => {
+  const na = { state: "n/a" as const, wire: "", why: "nothing samples here",
+               source: "adapter" as const };
+  vi.mocked(api.previewControls).mockResolvedValue({
+    requested: {}, effective: {}, controls: { temperature: na, top_k: na },
+  });
+  render(<ControlsReadout presetId="warm" provider="or" model="vendor/m" />);
+  const list = await screen.findByRole("list", { name: "Controls" });
+  expect(list.querySelectorAll("li")).toHaveLength(2);
+  expect(screen.queryByText(/^Not sent:/)).toBeNull();
+});
+
+test("the decision's line is the server's own reason", async () => {
+  const na = { state: "n/a" as const, wire: "", why: "the endpoint takes no sampling",
+               source: "adapter" as const };
+  vi.mocked(api.previewControls).mockResolvedValue({
+    requested: {}, effective: {}, controls: { temperature: na },
+  });
+  render(<ControlsReadout presetId="warm" provider="or" model="vendor/decider"
+                          operation="decide" />);
+  expect(await screen.findByText("Not sent: the endpoint takes no sampling."))
+    .toBeInTheDocument();
+});

@@ -4,6 +4,11 @@ import { SamplingSummary } from "./SamplingSummary";
 import { type ContextSection } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
 
+/** The section a decision's prompt capture files its outcome under
+ *  (`routes/character_turns.OUTCOME_SECTION_ID`, which a backend test pins to
+ *  this string): the answer, never part of what was sent. */
+const OUTCOME_ID = "decision";
+
 /** The context panel's body: the fill bar, the totals, and one collapsible row
  *  per prompt section.
  *
@@ -53,11 +58,18 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
                 see the pin took, not have to squeeze the prompt to find out. */}
             {s.pinned && <span className="ctx-pin">pinned</span>}
             {s.trimmed > 0 && <span className="ctx-drop">{s.trimmed} trimmed</span>}
-            <span className="ctx-meta">{s.tokens.toLocaleString()}{pct(s.tokens)}</span>
+            {/* A decision's outcome is what the call answered, filed beside the
+                prompt it was asked with: it was never sent, so it has no count
+                and no share of the bar. */}
+            <span className="ctx-meta">
+              {s.id === OUTCOME_ID ? "outcome · not sent" : `${s.tokens.toLocaleString()}${pct(s.tokens)}`}
+            </span>
           </summary>
-          <div className="ctx-mini">
-            <div style={{ width: `${Math.min(100, pctNumber(s.tokens))}%` }} />
-          </div>
+          {s.id !== OUTCOME_ID && (
+            <div className="ctx-mini">
+              <div style={{ width: `${Math.min(100, pctNumber(s.tokens))}%` }} />
+            </div>
+          )}
           {/* A World info row with nothing sent still lists what it held back. */}
           {s.text && <pre className="ctx-text">{s.text}</pre>}
           <LoreEntries section={s} />

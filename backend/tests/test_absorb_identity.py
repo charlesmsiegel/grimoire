@@ -1108,35 +1108,193 @@ def test_a_reply_in_todays_format_answers_no_row(client, scene):
     assert body["one_line"] == "o"
 
 
+#: A native endpoint's answer for the one examined row: new business, with
+#: no rationale (a native backend never has one).
+NATIVE_NEW = decisions.ItemResult({"decision": decisions.Answer("new")})
+
+#: What a native endpoint answers for a model it has no decisions for.
+NO_ENDPOINT = llm_errors.LLMError("bad_response", "no decisions endpoint", status=404)
+
+
+def _native(fake, *answers):
+    """`fake` with its native endpoint scripted by `answers`."""
+    fake.decisions = list(answers)
+    return fake
+
+
 @pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
                          ids=["spare", "same-provider"])
-def test_identity_on_a_decide_only_model_answers_on_the_fallback(client, scene, on):
-    """Until native decisions arrive, a Decision model that cannot generate is
-    skipped for a role fallback that can, on another provider or its own: the
-    check is asked of the fallback, and nothing is sent to `vendor/decider`."""
+def test_identity_on_a_decide_only_model_answers_natively(client, scene, on):
+    """Slice H: a Decision model that cannot generate is answered by its
+    provider's native decisions endpoint. The check is asked there, the role
+    fallback is not asked, and no identity prompt is completed on any model."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     inference_fixtures.decide_only(client, fallback=True, on=on)
-    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                decision_reply(_row("new")))
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
 
     body = _absorb(client, cid, sid)
 
     assert body["identity"]["status"] == "ok"
+    assert _checks(body) == [("new", "accepted")]
+    [(_item, conn, _retries)] = fake.native_requests
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert identity_requests(fake) == []
+    assert [(r["operation"], r["decision_mode"]) for r in _identity_rows(cid)] == [
+        ("decide", "native")]
+
+
+@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
+                         ids=["spare", "same-provider"])
+def test_identity_on_a_decide_only_model_answers_on_the_fallback(client, scene, on):
+    """When the native endpoint fails, the role fallback that generates
+    answers the check, on another provider or the decide-only model's own (a
+    stage of its own rather than a retry)."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True, on=on)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NO_ENDPOINT)
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["status"] == "ok"
+    assert len(fake.native_requests) == 1
     [sent] = identity_requests(fake)
     assert (sent["conn"]["id"], sent["conn"]["model"]) == on
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
 
 
-def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(client, scene):
-    """With no generating fallback the seam refuses (`incapable`), and the
-    phase reports that refusal as its own failure: the review still lands, the
-    rows stage with their hints, and nothing is sent for the check."""
+def test_a_native_identity_answer_maps_with_an_empty_reason(client, scene):
+    """G's review I4: a native `existing` on an offered id is accepted on its
+    own, with `reason: ""` -- the rationale is display text, and a native
+    backend has none to give."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     inference_fixtures.decide_only(client, fallback=False)
-    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                decision_reply(_row("new")))
+    _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                 decision_reply(_row("new"))),
+            decisions.ItemResult({"decision": decisions.Answer("existing"),
+                                  "id": decisions.Answer("find-the-ledger")}))
+
+    body = _absorb(client, cid, sid)
+
+    [edit] = _plot_edits(body)
+    assert edit["target"] == {"kind": "plot", "id": "find-the-ledger"}
+    ic = edit["identity_check"]
+    assert (ic["decision"], ic["status"], ic["reason"]) == ("existing", "accepted", "")
+    assert body["identity"]["status"] == "ok"
+
+
+@pytest.mark.parametrize("answer", [
+    decisions.Answer(None, "refused"), decisions.Answer(None, "abstained")],
+    ids=["refused", "abstained"])
+def test_a_native_answer_that_is_no_reading_leaves_the_row_unchecked(client, scene, answer):
+    """The plan's coordination obligation (brutal review H, 2-P3): a native
+    `refused` (or a tie, `abstained`) is an ANSWER, so it never moves to the
+    fallback -- but it is no reading of the row (`decisions.was_read`), so
+    the row is `unchecked` with its hint, never `uncertain`, and the phase
+    says the check answered none of the rows."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))),
+                   decisions.ItemResult({"decision": answer}))
+
+    body = _absorb(client, cid, sid)
+
+    assert len(fake.native_requests) == 1 and identity_requests(fake) == []
+    assert _checks(body) == [("unchecked", "hint_only")]
+    assert body["identity"]["status"] == "degraded"
+
+
+@pytest.mark.parametrize("native", ["refused", "cut"])
+def test_a_budget_stopped_native_stage_is_the_budget_through_its_fallback(
+        client, scene, monkeypatch, native):
+    """Task 4's parked review item, end to end, on a native-only Decision
+    model: the absorb clock stops the native stage -- refusing it unsent
+    (`BudgetRefused`), or sending it and cutting it off in flight -- and the
+    fallback stage is never sent. Refused, the chain ends there and the
+    refusal is raised as itself (brutal review H 🟡2); cut off, the spent
+    clock refuses the fallback stage unsent, the two compose into one error
+    whose sentence is not the clock's, and `_budget_overrun` still reads the
+    clock in its `words`. Either way the phase reports the budget, never a
+    provider failure, worded by whether a call went out."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True)
+    assert client.put("/api/config", json={"absorb_budget": "60"}).status_code == 200
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    real_explain = identity.explain
+
+    def explain_then_tick():
+        # Just before decide: the budget gone, or a sliver of it left.
+        clock[0] = 1e6 if native == "refused" else 59.95
+        return real_explain()
+
+    monkeypatch.setattr(identity, "explain", explain_then_tick)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
+    asked: list[str] = []
+    real_native = fake.decide_native
+
+    def stalls(item, conn, *args, **kwargs):
+        asked.append(conn["model"])          # the call is built; the clock decides if it goes
+
+        async def sent():
+            result = await real_native(item, conn, *args, **kwargs)
+            clock[0] = 1e6                   # out, and the budget runs out while it waits
+            await asyncio.sleep(30)
+            return result
+
+        return sent()
+
+    fake.decide_native = stalls
+
+    body = _absorb(client, cid, sid)
+
+    assert asked == ["vendor/decider"]
+    assert len(fake.native_requests) == (1 if native == "cut" else 0)
+    assert identity_requests(fake) == []      # the fallback was refused unsent
+    block = body["identity"]
+    assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
+        "failed", True, native == "cut")
+    assert block["reason"] == (routes.scenes._IDENTITY_CUT_SHORT if native == "cut"
+                               else routes.scenes._IDENTITY_REFUSED)
+    assert _checks(body) == [("unchecked", "hint_only")]
+    # A refused call files no row; a cut-off one is its meter's `error/timeout`.
+    assert [(r["decision_mode"], r["status"], r.get("error"))
+            for r in _identity_rows(cid)] == (
+        [("native", "error", "timeout")] if native == "cut" else [])
+
+
+def test_identity_on_a_decide_only_model_without_a_fallback_answers_natively(client, scene):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=False)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["status"] == "ok"
+    assert len(fake.native_requests) == 1 and identity_requests(fake) == []
+
+
+def test_identity_on_a_model_that_neither_generates_nor_decides_fails_the_phase(
+        client, scene):
+    """On a model that can neither generate nor decide natively the seam
+    refuses (`incapable`), and the phase reports that refusal as its own
+    failure: the review still lands, the rows stage with their hints, and
+    nothing is sent for the check."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.neither(client)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
 
     r = review_runs.absorb(client, cid, sid)
 
@@ -1146,9 +1304,11 @@ def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(c
     block = body["identity"]
     assert (block["status"], block["attempted"]) == ("failed", False)
     assert block["reason"].startswith("The Continuity checks route runs on the Decision "
-                                      "role (vendor/decider on OpenRouter)"), block["reason"]
+                                      "role (vendor/neither on OpenRouter), which cannot "
+                                      "generate text or make native decisions"), block["reason"]
     assert identity_requests(fake) == [] and _identity_rows(cid) == []
-    assert all(q["conn"].get("model") != "vendor/decider" for q in fake.requests)
+    assert fake.native_requests == []
+    assert all(q["conn"].get("model") != "vendor/neither" for q in fake.requests)
     [edit] = _plot_edits(body)
     assert edit["identity_check"]["status"] == "hint_only"
 

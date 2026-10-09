@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire import llm_usage
+from grimoire import decisions, llm_usage
 from grimoire.store import llm_connections, pricing, usage
 from grimoire.store.inference import facts
 
@@ -323,3 +323,72 @@ def test_an_embed_model_with_no_completion_count_is_listed(pid):
     _call(task="embed", operation="embed", provider_id=pid, model="vendor/embed-a",
           completion_tokens=None)
     assert [m["model"] for m in usage.unpriced_models()] == ["vendor/embed-a"]
+
+
+# ---- native decisions are never modelled (slice H, ruling 10) ----
+@pytest.mark.parametrize("provider", ["openai_compatible", "openrouter"])
+def test_a_native_decision_row_without_a_cost_is_unpriced_whatever_the_rates(pid, provider):
+    # Counts as reported (OpenAI's input/output pair, or OpenRouter's without
+    # its `cost`), and a rate on both layers for exactly this model.
+    facts.state(pid, "vendor/judge", rates=FACTS)
+    pricing.write_pricing({"vendor/judge": TABLE})
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND, provider=provider,
+          provider_id=pid, model="vendor/judge", scene="harbour",
+          prompt_tokens=420, completion_tokens=0, cache_read_tokens=0)
+
+    totals = _totals()
+    assert totals["unpriced_calls"] == 1
+    assert totals["modelled_calls"] == 0 and totals["modelled_usd"] == 0.0
+    assert totals["unmetered_calls"] == 0  # its counts were reported
+    assert totals["prompt_tokens"] == 420  # and still sum into the totals
+    turn = usage.scene_usage("saltmarch", "harbour")["turns"][0]
+    assert turn["modelled_usd"] is None and turn["cost_usd"] is None
+    # No rate can price it, so the chore never names its model.
+    assert usage.unpriced_models() == []
+
+
+def test_a_native_decision_row_nobody_priced_is_counted_apart(pid):
+    """The Costs card offers a rate only for calls a rate could price. A
+    native decision is never one (`_modellable`), with counts or without, so
+    it is counted in `unpriced_native_calls` -- a slice of `unpriced_calls`
+    -- and never in `unmetered_calls`, whose reason (no token counts) is not
+    its reason."""
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND,
+          provider_id=pid, model="vendor/judge", prompt_tokens=420, completion_tokens=0)
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND,
+          provider_id=pid, model="vendor/judge", prompt_tokens=None, completion_tokens=None)
+    _call(provider_id=pid, model="vendor/plain", completion_tokens=None)
+    _call(provider_id=pid, model="vendor/plain")
+
+    totals = _totals()
+    assert totals["unpriced_calls"] == 4
+    assert totals["unpriced_native_calls"] == 2
+    assert totals["unmetered_calls"] == 1
+    # A priced native row is spend, and no slice of the unpriced count.
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND,
+          provider_id=pid, model="vendor/judge", cost_usd=0.25, cost_basis=llm_usage.BILLED)
+    assert _totals()["unpriced_native_calls"] == 2
+
+
+def test_a_native_decision_row_with_a_reported_cost_is_spend(pid):
+    facts.state(pid, "vendor/judge", rates=FACTS)
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND, provider="openrouter",
+          provider_id=pid, model="vendor/judge", prompt_tokens=412, completion_tokens=58,
+          cost_usd=0.25, cost_basis=llm_usage.BILLED)
+
+    totals = _totals()
+    assert totals["cost_usd"] == pytest.approx(0.25)
+    assert totals["modelled_usd"] == 0.0 and totals["unpriced_calls"] == 0
+    assert usage.budget("saltmarch", 10.0)["spent_usd"] == pytest.approx(0.25)
+
+
+def test_a_structured_decision_row_is_modelled_as_before(pid):
+    facts.state(pid, "vendor/judge", rates=FACTS)
+    _call(task="speaker", operation="decide", decision_mode=decisions.STRUCTURED_BACKEND,
+          provider_id=pid, model="vendor/judge")
+
+    totals = _totals()
+    # 1000 x 0.001/1k + 1000 x 0.002/1k, exactly as a chat row of that shape.
+    assert totals["modelled_calls"] == 1
+    assert totals["modelled_usd"] == pytest.approx(0.003)
+    assert totals["unpriced_calls"] == 0

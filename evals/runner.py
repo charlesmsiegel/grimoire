@@ -7,10 +7,12 @@ Two ways to obtain output:
                     API key — this is the mode pytest runs, and the one that
                     guards prompt-template edits.
   live              call the model the app routes each case's task to, once per
-                    case -- a decide case (one with a `schema`) on its decide
-                    resolution, with `schema=`. Costs money
-                    and is never deterministic, so it is opt-in and its result
-                    is a report, not a gate.
+                    case -- a decide case (one with a `schema`) down the chain
+                    `inference.decide` would send it on (`inference.stages`
+                    of its decide resolution), or on one backend forced over
+                    its primary (`chain`). Costs money and is never
+                    deterministic, so it is opt-in and its result is a
+                    report, not a gate.
 
 Isolation is the caller's job: every run_* function here assumes GRIMOIRE_HOME
 already points at a fresh, empty directory. That keeps this module usable from
@@ -21,10 +23,26 @@ inheriting the other's setup.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
+from grimoire import decisions, inference, llm
+from grimoire.store.inference import providers
+from grimoire.store.inference import resolve as inference_resolve
 
 from .cases import BASELINE, Case
 from .graders import Check
+
+if TYPE_CHECKING:
+    from grimoire.store.inference.resolved import ResolvedInference
+
+#: `--decide-backend`'s choices: `chain` is what production sends
+#: (`inference.stages`); the other two force one backend on the resolution's
+#: primary, so the two can be compared on the same model.
+CHAIN = "chain"
+DECIDE_BACKENDS = (CHAIN, decisions.NATIVE_BACKEND, decisions.STRUCTURED_BACKEND)
 
 
 @dataclass
@@ -34,6 +52,8 @@ class Result:
     checks: list[Check]
     output: str
     error: str = ""
+    #: What answered a live decide case (`backend_note`); "" otherwise.
+    note: str = ""
 
     @property
     def passed(self) -> bool:
@@ -119,12 +139,19 @@ def conn_key(case: Case) -> str:
     return case.task if case.schema is None else f"{case.task} (decide)"
 
 
-def resolve_connections(cases: tuple[Case, ...]) -> dict[str, dict]:
-    """`conn_key` -> the connection dict the app would send that case's call
-    to, read from the real store -- one resolution per distinct key. A decide
-    case resolves its task with `operation="decide"`, as `inference.decide`'s
-    callers do, so the Decision role (or whatever the route chose) answers it
-    and its structured-capable attempts carry the flag the facade reads.
+def resolve_connections(cases: tuple[Case, ...], *, provider: str = "",
+                        model: str = "") -> dict[str, dict | ResolvedInference]:
+    """`conn_key` -> where the app would send that case's call, read from the
+    real store -- one resolution per distinct key: the whole decide
+    resolution for a decide case (`run_stages` builds its chain from it), the
+    connection dict for a generate case. A decide case resolves its task with
+    `operation="decide"`, as `inference.decide`'s callers do, so the Decision
+    role (or whatever the route chose) answers it.
+
+    `provider` and `model` (`--provider`/`--model`) override the selection
+    for this run, through the seam a reroll uses (`override_inference`), with
+    the same meaning and the same refusals. An override is a per-call
+    selection: nothing is written to settings.
 
     Must be called BEFORE GRIMOIRE_HOME is repointed at a fixture — that is the
     whole reason it is a separate function. Resolves through the app's own seam
@@ -136,49 +163,155 @@ def resolve_connections(cases: tuple[Case, ...]) -> dict[str, dict]:
     same `llm_connections` seeding the app runs at startup on a library that
     predates connections; nothing else here writes to the real store.
 
-    A task the seam refuses (no key, a model known unable to do the job)
-    raises RuntimeError with the seam's own reason.
+    A task the seam refuses (no key, a model known unable to do the job, an
+    override naming nothing) raises RuntimeError with the seam's own reason.
     """
     from fastapi import HTTPException
 
-    from grimoire.routes.common import require_inference
+    from grimoire.routes.common import override_inference, require_inference
 
-    out: dict[str, dict] = {}
+    body = SimpleNamespace(provider=provider, model=model) if provider or model else None
+    out: dict[str, dict | ResolvedInference] = {}
     for case in cases:
         key = conn_key(case)
         if key in out:
             continue
         try:
-            out[key] = require_inference(case.task, operation=operation(case)).conn
+            if body is not None:
+                resolved = override_inference(body, case.task,
+                                              operation=operation(case))[0]
+            else:
+                resolved = require_inference(case.task, operation=operation(case))
         except HTTPException as exc:
             detail = exc.detail
             if isinstance(detail, dict):
                 detail = detail.get("detail") or detail.get("kind") or ""
             raise RuntimeError(f"{key}: {detail} (choose a model on the Models page)") from exc
+        out[key] = resolved if case.schema is not None else resolved.conn
     return out
 
 
-def live(case: Case, conn: dict, record: bool = False, *, client=None) -> Result:
+class BackendRefusedError(ValueError):
+    """A forced decide backend the resolution's primary cannot serve, in one
+    sentence. Raised before anything is sent."""
+
+
+def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.Stage, ...]:
+    """The decide chain a live run sends `resolved`'s case down.
+
+    `chain` is `inference.stages(resolved)`, exactly what production sends.
+    `native` and `structured` are one stage on the primary, without its
+    fallback (`inference.without_fallback`, as production's own stage is),
+    so the two backends can be compared on the SAME model (a native-only
+    model against a structured one would compare the models as well). Each
+    refuses (`BackendRefusedError`) a primary that cannot take it: `native` a
+    connection kind with no decisions endpoint (`llm.NATIVE_DECISION_KINDS`),
+    a provider preset whose `never` holds `decide_native`, or a model known
+    (`resolve.decides_natively`: a `no` that is not a guess; `unknown` is
+    allowed, spec 5.3) unable to decide natively; `structured` a primary
+    known unable to generate (`resolve.generates`). A chain with no stage at
+    all is refused too, rather than failing mid-run."""
+    if backend == CHAIN:
+        stages = inference.stages(resolved)
+        if not stages:
+            raise BackendRefusedError(
+                f"{resolved.task} resolved to no decide stage: its model can "
+                f"neither generate nor decide natively.")
+        return stages
+    if backend not in DECIDE_BACKENDS:
+        raise ValueError(f"unknown decide backend {backend!r}")
+    if not resolved.attempts:
+        raise BackendRefusedError(
+            f"{resolved.task} resolved to no model to force {backend} on.")
+    primary = resolved.attempts[0]
+    where = f"{primary.model or '(default)'} on {primary.provider_id}"
+    if backend == decisions.NATIVE_BACKEND:
+        kind = primary.conn.get("kind", "openrouter")
+        if kind not in llm.NATIVE_DECISION_KINDS:
+            raise BackendRefusedError(
+                f"--decide-backend native: {where} is a {kind} connection, "
+                f"which has no native decisions endpoint.")
+        preset = providers.PRESETS.get(primary.provider_preset)
+        if preset is not None and "decide_native" in preset.never:
+            raise BackendRefusedError(
+                f"--decide-backend native: {where} is behind the "
+                f"{preset.label} preset, which never decides natively.")
+        if not inference_resolve.decides_natively(primary):
+            raise BackendRefusedError(
+                f"--decide-backend native: {where} is known unable to decide natively.")
+    elif not inference_resolve.generates(primary):
+        raise BackendRefusedError(
+            f"--decide-backend structured: {where} is known unable to generate.")
+    return (inference.Stage(backend, inference.without_fallback(primary.conn), None),)
+
+
+def backend_note(decision: decisions.Decision) -> str:
+    """What answered `decision`, for the report: `backend: <name>` when one
+    backend answered every item; when stages with different backends split
+    the batch (`Decision.backend` is ""), each backend with how many items it
+    answered, in item order (the backend of the lowest-numbered item it
+    answered first) -- `backend: native 3, structured 4`. Items nothing
+    answered are not counted. Each failed unit's final error
+    (`Decision.errors`) follows, so an item a stage failed shows its cause
+    beside the answer check it fails: `...; failed: bad_response: <detail>`."""
+    if decision.backend:
+        note = f"backend: {decision.backend}"
+    else:
+        counts = Counter(r.backend for r in decision.items if r.backend)
+        note = "backend: " + ", ".join(f"{name} {n}" for name, n in counts.items())
+    if decision.errors:
+        note += "; failed: " + "; ".join(f"{e.kind}: {e.detail}" for e in decision.errors)
+    return note
+
+
+def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
+         client=None, backend: str = CHAIN) -> Result:
     """One real generation for `case`, scored against the baseline expectation
     (live output must PASS). With `record`, the reply replaces the baseline
     recording — counterexample variants are never overwritten.
 
-    A decide case is asked with `schema=` (its `schema(ctx)`), exactly as
-    `inference.decide` asks the facade; the facade sends the provider's
-    structured mode on each attempt `conn` flags capable. `client` is the
-    facade to send through, owned by the caller (a test's fake); by default
-    one `LLMClient` is opened and closed here."""
+    A generate case (`target` a connection dict) is one `complete`. A decide
+    case (`target` its decide resolution) is answered by `inference.run_stages`
+    down `chain(target, backend)` -- by default the chain `inference.decide`
+    sends, each stage on its own backend -- over the case's `items` and
+    `explain`; the answers are written back as the structured reply
+    (`decisions.render`) the case's graders read, and `Result.note` says which
+    backend answered (`backend_note`). `client` is the facade to send
+    through, owned by the caller (a test's fake); by default one `LLMClient`
+    is opened and closed here."""
     from grimoire.llm import LLMClient, LLMError
 
     ctx = prepare(case)
-    schema = case.schema(ctx) if case.schema is not None else None
+    decide = case.schema is not None
+    if decide:
+        if isinstance(target, dict):
+            raise TypeError(f"{case.id} is a decide case: pass its resolution")
+        stages = chain(target, backend)
+    elif not isinstance(target, dict):
+        raise TypeError(f"{case.id} is a generate case: pass its connection")
+    note = ""
+
+    async def ask(c) -> str:
+        nonlocal note
+        if not decide:
+            return await c.complete(ctx["messages"], target)
+        explain = ctx.get("explain", "")
+        decision = await inference.run_stages(case.task, ctx["items"], stages, client=c,
+                                              explain=explain)
+        note = backend_note(decision)
+        # Which items a native endpoint answered: it is asked for no
+        # rationale, so a grader reads that item's as not applicable.
+        ctx["native_items"] = frozenset(
+            index for index, result in enumerate(decision.items)
+            if result.backend == decisions.NATIVE_BACKEND)
+        return decisions.render(decision.items, ctx["items"], explain=bool(explain))
 
     async def run() -> str:
         if client is not None:
-            return await client.complete(ctx["messages"], conn, schema=schema)
+            return await ask(client)
         own = LLMClient()
         try:
-            return await own.complete(ctx["messages"], conn, schema=schema)
+            return await ask(own)
         finally:
             await own.aclose()
 
@@ -187,7 +320,7 @@ def live(case: Case, conn: dict, record: bool = False, *, client=None) -> Result
     except LLMError as exc:
         return Result(case, BASELINE, [], "", f"{exc.kind}: {exc.detail}")
 
-    result = Result(case, BASELINE, list(case.grade(ctx, output)), output)
+    result = Result(case, BASELINE, list(case.grade(ctx, output)), output, note=note)
     if record:
         path = case.baseline.path(case.id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,14 +328,15 @@ def live(case: Case, conn: dict, record: bool = False, *, client=None) -> Result
     return result
 
 
-def live_all(cases: tuple[Case, ...], conns: dict[str, dict], isolate,
-             record: bool = False) -> list[Result]:
-    """Each case live, on the connection its task resolved to
-    (`resolve_connections`, keyed by `conn_key`)."""
+def live_all(cases: tuple[Case, ...], conns: dict[str, dict | ResolvedInference], isolate,
+             record: bool = False, *, client=None, backend: str = CHAIN) -> list[Result]:
+    """Each case live, on what its task resolved to (`resolve_connections`,
+    keyed by `conn_key`); a decide case down `chain(..., backend)`."""
     out = []
     for case in cases:
         with isolate():
-            out.append(live(case, conns[conn_key(case)], record=record))
+            out.append(live(case, conns[conn_key(case)], record=record, client=client,
+                            backend=backend))
     return out
 
 
@@ -221,8 +355,10 @@ def report(results: list[Result]) -> str:
     lines, failed = [], 0
     for r in results:
         status = "ok  " if r.passed else "FAIL"
-        lines.append(f"  [{status}] {r.case.id}.{r.variant}")
+        note = f"  ({r.note})" if r.note else ""
+        lines.append(f"  [{status}] {r.case.id}.{r.variant}{note}")
         if r.passed:
+            lines.extend(_not_applicable(r))
             continue
         failed += 1
         if r.error:
@@ -230,11 +366,20 @@ def report(results: list[Result]) -> str:
         for c in r.failures:
             detail = f": {c.detail}" if c.detail else ""
             lines.append(f"           {c.name}{detail}")
+        lines.extend(_not_applicable(r))
     total = len(results)
     lines.append("")
     lines.append(f"{total - failed}/{total} passed" if failed
                  else f"all {total} checks passed")
     return ascii_safe("\n".join(lines))
+
+
+def _not_applicable(r: Result) -> list[str]:
+    """A passing check that was not applicable (its detail says `n/a`, e.g. a
+    native item's rationale), listed so the report shows it was not graded
+    rather than dropping it silently."""
+    return [f"           {c.name}: {c.detail}" for c in r.checks
+            if c.ok and c.detail.startswith("n/a")]
 
 
 def ascii_safe(text: str) -> str:

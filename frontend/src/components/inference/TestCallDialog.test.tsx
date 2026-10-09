@@ -228,6 +228,19 @@ test("never shows a zero cost for an unknown price", async () => {
   expect(dialog).not.toHaveTextContent("$0");
 });
 
+test("a decision probe is never priced: cost unknown, not $0", async () => {
+  (api.previewModelTest as any).mockResolvedValue(preview({
+    sends: [{ capability: "decide_native",
+              description: "One native decision request: the statement “The lamp in the window is lit.” and the yes/no question “Is the lamp lit?”." }],
+    estimated_cost_usd: null, estimate_basis: null }));
+  open();
+
+  const dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  expect(await within(dialog).findByText(/One native decision request/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/cost unknown — one tiny request/)).toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("$0");
+});
+
 test("TestCallDialog says when the estimate comes from your rates", async () => {
   (api.previewModelTest as any).mockResolvedValue(
     preview({ estimated_cost_usd: 0.0042, estimate_basis: "rates" }));

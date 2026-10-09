@@ -5,10 +5,19 @@ is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
     async def stream(messages, conn, usage=None, *, schema=None) -> AsyncIterator[str]
-    async def complete(messages, conn, usage=None, *, schema=None) -> str
+    async def complete(messages, conn, usage=None, *, schema=None, retries=None) -> str
     async def single(messages, conn, usage=None) -> str
+    async def decide_native(item, conn, usage=None, *, retries=None) -> ItemResult
     async def list_models(conn) -> list[dict]
     async def check(conn) -> None
+
+`decide_native` is a native decisions endpoint's one attempt (slice H, spec
+7.4). `FakeLLM(decisions=[...])` scripts it by call order like `turns`, each
+entry an `ItemResult` to return or an `LLMError` to raise; the calls are
+recorded in `native_requests`. Like the facade, it takes the fallback off
+the connection, and refuses a kind with no native endpoint and an item
+`decisions.native_gap` names before recording or stamping anything, with the
+facade's own errors, so a chain test sees the same refusal.
 
 `schema` is the JSON Schema `decide` asks the facade for (slice F, spec 7.2).
 `complete` records it in `schemas`, one entry per call (None when the call
@@ -17,6 +26,12 @@ overrides `stream(messages, conn, usage=None)` alone still takes it. `stream`
 accepts it for signature parity and records nothing: the facade's decide path
 only completes. `single` takes no `schema`, exactly as the facade's does not:
 a model test asks one model one question, and nothing asks it for a schema.
+
+`retries` is the primary's retry count a decide chain's fallback stage names
+(slice H, ruling 12). `complete` records it in `retries`, one entry per call
+(None when the call named none), and forwards it nowhere: a fake makes one
+attempt whatever it is told. `decide` passes it only when it is not None, so
+every inline fake written before it existed is still called as it was.
 
 `usage` is the accounting holder the real facade fills in place (#152). Every
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
@@ -66,12 +81,13 @@ import json
 import threading
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import anyio
 
-from grimoire import llm_usage
-from grimoire.llm import ATTEMPTED, effective_model
+from grimoire import decisions, llm_usage
+from grimoire.llm import ATTEMPTED, _native_kind, _without_fallback, effective_model
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -204,7 +220,8 @@ class FakeLLM:
                  fail_after: int = 0, usage: dict | None = None,
                  models: list[dict] | None = None,
                  models_error: LLMError | None = None,
-                 health_error: LLMError | None = None):
+                 health_error: LLMError | None = None,
+                 decisions: list[decisions.ItemResult | LLMError] | None = None):
         if (turns is None) == (cassette is None):
             raise ValueError("FakeLLM takes exactly one of `turns` or `cassette`")
         if turns is not None and not turns:
@@ -212,6 +229,10 @@ class FakeLLM:
             # IndexError from inside the fake with nothing pointing at the test
             # that built it.
             raise ValueError("FakeLLM needs at least one turn")
+        if decisions is not None and not decisions:
+            # The same reason: an empty script would fail at the first call
+            # as an IndexError from inside the fake.
+            raise ValueError("FakeLLM needs at least one native decision, or decisions=None")
         self.turns = [list(t) for t in (turns or [])]
         self.cassette = cassette
         self.error = error
@@ -237,11 +258,19 @@ class FakeLLM:
         #: The `schema=` each `complete` call passed, in order (None for a call
         #: that passed none).
         self.schemas: list[dict | None] = []
+        #: The `retries=` each `complete` call passed, in order (None for a
+        #: call that passed none).
+        self.retries: list[int | None] = []
         #: The connections `list_models`/`check` were asked about, in order,
         #: and the outcomes a route filed back through `note_outcome`.
         self.listed: list[dict] = []
         self.checked: list[dict] = []
         self.noted: list[tuple] = []
+        #: The native decisions script (the last entry repeats), and each
+        #: `decide_native` call that got past the gap check, as
+        #: `(item, conn, retries)`. Not counted in `calls`: no generation ran.
+        self.decisions = None if decisions is None else list(decisions)
+        self.native_requests: list[tuple] = []
 
     # ---- the LLMClient surface ----
     async def stream(self, messages, conn, usage=None, *, schema=None):
@@ -250,21 +279,7 @@ class FakeLLM:
         # Stamped BEFORE anything can fail, like `llm._stamp`: the route is
         # known the moment the attempt starts, and an error frame still has to
         # say which connection produced it.
-        if usage is not None:
-            # `effective_model`, not `conn["model"]`, for the reason `llm._stamp`
-            # uses it: a claude connection with no model still runs one, and a
-            # fake that stamped the empty string would let a test assert a model
-            # the real facade never records.
-            usage.update({"model": effective_model(conn),
-                          "connection": conn.get("name") or conn.get("id")
-                          or conn.get("kind") or "?",
-                          "provider": conn.get("kind", "openrouter"), "attempts": 1,
-                          ATTEMPTED: conn})
-            # What served it, as `llm._stamp` files it, so a route test sees
-            # the row the real facade writes. No count: that is the facade's
-            # `_resilient`, after a natural end, never a stamp.
-            usage["requested_model"] = effective_model(conn)
-            llm_usage.account(usage, conn)
+        self._stamp(usage, conn)
         deltas = self._next(messages, conn)   # records the request and counts it
         for delta in deltas:
             yield delta
@@ -281,11 +296,34 @@ class FakeLLM:
         if self.stall:
             await asyncio.sleep(STALL_SECONDS)
 
-    async def complete(self, messages, conn, usage=None, *, schema=None) -> str:
-        # The schema is recorded here and NOT forwarded to `stream`: the
-        # subclasses that hold or rewrite a request override
-        # `stream(messages, conn, usage=None)` and need not know it exists.
+    async def decide_native(self, item, conn, usage=None, *, retries=None):
+        """The next scripted native decision. An `LLMError` entry is raised; an
+        `ItemResult` is returned, stamped `backend="native"` when it names
+        none. The holder is stamped as `stream` stamps it, so a meter files
+        the row the real facade's would."""
+        if self.decisions is None:
+            raise AssertionError("FakeLLM has no native decisions scripted")
+        # The facade's own boundary, in its order: the fallback off, then a
+        # kind with no endpoint, then the gap -- each before any stamp.
+        conn = _without_fallback(conn)
+        _native_kind(conn)
+        gap = decisions.native_gap(item)
+        if gap:
+            raise LLMError("bad_response", gap, code="native_unrepresentable")
+        self.native_requests.append((item, conn, retries))
+        self._stamp(usage, conn)
+        entry = self.decisions[min(len(self.native_requests), len(self.decisions)) - 1]
+        if isinstance(entry, LLMError):
+            raise entry
+        return entry if entry.backend else replace(entry, backend="native")
+
+    async def complete(self, messages, conn, usage=None, *, schema=None,
+                       retries=None) -> str:
+        # The schema and the retry count are recorded here and NOT forwarded
+        # to `stream`: the subclasses that hold or rewrite a request override
+        # `stream(messages, conn, usage=None)` and need not know they exist.
         self.schemas.append(schema)
+        self.retries.append(retries)
         # Consumes `stream`, exactly as the real `LLMClient.complete` does,
         # rather than reaching for the next turn itself. That is not a style
         # choice: a fake whose two methods are written separately drifts, and it
@@ -326,6 +364,26 @@ class FakeLLM:
         """The outcome a route hands back because the facade could not see it —
         a generation cancelled by its total-duration ceiling (#146)."""
         self.noted.append((conn, error))
+
+    @staticmethod
+    def _stamp(usage, conn) -> None:
+        """What `llm._stamp` files for an attempt, for a fake that has one."""
+        if usage is None:
+            return
+        # `effective_model`, not `conn["model"]`, for the reason `llm._stamp`
+        # uses it: a claude connection with no model still runs one, and a
+        # fake that stamped the empty string would let a test assert a model
+        # the real facade never records.
+        usage.update({"model": effective_model(conn),
+                      "connection": conn.get("name") or conn.get("id")
+                      or conn.get("kind") or "?",
+                      "provider": conn.get("kind", "openrouter"), "attempts": 1,
+                      ATTEMPTED: conn})
+        # What served it, as `llm._stamp` files it, so a route test sees
+        # the row the real facade writes. No count: that is the facade's
+        # `_resilient`, after a natural end, never a stamp.
+        usage["requested_model"] = effective_model(conn)
+        llm_usage.account(usage, conn)
 
     # ---- inspection ----
     @property
@@ -481,10 +539,11 @@ class StallingGateway(FakeCatalog):
             await asyncio.sleep(self.seconds)
         await super().check(conn)
 
-    async def complete(self, messages, conn, usage=None, *, schema=None) -> str:
+    async def complete(self, messages, conn, usage=None, *, schema=None,
+                       retries=None) -> str:
         if self.where == "complete":
             await asyncio.sleep(self.seconds)
-        return await super().complete(messages, conn, usage, schema=schema)
+        return await super().complete(messages, conn, usage, schema=schema, retries=retries)
 
     async def single(self, messages, conn, usage=None) -> str:
         if self.where == "single":

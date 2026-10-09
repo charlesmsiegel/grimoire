@@ -13,7 +13,8 @@ not change what a figure means: what it reports is the same all-time rollup
 ``usage`` would compute, arrived at by not re-reading bytes it has already
 read.
 
-**The aggregate is derived, never authoritative.** ``<home>/usage/rollup-v4.json``
+**The aggregate is derived, never authoritative.**
+``<home>/usage/rollup-v{VERSION}.json`` (`rollup_path`, named for `VERSION`)
 can be deleted at any moment and the next read rebuilds it from the ledger. No
 caller may ever treat it as a record of anything -- the JSONL files are the
 ledger, and this is a bookmark in them.
@@ -99,19 +100,25 @@ from . import atomic, pricing, usage
 #: structural zero (`usage._completion_count`), so a v2 file holds embed rows
 #: as unmetered and unpriced that the same rates now model. 4: the pricing
 #: table also matches the model asked for, and a model's own rates outrank it.
-VERSION = 4
+#: 5: a native decision row is never modelled (`usage._modellable`). No build
+#: before this one files such a row, but an older build sharing a synced
+#: ledger would fold one at chat rates into the file it shares with this one.
+#: 6: an unpriced native decision row is counted in `unpriced_native_calls`
+#: rather than, when it lacks counts, `unmetered_calls`.
+VERSION = 6
 
 #: What a caller gets for a campaign the ledger has never mentioned, and what a
 #: failed scan degrades to. `partial` is the field that keeps it honest -- see
 #: `_empty`.
-#: The three breakdown counts (`estimated_token_calls`,
-#: `modelled_subscription_calls`, `unpriced_subscription_calls`) are counts,
-#: never money: each sits inside a count beside it (`usage._add`).
+#: The four breakdown counts (`estimated_token_calls`,
+#: `modelled_subscription_calls`, `unpriced_subscription_calls`,
+#: `unpriced_native_calls`) are counts, never money: each sits inside a count
+#: beside it (`usage._add`).
 _FIELDS = ("calls", "cost_usd", "estimated_usd", "modelled_usd",
            "unpriced_calls", "unmetered_calls", "subscription_calls",
            "modelled_calls", "priced_calls", "total_tokens",
            "estimated_token_calls", "modelled_subscription_calls",
-           "unpriced_subscription_calls")
+           "unpriced_subscription_calls", "unpriced_native_calls")
 
 
 def rollup_path() -> Path:

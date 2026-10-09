@@ -283,3 +283,25 @@ def test_the_preview_reads_every_adapter(client, kind):
     got = _preview(client, preset_id=pid, provider=cid, model="")
     assert got.status_code == 200
     assert got.json()["requested"] == {"temperature": 0.8}
+
+
+def test_a_decide_preview_is_what_a_native_attempt_carries(client):
+    """Slice H: the preview asked for a decision on a model that can only
+    decide answers what the resolver stores on that attempt -- every control
+    n/a -- so the Decision card and a decide route never disagree."""
+    rows = [{"id": "vendor/decider", "outputs": ["decisions"]}]
+    cid = _connection(client, rows=rows, model="vendor/decider")
+    pid = sampler_presets.create_preset("Warm", {"temperature": 0.8})
+    llm_connections.update_connection(cid, sampler_preset=pid)
+    config.write_config(active_connection_id=cid)
+
+    attempt = inf.resolve("scene-break", operation="decide").attempts[0]
+    assert attempt.decision_mode == "native"
+    got = _preview(client, preset_id=pid, provider=cid, model="vendor/decider",
+                   operation="decide")
+    assert got.status_code == 200
+    assert got.json() == attempt.controls
+    assert got.json()["controls"]["temperature"]["state"] == "n/a"
+    # Without the operation it is the generate preview it always was.
+    plain = _preview(client, preset_id=pid, provider=cid, model="vendor/decider").json()
+    assert plain["controls"]["temperature"]["state"] != "n/a"

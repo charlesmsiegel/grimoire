@@ -41,8 +41,16 @@ fallback both refused is three calls. A sweep that selects
 campaign's one background run -- refusing `PUT /config/data-dir` while it
 lives, and making End Scene adopt the live run rather than start its own --
 for up to three times as long as the single call it replaced, and up to nine
-times with both routes of every chunk re-sent. The ceiling bounds each call,
-not the sweep.
+times with both routes of every chunk re-sent. On a native Decision model
+(slice H) each candidate is a call of its own under the same ceiling,
+`inference.NATIVE_CONCURRENCY` (4) at a time, so n candidates take up to
+ceil(n / 4) ceilings, and a fallback stage of its own then adds its chunks at
+up to two calls each (one, and a prompt-only re-send on a schema refusal): a
+full sweep with a fallback is up to 6 + 6 = twelve times as long, and so is a
+structured primary with a native fallback. A hung decisions endpoint stops
+after a run of `inference.NATIVE_TIMEOUT_STOP` timeouts, about two waves; an
+endpoint that answers just inside the ceiling does not. The ceiling bounds
+each call, not the sweep.
 """
 
 from __future__ import annotations

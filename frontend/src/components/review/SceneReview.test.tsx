@@ -2185,6 +2185,41 @@ test("voice checks the absorb budget never reached are named (#59)", async () =>
   expect(screen.getByText(/Never attempted, skipped: winifred/)).toBeTruthy();
 });
 
+test("voice noteless names the characters", async () => {
+  // A native verdict has no rationale: a drift with no corrective is shown,
+  // and the notice says nothing was stored for it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbWithVoice({ status: "ok", reason: null, checked: ["seraphine", "mara"],
+    flagged: ["seraphine"], unjudged: [], noteless: ["seraphine"], failed: [], skipped: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const notice = await screen.findByText(/Out of voice, with no corrective to store: seraphine\./);
+  expect(notice.closest(".mechanics-notice")).toBeTruthy();
+  expect(notice.textContent).toContain(
+    "The Decision model answers natively and gives no note, so any standing correction is left as it is.");
+});
+
+test("a voice block without noteless renders no such notice", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  for (const voice of [
+    { status: "ok", reason: null, checked: ["seraphine"], flagged: ["seraphine"], unjudged: [],
+      failed: [], skipped: [] },
+    { status: "ok", reason: null, checked: ["seraphine"], flagged: ["seraphine"], unjudged: [],
+      noteless: [], failed: [], skipped: [] },
+  ]) {
+    absorbWithVoice(voice);
+    const view = renderCampaign();
+    await screen.findByText("hi");
+    fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+    await screen.findByRole("button", { name: /accept all .* & save|save \d+ decisions/i });
+    expect(screen.queryByText(/no corrective to store/)).toBeNull();
+    view.unmount();
+  }
+});
+
 test("clean and skipped voice phases render no notice (#59)", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });

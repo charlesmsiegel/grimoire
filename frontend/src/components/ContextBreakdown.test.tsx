@@ -59,3 +59,24 @@ test("a snapshot frozen before presets existed renders no sampler line", () => {
   render(<ContextBreakdown models={[]} ctx={ctx()} />);
   expect(screen.queryByText(/Sampler:/)).toBeNull();
 });
+
+test("a decision's outcome is its own row: never sent, so no token count", () => {
+  // The speaker pick files what it decided as a last `decision` section of
+  // zero tokens (Task 6). It is the call's answer, not a part of the prompt.
+  const { container } = render(<ContextBreakdown models={models} ctx={ctx({
+    sections: [
+      { id: "world", label: "World info", text: "lore", tokens: 100, tier: "spotlight",
+        dropped: false, trimmed: 0 },
+      { id: "decision", label: "decision", text: '{"backend": "native"}', tokens: 0,
+        tier: "lock-in", dropped: false, trimmed: 0 },
+    ],
+  })} />);
+  const row = screen.getByText("decision").closest("summary")!;
+  expect(row).toHaveTextContent("outcome · not sent");
+  expect(row).not.toHaveTextContent(/\d/);
+  expect(screen.getByText('{"backend": "native"}')).toBeInTheDocument();
+  // No share of the prompt's bar: only the World info row draws one.
+  expect(container.querySelectorAll(".ctx-mini")).toHaveLength(1);
+  // A prompt section keeps its count.
+  expect(screen.getByText("World info").closest("summary")).toHaveTextContent("100 · 50%");
+});

@@ -53,9 +53,10 @@ ROUTES = pathlib.Path(routes_pkg.__file__).parent
 EXTRA_SOURCES = (pathlib.Path(inference_mod.__file__),)
 
 #: The `LLMClient` methods that reach a provider. `aclose` does not. `single`
-#: is the model test call's one attempt (slice B Task 9): it spends money like
-#: the other two, so it is held to the same rule.
-_GENERATORS = ("stream", "complete", "single")
+#: is the model test call's one attempt (slice B Task 9), and `decide_native`
+#: a native decisions endpoint's (slice H): each spends money like the other
+#: two, so each is held to the same rule.
+_GENERATORS = ("stream", "complete", "single", "decide_native")
 #: How the injected client is spelled at every route (see the module docstring).
 _CLIENT = "client"
 #: The holder attribute a `store.usage.Meter` exposes.
@@ -153,6 +154,21 @@ def test_the_guard_actually_detects_an_unmetered_call():
         assert _is_metered(next(_generation_calls(ast.parse(src)))), src
     unmetered = ast.parse("client.single(messages, conn)\n")
     assert not _is_metered(next(_generation_calls(unmetered)))
+
+
+def test_the_guard_catches_an_unmetered_native_decision():
+    """Slice H: a native decision reaches a provider, so a planted
+    `client.decide_native(item, conn)` with no meter is an offender, and the
+    chain's own spelling (`m.usage` third, `retries=` beside it) is not."""
+    planted = ast.parse("client.decide_native(item, conn)\n")
+    assert not _is_metered(next(_generation_calls(planted)))
+    for src in ("client.decide_native(item, conn, m.usage, retries=call.retries)",
+                "client.decide_native(item, conn, usage=m.usage)"):
+        assert _is_metered(next(_generation_calls(ast.parse(src)))), src
+    found = list(_generation_calls(ast.parse(
+        pathlib.Path(inference_mod.__file__).read_text(encoding="utf-8"))))
+    assert any(node.func.attr == "decide_native" for node in found), (
+        "inference.py makes no client.decide_native call the guard can see")
 
 
 def test_the_guard_is_not_fooled_by_a_holder_that_files_nothing():

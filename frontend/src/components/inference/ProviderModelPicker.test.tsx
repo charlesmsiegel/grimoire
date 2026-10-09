@@ -190,6 +190,87 @@ test("Test… opens the test dialog for that row", async () => {
   expect(api.runModelTest).not.toHaveBeenCalled();
 });
 
+/** An answer to the `decide` need whose one unverified row `b` states `caps`. */
+function decideAnswer(caps: Record<string, { value: string; source: string }>) {
+  const base = answer("decide", [], ["b"], []);
+  base.groups.unverified[0] = { ...base.groups.unverified[0], capabilities: caps };
+  return base;
+}
+
+test("an unverified Decision row known unable to generate offers decide_native", async () => {
+  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+    generate: { value: "no", source: "catalog" },
+    decide_native: { value: "unknown", source: "unknown" } }));
+  render(<Harness needs={["decide"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["generate", "decide_native"] });
+});
+
+test.each([
+  ["unknown", { value: "unknown", source: "unknown" }],
+  ["yes", { value: "yes", source: "test" }],
+])("a Decision row whose generate is %s offers generate only", async (_name, generate) => {
+  const capabilities = { generate, decide_native: { value: "unknown", source: "unknown" } };
+  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer(capabilities));
+  render(<Harness needs={["decide"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  // A `yes` already answered is not probed again, but the list is never emptied.
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["generate"] });
+});
+
+test("a Decision row whose generate no is a name-rule guess never offers decide_native",
+     async () => {
+  // Brutal review H (2-P4): the resolver serves such a model structured
+  // whatever the native probe finds (a name-rule `no` is a guess), so a
+  // confirmed, cost-unknown native request would buy nothing.
+  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+    generate: { value: "no", source: "name" },
+    decide_native: { value: "unknown", source: "unknown" } }));
+  render(<Harness needs={["decide"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["generate"] });
+});
+
+test("a Decision row whose decide_native is no never offers it", async () => {
+  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+    generate: { value: "no", source: "catalog" },
+    decide_native: { value: "no", source: "catalog" } }));
+  render(<Harness needs={["decide"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["generate"] });
+});
+
+test("a picker that does not ask to decide never offers decide_native", async () => {
+  const unverified = answer("generate", [], ["b"], []);
+  unverified.groups.unverified[0] = { ...unverified.groups.unverified[0], capabilities: {
+    generate: { value: "no", source: "catalog" },
+    decide_native: { value: "unknown", source: "unknown" } } };
+  (api.readConnectionCapabilities as any).mockResolvedValue(unverified);
+  render(<Harness needs={["generate"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["generate"] });
+});
+
 test("a test dialog closed mid-run and opened again rejoins that run", async () => {
   (api.readConnectionCapabilities as any).mockResolvedValue(
     answer("generate", [], ["b"], []));

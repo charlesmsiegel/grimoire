@@ -1,0 +1,35 @@
+{
+  "model": "gpt-6-luna",
+  "answers": [
+    {"type": "predicate", "name": "over", "probability": 0.82},
+    {
+      "type": "choice",
+      "name": "speaker",
+      "choice": "characters:winifred",
+      "probabilities": [
+        {"value": "characters:mara", "probability": 0.2},
+        {"value": "characters:winifred", "probability": 0.7},
+        {"value": "none", "probability": 0.1}
+      ],
+      "confidence": 0.64
+    },
+    {
+      "type": "score",
+      "name": "tension",
+      "score": 1.1,
+      "probabilities": [
+        {"value": 0, "label": "0", "probability": 0.35},
+        {"value": 1, "label": "1", "probability": 0.2},
+        {"value": 2, "label": "2", "probability": 0.45}
+      ],
+      "confidence": 0.41
+    }
+  ],
+  "usage": {
+    "input_tokens": 412,
+    "input_tokens_details": {"cached_tokens": 128, "cache_write_tokens": 0},
+    "output_tokens": 0,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 412
+  }
+}

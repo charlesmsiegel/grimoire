@@ -652,9 +652,14 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
 
 # ------------------------------------------------------------------ decisions
 
+#: The detail of a `decide.rationale` that is not applicable: the item was
+#: answered by a native decisions endpoint, which carries no rationale.
+NATIVE_RATIONALE = "n/a: answered natively, which carries no rationale"
+
+
 def grade_decision(text: str, items: Sequence[decisions.Item], *, explain: bool,
                    question: str, expected: object,
-                   max_rationale: int | None = None) -> list[Check]:
+                   max_rationale: int | None = None, native: bool = False) -> list[Check]:
     """Does a one-item decision reply decode, answer `question` with
     `expected`, and -- when `explain` asked it to -- say why?
 
@@ -671,6 +676,10 @@ def grade_decision(text: str, items: Sequence[decisions.Item], *, explain: bool,
     `max_rationale` caps `decide.rationale` too, where the call site refuses a
     longer one (voice drift's `MAX_NOTE`). A decision asked with no rationale
     (`explain=False`, the speaker pick) has no `decide.rationale` to fail.
+    Nor does an item a native endpoint answered (`native`, a live run's
+    `native_items`): it was never asked for one, so its `decide.rationale`
+    passes visibly as `NATIVE_RATIONALE` rather than failing a backend for
+    what its wire cannot carry. A structured answer keeps the real check.
     """
     if decisions.find_object(text) is None:
         return [Check("decide.json", False, "no JSON object recoverable from the reply")]
@@ -681,7 +690,11 @@ def grade_decision(text: str, items: Sequence[decisions.Item], *, explain: bool,
                     and type(answer.answer) is type(expected),
                     f"{question} answered {answer.answer!r} ({answer.reason or 'read'}), "
                     f"expected {expected!r}")]
-    return [*checks, _rationale_check(result.rationale, max_rationale)] if explain else checks
+    if not explain:
+        return checks
+    if native:
+        return [*checks, Check("decide.rationale", True, NATIVE_RATIONALE)]
+    return [*checks, _rationale_check(result.rationale, max_rationale)]
 
 
 def _rationale_check(rationale: str, cap: int | None) -> Check:

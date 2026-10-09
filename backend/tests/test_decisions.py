@@ -569,10 +569,13 @@ def test_answer_holds_its_invariants():
             bad()
 
 
-def test_decision_backend_is_one_of_backends():
+def test_decision_backend_is_one_of_backends_or_none_on_a_mixed_batch():
     for backend in decisions.BACKENDS:
         assert decisions.Decision((), backend).backend == backend
-    for bad in ("", "Structured", "openrouter"):
+    # Stages with different backends answered the batch (slice H): no one
+    # backend did, and each ItemResult says which answered it.
+    assert decisions.Decision((), "").backend == ""
+    for bad in ("Structured", "openrouter"):
         with pytest.raises(ValueError):
             decisions.Decision((), bad)
 
@@ -643,3 +646,334 @@ def test_constants():
 
 def test_decisions_is_a_leaf():
     assert _sibling_imports("decisions") == set()
+
+
+# --- native: reserved none, option limit, string budgets ---------------------
+
+ONE_NULLABLE = Choice("id", "i", (Option("find-the-ledger", "Find the ledger"),),
+                      allow_none=True)
+
+
+def _long_ids(n: int, width: int, prefix: str = "o") -> tuple[Option, ...]:
+    return tuple(Option(f"{prefix}{i:04d}".ljust(width, "x"), "") for i in range(n))
+
+
+def _predicates(n: int, width: int = 0) -> Item:
+    return Item("ctx", tuple(Predicate(f"q{i:04d}".ljust(width, "x"), "i")
+                             for i in range(n)))
+
+
+def test_item_result_backend_defaults_empty_and_parse_leaves_it():
+    assert ItemResult({}).backend == ""
+    for backend in decisions.BACKENDS:
+        assert ItemResult({}, backend=backend).backend == backend
+    with pytest.raises(ValueError):
+        ItemResult({}, backend="openrouter")
+    for result in decisions.parse(REPLY, [_item()], explain=True):
+        assert result.backend == ""
+    for result in decisions.unanswered([_item()], "error"):
+        assert result.backend == ""
+
+
+def test_none_key_is_refused_as_an_option():
+    assert decisions.NONE_KEY == "<none>"
+    with pytest.raises(DecideRequestError):
+        decisions.validate([_choice_item((Option("<none>", ""), MARA))])
+    with pytest.raises(DecideRequestError):
+        decisions.validate([_choice_item((Option("the-map", "", ("<NONE>",)), MARA))])
+
+
+def test_none_key_is_not_offerable():
+    assert not decisions.offerable("<none>")
+    assert not decisions.offerable("<NONE>")
+    assert not decisions.offerable("  <none> ")
+    assert decisions.offerable("the-map")
+    assert decisions.offerable("none")
+
+
+def test_native_choice_keys_add_one_reserved_none():
+    plain = Choice("who", "i", (MARA, GRIMOIRE))
+    assert decisions.native_choice_keys(plain) == (
+        ("characters:mara", "characters:mara"), ("grimoire", "grimoire"))
+    nullable = Choice("who", "i", (MARA, GRIMOIRE), allow_none=True)
+    assert decisions.native_choice_keys(nullable) == (
+        ("characters:mara", "characters:mara"), ("grimoire", "grimoire"),
+        ("none", decisions.NONE_KEY))
+    assert decisions.NATIVE_NONE == "none"
+    assert decisions.NATIVE_NONE_TEXT == "None of the other options fits."
+
+    taken = Choice("who", "i", (Option("none", ""), MARA), allow_none=True)
+    assert decisions.native_choice_keys(taken)[-1] == ("none_2", decisions.NONE_KEY)
+    both = Choice("who", "i", (Option("none", ""), Option("none_2", ""), MARA),
+                  allow_none=True)
+    assert decisions.native_choice_keys(both)[-1] == ("none_3", decisions.NONE_KEY)
+    assert decisions.native_choice_keys(ONE_NULLABLE) == (
+        ("find-the-ledger", "find-the-ledger"), ("none", decisions.NONE_KEY))
+
+
+def test_native_gap_names_a_nullable_choice_past_the_option_limit():
+    assert decisions.NATIVE_MAX_OPTIONS == 255
+    past = _choice_item(_options(255), allow_none=True)
+    decisions.validate([past])
+    assert decisions.native_gap(past) == (
+        "Question q offers 256 options including none; "
+        "a decisions endpoint takes at most 255.")
+    for fits in (_choice_item(_options(254), allow_none=True),
+                 _choice_item(_options(255)),
+                 _choice_item(_options(1), allow_none=True),
+                 _item()):
+        assert decisions.native_gap(fits) == ""
+
+
+def test_validate_refuses_an_enum_past_the_string_budget():
+    assert decisions.MAX_ENUM_STRING_CHARS == 15_000
+    assert decisions.ENUM_STRING_CHARS_ABOVE == 250
+    with pytest.raises(DecideRequestError, match=r"whose ids total 15060 characters"):
+        decisions.validate([_choice_item(_long_ids(251, 60))])
+    decisions.validate([_choice_item(_long_ids(251, 50))])  # 12,550 characters
+    decisions.validate([_choice_item(_long_ids(250, 70))])  # 250 values: no per-enum rule
+
+
+def test_validate_refuses_an_item_past_the_schema_string_budget():
+    assert decisions.MAX_SCHEMA_STRING_CHARS == 120_000
+    decisions.validate([_predicates(470, 250)])  # 117,500 + the item's own keys
+    with pytest.raises(DecideRequestError, match=r"schema holds 125017 characters"):
+        decisions.validate([_predicates(500, 250)])  # 125,000
+    # Enum strings count too: four choices of 250 values (1,000, inside the
+    # enum budget, and none above 250) of 125 characters each.
+    wide = Item("ctx", tuple(Choice(f"c{n}", "i", _long_ids(250, 125, f"c{n}-"))
+                             for n in range(4)))
+    assert decisions.enum_values(wide) == decisions.MAX_ENUM_VALUES
+    with pytest.raises(DecideRequestError, match=r"schema holds 125025 characters"):
+        decisions.validate([wide])
+
+
+def test_validate_refuses_an_item_past_the_schema_property_budget():
+    assert decisions.MAX_SCHEMA_PROPERTIES == 5000
+    # Its own index, `answers`, `rationale`, and one property per question.
+    assert decisions.schema_properties([_predicates(4997)]) == 5000
+    decisions.validate([_predicates(4997)])
+    with pytest.raises(DecideRequestError, match=r"schema holds 5001 properties"):
+        decisions.validate([_predicates(4998)])
+
+
+def test_chunks_close_before_the_schema_string_budget():
+    fifty, seventy = _predicates(200, 250), _predicates(280, 250)
+    assert decisions.schema_chars([fifty]) == 1 + 7 + 9 + 50_000
+    items = [fifty, seventy, fifty, fifty, fifty]
+    out = decisions.chunks(items)
+    assert [(offset, len(chunk)) for offset, chunk in out] == [(0, 1), (1, 1), (2, 2), (4, 1)]
+    assert [i for _, chunk in out for i in chunk] == items
+    for _, chunk in out:
+        assert decisions.schema_chars(chunk) <= decisions.MAX_SCHEMA_STRING_CHARS
+    # An item that alone exceeds the budget is a chunk of its own.
+    alone = _predicates(500, 250)
+    assert [len(c) for _, c in decisions.chunks([fifty, alone, fifty])] == [1, 1, 1]
+    assert [len(c) for _, c in decisions.chunks([fifty] * 3, chars=10**9)] == [3]
+
+
+def test_chunks_close_before_the_schema_property_budget():
+    items = [_predicates(2000)] * 5
+    out = decisions.chunks(items)
+    assert [len(chunk) for _, chunk in out] == [2, 2, 1]
+    for _, chunk in out:
+        assert decisions.schema_properties(chunk) <= decisions.MAX_SCHEMA_PROPERTIES
+
+
+def test_schema_chars_counts_keys_and_enum_strings():
+    expected = (len("0") + len("answers") + len("rationale") + len("over") + len("who")
+                + len("tone") + len("characters:mara") + len("grimoire"))
+    assert decisions.schema_chars([_item()]) == expected
+    assert decisions.schema_chars([_item(allow_none=False)]) == expected
+    # Integer enums do not count; a second item adds its index and its keys.
+    two = decisions.schema_chars([_item(), Item("b", (Predicate("p", "i"),))])
+    assert two == expected + len("1") + len("answers") + len("rationale") + len("p")
+    assert decisions.schema_properties([_item()]) == 1 + 2 + 3
+
+
+# --- native: answers ---------------------------------------------------------
+
+PRED = Predicate("over", "i")
+WHO = Choice("who", "i", (MARA, GRIMOIRE), allow_none=True)
+STRICT_WHO = Choice("who", "i", (MARA, GRIMOIRE))
+TONE = Score("tone", "i", ("low", "mid", "high"))
+NONE_KEY = "<none>"  # decisions.NONE_KEY, spelled out
+
+
+def _native(q, **kw):
+    return decisions.native_answer(q, **kw)
+
+
+def test_native_answer_predicate():
+    assert _native(PRED, chosen=True) == Answer(True)
+    assert _native(PRED, chosen=False) == Answer(False)
+    assert _native(PRED, probability=0.7) == Answer(True, probability=0.7)
+    assert _native(PRED, probability=0.3) == Answer(False, probability=0.3)
+    assert _native(PRED, probability=1) == Answer(True, probability=1.0)
+    assert _native(PRED, probability=0.5) == Answer(None, "abstained", probability=0.5)
+    for bad in (1.5, -0.1, float("nan"), float("inf"), True, "0.7", None, 10**400,
+                -(10**400)):
+        assert _native(PRED, probability=bad) == Answer(None, "unreadable"), bad
+    # An int too large for a float is out of range, never an OverflowError.
+    assert _native(PRED, chosen=True, probability=10**400) == Answer(True)
+    assert _native(PRED) == Answer(None, "unreadable")
+    # A non-bool `chosen` is not a predicate's answer; the probability decides.
+    assert _native(PRED, chosen="yes", probability=0.8) == Answer(True, probability=0.8)
+
+
+def test_native_answer_explicit_predicate_wins_over_its_probability():
+    """Deliberate (M11): a provider's explicit boolean is its answer, and the
+    probability it reported beside it is carried as reported. Neither is
+    reconciled into the other -- do not "fix" this into a threshold on the
+    probability, which would overrule an answer the provider gave."""
+    assert _native(PRED, chosen=True, probability=0.2) == Answer(True, probability=0.2)
+    assert _native(PRED, chosen=False, probability=0.9) == Answer(False, probability=0.9)
+
+
+def test_native_answer_choice():
+    assert _native(WHO, chosen="characters:mara") == Answer("characters:mara")
+    assert _native(WHO, chosen="Characters:Mara") == Answer(
+        None, "unreadable", detail=decisions.NOT_AN_OPTION)
+    assert _native(WHO, chosen=5) == Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION)
+    for nothing in (NONE_KEY, None):
+        assert _native(WHO, chosen=nothing) == Answer(None, "abstained")
+        assert _native(STRICT_WHO, chosen=nothing) == Answer(None, "unreadable")
+
+    dist = {"characters:mara": 0.6, "grimoire": 0.4}
+    assert _native(WHO, distribution=dist) == Answer("characters:mara", distribution=dist)
+    on_none = {"characters:mara": 0.2, "grimoire": 0.1, NONE_KEY: 0.7}
+    assert _native(WHO, distribution=on_none) == Answer(
+        None, "abstained", distribution=on_none)
+    tie = {"characters:mara": 0.5, "grimoire": 0.5}
+    assert _native(WHO, distribution=tie) == Answer(None, "abstained", distribution=tie)
+    assert _native(WHO) == Answer(None, "unreadable")
+    assert _native(WHO, distribution={}) == Answer(None, "unreadable")
+
+    stray = {"characters:rowan": 0.9, "grimoire": 0.1}
+    assert _native(WHO, chosen="grimoire", distribution=stray) == Answer("grimoire")
+    assert _native(WHO, distribution=stray) == Answer(None, "unreadable")
+    # The reserved none is a legal key only where none is allowed.
+    assert _native(STRICT_WHO, distribution=on_none) == Answer(None, "unreadable")
+    for bad in ({"grimoire": 1.2}, {"grimoire": float("nan")}, {"grimoire": True},
+                {"grimoire": "0.4"}, [("grimoire", 0.4)], {0: 0.4},
+                {"grimoire": 10**400}, {"characters:mara": 0.6, "grimoire": -(10**400)}):
+        assert _native(WHO, distribution=bad) == Answer(None, "unreadable"), bad
+    # The overflowing report is dropped whole; an explicit answer still stands.
+    assert _native(WHO, chosen="grimoire", distribution={"grimoire": 10**400}) == (
+        Answer("grimoire"))
+    assert _native(TONE, distribution={"0": 0.1, "2": 10**400}) == Answer(None, "unreadable")
+    # The explicit answer wins over its distribution, which rides along.
+    assert _native(WHO, chosen="grimoire", distribution=dist) == Answer(
+        "grimoire", distribution=dist)
+
+
+def test_native_answer_one_option_nullable_choice():
+    assert _native(ONE_NULLABLE, chosen="find-the-ledger") == Answer("find-the-ledger")
+    assert _native(ONE_NULLABLE, chosen=NONE_KEY) == Answer(None, "abstained")
+    assert _native(ONE_NULLABLE, distribution={"find-the-ledger": 0.3, NONE_KEY: 0.7}) == (
+        Answer(None, "abstained", distribution={"find-the-ledger": 0.3, NONE_KEY: 0.7}))
+
+
+def test_native_answer_score():
+    assert _native(TONE, chosen=2) == Answer(2)
+    assert _native(TONE, chosen=3) == Answer(None, "unreadable")
+    assert _native(TONE, chosen=-1) == Answer(None, "unreadable")
+    assert _native(TONE, chosen=True) == Answer(None, "unreadable")
+    dist = {"0": 0.1, "1": 0.2, "2": 0.7}
+    assert _native(TONE, distribution=dist) == Answer(2, distribution=dist)
+    assert _native(TONE, distribution={"0": 0.1, "3": 0.9}) == Answer(None, "unreadable")
+
+
+def test_native_answer_score_ignores_a_fractional_weighted_score():
+    """I1: both providers return a probability-weighted, fractional `score`.
+    It is never rounded into an answer: the answer is the argmax of the
+    per-level probabilities, or nothing."""
+    dist = {"0": 0.1, "1": 0.2, "2": 0.7}
+    assert _native(TONE, chosen=1.4, distribution=dist) == Answer(2, distribution=dist)
+    assert _native(TONE, chosen=1.4) == Answer(None, "unreadable")
+    bimodal = {"0": 0.45, "1": 0.1, "2": 0.45}
+    assert _native(TONE, chosen=1.0, distribution=bimodal) == Answer(
+        None, "abstained", distribution=bimodal)
+
+
+def test_native_answer_refused():
+    for q in (PRED, WHO, TONE):
+        assert _native(q, refused=True) == Answer(None, "refused")
+        assert _native(q, refused=True, chosen=True, probability=0.9) == Answer(None, "refused")
+
+
+def test_native_answer_outcomes_against_was_read():
+    assert not decisions.was_read(_native(WHO, refused=True))
+    assert not decisions.was_read(_native(WHO, distribution={"characters:mara": 0.5,
+                                                             "grimoire": 0.5}))
+    assert not decisions.was_read(_native(WHO, chosen=NONE_KEY))
+    unread_none = _native(STRICT_WHO, chosen=NONE_KEY)
+    assert unread_none == Answer(None, "unreadable")
+    assert decisions.was_read(unread_none)
+    assert decisions.was_read(_native(WHO, chosen="grimoire"))
+
+
+# --- native: the capture's outcome, and the structured rendering -------------
+
+def test_outcome_omits_empty_fields():
+    dist = {"characters:mara": 0.2, "grimoire": 0.1, NONE_KEY: 0.7}
+    results = (
+        ItemResult({"over": Answer(False, probability=0.1),
+                    "who": Answer(None, "abstained", distribution=dist),
+                    "tone": Answer(0)}, backend="native"),
+        ItemResult({"over": Answer(True),
+                    "who": Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION),
+                    "tone": Answer(None, "unreadable")}, "Mara spoke last.",
+                   backend="structured"),
+        ItemResult({"over": Answer(None, "error")}),
+    )
+    assert decisions.outcome("native", "openrouter", "vendor/model", results) == {
+        "mode": "native", "provider": "openrouter", "model": "vendor/model",
+        "items": [
+            {"backend": "native", "answers": {
+                "over": {"answer": False, "probability": 0.1},
+                "who": {"answer": None, "reason": "abstained", "distribution": dist},
+                "tone": {"answer": 0}}},
+            {"backend": "structured", "answers": {
+                "over": {"answer": True},
+                "who": {"answer": None, "reason": "unreadable", "detail": "not_an_option"},
+                "tone": {"answer": None, "reason": "unreadable"}},
+             "rationale": "Mara spoke last."},
+            {"answers": {"over": {"answer": None, "reason": "error"}}},
+        ]}
+    assert decisions.outcome("structured", "", "", ()) == {"mode": "structured", "items": []}
+    json.dumps(decisions.outcome("native", "openrouter", "vendor/model", results))
+
+
+def test_outcome_of_a_failure():
+    assert decisions.outcome("native", "openrouter", "vendor/model",
+                             error="bad_response") == {
+        "mode": "native", "provider": "openrouter", "model": "vendor/model",
+        "error": "bad_response"}
+
+
+def test_render_round_trips_answered_values():
+    items = [_item(), _item(allow_none=False), Item("b", (Predicate("p", "i"),))]
+    results = (
+        ItemResult({"over": Answer(True), "who": Answer("characters:mara"),
+                    "tone": Answer(2)}, "Because.", backend="native"),
+        ItemResult({"over": Answer(False), "who": Answer("grimoire"), "tone": Answer(0)},
+                   backend="native"),
+        ItemResult({"p": Answer(None, "abstained")}, backend="native"),
+    )
+    for explain in (True, False):
+        text = decisions.render(results, items, explain=explain)
+        back = decisions.parse(text, items, explain=explain)
+        assert [{k: a.answer for k, a in r.answers.items()} for r in back] == [
+            {k: a.answer for k, a in r.answers.items()} for r in results]
+        assert [r.rationale for r in back] == (
+            [r.rationale for r in results] if explain else ["", "", ""])
+    assert json.loads(decisions.render(results[:1], items[:1], explain=True)) == {
+        "0": {"answers": {"over": True, "who": "characters:mara", "tone": 2},
+              "rationale": "Because."}}
+    nullable = decisions.render(
+        (ItemResult({"over": Answer(True), "who": Answer(None, "abstained"),
+                     "tone": Answer(1)}),), items[:1], explain=False)
+    assert json.loads(nullable) == {"0": {"answers": {"over": True, "who": None, "tone": 1}}}
+    (back,) = decisions.parse(nullable, items[:1], explain=False)
+    assert back.answers["who"] == Answer(None, "abstained")
