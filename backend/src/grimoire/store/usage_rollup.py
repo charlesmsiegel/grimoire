@@ -13,7 +13,8 @@ not change what a figure means: what it reports is the same all-time rollup
 ``usage`` would compute, arrived at by not re-reading bytes it has already
 read.
 
-**The aggregate is derived, never authoritative.** ``<home>/usage/rollup-v5.json``
+**The aggregate is derived, never authoritative.**
+``<home>/usage/rollup-v{VERSION}.json`` (`rollup_path`, named for `VERSION`)
 can be deleted at any moment and the next read rebuilds it from the ledger. No
 caller may ever treat it as a record of anything -- the JSONL files are the
 ledger, and this is a bookmark in them.

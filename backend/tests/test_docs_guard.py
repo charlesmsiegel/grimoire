@@ -601,7 +601,8 @@ def test_claude_md_names_every_run_class():
 COSTS_LEDGER_FIELDS = ("provider_id", "requested_model", "tokens_estimated", "billing")
 
 #: The bucket counts the same section names, each a key `store/usage.py` bumps.
-COSTS_BUCKET_COUNTS = ("modelled_subscription_calls", "estimated_token_calls")
+COSTS_BUCKET_COUNTS = ("modelled_subscription_calls", "estimated_token_calls",
+                       "unpriced_native_calls")
 
 
 def test_claude_md_costs_names_real_ledger_fields():
@@ -637,6 +638,21 @@ def test_claude_md_costs_names_real_ledger_fields():
         "CLAUDE.md names `pricing.rate_for_call` as the rate-precedence function, "
         "and `store/pricing.py` has no such callable"
     )
+
+
+def test_claude_md_costs_names_the_rollup_version_in_force():
+    """The Costs section names the rail aggregate's format version, the
+    reason an older build's rollup is never read with a native row folded in.
+    A version it names must be `usage_rollup.VERSION`: the next bump would
+    otherwise leave the prose pointing at a file no build writes."""
+    from grimoire.store import usage_rollup
+
+    section = _section(_read(CLAUDE), "Costs")
+    named = re.findall(r"`usage_rollup\.VERSION = (\d+)`", section)
+    assert named, "CLAUDE.md's Costs section no longer names `usage_rollup.VERSION`"
+    assert {int(n) for n in named} == {usage_rollup.VERSION}, (
+        f"CLAUDE.md names usage_rollup.VERSION {named}; the code says "
+        f"{usage_rollup.VERSION}")
 
 
 def test_no_orphan_images():

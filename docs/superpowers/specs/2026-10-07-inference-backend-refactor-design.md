@@ -487,6 +487,19 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
   its sentence then reads "cannot generate text or make native decisions",
   composed in `incapable_text` from the two capabilities' own phrases rather
   than from a new key in `CANNOT`.
+  A decisions-only model the catalog cannot place is the user's to mark. On
+  the OpenAI preset, whose `always` says every model generates and whose
+  `/models` rows state no outputs, a decisions-only model resolves
+  structured until the user sets the capability override `generate: no` on
+  the model-facts panel (`PUT /llm-connections/{id}/facts`). A user's word
+  outranks the preset (§6.2), so the model is then native-only and its
+  decisions go to `/decisions`. No model id is named in code.
+  The reverse holds too, deliberately (ruling I8): an OpenRouter model whose
+  catalog `outputs` lists neither `text` nor `decisions` (an image or an
+  embeddings model) is `generate: no` from the catalog and `decide_native:
+  unknown`, because a list without `decisions` says nothing. So on a decide
+  route it resolves native, and its decisions fail at the endpoint like any
+  failed call, moving to the fallback when there is one.
   The Decision role card is resolved as a `decide`, so the card and the decide
   routes' rows read one refusal: `skip_text`, `decide_skip` and the skip notice
   are deleted, and a role card and its row can no longer disagree.
@@ -616,6 +629,29 @@ unset, half-set or known not to embed resolves with no `space_id`.
   - A `PresetRefusalError` stops the chain, as it stops the facade, including a
     native fallback stage that would take no sampling: the user should fix the
     preset.
+  - **A connection-wide failure stops sending, on either backend** (slice H):
+    an auth failure, `missing_key`, a `rate_limit` the facade has already
+    retried as far as it will, a spend refusal (`llm_errors.account_limit`),
+    or the caller's clock refusing a call unsent (absorb's `BudgetRefused`).
+    A native stage starts no further item after one, and a structured stage
+    sends no further chunk (`inference._connection_wide`). Items in flight
+    finish, and those never sent carry the failure that stopped them to the
+    next stage. A structured chunk with a fallback riding the facade stops
+    the stage only when the failures of both routes are connection-wide,
+    except a clock refusal, which always stops it. This is a deliberate change
+    to F's structured stage.
+  - A stage that stopped that way skips each later stage on the **same
+    connection**, by store id; its items keep the failures they have.
+  - A clock refusal ends the whole chain, because the clock refuses every
+    later call too. It is raised as the `BudgetRefused` it is: a unit whose
+    every failure is the clock's is never composed into a plain `LLMError`.
+  - A native stage also stops after `NATIVE_TIMEOUT_STOP` (one full wave,
+    `NATIVE_CONCURRENCY`) items **in a row** have timed out, whether the
+    provider's read bound or the caller's ceiling raised it. Any answer or
+    other failure resets the count. A timeout is not connection-wide: the
+    stop applies to that stage only, and a generating stage on the same
+    connection still runs, because a hung decisions endpoint says nothing
+    about the chat endpoint.
 - `embed`: no fallback (§7.3).
 
 ### 5.6 Per-call override (reroll, #77)
@@ -802,17 +838,21 @@ Optional; offered on unverified rows and on the model-facts panel.
    - decide_native: one fixed predicate. It is **never priced**: the probe is
      `priceable=False`, read by every estimator, because a catalog row does not
      say how a decision is billed and a probe with no reported tokens must not
-     read as "$0.00". The Decision picker offers it only for a model known
-     unable to generate (a model that can generate is served structured, §5.5,
-     so the answer would change nothing); the provider page's explicit Test…
-     may list it for any model
+     read as "$0.00". The Decision picker offers it only for a model the
+     resolver would serve natively: known unable to generate and not known
+     unable to decide natively, where a name-rule `no` is a guess and counts
+     for neither (a model that can generate is served structured, §5.5, so the
+     answer would change nothing). The provider page's explicit Test… may
+     list it for any model
 3. Results go to `facts.json[model].verified`, stamped with the provider's
    `rev` when the test started (nothing is recorded if it moved meanwhile). A
    failure is recorded only when the provider refused the probe itself
    (400/404/413/415/422, and not a refusal of the probe's own reply cap), with
    the error text it gave and no credentials; it resolves as `unknown` with
-   that error (§6.2). Rate limits, outages, 402/408, auth and transport
-   failures are reported to the caller and not recorded, and a failure that
+   that error (§6.2). A native decision probe's 403 is a refusal of the probe
+   too (§7.4 Health): it is recorded, and as an `auth` kind it also halts the
+   probes after it (ruling 11). Rate limits, outages, 402/408, auth and
+   transport failures are otherwise reported to the caller and not recorded, and a failure that
    answers for every probe stops the probes after it (reported "not sent").
    An account limit (`llm_errors.account_limit`) is both: never recorded and
    always halting -- a 402, a 429 carrying `enforced_spend_limit_reached`, and
@@ -1117,7 +1157,9 @@ Templates live under `templates/decide/` and go through
   unit's final error is re-raised (composed across stages, as "Result"
   says); `reason: error` marks only a failed unit's items, and only when
   another item answered. `Decision.errors` holds each failed unit's final
-  error, which the call sites read through `_decide_error`.
+  error, which the call sites read through `_decide_error`. A connection-wide
+  failure stops a stage from sending more (§5.5), so the first failed unit's
+  error may be one that held the unit back rather than one it was sent into.
 - **`capture`** is a hook called after each call settles (§9.4).
 - **Reading the reply.** The parser never raises and answers every item. It
   reads a fenced or surrounded object, and for a single item two shapes a
@@ -1224,7 +1266,11 @@ stops the task rather than being guessed around.
   call per item, the continuity sweep sending one item per row) and to be
   tuned later against real prompts. The native items of one stage run in one
   `asyncio.TaskGroup`, so an unexpected exception or a cancel leaves no request
-  running, and every meter opened files `aborted`. Results keep input order.
+  the group owns running, and every meter opened files `aborted`. An `around`
+  that detaches the call into a task of its own (`_bounded_call`) abandons that
+  task rather than awaiting it, so its request may finish unwinding after the
+  batch returns. That is `_bounded_call`'s documented trade. Results keep
+  input order.
 - **Health.** A native 4xx in `NATIVE_REJECTED_STATUSES` (`REJECTED_STATUSES`
   plus 403) does not mark the connection failing: the connection answered, and
   the decisions endpoint refused that model, key or request.
@@ -1237,7 +1283,7 @@ stops the task rather than being guessed around.
 | voice-drift | `choice` drift / in_voice / not_enough | the note becomes the optional rationale (`explain` carries the corrective instruction); a native backend gives none and the verdict is shown without a note; today's `unknown` becomes `answer: None` and still counts as a failed check |
 | speaker | `choice` over eligible refs, `allow_none` | none; the speaker keeps today's two issue strings, and control still returns to the player when nothing is readable. A roster `decide` refuses before sending is today's invalid handoff too: two refs that collide once normalised, or more than 254 refs (with `grimoire`, past the 255 options a choice may offer) |
 | continuity-identity | one item per row, two questions: `decision` (a `choice` existing / new / uncertain) and `id` (a `choice` over that row's offered candidate ids, `allow_none`, a single candidate allowed) | the candidates are shown in the item's context and the one meant is answered as `id`; keeping today's two fields keeps today's two outcomes apart (an unknown word is `uncertain` and accepted, an unoffered id is `uncertain` and downgraded). Each item's context is self-contained (native backends send one request per item), and rows are chunked at 8 in one `decide()`, one metered call per chunk, each drawing on the absorb budget. A failed or garbled chunk beside answered ones leaves its rows `unchecked` (phase `degraded`, never `ok`), never `uncertain` (that covers an item the reply never reached; one answered badly is still read and stored `uncertain`); a row not `was_read` is unanswered, and a chunk error with nothing read is reported as that error. The trust rules are today's: answers become today's decision dicts for the unchanged `Examination.decide`, and the reason is display-only, stored `""` when none came back. `None` for every item is today's "undecodable"; an object holding no item (`{}`, today's format) is an empty answer. An offered id is read through the generic normalisation (a normalised-id widening toward a merge, a printed gate entry). Neither resolution is refused at request time: the identity phase reports `failed` and persist 1's findings stand, and the review shows the refusal's own sentence for `incapable` |
-| continuity-reconcile | one item per candidate: `choice` over that candidate kind's vocabulary, plus `from` / `to` (`choice` A / B, `allow_none`) on the pair vocabularies only, and up to three nullable evidence choices (`evidence_scene`, `evidence_scene_2`, `evidence_scene_3`, `EVIDENCE_SCENES = 3`) over the scenes that item shows, each asked only when it shows at least that many | per-kind vocabularies become per-item option lists, labelled by their own word with the criteria carried whole in the question; temporal keeps today's fixed commitment-to-event direction. Evidence maps to a deduped, ordered list as today; only a reply citing four or more scenes is narrowed (the first three are stored). Each item's context is self-contained (the reconcile date, the item's own chronicle lines, the recent window and the question instructions repeat per item, so repeated input grows linearly with the candidates, which chunking bounds per call and not in total); option descriptions do not repeat the context. One `decide()` chunked at 8: a sweep of up to 24 candidates is up to 3 metered calls, plus one prompt-only re-send per route that refused the schema (so up to 3 per chunk with a fallback), each under the full reconcile ceiling, so a sweep can hold the campaign's background run up to 3x (9x with both routes of every chunk re-sent) as long as today, during which `PUT /config/data-dir` is refused and End Scene adopts rather than starts. A failed or garbled chunk beside answered ones leaves its candidates without a proposal (the sweep lands with `llm: "ok"` and `unanswered`, and the review shows a one-line partial-sweep note); nothing is stored `uncertain` for a candidate the reply never reached, and a cached candidate is asked again by the next sweep, while a model-only nomination in a failed chunk is not stored (as with today's whole-call failure). A chunk error with nothing read is reported as that error. The trust rules are today's: answers become today's reply elements for `_decide`, unchanged but for I4's rationale rule (a status word stands on its evidence scene alone). Neither resolution is refused at request time: the sweep lands with `llm: "off"`, and a model that cannot serve continuity shows the `incapable` sentence rather than "No model connection" |
+| continuity-reconcile | one item per candidate: `choice` over that candidate kind's vocabulary, plus `from` / `to` (`choice` A / B, `allow_none`) on the pair vocabularies only, and up to three nullable evidence choices (`evidence_scene`, `evidence_scene_2`, `evidence_scene_3`, `EVIDENCE_SCENES = 3`) over the scenes that item shows, each asked only when it shows at least that many | per-kind vocabularies become per-item option lists, labelled by their own word with the criteria carried whole in the question; temporal keeps today's fixed commitment-to-event direction. Evidence maps to a deduped, ordered list as today; only a reply citing four or more scenes is narrowed (the first three are stored). Each item's context is self-contained (the reconcile date, the item's own chronicle lines, the recent window and the question instructions repeat per item, so repeated input grows linearly with the candidates, which chunking bounds per call and not in total); option descriptions do not repeat the context. One `decide()` chunked at 8: a sweep of up to 24 candidates is up to 3 metered calls, plus one prompt-only re-send per route that refused the schema (so up to 3 per chunk with a fallback), each under the full reconcile ceiling, so a sweep on a structured Decision model can hold the campaign's background run up to 3x (9x with both routes of every chunk re-sent) as long as today. On a native stage each item is one call under its own ceiling, `NATIVE_CONCURRENCY` (4) in flight, so N items take up to ⌈N/4⌉ ceilings. A fallback stage of its own adds its chunks, each one call plus a prompt-only re-send on a schema refusal, so up to 2 ceilings per chunk. A full sweep of 24 on a native model with a fallback is therefore up to 6 + 6 = 12x as long as today, and the same is true for a structured primary with a native fallback. The timeout stop (§5.5) bounds a hung decisions endpoint at about two waves rather than six, but an endpoint that answers just inside the ceiling still takes the full ⌈N/4⌉. Throughout, `PUT /config/data-dir` is refused and End Scene adopts rather than starts. A failed or garbled chunk beside answered ones leaves its candidates without a proposal (the sweep lands with `llm: "ok"` and `unanswered`, and the review shows a one-line partial-sweep note); nothing is stored `uncertain` for a candidate the reply never reached, and a cached candidate is asked again by the next sweep, while a model-only nomination in a failed chunk is not stored (as with today's whole-call failure). A chunk error with nothing read is reported as that error. The trust rules are today's: answers become today's reply elements for `_decide`, unchanged but for I4's rationale rule (a status word stands on its evidence scene alone). Neither resolution is refused at request time: the sweep lands with `llm: "off"`, and a model that cannot serve continuity shows the `incapable` sentence rather than "No model connection" |
 
 
 **Eval gate.** Each conversion lands with recorded cases under `evals/` and
@@ -1269,7 +1315,14 @@ today's parse on them, offline. Native backends are measured with
   forces one backend on the resolved primary, which is how "native beats
   structured" is measured on one model (§16), and `--provider/--model` selects
   through `override_inference`, writing no settings. Every `--live` run spends
-  money and needs the user's explicit approval.
+  money and needs the user's explicit approval. A natively answered item's
+  rationale is graded n/a (`evals/graders.NATIVE_RATIONALE`), never a miss,
+  since a native API carries none by contract; otherwise the native-versus-
+  structured comparison would be biased against native. `--decide-backend
+  native` is refused before anything is sent for a primary with no native
+  endpoint (a kind outside `NATIVE_DECISION_KINDS`), on a preset whose `never`
+  holds `decide_native`, or with a known `no` for `decide_native`
+  (`resolve.decides_natively`).
 
 ---
 
@@ -1412,7 +1465,10 @@ never count; zero rates are a price. It is computed from configuration, never
 from the ledger (the chores contract: a live, cheap count), and sits beside the
 ledger-based `unpriced` chore: that one asks which recorded strings no rate
 matches, this one asks which configured models nothing would price. Its action
-opens that model's rates field.
+opens that model's rates field. Every generative use of a native-only model is
+skipped (`in_use._native`, slice H): its decisions are native, which no rate
+prices (§9.3), and its generations are refused unsent, so a rate set for it
+would price nothing. Its Embedding use is still counted.
 
 ### 9.3 Ledger rows
 
@@ -1435,9 +1491,14 @@ resolution is never mutated and a fallback attempt carries its own.
   chat rates would mis-model it. It is enforced at read time, not at filing:
   `store.usage.Rates.estimate` returns None for a row whose `decision_mode` is
   `native`, so no rollup, per-turn row or rail aggregate models one (the
-  rail's `usage_rollup.VERSION` moved to 5 with it), and `unpriced_models`
-  never offers a rate for one. Without a reported cost the row is unpriced,
-  it never carries a local token estimate, and it is never read as zero.
+  rail's `usage_rollup.VERSION` moved to 6 with it, so an older build's
+  rollup file is never read with a native row folded in at chat rates), and
+  `unpriced_models` never offers a rate for one. Without a reported cost the
+  row is unpriced, it never carries a local token estimate, and it is never
+  read as zero. An unpriced native row is counted in `unpriced_native_calls`
+  and never in `unmetered_calls`; the two counts are disjoint.
+  A native row's `preset` is absent: a native call sends no sampling (§8),
+  and `decide_native` drops the dict's `sampling` before it stamps.
 - `provider` stays the adapter kind, as every existing row already writes it
   and an append-only ledger cannot change a field's meaning under rows older
   builds still read. The provider goes in `provider_id`, and `connection`
@@ -1492,6 +1553,15 @@ absent, never as the earlier batches' partial sum.
     built only when a capture is given, and off the loop.
   - The outcome is `decisions.outcome`, recorded as a zero-token `decision`
     section. A native stage's conn is captured without `sampling`.
+  - The conn is the `llm.ATTEMPTED` dict of the attempt that answered, so a
+    fallback or a prompt-only re-send names itself. A failed call names its
+    stage's dict.
+  - A call refused before anything went out is captured with `messages=[]`
+    and its error. That covers `native_unrepresentable` and a clock refusal.
+    An adapter's `missing_key` is raised after the attempt is stamped, so it
+    is captured with the request it would have sent, and files an `error`
+    row. Items and chunks held back by a connection-wide stop are never
+    sent, and they are not captured.
   - The capture runs outside the meter and guarded, so it can never fail an
     answered decision or file an error row.
   - One structured call is one capture, its schema-refusal retry included. A
@@ -1572,8 +1642,12 @@ go through `useHotkeys`.
   - "This model can't create embeddings."
 
   The decide warning is keyed on the resolution's `decision_mode` (slice H):
-  native; structured on a model that could also decide natively; structured
-  with no native API; or the refusal's own sentence. The frontend keeps no
+  native; structured on a model that could also decide natively, or whose
+  native API is unknown ("Answered by structured generation."); structured
+  with a known `no` for `decide_native`, which is the only case that says
+  "No native decision API"; or the refusal's own sentence. The settings view
+  carries the resolved primary's `decides_natively` as `yes`, `no` or
+  `unknown`, with `no` only when it is known. The frontend keeps no
   capability rule of its own.
 
 **Presets editor**: today's `SamplerPresetEditor`, renamed, with
@@ -1935,7 +2009,8 @@ picker; newer-format banner.
   before they win on evals. Slice H serves native only a model that cannot
   generate; "native first for a model that also generates" is recorded as a
   later user decision, gated on `evals/run.py --live --decide-backend`
-  measuring both backends on one model.
+  measuring both backends on one model, with a native item's rationale
+  graded n/a (§7.4).
 - Embedding fallback of any kind.
 - Historical retrieval, agent orchestration, tool use.
 - Replacing file-backed configuration with a database.
