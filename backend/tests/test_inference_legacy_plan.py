@@ -31,8 +31,8 @@ from grimoire.store import (
     routing,
     sampler_presets,
 )
-from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store import inference_retired as retired
+from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.inference import facts, legacy_plan, migrate
 from tests import inference_baseline as base
 from tests import inference_baseline_c as base_c

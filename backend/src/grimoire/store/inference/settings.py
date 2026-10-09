@@ -64,10 +64,10 @@ from .. import (
     sampler_presets,
 )
 from .. import inference_keys as keys
+from .. import inference_retired as retired
 from ..campaigns import lifecycle as campaign_lifecycle
 from ..campaigns import read as campaign_read
 from ..frontmatter import breaks_line
-from .. import inference_retired as retired
 from . import capabilities, cascade, facts, in_use, migrate, providers, resolve
 from .resolved import ResolvedInference
 

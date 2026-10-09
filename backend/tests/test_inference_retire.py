@@ -34,9 +34,9 @@ from grimoire.store import (
     sampler_presets,
     worlds,
 )
+from grimoire.store import inference_retired as retired
 from grimoire.store.campaigns import lifecycle as campaign_lifecycle
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store import inference_retired as retired
 from grimoire.store.inference import legacy_plan, migrate, retire
 from grimoire.store.inference import resolve as inference
 from grimoire.store.inference import settings as inference_settings
