@@ -391,3 +391,51 @@ def test_a_campaign_write_reads_campaign_md_fresh(client):
     assert refused.value.status == 409
     assert parse_frontmatter(path.read_text(encoding="utf-8"))[0].get(
         keys.role_key("fast", "provider"), "") == ""
+
+
+# ---- a model answered natively is priced by no rate (slice H, Task 9) ----
+DECIDE_ROUTE = next(r.key for r in routing.ROUTES if r.operation == "decide")
+
+
+def _native_only() -> str:
+    """The OpenAI preset (its own native decisions endpoint, no reported
+    price), with `MODEL` stated unable to generate: a Decision use of it is
+    answered natively (`resolve.native_only`), where no rate prices anything."""
+    pid = llm_connections.create_connection(
+        "openai_compatible", "Realm OpenAI", base_url="https://api.openai.com/v1",
+        api_key="sk-fake-openai")
+    facts.state(pid, MODEL, overrides={"generate": "no"})
+    return pid
+
+
+def test_a_model_in_use_only_natively_is_not_listed(client):
+    pid = _native_only()
+    _format2()
+    store.write_config(**_role("decision", pid, MODEL),
+                       **{keys.fallback_key("decision", "provider"): pid,
+                          keys.fallback_key("decision", "model"): MODEL,
+                          keys.use_key(DECIDE_ROUTE): keys.PIN,
+                          keys.pin_key(DECIDE_ROUTE, "provider"): pid,
+                          keys.pin_key(DECIDE_ROUTE, "model"): MODEL})
+    assert in_use.unpriced() == []
+    # Still a stored selection: the provider's detail lists every use.
+    assert len(in_use.selections()) == 3
+
+
+def test_a_model_also_in_use_another_way_is_listed_for_that_use(client):
+    pid = _native_only()
+    _format2()
+    store.write_config(**_role("decision", pid, MODEL), **_role("fast", pid, MODEL))
+    assert in_use.unpriced() == [
+        {"provider_id": pid, "provider_name": "Realm OpenAI", "model": MODEL,
+         "uses": [{"kind": "role", "key": "fast", "scope": "global"}]}]
+
+
+def test_a_decision_model_that_generates_is_still_listed(client):
+    """Ruling 1: one that can generate is answered by structured generation,
+    which a rate prices, whatever its `decide_native` says."""
+    pid = _native_only()
+    facts.state(pid, MODEL, overrides={"generate": "", "decide_native": "yes"})
+    _format2()
+    store.write_config(**_role("decision", pid, MODEL))
+    assert _pairs() == [(pid, MODEL)]

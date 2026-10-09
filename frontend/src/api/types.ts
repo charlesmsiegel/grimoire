@@ -1743,12 +1743,15 @@ export type UsageBucket = {
   /** Breakdown counts, each a slice of a count above and never money (spec
    *  9.1): `modelled_subscription_calls` sits inside `modelled_calls`,
    *  `unpriced_subscription_calls` inside `unpriced_calls` -- calls a
-   *  subscription served that no provider billed -- and `estimated_token_calls`
+   *  subscription served that no provider billed -- `unpriced_native_calls`
+   *  inside `unpriced_calls` too -- native decisions, which no rate prices,
+   *  and never also counted in `unmetered_calls` -- and `estimated_token_calls`
    *  inside `calls`, the ones whose token counts were counted here because the
    *  provider reported none. `/usage` omits each while it is zero, so a reader
    *  takes absent as 0. */
   modelled_subscription_calls?: number;
   unpriced_subscription_calls?: number;
+  unpriced_native_calls?: number;
   estimated_token_calls?: number;
   duration_ms: number;
 };
@@ -3260,6 +3263,7 @@ export type ShellMoney = {
    *  them; optional because a response from an older build does not. */
   modelled_subscription_calls?: number;
   unpriced_subscription_calls?: number;
+  unpriced_native_calls?: number;
   estimated_token_calls?: number;
   partial: boolean;
 };

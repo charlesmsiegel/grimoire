@@ -18,9 +18,12 @@ whose provider's preset does not report prices (`reports_price`: OpenRouter
 and the Claude subscription never count), and which no rate prices
 (`pricing.rate_for_call`: the model's own rates, then `pricing.json`). A zero
 rate somebody entered is a price. A model served by two providers is two
-pairs, because each is priced on its own provider. It is computed from
-configuration alone and never reads the usage ledger, so it costs the same
-however long the library has been played.
+pairs, because each is priced on its own provider. A use answered natively --
+a decision slot holding a model `resolve.native_only` serves on its provider's
+decisions endpoint -- is not one a rate could price (`usage._modellable`), so
+it is left out. It is computed from configuration (and, for such a slot, the
+model's cached catalog row and facts) and never reads the usage ledger, so it
+costs the same however long the library has been played.
 
 **What it costs, and what is memoized.** Only a campaign's frontmatter parse
 (`campaign_meta`), on the stat signature of its `campaign.md`, in a pool of its
@@ -48,7 +51,7 @@ from .. import config, pricing, routing, statcache
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..frontmatter import parse_frontmatter
-from . import facts, providers, resolve, translate
+from . import capabilities, facts, providers, resolve, translate
 
 #: `campaign_meta`'s memo, apart from `statcache`'s shared pool: a walk touches
 #: every campaign, and the shared FIFO is what other sweeps rely on staying
@@ -168,11 +171,16 @@ def unpriced() -> list[dict]:
     """`[{provider_id, provider_name, model, uses: [{kind, key, scope, cid?}]}]`:
     each distinct `(provider, model)` in use that nothing would price, sorted
     by provider name, then model. `model` is the one its rates are stated
-    under (`facts.model_of`). Raises what `config.read_config` raises."""
+    under (`facts.model_of`). Raises what `config.read_config` raises.
+
+    A use answered natively (`_native`) is left out, since no rate prices a
+    native decision (`usage._modellable`): a pair used only that way is not
+    listed, and one used another way too is listed for that use alone."""
     lookup = resolve.connection_lookup()
     table = pricing.read_pricing()
     rates = pricing.provider_rates()
     found: dict[tuple[str, str], dict | None] = {}
+    native: dict[tuple[str, str], bool] = {}
     for use in _selections(config.read_config(), lookup):
         raw = lookup(use.provider)
         if raw is None:
@@ -195,7 +203,28 @@ def unpriced() -> list[dict]:
                 "provider_name": str(raw.get("name") or use.provider),
                 "model": model, "uses": []}
         entry = found[pair]
-        if entry is not None:
-            entry["uses"].append(_where(use))
-    return sorted((e for e in found.values() if e is not None),
+        if entry is None or _native(use, raw, model, native):
+            continue
+        entry["uses"].append(_where(use))
+    return sorted((e for e in found.values() if e is not None and e["uses"]),
                   key=lambda e: (e["provider_name"], e["model"], e["provider_id"]))
+
+
+#: The routes that decide (`operation` "decide"): a pin on one is a decision use.
+_DECIDE_ROUTES = frozenset(r.key for r in routing.ROUTES if r.operation == "decide")
+
+
+def _native(use: Use, raw: dict, model: str, memo: dict[tuple[str, str], bool]) -> bool:
+    """Whether `use` is answered natively: a slot that decides -- the Decision
+    role, its fallback, or a pin on a decide route -- holding a model
+    `resolve.native_only` serves on its provider's decisions endpoint, the
+    resolver's own rule. The model's capabilities are read once per pair, and
+    only for a pair nothing prices that a decision slot holds."""
+    decides = (use.key == "decision" if use.kind in ("role", "fallback")
+               else use.kind == "route" and use.key in _DECIDE_ROUTES)
+    if not decides:
+        return False
+    pair = (use.provider, model)
+    if pair not in memo:
+        memo[pair] = resolve.native_only(capabilities.caps_for(raw, model))
+    return memo[pair]

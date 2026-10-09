@@ -211,7 +211,10 @@ _SESSION_START = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 #: no rate could ever cover, because the provider reported no token counts
 #: either. The split exists so a view can tell a reader whether typing a rate
 #: would help: for an unmetered call it would not, and sending them to do it is
-#: sending them to an action that cannot resolve the warning.
+#: sending them to an action that cannot resolve the warning. A native decision
+#: no rate may model (`_modellable`) is the other such slice, counted apart
+#: (the lazy `unpriced_native_calls`) and never in `unmetered_calls`, because
+#: its reason is not missing counts.
 _ZERO = {"calls": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
          "total_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
          "cost_usd": 0.0, "estimated_usd": 0.0, "modelled_usd": 0.0,
@@ -982,16 +985,7 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
     if cost is None:
         modelled = rates.estimate(row) if rates is not None else None
         if modelled is None:
-            bucket["unpriced_calls"] += 1
-            if subscription:
-                _bump(bucket, "unpriced_subscription_calls")
-            # Counted whether or not a rate exists, and read straight off the
-            # row rather than from the estimator's verdict: the question is
-            # "could ANY rate have priced this", and the answer is no whenever
-            # a count is missing -- see `pricing.estimate`, which requires both,
-            # and `_counts`, which knows an embedding completes nothing.
-            if not _metered(row):
-                bucket["unmetered_calls"] += 1
+            _add_unpriced(bucket, row, subscription)
         else:
             bucket["modelled_calls"] += 1
             bucket["modelled_usd"] += modelled
@@ -1007,6 +1001,25 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
         bucket["estimated_usd"] += cost
     else:
         bucket["cost_usd"] += cost
+
+
+def _add_unpriced(bucket: dict, row: dict, subscription: bool) -> None:
+    """`_add`'s share for a row nothing priced: `unpriced_calls`, and the
+    slices of it that say why."""
+    bucket["unpriced_calls"] += 1
+    if subscription:
+        _bump(bucket, "unpriced_subscription_calls")
+    # Counted whether or not a rate exists, and read straight off the row
+    # rather than from the estimator's verdict: the question is "could ANY
+    # rate have priced this". A native decision never could (`_modellable`),
+    # whatever its counts, and is counted apart so a view can say so in its
+    # own words; otherwise the answer is no whenever a count is missing -- see
+    # `pricing.estimate`, which requires both, and `_counts`, which knows an
+    # embedding completes nothing.
+    if not _modellable(row):
+        _bump(bucket, "unpriced_native_calls")
+    elif not _metered(row):
+        bucket["unmetered_calls"] += 1
 
 
 def _bump(bucket: dict, key: str) -> None:

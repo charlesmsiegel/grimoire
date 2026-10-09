@@ -155,7 +155,7 @@ def test_rollup_json_is_not_mistaken_for_a_ledger_month(home):
     _call(cost_usd=1.0, ts="2026-08-01T00:00:00Z")
     usage_rollup.campaign_totals("saltmarch")
 
-    assert usage_rollup.rollup_path().name == "rollup-v5.json"
+    assert usage_rollup.rollup_path().name == "rollup-v6.json"
     stored = json.loads(usage_rollup.rollup_path().read_text(encoding="utf-8"))
     assert list(stored["months"]) == ["2026-08"]
 
@@ -440,3 +440,5 @@ def test_the_rail_never_models_a_native_decision_row(home):
     # Only the structured row is modelled: 1000 at $1/1k plus 200 at $2/1k.
     assert out["modelled_usd"] == pytest.approx(1.4)
     assert out["modelled_calls"] == 1 and out["unpriced_calls"] == 1
+    # And the rail's money says why no rate prices the one left over.
+    assert out["unpriced_native_calls"] == 1 and out["unmetered_calls"] == 0

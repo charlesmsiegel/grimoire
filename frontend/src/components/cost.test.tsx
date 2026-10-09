@@ -130,6 +130,40 @@ test("a mix says how many of them no rate can reach", () => {
   expect(container.textContent).toMatch(/1 of them reported no token counts/);
 });
 
+test("native decisions nobody priced are never offered a rate", () => {
+  // A native decision is never modelled (`usage._modellable`), whatever its
+  // counts, so a rate would price nothing: no hint, and no $0 either.
+  const native = { ...ZERO, calls: 2, prompt_tokens: 40, total_tokens: 40,
+                   unpriced_calls: 2, unpriced_native_calls: 2 };
+  const { container } = render(<Footnotes bucket={native} />);
+
+  expect(container.textContent).not.toMatch(/Set per-token rates/);
+  expect(container.textContent).toMatch(
+    /No rate can price these — a native decision is priced by its provider or not at all/);
+  expect(container.textContent).not.toMatch(/reported no token counts/);
+  expect(bucketPrice(native)).toBe(UNPRICED);
+});
+
+test("beside calls a rate could price, native decisions are named apart", () => {
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 4, unpriced_calls: 4, unpriced_native_calls: 1,
+                         unmetered_calls: 1 }} />);
+
+  // Two of the four could be priced by a rate.
+  expect(container.textContent).toMatch(/Set per-token rates in Settings/);
+  expect(container.textContent).toMatch(/1 of them reported no token counts/);
+  expect(container.textContent).toMatch(/1 of them was a native decision, which no rate prices/);
+});
+
+test("native and unmetered calls alone leave no call a rate could price", () => {
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 3, unpriced_calls: 3, unpriced_native_calls: 2,
+                         unmetered_calls: 1 }} />);
+
+  expect(container.textContent).not.toMatch(/Set per-token rates/);
+  expect(container.textContent).toMatch(/2 of them were native decisions, which no rate prices/);
+});
+
 test("a complete bucket has no footnotes at all", () => {
   const { container } = render(
     <Footnotes bucket={{ ...ZERO, calls: 2, priced_calls: 2, cost_usd: 0.02 }} />);

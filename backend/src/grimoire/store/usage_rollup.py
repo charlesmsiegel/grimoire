@@ -102,19 +102,22 @@ from . import atomic, pricing, usage
 #: 5: a native decision row is never modelled (`usage._modellable`). No build
 #: before this one files such a row, but an older build sharing a synced
 #: ledger would fold one at chat rates into the file it shares with this one.
-VERSION = 5
+#: 6: an unpriced native decision row is counted in `unpriced_native_calls`
+#: rather than, when it lacks counts, `unmetered_calls`.
+VERSION = 6
 
 #: What a caller gets for a campaign the ledger has never mentioned, and what a
 #: failed scan degrades to. `partial` is the field that keeps it honest -- see
 #: `_empty`.
-#: The three breakdown counts (`estimated_token_calls`,
-#: `modelled_subscription_calls`, `unpriced_subscription_calls`) are counts,
-#: never money: each sits inside a count beside it (`usage._add`).
+#: The four breakdown counts (`estimated_token_calls`,
+#: `modelled_subscription_calls`, `unpriced_subscription_calls`,
+#: `unpriced_native_calls`) are counts, never money: each sits inside a count
+#: beside it (`usage._add`).
 _FIELDS = ("calls", "cost_usd", "estimated_usd", "modelled_usd",
            "unpriced_calls", "unmetered_calls", "subscription_calls",
            "modelled_calls", "priced_calls", "total_tokens",
            "estimated_token_calls", "modelled_subscription_calls",
-           "unpriced_subscription_calls")
+           "unpriced_subscription_calls", "unpriced_native_calls")
 
 
 def rollup_path() -> Path:

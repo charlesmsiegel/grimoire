@@ -347,6 +347,29 @@ def test_a_native_decision_row_without_a_cost_is_unpriced_whatever_the_rates(pid
     assert usage.unpriced_models() == []
 
 
+def test_a_native_decision_row_nobody_priced_is_counted_apart(pid):
+    """The Costs card offers a rate only for calls a rate could price. A
+    native decision is never one (`_modellable`), with counts or without, so
+    it is counted in `unpriced_native_calls` -- a slice of `unpriced_calls`
+    -- and never in `unmetered_calls`, whose reason (no token counts) is not
+    its reason."""
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND,
+          provider_id=pid, model="vendor/judge", prompt_tokens=420, completion_tokens=0)
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND,
+          provider_id=pid, model="vendor/judge", prompt_tokens=None, completion_tokens=None)
+    _call(provider_id=pid, model="vendor/plain", completion_tokens=None)
+    _call(provider_id=pid, model="vendor/plain")
+
+    totals = _totals()
+    assert totals["unpriced_calls"] == 4
+    assert totals["unpriced_native_calls"] == 2
+    assert totals["unmetered_calls"] == 1
+    # A priced native row is spend, and no slice of the unpriced count.
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND,
+          provider_id=pid, model="vendor/judge", cost_usd=0.25, cost_basis=llm_usage.BILLED)
+    assert _totals()["unpriced_native_calls"] == 2
+
+
 def test_a_native_decision_row_with_a_reported_cost_is_spend(pid):
     facts.state(pid, "vendor/judge", rates=FACTS)
     _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND, provider="openrouter",
