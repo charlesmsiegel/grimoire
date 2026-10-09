@@ -1,23 +1,16 @@
-import { Fragment, useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  api, type Config, type ConfigUpdate, type GenerativeRole, type InferenceSettings,
-  type PromptLayoutSection, type RoleSummary, type SceneContext,
+  api, type Config, type ConfigUpdate, type PromptLayoutSection, type SceneContext,
 } from "../api/client";
 import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { EMBEDDINGS_COPY } from "../components/inference/copy";
-import { InferenceBanner } from "../components/inference/InferenceBanner";
-import { migrationBanner, migrationLine } from "../components/inference/migration";
-import { describe as describeSelection } from "../components/inference/selection";
-import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 import { onConfigChanged } from "../appEvents";
 import { ColumnSection, PageShell } from "../components/PageShell";
-import PricingEditor from "../components/PricingEditor";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
-import { SamplerPresetEditor } from "../components/SamplerPresetEditor";
 import { ImageStoreCard } from "../components/ImageStoreCard";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
@@ -100,21 +93,33 @@ function draftOf(c: Config): Draft {
 }
 
 type SectionId =
-  | "storage" | "backups" | "logging" | "models" | "timeouts" | "pricing"
+  | "storage" | "backups" | "logging" | "timeouts"
   | "setup"
   | "context" | "layout" | "tracker" | "system-prompt" | "response"
-  | "samplers" | "transcript" | "output" | "playing" | "appearance";
+  | "transcript" | "output" | "playing" | "appearance";
 
-/** Section ids that are gone, and the section that answers for them now, so a
- *  link written before the change still lands somewhere that makes sense.
- *  `semantic` is the one older links carry (Todo's embeddings chore). A Map
- *  rather than an object literal: the id comes from the address bar, and an
- *  object answers `toString` or `constructor` with what it inherits. */
-const RETIRED = new Map<string, SectionId>([
-  ["semantic", "models"], ["connection", "models"], ["routing", "models"],
+/** Ids of panes that became pages of their own (Settings → Inference), and
+ *  where each went, so a link written before still lands where its setting
+ *  is. A Map rather than an object literal: the id comes from the address
+ *  bar, and an object answers `toString` or `constructor` with what it
+ *  inherits. */
+const MOVED = new Map<string, string>([
+  ["models", "/models"], ["semantic", "/models"], ["connection", "/models"],
+  ["routing", "/models/edit"], ["samplers", "/presets"], ["pricing", "/models#rates"],
 ]);
 
-/** The column, as data: three groups, seventeen sections, and which draft
+/** Settings → Inference: three pages of their own, linked from the column's
+ *  first group. Links, not panes -- they own no draft field, so they never
+ *  carry an unsaved dot, and their keys never take part in `?section=`. */
+type LinkDef = { key: "inference-providers" | "inference-models" | "inference-presets";
+                 group: "Inference"; label: string; to: string };
+const LINKS: LinkDef[] = [
+  { key: "inference-providers", group: "Inference", label: "Providers", to: "/providers" },
+  { key: "inference-models", group: "Inference", label: "Models", to: "/models" },
+  { key: "inference-presets", group: "Inference", label: "Presets", to: "/presets" },
+];
+
+/** The column, as data: three groups, fourteen sections, and which draft
  *  fields each one owns — the last part is what lets a section carry an
  *  unsaved dot, so the footer's count is always findable rather than being a
  *  number about somewhere else. */
@@ -125,17 +130,8 @@ const SECTIONS: SectionDef[] = [
     fields: ["backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir"] },
   { id: "logging", group: "The install", label: "Logging",
     fields: ["log_level"] },
-  // A summary, not an editor: the roles are chosen on /models and the
-  // providers they name on /providers, which save themselves. What this
-  // section still owns is what applies to every call whichever model runs it
-  // (retries) and the recall knobs, which are not a model choice.
-  { id: "models", group: "The install", label: "Models",
-    fields: ["llm_retries", "semantic_recall_depth", "semantic_recall_threshold"] },
-  { id: "timeouts", group: "The install", label: "Timeouts",
-    fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
-  // No draft fields: the rate table is a file of its own behind its own route,
-  // so it saves itself rather than through this page's Save (#158).
-  { id: "pricing", group: "The install", label: "Token rates", fields: [] },
+  { id: "timeouts", group: "The install", label: "Timeouts & retries",
+    fields: ["llm_timeout", "absorb_budget", "llm_call_budget", "llm_retries"] },
   // No fields: the wizard writes each step as it is answered, which is what
   // makes Back navigation rather than undo. This section is the way back INTO
   // it once setup is done, which the router otherwise makes unreachable.
@@ -143,7 +139,7 @@ const SECTIONS: SectionDef[] = [
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "lore_recursion_depth", "archive_depth",
              "prompt_log_depth", "offscene_known_limit", "speaker_turn_taking", "send_images",
-             "send_images_limit"] },
+             "send_images_limit", "semantic_recall_depth", "semantic_recall_threshold"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
@@ -151,9 +147,6 @@ const SECTIONS: SectionDef[] = [
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
     fields: ["system_prompt"] },
   { id: "response", group: "What the model sees", label: "Response targets", fields: [] },
-  // No draft fields: presets are files of their own behind their own routes,
-  // and the editor saves each one itself, like the token rates.
-  { id: "samplers", group: "What the model sees", label: "Presets", fields: [] },
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   // No draft fields: rules save as you edit them, through their own routes,
@@ -229,53 +222,6 @@ function ImagesReachHint({ reach, on }: { reach?: string; on: boolean }) {
   return null;
 }
 
-const ROLE_LABEL: Record<GenerativeRole, string> = {
-  primary: "Primary", fast: "Fast", decision: "Decision",
-};
-
-/** provider ▸ model ▸ preset, as `GET /config` named the role. The summary is
- *  the cascade's answer, so a role with no choice of its own already names
- *  the one it falls through to; `null` is a role nothing selects at all. */
-function describeRole(role: RoleSummary | null): string {
-  if (!role) return "not set";
-  return [role.provider_name, role.model || "its default model",
-          role.preset_name || "no preset"].join(" ▸ ");
-}
-
-/** The role an unset Fast or Decision reads through (spec 4.4), as `/models`
- *  words it. */
-const SAME_AS: Partial<Record<GenerativeRole, string>> = {
-  fast: "Same as Primary", decision: "Same as Fast",
-};
-
-/** A role's summary line. `GET /config` names what it resolves to either
- *  way, so whether that is the role's own choice or what it inherits is the
- *  settings view's to say -- a role that stores no provider and no model is
- *  the "same as" one. Before the view answers, the line is the summary's. */
-function roleLine(role: GenerativeRole, summary: RoleSummary | null,
-                  view: InferenceSettings | null): string {
-  const stored = view?.roles[role]?.stored;
-  const unset = !!stored && !stored.provider && !stored.model;
-  return unset && SAME_AS[role] ? `${SAME_AS[role]} — ${describeRole(summary)}`
-    : describeRole(summary);
-}
-
-/** The Embedding role's chip: two answers, because they are two switches.
- *  Whether anything embeds is the server's (`embedding_on`, the one gate
- *  every embedder shares: recall, the art catalogue, search by meaning and the
- *  continuity checks after a wrap-up), and how many entries recall adds is
- *  the depth -- which turns recall off and nothing else. Conflating the two is
- *  what let "depth 0" read as "nothing is sent" while the other embedders
- *  still ran.
- *
- *  Reads the SAVED depth, not the draft: the chip states what is in force, and
- *  the field beside it is where an unsaved one is shown. */
-function embeddingChip(c: Config): string {
-  if (!c.inference.embedding_on) return "off";
-  const depth = (c.semantic_recall_depth || "").trim();
-  return depth === "" || depth === "0" ? "on · recall off" : `on · recall ${depth}`;
-}
-
 /** Whether two layouts would store the same thing. Compared field by field
  *  rather than by JSON string so a key-order change in the API response cannot
  *  read as an edit the reader never made. */
@@ -331,7 +277,10 @@ export default function ConfigView() {
   // section id, current or retired, is ignored and the page opens where it
   // always has.
   const asked = useSearchParams()[0].get("section") ?? "";
-  const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? RETIRED.get(asked) ?? null;
+  const navigate = useNavigate();
+  const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? null;
+  const movedTo = MOVED.get(asked) ?? null;
+  useEffect(() => { if (movedTo) navigate(movedTo, { replace: true }); }, [movedTo, navigate]);
   const [section, setSection] = useState<SectionId>(askedSection ?? "storage");
   // ...and a changed query is followed while the page stays mounted. Keyed on
   // the asked id, so the reader's own clicks in the column are not undone by a
@@ -340,20 +289,6 @@ export default function ConfigView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<Probe>(null);
-  /** The settings view, read for what `GET /config` does not carry: where the
-   *  move to the new model settings layout stands, what the Embedding role
-   *  embeds with (or why it embeds nothing), and which roles inherit. Read
-   *  when Models is first opened -- it resolves every role and route, and
-   *  only that section says anything about them -- then again on any
-   *  model-settings change made anywhere, and while an upgrade is on its way,
-   *  so a banner does not outlive the upgrade it describes. Undefined until
-   *  it answers; null after a failed read, which draws no banner rather than
-   *  a guessed one. */
-  const [modelsOpened, setModelsOpened] = useState(section === "models");
-  useEffect(() => { if (section === "models") setModelsOpened(true); }, [section]);
-  const inferenceView = useInferenceSettings(modelsOpened);
-  const inference: InferenceSettings | null | undefined =
-    inferenceView.settled ? inferenceView.settings : undefined;
   // Bumped when the store pointer moves, to remount anything describing the
   // old library rather than leave it showing a report about a folder the app
   // is no longer using.
@@ -449,8 +384,7 @@ export default function ConfigView() {
       case "tracker": return draft?.tracker === "off" ? "off" : "on";
       // Deliberately blank: the rate table, the presets and the response
       // preset are each a document of their own, and "12 entries" is a size
-      // rather than a setting. Models has no one-word answer either -- four
-      // roles are not a word -- so its row carries the ready dot instead.
+      // rather than a setting.
       default: return "";
     }
   }
@@ -533,16 +467,28 @@ export default function ConfigView() {
   /** Where the upgrade stands, in the words every model-settings surface
    *  uses (`inference/migration`): the banner while the library's settings
    *  cannot be saved, else a quiet line on the card. */
-  const banner = migrationBanner(inference);
-  const upgradeNote = migrationLine(inference);
-  const embeddingCard = inference?.roles.embedding;
-
   const column = (
     <>
       <div className="column-head">
         <div className="eyebrow">Settings</div>
         {config && <div className="column-head-sub">{config.data_dir}</div>}
       </div>
+      <ColumnSection label={LINKS[0].group}>
+        {LINKS.map((l) => (
+          <Link key={l.key} to={l.to} className="column-row">
+            <span className="column-row-label">
+              {l.label}
+              {/* The dot is the state, so the state is also spelled out. */}
+              {l.key === "inference-models" && config && (
+                <>
+                  <span className={"conn-dot " + (config.ready ? "ok" : "off")} aria-hidden> ●</span>
+                  <span className="sr-only">{config.ready ? " ready" : " not ready"}</span>
+                </>
+              )}
+            </span>
+          </Link>
+        ))}
+      </ColumnSection>
       {GROUPS.map((group) => (
         <ColumnSection key={group} label={group}>
           {SECTIONS.filter((s) => s.group === group).map((s) => (
@@ -550,16 +496,6 @@ export default function ConfigView() {
                     onClick={() => setSection(s.id)}>
               <span className="column-row-label">
                 {s.label}
-                {/* The dot is the state, so the state is also spelled out: a
-                    colour is not a label. `ready` describes what chat
-                    would run on as the resolver answers it, not a legacy
-                    connection. */}
-                {s.id === "models" && config && (
-                  <>
-                    <span className={"conn-dot " + (config.ready ? "ok" : "off")} aria-hidden> ●</span>
-                    <span className="sr-only">{config.ready ? " ready" : " not ready"}</span>
-                  </>
-                )}
                 {/* `off` used to be appended to these two labels. It is the
                     row's VALUE now, in the slot every other row uses, so it is
                     said once and in the same place. */}
@@ -745,123 +681,6 @@ export default function ConfigView() {
           </>
         )}
 
-        {draft && config && section === "models" && (
-          <>
-            <InferenceBanner status={banner} />
-            {/* What each role runs, at a glance and read-only. Choosing is the
-                Models page's and the providers it names are the Providers
-                page's: an editor here would be a second copy of either, and
-                the legacy one it replaces wrote keys the server now refuses. */}
-            {/* Busy until the upgrade status has answered: the roles are
-                already here, but whether a line about the upgrade belongs
-                under them is not known yet. */}
-            <section className="models-summary" aria-labelledby="models-summary-title"
-                     aria-busy={inference === undefined}>
-              <h2 id="models-summary-title" className="models-summary-title">Models in use</h2>
-              <dl>
-                {(["primary", "fast", "decision"] as const).map((role) => (
-                  <Fragment key={role}>
-                    <dt>{ROLE_LABEL[role]}</dt>
-                    <dd>{roleLine(role, config.inference.roles[role], inference ?? null)}</dd>
-                  </Fragment>
-                ))}
-                <dt>Embedding</dt>
-                <dd>
-                  <span className={"chip" + (config.inference.embedding_on ? " on" : "")}>
-                    {embeddingChip(config)}
-                  </span>
-                  {/* What embeds and where the library's text goes, or why
-                      nothing does -- both the settings view's, read beside
-                      the summary. */}
-                  {embeddingCard?.on && embeddingCard.resolves && (
-                    <span className="field-hint"> {describeSelection(embeddingCard.resolves, false)}</span>
-                  )}
-                  {embeddingCard && !embeddingCard.on && embeddingCard.problem && (
-                    <span className="field-hint"> {embeddingCard.problem}</span>
-                  )}
-                </dd>
-              </dl>
-              {upgradeNote && <p className="field-hint">{upgradeNote}</p>}
-              <p className="config-caption">
-                Roles, and which role or model each route uses, are chosen on{" "}
-                <Link to="/models">Models</Link>; the providers they name — keys,
-                endpoints, model lists — on <Link to="/providers">Providers</Link>.
-              </p>
-            </section>
-            <p className="config-copy">
-              A call that fails for a passing reason — a rate limit, a dropped
-              connection — is re-sent up to the retry count, with a growing pause
-              between tries. Only ever <em>before</em> the reply starts arriving: once
-              text is on screen it is never re-requested, because a second attempt
-              would repeat what you have already read. <code>0</code> retries sends
-              once and reports the failure.
-            </p>
-            <p className="config-copy">
-              If the model still cannot answer, the role's fallback — set on its card
-              on the Models page — gets one attempt, and it can be an entirely
-              different provider.
-            </p>
-            <div className="config-fields">
-              <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
-                        caption="0 = send once, then report the failure"
-                        value={draft.llm_retries}
-                        onChange={(v) => edit("llm_retries", v)} />
-            </div>
-            <p className="config-copy">
-              World info activates on keywords. Semantic recall adds a second pass over the
-              entries the keywords missed, picking the ones closest in meaning to what has just
-              been said — so the lore about a character's inherited sword can surface when the
-              scene talks about the blade her mother left her. It only ever adds, never removes,
-              and lore owned by an absent character stays hidden either way. Set recalled entries
-              to <code>0</code> to turn recall off. It needs the Embedding role.
-            </p>
-            <p className="config-copy">{EMBEDDINGS_COPY}</p>
-            <div className="config-fields">
-              <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"
-                        caption="0 = recall off" value={draft.semantic_recall_depth}
-                        onChange={(v) => edit("semantic_recall_depth", v)} />
-              <NumField id="cfg-semantic-threshold" label="Similarity threshold" decimal
-                        placeholder="0.4" caption="0 to 1" value={draft.semantic_recall_threshold}
-                        onChange={(v) => edit("semantic_recall_threshold", v)} />
-            </div>
-            <p className="config-copy">
-              What counts as "close enough" differs between embedding models, so tune the
-              threshold (0 to 1) against the scene inspector, which shows what actually
-              activated.
-            </p>
-            <p className="config-copy">
-              <strong>This sends text to the Embedding role's provider.</strong> With the
-              Embedding role set, these go to that provider as well as to the providers your
-              other roles use — a second place your campaign is read: recent scene text and the
-              world info being searched (recall), image descriptions (the art catalogue), the
-              scenes and records being searched when you search the library by meaning, and
-              plot-thread and commitment summaries after each wrap-up (finding possible
-              overlaps). Choose a local provider for
-              the <Link to="/models/role/embedding">Embedding role</Link> to keep it on your
-              machine.
-            </p>
-          </>
-        )}
-
-        {draft && section === "samplers" && (
-          <>
-            <p className="config-copy">
-              A preset is a named set of temperature, top-p, top-k, min-p, the three
-              penalties, a token cap, stop strings and a reasoning effort — the
-              settings SillyTavern users share per model. A preset sets only what it
-              names; everything it leaves blank stays at the provider's default.
-            </p>
-            <p className="config-copy">
-              Attach one to a role or a route on the <Link to="/models">Models</Link>{" "}
-              page; a campaign can override either from the scene inspector, the same
-              way it overrides the model. Not every backend takes every parameter, so
-              what cannot be sent is dropped — <em>Preview on…</em> below, the Models
-              page and the scene inspector say which.
-            </p>
-            <SamplerPresetEditor />
-          </>
-        )}
-
         {draft && section === "timeouts" && (
           <>
             <p className="config-copy">
@@ -878,6 +697,19 @@ export default function ConfigView() {
               are already reading must not be cut off mid-sentence), and so is absorb, which
               the budget beside it already covers. <code>0</code> removes it.
             </p>
+            <p className="config-copy">
+              A call that fails for a passing reason — a rate limit, a dropped
+              connection — is re-sent up to the retry count, with a growing pause
+              between tries. Only ever <em>before</em> the reply starts arriving: once
+              text is on screen it is never re-requested, because a second attempt
+              would repeat what you have already read. <code>0</code> retries sends
+              once and reports the failure.
+            </p>
+            <p className="config-copy">
+              If the model still cannot answer, the role's fallback — set on the{" "}
+              <Link to="/models">Models</Link> page — gets one attempt, and it can be an entirely
+              different provider.
+            </p>
             <div className="config-fields">
               <NumField id="cfg-llm-timeout" label="No-reply timeout" unit="seconds"
                         placeholder="120" value={draft.llm_timeout}
@@ -888,36 +720,11 @@ export default function ConfigView() {
               <NumField id="cfg-llm-call-budget" label="One-shot call ceiling" unit="seconds"
                         placeholder="300" value={draft.llm_call_budget}
                         onChange={(v) => edit("llm_call_budget", v)} />
+              <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
+                        caption="0 = send once, then report the failure"
+                        value={draft.llm_retries}
+                        onChange={(v) => edit("llm_retries", v)} />
             </div>
-          </>
-        )}
-
-        {draft && section === "pricing" && (
-          <>
-            <p className="config-copy">
-              Grimoire records what each provider says a call cost. OpenRouter
-              says; an OpenAI-compatible endpoint you host yourself says nothing
-              at all, and those calls read as <em>not reported</em> everywhere costs
-              are shown — which is honest, and no use for answering what a
-              campaign has cost. Rates here fill that gap. A model's own
-              rates, set on its provider's page, are used before this table.
-            </p>
-            <p className="config-copy">
-              What comes out of them is an <strong>estimate, and is labelled as
-              one</strong>: a modelled figure is reported in its own column, is
-              never added to what a provider actually charged, and is never
-              charged against a campaign's budget. A model with no entry of its
-              own falls back to a <code>provider/*</code> wildcard, then to the
-              catch-all. Rates are dollars per 1,000 tokens; the per-million
-              figure most price sheets quote is shown under each box.
-            </p>
-            <p className="config-copy">
-              Leaving the two cache boxes empty is not the same as setting them
-              to zero: cached tokens are part of the prompt the provider counted,
-              so an empty box prices them at the input rate. Fill them in only
-              for a provider that discounts them.
-            </p>
-            <PricingEditor />
           </>
         )}
 
@@ -1049,6 +856,39 @@ export default function ConfigView() {
                 </p>
               </>
             )}
+            <p className="config-copy">
+              World info activates on keywords. Semantic recall adds a second pass over the
+              entries the keywords missed, picking the ones closest in meaning to what has just
+              been said — so the lore about a character's inherited sword can surface when the
+              scene talks about the blade her mother left her. It only ever adds, never removes,
+              and lore owned by an absent character stays hidden either way. Set recalled entries
+              to <code>0</code> to turn recall off. It needs the Embedding role.
+            </p>
+            <p className="config-copy">{EMBEDDINGS_COPY}</p>
+            <div className="config-fields">
+              <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"
+                        caption="0 = recall off" value={draft.semantic_recall_depth}
+                        onChange={(v) => edit("semantic_recall_depth", v)} />
+              <NumField id="cfg-semantic-threshold" label="Similarity threshold" decimal
+                        placeholder="0.4" caption="0 to 1" value={draft.semantic_recall_threshold}
+                        onChange={(v) => edit("semantic_recall_threshold", v)} />
+            </div>
+            <p className="config-copy">
+              What counts as "close enough" differs between embedding models, so tune the
+              threshold (0 to 1) against the scene inspector, which shows what actually
+              activated.
+            </p>
+            <p className="config-copy">
+              <strong>This sends text to the Embedding role's provider.</strong> With the
+              Embedding role set, these go to that provider as well as to the providers your
+              other roles use — a second place your campaign is read: recent scene text and the
+              world info being searched (recall), image descriptions (the art catalogue), the
+              scenes and records being searched when you search the library by meaning, and
+              plot-thread and commitment summaries after each wrap-up (finding possible
+              overlaps). Choose a local provider for
+              the <Link to="/models/edit">Embedding role</Link> to keep it on your
+              machine.
+            </p>
           </>
         )}
 
