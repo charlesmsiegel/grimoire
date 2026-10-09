@@ -1237,20 +1237,20 @@ def test_build_items_one_per_row_asking_one_folded_decision():
     assert items[1].context.startswith("Proposed commitment: Seraphine's midnight deadline\n")
     assert "Row r1" not in items[0].context
     # A candidate is described under its clipped title, and spelled by its ref form.
-    # The title is quoted and followed by a comma, so the rendered line chains
+    # The title is quoted with no colon after it, so the rendered line chains
     # no colon after the id's own; each spelling is also offered with a space
     # after "existing:".
     assert _options(items[0].questions[0])[0] == (
         "existing:find-the-ledger",
-        ('the listed candidate "Find the ledger", only when this candidate is the same '
-         "narrative question or obligation, so the row's beat simply moves that record "
-         "forward."),
+        ('the listed candidate "Find the ledger" itself, only when the row is that same '
+         "narrative question or obligation, so its beat simply moves that record forward; "
+         'a narrower question, a continuation or a related subplot of it is "new".'),
         ("existing:thread:find-the-ledger", "existing: find-the-ledger",
          "existing: thread:find-the-ledger"))
     user = inference.structured_messages(items[:1], explain="")[1]["content"]
     line = next(ln for ln in user.splitlines() if ln.startswith("  - existing:find-the-ledger"))
     assert line.startswith('  - existing:find-the-ledger: the listed candidate "Find the '
-                           'ledger", only when this candidate')
+                           'ledger" itself, only when the row')
     assert line.count(":") == 2
     assert identity.explain() == prompts.render("continuity_identity/explain.j2")
     assert identity.EXISTING_PREFIX == "existing:"
@@ -1274,7 +1274,7 @@ def test_a_candidate_titled_blank_is_described_by_its_id():
     row["candidates"][0]["title"] = ""
     [item] = identity.build_items([row], {})
     assert item.questions[0].options[0].description.startswith(
-        'the listed candidate "find-the-ledger", ')
+        'the listed candidate "find-the-ledger" itself, ')
 
 
 def test_the_folded_existing_reads_alias_sources_and_ref_forms():

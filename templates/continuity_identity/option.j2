@@ -8,12 +8,16 @@
     decision's bullet in the retired one-call prompt, word for word after its
     quoted word (`verify_templates.py`'s IDENTITY_OPTIONS holds each, by
     decision), except that the existing bullet's names its candidate, the one
-    it folds (IDENTITY_REWORDED), quoted and followed by a comma rather
-    than a colon: `decide/user.j2` renders the line as `- <id>: <description>`,
-    and an id `existing:<id>` already carries a colon of its own, so a title
-    led in with another chained three or four on one line. -#}
+    it folds (IDENTITY_REWORDED), quoted and with no colon after it:
+    `decide/user.j2` renders the line as `- <id>: <description>`, and an id
+    `existing:<id>` already carries a colon of its own, so a title led in
+    with another chained three or four on one line. Because every candidate
+    gets an option of its own, the description also says that a narrower
+    question, a continuation or a related subplot of the candidate is "new":
+    without it a concrete continuation of a broad thread was read as that
+    thread (a live check against structured output, 2026-10-09). -#}
 {%- if decision == "existing" -%}
-the listed candidate "{{ title }}", only when this candidate is the same narrative question or obligation, so the row's beat simply moves that record forward.
+the listed candidate "{{ title }}" itself, only when the row is that same narrative question or obligation, so its beat simply moves that record forward; a narrower question, a continuation or a related subplot of it is "new".
 {%- elif decision == "new" -%}
 when the row is a different question, a continuation, or a related subplot: something that grew out of a listed record but is business of its own deserves a record of its own.
 {%- elif decision == "uncertain" -%}
