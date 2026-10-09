@@ -1101,3 +1101,21 @@ def test_a_reply_with_no_distribution_is_read_as_chosen():
     tie = decisions.native_answer(choice, chosen="distinct", distribution={
         "duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.2, "distinct": 0.3})
     assert decisions.regrouped(tie, word, ("duplicate", "distinct")) is None
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_value_naming_no_option_keeps_what_it_named(provider):
+    """`Answer.stated` holds what a native reply named when it named no
+    option, which `decisions.render` cannot write back: the eval graders read
+    it to tell an unoffered ``existing:<id>`` from an unknown word. It is not
+    compared, so the answer still equals the plain not-an-option."""
+    result = read(provider)(_native_reply(provider, SPEAKER_ONLY,
+                                          {"speaker": "characters:rowan"}), SPEAKER_ONLY)
+    answer = result.answers["speaker"]
+    assert answer.detail == decisions.NOT_AN_OPTION and answer.stated == "characters:rowan"
+    assert answer == Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION)
+    named = read(provider)(_native_reply(provider, SPEAKER_ONLY,
+                                         {"speaker": "characters:mara"}), SPEAKER_ONLY)
+    assert named.answers["speaker"].stated == ""
+    with pytest.raises(ValueError, match="stated value"):
+        Answer("characters:mara", stated="characters:rowan")

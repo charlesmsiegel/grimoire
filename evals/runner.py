@@ -87,14 +87,18 @@ def native_output(ctx: dict, native: str, text: str) -> str:
     order, each read through the `native` adapter's `decision_result` -- the
     production mapping -- and written back as the structured reply its graders
     read (`decisions.render`). Every item is marked answered natively, so a
-    rationale is graded n/a, as it is live. A body the adapter refuses raises:
-    a native recording is hand-authored, and one that no longer reads is a
-    broken fixture, not a failed check."""
+    rationale is graded n/a, as it is live, and its results are kept beside
+    the text (`ctx["native_results"]`): `render` writes every unread answer
+    as null, so a refusal, an abstention and a value naming no option would
+    otherwise grade as the null a structured reply sent. A body the adapter
+    refuses raises: a native recording is hand-authored, and one that no
+    longer reads is a broken fixture, not a failed check."""
     bodies = json.loads(text)
     adapter = NATIVE_ADAPTERS[native]
     results = tuple(adapter.decision_result(body, item)
                     for body, item in zip(bodies, ctx["items"], strict=True))
     ctx["native_items"] = frozenset(range(len(results)))
+    ctx["native_results"] = dict(enumerate(results))
     return decisions.render(results, ctx["items"], explain=bool(ctx.get("explain")))
 
 
@@ -334,6 +338,10 @@ def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
         ctx["native_items"] = frozenset(
             index for index, result in enumerate(decision.items)
             if result.backend == decisions.NATIVE_BACKEND)
+        # And what it answered, as read: `render` writes an unread answer as
+        # null, which a grader would read as a structured null.
+        ctx["native_results"] = {index: decision.items[index]
+                                 for index in ctx["native_items"]}
         return decisions.render(decision.items, ctx["items"], explain=bool(explain))
 
     async def run() -> str:

@@ -47,7 +47,7 @@ import logging
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 log = logging.getLogger(__name__)
@@ -227,6 +227,13 @@ class Answer:
     `probability` and
     `distribution` are what a backend actually reported; a missing one stays
     missing, and nothing computes a stand-in.
+
+    `stated` is what a native reply named when it named no option
+    (`NOT_AN_OPTION`), as it named it, and ``""`` otherwise: a structured
+    reply's raw text is still at hand to read it from, a native one's is not,
+    and an eval grader tells an unoffered ``existing:<id>`` from an unknown
+    word by it. Never an answer, and not compared: two answers that read
+    alike are equal.
     """
 
     answer: bool | str | int | None
@@ -234,6 +241,7 @@ class Answer:
     probability: float | None = None
     distribution: dict[str, float] | None = None
     detail: str = ""
+    stated: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
         if (self.answer is None) != bool(self.reason):
@@ -242,6 +250,8 @@ class Answer:
             raise ValueError(f"unknown reason {self.reason!r}")
         if self.detail and self.reason != "unreadable":
             raise ValueError("a detail qualifies an unreadable answer only")
+        if self.stated and self.detail != NOT_AN_OPTION:
+            raise ValueError("a stated value qualifies an answer that named no option only")
 
 
 @dataclass(frozen=True)
@@ -870,7 +880,7 @@ def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object
     - A choice: `chosen` an exact option id is that option (aliases are the
       structured parser's, §7.4); `NONE_KEY` or None is `abstained` with
       `allow_none` and `unreadable` without; any other value is `unreadable`
-      with `NOT_AN_OPTION`. With nothing chosen, the distribution's argmax --
+      with `NOT_AN_OPTION`, a string kept as its `stated`. With nothing chosen, the distribution's argmax --
       `abstained` on a tie or on `NONE_KEY` -- and with no usable
       distribution, `unreadable`.
     - A score: `chosen` an `int` index (never a bool or a float); else the
@@ -886,7 +896,9 @@ def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object
         value, reason, detail = _native_choice(q, chosen, dist)
     else:
         value, reason, detail = _native_score(q, chosen, dist)
-    return Answer(value, reason, probability=p, distribution=dist, detail=detail)
+    stated = chosen if detail == NOT_AN_OPTION and isinstance(chosen, str) else ""
+    return Answer(value, reason, probability=p, distribution=dist, detail=detail,
+                  stated=stated)
 
 
 #: `(answer, reason, detail)`: an `Answer` before its report rides on it.

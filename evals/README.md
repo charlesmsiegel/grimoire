@@ -355,6 +355,15 @@ folded choice, would have shown. The evidence questions were the last: asked
 "for" the status words, they came back none natively and every closure fell
 to `uncertain`; each now asks which shown scene, if any, shows a record
 settled, and `_decide` keeps the rule that a status word needs one.
+`decisions.render` writes every unread native answer as null, so the native
+results are kept beside the text (`ctx["native_results"]`, by replay and by a
+live run alike) and the two continuity graders read a native item from them:
+a refusal or an abstention fails `covers` as the app leaves that item
+unanswered, and a value naming no option keeps what it named
+(`Answer.stated`), so an unoffered `existing:<id>` still fails
+`identity.known_ids`. The counterexamples `native-unknown-id`,
+`native-refused` (identity) and `native-unfounded` (reconcile: a closure
+answered with every evidence slot none) show each.
 `scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`,
 keeps only the entries `suggest.is_card` keeps (a title and a premise, the
 cards the player is shown), and judges claims and dates with `suggest.claim`

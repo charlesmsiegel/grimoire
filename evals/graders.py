@@ -20,7 +20,7 @@ Each grader returns a list of Check. A case passes when every check passes.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from grimoire import decisions
@@ -345,8 +345,23 @@ def _identity_verdict(key: str, got: dict, want: dict, kind: str | None) -> Chec
                  f"row {key} was {got.get('decision')!r} {rid!r}, wanted {wanted}")
 
 
+def _with_native(text: str, items: Sequence[decisions.Item],
+                 native: Mapping[int, decisions.ItemResult] | None
+                 ) -> tuple[decisions.ItemResult, ...]:
+    """`text` parsed as the structured reply it is, except that an item a
+    native endpoint answered is read as it answered (`native`, by item index,
+    a run's `native_results`) rather than from the null `decisions.render`
+    wrote for whatever it left unread: so a refusal or an abstention counts as
+    unanswered, as the app counts it, and a value naming no option keeps what
+    it named (`Answer.stated`)."""
+    results = decisions.parse(text, items, explain=True)
+    return tuple((native or {}).get(n, result) for n, result in enumerate(results))
+
+
 def grade_identity_decision(text: str, items: Sequence[decisions.Item],
-                            rows: list[dict], expected: dict[str, dict]) -> list[Check]:
+                            rows: list[dict], expected: dict[str, dict], *,
+                            native: Mapping[int, decisions.ItemResult] | None = None
+                            ) -> list[Check]:
     """The duplicate check through `decide()`: does the reply decode, answer
     every row in the contract's words, name only ids it was offered -- and give
     the right verdict on each scored row?
@@ -359,25 +374,30 @@ def grade_identity_decision(text: str, items: Sequence[decisions.Item],
     on the mapping. `identity.json` is the one check on the raw reply
     (`decisions.find_object`), and with no object nothing else is reported.
 
-    An item the reply never reached (`NO_ITEM`) fails `identity.covers_rows`
-    alone: its own verdict is left out rather than failed beside it, so "the
-    row was skipped" and "the row was misjudged" stay separable. An
+    An item the reply never reached (`NO_ITEM`), or one a native endpoint
+    refused or abstained on (`native`, read as it answered, `_with_native`),
+    fails `identity.covers_rows` alone -- the app leaves that row unchecked
+    (`decisions.was_read`): its own verdict is left out rather than failed
+    beside it, so "the row was skipped" and "the row was misjudged" stay
+    separable. An
     ``existing`` is folded with the id it names (``existing:<id>``, spec 7.4),
     so one naming a record the row was not offered, or none, is no option of
     the decision either: the two checks are told apart on the raw answer
-    (`_raw_decision`), `known_ids` failing an unread one that begins
-    ``existing`` and `enum` any other. `expected` maps a row key to
+    (`_raw_decision`, or a native answer's `stated`), `known_ids` failing an
+    unread one that begins ``existing`` and `enum` any other. `expected` maps a row key to
     ``{"decision", "id", "check"}``: the verdict that row should get, and the
     name of the check that reports it."""
     if decisions.find_object(text) is None:
         return [Check("identity.json", False, "no JSON object recoverable from the reply")]
-    results = decisions.parse(text, items, explain=True)
+    results = _with_native(text, items, native)
     decided = [r.answers[identity.DECISION_ID] for r in results]
     skipped = [row["key"] for row, answer in zip(rows, decided, strict=True)
-               if answer.detail == decisions.NO_ITEM]
+               if not decisions.was_read(answer)]
     unread = [(n, row["key"]) for n, (row, answer) in enumerate(zip(rows, decided, strict=True))
               if answer.detail == decisions.NOT_AN_OPTION]
-    unnamed = [key for n, key in unread if _names_existing(_raw_decision(text, n))]
+    unnamed = [key for n, key in unread
+               if _names_existing(decided[n].stated if native and n in native
+                                  else _raw_decision(text, n))]
     unknown = [key for _, key in unread if key not in unnamed]
     by_row = {a["row"]: a for a in identity.answers_of(rows, results) or []}
     return [
@@ -432,7 +452,9 @@ def _reconcile_verdict(key: str, got: dict, want: dict) -> Check:
 
 
 def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload: dict,
-                             expected: dict[str, dict]) -> list[Check]:
+                             expected: dict[str, dict], *,
+                             native: Mapping[int, decisions.ItemResult] | None = None
+                             ) -> list[Check]:
     """The reconciliation sweep through `decide()`: does the reply decode,
     answer every candidate in its own vocabulary, found every status word on a
     scene its item showed -- and give the right verdict on each scored
@@ -446,31 +468,37 @@ def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload
     one check on the raw reply (`decisions.find_object`), and with no object
     nothing else is reported.
 
-    A candidate the reply never reached (`NO_ITEM`) fails `reconcile.covers`
-    alone: its own verdict is left out rather than failed beside it.
+    A candidate the reply never reached (`NO_ITEM`), or one a native endpoint
+    refused or abstained on (`native`, read as it answered, `_with_native`),
+    fails `reconcile.covers` alone -- the app stores it no proposal
+    (`decisions.was_read`): its own verdict is left out rather than failed
+    beside it.
     `reconcile.enum` fails a decision answered with no option of its item
     (`NOT_AN_OPTION`). `reconcile.evidence` fails a status word with no
     evidence scene read in any `reconcile.EVIDENCE_IDS` slot; a rationale is
     not required (I4), and an item's options are only the scenes it shows.
-    Each verdict reads the decision answer, a folded one split back into its
+    Each verdict reads the decision answer as the app does (`reconcile._chosen`:
+    a native distribution summed by word), a folded one split back into its
     word and its `from` letter (`reconcile.unfolded`, spec 7.4).
     `expected` maps a candidate key to ``{"check", "decisions", "from"}``: the
     words that candidate may be decided as, the check that reports it, and,
     per directed word, the letter its ``from`` must name."""
     if decisions.find_object(text) is None:
         return [Check("reconcile.json", False, "no JSON object recoverable from the reply")]
-    results = decisions.parse(text, items, explain=True)
+    results = _with_native(text, items, native)
     keyed = [(cand["key"], result) for cand, result in
              zip(payload["candidates"], results, strict=True)]
+    cands = {cand["key"]: cand for cand in payload["candidates"]}
     decided = {key: result.answers[reconcile.DECISION_ID] for key, result in keyed}
-    skipped = [key for key, answer in decided.items() if answer.detail == decisions.NO_ITEM]
+    skipped = [key for key, answer in decided.items() if not decisions.was_read(answer)]
     unknown = [key for key, answer in decided.items()
                if answer.detail == decisions.NOT_AN_OPTION]
     unfounded = [key for key, result in keyed
                  if decided[key].answer in RECONCILE_STATUS
                  and not any(isinstance(_answer_of(result, slot), str)
                              for slot in reconcile.EVIDENCE_IDS)]
-    read = {key: _verdict_of(decided[key].answer)
+    read = {key: _verdict_of(reconcile._chosen(decided[key], cands[key])
+                             if isinstance(decided[key].answer, str) else decided[key].answer)
             for key, _ in keyed if decisions.was_read(decided[key])}
     return [
         Check("reconcile.json", True),
