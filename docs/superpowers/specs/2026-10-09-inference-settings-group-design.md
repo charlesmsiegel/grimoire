@@ -34,7 +34,7 @@ with providers, presets and rates one click away.
    - **Models** → `/models` (rebuilt; absorbs Token rates)
    - **Presets** → `/presets` (new page; the `samplers` pane moves here)
 2. The Settings panes `models`, `samplers` and `pricing` are removed; their
-   ids join `RETIRED` and redirect to the new pages. The three draft fields the
+   ids join `MOVED` and redirect to the new pages. The three draft fields the
    `models` pane owned move: `llm_retries` to **Timeouts** (relabelled
    "Timeouts & retries"), `semantic_recall_depth` and
    `semantic_recall_threshold` to **Context**.
@@ -87,27 +87,24 @@ Settings selects a pane with a query parameter, `/config?section=<id>`
 `SECTIONS`, then `RETIRED`). There is no `/config/:section` route, and none is
 added.
 
-The retired-id lookup splits in two:
+The retired-id lookup `RETIRED` (`Map<string, SectionId>`) is **deleted**.
+All three of its entries (`semantic`, `connection`, `routing`) pointed at the
+`models` pane, which is gone, so it would be left as an empty table. *(Amended
+2026-10-09: the plan review found that the first draft kept it empty.)* A new
+`MOVED: Map<string, string>` maps an old id to a route:
 
-- `RETIRED` keeps its type (`Map<string, SectionId>`) and its job: an old id
-  that names a pane which still exists.
-- A new `MOVED: Map<string, string>` maps an old id to a route:
-
-  | Old id | Route |
-  |---|---|
-  | `models` | `/models` |
-  | `samplers` | `/presets` |
-  | `pricing` | `/models#rates` |
-  | `semantic` | `/models` |
-  | `connection` | `/models` |
-  | `routing` | `/models/edit` |
-
-  `semantic`, `connection` and `routing` move out of `RETIRED`, because the
-  pane they pointed at is gone.
+| Old id | Route |
+|---|---|
+| `models` | `/models` |
+| `samplers` | `/presets` |
+| `pricing` | `/models#rates` |
+| `semantic` | `/models` |
+| `connection` | `/models` |
+| `routing` | `/models/edit` |
 
 When the asked id is in `MOVED`, ConfigView calls
 `navigate(target, { replace: true })` instead of `setSection`. The resolution
-order is `SECTIONS`, then `RETIRED`, then `MOVED`, then the default pane.
+order is `SECTIONS`, then `MOVED`, then the default pane.
 
 `shell/rail.ts`: the Settings row's `match` already covers `/config` and
 `/models`; it gains `/providers` and `/presets`, so the rail says "Settings"
@@ -436,7 +433,7 @@ a normal `PricingEntry`; only the display differs. An embedding generates
 nothing, and the ledger reads its absent completion count as zero
 (`usage._completion_count`).
 
-A rate of 0 renders as "$0.00", never as "none". An entry the pricing code
+A rate of 0 renders through `components/cost.tsx`'s `perMillionRate`, as every cost surface does (`$0/M`), never as "none". *(Amended 2026-10-09: the first draft said "$0.00", which no cost surface prints.)* An entry the pricing code
 would not use, such as a half-entry missing one side, is drawn as `none`,
 because `rate_for_call` returns what `pricing.entry` accepted.
 
@@ -575,7 +572,7 @@ Summary:
 - Decision lists the routes whose `uses === "decision"`, including an
   inherited one.
 - Embedding with `on: false` shows the off sentence, its problem, and no rate.
-- Each `rate.source` gets its own wording; `0` shows as "$0.00".
+- Each `rate.source` gets its own wording; `0` shows as `$0/M`.
 - `native` shows the native sentence, and Embedding shows only the prompt
   figure.
 
