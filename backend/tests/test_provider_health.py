@@ -436,18 +436,36 @@ def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(legacy_
     assert body["rev"] == rev
 
 
-def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
-    """The format-2 twin of the test above: `prefill` is the model's fact."""
-    client.app.dependency_overrides[routes.get_llm] = \
-        lambda: FakeCatalog(health_error=LLMError("bad_response", "assistant prefill"))
-    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
-    facts = "/api/llm-connections/openrouter/facts"
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
-    client.post("/api/llm-connections/openrouter/health")
-    rev = client.get("/api/llm-connections/openrouter").json()["rev"]
+def _model_verdict(client, model: str, error=None) -> str:
+    """File a verdict on `openrouter` as the facade's observer files one when
+    a generation on `model` settles (`ProviderHealth.record`), under the
+    provider's current rev; returns the facts url."""
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    target = wire.Target(provider_id="openrouter", kind="openrouter", model=model,
+                         provider_name="OpenRouter", api_key="k", requested_model=model,
+                         rev=raw["rev"])
+    client.app.state.health.record(target, error)
+    assert _state(client) == ("ok" if error is None else "error")
+    return "/api/llm-connections/openrouter/facts"
 
-    assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "error"
+
+def _prefill_refused() -> LLMError:
+    return LLMError("bad_response", "assistant prefill")
+
+
+def _primary_model() -> str:
+    return store.read_config()[store.inference_keys.role_key("primary", "model")]
+
+
+def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
+    """The format-2 twin of the test above: `prefill` is the model's fact, and
+    the verdict a generation on THAT model earned is the one it clears."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    model = _primary_model()
+    facts = "/api/llm-connections/openrouter/facts"
+    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+    _model_verdict(client, model, _prefill_refused())
+    rev = client.get("/api/llm-connections/openrouter").json()["rev"]
 
     assert client.put(facts, json={"model": model, "prefill": False}).status_code == 200
 
@@ -456,44 +474,85 @@ def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earne
     assert body["rev"] == rev
 
 
-def _errored_with_prefill(client, prefill):
-    """A format-2 provider whose model states `prefill` and whose last health
-    check failed: `(facts url, model, rev)`."""
-    client.app.dependency_overrides[routes.get_llm] = \
-        lambda: FakeCatalog(health_error=LLMError("bad_response", "assistant prefill"))
-    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
-    facts = "/api/llm-connections/openrouter/facts"
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    assert client.put(facts, json={"model": model, "prefill": prefill}).status_code == 200
-    client.post("/api/llm-connections/openrouter/health")
-    assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "error"
-    return facts, model
-
-
 def _state(client):
     return client.get("/api/llm-connections/openrouter").json()["health"]["state"]
 
 
 def test_any_change_to_a_models_prefill_fact_forgets_the_verdict(client):
     """`put_connection`'s rule is that `prefill` changed, in either direction,
-    and the fact's twin of it is the same."""
-    facts, model = _errored_with_prefill(client, False)
-
+    and the fact's twin of it is the same -- a success on that model too,
+    which ticking it may no longer earn."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    model = _primary_model()
+    facts = _model_verdict(client, model, _prefill_refused())
     assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+    assert _state(client) == "unknown"
 
+    _model_verdict(client, model)
+    assert client.put(facts, json={"model": model, "prefill": False}).status_code == 200
     assert _state(client) == "unknown"
 
 
 def test_a_facts_write_that_leaves_prefill_alone_keeps_the_verdict(client):
     """Another fact, or the same `prefill` stated again, is not the switch the
     refusal was about."""
-    facts, model = _errored_with_prefill(client, True)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    model = _primary_model()
+    facts = "/api/llm-connections/openrouter/facts"
+    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+    _model_verdict(client, model, _prefill_refused())
 
     assert client.put(facts, json={"model": model, "vision": "off"}).status_code == 200
     assert _state(client) == "error"
 
     assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
     assert _state(client) == "error"
+
+
+def test_a_prefill_flip_on_another_model_keeps_the_verdict(client):
+    """Spec review F2, narrowed (user ruling 2026-10-09): the verdict was
+    earned on the Primary's model; ticking "Keep writing" on another model of
+    the same provider -- one no role uses -- leaves it, because it is still
+    true."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    model = _primary_model()
+    facts = _model_verdict(client, model, _prefill_refused())
+    other = "vendor/other"
+    assert other != model
+
+    assert client.put(facts, json={"model": other, "prefill": True}).status_code == 200
+    assert _state(client) == "error"
+
+
+@pytest.mark.parametrize("kind", ["auth", "missing_key", "rate_limit", "network", "timeout"])
+def test_a_prefill_flip_keeps_a_verdict_about_the_provider(client, kind):
+    """A verdict no model's facts can change -- a revoked key, a missing one,
+    the network, a rate limit -- stays when the same model's `prefill`
+    flips: the provider is still in that state."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    model = _primary_model()
+    facts = _model_verdict(client, model, LLMError(kind, "provider says no"))
+
+    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+    assert _state(client) == "error"
+
+
+def test_the_model_a_verdict_was_earned_on_is_not_part_of_the_answer():
+    registry = health.ProviderHealth()
+    assert "model" not in registry.record(_conn())
+    assert "model" not in registry.status("openrouter")
+
+
+def test_forget_model_drops_only_that_models_model_verdict():
+    registry = health.ProviderHealth()
+    registry.record(_conn(), LLMError("bad_response", "assistant prefill"))
+    assert registry.forget_model("openrouter", "other") is False
+    assert registry.status("openrouter")["state"] == "error"
+    assert registry.forget_model("openrouter", "m") is True
+    assert registry.status("openrouter")["state"] == "unknown"
+    registry.record(_conn(), LLMError("auth", "bad key"))
+    assert registry.forget_model("openrouter", "m") is False
+    assert registry.status("openrouter")["state"] == "error"
 
 
 def test_a_connection_deleted_mid_update_is_still_a_404(client, monkeypatch):

@@ -1728,13 +1728,16 @@ def put_connection_facts(conn_id: str, body: FactsUpdate,
     except facts.FactsUnreadableError:
         # Held by another program: nothing was written, and a retry may land.
         raise HTTPException(status_code=503, detail=FACTS_UNREADABLE) from None
-    # `put_connection`'s rule for the legacy field, for the model's fact:
-    # `prefill` is what a refused trailing assistant message earns a verdict
-    # over, and it is rev-neutral, so a change to it is the one facts write that
-    # must forget the verdict -- otherwise unticking it leaves the dot red until
-    # some later call happens to succeed. Any other fact leaves it alone.
+    # `put_connection`'s rule for the legacy field, narrowed to the model's
+    # fact (user ruling 2026-10-09): `prefill` is what a refused trailing
+    # assistant message earns a verdict over, and it is rev-neutral, so a
+    # change to it must forget that verdict -- otherwise unticking it leaves
+    # the dot red until some later call happens to succeed. Only a verdict
+    # earned on THIS model, and of a kind its facts can change: one about
+    # another model, or about the provider (`auth`, `missing_key`, ...), is
+    # still true (`ProviderHealth.forget_model`). Any other fact leaves it alone.
     if prefill_moved and prefill_moved[-1]:
-        registry.forget(conn_id)
+        registry.forget_model(conn_id, model)
     return _facts_body(_facts_conn(conn_id), model)
 
 
