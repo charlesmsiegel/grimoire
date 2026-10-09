@@ -1877,8 +1877,11 @@ migration write. Then:
      longer reaches that slot.
    - **The id.** `slugify(name)`. If a preset with that id already holds
      different params or a different name, the id is
-     `f"{slugify(name)}-{sha256(canonical params)[:8]}"`. Identical
-     derivations collapse to one file, and two devices write the same bytes.
+     `f"{slugify(name)}-{sha256(canonical {name, params})[:8]}"`: a digest
+     of the derived name and its params together, as canonical JSON (sorted
+     keys, no spaces). Identical derivations collapse to one file, two
+     devices write the same bytes, and two derivations whose names slug alike
+     ("Warm", "Warm!") never share an id.
    - **A route-level preset is left alone, and noted** (slice I, ruling 5;
      ratified). A `preset_<route>` (global or campaign, `PRESET_CLEAR`
      included) that sets no reasoning effort, on a route whose selection at

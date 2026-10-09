@@ -374,7 +374,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
      - the slot's model satisfies `llm_reasoning.is_glm`;
      - the slot's preset, read, sets no `reasoning_effort`.
    - **What it points at.** A derived preset whose params are the slot's preset's params plus `{"reasoning_effort": E}`. Its name is `"<preset name> · reasoning <E>"`, or `"Reasoning <E>"` when the slot names no readable preset.
-   - **The id.** `slugify(name)`. If a preset with that id already holds different params or a different name, the id is `f"{slugify(name)}-{sha256(canonical params)[:8]}"`.
+   - **The id.** `slugify(name)`. If a preset with that id already holds different params or a different name, the id is `f"{slugify(name)}-{sha256(canonical {name, params})[:8]}"`: a digest of the derived name and its params together (corrected 2026-10-09 to match `legacy_plan.derive`, spec review F3).
    - **Determinism.** Identical derivations collapse to one file, and two devices write the same bytes.
 5. **What is not representable is noted durably, never only in `skipped`** (CR5; review I6).
    - A route-level preset (`preset_<route>`, global or campaign, `PRESET_CLEAR` included) that sets no reasoning effort, on a route whose selection at that scope is an `openai_compatible` GLM provider with a legacy effort, gets one note per (scope, route, provider). It is not derived, for ratification item 3's reason.
