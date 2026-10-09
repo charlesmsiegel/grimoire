@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import logging
 import random
@@ -14,13 +15,11 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import content_parts, decisions, llm_reasoning, prompts, store
+from .. import content_parts, decisions, llm_reasoning, prompts, store, wire
 from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
-    FALLBACK_KEY,
     LLMClient,
-    effective_model,
     fallback_sampling,
     prefill_capable,
 )
@@ -82,7 +81,7 @@ def _handoff_pool(cid, sid, round_record):
     return [entry for entry in round_record["eligible"] if entry["ref"] not in out]
 
 
-def _compose(cid, sid, round_record, actor, conn, appended=()):
+def _compose(cid, sid, round_record, actor, resolved, appended=()):
     # The prompt must offer the same remaining slots that the engine accepts.
     # Offering the current/used actors teaches an invalid handoff; omitting the
     # narrator hides a valid slot. Explicit one-response requests have no next,
@@ -107,8 +106,8 @@ def _compose(cid, sid, round_record, actor, conn, appended=()):
         "actor_ref": actor,
         "eligible_speakers": candidates,
         "describe": store.prompt_log.capturing(),
-        "model": effective_model(conn),
-        "images": store.post_images.images_for(conn),
+        "model": resolved.chain.primary.model,
+        "images": store.post_images.images_for(resolved.chain.primary),
     }
     if appended:
         kwargs["appended"] = appended
@@ -122,7 +121,7 @@ def start(
     sid,
     request,
     client,
-    conn,
+    resolved,
     run,
     *,
     post=None,
@@ -146,17 +145,21 @@ def start(
     they plan the round's speakers (`_plan`). A resumed round (`round_record`
     given: a retry, a roll resume) is never re-planned.
 
-    An empty `conn` is the caller saying no connection was needed
+    A `resolved` of None is the caller saying no connection was needed
     (`answers_nothing`). If the plan made here says otherwise after all -- the
-    order changed in between -- the connection is required now."""
+    order changed in between -- the connection is required now.
+
+    `resolved` is whatever resolution of the scene route opened the round
+    (a send's `chat`, a retry's, a roll's `continuation`, a replay's): every
+    contribution runs on it, under its own task (`_round_frames`)."""
     with store.locks.campaign_lock(cid):
         token = streaming._claim_turn(cid, sid)
         _fence(cid, sid, run, token)
         if round_record is None:
             planned = _plan(cid, sid, kind, trigger, actor_ref)
-            if not conn and (planned["actor_ref"]
-                             or not (automatic and planned["mode"] == "manual")):
-                conn = require_inference("chat", cid).conn
+            if resolved is None and (planned["actor_ref"]
+                                     or not (automatic and planned["mode"] == "manual")):
+                resolved = require_inference("chat", cid)
             if (planned["actor_ref"] is None and len(planned["eligible"]) > 1
                     and not (automatic and planned["mode"] == "manual")):
                 # The first speaker will be picked (`_first_actor` -> `_select`).
@@ -191,7 +194,7 @@ def start(
         cid,
         sid,
         client,
-        conn,
+        resolved,
         run,
         token,
         round_record,
@@ -470,7 +473,7 @@ def _selector_item(cid, sid, round_record):
         round_record["eligible"], conversation, round_record.get("note", ""))
 
 
-def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
+def _prepare(cid, sid, run, token, round_record, actor, resolved, appended):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         pending = round_record.get("pending_response")
@@ -478,20 +481,20 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
             record = store.responses.get(cid, sid, pending, private=True)
             if record["status"] != "complete" and not appended:
                 messages = PreparedMessages.from_snapshot(
-                    record.get("resume_snapshot") or record["snapshot"], effective_model(conn),
-                    campaign=cid,
+                    record.get("resume_snapshot") or record["snapshot"],
+                    resolved.chain.primary.model, campaign=cid,
                 )
                 _capture(
                     cid,
                     sid,
                     "continuation" if round_record.get("continuation") else "retry",
                     messages,
-                    conn,
+                    resolved.chain,
                 )
                 if record.get("resume_snapshot"):
                     return record, messages, "resume", record.get("resume_settings")
                 return record, messages, "primary", None
-        messages, _breakdown = _compose(cid, sid, round_record, actor, conn, appended)
+        messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended)
         # The round's eligible first, then the whole present cast: an explicit
         # pick a talkativeness roll filtered out is still who they are.
         speaker = next(
@@ -510,7 +513,7 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
                 cid, sid, round_record["id"], actor, speaker, messages.snapshot(),
                 getattr(messages, "settings", None),
             )
-        _capture(cid, sid, "continuation" if appended else "chat", messages, conn)
+        _capture(cid, sid, "continuation" if appended else "chat", messages, resolved.chain)
         if pending and appended:
             return record, messages, "resume", getattr(messages, "settings", None)
         return record, messages, "primary", None
@@ -619,11 +622,20 @@ def _normalise(cid, sid, record, text, connection=""):
 OUTCOME_SECTION_ID = "decision"
 
 
-def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
+def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
+             outcome: dict | None = None, *, vouched: bool = True):
     """Record one call's prompt in the prompt log. `outcome` is a decision's
     record of what it decided (`inference.Capture`), filed as a last
     `decision` section beside the messages built from plain ones, and left
-    out of `total_tokens`: it was never sent."""
+    out of `total_tokens`: it was never sent.
+
+    `sent` is what the call was sent on: a generation's chain -- whose
+    fallback, should it answer, is captured as the variant it was sent
+    (`_variant_target`) -- or one attempt's `wire.Target` (a decision's, or
+    that fallback variant's own). A native decision is sent no sampler
+    preset, so its capture reports none (`outcome`'s `mode`); nor does a
+    variant whose sampling nobody can vouch for (`vouched`, `_variant_target`'s
+    relabel)."""
     if not store.prompt_log.capturing():
         return
     # A prompt that carries its own breakdown (`PreparedMessages`) is filed
@@ -660,34 +672,45 @@ def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
-    _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), kind=conn["kind"], messages=messages,
-                   conn=conn)
+    if isinstance(sent, wire.Target):
+        # One attempt: a decision, or a fallback variant (below), whose
+        # messages are a plain list -- there is no variant of it to hook.
+        native = (outcome or {}).get("mode") == decisions.NATIVE_BACKEND
+        _record_prompt(cid, sid, task, breakdown, model=sent.model, kind=sent.kind,
+                       messages=messages, conn=sent if vouched and not native else None)
+        return
+    primary = sent.primary
+    _record_prompt(cid, sid, task, breakdown, model=primary.model, kind=primary.kind,
+                   messages=messages, conn=sent)
     if isinstance(messages, PreparedMessages):
         # Steered frozen variants have no historical section accounting. Capture
         # their exact rendered messages at actual fallback dispatch instead.
-        # `for_connection`: a tailed prompt (Keep writing) ends the way the
-        # fallback's own connection was sent; for any other it is `for_model`.
+        # `for_target`: a tailed prompt (Keep writing) ends the way the
+        # fallback's own attempt was sent; for any other it is `for_model`.
         def capture_variant(model, _breakdown):
-            variant = _variant_conn(conn, model)
-            _capture(cid, sid, task, messages.for_connection(variant, model), variant)
+            variant = _variant_target(sent, model)
+            _capture(cid, sid, task, messages.for_target(variant), variant,
+                     vouched=sent.fallback is not None)
         messages.on_variant = capture_variant
 
 
-def _variant_conn(conn: dict, model: str) -> dict:
-    """The connection a fallback variant was sent on, as its capture names it.
+def _variant_target(chain: wire.Chain, model: str) -> wire.Target:
+    """The attempt a fallback variant was sent on, as its capture names it.
 
-    The fallback this call carries (`llm.FALLBACK_KEY`, the resolver's own),
-    with the route's sampler preset under `llm.fallback_sampling`'s rule --
-    not the primary relabelled with the fallback's model, which would record
-    the primary's preset and catalog list against a request that never carried
-    them. Falls back to that relabel only when the call carries no fallback (a
-    connection built by hand), minus the sampling block it cannot vouch for.
+    The fallback this call carries (`wire.Chain.fallback`, the resolver's
+    own), with the route's sampler preset under `llm.fallback_sampling`'s
+    rule -- not the primary relabelled with the fallback's model, which would
+    record the primary's preset and catalog list against a request that never
+    carried them. Falls back to that relabel only when the call carries no
+    fallback (a chain built by hand), minus the sampling and the catalog list
+    it cannot vouch for -- and its capture files no sampler report
+    (`_capture`'s `vouched`).
     """
-    fallback = conn.get(FALLBACK_KEY)
-    if fallback is not None:
-        return {**fallback_sampling(conn, fallback), "model": model}
-    return {**{k: v for k, v in conn.items() if k not in ("sampling", "model_params")},
-            "model": model}
+    if chain.fallback is not None:
+        return dataclasses.replace(fallback_sampling(chain.primary, chain.fallback),
+                                   model=model, requested_model=model)
+    return dataclasses.replace(chain.primary, model=model, requested_model=model,
+                               sampling=wire.Sampling(), model_params=None)
 
 
 def _round_state(cid, sid, round_record, **fields):
@@ -751,12 +774,17 @@ def _reasoning_frame(event, watcher, liveness):
     return streaming._sse(event)
 
 
-async def _stream_events(client, messages, conn, meter, watcher, run, display):
+async def _stream_events(client, messages, resolved, meter, watcher, run, display,
+                         task="chat"):
     # Heartbeats are throttled here, at the producer, for `streaming._Liveness`'s
     # reason: every SSE line arrives as an empty delta. Liveness records frames
     # that went out, so a display frame the throttle held back is not one.
     liveness = streaming._Liveness()
-    async with aclosing(llm_reasoning.stream(client, messages, conn, meter.usage)) as source:
+    # The generation is opened by `llm_reasoning.stream` once its display
+    # buffer is in the holder, so the adapters find it from the first frame.
+    async with aclosing(llm_reasoning.stream(meter.usage, lambda: operations.generate(
+            task, messages, client=client, resolved=resolved,
+            usage=meter.usage))) as source:
         async for event in source:
             if run.cancel_requested:
                 raise anyio.get_cancelled_exc_class()()
@@ -779,15 +807,19 @@ async def _stream_events(client, messages, conn, meter, watcher, run, display):
                 break
 
 
-async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=None):
+async def _stream_contribution(client, messages, resolved, meter, watcher, run, cid=None,
+                               task="chat"):
     # Display rules for the connection that serves the call, settled on the
     # first visible text (`streaming._Display`), so a fallback's reply is shaped
     # by the rules it is saved under. Frames replace `delta` frames one for
-    # one, so `keep` counts from this contribution's `response_start`.
-    display = streaming._Display(cid, conn, meter)
+    # one, so `keep` counts from this contribution's `response_start`. `task`
+    # is the one the meter files and `generate` is asked for, and `resolved`
+    # that task's resolution.
+    display = streaming._Display(cid, streaming._asked(resolved), meter)
     try:
         async with aclosing(
-            _stream_events(client, messages, conn, meter, watcher, run, display)
+            _stream_events(client, messages, resolved, meter, watcher, run, display,
+                           task=task)
         ) as events:
             async for frame in events:
                 yield frame
@@ -896,7 +928,7 @@ async def _frames(
     cid,
     sid,
     client,
-    conn,
+    resolved,
     run,
     token,
     round_record,
@@ -910,7 +942,7 @@ async def _frames(
     """One run carries a player post's whole chain of rounds: the first, then
     each follow-on `_follow_on` opens while rounds remain, announced by a
     `round_start` frame. The turn settles once, after the last of them."""
-    turn = _Progress(round_record, appended, continuation, conn.get("id", ""))
+    turn = _Progress(round_record, appended, continuation, streaming._asked(resolved))
     # Tracker keys this turn marked `pending`, started in `finally` once the
     # terminal frames are out -- in transcript order, which is the order the
     # scene's tracker lock runs them in.
@@ -919,7 +951,7 @@ async def _frames(
         actor, turn.round_record = await _first_actor(cid, sid, client, round_record)
         while True:
             round_frames = _round_frames(
-                cid, sid, client, conn, run, token, turn, actor, outcome, tracked
+                cid, sid, client, resolved, run, token, turn, actor, outcome, tracked
             )
             async with aclosing(round_frames) as frames:
                 async for frame in frames:
@@ -979,13 +1011,14 @@ async def _frames(
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
-async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome, tracked):
+async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
+                        tracked):
     """One round's contributions, from `actor` until nobody is next. Every
     write lands on `turn`, which is what `_frames` rescues from on failure."""
     turn.ending = None
     while actor and not run.cancel_requested:
         await anyio.lowlevel.checkpoint()
-        turn.served = conn.get("id", "")
+        turn.served = streaming._asked(resolved)
         current = await run_in_threadpool(roster, cid, sid)
         if actor not in [r["ref"] for r in current] + ["grimoire"]:
             await run_in_threadpool(
@@ -1008,7 +1041,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             continue
         turn.made_by = None
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
-            _prepare, cid, sid, run, token, turn.round_record, actor, conn, turn.appended
+            _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended
         )
         record = turn.record
         turn.appended = ()
@@ -1023,8 +1056,12 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
                 }
             }
         )
+        # Whatever turn opened the round, a contribution is filed -- and
+        # generated -- as `chat`, or as `continuation` when it finishes a roll:
+        # one route, so the round's one resolution serves both (`for_task`).
+        task = "continuation" if turn.continuation else "chat"
         turn.meter = store.usage.meter(
-            "continuation" if turn.continuation else "chat",
+            task,
             campaign=cid,
             scene=sid,
             post=turn.round_record["post"],
@@ -1032,12 +1069,13 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             response_id=record["id"],
         )
         async for frame in _stream_contribution(
-                client, messages, conn, turn.meter, watcher, run, cid):
+                client, messages, operations.for_task(resolved, task), turn.meter,
+                watcher, run, cid, task=task):
             yield frame
         # Read before the meter is dropped: the facade stamps the attempt
         # that ran on `meter.usage`, which a fallback makes someone other
-        # than `conn`.
-        turn.served = served = streaming._served(turn.meter, conn)
+        # than the resolution's primary.
+        turn.served = served = streaming._served(turn.meter, streaming._asked(resolved))
         turn.meter.done()
         turn.made_by = _made_by(
             turn.meter, turn.meter.task, turn.composed, turn.round_record.get("typed_note", ""),
@@ -1154,7 +1192,7 @@ def _made_by(
     try:
         usage = meter.usage
         served = {
-            "connection_id": (usage.get(ATTEMPTED) or {}).get("id"),
+            "connection_id": _attempted_id(usage),
             "connection": usage.get("connection"),
             "model": usage.get("model"),
             "provider": usage.get("provider"),
@@ -1173,6 +1211,13 @@ def _made_by(
         return None
 
 
+def _attempted_id(usage: dict) -> str | None:
+    """The provider id of the attempt the facade stamped into `usage`
+    (`llm.ATTEMPTED`), or None when it stamped none."""
+    attempted = usage.get(ATTEMPTED)
+    return attempted.provider_id if isinstance(attempted, wire.Target) else None
+
+
 def _abort_meter(meter):
     if meter:
         meter.done("aborted")
@@ -1186,7 +1231,7 @@ async def _rescue(
     # filed under is the attempt that was running when the turn broke. With no
     # meter left, `served` is what `_frames` already settled on.
     if meter:
-        served = streaming._served(meter, {"id": served})
+        served = streaming._served(meter, served)
         if error:
             meter.done("error", error.kind, detail=error.detail)
         else:
@@ -1275,7 +1320,7 @@ def resume_roll(
     pid,
     request,
     client,
-    conn,
+    resolved,
     run,
     round_record,
     resolution,
@@ -1290,7 +1335,7 @@ def resume_roll(
         sid,
         request,
         client,
-        conn,
+        resolved,
         run,
         round_record=round_record,
         appended=(("Roll resolution", "system", block),),
@@ -1299,7 +1344,7 @@ def resume_roll(
     )
 
 
-def retry(cid, sid, request, client, conn, run, after_turn=None):
+def retry(cid, sid, request, client, resolved, run, after_turn=None):
     round_record = store.responses.unfinished(cid, sid)
     if round_record is None:
         raise HTTPException(
@@ -1324,7 +1369,7 @@ def retry(cid, sid, request, client, conn, run, after_turn=None):
         sid,
         request,
         client,
-        conn,
+        resolved,
         run,
         round_record=round_record,
         after_turn=after_turn,
@@ -1489,7 +1534,6 @@ def regenerate_response(
     _turn_override(body)
     _require_scene(cid, sid)
     resolved, _ = override_inference(body, "regenerate", cid)
-    conn = resolved.conn
     run, fresh = runs.reserve_turn(request.app, cid, sid, "regenerate", x_grimoire_attempt)
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -1517,7 +1561,8 @@ def regenerate_response(
             # Lock-free and non-minting, inside this hold: the round's typed
             # note, which a reroll of a director turn replays with its snapshot.
             note = store.responses.round_typed_note(cid, sid, record["round_id"])
-            messages = PreparedMessages.from_snapshot(record["snapshot"], effective_model(conn),
+            messages = PreparedMessages.from_snapshot(record["snapshot"],
+                                                      resolved.chain.primary.model,
                                                       campaign=cid)
             if body and body.guidance:
                 messages = messages.with_appended(
@@ -1535,7 +1580,7 @@ def regenerate_response(
                 store.steering.record(cid, sid, body.guidance)
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
-            request.app, cid, sid, rid, client, conn, run, token, record, messages, outcome,
+            request.app, cid, sid, rid, client, resolved, run, token, record, messages, outcome,
             note=note, guidance=(body.guidance if body else None) or "", task="regenerate",
         )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
@@ -1562,7 +1607,6 @@ def extend_response(
     _turn_override(body)
     _require_scene(cid, sid)
     resolved, _ = override_inference(body, "extend", cid)
-    conn = resolved.conn
     run, fresh = runs.reserve_turn(request.app, cid, sid, "extend", x_grimoire_attempt)
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -1572,32 +1616,34 @@ def extend_response(
             plan = _extend_target(cid, sid, rid)
             token = streaming._claim_turn(cid, sid)
             note = store.responses.round_typed_note(cid, sid, plan.record["round_id"])
-            messages = _extend_messages(plan.snapshot, conn, plan.partial, guidance, plan.words,
-                                        campaign=cid)
+            messages = _extend_messages(plan.snapshot, resolved.chain.primary, plan.partial, guidance,
+                                        plan.words, campaign=cid)
             if guidance:
                 # Last in the hold, after every refusal, as a reroll's steer.
                 store.steering.record(cid, sid, guidance)
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
-            request.app, cid, sid, rid, client, conn, run, token, plan.record, messages, outcome,
-            note=note, guidance=guidance, task="extend", extend=plan,
+            request.app, cid, sid, rid, client, resolved, run, token, plan.record, messages,
+            outcome, note=note, guidance=guidance, task="extend", extend=plan,
         )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
-async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, messages, outcome,
-                         *, note="", guidance="", task: str = "regenerate",
+async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, record, messages,
+                         outcome, *, note="", guidance="", task: str = "regenerate",
                          extend: ExtendPlan | None = None):
     """A reroll's stream -- or, with `extend`, a Keep writing continuation's.
 
     The two differ only at the edges: what the meter and prompt log call the
     call (`task`), whether the perception fence is expected (not in a prefill,
     where the model is mid-reply), the `extend.seed` the live bubble grows from,
-    and how the result lands (`_accept_extend` joins it onto the reply)."""
+    and how the result lands (`_accept_extend` joins it onto the reply).
+    `resolved` is the reroll's own resolution of `task` (`override_inference`)."""
+    chain = resolved.chain
     perception = record["actor_ref"] != "grimoire"
     if extend is not None:
-        perception = perception and not _prefills(conn)
+        perception = perception and not _prefills(chain.primary)
     watcher = store.response_protocol.ResponseWatcher(perception=perception)
     meter = store.usage.meter(
         task,
@@ -1612,7 +1658,7 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
     # variant's record is kept, so swiping back to it is free.
     tracked: list[tracker_routes.Mark] = []
     try:
-        await run_in_threadpool(_capture, cid, sid, task, messages, conn)
+        await run_in_threadpool(_capture, cid, sid, task, messages, chain)
         yield streaming._sse(
             {
                 "response_start": {
@@ -1626,9 +1672,9 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
             }
         )
         async for frame in _stream_contribution(
-                client, messages, conn, meter, watcher, run, cid):
+                client, messages, resolved, meter, watcher, run, cid, task=task):
             yield frame
-        served = streaming._served(meter, conn)
+        served = streaming._served(meter, streaming._asked(resolved))
         meter.done()
         refusal: tuple[str, str] | None
         if extend is None:
@@ -1640,7 +1686,7 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
             refusal = None if accepted else (
                 "replacement_incomplete", "The previous response was retained.")
         else:
-            mode = _served_mode(messages, meter, conn)
+            mode = _served_mode(messages, meter, chain.primary)
             made_by = _made_by(
                 meter, task, extend.composed, note, guidance,
                 settings=extend.settings if extend.composed == "resume" else None,
@@ -1834,10 +1880,13 @@ def _extend_views(cid: str, messages: list[dict], rid: str) -> dict[str, list[st
     return out
 
 
-def _served_mode(messages, meter, conn) -> str:
+def _served_mode(messages, meter, primary: wire.Target) -> str:
     """The tail the attempt that ANSWERED was sent -- a fallback picks its own,
-    so the primary's mode is not evidence of what the model continued."""
-    attempted = (meter.usage.get(ATTEMPTED) if meter is not None else None) or conn
+    so the primary's mode is not evidence of what the model continued. The
+    attempt the facade stamped (`llm.ATTEMPTED`), else `primary`."""
+    attempted = meter.usage.get(ATTEMPTED) if meter is not None else None
+    if not isinstance(attempted, wire.Target):
+        attempted = primary
     return messages.mode_for(attempted) or _extend_mode(attempted)
 
 
@@ -1939,8 +1988,8 @@ def _extends_record(message: dict, first: dict, records: dict[str, dict],
 _EXTEND_CLOSERS = frozenset(".,;:!?)]\u201d\u2019'*\u2026\u2014")
 
 
-def _prefills(conn: dict) -> bool:
-    """Whether a "Keep writing" attempt on `conn` is sent as a prefill.
+def _prefills(target: wire.Target) -> bool:
+    """Whether a "Keep writing" attempt on `target` is sent as a prefill.
 
     The connection's own opt-in (`llm.prefill_capable`, a gateway rule that
     cannot read the store), unless its provider preset rules prefill out: the
@@ -1948,22 +1997,25 @@ def _prefills(conn: dict) -> bool:
     with a 400 (`never_for`), so an opt-in there would fail every Keep writing. `claude` lists prefill
     under `never` too, and is exempt: its SDK path has sent an opted-in
     connection the prefill tail since play controls IV, and slice B changes
-    nothing an existing store does."""
-    if not prefill_capable(conn):
+    nothing an existing store does.
+
+    A target carries no explicit provider preset, so it is placed by its kind
+    and URL -- the answer its own preset gives, while every preset of a kind
+    agrees on prefill (`test_no_provider_preset_changes_a_vision_or_prefill_answer`)."""
+    if not prefill_capable(target):
         return False
-    preset = inference_providers.infer(conn)
+    preset = inference_providers.infer({"kind": target.kind, "base_url": target.base_url})
     if preset.kind == "claude":
         return True
-    return "prefill" not in inference_providers.never_for(preset,
-                                                          str(conn.get("model") or ""))
+    return "prefill" not in inference_providers.never_for(preset, target.model)
 
 
-def _extend_mode(conn: dict) -> str:
-    """The tail a "Keep writing" attempt on `conn` is sent."""
-    return "prefill" if _prefills(conn) else "instruction"
+def _extend_mode(target: wire.Target) -> str:
+    """The tail a "Keep writing" attempt on `target` is sent."""
+    return "prefill" if _prefills(target) else "instruction"
 
 
-def _extend_messages(snapshot: dict, conn: dict, partial: str, guidance: str,
+def _extend_messages(snapshot: dict, primary: wire.Target, partial: str, guidance: str,
                      words: int | None, campaign: str = "") -> PreparedMessages:
     """The extend prompt: the frozen snapshot, then the partial reply as the
     model's own turn, ending one of two ways per attempt (`with_tails`).
@@ -1986,8 +2038,8 @@ def _extend_messages(snapshot: dict, conn: dict, partial: str, guidance: str,
                                       guidance=guidance or ""),
         }],
     }
-    return PreparedMessages.from_snapshot(snapshot, effective_model(conn), campaign=campaign) \
-        .with_tails(tails, _extend_mode, conn)
+    return PreparedMessages.from_snapshot(snapshot, primary.model, campaign=campaign) \
+        .with_tails(tails, _extend_mode, primary)
 
 
 def _extend_joiner(lead: str, text: str, mode: str) -> str:

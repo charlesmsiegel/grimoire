@@ -33,6 +33,7 @@ import pytest
 from grimoire import routes
 from grimoire.routes import character_turns, streaming
 from grimoire.store import fence, response_protocol, state_fence
+from tests import wire_kit
 from tests.llm_fakes import FakeOpenRouter
 
 # ---- oracles: the pre-incremental algorithms, verbatim ---------------------
@@ -327,7 +328,7 @@ async def test_an_assigned_actor_heartbeats_the_same_way(monkeypatch, gap, beats
     monkeypatch.setattr(streaming, "HEARTBEAT_GAP", gap)
     frames = [f async for f in character_turns._stream_contribution(
         FakeOpenRouter(_SPARSE), [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, SimpleNamespace(usage={}),
+        wire_kit.resolution(wire_kit.target(model="m")), SimpleNamespace(usage={}),
         response_protocol.ResponseWatcher(), SimpleNamespace(cancel_requested=False))]
     assert frames.count(streaming._HEARTBEAT) == beats
     assert frames[0] == streaming._HEARTBEAT

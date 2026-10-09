@@ -26,15 +26,16 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import decisions, llm, llm_sampling, model_guidance, store
+from .. import decisions, llm, llm_sampling, model_guidance, store, wire
+from .. import inference as operations
 from ..health import ProviderHealth
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from ..store.inference import cascade as inference_cascade
+from ..store.inference import facts as inference_facts
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
-from ..store.inference import translate as inference_translate
 from ..store.inference.resolved import ResolvedInference
 
 log = logging.getLogger(__name__)
@@ -217,8 +218,9 @@ def run_error(exc: HTTPException) -> dict:
     return {**out, "retry_after": window} if window else out
 
 
-async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
-                           task: str, shape, cid: str = "", sid: str = "") -> dict:
+async def draft_completion(client: LLMClient, resolved: UsableInference,
+                           messages: list[dict], task: str, shape, cid: str = "",
+                           sid: str = "") -> dict:
     """One metered non-stream generation, as the outcome a detached run reports.
 
     THE helper the twelve computing `draft` routes share, and the reason they
@@ -238,11 +240,17 @@ async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
     a parse that raises inside would file the model's successful call as a
     provider error in the usage ledger -- which is the one place that has to be
     able to say what the provider actually did.
+
+    `resolved` is the route's resolution of `task` (`require_inference`, at
+    the call site that names the task), which `inference.generate` refuses
+    for any other task.
     """
     try:
         with store.usage.meter(task, campaign=cid, scene=sid) as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
+            text = await _bounded_call(
+                operations.generate(task, messages, client=client, resolved=resolved,
+                                    usage=m.usage, stream=False),
+                on_timeout=_noting(client, resolved, m.usage))
     except LLMError as exc:
         return {"state": "failed", "error": run_error(_llm_http_error(exc))}
     try:
@@ -254,8 +262,9 @@ async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
         return {"state": "failed", "error": run_error(exc)}
 
 
-def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[dict]]:
-    """The connection and the messages for one image-description draft.
+def image_draft_prompt(path, subject: str,
+                       cid: str = "") -> tuple[UsableInference, list[dict]]:
+    """The resolution and the messages for one image-description draft.
 
     Everything `_draft_description` used to do BEFORE the provider call, split
     out so the route can do it synchronously -- while the request is still
@@ -274,11 +283,11 @@ def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[di
     # `image_drafts.UNSUPPORTED` exactly as this function's own kind check
     # used to; a model its catalog or the user says is blind, as `incapable`.
     # The one check, so no surface can drift from another.
-    conn = require_inference("image-description", cid).conn
+    resolved = require_inference("image-description", cid)
     if path is None:
         raise HTTPException(status_code=404, detail="image not found")
     try:
-        return conn, store.image_drafts.build_prompt(path, subject)
+        return resolved, store.image_drafts.build_prompt(path, subject)
     except store.image_drafts.ImageTooLargeError as exc:
         # Refused before the bytes are read, so this is an error rather than the
         # killed process an Android install would otherwise get. See MAX_BYTES.
@@ -302,8 +311,8 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     the store (#239), and reading config.md per call is what lets a
     Configuration-page change land without a restart (#243). The retry count
     rides the same seam for the same two reasons. The fallback (#144) does not:
-    each call's resolved connection carries its own (`llm.FALLBACK_KEY`, set by
-    `store.inference.resolve`), so the client holds none.
+    each call's resolved chain carries its own (`wire.Chain.fallback`, resolved
+    by `store.inference.resolve`), so the client holds none.
 
     The token counter rides the seam too (`_count_tokens`): the facade counts
     what a provider did not report, on a worker thread, and the gateway may not
@@ -325,8 +334,8 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
 
 # Late-bound through the module attribute, so a test patching
 # `store.post_images` intercepts what the facade calls (#377).
-def _post_images_for(conn: dict) -> int:
-    return store.post_images.images_for(conn)
+def _post_images_for(attempt: wire.Target) -> int:
+    return store.post_images.images_for(attempt)
 
 
 def _load_post_image(cid: str, part: dict) -> str | None:
@@ -397,7 +406,7 @@ def _turn_override(body) -> dict | None:
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
                    messages: list[dict] | None = None,
-                   conn: dict | None = None) -> None:
+                   conn: wire.Chain | wire.Target | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -415,10 +424,11 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     variant callback is handed a model id only -- so its counts read as
     estimates, which is the safe direction.
 
-    `conn` is the connection this attempt is sent on, and what the snapshot
-    records about its sampler preset -- `llm_sampling.report`, the same split
-    the facade sends -- so a past turn says what it was sent WITH, and what
-    its backend could not take.
+    `conn` is what this call is sent on -- a generation's chain, or one
+    attempt's target -- and what the snapshot records about its sampler
+    preset is its first attempt's (`llm_sampling.report`, the same split the
+    facade sends), so a past turn says what it was sent WITH, and what its
+    backend could not take.
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -437,18 +447,19 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     # off. Nothing to record, and nothing was built to record.
     if breakdown is None:
         return
-    report = llm_sampling.report(conn)
+    chain = conn if isinstance(conn, wire.Chain) else None
+    report = llm_sampling.report(conn.primary if isinstance(conn, wire.Chain) else conn)
     if report is not None:
         breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):
         def on_variant(selected: str, variant: dict | None) -> None:
             # The fallback as the facade sends it: the one this call carries
-            # (`llm.FALLBACK_KEY`), with the route's preset carried onto it
+            # (`wire.Chain.fallback`), with the route's preset carried onto it
             # under the same rule.
-            fallback = conn.get(llm.FALLBACK_KEY) if conn is not None else None
+            fallback = chain.fallback if chain is not None else None
             _record_prompt(cid, sid, task, variant, model=selected,
-                           conn=llm.fallback_sampling(conn, fallback)
-                           if conn is not None and fallback is not None else None)
+                           conn=llm.fallback_sampling(chain.primary, fallback)
+                           if chain is not None and fallback is not None else None)
         messages.on_variant = on_variant
     # The scene check and the append are ONE critical section, on the same lock
     # `record` uses. Another client can rename or delete the scene between the
@@ -605,20 +616,21 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
         raise LLMError("timeout", str(exc) or "the call timed out") from exc
 
 
-def _noting(client: LLMClient, conn: dict, usage: dict | None = None):
+def _noting(client: LLMClient, resolved: ResolvedInference, usage: dict | None = None):
     """`on_timeout` for a bounded generation: file the overrun against the
     connection that was actually running when the ceiling fired (#146).
 
     A function rather than a lambda at each call site, because the thing worth
     reading at those sites is the generation, not the bookkeeping.
 
-    `conn` is the route's connection and `usage` is the holder the facade
+    `resolved` is the route's resolution and `usage` is the holder the facade
     stamps per attempt, which is the more accurate of the two: a generation
     that failed over is being served by the *fallback* by the time it overruns,
     and blaming the primary would both overwrite its real failure with a
     timeout it did not cause and leave the connection that did cause one
-    looking healthy. The route's own connection is the fallback for a caller
-    that threads no holder.
+    looking healthy. The resolution's primary attempt
+    (`inference.note_outcome`) is the fallback for a caller that threads no
+    holder, or whose holder no attempt has stamped yet.
     """
     def note(exc: LLMError) -> None:
         # Guarded for the same reason `llm._observe` is, and it took a broken
@@ -628,7 +640,11 @@ def _noting(client: LLMClient, conn: dict, usage: dict | None = None):
         # `note_outcome` turned "the budget stopped this phase" into an
         # AttributeError, and the phase stopped reporting why it died.
         try:
-            client.note_outcome((usage or {}).get(llm.ATTEMPTED) or conn, exc)
+            attempted = (usage or {}).get(llm.ATTEMPTED)
+            if attempted:
+                client.note_outcome(attempted, exc)
+            else:
+                operations.note_outcome(client, resolved, exc)
         except Exception as exc2:  # noqa: BLE001 - see above
             log.warning("could not record a ceiling timeout: %s", exc2)
 
@@ -1121,23 +1137,27 @@ def _sheet_failure_status(exc: Exception) -> int:
 
 @dataclass(frozen=True)
 class UsableInference(ResolvedInference):
-    """A resolution the seam has checked can send: its `conn` is never None.
+    """A resolution the seam has checked can send: its `chain` is never None.
 
     What `require_inference` and `override_inference` hand back. The same
     fields, narrowed in the one place the narrowing is true -- after the
-    refusals -- so a call site's `.conn` is the `dict` the facade takes rather
-    than an Optional every caller would have to re-check.
+    refusals -- so a call site's `.chain` is the `wire.Chain` the facade takes
+    rather than an Optional every caller would have to re-check.
     """
 
     @property
-    def conn(self) -> dict:
-        """The connection dict the facade is sent: the primary attempt's."""
-        assert self.attempts, "a usable resolution always resolved an attempt"
-        return self.attempts[0].conn
+    def chain(self) -> wire.Chain:
+        """What the facade is sent, typed (`ResolvedInference.chain`): never
+        None here. Its `primary` is where a call site reads the display facts
+        of the attempt it asks for first -- `.kind`, `.model`, `.provider_id`."""
+        chain = super().chain
+        assert chain is not None, "a usable resolution always resolved an attempt"
+        return chain
 
 
 def _narrowed(resolved: ResolvedInference) -> UsableInference:
-    """`resolved` as a `UsableInference`; the caller has refused a None `conn`."""
+    """`resolved` as a `UsableInference`; the caller has refused a resolution
+    with no attempt (a None `chain`)."""
     assert resolved.attempts, "narrowed a resolution that resolved nothing"
     return UsableInference(**{f.name: getattr(resolved, f.name) for f in fields(resolved)})
 
@@ -1209,7 +1229,7 @@ def refuse_unmigrated() -> None:
     The status is `migrate.status()`: `pending`, `running`, or `failed` with
     the reason (a safety backup that could not be taken)."""
     refuse_newer()
-    if inference_translate.is_current(store.read_config()):
+    if store.inference_keys.is_current(store.read_config()):
         return
     raise _not_migrated()
 
@@ -1245,7 +1265,7 @@ def rates_block() -> str | None:
         return RATES_UNREADABLE
     if store.inference_keys.is_newer(meta):
         return RATES_NEWER_FORMAT
-    return None if inference_translate.is_current(meta) else RATES_AFTER_UPGRADE
+    return None if store.inference_keys.is_current(meta) else RATES_AFTER_UPGRADE
 
 
 def rates_editable() -> bool:
@@ -1276,8 +1296,8 @@ def require_inference(task: str = "", cid: str = "", *,
     resolver (`store.inference.resolve`) answers, and this refuses what cannot
     send -- a missing key or connection first, then a primary known unable to
     do what the route needs (`inference.refusal`, pure, so the settings view
-    reports the same decision). `.conn` is the connection dict the facade
-    reads.
+    reports the same decision). `.chain` is what the facade is sent, and
+    `.chain.primary` the attempt a call site reads its display facts off.
 
     `task` is the same string the call site meters under (`store.usage.meter`),
     and `store/routing.py` maps it to a route; `cid` lets a campaign override
@@ -1302,7 +1322,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
     sentinel the caller has to re-resolve:
 
         resolved, routed = override_inference(body, "regenerate", cid)
-        conn = resolved.conn
+        chain = resolved.chain
 
     A tuple rather than "None means no override", which is what this was and
     which review broke in two ways at once. It could not say *both* "the caller
@@ -1387,7 +1407,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
     connection is *primary*; the fallback is the route's policy about what
     happens when a primary is exhausted, and silently suspending it for one
     call would make a reroll the one turn a rate limit can simply lose. The
-    resolution carries it (`llm.FALLBACK_KEY`), with the sampling it would have
+    resolution carries it (`wire.Chain.fallback`), with the sampling it would have
     had without the override; a fallback on the override's own provider is
     dropped there (`llm._same_route`'s rule), so "reroll this on the fallback"
     does not double up.
@@ -1408,14 +1428,13 @@ def override_inference(body, task: str = "", cid: str = "", *,
     # keyless connection with no 409, and a repoint sent "the same provider,
     # its bigger model" to another provider entirely. The resolver reads each
     # connection once per resolution (`resolve.connection_lookup`), so
-    # everything here is decided on the dict that is handed to the facade.
+    # everything here is decided on the target that is handed to the facade.
     override = (inference_cascade.Selection(conn_id, model, preset)
                 if conn_id or model or preset else None)
     resolved = inference.resolve(  # routing-ok: this IS the seam, for a per-call override
         task, cid, operation=operation, override=override)
-    conn = resolved.conn
-    if preset and conn is not None \
-            and resolved.attempts[0].conn["sampling"]["scope"] != "override":
+    primary = resolved.attempts[0].target if resolved.attempts else None
+    if preset and primary is not None and primary.sampling.scope != "override":
         # The preset was named and the resolver found nothing by that name (it
         # fell back to the route's), so the reroll would run on a preset the
         # reader did not pick. A body error, so before the connection's own
@@ -1428,11 +1447,11 @@ def override_inference(body, task: str = "", cid: str = "", *,
     if not conn_id:
         # The seam's refusals, on the copy that serves. A model alone drives
         # the STANDING provider, so this is the standing route's own refusal:
-        # `problem` does not depend on the model, and `via`/`legacy_route`
+        # `problem` does not depend on the model, and `via`/`route`
         # describe the standing choice -- a routed connection that cannot
         # send says so here too.
         _refuse_unusable(resolved)
-    elif conn is None:
+    elif primary is None:
         # Written for the banner it lands in, not for a log. `errorText`
         # renders `detail` verbatim, and the reader's next move is the one
         # worth naming: the connection they picked is gone (deleted in
@@ -1441,14 +1460,15 @@ def override_inference(body, task: str = "", cid: str = "", *,
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
-    elif resolved.current and not model and not _has_standing_model(resolved, conn):
+    elif not resolved.legacy and not model and not _has_standing_model(resolved, primary):
         # A provider alone keeps the standing model, and there is none to keep.
-        # The body's fault, so before the connection's own refusals.
+        # The body's fault, so before the connection's own refusals. (A
+        # format-1 store's provider alone runs its own model, spec 5.6.)
         raise HTTPException(
             status_code=400,
             detail="Name a model for this provider — there is no standing model to keep.")
     else:
-        problem = inference.problem(conn)
+        problem = inference.target_problem(primary)
         if problem is not None:
             # NAMED, unlike `require_inference`'s copy of this. There the
             # connection is the one the whole app is using and needs no
@@ -1457,17 +1477,18 @@ def override_inference(body, task: str = "", cid: str = "", *,
             # the connection they have been playing on has broken.
             raise HTTPException(
                 status_code=409,
-                detail={"detail": f"{conn['name']}: {problem}", "kind": "missing_key"})
+                detail={"detail": f"{primary.provider_name}: {problem}", "kind": "missing_key"})
     # Then what the call needs, on the attempt that would serve it: an override
     # onto a model known unable to do the job is refused like the standing one.
     _refuse_incapable(resolved)
     served = _narrowed(resolved)
     standing = resolved.standing
-    # Same provider means the same connection dict, so the standing model's
-    # effective value is read off it with only the model swapped back.
-    same = (standing is not None and served.conn["id"] == standing.provider
-            and effective_model(served.conn)
-            == effective_model({**served.conn, "model": standing.model}))
+    # Same provider means the same connection, so the standing model's
+    # effective value is read on its kind with only the model swapped back.
+    sent = served.chain.primary
+    same = (standing is not None and sent.provider_id == standing.provider
+            and sent.model == inference_facts.model_of({"kind": sent.kind,
+                                                        "model": standing.model}))
     if same and preset:
         # The preset is the third thing a route is: the same provider and model
         # under another preset is another route. Effective on both sides, so
@@ -1477,12 +1498,12 @@ def override_inference(body, task: str = "", cid: str = "", *,
     return served, not same
 
 
-def _has_standing_model(resolved: ResolvedInference, conn: dict) -> bool:
+def _has_standing_model(resolved: ResolvedInference, primary: wire.Target) -> bool:
     """Whether a provider-only override on a current layout has a model to run:
     the standing selection's, or the provider IS the standing one (nothing to
     keep, nothing changed)."""
     standing = resolved.standing
-    return standing is not None and (conn["id"] == standing.provider
+    return standing is not None and (primary.provider_id == standing.provider
                                      or bool(standing.model))
 
 
@@ -1505,12 +1526,12 @@ def _soft_resolved(resolve: Callable[[], UsableInference]
     `kind` is its fixed vocabulary (`missing_key`, `incapable`, ...; "" for a
     refusal that carries none), which is what a log line may say.
 
-    `_soft_inference` is this, keeping the connection dict. The resolution
-    itself is for a caller that hands it on whole -- the scene-break title,
-    which runs only after a verdict has been stored, and whose failure must
-    leave that verdict standing with no title rather than lose it. Takes a
-    THUNK for `_soft_inference`'s reason: the task stays a literal at the call
-    site, where `test_routing_guard.py` reads it.
+    `_soft_inference` is this without the kind. A caller that wants the kind
+    too reads it here -- the scene-break title, which runs only after a
+    verdict has been stored, and whose failure must leave that verdict
+    standing with no title rather than lose it. Takes a THUNK for
+    `_soft_inference`'s reason: the task stays a literal at the call site,
+    where `test_routing_guard.py` reads it.
     """
     try:
         return resolve(), "", ""
@@ -1521,8 +1542,9 @@ def _soft_resolved(resolve: Callable[[], UsableInference]
         return None, str(detail), ""
 
 
-def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None, str]:
-    """A SECONDARY absorb phase's connection, or why it has none (#142).
+def _soft_inference(resolve: Callable[[], UsableInference]
+                    ) -> tuple[UsableInference | None, str]:
+    """A SECONDARY absorb phase's resolution, or why it has none (#142).
 
     `(None, reason)` rather than a raised 409, because the three phases below
     each promise never to fail an absorb: a dossier refresh routed at a
@@ -1537,7 +1559,7 @@ def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None
     one -- which is how a routing map goes stale without anything failing.
     """
     resolved, why, _kind = _soft_resolved(resolve)
-    return (None, why) if resolved is None else (resolved.conn, "")
+    return (None, why) if resolved is None else (resolved, "")
 
 
 def _decide_error(decision: decisions.Decision, qid: str) -> LLMError | None:

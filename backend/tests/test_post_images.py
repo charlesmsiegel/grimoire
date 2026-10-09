@@ -5,8 +5,10 @@ import importlib
 
 import pytest
 
-from grimoire import catalog, store
+from grimoire import catalog, store, wire
 from grimoire.store import config, llm_connections, post_images
+from grimoire.store.inference import resolve
+from tests.inference_fixtures import put_settings
 
 
 @pytest.fixture
@@ -20,6 +22,15 @@ def _conn(kind="openrouter", vision="", model="m"):
     cid = llm_connections.create_connection(kind, f"{kind}-{vision or 'auto'}-{model}",
                                             api_key="k", model=model, vision=vision)
     return llm_connections.read_connection_raw(cid)
+
+
+def _t(conn: dict) -> wire.Target:
+    """`conn` as the target it sends at its own model, built now by the
+    store's builder (`resolve.target_for`): the post-image preference the
+    record states is its model's fact, and its catalog is read as it
+    stands."""
+    return resolve.target_for(conn, conn["model"], resolve.preset_sampling(""),
+                              model_facts={"vision": conn.get("vision", "")})
 
 
 def _catalog(conn, rows):
@@ -37,33 +48,33 @@ def test_catalog_entry_reads_input_modalities():
 
 # ---- capability ----
 def test_claude_never_reads_images_whatever_it_says(home):
-    assert post_images.capability(_conn("claude", "on")) == "no"
+    assert post_images.capability(_t(_conn("claude", "on"))) == "no"
     assert post_images.capability(None) == "no"
 
 
 def test_the_override_wins(home):
-    assert post_images.capability(_conn(vision="on")) == "yes"
-    assert post_images.capability(_conn(vision="off")) == "no"
+    assert post_images.capability(_t(_conn(vision="on"))) == "yes"
+    assert post_images.capability(_t(_conn(vision="off"))) == "no"
 
 
 def test_auto_reads_the_cached_catalog(home):
     conn = _conn()
-    assert post_images.capability(conn) == "unknown"
+    assert post_images.capability(_t(conn)) == "unknown"
     _catalog(conn, [{"id": "m", "vision": True}])
-    assert post_images.capability(conn) == "yes"
+    assert post_images.capability(_t(conn)) == "yes"
     _catalog(conn, [{"id": "m", "vision": False}])
-    assert post_images.capability(conn) == "no"
+    assert post_images.capability(_t(conn)) == "no"
     _catalog(conn, [{"id": "m", "vision": None}])
-    assert post_images.capability(conn) == "unknown"
+    assert post_images.capability(_t(conn)) == "unknown"
     _catalog(conn, [{"id": "other", "vision": True}])
-    assert post_images.capability(conn) == "unknown"
+    assert post_images.capability(_t(conn)) == "unknown"
     _catalog(conn, [{"id": "m"}])  # a sidecar written before #377
-    assert post_images.capability(conn) == "unknown"
+    assert post_images.capability(_t(conn)) == "unknown"
 
 
 def test_an_unknown_stored_vision_value_reads_as_auto(home):
     conn = {**_conn(), "vision": "sometimes"}
-    assert post_images.capability(conn) == "unknown"
+    assert post_images.capability(_t(conn)) == "unknown"
 
 
 # ---- limit / images_for / reach ----
@@ -82,14 +93,14 @@ def test_limit_reads_fail_soft(home, raw, want):
 
 def test_images_for_needs_both_the_setting_and_the_capability(home):
     yes, no = _conn(vision="on"), _conn(vision="off")
-    assert post_images.images_for(yes) == 0
+    assert post_images.images_for(_t(yes)) == 0
     config.write_config(send_images="on")
-    assert post_images.images_for(yes) == 3
-    assert post_images.images_for(no) == 0
-    assert post_images.reach(no) == "no"
-    assert post_images.reach(yes) == "yes"
+    assert post_images.images_for(_t(yes)) == 3
+    assert post_images.images_for(_t(no)) == 0
+    assert post_images.reach(_t(no)) == "no"
+    assert post_images.reach(_t(yes)) == "yes"
     config.write_config(send_images="off")
-    assert post_images.reach(yes) == "off"
+    assert post_images.reach(_t(yes)) == "off"
 
 
 def test_reach_with_no_connection_is_none_not_no(home):
@@ -113,16 +124,19 @@ def test_send_images_round_trips_and_is_validated(client):
 
 def test_reach_describes_the_chat_connection(client):
     cid = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Seraphine", "api_key": "k", "model": "m"}).json()["id"]
-    client.put("/api/config", json={"active_connection_id": cid, "send_images": "on"})
+        "kind": "openrouter", "name": "Seraphine", "api_key": "k"}).json()["id"]
+    put_settings(client, {"roles": {"primary": {"selection": {"provider": cid, "model": "m"}}}})
+    assert client.put("/api/config", json={"send_images": "on"}).status_code == 200
     assert client.get("/api/config").json()["send_images_reach"] == "unknown"
-    client.put(f"/api/llm-connections/{cid}", json={"vision": "on"})
+    r = client.put(f"/api/llm-connections/{cid}/facts", json={"model": "m", "vision": "on"})
+    assert r.status_code == 200, r.text
     assert client.get("/api/config").json()["send_images_reach"] == "yes"
 
 
 def test_reach_with_no_connection_reads_none(client):
     client.get("/api/config")  # the first read migrates in a default connection
-    client.put("/api/config", json={"send_images": "on", "active_connection_id": ""})
+    put_settings(client, {"roles": {"primary": {"selection": {}}}})
+    assert client.put("/api/config", json={"send_images": "on"}).status_code == 200
     assert client.get("/api/config").json()["send_images_reach"] == "none"
 
 
@@ -130,20 +144,25 @@ def test_editing_only_the_vision_override_keeps_the_catalog(home):
     conn = _conn()
     _catalog(conn, [{"id": "m", "vision": True}])
     llm_connections.update_connection(conn["id"], vision="off")
-    assert post_images.capability(llm_connections.read_connection_raw(conn["id"])) == "no"
+    assert post_images.capability(_t(llm_connections.read_connection_raw(conn["id"]))) == "no"
     llm_connections.update_connection(conn["id"], vision="")
-    assert post_images.capability(llm_connections.read_connection_raw(conn["id"])) == "yes"
+    assert post_images.capability(_t(llm_connections.read_connection_raw(conn["id"]))) == "yes"
 
 
 def test_connection_vision_is_constrained_and_round_trips(client):
+    """Vision is a fact of the model at format 2 (`PUT .../facts`), not of the
+    provider."""
     bad = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Mara", "api_key": "k", "vision": "sometimes"})
     assert bad.status_code == 422
     cid = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Mara", "api_key": "k", "vision": "on"}).json()["id"]
-    assert client.get(f"/api/llm-connections/{cid}").json()["vision"] == "on"
-    client.put(f"/api/llm-connections/{cid}", json={"vision": ""})
-    assert client.get(f"/api/llm-connections/{cid}").json()["vision"] == ""
+        "kind": "openrouter", "name": "Mara", "api_key": "k"}).json()["id"]
+    facts = f"/api/llm-connections/{cid}/facts"
+    assert client.put(facts, json={"model": "m", "vision": "sometimes"}).status_code == 400
+    assert client.put(facts, json={"model": "m", "vision": "on"}).status_code == 200
+    assert client.get(facts, params={"model": "m"}).json()["vision"] == "on"
+    assert client.put(facts, json={"model": "m", "vision": ""}).status_code == 200
+    assert client.get(facts, params={"model": "m"}).json()["vision"] == ""
 
 
 # ---- resolving and encoding (Task 4) ----

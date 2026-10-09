@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import catalog, routes
+from grimoire import catalog, routes, wire
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests.llm_fakes import FakeCatalog
@@ -109,7 +109,7 @@ def test_preview_lists_an_unsaved_connections_provider(client):
 
     assert r.status_code == 200
     assert r.json() == {"models": fake.models}
-    assert [(c["kind"], c["api_key"]) for c in fake.listed] == [("openrouter", "sk-typed")]
+    assert [(c.kind, c.api_key) for c in fake.listed] == [("openrouter", "sk-typed")]
 
 
 def test_preview_carries_a_typed_base_url(client):
@@ -119,7 +119,7 @@ def test_preview_carries_a_typed_base_url(client):
     client.post("/api/model-catalog", json={
         "kind": "openai_compatible", "base_url": "http://127.0.0.1:8080/v1", "api_key": ""})
 
-    assert [(c["kind"], c["base_url"]) for c in fake.listed] == [
+    assert [(c.kind, c.base_url) for c in fake.listed] == [
         ("openai_compatible", "http://127.0.0.1:8080/v1")]
 
 
@@ -131,7 +131,7 @@ def test_preview_needs_no_key_at_all(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     assert client.post("/api/model-catalog", json={"kind": "openrouter"}).status_code == 200
-    assert fake.listed[0]["api_key"] == ""
+    assert fake.listed[0].api_key == ""
 
 
 def test_preview_refuses_the_kind_with_no_catalog(client):
@@ -182,7 +182,7 @@ def test_preview_does_not_touch_a_stored_key(client):
 
     client.post("/api/model-catalog", json={"kind": "openrouter", "api_key": "sk-typed"})
 
-    assert fake.listed[0]["api_key"] == "sk-typed"
+    assert fake.listed[0].api_key == "sk-typed"
 
 
 def test_an_entry_keeps_the_parameters_a_model_takes():
@@ -278,8 +278,9 @@ def test_an_anthropic_row_with_no_capability_tree_keeps_what_else_it_states():
     assert got["outputs"] == ["text"]
     assert got["vision"] is None
     assert got["features"] == {"max_tokens": 64000}
-    conn = {"kind": "anthropic", "model": "claude-test-1", "model_features": got["features"],
-            "sampling": {"params": {"max_tokens": 100000}}}
+    conn = wire.Target(provider_id="", kind="anthropic", model="claude-test-1",
+                       model_features=got["features"],
+                       sampling=wire.Sampling(params={"max_tokens": 100000}))
     assert ls.effective(conn)["effective"]["max_tokens"] == 64000
 
 

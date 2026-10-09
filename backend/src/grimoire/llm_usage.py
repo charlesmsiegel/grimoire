@@ -48,6 +48,8 @@ in and anything unrecognized is simply not recorded.
 
 from __future__ import annotations
 
+from . import wire
+
 #: Money reported by a provider that charges per call. The other basis
 #: (`equivalent`) is `claude_agent`'s, whose calls bill against a subscription;
 #: `store.usage` keeps the two out of one total and says why.
@@ -170,16 +172,12 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
 
 
 # ---- what served a call (slice E; spec 9.1-9.3) ----
-#: Where a connection dict carries its ACCOUNT block: what the resolver knows
-#: of the attempt that the wire does not say -- the `operation` it runs, the
-#: `role` whose slot supplied it, the provider's `billing`, and (slice F) the
-#: `decision_mode` one call used. `store.inference.resolve.ACCOUNT_KEY`,
-#: restated because the gateway imports no store (#239); a test holds the two
-#: spellings equal. Private-looking for the reason `llm.FALLBACK_KEY` is: no
-#: adapter reads it, and nothing here sends it.
-ACCOUNT_KEY = "_account"
-
-#: The account block's keys that `account` files, each as its own ledger field.
+#: A target's ACCOUNT (`wire.Account`) is what the resolver knows of the
+#: attempt that the wire does not say -- the `operation` it runs, the `role`
+#: whose slot supplied it, the provider's `billing`, and (slice F) the
+#: `decision_mode` one call used. No adapter reads it, and nothing here sends
+#: it. A stamp is laid on a target's account (`wire.Target.with_account`).
+#: These are its fields `account` files, each as its own ledger field.
 ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode")
 
 
@@ -187,48 +185,24 @@ def _text(value: object) -> str:
     return value if isinstance(value, str) and value else ""
 
 
-def account(usage: dict | None, conn: dict) -> None:
+def account(usage: dict | None, target: wire.Target) -> None:
     """File what served this attempt into the holder: the provider's id
-    (`provider_id`, from `conn["id"]`), the sampler preset actually sent
-    (`preset`, `conn["sampling"]["preset_id"]` -- never the provider preset),
-    and each `ACCOUNT_FIELDS` key of the account block.
+    (`provider_id`, the target's), the sampler preset actually sent
+    (`preset`, its `sampling.preset_id` -- never the provider preset), and
+    each `ACCOUNT_FIELDS` field of its account (`wire.Account`).
 
-    Only a non-empty `str` is copied, so a hand-built conn with a stray value
-    costs the field and never the row. Reads `conn`, never writes it, and never
-    raises: this is bookkeeping beside a call that has already been made."""
+    Only a non-empty `str` is copied, so a hand-built attempt with a stray
+    value costs the field and never the row. Reads the attempt, never writes
+    it, and never raises: this is bookkeeping beside a call that has already
+    been made."""
     if usage is None:
         return
     try:
-        filed: dict[str, str] = {}
-        provider_id = _text(conn.get("id"))
-        if provider_id:
-            filed["provider_id"] = provider_id
-        sampling = conn.get("sampling")
-        preset = _text(sampling.get("preset_id")) if isinstance(sampling, dict) else ""
-        if preset:
-            filed["preset"] = preset
-        block = conn.get(ACCOUNT_KEY)
-        if isinstance(block, dict):
-            for key in ACCOUNT_FIELDS:
-                value = _text(block.get(key))
-                if value:
-                    filed[key] = value
-        usage.update(filed)
+        values = {"provider_id": target.provider_id, "preset": target.sampling.preset_id,
+                  **{key: getattr(target.account, key) for key in ACCOUNT_FIELDS}}
+        usage.update({key: value for key, value in values.items() if _text(value)})
     except Exception:  # noqa: BLE001 - see the docstring
         return
-
-
-def with_account(conn: dict, **fields: str) -> dict:
-    """`conn` with `fields` laid over its account block: a NEW conn and a NEW
-    block, and the one way to change an account block.
-
-    Never in place, because the block is shared: every `{**conn}` copy --
-    `llm.fallback_sampling`'s, `resolve.with_facts`'s -- carries the same dict,
-    so a write to it would rewrite the primary's and the fallback's at once.
-    Slice F stamps `decision_mode` per call through this; the model test call
-    stamps its probe's `operation`."""
-    block = conn.get(ACCOUNT_KEY)
-    return {**conn, ACCOUNT_KEY: {**(block if isinstance(block, dict) else {}), **fields}}
 
 
 # ---- a count the provider did not report (slice E, Task 3; spec 9.1) ----

@@ -67,7 +67,7 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
                           client: LLMClient = Depends(get_llm),
                           x_grimoire_attempt: str | None = Header(default=None)):
     scene = _source(cid, sid, rid, body)
-    conn = require_inference("character-from-passage", cid).conn
+    resolved = require_inference("character-from-passage", cid)
     # The neighbours are prompt context, so they are read in the prompt view.
     posts = regex.view.view(scene["messages"], cid=cid, phase="prompt")
     index = next((i for i, post in enumerate(posts) if post.get("response_id") == rid), None)
@@ -88,7 +88,7 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
                 "quotes": passage_evidence.quotes(body.passage, body.name)}
 
     async def work():
-        return await draft_completion(client, conn, messages, "character-from-passage", shape, cid=cid, sid=sid)
+        return await draft_completion(client, resolved, messages, "character-from-passage", shape, cid=cid, sid=sid)
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "character-from-passage",
                           x_grimoire_attempt, work)

@@ -1,9 +1,12 @@
 """Roles and routes, read for the Models screen and written from it (spec 10).
 
 `view` is what a role card and a route row render, at the global scope or one
-campaign's. Each carries what the scope STORES (read through the legacy
-translation, so a store the migration has not reached shows what plays),
-what it `resolves` to and what it `inherits`:
+campaign's. Each carries what the scope STORES (read as the resolver reads it,
+`resolve.current_view`, so a store the migration or retirement has not reached
+shows the format-2 layout it will be written as -- which is what plays), what
+it `resolves` to and what it `inherits`. The view also carries the planner's
+`retirement_notes` (`resolve.retirement_notes`): what could not be carried
+over. Nothing renders them yet.
 
 - `resolves` is one `resolve.resolve` per row -- the route's first task, or
   the role itself (`role=`) -- so it is what `require_inference` serves, and
@@ -49,7 +52,7 @@ from __future__ import annotations
 
 import functools
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from .. import (
     alternates,
@@ -61,9 +64,11 @@ from .. import (
     sampler_presets,
 )
 from .. import inference_keys as keys
+from .. import inference_retired as retired
 from ..campaigns import lifecycle as campaign_lifecycle
+from ..campaigns import read as campaign_read
 from ..frontmatter import breaks_line
-from . import capabilities, cascade, facts, in_use, migrate, providers, resolve, translate
+from . import capabilities, cascade, facts, in_use, migrate, providers, resolve
 from .resolved import ResolvedInference
 
 SCOPES: tuple[str, ...] = ("global", "campaign")
@@ -121,12 +126,12 @@ def _sel(resolved: ResolvedInference) -> dict | None:
     if not resolved.attempts:
         return None
     first = resolved.attempts[0]
-    sampling = first.conn.get("sampling") or {}
+    target = first.target
     return {"provider": first.provider_id,
-            "provider_name": str(first.conn.get("name") or first.provider_id),
+            "provider_name": target.provider_name or first.provider_id,
             "model": first.model,
             "preset": first.preset_id,
-            "preset_name": str(sampling.get("preset_name") or ""),
+            "preset_name": target.sampling.preset_name,
             "via": resolved.via, "scope": resolved.scope}
 
 
@@ -213,8 +218,8 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             "uses": uses or None}
 
 
-def _embedding_card(cfg: dict, lookup: translate.Lookup) -> dict:
-    provider, model = translate.embedding_role(cfg)
+def _embedding_card(cfg: dict, lookup: llm_connections.Lookup) -> dict:
+    provider, model = resolve.embedding_role(cfg)
     # One resolution per card: whether it is on, and why not, are read from
     # the same answer (spec 12, one decision).
     got = embed_space.resolution(cfg)
@@ -243,7 +248,7 @@ def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:
     if why != embed_space.OFF or got is None or not got.missing or not got.attempts:
         return why
     attempt = got.attempts[0]
-    name = str(attempt.conn.get("name") or attempt.provider_id)
+    name = attempt.target.provider_name or attempt.provider_id
     return (f"{attempt.model} on {name} cannot {capabilities.CANNOT['embed']}, "
             "so embedding is off — choose another Embedding model.")
 
@@ -254,7 +259,7 @@ def _providers() -> list[dict]:
     for the key it deliberately does not carry) -- and `own_model`, the model
     its record names (`facts.model_of`): what a reroll naming the provider
     alone runs on a store still at format 1, where a provider has a model of
-    its own (`resolve._overridden`); "" when it names none."""
+    its own (`resolve._overridden`, spec 5.6); "" when it names none."""
     return [{"id": c["id"], "name": str(c.get("name") or c["id"]),
              "kind": str(c.get("kind") or ""),
              "preset": str(c.get("preset") or "") or providers.infer(c).id,
@@ -272,14 +277,18 @@ def view(scope: str, cid: str = "") -> dict:
         raise ValueError(f"no such scope: {scope!r}")
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
-    current = keys.is_current(cfg)
-    glob = translate.global_view(cfg, lookup)
+    # What each row STORES is the layout as the migration persists it
+    # (`stored`): every preset id in it names a preset file, so a save that
+    # sends a row back unchanged names what a write accepts. The derived
+    # reasoning preset a GLM slot plays on (in memory, until retirement
+    # writes it) is what the row `resolves` to.
     if scope == "campaign":
-        own = translate.campaign_view(in_use.campaign_meta(cid, strict=False), lookup,
-                                      current=current)
+        seen = resolve.current_view(cfg, in_use.campaign_meta(cid, strict=False), cid=cid)
+        glob, own = seen.stored, seen.stored_meta
     else:
         cid = ""
-        own = glob
+        seen = resolve.current_view(cfg)
+        glob = own = seen.stored
 
     def uses(route: routing.Route) -> str:
         return cascade.walked_role(route, campaign=own if scope == "campaign" else {},
@@ -299,14 +308,150 @@ def view(scope: str, cid: str = "") -> dict:
         "presets": [{"id": p["id"], "name": p["name"]}
                     for p in sampler_presets.list_presets()],
         "preset_clear": sampler_presets.PRESET_CLEAR,
+        # What could not be carried over (ruling 5, N9), shown on /models
+        # until dismissed: see `retirement_notes`.
+        "retirement_notes": retirement_notes(scope, cid),
     }
 
 
-def _named(selection: cascade.Selection, lookup: translate.Lookup) -> dict:
+#: Why a write that reaches the retirement record is refused when the record
+#: cannot be read just now (409 `retirement_unreadable`, R3-3): empty, held by
+#: another program, or missing an entry a stripped connection needs -- what a
+#: sync still in flight looks like.
+RETIREMENT_UNREADABLE = (f"The record of retired model settings ({retired.FILENAME}, at "
+                         "the library's root) could not be read; try again once it "
+                         "has synced.")
+#: The same refusal when the record was read and does not parse: waiting will
+#: not fix it, so it says what will.
+RETIREMENT_MALFORMED = (f"The record of retired model settings ({retired.FILENAME}, at "
+                        "the library's root) does not parse ({why}). It will not fix "
+                        "itself: repair that file, or restore it from a backup.")
+
+
+def retirement_unreadable(exc: retired.RecordUnreadableError) -> str:
+    """The 409 `retirement_unreadable` sentence for `exc`: the file named,
+    and "does not parse" (a person must act) told apart from "not synced
+    yet" (waiting will do) -- spec review of slice I, code finding 3."""
+    if isinstance(exc, retired.RecordMalformedError):
+        why = str(exc).removeprefix("the retirement record ").split(";")[0]
+        return RETIREMENT_MALFORMED.format(why=why)
+    if isinstance(exc, retired.EntryMissingError):
+        return (f"The record of retired model settings ({retired.FILENAME}, at the "
+                f"library's root) holds nothing yet for the provider “{exc.name}”, "
+                "whose old model settings it keeps; try again once it has synced. "
+                + retired.EntryMissingError.WAY_OUT.format(name=exc.name))
+    return RETIREMENT_UNREADABLE
+
+
+def _campaign_names() -> dict[str, str]:
+    try:
+        return {cid: name or cid for cid, name, _world in campaign_read.world_refs()}
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+
+
+def retirement_notes(scope: str, cid: str = "") -> list[dict]:
+    """What could not be carried over, as the view shows it (N11): the
+    retirement record's notes not yet dismissed, then the planner's
+    (`resolve.retirement_notes`) that the record does not hold yet -- one
+    list, ids collapsing, so a note reads the same before and after
+    retirement records it, and one dismissed before retirement stays
+    dismissed. On the global view (`/models`) every scope's -- the planner's
+    included, planned for every campaign (`_planner_notes`), so a campaign's
+    loss shows there from this build's first start (spec 11.4); on a
+    campaign's, the global ones and that campaign's. Each row carries `scope_name`: ""
+    for the global scope, else the campaign's name, so a note on `/models`
+    says where it applies. Read fail-soft: never raises."""
+    record = retired.read()
+    known = {row["id"] for row in record["notes"]}
+    names = _campaign_names()
+
+    def shown(row_scope: str) -> bool:
+        return scope == "global" or row_scope in (retired.GLOBAL_SCOPE,
+                                                  retired.campaign_scope(cid))
+
+    def row(fields: Mapping[str, str]) -> dict:
+        target = retired.scope_campaign(fields["scope"])
+        return {**{k: fields[k] for k in retired.Note._fields},
+                "scope_name": names.get(target, target) if target else ""}
+
+    planned = (_planner_notes(names) if scope == "global"
+               else resolve.retirement_notes(cid))
+    out = [row(r) for r in record["notes"] if not r["dismissed"] and shown(r["scope"])]
+    out += [row(n._asdict()) for n in planned if n.id not in known and shown(n.scope)]
+    return out
+
+
+def _planner_notes(names: Mapping[str, str]) -> list[retired.Note]:
+    """What the planner could not carry over, in every scope: the global
+    plan's and each campaign's (`resolve.retirement_notes`, which gives a
+    campaign's own beside the global ones), ids collapsing. What `/models`
+    shows before retirement has recorded them (spec 11.4), and what a
+    dismissal looks a planner-only note up in.
+
+    A permanent fan-out, by design: every GET of `/models` plans each
+    campaign -- on a retired store too, where a retired campaign costs one
+    read of its `campaign.md` (the overlay plans nothing) -- because a late
+    unmarked campaign can arrive at any time, and its loss must show. The
+    cost is accepted: it is linear in campaigns, one small frontmatter read
+    each, on a settings page rather than the play path. `config.md` is read
+    once per call."""
+    cfg = config.read_config()
+    out: dict[str, retired.Note] = {}
+    for cid in ["", *names]:
+        for note in resolve.retirement_notes(cid, cfg=cfg):
+            out.setdefault(note.id, note)
+    return list(out.values())
+
+
+def forget_campaign_notes(scope: str) -> bool:
+    """Drop a deleted campaign's notes from the retirement record (`scope`,
+    `retired.campaign_scope(cid)`), so `/models` stops showing them and a
+    campaign created later under the same slug never inherits them. Called
+    by the campaign delete once the campaign is gone. In
+    `config.format_hold`, the record writers' cross-process hold. Best
+    effort, never raising: the campaign is already deleted, and a record that
+    cannot be read just now (or a store a newer build switched) keeps the
+    notes rather than refusing anything -- False then, as when there were
+    none."""
+    try:
+        with config.format_hold():
+            return retired.forget_scope(scope)
+    except (retired.RecordUnreadableError, config.NewerFormatError, locks.StoreBusy,
+            OSError):
+        return False
+
+
+def dismiss_note(note_id: str) -> bool:
+    """Dismiss note `note_id` for good, on every device: returns whether any
+    note by that id was known. One the record does not hold yet -- the
+    planner's, before retirement recorded it -- is recorded already dismissed
+    (N14), so neither the planner nor a later retirement brings it back. A
+    settings write that spends nothing and touches no campaign: in
+    `config.format_hold` (a newer store raises `config.NewerFormatError`),
+    which is also the cross-process hold the record's writers share.
+    `retired.RecordUnreadableError` when the record cannot be read."""
+    with config.format_hold():
+        if retired.dismiss(note_id):
+            return True
+    # Planned outside the hold (it reads connections and presets); recorded
+    # inside it, where `dismiss` reads the record again.
+    planned = next((note for note in _planner_notes(_campaign_names())
+                    if note.id == note_id), None)
+    if planned is None:
+        return False
+    with config.format_hold():
+        return retired.dismiss(planned)
+
+
+def _named(selection: cascade.Selection, lookup: llm_connections.Lookup,
+           virtual: Mapping[str, dict]) -> dict:
     """A role's selection as the header names it: the provider's name, the
-    model and the preset's name ("" when it names none, or one that is gone)."""
+    model and the preset's name ("" when it names none, or one that is gone;
+    a derived preset not yet written is `virtual`'s)."""
     raw = lookup(selection.provider) or {}
-    preset = sampler_presets.read_preset(selection.preset) if selection.preset else None
+    preset = (virtual.get(selection.preset) or sampler_presets.read_preset(selection.preset)
+              if selection.preset else None)
     return {"provider_name": str(raw.get("name") or selection.provider),
             # The model it actually runs: a Claude provider with none set
             # runs its default, which is what `active_connection` names too.
@@ -319,15 +464,16 @@ def summary() -> dict:
     each generative role's global selection, named (None when nothing selects
     one), and whether embedding is on.
 
-    One `translate.global_view` and `cascade.role_selection` per role -- the
+    One `resolve.current_view` and `cascade.role_selection` per role -- the
     cascade, not the resolver: no `resolve.resolve`, so this refuses nothing
     and is no resolver call site (the header's own target is the one display
-    resolve the config route makes). A legacy store reads through the
-    translation, so it names what plays there too."""
+    resolve the config route makes). A legacy store is read as the planner
+    reads it, so it names what plays there too."""
     llm_connections.ensure_migrated()
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
-    glob = translate.global_view(cfg, lookup)
+    seen = resolve.current_view(cfg)
+    glob = seen.cfg
 
     def exists(provider_id: str) -> bool:
         return lookup(provider_id) is not None
@@ -335,7 +481,7 @@ def summary() -> dict:
     roles: dict[str, dict | None] = {}
     for role in keys.GENERATIVE_ROLES:
         selection = cascade.role_selection(role, campaign={}, glob=glob, exists=exists)[0]
-        roles[role] = None if selection is None else _named(selection, lookup)
+        roles[role] = None if selection is None else _named(selection, lookup, seen.presets)
     return {"roles": roles, "embedding_on": embed_space.resolve(cfg) is not None}
 
 
@@ -346,8 +492,8 @@ def used_by(provider_id: str) -> list[dict]:
     role, a role's fallback, a route's chosen pin, or the Embedding role.
 
     `in_use.selections`, filtered to this provider: read as `view` reads them,
-    through the legacy translation, so a store the migration has not reached
-    reports what plays. Global first, then each campaign by id; a campaign
+    through the planner, so a store the migration has not reached reports
+    what plays. Global first, then each campaign by id; a campaign
     that cannot be read names nothing. Walks every campaign (each one's parse
     memoized on its file), so it belongs on a provider's detail, never on the
     list, which would ask it once per provider."""

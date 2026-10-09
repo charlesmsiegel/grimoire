@@ -502,7 +502,7 @@ def test_a_fallback_that_cannot_send_says_why_on_its_rows(client):
     assert got["roles"]["primary"]["fallback_missing"] == []
     assert _row(got, "scene")["fallback_problem"] == "OpenRouter key not set"
     assert inference.resolve("chat").fallback_problem == "OpenRouter key not set"
-    assert inference.resolve("chat").fallback is None
+    assert len(inference.resolve("chat").attempts) == 1
     assert _row(_campaign(client, cid), "scene")["fallback_problem"] == "OpenRouter key not set"
 
 
@@ -520,7 +520,7 @@ def test_a_fallback_on_the_primarys_own_provider_says_why_on_its_rows(client):
 
     assert got["roles"]["primary"]["fallback_problem"] == inference.SAME_PROVIDER
     assert _row(got, "scene")["fallback_problem"] == inference.SAME_PROVIDER
-    assert inference.resolve("chat").fallback is None
+    assert len(inference.resolve("chat").attempts) == 1
     assert _row(_campaign(client, cid), "scene")["fallback_problem"] == inference.SAME_PROVIDER
 
 

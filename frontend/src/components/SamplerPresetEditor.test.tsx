@@ -214,6 +214,22 @@ test("the form offers reasoning effort", async () => {
     name: "Cold", notes: "", params: {} }));
 });
 
+test("the form offers max when the server lists it", async () => {
+  const withMax = TABLE.map((row) => row.name === "reasoning_effort"
+    ? { ...row, choices: ["off", "low", "medium", "high", "max"] } : row);
+  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [WARM], params: withMax } as never);
+  render(<SamplerPresetEditor />);
+  fireEvent.click(await within(await waitFor(rail)).findByText("Warm"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const box = screen.getByLabelText<HTMLSelectElement>("Reasoning effort");
+  expect([...box.options].map((o) => o.value)).toEqual(["", "off", "low", "medium", "high", "max"]);
+  fireEvent.change(box, { target: { value: "max" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.updateSamplerPreset).toHaveBeenCalledWith("warm", {
+    name: "Warm", notes: "For **prose**.",
+    params: { temperature: 1.1, stop: ["\nYou:"], reasoning_effort: "max" } }));
+});
+
 test("a stored reasoning level the table does not offer is shown as itself", async () => {
   vi.mocked(api.listSamplerPresets).mockResolvedValue({
     presets: [{ ...WARM, params: { ...WARM.params, reasoning_effort: "max" } }],

@@ -686,7 +686,7 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
             "continuity-reconcile", items, client=client, resolved=resolved, explain=explain,
             campaign=cid,
             around=lambda call, holder: _bounded_call(
-                call, on_timeout=_noting(client, resolved.conn, holder)))
+                call, on_timeout=_noting(client, resolved, holder)))
     except LLMError as exc:
         result["llm"] = "failed"
         return _failed(result, run_error(_llm_http_error(exc))), {}

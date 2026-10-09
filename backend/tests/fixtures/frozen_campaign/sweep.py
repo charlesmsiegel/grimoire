@@ -60,16 +60,17 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 from grimoire import store
 from grimoire.store.continuity import candidates, drivers, effective, graph, pending, pressure
+from tests import frozen_copy
 
 HERE = Path(__file__).resolve().parent
 HOME = HERE / "home"
+assert HOME == frozen_copy.HOME, "the sweep and `tests/frozen_copy.py` name one home/"
 SNAPSHOT = HERE / "snapshot.json"
 
 
@@ -264,8 +265,7 @@ def _write_snapshot() -> int:
     """Regenerate `snapshot.json` from a scratch copy of `home/`. Deliberate —
     see the module docstring."""
     with tempfile.TemporaryDirectory() as tmp:
-        home = Path(tmp) / "home"
-        shutil.copytree(HOME, home)
+        home = frozen_copy.copy_home(Path(tmp) / "home")
         os.environ["GRIMOIRE_HOME"] = str(home)
         store.migrations.migrate_scene_ids()
         data = sweep(home)

@@ -96,6 +96,7 @@ from . import (
     image_usage,
     inference,
     inference_keys,
+    inference_retired,
     journal,
     length_drift,
     lengths,

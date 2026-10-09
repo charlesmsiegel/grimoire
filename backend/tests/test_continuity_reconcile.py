@@ -23,7 +23,6 @@ from grimoire.store import (
     campaigns,
     clock,
     commitments,
-    config,
     embed_space,
     errors,
     events,
@@ -46,6 +45,7 @@ from grimoire.store.continuity import (
     review,
     similarity,
 )
+from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC
@@ -694,7 +694,7 @@ def _configure():
     conn = llm_connections.create_connection("openai_compatible", "Vectors",
                                              base_url="https://vectors.example/v1",
                                              api_key="sk-x", model="", post_process="none")
-    config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn)
+    embedding(conn, "embed-1")
 
 
 def _vector_space():

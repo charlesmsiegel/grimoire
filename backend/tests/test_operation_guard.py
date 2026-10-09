@@ -47,6 +47,21 @@ so only a call through a binding of `grimoire.inference` is an operation call:
 - the safety rule (spec 14), both ways: every task of a decide route is the
   literal of some call, and a route defaulting to the Decision role decides.
 
+The generate half (slice I). `generate` is recognised the same way -- through
+a binding of `grimoire.inference` only, so `decide`, H's `run_stages` and
+every other object's `generate` are never swept in:
+
+- every `generate` call passes `resolved=`, and a first positional task that
+  is a string literal whose route generates (or a registered non-route task,
+  `routing.NON_ROUTE_TASKS`) -- or a name that traces only to such literals.
+  A turn's meter is opened where the turn is streamed (`_fence_stream`,
+  `draft_completion`, a group round's `_stream_contribution`), so the task is
+  a parameter there and the literal is at the caller; `TaskProvenance`
+  follows it back exactly as `Provenance` follows a space (a parameter: what
+  every package call site passes for it, or its default; a local: every value
+  assigned; `x if c else y`: both), and accepts nothing else;
+- the operation is never handed around as a value.
+
 **Where the space comes from** (spec 7.3, rule 2). `embed_sync` never
 re-resolves the space it is handed, so nothing in it stops a call site from
 building one by hand -- a dict off a connection's `base_url` and `api_key`
@@ -88,6 +103,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import pathlib
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -1065,3 +1081,352 @@ def test_bindings_resolve_the_decide_module():
     # From a package's own `__init__`, one level up is the package itself.
     pkg = ast.parse("from .. import inference as a\n")
     assert bindings(pkg, "grimoire.routes", DECIDE_MODULE, is_pkg=True)[0] == {"a"}
+
+
+# ---- the generate half (slice I) ----
+
+#: The operation's name in `grimoire.inference` (`DECIDE_MODULE`).
+GENERATE = "generate"
+
+#: At least this many operation calls exist (vacuity insurance): the turn
+#: stream, a group round's contribution, the opener, the drafts' shared
+#: completion, the tracker, the tagline batch, absorb's extraction, audit and
+#: dossiers, the rolling summary and the scene-break title.
+MIN_GENERATE_CALLS = 11
+
+
+def _inference_refs(tree: ast.AST, modname: str, is_pkg: bool,
+                    op: str) -> Iterator[tuple[ast.AST, bool]]:
+    """`_decide_refs` for any operation of `grimoire.inference`: every
+    reference to `op` through a binding of that module, and whether it is a
+    call's `func`."""
+    modules, names = bindings(tree, modname, DECIDE_MODULE, is_pkg=is_pkg)
+    aliases = {local for local, name in names.items() if name == op}
+    if not modules and not aliases:
+        return
+    funcs = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    for node in ast.walk(tree):
+        through_module = (isinstance(node, ast.Attribute) and node.attr == op
+                          and _dotted(node.value) in modules)
+        by_name = (isinstance(node, ast.Name) and node.id in aliases
+                   and isinstance(node.ctx, ast.Load))
+        if through_module or by_name:
+            yield node, id(node) in funcs
+
+
+def generate_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.Call]:
+    """Every `generate` operation call in one module."""
+    called = {id(ref) for ref, is_call in _inference_refs(tree, modname, is_pkg, GENERATE)
+              if is_call}
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and id(n.func) in called]
+
+
+def _a_generate_task(task: str, route_of: Callable[[str], routing.Route | None]) -> bool:
+    route = route_of(task)
+    return (route is not None and route.operation == "generate") or (
+        task in routing.NON_ROUTE_TASKS)
+
+
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+
+
+def _shadowed(tree: ast.AST) -> set[int]:
+    """The ids of every loaded `Name` that a `lambda` parameter or a
+    comprehension variable around it binds.
+
+    `Provenance` maps a node to its innermost `def` and reads names there, so
+    on its own it would resolve `lambda task: generate(task, ...)` against the
+    enclosing function's `task` -- a different variable. Such a name is not
+    traced at all: it is refused, as any binding the walk cannot read is. A
+    lambda's defaults and a comprehension's first `iter` are evaluated
+    outside the new scope, and are walked as such."""
+    out: set[int] = set()
+    _visit_scopes(tree, frozenset(), out)
+    return out
+
+
+def _lambda_names(node: ast.Lambda) -> set[str]:
+    a = node.args
+    names = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+    return names | {x.arg for x in (a.vararg, a.kwarg) if x is not None}
+
+
+def _visit_scopes(node: ast.AST, bound: frozenset[str], out: set[int]) -> None:
+    """`_shadowed`'s walk: `bound` is what the lambdas and comprehensions
+    around `node` bind; a loaded name among them goes into `out`."""
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in bound:
+        out.add(id(node))
+    if isinstance(node, ast.Lambda):
+        a = node.args
+        for default in (*a.defaults, *(d for d in a.kw_defaults if d is not None)):
+            _visit_scopes(default, bound, out)
+        _visit_scopes(node.body, bound | _lambda_names(node), out)
+    elif isinstance(node, _COMPREHENSIONS):
+        _visit_comprehension(node, bound, out)
+    else:
+        for child in ast.iter_child_nodes(node):
+            _visit_scopes(child, bound, out)
+
+
+def _visit_comprehension(node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+                         bound: frozenset[str], out: set[int]) -> None:
+    """A comprehension's scope: its targets bind everything inside it but the
+    first `iter`, which is evaluated outside."""
+    inner = bound | {n.id for g in node.generators for n in ast.walk(g.target)
+                     if isinstance(n, ast.Name)}
+    _visit_scopes(node.generators[0].iter, bound, out)
+    for i, gen in enumerate(node.generators):
+        if i:
+            _visit_scopes(gen.iter, inner, out)
+        for cond in gen.ifs:
+            _visit_scopes(cond, inner, out)
+    parts = (node.key, node.value) if isinstance(node, ast.DictComp) else (node.elt,)
+    for part in parts:
+        _visit_scopes(part, inner, out)
+
+
+class TaskProvenance(Provenance):
+    """Whether a `generate` call's task traces to string literals of generate
+    tasks, followed through the package as `Provenance` follows a space.
+
+    `data_tasks` names the one task that is data rather than code, by
+    `(module, dotted expression)`, with the check that holds it instead: the
+    eval runner's `case.task` (`DATA_TASKS`)."""
+
+    def __init__(self, trees: dict[str, tuple[ast.Module, bool]], *,
+                 route_of: Callable[[str], routing.Route | None] = routing.route,
+                 data_tasks: dict[tuple[str, str], Callable[[], bool]] | None = None):
+        super().__init__(trees)
+        self.route_of = route_of
+        self.data_tasks = data_tasks or {}
+        self.shadowed: set[int] = set()
+        for tree, _is_pkg in trees.values():
+            self.shadowed |= _shadowed(tree)
+
+    def ok(self, expr: ast.expr | None, ctx: _Ctx) -> bool:
+        if isinstance(expr, ast.Constant):
+            return isinstance(expr.value, str) and _a_generate_task(expr.value, self.route_of)
+        if isinstance(expr, ast.IfExp):
+            return self.ok(expr.body, ctx) and self.ok(expr.orelse, ctx)
+        if isinstance(expr, ast.Name):
+            return id(expr) not in self.shadowed and self._name(expr.id, ctx)
+        if isinstance(expr, ast.Attribute):
+            check = self.data_tasks.get((ctx[0], _dotted(expr) or ""))
+            return check is not None and check()
+        return False
+
+    def problems(self) -> list[str]:
+        out: list[str] = []
+        for mod, (tree, is_pkg) in self.trees.items():
+            for ref, is_call in _inference_refs(tree, mod, is_pkg, GENERATE):
+                if not is_call:
+                    out.append(f"{mod}:{ref.lineno}: generate handed around as a value")
+            for call in generate_calls(tree, mod, is_pkg):
+                task = call.args[0] if call.args else None
+                if not self.ok(task, (mod, self.parent.get(id(call)), None)):
+                    out.append(f"{mod}:{call.lineno}: generate's task is not a literal of a "
+                               "generate task, nor a name that traces only to one")
+                if not any(k.arg == "resolved" for k in call.keywords):
+                    out.append(f"{mod}:{call.lineno}: generate passes no resolved=")
+        return out
+
+
+#: Outside the package, but generating all the same: the scripts a skill
+#: drives and the eval runner (`test_routing_guard.OUTSIDE_DIRS`'s two), by
+#: the module name each is imported as.
+REPO = pathlib.Path(__file__).resolve().parents[2]
+OUTSIDE = {"evals": REPO / "evals", "scripts": REPO / "backend" / "scripts"}
+
+
+def outside_walk() -> Iterator[tuple[str, ast.Module, bool]]:
+    """`_walk` for `OUTSIDE`: every module under `evals/` and
+    `backend/scripts/`, named `evals.<x>` / `scripts.<x>`."""
+    for prefix, root in OUTSIDE.items():
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root).with_suffix("")
+            parts = [prefix, *rel.parts]
+            is_pkg = parts[-1] == "__init__"
+            if is_pkg:
+                parts = parts[:-1]
+            yield ".".join(parts), ast.parse(path.read_text(encoding="utf-8")), is_pkg
+
+
+def _eval_cases_generate() -> bool:
+    """The eval runner's task is `case.task`, data: every generate case (no
+    `schema`) names a task on a generate route, read off the cases themselves."""
+    import sys
+
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from evals import cases as case_mod
+
+    return all(_a_generate_task(case.task, routing.route)
+               for case in case_mod.CASES if case.schema is None)
+
+
+#: The one task that is data rather than code, and what holds it instead.
+DATA_TASKS: dict[tuple[str, str], Callable[[], bool]] = {
+    ("evals.runner", "case.task"): _eval_cases_generate,
+}
+
+
+def _all_walked() -> Iterator[tuple[str, ast.Module, bool]]:
+    yield from _walk()
+    yield from outside_walk()
+
+
+@functools.cache
+def _generate_problems() -> tuple[str, ...]:
+    prov = TaskProvenance({mod: (tree, is_pkg) for mod, tree, is_pkg in _all_walked()},
+                          data_tasks=DATA_TASKS)
+    return tuple(prov.problems())
+
+
+def test_the_generate_walk_reaches_the_scripts_and_the_evals():
+    """Vacuity insurance for `OUTSIDE`: the eval runner's and the ingest
+    script's generations are found and judged."""
+    found = {modname for modname, tree, is_pkg in outside_walk()
+             if generate_calls(tree, modname, is_pkg)}
+    assert found == {"evals.runner", "scripts.ingest_scene"}, found
+
+
+def test_the_eval_runners_data_task_is_held_to_generate_routes():
+    assert _eval_cases_generate()
+
+
+def test_every_generate_names_a_generate_task_and_passes_resolved():
+    found = _generate_problems()
+    assert not found, ("inference.generate must name a generate task -- a literal, or a "
+                       "name every caller hands one -- and pass resolved=:\n  "
+                       + "\n  ".join(found))
+
+
+def test_generate_is_never_handed_around_as_a_value():
+    handed = [p for p in _generate_problems() if "handed around" in p]
+    assert not handed, handed
+
+
+def test_the_walk_finds_the_generate_call_sites():
+    found = sum(len(generate_calls(tree, modname, is_pkg)) for modname, tree, is_pkg in _walk())
+    assert found >= MIN_GENERATE_CALLS, f"only {found} generate calls found; did they move?"
+
+
+def test_the_generate_walk_never_sweeps_in_decide():
+    """`decide` (and H's `run_stages`) is not a generation: neither half
+    counts the other's calls."""
+    for modname, tree, is_pkg in _walk():
+        generating = {id(c) for c in generate_calls(tree, modname, is_pkg)}
+        assert not generating & {id(c) for c in decide_calls(tree, modname, is_pkg)}, modname
+        for call in generate_calls(tree, modname, is_pkg):
+            assert isinstance(call.func, (ast.Attribute, ast.Name))
+            name = call.func.attr if isinstance(call.func, ast.Attribute) else call.func.id
+            assert name == GENERATE, (modname, call.lineno)
+
+
+# ---- planted cases (generate) ----
+_GENERATE_PLANTED_IN = "grimoire.routes.scenes"
+_OPS = "from .. import inference as operations\n"
+
+
+def _planted_generate_problems(src: str, modname: str = _GENERATE_PLANTED_IN) -> list[str]:
+    """`TaskProvenance.problems` over planted source, against the real routes:
+    `chat` generates and `scene-break` decides."""
+    return TaskProvenance({modname: (ast.parse(src), False)}).problems()
+
+
+@pytest.mark.parametrize("src", [
+    # A decide task.
+    _OPS + "operations.generate('scene-break', m, client=c, resolved=r)\n",
+    # No such task.
+    _OPS + "operations.generate('no-such-task', m, client=c, resolved=r)\n",
+    # A name bound at module scope: nothing traces it.
+    _OPS + "TASK = 'chat'\noperations.generate(TASK, m, client=c, resolved=r)\n",
+    # A literal task, but no resolution.
+    _OPS + "operations.generate('chat', m, client=c)\n",
+    # An attribute, not a name: `resolved.task` is whatever was resolved.
+    _OPS + ("def f(resolved):\n"
+            "    return operations.generate(resolved.task, m, client=c, resolved=resolved)\n"
+            "f(r)\n"),
+    # A forwarder one of whose callers passes a decide task.
+    _OPS + ("def f(task):\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"
+            "f('chat')\nf('scene-break')\n"),
+    # A forwarder nobody calls: its task is unseen.
+    _OPS + ("def f(task):\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"),
+    # A forwarder handed around as a value: its callers are unseen.
+    _OPS + ("def f(task):\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"
+            "run(f, 'chat')\n"),
+    # A forwarder whose default is a decide task.
+    _OPS + ("def f(task='scene-break'):\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"
+            "f()\n"),
+    # One branch of a conditional is not a generate task.
+    _OPS + "operations.generate('chat' if x else 'scene-break', m, client=c, resolved=r)\n",
+    # A name binding, aliased.
+    "from ..inference import generate as gen\ngen('scene-break', m, client=c, resolved=r)\n",
+    # The operation handed around as a value.
+    _OPS + "run_in_threadpool(operations.generate, 'chat', m, resolved=r)\n",
+    # Absolute spellings bind the same module.
+    "import grimoire.inference as ops\nops.generate(t, m, client=c, resolved=r)\n",
+    # A lambda parameter shadowing a traced parameter: a different variable.
+    _OPS + ("def f(task='chat'):\n"
+            "    return run(lambda task: operations.generate(task, m, client=c, resolved=r))\n"
+            "f()\n"),
+    # A comprehension variable shadowing a traced parameter.
+    _OPS + ("def f(task='chat'):\n"
+            "    return [operations.generate(task, m, client=c, resolved=r) for task in ts]\n"
+            "f()\n"),
+    # The shadow reaches a forwarder's call site too.
+    _OPS + ("def g(task):\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"
+            "def f(task='chat'):\n"
+            "    return [g(task) for task in ts]\n"
+            "f()\n"),
+    # An attribute that is not the declared data task.
+    _OPS + ("def f(case):\n"
+            "    return operations.generate(case.task, m, client=c, resolved=r)\n"
+            "f(x)\n"),
+])
+def test_the_generate_guard_flags_planted_cases(src):
+    assert _planted_generate_problems(src), src
+
+
+@pytest.mark.parametrize("src", [
+    _OPS + "operations.generate('chat', m, client=c, resolved=r, usage=x.usage)\n",
+    _OPS + "operations.generate('tagline', m, client=c, resolved=r, stream=False)\n",
+    _OPS + "operations.generate('chat' if x else 'continuation', m, client=c, resolved=r)\n",
+    # A forwarder: the literal is at every caller, or the default.
+    _OPS + ("def f(cid, task='chat'):\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"
+            "f(1)\nf(1, 'retry')\nf(1, task='director')\n"),
+    # Two forwarders, and a closure inside the inner one.
+    _OPS + ("def inner(task):\n"
+            "    async def frames():\n"
+            "        async for d in operations.generate(task, m, client=c, resolved=r):\n"
+            "            yield d\n"
+            "    return frames\n"
+            "def outer(task='chat'):\n"
+            "    return inner(task=task)\n"
+            "outer()\nouter(task='replay')\n"),
+    # A lambda that closes over the traced parameter (as `_stream_events`
+    # does) is not a shadow; nor is a comprehension's first `iter`.
+    _OPS + ("def f(task='chat'):\n"
+            "    return run(lambda: operations.generate(task, m, client=c, resolved=r))\n"
+            "f()\n"),
+    _OPS + ("def f(task='chat'):\n"
+            "    return [x for x in operations.generate(task, m, client=c, resolved=r)]\n"
+            "f()\n"),
+    # A local chosen between two literals.
+    _OPS + ("def f(x):\n"
+            "    task = 'continuation' if x else 'chat'\n"
+            "    return operations.generate(task, m, client=c, resolved=r)\n"),
+    # Other objects' `generate`, and `decide`, in a module that binds the operation.
+    _OPS + "image.generate(prompt)\nself.generate()\n",
+    _OPS + "operations.decide('scene-break', items, client=c, resolved=r)\n",
+    # `inference` bound to the STORE's resolver, as routes/common.py binds it.
+    "from ..store.inference import resolve as inference\ninference.generate('scene-break')\n",
+])
+def test_the_generate_guard_passes_planted_cases(src):
+    assert _planted_generate_problems(src) == [], src

@@ -28,6 +28,7 @@ from .. import store
 from ..llm import LLMClient
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
+from ..store.inference import settings as inference_settings
 from . import characters as character_routes
 from . import ledger as ledger_routes
 from . import runs
@@ -733,12 +734,12 @@ def post_campaign_library_description_draft(
     clock confirmation over a campaign nothing had written.
     """
     _campaign_root_or_404(cid)
-    conn, messages = image_draft_prompt(
+    resolved, messages = image_draft_prompt(
         store.campaign_images.image_path(cid, name), "", cid=cid)
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "image-description",
+            client, resolved, messages, "image-description",
             lambda text: {"description": store.image_drafts.parse_output(text)},
             cid=cid)
 
@@ -1053,6 +1054,10 @@ def delete_campaign(cid: str, request: Request):
     # inside the retention window would otherwise inherit this one's drafts --
     # see `RunRegistry.forget_subject`.
     runs.forget_subject(request.app, runs.campaign_subject(cid))
+    # Its "not carried over" notes on `/models` go too, for the same reason: a
+    # replacement under this slug must not be shown a loss that happened here.
+    # Best effort -- the campaign is gone either way.
+    inference_settings.forget_campaign_notes(store.inference_retired.campaign_scope(cid))
     # Nothing is done about this campaign's ledger rows, and `usage_rollup` has
     # no `forget` for the same reason: the ledger is append-only and records
     # money that was actually spent, so a replacement campaign reusing the slug
@@ -2199,7 +2204,7 @@ def post_campaign_voice_anchor_generate(
     overlay so a campaign-local character (which has no world copy) can use it
     too. Preview only — the caller persists with PUT."""
     _campaign_root_or_404(cid)
-    conn = require_inference("voice-anchor", cid).conn
+    resolved = require_inference("voice-anchor", cid)
     root = store.overlay.char_root(cid, char)
     try:
         ch = store.characters.read_character(root, char)
@@ -2213,7 +2218,7 @@ def post_campaign_voice_anchor_generate(
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "voice-anchor",
+            client, resolved, messages, "voice-anchor",
             lambda text: {"voice_anchor": store.voice_anchors.parse_output(text)},
             cid=cid)
 

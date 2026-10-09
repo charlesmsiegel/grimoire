@@ -7,9 +7,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import prompts, store
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient
 from . import character_turns, runs
 from .common import (
+    UsableInference,
     _campaign_root_or_404,
     _record_prompt,
     _require_scene,
@@ -133,7 +134,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction, request: Reques
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = require_inference("continuation", cid).conn
+    resolved = require_inference("continuation", cid)
     # RESERVED BEFORE THE FIRST CAS. Every transition below writes the proposal
     # record, so a 409 raised after one would report that nothing happened over
     # a record that has already moved. The exits that answer without generating
@@ -160,7 +161,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction, request: Reques
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _roll_proposal_run(cid, sid, body, request, client, conn, run)
+        return _roll_proposal_run(cid, sid, body, request, client, resolved, run)
 
 
 def _paused_response_round(cid: str, sid: str, proposal: dict) -> dict | None:
@@ -202,9 +203,10 @@ def _paused_response_round(cid: str, sid: str, proposal: dict) -> dict | None:
 
 
 def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Request,
-                       client: LLMClient, conn: dict, run):
+                       client: LLMClient, resolved: UsableInference, run):
     """The body of an adjudication, once the scene is reserved -- see
     `scenes._chat_run` for why every exit from it is wrapped."""
+    primary = resolved.chain.primary
     # Validation, adjudication and projection share the scene's lock. A paused
     # run released its exclusion key so this request can own it; identity and
     # transcript evidence must still match before even the pure dice resolver.
@@ -292,8 +294,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                 cid, sid, round_record["id"] if round_record is not None else None)
             if round_record is None:
                 messages, breakdown = _continuation_messages(
-                    cid, sid, resolution, model=effective_model(conn),
-                    images=store.post_images.images_for(conn))
+                    cid, sid, resolution, model=primary.model,
+                    images=store.post_images.images_for(primary))
             else:
                 on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
                 block = prompts.render("scene/roll_result.j2", resolution=resolution,
@@ -301,8 +303,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
         elif status == "declined":
             if round_record is None:
                 messages, breakdown = _declined_continuation_messages(
-                    cid, sid, model=effective_model(conn),
-                    images=store.post_images.images_for(conn))
+                    cid, sid, model=primary.model,
+                    images=store.post_images.images_for(primary))
             else:
                 block = prompts.render("scene/roll_declined.j2")
         else:  # defensive: a race moved the record out from under us
@@ -319,7 +321,7 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
     # the lock in this request thread can deadlock.
     if round_record is not None:
         return character_turns.resume_roll(
-            cid, sid, pid, request, client, conn, run, round_record, resolution,
+            cid, sid, pid, request, client, resolved, run, round_record, resolution,
             after_turn=_follow_up_hook(request.app, cid, sid, client),
             appended_block=block)
     outcome = StreamOutcome()
@@ -333,13 +335,13 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
     # question want asking exactly as they do after a send. The hook comes from
     # `scenes` rather than being written again here, so the two callers cannot
     # disagree about what a turn asks for next.
-    stream = _continuation_stream(cid, sid, pid, messages, conn, client,
+    stream = _continuation_stream(cid, sid, pid, messages, resolved, client,
                                   identity=run.scene_identity, outcome=outcome,
                                   after_turn=_follow_up_hook(request.app, cid, sid,
                                                              client))
     _record_prompt(cid, sid, "continuation", breakdown,
-                   model=effective_model(conn), kind=conn["kind"], messages=messages,
-                   conn=conn)
+                   model=primary.model, kind=primary.kind, messages=messages,
+                   conn=resolved.chain)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))

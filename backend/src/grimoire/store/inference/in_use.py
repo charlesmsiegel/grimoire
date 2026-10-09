@@ -4,9 +4,9 @@
 generative roles and their fallbacks, each route's chosen pin, the Embedding
 role, and then each campaign's own roles, fallbacks and chosen campaign-scoped
 pins, by campaign id -- the order a provider's "used by" list has always
-shown (`settings.used_by`, which filters it to one provider). It is read
-through the legacy translation, so a store the migration has not reached
-reports what plays. A selection with a blank model, or one naming a provider
+shown (`settings.used_by`, which filters it to one provider). It is read as
+the resolver reads the settings (`resolve.current_view`: a layout the
+migration has not reached is planned in memory), so it reports what plays. A selection with a blank model, or one naming a provider
 that no longer exists, is still a stored selection and is kept; a pin its
 route does not choose is not one; a campaign that cannot be read names nothing.
 
@@ -28,8 +28,8 @@ long the library has been played.
 
 **What it costs, and what is memoized.** Only a campaign's frontmatter parse
 (`campaign_meta`), on the stat signature of its `campaign.md`, in a pool of its
-own. The translation, the connection lookup and the format marker come from
-other files and are read fresh on every call -- they are in memory and cheap,
+own. The planner's view, the connection lookup and the format marker come
+from other files and are read fresh on every call -- they are in memory and cheap,
 and a memo of anything derived from them would go stale when a provider is
 deleted or a legacy connection's model is edited, neither of which touches a
 `campaign.md`. So a walk is one parse per `campaign.md` that changed since the
@@ -52,7 +52,7 @@ from .. import config, pricing, routing, statcache
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..frontmatter import parse_frontmatter
-from . import capabilities, facts, providers, resolve, translate
+from . import capabilities, facts, providers, resolve
 
 #: `campaign_meta`'s memo, apart from `statcache`'s shared pool: a walk touches
 #: every campaign, and the shared FIFO is what other sweeps rely on staying
@@ -70,7 +70,7 @@ _UNREADABLE_CAMPAIGN = (campaign_paths.CampaignNotFound, OSError, UnicodeDecodeE
 
 class Use(NamedTuple):
     """One stored selection: `provider` (as stored, trimmed) and `model` (as
-    the translation reads it, possibly ""), what kind of slot holds it, the
+    the resolver reads it, possibly ""), what kind of slot holds it, the
     role or route key (`embedding` for the Embedding role), and where."""
 
     provider: str
@@ -138,19 +138,18 @@ def _uses(own: dict, scope: str, cid: str, routes: list[routing.Route]) -> list[
     return out
 
 
-def _selections(cfg: dict, lookup: translate.Lookup) -> list[Use]:
-    out = _uses(translate.global_view(cfg, lookup), "global", "", list(routing.ROUTES))
-    provider, model = translate.embedding_role(cfg)
+def _selections(cfg: dict) -> list[Use]:
+    out = _uses(resolve.current_view(cfg).cfg, "global", "", list(routing.ROUTES))
+    provider, model = resolve.embedding_role(cfg)
     if provider:
         out.append(Use(provider, model, "role", "embedding", "global", ""))
-    current = keys.is_current(cfg)
     scoped = [r for r in routing.ROUTES if r.campaign_scoped]
     for cid in campaign_paths.campaign_ids():
         try:
             meta = campaign_meta(cid)
         except _UNREADABLE_CAMPAIGN:
             continue
-        own = translate.campaign_view(meta, lookup, current=current)
+        own = resolve.current_view(cfg, meta, cid=cid).meta
         out += _uses(own, "campaign", cid, scoped)
     return out
 
@@ -158,7 +157,7 @@ def _selections(cfg: dict, lookup: translate.Lookup) -> list[Use]:
 def selections() -> list[Use]:
     """Every stored selection that names a provider, in `used_by`'s order
     (see the module docstring). Raises what `config.read_config` raises."""
-    return _selections(config.read_config(), resolve.connection_lookup())
+    return _selections(config.read_config())
 
 
 def _where(use: Use) -> dict:
@@ -182,7 +181,7 @@ def unpriced() -> list[dict]:
     rates = pricing.provider_rates()
     found: dict[tuple[str, str], dict | None] = {}
     native: dict[tuple[str, str], bool] = {}
-    for use in _selections(config.read_config(), lookup):
+    for use in _selections(config.read_config()):
         raw = lookup(use.provider)
         if raw is None:
             continue

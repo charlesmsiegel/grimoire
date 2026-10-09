@@ -4,6 +4,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire.store import failsoft, paths
+from grimoire.store import inference_keys as keys
 
 
 @pytest.fixture(autouse=True)
@@ -80,11 +81,12 @@ def test_rejects_file_target(monkeypatch, tmp_path):
 def test_config_follows_data_dir(monkeypatch, tmp_path):
     isolate(monkeypatch, tmp_path)
     store.set_data_dir(str(tmp_path / "campaign-a"))
-    store.write_config(active_connection_id="claude")
+    primary = keys.role_key("primary", "provider")
+    store.write_config(**{primary: "claude"})
 
     store.set_data_dir(str(tmp_path / "campaign-b"))
     # A fresh store at the new location gets defaults, not campaign-a's value.
-    assert store.read_config()["active_connection_id"] != "claude"
+    assert store.read_config().get(primary, "") != "claude"
     assert (tmp_path / "campaign-b" / "config.md").exists()
 
 

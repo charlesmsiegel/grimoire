@@ -1,34 +1,36 @@
 """What a task resolved to: the attempts it runs, and how they were chosen.
 
 Built by `resolve.resolve` (and, for the Embedding role, `resolve.embedding`)
-and nowhere else. Until the facade takes attempts directly (spec §13), each
-`Attempt` carries its lowered connection dict -- the shape `LLMClient` reads
-today -- so `conn` is what a call site hands the facade.
-From slice C that dict carries the fallback too: the fallback attempt's own
-lowered dict, under `llm.FALLBACK_KEY` (`resolve.FALLBACK_KEY`), which is what
-the facade sends when that primary fails (spec §5.2, §5.4, §5.5). There is no
-other fallback on the shipped client.
+and nowhere else. Each `Attempt` carries what it IS (its provider's kind, URL,
+rev, billing and preset), what is known of its model (`facts`), what it can do
+(`capabilities`, each a `capabilities.Cap` with its source) -- and, from
+those, `missing` / `fallback_missing`: what the route needs that an attempt is
+known not to have. The seam refuses on `missing`. A non-empty
+`fallback_missing` drops the fallback from the chain (spec §5.3): it stays in
+`attempts`, so a surface can say why, but it never rides the primary, so it is
+never sent.
 
-Slice B adds what each attempt IS (its provider's kind, URL, rev, billing and
-preset), what is known of its model (`facts`), and what it can do
-(`capabilities`, each a `capabilities.Cap` with its source) -- and, from those,
-`missing` / `fallback_missing`: what the route needs that an attempt is known
-not to have. The seam refuses on `missing`. A non-empty `fallback_missing`
-drops the fallback from the chain (spec §5.3): it stays in `attempts`, so a
-surface can say why, but it is never attached to the primary, so it is never
-sent.
-
-Slice F adds what a decide resolution needs: each attempt's `decision_mode`
-(which backend would answer it). Slice H serves a primary that cannot
-generate natively, so `conn` is always the primary's.
+Each attempt is sent as its `target`, a `wire.Target` the resolver builds
+directly (slice I), and a resolution's `chain` is what a call site hands the
+facade: the primary's target, and the fallback's when it `rides` (spec §5.2,
+§5.4, §5.5). Slice F adds each attempt's `decision_mode` (which backend would
+answer it on a decide resolution). There is no connection dict: slice I
+deleted the lowering (Task 10), and `test_lowering_retired_guard.py` keeps it
+deleted.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ... import wire
 from .capabilities import Cap
 from .cascade import Selection
+
+#: The target of an attempt built by hand, as tests build them -- its twin is
+#: the empty `controls`. Every attempt the resolver builds carries its own
+#: (`resolve._target`).
+UNBUILT = wire.Target(provider_id="", kind="", model="")
 
 
 @dataclass(frozen=True)
@@ -40,11 +42,6 @@ class Attempt:
     #: The sampler preset the attempt runs with ("" for provider defaults). On
     #: a fallback, the primary's when the primary's came from a route scope.
     preset_id: str
-    #: The attempt lowered to today's connection dict (`sampling` and, where
-    #: the catalog says, `model_params` and `model_features` attached; at
-    #: format 2, the model's `vision`, `prefill` and `post_process` facts in
-    #: place of the connection's legacy fields -- `resolve.with_facts`).
-    conn: dict
     #: The connection's adapter (`kind`).
     provider_kind: str = ""
     #: Where requests go: the connection's own URL, else its preset's.
@@ -61,7 +58,7 @@ class Attempt:
     #: Every capability name -> `Cap(value, source, error)` (`capabilities.resolve_caps`;
     #: `error` is set only on a failed test, which reads `unknown`).
     capabilities: dict[str, Cap] = field(default_factory=dict)
-    #: Effective controls (spec 8): `llm_sampling.effective(conn)` -- what each
+    #: Effective controls (spec 8): `llm_sampling.effective(target)` -- what each
     #: preset control sends on this attempt and why. Empty only on an attempt
     #: built by hand.
     controls: dict = field(default_factory=dict)
@@ -74,8 +71,13 @@ class Attempt:
     #: generate and not known unable to decide natively, "structured" when it
     #: can generate (whatever its `decide_native`), "" when it can do neither.
     #: "" on a generate resolution. The capability answer only -- the backend
-    #: stamps the mode a call actually used on a copy of its account block.
+    #: stamps the mode a call actually used on a new target's account.
     decision_mode: str = ""
+    #: The attempt as an adapter sends it (`resolve._target`): the provider's
+    #: record at this model and preset, its model's stated behaviour laid on,
+    #: and the resolution's account stamp and structured flag. `UNBUILT` only
+    #: on an attempt built by hand.
+    target: wire.Target = UNBUILT
 
 
 @dataclass(frozen=True)
@@ -84,9 +86,6 @@ class ResolvedInference:
     operation: str
     #: The route's key, or "" for a task no route claims.
     route: str
-    #: The key the route's legacy settings live under (`routing.legacy_key`),
-    #: which is what a refusal names; "" for no route.
-    legacy_route: str
     #: The role whose slot supplied the selection ("" for a pin, or nothing).
     role: str
     #: "route" (a pin), "role", or "" when nothing was selected.
@@ -104,13 +103,8 @@ class ResolvedInference:
     #: same reads the attempts were built from (None when it chose nothing).
     #: What an override is compared against to say whether it moved the call.
     standing: Selection | None = None
-    #: Whether the layout this was resolved from is the current one (roles and
-    #: route choices) rather than the legacy keys read as it. The per-call
-    #: override means different things in the two (spec 5.6), so the seam that
-    #: refuses on it asks this rather than re-reading `config.md`.
-    current: bool = False
     #: The sampler preset the STANDING selection would have run with, when the
-    #: call carried an override preset (either layout); None otherwise (it
+    #: call carried an override preset; None otherwise (it
     #: is only ever compared against that preset).
     standing_preset: str | None = None
     #: The capabilities the route needs -- its operation's own and its
@@ -119,8 +113,8 @@ class ResolvedInference:
     #: name rule's `no` (a guess, `resolve._GUESSES`). What the seam refuses on.
     missing: tuple[str, ...] = ()
     #: The same check on the fallback attempt. Never refused on: a fallback
-    #: with anything here is reported, and not attached to the primary's
-    #: connection (`llm.FALLBACK_KEY`), so the facade does not send it.
+    #: with anything here is reported, and does not ride (`rides`), so the
+    #: facade does not send it.
     fallback_missing: tuple[str, ...] = ()
     #: Why the chosen fallback is left out of `attempts` though it exists: it
     #: cannot send at all (`resolve.problem`: no key, no base URL), or it is on
@@ -135,21 +129,36 @@ class ResolvedInference:
     #: a model, an endpoint, and nothing in `missing`; None otherwise, and
     #: always None for a generative resolution.
     space_id: str | None = None
+    #: Whether the fallback attempt rides the facade behind the primary
+    #: (`chain`'s `fallback`): always on a generate resolution whose fallback
+    #: is not known incapable; on a decide one only where both attempts are
+    #: structured (`resolve._rides`) -- elsewhere `inference.stages` sends the
+    #: fallback as a stage of its own. False with no fallback.
+    rides: bool = False
+    #: Set only on a resolution of a format-1 store (`config.md` below format
+    #: 2, read through the planner, `legacy_plan.Overlay.legacy`): the legacy
+    #: route the task's route was stored under ("" for none), which the
+    #: format-1 `missing_key` sentence names a pin by (`resolve.unusable`).
+    #: None at format 2, and on an attempt built by hand.
+    legacy_route: str | None = None
 
     @property
-    def conn(self) -> dict | None:
-        """The connection dict the facade is sent: the primary attempt's.
+    def chain(self) -> wire.Chain | None:
+        """What the facade is sent: the primary attempt's target, and the
+        fallback attempt's when it `rides` -- so a fallback known incapable,
+        or one a decide resolution sends as a stage of its own, is not on it.
         None when nothing resolved."""
-        return self.attempts[0].conn if self.attempts else None
+        if not self.attempts:
+            return None
+        rides = self.rides and len(self.attempts) > 1
+        return wire.Chain(self.attempts[0].target, self.attempts[1].target if rides else None)
 
     @property
-    def fallback(self) -> dict | None:
-        """The fallback attempt's connection dict (`llm.fallback_sampling`
-        applied, `llm._same_route` honoured), or None when there is none. What
-        the facade sends behind the primary, unless `fallback_missing` dropped
-        it (spec 5.3) -- or what `inference.stages` sends as a stage of its own
-        where either attempt is native."""
-        return self.attempts[1].conn if len(self.attempts) > 1 else None
+    def legacy(self) -> bool:
+        """Whether this is a format-1 store's resolution (`legacy_route` set):
+        the two places such a store still answers as it always has -- a
+        reroll naming a provider alone, and the `missing_key` sentence."""
+        return self.legacy_route is not None
 
     @property
     def decision_mode(self) -> str | None:

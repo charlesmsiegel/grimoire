@@ -13,9 +13,12 @@ def test_llm_error_detail_defaults_to_kind():
     assert LLMError("network").detail == "network"
 
 
-from grimoire import llm  # noqa: E402 - deliberate late import; see the lines above
+import dataclasses  # noqa: E402 - deliberate late import; see the lines above
+
+from grimoire import llm, wire  # noqa: E402 - deliberate late import; see the lines above
 from grimoire.anthropic import AnthropicClient  # noqa: E402 - deliberate late import
 from grimoire.llm import LLMClient  # noqa: E402 - deliberate late import; see the lines above
+from grimoire.store.inference import resolve  # noqa: E402 - deliberate late import
 
 
 class FakeProvider:
@@ -28,8 +31,17 @@ class FakeProvider:
         yield self.tag
 
 
-def _conn(kind, **fields):
-    return {"kind": kind, "model": "m", "api_key": "k", "base_url": "", "post_process": "none", **fields}
+def _target(kind: str = "openrouter", *, model: str = "m", api_key: str = "",
+            **fields) -> wire.Target:
+    """One attempt, as the facade is sent it: `kind` on `model`, named `name`
+    (else its `id`), asking for the model it sends."""
+    return wire.Target(provider_id=fields.pop("id", ""), kind=kind, model=model,
+                       provider_name=fields.pop("name", ""), api_key=api_key,
+                       requested_model=model, **fields)
+
+
+def _conn(kind, **fields) -> wire.Target:
+    return _target(kind, **{"api_key": "k", "post_process": "none", **fields})
 
 
 async def test_dispatches_to_openrouter():
@@ -53,10 +65,14 @@ async def test_dispatches_to_claude():
 
 
 async def test_claude_missing_model_defaults_to_opus():
+    """An unset Claude model is the one the path runs -- a rule of the
+    attempt's model (`llm.effective_model`, which the resolver's targets are
+    built by), so the target the facade is sent already names it."""
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
-    conn = _conn("claude", model="")
-    [c async for c in client.stream([], conn)]
+    model = resolve.provider_target({"kind": "claude", "model": ""}).model
+    assert model == "opus" == llm.CLAUDE_DEFAULT_MODEL
+    [c async for c in client.stream([], _conn("claude", model=model))]
     assert cl.calls == [(("opus",), {"usage": None})]
 
 
@@ -82,7 +98,7 @@ async def test_openai_compatible_none_post_process_is_not_strict():
 async def test_missing_kind_defaults_to_openrouter():
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
-    conn = {"model": "or-model", "api_key": "sk-or-x"}  # defensive: no kind key at all
+    conn = _target("", model="or-model", api_key="sk-or-x")  # defensive: no kind at all
     assert [c async for c in client.stream([], conn)] == ["or"]
 
 
@@ -107,9 +123,9 @@ async def test_anthropic_gets_the_controls_effective_decides_capped_by_the_catal
     conn = _conn("anthropic", model="claude-test-1",
                  model_features={"max_tokens": 8192, "adaptive_thinking": True,
                                  "enabled_thinking": False, "effort": ["low", "medium", "high"]},
-                 sampling={"preset_id": "p", "preset_name": "Terse", "scope": "connection",
-                           "params": {"temperature": 0.7, "stop": ["END"],
-                                      "reasoning_effort": "low"}})
+                 sampling=wire.Sampling(preset_id="p", preset_name="Terse", scope="connection",
+                                        params={"temperature": 0.7, "stop": ["END"],
+                                                "reasoning_effort": "low"}))
     [c async for c in client.stream([], conn)]
     effective = an.calls[0][1]["effective"]
     assert effective == {"max_tokens": 8192, "stop_sequences": ["END"],
@@ -147,6 +163,7 @@ from tests.llm_fakes import (  # noqa: E402 - see the late imports above
     RecordingProvider,
     RefusingProvider,
     SequencedProvider,
+    carrying,
 )
 
 
@@ -201,7 +218,7 @@ async def test_check_probes_the_connections_own_provider():
     client = _asking_client(openrouter=op, claude=cl, openai_compatible=oc, anthropic=an)
 
     await client.check(_conn("openrouter", api_key="sk-or-x"))
-    await client.check(_conn("claude", model=""))
+    await client.check(_conn("claude", model=llm.CLAUDE_DEFAULT_MODEL))
     await client.check(_conn("openai_compatible", base_url="https://x/v1", api_key="k"))
     await client.check(_conn("anthropic", api_key="test-key",
                              base_url="https://proxy.example.com"))
@@ -219,12 +236,18 @@ async def test_a_failing_check_is_not_retried_or_fallen_back_to_another_provider
     op = RecordingProvider(probe_error=LLMError("rate_limit", "slow down"))
     oc = RecordingProvider()
     client = LLMClient(openrouter=op, claude=RecordingProvider(), openai_compatible=oc,
-                       retries=3, fallback=lambda: _conn("openai_compatible", id="fb"))
+                       retries=3)
 
     with pytest.raises(LLMError) as exc:
         await client.check(_conn("openrouter", id="or"))
 
     assert exc.value.kind == "rate_limit"
+    assert len(op.probed) == 1 and oc.probed == []
+    # No fallback can be within reach: `check` takes one target, and a chain
+    # carrying one is refused before anything is probed.
+    with pytest.raises(TypeError):
+        await client.check(carrying(_conn("openrouter", id="or"),
+                                    _conn("openai_compatible", id="fb")))
     assert len(op.probed) == 1 and oc.probed == []
 
 
@@ -580,9 +603,9 @@ class HalfwayProvider:
         raise LLMError(self.kind, "died mid-stream")
 
 
-def _retry_client(provider, retries=2, fallback=None, timeout=0):
+def _retry_client(provider, retries=2, timeout=0):
     return LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
-                     timeout=timeout, retries=retries, fallback=fallback)
+                     timeout=timeout, retries=retries)
 
 
 @pytest.fixture(autouse=True)
@@ -798,8 +821,9 @@ async def test_a_window_we_will_not_wait_out_still_takes_the_fallback():
             yield f"from {model}"
 
     Recorder.models = []
-    client = _retry_client(Recorder(), retries=5, fallback=lambda: _route("b", "backup"))
-    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
+    client = _retry_client(Recorder(), retries=5)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
     assert Recorder.models == ["primary", "backup"]
 
 
@@ -835,14 +859,15 @@ class RouteRecorder:
         yield f"from {model}"
 
 
-def _route(id, model):
-    return {"id": id, "name": f"conn-{id}", "kind": "openrouter", "model": model, "api_key": "k"}
+def _route(id, model) -> wire.Target:
+    return _target("openrouter", id=id, name=f"conn-{id}", model=model, api_key="k")
 
 
 async def test_the_fallback_answers_once_the_primary_is_exhausted():
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=1, fallback=lambda: _route("b", "backup"))
-    chunks = [c async for c in client.stream([], _route("a", "primary"))]
+    client = _retry_client(provider, retries=1)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
+    chunks = [c async for c in client.stream([], chain)]
     assert chunks == ["from backup"]
     # Two attempts on the primary (first + one retry), then exactly one on the
     # fallback -- #144's "tried once after the primary's retries are exhausted".
@@ -856,19 +881,21 @@ async def test_complete_retries_overrides_only_the_primary_count():
     once -- and without it `complete` makes exactly the requests it did."""
     both = {"primary", "backup"}
     provider = RouteRecorder(failing=both)
-    client = _retry_client(provider, retries=3, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=3)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with pytest.raises(LLMError):
-        await client.complete([], _route("a", "primary"), retries=1)
+        await client.complete([], chain, retries=1)
     assert provider.models == ["primary", "primary", "backup"]
 
     provider.models.clear()
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with pytest.raises(LLMError):
-        await client.complete([], _route("a", "primary"), retries=0)
+        await client.complete([], chain, retries=0)
     assert provider.models == ["primary", "backup"]
 
     provider.models.clear()
     with pytest.raises(LLMError):
-        await client.complete([], _route("a", "primary"))
+        await client.complete([], carrying(_route("a", "primary"), _route("b", "backup")))
     assert provider.models == ["primary"] * 4 + ["backup"]
 
 
@@ -876,8 +903,9 @@ async def test_the_fallback_is_tried_for_non_retryable_failures_too():
     """A repeat cannot fix a bad key, but a different connection can — that is
     the whole condition someone configures a fallback for."""
     provider = RouteRecorder(failing={"primary"}, kind="auth")
-    client = _retry_client(provider, retries=3, fallback=lambda: _route("b", "backup"))
-    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
+    client = _retry_client(provider, retries=3)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
     assert provider.models == ["primary", "backup"]  # no wasted retries
 
 
@@ -886,9 +914,10 @@ async def test_when_both_routes_fail_the_message_names_both():
     sends someone off to debug an endpoint they were not using; reporting only
     the primary's leaves them fixing it and still getting nothing."""
     provider = RouteRecorder(failing={"primary", "backup"})
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=0)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], _route("a", "primary"))]
+        [c async for c in client.stream([], chain)]
     assert "primary is unavailable" in exc.value.detail
     assert "backup is unavailable" in exc.value.detail
     assert provider.models == ["primary", "backup"]
@@ -905,9 +934,10 @@ async def test_the_kind_is_the_primary_connections():
         yield  # unreachable; it is what makes this an async generator
 
     provider.stream = stream
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=0)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], _route("a", "primary"))]
+        [c async for c in client.stream([], chain)]
     assert exc.value.kind == "rate_limit"
 
 
@@ -921,7 +951,7 @@ async def test_a_single_route_failure_is_re_raised_untouched():
             raise original
             yield  # unreachable; it is what makes this an async generator
 
-    client = _retry_client(Raiser(), retries=0, fallback=lambda: None)
+    client = _retry_client(Raiser(), retries=0)
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _route("a", "primary"))]
     assert exc.value is original
@@ -934,7 +964,7 @@ async def test_a_retried_route_does_not_report_a_fallback_nobody_configured():
     question — and answering it that way told users with no fallback that their
     fallback had failed."""
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=2, fallback=lambda: None)
+    client = _retry_client(provider, retries=2)
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _route("a", "primary"))]
     assert "fallback" not in exc.value.detail
@@ -952,15 +982,16 @@ async def test_the_primarys_retry_after_survives_a_failed_fallback():
 
     provider = RouteRecorder(failing={"primary", "backup"})
     provider.stream = stream
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=0)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], _route("a", "primary"))]
+        [c async for c in client.stream([], chain)]
     assert (exc.value.kind, exc.value.retry_after) == ("rate_limit", 90.0)
 
 
 async def test_no_fallback_configured_leaves_one_route():
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=0, fallback=lambda: None)
+    client = _retry_client(provider, retries=0)
     with pytest.raises(LLMError):
         [c async for c in client.stream([], _route("a", "primary"))]
     assert provider.models == ["primary"]
@@ -970,36 +1001,28 @@ async def test_a_fallback_pointing_at_the_active_connection_is_dropped():
     """Otherwise it is a third attempt wearing a different name, and it doubles
     how long the user waits to hear that the provider is down."""
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("a", "primary"))
+    client = _retry_client(provider, retries=0)
+    chain = carrying(_route("a", "primary"), _route("a", "primary"))
     with pytest.raises(LLMError):
-        [c async for c in client.stream([], _route("a", "primary"))]
+        [c async for c in client.stream([], chain)]
     assert provider.models == ["primary"]
-
-
-async def test_a_resolver_that_raises_means_no_fallback():
-    """A broken fallback must not be able to fail a generation the primary
-    would have served."""
-    def boom():
-        raise OSError("store unreadable")
-
-    provider = RouteRecorder(failing=set())
-    client = _retry_client(provider, retries=0, fallback=boom)
-    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from primary"]
 
 
 async def test_the_fallback_is_never_reached_when_the_primary_answers():
     provider = RouteRecorder(failing=set())
-    client = _retry_client(provider, retries=2, fallback=lambda: _route("b", "backup"))
-    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from primary"]
+    client = _retry_client(provider, retries=2)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from primary"]
     assert provider.models == ["primary"]
 
 
 async def test_a_fallback_is_not_taken_after_text_has_been_sent():
     provider = HalfwayProvider()
-    client = _retry_client(provider, retries=2, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=2)
     seen = []
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with pytest.raises(LLMError):
-        async for chunk in client.stream([], _route("a", "primary")):
+        async for chunk in client.stream([], chain):
             seen.append(chunk)
     assert seen == ["half a sentence"] and provider.attempts == 1
 
@@ -1010,9 +1033,10 @@ async def test_falling_back_is_logged(caplog):
     surface; per-response reporting is not solved here."""
     import logging
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=0)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
     with caplog.at_level(logging.WARNING, logger="grimoire.llm"):
-        [c async for c in client.stream([], _route("a", "primary"))]
+        [c async for c in client.stream([], chain)]
     assert "falling back" in caplog.text
     assert "conn-b" in caplog.text and "rate_limit" in caplog.text
 
@@ -1200,9 +1224,10 @@ async def test_complete_carries_the_usage_holder_too():
 
 async def test_the_facade_stamps_the_connection_that_actually_answered():
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=0)
     usage = {}
-    assert [c async for c in client.stream([], _route("a", "primary"), usage=usage)] == [
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
+    assert [c async for c in client.stream([], chain, usage=usage)] == [
         "from backup"]
     assert usage["model"] == "backup", "the ledger must name the route that served"
     assert usage["connection"] == "conn-b"
@@ -1213,7 +1238,8 @@ async def test_a_claude_route_is_stamped_with_the_model_it_will_really_run():
     provider = UsageProvider()
     client = _retry_client(provider, retries=0)
     usage = {}
-    [c async for c in client.stream([], _conn("claude", model=""), usage=usage)]
+    [c async for c in client.stream([], _conn("claude", model=llm.CLAUDE_DEFAULT_MODEL),
+                                    usage=usage)]
     assert usage["model"] == llm.CLAUDE_DEFAULT_MODEL
 
 
@@ -1277,8 +1303,8 @@ async def test_a_client_asked_for_no_accounting_passes_none_down():
     assert provider.seen == [None]
 
 
-def _claude_route():
-    return {"id": "b", "name": "conn-b", "kind": "claude", "model": "backup"}
+def _claude_route() -> wire.Target:
+    return _target("claude", id="b", name="conn-b", model="backup")
 
 
 async def test_a_multimodal_call_skips_a_fallback_that_cannot_carry_it():
@@ -1289,11 +1315,11 @@ async def test_a_multimodal_call_skips_a_fallback_that_cannot_carry_it():
     reader was then told "and the fallback failed too" about a connection they
     had not chosen, instead of the real error from the one they had."""
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=0, fallback=_claude_route)
+    client = _retry_client(provider, retries=0)
     parts = [{"role": "user", "content": [{"type": "text", "text": "what is this?"},
                                           {"type": "image_url", "image_url": {"url": "data:x"}}]}]
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream(parts, _route("a", "primary"))]
+        [c async for c in client.stream(parts, carrying(_route("a", "primary"), _claude_route()))]
 
     assert provider.models == ["primary"]              # the fallback was never asked
     assert "fallback failed too" not in exc.value.detail
@@ -1303,17 +1329,18 @@ async def test_an_ordinary_call_still_takes_that_same_fallback():
     """The pruning is about the message, not about the connection: plain text
     is exactly what a Claude fallback is there to serve."""
     provider = RouteRecorder(failing={"primary"})
-    client = _retry_client(provider, retries=0, fallback=_claude_route)
+    client = _retry_client(provider, retries=0)
     text = [{"role": "user", "content": "what is this?"}]
-    assert [c async for c in client.stream(text, _route("a", "primary"))] == ["from backup"]
+    chain = carrying(_route("a", "primary"), _claude_route())
+    assert [c async for c in client.stream(text, chain)] == ["from backup"]
     assert provider.models == ["primary", "backup"]
 
 
 # ---- sampler presets: split per attempt, fallback inheritance, refusals ----
 
-def _sampled(conn, params, scope="connection", name="Warm"):
-    return {**conn, "sampling": {"preset_id": name.lower(), "preset_name": name,
-                                 "scope": scope, "params": params}}
+def _sampled(conn: wire.Target, params, scope="connection", name="Warm") -> wire.Target:
+    return dataclasses.replace(conn, sampling=wire.Sampling(
+        preset_id=name.lower(), preset_name=name, scope=scope, params=params))
 
 
 async def test_no_preset_passes_no_sampling_kwarg():
@@ -1349,10 +1376,10 @@ async def test_a_standard_endpoint_is_sent_only_the_openai_params():
 
 async def test_a_route_scoped_preset_follows_the_route_onto_the_fallback():
     provider = RefusingProvider(failing={"primary"})
-    client = _retry_client(provider, retries=0,
-                           fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    client = _retry_client(provider, retries=0)
     conn = _sampled(_route("a", "primary"), {"temperature": 0.2}, scope="global")
-    assert [c async for c in client.stream([], conn)] == ["from backup"]
+    chain = carrying(conn, _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
     assert provider.calls[1] == ("backup", {"usage": provider.calls[1][1]["usage"],
                                             "sampling": {"temperature": 0.2}})
 
@@ -1360,19 +1387,19 @@ async def test_a_route_scoped_preset_follows_the_route_onto_the_fallback():
 async def test_a_route_cleared_preset_clears_the_fallbacks_too():
     """The sentinel keeps a role-play cap off absorb; a 429 must not undo it."""
     provider = RefusingProvider(failing={"primary"})
-    client = _retry_client(provider, retries=0,
-                           fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    client = _retry_client(provider, retries=0)
     conn = _sampled(_route("a", "primary"), {}, scope="campaign")
-    [c async for c in client.stream([], conn)]
+    chain = carrying(conn, _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    [c async for c in client.stream([], chain)]
     assert "sampling" not in provider.calls[1][1]
 
 
 async def test_a_connection_level_preset_stays_with_its_connection():
     provider = RefusingProvider(failing={"primary"})
-    client = _retry_client(provider, retries=0,
-                           fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    client = _retry_client(provider, retries=0)
     conn = _sampled(_route("a", "primary"), {"temperature": 0.2})
-    [c async for c in client.stream([], conn)]
+    chain = carrying(conn, _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    [c async for c in client.stream([], chain)]
     assert provider.calls[1][1]["sampling"] == {"max_tokens": 300}
 
 
@@ -1381,11 +1408,11 @@ async def test_a_refused_preset_is_not_handed_to_the_fallback(status):
     seen = []
     provider = RefusingProvider(failing={"primary"}, status=status)
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
-                       timeout=0, retries=2, fallback=lambda: _route("b", "backup"),
-                       observer=lambda conn, err: seen.append((conn["id"], err)))
+                       timeout=0, retries=2,
+                       observer=lambda conn, err: seen.append((conn.provider_id, err)))
     conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], conn)]
+        [c async for c in client.stream([], carrying(conn, _route("b", "backup")))]
     assert [m for m, _ in provider.calls] == ["primary"]
     assert "Warm" in exc.value.detail and "temperature" in exc.value.detail
     assert "fallback connection was not tried" in exc.value.detail
@@ -1398,23 +1425,27 @@ async def test_a_refused_preset_is_not_handed_to_the_fallback(status):
 
 async def test_a_400_with_no_preset_still_falls_back():
     provider = RefusingProvider(failing={"primary"}, status=400)
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
-    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
+    client = _retry_client(provider, retries=0)
+    chain = carrying(_route("a", "primary"), _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
 
 
 async def test_a_500_with_a_preset_still_falls_back():
     provider = RefusingProvider(failing={"primary"}, status=500)
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    client = _retry_client(provider, retries=0)
     conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
-    assert [c async for c in client.stream([], conn)] == ["from backup"]
+    chain = carrying(conn, _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
 
 
 async def test_a_400_whose_params_were_all_dropped_still_falls_back():
     """Nothing was sent, so nothing in the preset can be what was refused."""
     provider = RefusingProvider(failing={"primary"}, status=400)
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
-    conn = {**_sampled(_route("a", "primary"), {"min_p": 0.1}), "model_params": ["temperature"]}
-    assert [c async for c in client.stream([], conn)] == ["from backup"]
+    client = _retry_client(provider, retries=0)
+    conn = dataclasses.replace(_sampled(_route("a", "primary"), {"min_p": 0.1}),
+                               model_params=("temperature",))
+    chain = carrying(conn, _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
 
 
 
@@ -1425,39 +1456,40 @@ async def test_a_400_that_names_no_sent_param_still_falls_back():
     provider = RefusingProvider(failing={"primary"}, status=400,
                              why="maximum context length is 8192 tokens")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
-                       timeout=0, retries=0, fallback=lambda: _route("b", "backup"),
-                       observer=lambda conn, err: seen.append((conn["id"], err)))
+                       timeout=0, retries=0,
+                       observer=lambda conn, err: seen.append((conn.provider_id, err)))
     conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
-    assert [c async for c in client.stream([], conn)] == ["from backup"]
+    chain = carrying(conn, _route("b", "backup"))
+    assert [c async for c in client.stream([], chain)] == ["from backup"]
     assert seen[0][0] == "a" and seen[0][1] is not None
 
 
 async def test_a_refusal_spelled_with_hyphens_is_still_recognized():
     provider = RefusingProvider(failing={"primary"}, status=400, why="unknown field: repeat_penalty")
-    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
-    conn = {**_sampled(_conn("openai_compatible", id="a", model="primary", base_url="http://x"),
-                       {"repetition_penalty": 1.1}), "sampler_support": "extended"}
+    client = _retry_client(provider, retries=0)
+    conn = dataclasses.replace(
+        _sampled(_conn("openai_compatible", id="a", model="primary", base_url="http://x"),
+                 {"repetition_penalty": 1.1}), sampler_support="extended")
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], conn)]
+        [c async for c in client.stream([], carrying(conn, _route("b", "backup")))]
     assert "fallback connection was not tried" in exc.value.detail
 
 
 async def test_a_fallback_that_refuses_the_preset_reports_both_failures():
     provider = RefusingProvider(failing={"primary", "backup"}, status=400)
-    client = _retry_client(provider, retries=0,
-                           fallback=lambda: _sampled(_route("b", "backup"), {"temperature": 2}))
+    client = _retry_client(provider, retries=0)
     conn = _route("a", "primary")   # the primary sent nothing, so it falls back
+    chain = carrying(conn, _sampled(_route("b", "backup"), {"temperature": 2}))
     with pytest.raises(LLMError) as exc:
-        [c async for c in client.stream([], conn)]
+        [c async for c in client.stream([], chain)]
     assert "and the fallback failed too" in exc.value.detail
     assert "not tried" not in exc.value.detail
 
 
-@pytest.mark.parametrize("conn,expected", [
-    ({"kind": "openrouter"}, False), ({"kind": "openrouter", "prefill": True}, True),
-    ({"kind": "claude", "prefill": True}, True), ({"kind": "openrouter", "prefill": "true"}, False)])
-def test_prefill_capable_reads_only_the_flag(conn, expected):
-    assert llm.prefill_capable(conn) is expected
+@pytest.mark.parametrize("kind,prefill", [
+    ("openrouter", False), ("openrouter", True), ("claude", True), ("claude", False)])
+def test_prefill_capable_reads_only_the_flag(kind, prefill):
+    assert llm.prefill_capable(_conn(kind, prefill=prefill)) is prefill
 
 
 # ---- `single`: exactly one attempt, for the model test call (Task 9) ----
@@ -1480,18 +1512,15 @@ async def test_single_does_not_retry_a_rate_limit():
 
 async def test_single_never_calls_a_configured_fallback():
     provider = RouteRecorder(failing={"primary"}, kind="auth")
-    asked = []
-
-    def fallback():
-        asked.append(True)
-        return _route("b", "backup")
-
-    client = _retry_client(provider, retries=2, fallback=fallback)
+    client = _retry_client(provider, retries=2)
     with pytest.raises(LLMError) as exc:
         await client.single([], _route("a", "primary"))
     assert provider.models == ["primary"]
-    assert asked == []   # not even resolved
     assert "fallback" not in exc.value.detail
+    # A chain carrying a fallback is refused unsent: `single` takes one target.
+    with pytest.raises(TypeError):
+        await client.single([], carrying(_route("a", "primary"), _route("b", "backup")))
+    assert provider.models == ["primary"]
 
 
 async def test_single_sends_no_degrade_sibling():
@@ -1540,10 +1569,9 @@ async def test_single_hands_anthropic_its_effective_body():
     an = FakeProvider("an")
     client = LLMClient(openrouter=FakeProvider("or"), claude=FakeProvider("cl"),
                        openai_compatible=FakeProvider("oc"), anthropic=an,
-                       retries=3, fallback=lambda: _route("b", "backup"))
+                       retries=3)
     conn = _conn("anthropic", model="claude-test-1",
-                 sampling={"preset_id": "", "preset_name": "", "scope": "none",
-                           "params": {"max_tokens": 64}})
+                 sampling=wire.Sampling(params={"max_tokens": 64}))
     assert await client.single([], conn) == "an"
     assert an.calls[0][1]["effective"] == {"max_tokens": 64}
 

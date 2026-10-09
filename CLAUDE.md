@@ -244,8 +244,8 @@ around that single sentence.
 row carries `provider_id` (the provider's store id; `provider` stays the
 adapter kind), `requested_model` (only when the answer named a dated snapshot),
 `operation`, `role`, `preset` and `billing`. Nobody passes them at a call site:
-`llm._stamp` copies them off the resolved conn of the attempt that served, a
-fallback included, and `usage.Meter.done` files what the holder carries.
+`llm._stamp` copies them off the target (`wire.Target`) of the attempt that
+served, a fallback included, and `usage.Meter.done` files what the holder carries.
 `billing` (`metered` or `subscription`) is a label, and only `cost_basis` moves
 a figure between columns — **a billed price beats the subscription tag**, stays
 `cost_usd` and counts against a budget. A row with no reported price is priced
@@ -549,22 +549,42 @@ would answer neither question.
   Python and Node floors up front, and `test_install_scripts.py` holds those
   floors to `requires-python` and `engines.node`. A store this build creates
   is **born at the current model-settings format**: the first write of a
-  missing `config.md` stamps the format marker (`inference_keys.born_current`),
+  missing `config.md` stamps the format marker (`config.birth_fields()`),
   so a fresh install is never migrated and no safety archive is taken of an
   empty library. `GRIMOIRE_INFERENCE_AUTOMIGRATE=0`, which `tests/conftest.py`
-  sets, turns off that birth stamp and the background migration together; a
-  test that wants either stamps the marker or calls `migrate.ensure` itself.
-  So the older play suites run at format 1, and `test_format2_play.py` is the
-  turn path (a chat turn and a reroll) at the format a fresh install ships.
+  sets, turns off the background migration only -- the birth stamp is always
+  written, and `config.birth_fields()` is its one spelling. A test that wants
+  the migration calls `migrate.ensure` itself, and a test that needs a format-1
+  library calls `tests.inference_fixtures.legacy_store()` before anything reads
+  the store (a `config.md` that exists without the marker stays legacy).
+  The suite is **born an upgraded default library at format 2**:
+  `tests/conftest.py` sets `GRIMOIRE_TEST_BIRTH=upgraded-default` at import,
+  which adds the default Primary to the birth stamp, so every suite plays at
+  the format a fresh install ships. A test about the product's own birth (the
+  format and retirement markers alone) takes `@pytest.mark.product_birth`; one
+  about the legacy layout takes the `legacy_client` fixture or calls
+  `legacy_store()`.
+  `test_format2_play.py` is the focused run of the turn path (a chat turn and
+  a reroll) at that format.
 - **Model settings moved to a new layout, once, in the background**
   (`store/inference/migrate.py`, started by `main.start` at startup and after a
   data-dir move). Its first write is a full archive named
-  `pre-inference-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`), and it is the
-  one archive retention leaves alone: `GET /backups` lists it beside the
-  ordinary series, but `backups.sweep` counts and deletes only the ordinary
-  series, so it stays until a person removes it. Until the switch lands the
+  `pre-inference-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`), and retention
+  leaves it alone: `GET /backups` lists it beside the ordinary series, but
+  `backups.sweep` counts and deletes only the ordinary series, so it stays
+  until a person removes it. The same run then **retires** the legacy layout
+  (`store/inference/retire.py`, run by `migrate._retire` after the marker, and
+  again on any later start that finds something left): it persists the
+  planner's derived reasoning presets, repoints and deletes the legacy keys and
+  stamps `inference_retired`, failing closed on any file it cannot read, and
+  when that deletes or replaces a stored value it first takes a second
+  never-pruned full archive, `pre-retirement-grimoire-<stamp>.zip`
+  (`backups.RETIRE_PREFIX`) -- unless this same run took the
+  `pre-inference-` one. Until the switch lands the
   new Models settings answer 409 `not_migrated` (play carries on through the
-  legacy translation); a store a newer build switched refuses every
+  planner, in memory -- `store/inference/legacy_plan.py`, the one reader of the
+  legacy layout, which `test_legacy_reader_guard.py` holds to being the only
+  one); a store a newer build switched refuses every
   model-settings write with 409 `newer_format`. Backup, marker, resume, busy
   campaigns and older builds are all in `docs/store-guarantees.md`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
@@ -785,24 +805,43 @@ would answer neither question.
   What the store promises is in `docs/store-guarantees.md`; the design is
   `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
 - **Adding an LLM call site?** Resolve it with
-  `require_inference(<task>, cid)` and name the task the call meters under;
-  what it returns carries the connection dict `LLMClient` takes as `.conn`
-  (read that, until the facade stops needing a connection at all).
+  `require_inference(<task>, cid)` and name the task the call meters under.
+  **A generation is `operations.generate(<task>, messages, client=…,
+  resolved=…, usage=m.usage)`** inside that task's `store.usage.meter`
+  (`stream=False` for the joined reply; the operation module bound as
+  `from .. import inference as operations`). It refuses a resolution for
+  another task or operation before any client call, so a call that generates
+  under a sibling task of the route it resolved -- a director turn on the
+  send's `chat` -- says so with `operations.for_task(resolved, <task>)`.
+  `client.stream`/`complete` are spelled only in `inference.py`, and
+  `test_routing_guard.py` fails one anywhere else. What the seam returns
+  carries the `wire.Chain` the facade is sent as `.chain` (`generate` hands it
+  on), and the facade dispatches each of its typed `wire.Target`s through the
+  adapter registry (`adapters.py`); read the display facts (`.kind`, `.model`,
+  `.provider_id`) off `resolved.chain.primary`. There is no connection dict:
+  the lowering is deleted, and `test_lowering_retired_guard.py` keeps it so.
   `store/routing.py` maps the task to a route (each one declares its
   `operation`, its `default_role` and what it `requires`), and
   `store/inference/` resolves the route to a role (Primary, Fast, Decision,
-  Embedding) or a pinned model. Which settings it reads is decided once per
-  resolution by `config.md`'s format marker. A store at format 2 reads the
+  Embedding) or a pinned model. Every store is resolved as format 2: the
   roles and their fallbacks, each route's choice, pin and preset, a campaign's
   own overrides of both, and the facts of the chosen model -- `vision`,
-  `prefill` and `post_process`, which the lowering lays over the connection
-  dict in place of the connection's legacy fields. A store the migration has
-  not reached is read through `translate`, the legacy keys seen as that same
-  layout, so a call site never asks which one it is on. The fallback rides on
-  the resolved conn: the primary's dict carries the fallback attempt, lowered
-  (wearing the route's preset when the route has one), under `FALLBACK_KEY`,
-  and the facade sends that one. A fallback *known* unable to do what the route needs is reported
-  (`fallback_missing`) and never attached, so the facade never sends it -- nor
+  `prefill` and `post_process`, which each attempt's target is built with in
+  place of the connection's legacy fields. A layout the migration has
+  not reached is read through the planner, in memory (`resolve._overlay`, the
+  one call of `legacy_plan.overlay`): the legacy keys seen as that same
+  layout, a legacy GLM effort as a derived reasoning preset, and nothing
+  written, so a call site never asks which one it is on. Two answers stay
+  format 1's on a format-1 store, both read off the overlay rather than a
+  legacy field: a reroll naming a provider alone runs that provider's own
+  model and preset, and the `missing_key` sentence keeps its old wording
+  (`ResolvedInference.legacy`). The derived presets stay in memory until
+  retirement (`store/inference/retire.py`) writes them and marks each scope
+  retired; a retired scope reads nothing of the planner. The fallback rides on
+  the resolved chain: `chain.fallback` is the fallback attempt's target
+  (wearing the route's preset when the route has one), and the facade sends
+  that one. A fallback *known* unable to do what the route needs is reported
+  (`fallback_missing`) and never rides, so the facade never sends it -- nor
   one that names the primary's own connection (a retry, which the retry budget
   covers -- except behind a Decision model that cannot generate, where it is a
   decide stage of its own), nor one that cannot carry the call's images. A reroll's connection override goes through `override_inference`, and
@@ -846,10 +885,10 @@ would answer neither question.
   `summary` route, drafted only once a YES verdict is written, so a read
   between the two writes sees a YES with no title and the inspector shows the
   proposal untitled until its next refresh. Whether an attempt is also sent
-  its provider's structured mode is decided per attempt (`STRUCTURED_KEY`,
-  present on decide resolutions only); the schema is in the prompt either
-  way, and the mode is filed per call on a copied account block, never by
-  mutating the resolution's. An attempt whose provider refuses the structured
+  its provider's structured mode is decided per attempt
+  (`wire.Target.structured`, set on a decide resolution's targets only); the
+  schema is in the prompt either way, and the mode is filed per call on a new
+  target's account (`with_account`), never by mutating the resolution's. An attempt whose provider refuses the structured
   field is sent once more without the mode once every route has failed -- a
   refusing primary after its fallback failed too, a refusing fallback after
   the primary failed -- once per attempt, as its own metered call
@@ -889,8 +928,8 @@ would answer neither question.
   `SAME_PROVIDER` even behind a native primary: that is a second send of
   the call that failed, whatever stage it sits in (#144).
   `decide_native` is metered per item (`store.usage.meter`, opened in
-  `inference._native` with `decision_mode` stamped on a copy of the stage's
-  account block), at most `NATIVE_CONCURRENCY` in flight inside one
+  `inference._native` with `decision_mode` stamped on a new copy of the
+  stage target's account), at most `NATIVE_CONCURRENCY` in flight inside one
   `asyncio.TaskGroup`, so an unexpected exception or a cancel leaves no
   request the group owns running (an `around` that detaches its call, as
   `_bounded_call` does, abandons it to unwind on its own). It sends no

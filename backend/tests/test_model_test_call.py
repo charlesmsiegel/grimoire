@@ -31,15 +31,15 @@ import httpx
 import pytest
 
 import grimoire.store as store
-from grimoire import catalog, decisions, embeddings, routes
+from grimoire import catalog, decisions, embeddings, routes, wire
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
-from grimoire.store.inference import facts, probes
-from grimoire.store.inference import resolve as inference
-from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter
+from grimoire.store.inference import facts, probes, resolve
+from tests import wire_kit
+from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
 
 REFUSAL = ("This test sends a request to the provider and may cost money — "
            "confirm to run it.")
@@ -48,7 +48,7 @@ MODEL = "vendor/model-a"
 
 def _connection(client, **fields) -> str:
     body = {"kind": "openrouter", "name": "Realm Router", "api_key": "sk-or-fake-0001",
-            "model": MODEL, **fields}
+            **fields}
     r = client.post("/api/llm-connections", json=body)
     assert r.status_code == 200, r.text
     return r.json()["id"]
@@ -270,8 +270,7 @@ def _unreported(client) -> str:
     """A provider that does not report its own price, the only kind the
     user's rates may price (an OpenRouter row is the catalog's or unknown)."""
     return _connection(client, kind="openai_compatible", name="Saltmarch Local",
-                       base_url="https://saltmarch.example/v1", api_key="sk-fake-local",
-                       model=MODEL)
+                       base_url="https://saltmarch.example/v1", api_key="sk-fake-local")
 
 
 def test_estimate_from_rates_sums_the_probes_and_prices_images_as_tokens():
@@ -417,12 +416,36 @@ def test_without_confirm_the_test_is_refused_and_nothing_is_sent(client, confirm
     assert client.get("/api/runs").json()["runs"] == []
 
 
+@pytest.mark.parametrize(("kind", "model"), [("openrouter", MODEL), ("claude", "")])
+def test_an_unconfirmed_test_builds_no_target(client, monkeypatch, kind, model):
+    """CLAUDE.md's spend rule, held literally: the route refuses the request
+    without its yes "before anything is built or sent". The plan's default
+    model is the record's (`facts.model_of`, a pure rule), so not even the
+    probe's target is built before the refusal."""
+    built: list[str] = []
+    for name in ("provider_target", "target_for"):
+        real = getattr(resolve, name)
+        monkeypatch.setattr(resolve, name,
+                            lambda *a, _real=real, _name=name, **kw: built.append(_name)
+                            or _real(*a, **kw))
+    _use(client, FakeOpenRouter(["ok"]))
+    # A Claude record names no model: the plan's default is the one it runs.
+    conn = _connection(client, kind=kind, name=f"Realm {kind}")
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": model, "capabilities": ["generate"]})
+    assert r.status_code == 400 and r.json()["detail"] == REFUSAL
+    assert built == []
+    # The control: a confirmed test does build its probe's target there.
+    _run(client, conn, ["generate"], model=model)
+    assert "target_for" in built
+
+
 @pytest.mark.parametrize("path", ["test", "test/preview"])
 def test_a_capability_the_preset_rules_out_is_refused_before_sending(client, path):
     fake = FakeOpenRouter(["ok"])
     _use(client, fake)
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
 
     r = client.post(f"/api/llm-connections/{conn}/{path}",
                     json={"model": "claude-model-x", "capabilities": ["generate", "embed"],
@@ -466,6 +489,35 @@ def test_a_connection_that_cannot_send_is_refused_before_sending(client):
     assert fake.calls == 0
 
 
+class _StrictRecorder:
+    """An OpenAI-compatible client that answers every probe and records the
+    `strict` flag each was sent with -- the one probe field a model's facts
+    put on the wire (`post_process`)."""
+
+    def __init__(self) -> None:
+        self.strict: list[bool] = []
+
+    async def stream(self, messages, model, key, base_url, strict=False, usage=None, **kw):
+        self.strict.append(strict)
+        yield "ok"
+
+
+@pytest.mark.parametrize("stated", ["strict", "none"])
+def test_a_probe_is_sent_its_models_post_processing(client, stated):
+    """The probe target carries the model's facts (`resolve.facts_for`): a
+    model whose facts say strict post-processing is probed strict, as a turn
+    on it is sent."""
+    assert store.inference_keys.is_current(store.read_config())
+    conn = _connection(client, kind="openai_compatible", name="Saltmarch Local",
+                       base_url="http://localhost:1234/v1", api_key="sk-fake-local")
+    facts.set_stated(conn, MODEL, post_process=stated)
+    recorder = _StrictRecorder()
+    _use(client, LLMClient(openai_compatible=recorder, retries=0))  # type: ignore[arg-type]
+    got = _run(client, conn, ["generate"])
+    assert got["result"]["results"]["generate"]["ok"] is True
+    assert recorder.strict == [stated == "strict"]
+
+
 # ---- a confirmed test ----------------------------------------------------------
 
 def test_a_confirmed_test_meters_one_row_per_probe_and_records_the_verdicts(
@@ -487,8 +539,8 @@ def test_a_confirmed_test_meters_one_row_per_probe_and_records_the_verdicts(
     # under test and the 64-token cap, nothing else from a preset.
     assert fake.calls == 2
     for request in fake.requests:
-        assert request["conn"]["model"] == MODEL
-        assert request["conn"]["sampling"]["params"] == {"max_tokens": 64}
+        assert request["target"].model == MODEL
+        assert request["target"].sampling.params == {"max_tokens": 64}
     assert fake.requests[0]["messages"] == probes.messages("generate")
     # The embed probe went to the endpoint the Embedding path resolves for an
     # OpenRouter provider, with the model under test and the provider's key.
@@ -584,9 +636,29 @@ def _sse(*chunks: dict) -> str:
     return "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
 
 
-def _wire_client(client, handler, **llm) -> list[httpx.Request]:
-    """A REAL facade, with retries and a fallback configured, whose
-    OpenAI-compatible adapter talks to a `MockTransport`."""
+class _Offering(LLMClient):
+    """A REAL facade that hands every chain it is sent a fallback (`offer`,
+    as the call's own: `wire.Chain.fallback`), so a route that generates
+    through `stream` or `complete` has one within reach -- and only the
+    route's choice of `single`, whose one target can carry no fallback (a
+    chain is refused), keeps it unused."""
+
+    def __init__(self, offer: wire.Target | None, **llm) -> None:
+        super().__init__(**llm)
+        self._offer = offer
+
+    def stream(self, messages, chain, usage=None, **kwargs):
+        return super().stream(messages, carrying(chain, self._offer), usage, **kwargs)
+
+    async def complete(self, messages, chain, usage=None, **kwargs):
+        return await super().complete(messages, carrying(chain, self._offer), usage, **kwargs)
+
+
+def _wire_client(client, handler, *, offer: wire.Target | None = None,
+                 **llm) -> list[httpx.Request]:
+    """A REAL facade, with retries configured and -- given `offer` -- a
+    fallback handed every call, whose OpenAI-compatible adapter talks to a
+    `MockTransport`."""
     seen: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
@@ -594,26 +666,25 @@ def _wire_client(client, handler, **llm) -> list[httpx.Request]:
         return handler(request)
 
     adapter = OpenAICompatibleClient(http=httpx.AsyncClient(transport=httpx.MockTransport(record)))
-    facade = LLMClient(openai_compatible=adapter, **llm)
+    facade = _Offering(offer, openai_compatible=adapter, **llm)
     client.app.dependency_overrides[routes.get_llm] = lambda: facade
     return seen
 
 
 def _endpoint(client, name: str, host: str) -> str:
     return _connection(client, kind="openai_compatible", name=name,
-                       base_url=f"https://{host}/v1", api_key="sk-fake-endpoint",
-                       model=MODEL)
+                       base_url=f"https://{host}/v1", api_key="sk-fake-endpoint")
 
 
 def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, monkeypatch):
     from grimoire import llm as llm_mod
     monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
     conn = _endpoint(client, "Mara Endpoint", "primary.example")
-    backup = store.llm_connections.read_connection_raw(
-        _endpoint(client, "Winifred Endpoint", "backup.example"))
+    backup = config_routes._probe_target(store.llm_connections.read_connection_raw(
+        _endpoint(client, "Winifred Endpoint", "backup.example")), MODEL)
     seen = _wire_client(
         client, lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
-        retries=3, fallback=lambda: backup)
+        retries=3, offer=backup)
 
     run = _run(client, conn, ["generate"])
 
@@ -626,15 +697,14 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     assert rows[0]["task"] == "model-test"
     assert rows[0].get("attempts", 1) == 1   # the ledger omits the default
 
-    # The control: the same facade, sent the same probe through `stream`,
-    # DOES retry and fall back -- so the one request above is the test call's
-    # doing, not this setup's.
+    # The control: the same facade, sent the same probe through `stream` --
+    # with the same fallback offered -- DOES retry and fall back, so the one
+    # request above is the test call's doing, not this setup's.
     seen.clear()
     facade = client.app.dependency_overrides[routes.get_llm]()
-    probe_conn = inference.lower(store.llm_connections.read_connection_raw(conn),
-                                 probes.sampling(), MODEL)
+    probe = config_routes._probe_target(store.llm_connections.read_connection_raw(conn), MODEL)
     with pytest.raises(LLMError):
-        asyncio.run(facade.complete(probes.messages("generate"), probe_conn))
+        asyncio.run(facade.complete(probes.messages("generate"), wire.Chain(probe)))
     assert [r.url.host for r in seen] == ["primary.example"] * 4 + ["backup.example"]
 
 
@@ -805,7 +875,7 @@ def test_a_truncated_anthropic_stream_is_a_failed_probe_not_an_accepted_one(clie
     probe did not succeed: it is reported as a failure, and -- a malformed
     stream being no verdict on the model -- nothing is filed."""
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
     seen: list[httpx.Request] = []
     start = {"type": "message_start", "message": {
         "id": "msg_1", "model": "claude-model-x", "role": "assistant", "content": [],
@@ -840,7 +910,7 @@ def _anthropic_wire(client, handler) -> tuple[str, list[httpx.Request]]:
     """An Anthropic connection and a REAL facade whose Anthropic adapter talks
     to a `MockTransport` that records."""
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
     seen: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
@@ -1120,11 +1190,11 @@ def test_the_gateway_fake_answers_single_like_complete():
     import asyncio
     fake = FakeLLM([["o", "k"]], error=None)
     usage: dict = {}
-    assert asyncio.run(fake.single([], {"kind": "openrouter", "model": "m"}, usage)) == "ok"
+    assert asyncio.run(fake.single([], wire_kit.target(model="m"), usage)) == "ok"
     assert usage["attempts"] == 1
     failing = FakeLLM([["x"]], error=LLMError("auth", "no"))
     with pytest.raises(LLMError):
-        asyncio.run(failing.single([], {"kind": "openrouter", "model": "m"}))
+        asyncio.run(failing.single([], wire_kit.target(model="m")))
 
 
 def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
@@ -1150,7 +1220,7 @@ def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
 
 def test_a_model_test_row_carries_its_probe_operation(client, monkeypatch):
     """M9: each probe's row names the operation it probed, and the billing the
-    lowered connection carries -- through `llm_usage.with_account`, so the
+    lowered connection carries -- on a target stamped with it, so the
     connection the run holds is never written to."""
     _use(client, FakeOpenRouter(["ok"]))
     conn = _connection(client)
@@ -1175,8 +1245,7 @@ def _openai(client) -> str:
     """The OpenAI preset: the one `openai_compatible` provider with a native
     endpoint, and one that does not report its own price (rates may price it)."""
     return _connection(client, kind="openai_compatible", name="Realm OpenAI",
-                       base_url="https://api.openai.com/v1", api_key="sk-fake-openai",
-                       model=MODEL)
+                       base_url="https://api.openai.com/v1", api_key="sk-fake-openai")
 
 
 def test_the_decide_native_probe_has_one_predicate_and_no_price():
@@ -1203,7 +1272,7 @@ def test_the_decide_native_probe_sends_one_native_request(client):
     item, sent, retries = fake.native_requests[0]
     assert item == probes.PROBE_ITEM
     assert retries == 0
-    assert sent["model"] == MODEL
+    assert sent.model == MODEL
     assert fake.calls == 0   # nothing generated
     rows = _rows()
     assert [(r["task"], r["operation"], r["decision_mode"]) for r in rows] == [
@@ -1273,7 +1342,7 @@ def test_the_decide_native_probe_is_refused_on_presets_that_cannot(client, path)
     fake = FakeLLM([["unused"]], decisions=[_native_answer()])
     _use(client, fake)
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
 
     r = client.post(f"/api/llm-connections/{conn}/{path}",
                     json={"model": "claude-model-x", "capabilities": ["decide_native"],

@@ -13,20 +13,23 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from tests import draft_runs as drafts
-from tests import review_runs
+from tests import inference_fixtures, review_runs, wire_kit
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
 
-def _unfenced_stream(*args, **kw):
+def _unfenced_stream(cid, sid, messages, conn, *args, **kw):
     """`_chat_stream` with the publish fence and the outcome box switched off.
 
     Both are keyword-only and required on the real function so a route being
     migrated to detached runs cannot forget them; this test predates the fence
     and means the old behaviour. `test_routes._unfenced_stream` carries the
     full reasoning -- not imported from there because importing that module
-    runs the largest suite in the tree at collection time.
+    runs the largest suite in the tree at collection time. The connection is
+    handed on as a resolution of the turn's task, as there.
     """
-    return routes.streaming._chat_stream(*args, identity=None, outcome=None, **kw)
+    return routes.streaming._chat_stream(cid, sid, messages,
+                                         wire_kit.resolution(conn, kw.get("task", "chat")),
+                                         *args, identity=None, outcome=None, **kw)
 
 
 USAGE = {"prompt_tokens": 900, "completion_tokens": 40, "cost_usd": 0.0042,
@@ -225,7 +228,7 @@ async def test_a_cancelled_turn_is_recorded_as_aborted_not_as_a_failure(client, 
     _, cid = _campaign(client)
     sid = _scene(client, cid)
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "hi"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "hi"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter([""]))
     frames = resp.body_iterator
     assert await frames.__anext__() == ": heartbeat\n\n"
@@ -685,6 +688,7 @@ def test_the_scene_list_says_whether_a_models_own_rates_can_be_written(client):
     store at the current model-settings format (`PUT .../facts` answers 409
     `not_migrated` before it, `newer_format` after), so the page is told."""
     from grimoire.store import inference_keys
+    inference_fixtures.legacy_store()
     _, cid = _campaign(client)
 
     def flags() -> tuple:

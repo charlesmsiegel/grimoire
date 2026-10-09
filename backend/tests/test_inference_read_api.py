@@ -13,9 +13,10 @@ from __future__ import annotations
 import pytest
 
 from grimoire import llm_sampling
-from grimoire.store import config, llm_connections, sampler_presets
+from grimoire.store import llm_connections, sampler_presets
 from grimoire.store.inference import facts
 from grimoire.store.inference import resolve as inf
+from tests.inference_fixtures import primary
 
 ZAI = "https://api.z.ai/api/paas/v4"
 
@@ -27,7 +28,9 @@ BARE = {"id": "vendor/bare-1"}
 
 def _connection(client, kind="openrouter", rows=(), **fields) -> str:
     body = {"kind": kind, "name": "Saltmarch", "api_key": "sk-fake-key", **fields}
-    cid = client.post("/api/llm-connections", json=body).json()["id"]
+    got = client.post("/api/llm-connections", json=body)
+    assert got.status_code == 200, got.text
+    cid = got.json()["id"]
     if rows:
         rev = llm_connections.read_connection_raw(cid)["rev"]
         llm_connections.set_cached_models(cid, list(rows), rev)
@@ -218,11 +221,10 @@ def _preview(client, **body):
 def test_the_preview_is_what_an_attempt_resolved_for_it_carries(client):
     rows = [{"id": "vendor/winifred-2", "outputs": ["text"],
              "params": ["temperature", "reasoning"]}]
-    cid = _connection(client, rows=rows, model="vendor/winifred-2")
+    cid = _connection(client, rows=rows)
     pid = sampler_presets.create_preset("Warm", {"temperature": 0.8, "top_k": 30,
                                                  "reasoning_effort": "low"})
-    llm_connections.update_connection(cid, sampler_preset=pid)
-    config.write_config(active_connection_id=cid)
+    primary(client, "vendor/winifred-2", provider=cid, api_key="", preset=pid)
 
     attempt = inf.resolve("chat").attempts[0]
     assert (attempt.provider_id, attempt.model, attempt.preset_id) == (
@@ -239,6 +241,20 @@ def test_the_preview_is_what_an_attempt_resolved_for_it_carries(client):
 
 
 def test_the_preview_of_another_model_is_that_models(client):
+    cid = _connection(client, rows=[
+        {"id": "vendor/mara-7b", "params": ["temperature"]},
+        {"id": "vendor/seraphine-1", "params": ["top_p"]}])
+    pid = sampler_presets.create_preset("Cool", {"temperature": 0.2})
+    one = _preview(client, preset_id=pid, provider=cid, model="vendor/mara-7b").json()
+    other = _preview(client, preset_id=pid, provider=cid, model="vendor/seraphine-1").json()
+    assert one["controls"]["temperature"]["state"] == "supported"
+    assert other["controls"]["temperature"]["state"] == "unsupported"
+
+
+def test_a_preview_naming_no_model_is_the_legacy_providers_own(legacy_client):
+    """An empty `model` previews the provider's own model: a format-1 provider
+    names one (at format 2 a provider has none, and the caller names it)."""
+    client = legacy_client
     cid = _connection(client, model="vendor/mara-7b", rows=[
         {"id": "vendor/mara-7b", "params": ["temperature"]},
         {"id": "vendor/seraphine-1", "params": ["top_p"]}])
@@ -252,7 +268,7 @@ def test_the_preview_of_another_model_is_that_models(client):
 
 
 def test_the_preview_with_no_preset_requests_nothing(client):
-    cid = _connection(client, model="vendor/mara-7b")
+    cid = _connection(client)
     body = _preview(client, preset_id="", provider=cid, model="vendor/mara-7b").json()
     assert body["requested"] == {} and body["effective"] == {}
     assert set(body["controls"]) == set(llm_sampling.CONTROLS)
@@ -290,10 +306,9 @@ def test_a_decide_preview_is_what_a_native_attempt_carries(client):
     decide answers what the resolver stores on that attempt -- every control
     n/a -- so the Decision card and a decide route never disagree."""
     rows = [{"id": "vendor/decider", "outputs": ["decisions"]}]
-    cid = _connection(client, rows=rows, model="vendor/decider")
+    cid = _connection(client, rows=rows)
     pid = sampler_presets.create_preset("Warm", {"temperature": 0.8})
-    llm_connections.update_connection(cid, sampler_preset=pid)
-    config.write_config(active_connection_id=cid)
+    primary(client, "vendor/decider", provider=cid, api_key="", preset=pid)
 
     attempt = inf.resolve("scene-break", operation="decide").attempts[0]
     assert attempt.decision_mode == "native"

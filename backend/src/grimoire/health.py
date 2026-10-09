@@ -37,6 +37,7 @@ true: nothing has been observed yet.
 
 from __future__ import annotations
 
+from . import wire
 from .store import paths
 
 #: No observation yet — the app has just started, or nothing has used this
@@ -47,12 +48,26 @@ OK = "ok"
 ERROR = "error"
 
 
+#: This module's bookkeeping on a record, never in a response body: the
+#: revision it is filed under, and the model the call that earned it ran.
+_BOOKKEEPING = frozenset({"rev", "model"})
+
+#: The verdicts a model's own `prefill` fact can have earned: a success, and a
+#: refusal of the request itself (a trailing assistant message the model does
+#: not take is a 400, `bad_response`). Every other kind -- a missing or
+#: rejected key, a rate limit, the network, a timeout, a missing dependency --
+#: is about the provider, whatever model the call ran, and a facts write
+#: never clears it (`forget_model`).
+_MODEL_VERDICTS = frozenset({"", "bad_response"})
+
+
 def _public(status: dict) -> dict:
-    """One record as callers see it: a copy, minus the revision it is filed
-    under. The rev is this module's bookkeeping — the answer to "is this
-    verdict still about the connection you are looking at" — and putting it in
-    a response body would invite a client to start reasoning about it."""
-    return {k: v for k, v in status.items() if k != "rev"}
+    """One record as callers see it: a copy, minus its bookkeeping (the
+    revision it is filed under and the model it was earned on). That is this
+    module's -- the answer to "is this verdict still about the connection you
+    are looking at" -- and putting it in a response body would invite a
+    client to start reasoning about it."""
+    return {k: v for k, v in status.items() if k not in _BOOKKEEPING}
 
 
 class ProviderHealth:
@@ -66,28 +81,29 @@ class ProviderHealth:
     def __init__(self) -> None:
         self._by_id: dict[str, dict] = {}
 
-    def record(self, conn: dict, error=None) -> dict:
-        """File one outcome for `conn` and return the status it produces.
+    def record(self, target: wire.Target, error=None) -> dict:
+        """File one outcome for `target` -- the attempt's `wire.Target` --
+        and return the status it produces.
 
-        A connection with no id is dropped rather than filed under `""`: the
-        facade is handed connection *dicts*, and a caller that builds one by
-        hand (tests, mostly) would otherwise collide with every other
-        anonymous connection in one shared slot.
+        A connection with no id is dropped rather than filed under `""`: a
+        caller that builds an attempt by hand (tests, mostly) would otherwise
+        collide with every other anonymous connection in one shared slot.
 
         What is filed describes the connection **as it was when the call ran**,
         so it is filed under that connection's revision — see `status`, which
         will not hand a verdict back for a revision the connection has since
-        moved past. The facade is given whole connection dicts and those carry
-        `rev` already, so this costs a key rather than a mechanism.
+        moved past. Every attempt carries `rev` already, so this costs a key
+        rather than a mechanism.
         """
-        cid = conn.get("id") or ""
+        cid, rev = target.provider_id, target.rev
         if not cid:
             return self.status("")
         status = {"state": OK if error is None else ERROR,
                   "kind": "" if error is None else getattr(error, "kind", "bad_response"),
                   "detail": "" if error is None else getattr(error, "detail", str(error)),
                   "at": paths.now_iso(),
-                  "rev": conn.get("rev", "")}
+                  "rev": rev,
+                  "model": target.model}
         self._by_id[cid] = status
         return _public(status)
 
@@ -131,3 +147,21 @@ class ProviderHealth:
         did not take.
         """
         self._by_id.pop(cid, None)
+
+    def forget_model(self, cid: str, model: str) -> bool:
+        """Drop what is known about `cid` only when it is about `model`: a
+        verdict the last call earned ON that model, and of a kind a model's
+        own facts can change (`_MODEL_VERDICTS`). Returns whether it dropped
+        one.
+
+        Called when a facts write flips `model`'s `prefill` (user ruling
+        2026-10-09): unticking "Keep writing" must not leave the dot red over
+        a refusal it caused, but a verdict about another model, or one that
+        is about the provider whatever the model (`auth`, `missing_key`, ...),
+        is still true, and stays."""
+        known = self._by_id.get(cid)
+        if (known is None or known.get("model", "") != model
+                or known.get("kind", "") not in _MODEL_VERDICTS):
+            return False
+        del self._by_id[cid]
+        return True

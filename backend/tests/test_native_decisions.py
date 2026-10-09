@@ -11,14 +11,15 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 
-from grimoire import decisions, llm, llm_usage, openai_compatible
+from grimoire import decisions, llm, llm_usage, openai_compatible, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate, Score
-from grimoire.llm import FALLBACK_KEY, LLMClient
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import DECISIONS_URL, OpenRouterClient, decision_body, decision_result
@@ -52,9 +53,16 @@ ITEM = Item(CONTEXT, (OVER, SPEAKER, TENSION))
 SPEAKER_ONLY = Item(CONTEXT, (SPEAKER,))
 ONE_OPTION = Choice("speaker", "Who speaks next?", (MARA,), allow_none=True)
 
-CONN = {"id": "or-main", "kind": "openrouter", "model": MODEL, "api_key": KEY}
-OPENAI_CONN = {"id": "oa-main", "kind": "openai_compatible", "model": OPENAI_MODEL,
-               "api_key": OPENAI_KEY, "base_url": OPENAI_BASE}
+CONN = wire.Target(provider_id="or-main", kind="openrouter", model=MODEL,
+                   requested_model=MODEL, api_key=KEY)
+#: `CONN`, by the name the fake's tests use: the target the facade sends.
+TARGET = CONN
+OPENAI_CONN = wire.Target(provider_id="oa-main", kind="openai_compatible",
+                          model=OPENAI_MODEL, requested_model=OPENAI_MODEL,
+                          api_key=OPENAI_KEY, base_url=OPENAI_BASE)
+#: A sampler preset, which a native decision is never sent.
+WARM = wire.Sampling(preset_id="warm", preset_name="Warm", scope="connection",
+                     params={"temperature": 0.9, "max_tokens": 300})
 
 
 def body(name: str) -> dict:
@@ -507,7 +515,7 @@ async def test_a_read_timeout_is_a_timeout_and_not_retried():
 async def test_the_adapter_refuses_an_empty_key_unsent():
     wire = Wire((200, body("answered")))
     with pytest.raises(LLMError) as exc:
-        await facade(wire).decide_native(ITEM, {**CONN, "api_key": ""})
+        await facade(wire).decide_native(ITEM, replace(CONN, api_key=""))
     assert exc.value.kind == "missing_key" and wire.requests == []
 
 
@@ -598,7 +606,7 @@ async def test_an_openai_envelope_that_answers_nothing_still_files_its_usage():
 
 
 async def test_openai_decide_refuses_a_missing_key_or_base_url_unsent():
-    for conn in ({**OPENAI_CONN, "api_key": ""}, {**OPENAI_CONN, "base_url": ""}):
+    for conn in (replace(OPENAI_CONN, api_key=""), replace(OPENAI_CONN, base_url="")):
         wire = Wire((200, openai_body("answered")))
         with pytest.raises(LLMError) as exc:
             await openai_facade(wire).decide_native(ITEM, conn)
@@ -633,17 +641,15 @@ async def test_facade_decide_native_dispatches_openai_compatible():
     wire = Wire((429, {"error": {"message": "slow down", "type": "requests"}}),
                 (200, openai_body("answered")))
     holder: dict = {}
-    conn = {**OPENAI_CONN, "sampling": {"preset_id": "warm", "preset_name": "Warm",
-                                        "params": {"temperature": 0.9}},
-            FALLBACK_KEY: {**CONN}}
+    conn = replace(OPENAI_CONN, sampling=WARM)
     seen: list = []
     result = await openai_facade(wire, observer=lambda c, e: seen.append(e)).decide_native(
         ITEM, conn, holder)
     assert result.backend == "native" and result.answers["over"].answer is True
-    # Retried by the facade's rule, sent no sampling, never fell back.
+    # Retried by the facade's rule, sent no sampling, and one target alone.
     assert len(wire.requests) == 2 and holder["attempts"] == 2
     assert wire.sent() == openai_compatible.decision_body(ITEM, OPENAI_MODEL)
-    assert FALLBACK_KEY not in holder[llm.ATTEMPTED]
+    assert holder[llm.ATTEMPTED] == conn.without_sampling()
     assert seen[-1] is None
 
 
@@ -703,21 +709,24 @@ async def test_a_served_native_request_is_observed_healthy():
     assert seen == [(CONN, None)]
 
 
-async def test_facade_decide_native_strips_the_fallback_and_sends_no_sampling():
-    fallback_wire = Wire((200, body("answered")))
-    fallback = {"id": "or-spare", "kind": "openrouter", "model": "spare/model", "api_key": "sk-spare"}
-    conn = {**CONN, "sampling": {"preset_id": "warm", "preset_name": "Warm",
-                                 "params": {"temperature": 0.9, "max_tokens": 300}},
-            FALLBACK_KEY: fallback}
-    wire = Wire((500, {"error": {"code": 500, "message": "boom"}}))
-    client = facade(wire, retries=0)
+async def test_facade_decide_native_takes_no_fallback_and_sends_no_sampling():
+    fallback = wire.Target(provider_id="or-spare", kind="openrouter", model="spare/model",
+                           requested_model="spare/model", api_key="sk-spare")
+    conn = replace(CONN, sampling=WARM)
+    sent = Wire((500, {"error": {"code": 500, "message": "boom"}}))
+    client = facade(sent, retries=0)
     holder: dict = {}
     with pytest.raises(LLMError):
         await client.decide_native(ITEM, conn, holder)
-    assert len(wire.requests) == 1 and fallback_wire.requests == []
-    assert wire.sent() == decision_body(ITEM, MODEL)
-    assert FALLBACK_KEY not in holder[llm.ATTEMPTED]
-    assert FALLBACK_KEY in conn  # the caller's dict is left as it was
+    assert len(sent.requests) == 1
+    assert sent.sent() == decision_body(ITEM, MODEL)
+    assert holder[llm.ATTEMPTED] == conn.without_sampling()
+    assert conn.sampling == WARM  # the caller's target is left as it was
+    # A chain carrying a fallback is refused unsent: the stages are `decide`'s.
+    refused: dict = {}
+    with pytest.raises(TypeError):
+        await client.decide_native(ITEM, wire.Chain(conn, fallback), refused)  # type: ignore[arg-type]
+    assert len(sent.requests) == 1 and refused == {}
 
 
 async def test_decide_native_sends_each_kind_through_its_own_adapter():
@@ -751,7 +760,7 @@ async def test_facade_decide_native_refuses_a_kind_without_an_endpoint(kind):
     events: list[dict] = []
     with pytest.raises(LLMError) as exc:
         await facade(wire, capture=lambda: events.append).decide_native(
-            ITEM, {**CONN, "kind": kind}, holder)
+            ITEM, replace(CONN, kind=kind), holder)
     assert exc.value.kind == "bad_response"
     assert exc.value.detail == f"{kind} connections have no native decisions endpoint"
     assert wire.requests == [] and holder == {} and events == []
@@ -774,7 +783,7 @@ async def test_an_unrepresentable_item_is_refused_before_any_request():
 
 
 def test_native_body_holds_no_key_or_url():
-    conn = {**CONN, "base_url": "https://openrouter.ai/api/v1"}
+    conn = replace(CONN, base_url="https://openrouter.ai/api/v1")
     sent = llm.native_body(ITEM, conn)
     assert sent == decision_body(ITEM, MODEL)
     text = json.dumps(sent)
@@ -782,7 +791,7 @@ def test_native_body_holds_no_key_or_url():
     text = json.dumps(llm.native_body(ITEM, OPENAI_CONN))
     assert OPENAI_KEY not in text and "https://" not in text and "example.test" not in text
     with pytest.raises(LLMError):
-        llm.native_body(ITEM, {**CONN, "kind": "claude"})
+        llm.native_body(ITEM, replace(CONN, kind="claude"))
 
 
 def test_native_rejected_statuses_add_forbidden():
@@ -798,33 +807,34 @@ async def test_fake_decide_native_scripts_and_stamps():
     fake = FakeLLM([["unused"]], decisions=[answered, failure])
     holder: dict = {}
     item = Item(CONTEXT, (OVER,))
-    result = await fake.decide_native(item, CONN, holder, retries=1)
+    result = await fake.decide_native(item, TARGET, holder, retries=1)
     assert result.backend == "native" and result.answers == answered.answers
     assert holder["model"] == MODEL and holder["provider"] == "openrouter"
-    assert holder[llm.ATTEMPTED] is CONN and holder["attempts"] == 1
+    assert holder[llm.ATTEMPTED] == TARGET and holder["attempts"] == 1
     with pytest.raises(LLMError) as exc:
-        await fake.decide_native(item, CONN)
+        await fake.decide_native(item, TARGET)
     assert exc.value is failure
     with pytest.raises(LLMError):  # the last entry repeats
-        await fake.decide_native(item, CONN)
-    assert fake.native_requests == [(item, CONN, 1), (item, CONN, None), (item, CONN, None)]
+        await fake.decide_native(item, TARGET)
+    assert fake.native_requests == [(item, TARGET, 1), (item, TARGET, None),
+                                    (item, TARGET, None)]
     assert fake.calls == 0  # no generation was made
 
     structured = ItemResult({"over": Answer(False)}, backend="structured")
-    assert (await FakeLLM([["x"]], decisions=[structured]).decide_native(item, CONN)).backend == \
-        "structured"
+    assert (await FakeLLM([["x"]], decisions=[structured]).decide_native(
+        item, TARGET)).backend == "structured"
 
     crowd = Item(CONTEXT, (Choice("speaker", "Who?", tuple(
         Option(f"characters:c{i}", "") for i in range(255)), allow_none=True),))
     refusing = FakeLLM([["x"]], decisions=[answered])
     empty: dict = {}
     with pytest.raises(LLMError) as exc:
-        await refusing.decide_native(crowd, CONN, empty)
+        await refusing.decide_native(crowd, TARGET, empty)
     assert exc.value.code == "native_unrepresentable" and empty == {}
     assert refusing.native_requests == []
 
     with pytest.raises(AssertionError, match="FakeLLM has no native decisions scripted"):
-        await FakeLLM([["x"]]).decide_native(item, CONN)
+        await FakeLLM([["x"]]).decide_native(item, TARGET)
     with pytest.raises(ValueError, match="at least one native decision"):
         FakeLLM([["x"]], decisions=[])
 
@@ -834,29 +844,40 @@ async def test_fake_decide_native_refuses_a_kind_the_facade_refuses(kind):
     fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
     holder: dict = {}
     with pytest.raises(LLMError) as exc:
-        await fake.decide_native(Item(CONTEXT, (OVER,)), {**CONN, "kind": kind}, holder)
+        await fake.decide_native(Item(CONTEXT, (OVER,)), replace(CONN, kind=kind), holder)
     assert (exc.value.kind, exc.value.detail) == (
         "bad_response", f"{kind} connections have no native decisions endpoint")
     assert holder == {} and fake.native_requests == []
 
 
-async def test_fake_decide_native_strips_the_fallback_before_it_stamps():
+async def test_fake_decide_native_takes_one_target_as_the_facade_does():
+    """Handed a target, the fake -- like the facade -- sends and stamps it
+    alone; handed a chain or a dict, it refuses, as the facade does, before
+    it records or stamps anything."""
+    spare = wire.Target(provider_id="", kind="openrouter", model="spare/model",
+                        requested_model="spare/model")
     fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
-    conn = {**CONN, FALLBACK_KEY: {"kind": "openrouter", "model": "spare/model"}}
     holder: dict = {}
-    await fake.decide_native(Item(CONTEXT, (OVER,)), conn, holder)
-    assert holder[llm.ATTEMPTED] == CONN and FALLBACK_KEY not in holder[llm.ATTEMPTED]
-    assert fake.native_requests[0][1] == CONN
-    assert FALLBACK_KEY in conn
+    await fake.decide_native(Item(CONTEXT, (OVER,)), TARGET, holder)
+    assert holder[llm.ATTEMPTED] == TARGET
+    assert fake.native_requests[0][1] == TARGET
+    for handed in (wire.Chain(TARGET, spare),
+                   {"id": "or-main", "kind": "openrouter", "model": MODEL, "api_key": KEY}):
+        fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
+        holder = {}
+        with pytest.raises(TypeError):
+            await fake.decide_native(Item(CONTEXT, (OVER,)), handed, holder)
+        assert holder == {} and fake.native_requests == []
 
 
 async def test_fake_decide_native_accepts_openai_compatible():
     fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
     holder: dict = {}
-    result = await fake.decide_native(Item(CONTEXT, (OVER,)), OPENAI_CONN, holder)
+    target = OPENAI_CONN
+    result = await fake.decide_native(Item(CONTEXT, (OVER,)), target, holder)
     assert result.answers["over"].answer is True
     assert holder["provider"] == "openai_compatible"
-    assert fake.native_requests == [(Item(CONTEXT, (OVER,)), OPENAI_CONN, None)]
+    assert fake.native_requests == [(Item(CONTEXT, (OVER,)), target, None)]
 
 
 # ---- continuity's folded choices on the native path ------------------------

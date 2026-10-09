@@ -23,11 +23,12 @@ here takes a campaign lock.
 
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 
 from .. import llm_sampling
-from . import atomic, config, inference_keys, routing
+from . import atomic, config, frontmatter, inference_keys, routing
 from .paths import home, natural_key, safe_id, slugify, uniquify
 
 #: "No preset at this scope -- stop looking." Distinct from "" (no opinion,
@@ -78,6 +79,11 @@ def read_preset(pid: str) -> dict | None:
         return None
     if not isinstance(data, dict):
         return None
+    return _shaped(pid, data)
+
+
+def _shaped(pid: str, data: dict) -> dict:
+    """A preset file's object as `read_preset` answers it."""
     params = data.get("params")
     name = data.get("name")
     return {"id": pid,
@@ -86,6 +92,69 @@ def read_preset(pid: str) -> dict | None:
             if isinstance(params, dict) else {},
             "notes": data.get("notes") if isinstance(data.get("notes"), str) else "",
             "source": data.get("source") if isinstance(data.get("source"), str) else ""}
+
+
+def read_preset_strict(pid: str) -> dict | None:
+    """`read_preset`, for a reader whose answer is WRITTEN down (retirement's
+    derived presets, slice I): None only when no preset by that id can exist
+    (an unsafe id) or none does (no file). A file that is there but holds no
+    preset -- empty, not JSON, not an object, `params` that are not an
+    object -- raises `frontmatter.RecordUnreadableError`, and the read's own
+    `OSError` / `UnicodeDecodeError` pass through: a derived preset built
+    from a base a sync client was holding would be saved without the base's
+    samplers, for good.
+
+    The shape is `read_preset`'s, params filtered the same way, so a plan
+    read through either agrees on every preset both can read."""
+    if not safe_id(pid):
+        return None
+    p = _path(pid)
+    try:
+        if not p.exists():
+            return None
+    except OSError as exc:
+        # `read_preset`'s reason: a name too long for the filesystem is a
+        # preset that does not exist, whichever way it is read.
+        if getattr(exc, "errno", None) == errno.ENAMETOOLONG:
+            return None
+        raise
+    text = p.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise frontmatter.RecordUnreadableError(
+            f"sampler preset {pid} holds no preset ({exc})") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("params", {}), dict):
+        raise frontmatter.RecordUnreadableError(f"sampler preset {pid} holds no preset")
+    return _shaped(pid, data)
+
+
+def put_derived(pid: str, name: str, params: dict) -> None:
+    """Write a derived reasoning preset (retirement, slice I ruling 4) at
+    `pid`: written when absent, nothing when the file already holds this very
+    preset (same name, same params), and `ValueError` when it holds anything
+    else -- which `legacy_plan.derive`'s digest suffix makes unreachable,
+    since it picks an id only when that id is free or holds this preset.
+
+    `params` are written as given, not re-validated: they are the base
+    preset's params as STORED plus the effort, and a value `validate` would
+    refuse costs that one parameter on the wire (`read_preset`'s rule) --
+    refusing it here would cost the whole derivation instead. Notes and
+    source are empty, as the planner's in-memory copy has them, so two
+    devices write the same bytes.
+
+    In `config.format_hold`, as every preset write is (N19): the read, the
+    comparison and the write are one hold. A file that cannot be read is
+    never written over (`read_preset_strict`)."""
+    if not safe_id(pid):
+        raise ValueError(f"not a preset id: {pid!r}")
+    with config.format_hold():
+        current = read_preset_strict(pid)
+        if current is not None:
+            if (current["name"], current["params"]) == (name, params):
+                return
+            raise ValueError(f"sampler preset {pid} already holds another preset")
+        _write(pid, name, dict(params), "", "")
 
 
 def exists(pid: str) -> bool:

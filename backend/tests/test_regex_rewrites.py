@@ -14,6 +14,7 @@ import json
 from grimoire import routes, store
 from grimoire.routes import character_turns
 from grimoire.store.regex import rewrites
+from tests.inference_fixtures import primary
 from tests.llm_fakes import FakeLLM
 
 ELLIPSIS = {"name": "Ellipsis", "pattern": r"\.\.\.", "replacement": "…",
@@ -26,7 +27,7 @@ def put_rules(client, cid, *rule_list):
 
 
 def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    primary(client)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")

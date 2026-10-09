@@ -20,24 +20,32 @@ Three different kinds of assertion live here, deliberately:
   the snapshot. They are what stops a regeneration from making the harness
   vacuous: regenerate `snapshot.json` from a broken build and these still fail.
 - **The tree digests** — a read must not write, and a migration must be
-  idempotent. Neither is visible in the sweep's output at all.
+  idempotent. Neither is visible in the sweep's output at all. And `home/`
+  itself is digested around every test here (`_home_untouched`, spec §11.5):
+  a copy plays, migrates and absorbs; the checked-in tree never moves.
+
+The copy is `tests/frozen_copy.py`'s, the one the sweep regenerating
+`snapshot.json` makes too. `home/` is a format-1 store: the turn and absorb
+tests play it as it stands, through the planner in memory (inference slice
+I), and `test_a_migrated_and_retired_copy_plays_a_turn` plays the same turn
+once the model-settings migration and retirement have persisted that plan.
 """
 
 from __future__ import annotations
 
+import contextlib
 import difflib
-import hashlib
 import json
 import re
-import shutil
-from pathlib import Path
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from grimoire import routes, store
 from grimoire.main import create_app
-from tests import review_runs
+from grimoire.store.inference import migrate
+from tests import frozen_copy, review_runs
 from tests.fixtures.frozen_campaign import build
 from tests.fixtures.frozen_campaign import sweep as frozen
 from tests.llm_fakes import from_cassette
@@ -52,27 +60,32 @@ LEGACY_SID = "2026-01-02-the-long-quay"
 MIGRATED_SID = "002--2026-01-02--the-long-quay"
 
 
+@pytest.fixture(autouse=True)
+def _home_untouched():
+    """Every test here leaves the checked-in `home/` exactly as it found it
+    (spec §11.5): whatever a test plays, migrates or absorbs, it does on a
+    copy."""
+    before = frozen_copy.digest()
+    yield
+    assert frozen_copy.digest() == before, "a frozen test wrote into home/"
+
+
 @pytest.fixture
 def frozen_home(monkeypatch, tmp_path):
     """A private copy of the frozen store, rooted at GRIMOIRE_HOME."""
-    home = tmp_path / "home"
-    shutil.copytree(frozen.HOME, home)
+    home = frozen_copy.copy_home(tmp_path / "home")
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
     return home
 
 
-def _digest(home: Path) -> dict[str, str]:
-    """Every entry's content hash, keyed by store-relative path.
-
-    Directories are recorded too, with a sentinel in place of a hash. An empty
-    directory is observable store state rather than nothing — actor-id
-    allocation treats an existing actor directory as taken (`characters.
-    create_character`'s `uniquify`), so a read that left one behind would change
-    what the next write is allowed to be called while every file hash stayed
-    put."""
-    return {p.relative_to(home).as_posix():
-            hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "<dir>"
-            for p in sorted(home.rglob("*"))}
+#: Every entry's content hash, keyed by store-relative path
+#: (`frozen_copy.digest`). Directories are recorded too, with a sentinel in
+#: place of a hash. An empty directory is observable store state rather than
+#: nothing — actor-id allocation treats an existing actor directory as taken
+#: (`characters.create_character`'s `uniquify`), so a read that left one behind
+#: would change what the next write is allowed to be called while every file
+#: hash stayed put.
+_digest = frozen_copy.digest
 
 
 def _snapshot() -> dict:
@@ -258,8 +271,8 @@ def test_the_builder_still_mints_a_fixture(monkeypatch, tmp_path):
 # generating half of the store on a frozen campaign without spending money or
 # depending on a model.
 
-@pytest.fixture
-def frozen_client(frozen_home):
+@contextlib.contextmanager
+def _played() -> Iterator[TestClient]:
     """The real app over the frozen store, with the cassette standing in for
     the gateway at the same DI seam production uses. The fake is hung off the
     client as `.llm` so a test can assert on the request the routes built."""
@@ -284,8 +297,37 @@ def frozen_client(frozen_home):
         yield client
 
 
+@pytest.fixture
+def frozen_client(frozen_home):
+    """`_played` on the frozen copy as it stands: a format-1 store, played
+    through the planner in memory."""
+    with _played() as client:
+        yield client
+
+
 @pytest.mark.tracker      # the shipped default: this campaign predates the setting
 def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client):
+    assert not store.inference_keys.is_current(store.read_config())
+    _plays_a_turn(frozen_client)
+
+
+@pytest.mark.tracker
+def test_a_migrated_and_retired_copy_plays_a_turn(frozen_home):
+    """The same turn, once the model-settings migration and retirement have
+    persisted what the planner plays in memory: the copy is switched to
+    format 2 and its legacy keys retired first. `home/` itself is never
+    touched (the copy is `frozen_home`'s)."""
+    got = migrate.ensure()
+    assert got.state == "done", got
+    cfg = store.read_config()
+    assert store.inference_keys.is_current(cfg)
+    assert cfg[store.inference_keys.RETIRED_KEY] == "1"
+    assert got.retirement["left"] == [], got.retirement
+    with _played() as client:
+        _plays_a_turn(client)
+
+
+def _plays_a_turn(frozen_client: TestClient) -> None:
     # This cassette answers the actor-scoped prompt with prose for the
     # selected speaker; the transcript still keeps its familiar block shape.
     before = len(frozen_client.get(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}").json()["messages"])

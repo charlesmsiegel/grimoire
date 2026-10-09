@@ -124,7 +124,7 @@ def model_of(conn: dict) -> str:
 
     `llm.effective_model`'s rule, restated because the store never imports
     `llm` (a test holds the two equal). The migration writes a connection's
-    facts under this key and the format-2 lowering reads them back under it,
+    facts under this key and the resolver reads them back under it,
     so the two cannot disagree about which model a fact belongs to."""
     model = str(conn.get("model") or "")
     if not model and conn.get("kind") == "claude":
@@ -154,8 +154,8 @@ def of(provider_id: str, model: str, rev: str, *, strict: bool = False) -> dict:
     -- raises instead of reading as a model nothing was said of; an absent
     file still reads as empty. The facts panel's GET flags either
     (`unreadable`), since a save would be refused, and the migration's
-    Embedding check (`migrate._embeds`) fails the run on it rather than
-    deciding anything for good from a file it could not read.
+    Embedding check (`legacy_plan.legacy_embeds`) fails the run on it rather
+    than deciding anything for good from a file it could not read.
     """
     if strict and safe_id(provider_id):
         return _view(_load_for_write(provider_id).get(model, {}), rev)
@@ -433,6 +433,27 @@ def _take_back_copies(doc: dict[str, dict]) -> None:
                     entry.pop(field)
         if not entry:
             doc.pop(name)
+
+
+def adopted(provider_id: str, model: str, rev: str, *, adopting: str,
+            stated: dict[str, object]) -> dict:
+    """`of(provider_id, model, rev)` as it will read once the migration's
+    step 3 has run `adopt_legacy(provider_id, adopting, stated)`: every copy an
+    earlier, interrupted run recorded on this provider taken back first
+    (`_take_back_copies`), then the fields of `stated` the writer takes laid
+    over `adopting`'s entry. A read: nothing is written, and a file that
+    cannot be read is empty, as for `of`.
+
+    What play reads at format 1 (`resolve`, through the planner's
+    `Overlay.facts`), so a field the user set back to its default since an
+    interrupted run copied it is not sent as the stale copy -- the in-memory
+    answer is the one the migration persists."""
+    doc = {name: dict(entry) for name, entry in _load(provider_id).items()}
+    _take_back_copies(doc)
+    valid, _refused = _checked_legacy(stated)
+    if valid:
+        doc.setdefault(adopting, {}).update(valid)
+    return _view(doc.get(model, {}), rev)
 
 
 def adopt_legacy(provider_id: str, model: str, stated: dict[str, object]) -> dict[str, str]:

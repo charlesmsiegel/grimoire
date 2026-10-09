@@ -1659,7 +1659,7 @@ def test_a_native_close_verdict_without_a_rationale_takes_gs_mapping(client, mon
     assert run["state"] == "landed", run
     assert run["result"]["llm"] == "ok"
     [(_item, conn, _retries)] = fake.native_requests
-    assert conn["model"] == "vendor/decider" and _reconcile_requests(fake) == []
+    assert conn.model == "vendor/decider" and _reconcile_requests(fake) == []
     [result] = seen
     assert (result.backend, result.rationale) == ("native", "")
     assert all(a.detail != decisions.NO_ITEM for a in result.answers.values())
@@ -1692,7 +1692,7 @@ def test_the_sweep_on_a_decide_only_model_answers_natively(client, on):
     assert run["state"] == "landed", run
     assert run["result"]["llm"] == "ok"
     [(_item, conn, _retries)] = fake.native_requests
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/decider")
     assert _reconcile_requests(fake) == []
     assert _records(cid)[PAIR]["proposal"]["decision"] == "duplicate"
     assert [(r["operation"], r["decision_mode"]) for r in _sweep_rows(cid)] == [
@@ -1718,8 +1718,8 @@ def test_the_sweep_on_a_decide_only_model_answers_on_the_fallback(client, on):
     assert run["result"]["llm"] == "ok"
     assert len(fake.native_requests) == 1
     [sent] = _reconcile_requests(fake)
-    assert (sent["conn"]["id"], sent["conn"]["model"]) == on
-    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+    assert (sent["target"].provider_id, sent["target"].model) == on
+    assert all(r["target"].model != "vendor/decider" for r in fake.requests)
 
 
 @pytest.mark.parametrize("answer", [
@@ -1815,7 +1815,7 @@ def test_the_decision_role_now_serves_the_sweep(client):
 
     assert run["state"] == "landed", run
     [sent] = _reconcile_requests(fake)
-    assert (sent["conn"]["id"], sent["conn"]["model"]) == ("spare", "vendor/spare")
+    assert (sent["target"].provider_id, sent["target"].model) == ("spare", "vendor/spare")
 
 
 def test_sweep_rows_file_decide_and_structured(client, monkeypatch):

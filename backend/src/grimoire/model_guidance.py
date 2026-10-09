@@ -15,7 +15,7 @@ from copy import deepcopy
 
 from jinja2 import TemplateError
 
-from . import prompts
+from . import prompts, wire
 
 _log = logging.getLogger(__name__)
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -82,7 +82,7 @@ class PreparedMessages(list):
         #: the chooser that picks one from the attempt's connection. None for
         #: every ordinary prompt.
         self._tails: dict[str, list[dict]] | None = None
-        self._choose: Callable[[dict], str] | None = None
+        self._choose: Callable[[wire.Target], str] | None = None
         #: The tail the primary attempt is sent: with the primary model, the
         #: one combination the prompt record already holds.
         self._primary_tail: str | None = None
@@ -121,17 +121,17 @@ class PreparedMessages(list):
                 # usable fallback into another provider failure.
                 _log.exception("Could not record model prompt variant")
 
-    def with_tails(self, tails: dict[str, list[dict]], choose: Callable[[dict], str],
-                   primary: dict) -> PreparedMessages:
+    def with_tails(self, tails: dict[str, list[dict]], choose: Callable[[wire.Target], str],
+                   primary: wire.Target) -> PreparedMessages:
         """A copy whose sent messages end in one of `tails`, chosen per attempt.
 
         "Keep writing" sends a partial reply either as a prefill (the reply is
         the last message) or followed by an instruction to continue it, and
         which one a route can take depends on that route's connection -- so a
         fallback of another sort has to get its own ending, not the primary's.
-        `choose(conn)` names the tail for a connection; `primary` is the one
-        the call starts on, and the list body (what the prompt log and a fake
-        LLM see) is what that primary attempt sends.
+        `choose(attempt)` names the tail for an attempt's `wire.Target`;
+        `primary` is the one the call starts on, and the list body (what the
+        prompt log and a fake LLM see) is what that primary attempt sends.
 
         Built from the factory rather than `snapshot()`, which refuses a prompt
         that was never frozen. No breakdown: the old one does not measure the
@@ -147,28 +147,34 @@ class PreparedMessages(list):
         copy[:] = [*copy, *deepcopy(tails[copy._primary_tail])]
         return copy
 
-    def for_connection(self, conn: dict, model: str) -> list[dict]:
-        """`for_model`, plus the tail this attempt's connection chooses.
+    def for_connection(self, target: wire.Target, model: str) -> list[dict]:
+        """`for_model`, plus the tail this attempt's target chooses.
 
         `on_variant` fires once per (model, tail) the primary attempt was not
-        sent -- so a same-model fallback whose connection takes the other
-        ending is recorded too. An observer recording a tailed prompt reads
-        `for_connection` with the fallback's connection
-        (`character_turns._capture` does), so the prompt log holds the ending
-        that fallback was really sent."""
+        sent -- so a same-model fallback whose provider takes the other ending
+        is recorded too. An observer recording a tailed prompt reads it with
+        the fallback's target (`for_target`, which `character_turns._capture`
+        calls), so the prompt log holds the ending that fallback was really
+        sent."""
         if self._tails is None or self._choose is None:
             return self.for_model(model)
-        mode = self._choose(conn)
+        mode = self._choose(target)
         messages, breakdown = self._variant(model)
         if (model, mode) != (self._primary_model, self._primary_tail):
             self._notify((model, mode), model, breakdown)
         return [*deepcopy(messages), *deepcopy(self._tails[mode])]
 
-    def mode_for(self, conn: dict) -> str | None:
-        """The tail `conn` would be sent, or None for an untailed prompt."""
+    def for_target(self, target: wire.Target) -> list[dict]:
+        """`for_connection` for one typed attempt: the target is what the
+        tail chooser is handed, and its model -- the one sent -- picks the
+        variant."""
+        return self.for_connection(target, target.model)
+
+    def mode_for(self, target: wire.Target) -> str | None:
+        """The tail `target` would be sent, or None for an untailed prompt."""
         if self._tails is None or self._choose is None:
             return None
-        return self._choose(conn)
+        return self._choose(target)
 
     def any_variant(self, test: Callable[[list[dict]], bool]) -> bool:
         """Whether `test` holds for any variant this prompt could send, without

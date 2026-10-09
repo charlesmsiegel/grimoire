@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import ingest_scene
 
 from grimoire.store import campaigns, worlds
+from tests import wire_kit
 
 
 def _world(monkeypatch, tmp_path) -> str:
@@ -179,7 +180,8 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
         "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     result = asyncio.run(ingest_scene.run_absorb(cid, sid, client, conn))
     assert result["parsed"]["one_line"] == "Marisol needles Julian."
     assert any(e["kind"] == "character_state" for e in result["edits"])
@@ -188,7 +190,8 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     assert applied and failures == []
     st = playstate.read_state(croot, "marisol")
     assert "wary of Julian" in st["current_state"]
-    assert client.calls[0][1]["model"] == "test/model" and client.calls[0][1]["api_key"] == "k"
+    sent = client.calls[0][1].primary
+    assert sent.model == "test/model" and sent.api_key == "k"
 
 
 def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
@@ -210,7 +213,8 @@ def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
         "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     first = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, conn))
     assert first["status"] == "done"
@@ -252,7 +256,8 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
         "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     result = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, conn))
     assert result["status"] == "done"
@@ -267,7 +272,8 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     scene1 = {
         "key": "file1-scene01", "title": "Scene One",
@@ -325,7 +331,8 @@ def test_run_absorb_primes_the_prompt_with_open_commitments(monkeypatch, tmp_pat
                              "by midwinter", "She swore it on the stair.", "earlier-scene")
 
     client = FakeClient("{}")
-    asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"kind": "openrouter"}))
+    asyncio.run(ingest_scene.run_absorb(cid, sid, client,
+                                       wire_kit.resolution(wire_kit.target(model=""), "absorb")))
     user_message = client.calls[0][0][1]["content"]
     assert "Open commitments:" in user_message
     assert "the-oath: Marisol's oath (promise, open), due by midwinter" in user_message
@@ -384,7 +391,8 @@ def test_a_scene_whose_edits_did_not_all_land_is_not_marked_done(monkeypatch, tm
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     real_apply = _break_commitments_during_apply(monkeypatch)
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -419,7 +427,8 @@ def test_an_incomplete_scene_retries_only_the_rows_that_did_not_land(monkeypatch
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     real_apply = _break_commitments_during_apply(monkeypatch)
@@ -530,7 +539,8 @@ def test_a_conflicting_row_is_not_replayed_on_the_next_run(monkeypatch, tmp_path
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     _move_commitment_during_apply(monkeypatch)
@@ -562,7 +572,8 @@ def test_a_conflict_is_carried_across_a_retry_that_clears_the_io_failure(monkeyp
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     croot = campaigns_store.campaign_root(cid)
 
     # Hand-write the entry the first attempt would have produced: one conflict
@@ -600,7 +611,7 @@ def test_the_cli_exits_nonzero_when_a_scene_is_incomplete(monkeypatch, tmp_path,
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
     monkeypatch.setattr(ingest_scene, "absorb_connection",
-                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
+                        lambda _cid: (wire_kit.resolution(wire_kit.target(model="m", api_key="k"), "absorb"), ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -633,7 +644,8 @@ def test_a_renamed_scene_stops_the_resume_rather_than_writing_to_a_ghost(monkeyp
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     _break_commitments_during_apply(monkeypatch)
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -667,7 +679,7 @@ def test_the_cli_reports_a_resume_whose_scene_vanished(monkeypatch, tmp_path, ca
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
     monkeypatch.setattr(ingest_scene, "absorb_connection",
-                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
+                        lambda _cid: (wire_kit.resolution(wire_kit.target(model="m", api_key="k"), "absorb"), ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -688,7 +700,8 @@ def test_a_failure_after_the_timeline_does_not_file_it_twice(monkeypatch, tmp_pa
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
@@ -720,7 +733,8 @@ def test_the_extraction_is_recorded_before_the_timeline_is_written(monkeypatch, 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     real_save = ingest_scene.save_manifest
@@ -754,7 +768,8 @@ def test_a_new_scene_repeating_the_previous_events_still_files_them(monkeypatch,
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -780,7 +795,8 @@ def test_a_resumed_scene_repeating_the_previous_events_still_files_them(monkeypa
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     # The preceding scene files the batch this one will honestly repeat.
@@ -826,7 +842,8 @@ def test_a_resume_after_its_own_append_does_not_file_the_events_twice(monkeypatc
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
@@ -858,7 +875,8 @@ def test_a_later_concurrent_append_does_not_make_the_resume_refile(monkeypatch, 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
@@ -891,7 +909,8 @@ def test_the_pre_image_is_retaken_inside_the_lock(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     real_absorb = ingest_scene.chronicle.absorb
     stale = ingest_scene._timeline_preimage(cid)     # what the write-ahead would record
@@ -975,7 +994,8 @@ def test_a_resume_keeps_the_conflict_basis_it_was_staged_against(monkeypatch, tm
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     real_mark = ingest_scene.scenes.mark_absorbed
 
@@ -1036,7 +1056,8 @@ def test_a_resume_uses_the_saved_extraction(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
@@ -1084,7 +1105,8 @@ def test_a_vanished_scene_is_persisted_so_it_can_be_resolved(monkeypatch, tmp_pa
                                            "applied": ["plot:the-siege"]}})
 
     client = FakeClient(_PARTIAL_OUTPUT)
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     got = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
     assert got["status"] == "incomplete"
     assert client.calls == []                       # still no re-extraction
@@ -1113,7 +1135,8 @@ def test_resolve_closes_a_conflicted_scene_without_rebuilding_it(monkeypatch, tm
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
 
     _move_commitment_during_apply(monkeypatch)
@@ -1172,7 +1195,7 @@ def test_the_cli_points_at_resolve_rather_than_at_deleting_the_key(monkeypatch, 
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
     monkeypatch.setattr(ingest_scene, "absorb_connection",
-                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
+                        lambda _cid: (wire_kit.resolution(wire_kit.target(model="m", api_key="k"), "absorb"), ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -1196,7 +1219,8 @@ def test_the_resume_revalidates_the_scene_inside_the_lock(monkeypatch, tmp_path)
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
 
     _break_commitments_during_apply(monkeypatch)
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -1241,7 +1265,7 @@ def test_the_cli_prints_each_unreplayable_reason(monkeypatch, tmp_path, capsys):
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
     monkeypatch.setattr(ingest_scene, "absorb_connection",
-                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
+                        lambda _cid: (wire_kit.resolution(wire_kit.target(model="m", api_key="k"), "absorb"), ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -1285,7 +1309,8 @@ def test_a_scene_whose_only_failure_created_a_record_stops_for_a_person(monkeypa
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     text = json_module.dumps({
         "one_line": "a", "summary": "s", "keywords": [], "timeline_events": [],
         "character_state_edits": [], "lore_edits": [], "authored_edits": [],
@@ -1334,7 +1359,8 @@ def test_an_unreplayable_failure_survives_a_successful_retry(monkeypatch, tmp_pa
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
+                               "absorb")
     sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
     stranded = {"id": "new_character:cassian", "kind": "error",
                 "reason": "could not seat the new character"}
@@ -1377,7 +1403,8 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
     facts.record(cid, "Marisol holds the stair.", "before midwinter", "000--earlier")
 
     client = FakeClient("{}")
-    asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"kind": "openrouter"}))
+    asyncio.run(ingest_scene.run_absorb(cid, sid, client,
+                                       wire_kit.resolution(wire_kit.target(model=""), "absorb")))
     user_message = client.calls[0][0][1]["content"]
     assert "Standing facts:" in user_message
     assert "f1: Marisol holds the stair. (before midwinter)" in user_message
@@ -1386,19 +1413,21 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
 # ---- where the ingest runs: the app's absorb route, never the retired active connection ----
 
 def _format_2_campaign(monkeypatch, tmp_path) -> str:
-    """A campaign on a migrated store whose Primary is a local provider, while
+    """A campaign on a format-2 store whose Primary is a local provider, while
     the frozen legacy `active_connection_id` still names a keyless OpenRouter."""
-    from grimoire.store import config, llm_connections
+    from grimoire.store import config, inference_keys, llm_connections
     from grimoire.store import worlds as worlds_store
-    from grimoire.store.inference import migrate
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     llm_connections.create_connection("openai_compatible", "Mara Local",
                                       base_url="http://localhost:1234/v1")
-    assert migrate.ensure().state == "done"
+    assert inference_keys.is_current(config.read_config())   # born at format 2
+    # The legacy key as an older build left it (this build seeds it below
+    # format 2 only, slice I).
     config.write_config(role_primary_provider="mara-local",
-                        role_primary_model="local-model")
+                        role_primary_model="local-model",
+                        active_connection_id="openrouter")
     assert config.read_config()["active_connection_id"] == "openrouter"
     return cid
 
@@ -1415,7 +1444,7 @@ def test_the_cli_runs_where_the_apps_absorb_would(monkeypatch, tmp_path, capsys)
     assert ingest_scene.main() == 0, capsys.readouterr().err
 
     (_messages, conn), = client.calls
-    assert (conn["id"], conn["model"]) == ("mara-local", "local-model")
+    assert (conn.primary.provider_id, conn.primary.model) == ("mara-local", "local-model")
     # The scene is stamped with what chat would run on, as the app stamps one.
     sid = ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["sid"]
     from grimoire.store import scenes

@@ -19,9 +19,9 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm, llm_usage, prompts, routes
+from grimoire import decisions, inference, llm, llm_usage, prompts, routes, wire
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
-from grimoire.llm import ATTEMPTED, FALLBACK_KEY, LLMClient
+from grimoire.llm import ATTEMPTED, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
 from grimoire.store.inference import capabilities, facts, migrate, settings
@@ -36,8 +36,6 @@ from tests.llm_fakes import (
 
 from . import inference_baseline as base
 from . import inference_fixtures as fx
-
-ACCOUNT = llm_usage.ACCOUNT_KEY
 
 
 @pytest.fixture(autouse=True)
@@ -261,8 +259,8 @@ def test_decide_writes_nothing_into_the_holder(client, monkeypatch):
     which is exactly what this must catch, whatever value it writes."""
     real_account = llm_usage.account
 
-    def blind(usage, conn):
-        real_account(usage, {k: v for k, v in conn.items() if k != ACCOUNT})
+    def blind(usage, target):
+        real_account(usage, dataclasses.replace(target, account=wire.Account()))
 
     monkeypatch.setattr(llm_usage, "account", blind)
     _store(client)
@@ -275,9 +273,10 @@ def test_decide_writes_nothing_into_the_holder(client, monkeypatch):
     fake = FakeLLM([[decision_reply({"over": True})]])
     _decide(fake, [_item()], around=around)
     (holder,) = holders
-    assert holder[ATTEMPTED] is fake.conn
+    sent = fake.requests[-1]["chain"]
+    assert holder[ATTEMPTED] is sent.primary
     stamped: dict = {}
-    asyncio.run(FakeLLM([["x"]]).complete([], fake.conn, stamped))
+    asyncio.run(FakeLLM([["x"]]).complete([], sent, stamped))
     assert holder == stamped
     assert "operation" not in holder and "decision_mode" not in holder
 
@@ -302,42 +301,39 @@ def test_a_decide_row_files_its_operation_and_mode(client):
 
 
 def test_the_mode_is_stamped_per_call_on_copied_blocks(client):
-    """I7: the mode rides a copy of each attempt's block; the resolution's own
-    blocks are left exactly as the resolver wrote them."""
+    """I7: the mode rides new targets; the resolution's own targets are left
+    exactly as the resolver wrote them."""
     _store(client)
     resolved = _resolved()
-    before = deepcopy(resolved.conn)
-    primary_block = resolved.conn[ACCOUNT]
-    fallback_block = resolved.attempts[1].conn[ACCOUNT]
+    before = deepcopy(resolved.attempts)
+    chain = resolved.chain
+    assert chain is not None and chain.fallback is not None
     fake = FakeLLM([[decision_reply({"over": True})]])
     _decide(fake, [_item()], resolved=resolved)
-    sent = fake.conn
-    # Per key, so the block's other fields (slice E's billing and role) may
-    # ride beside these.
-    for block in (sent[ACCOUNT], sent[FALLBACK_KEY][ACCOUNT]):
-        assert (block["operation"], block["decision_mode"]) == ("decide", "structured")
-    assert sent[ACCOUNT] is not primary_block
-    assert sent[FALLBACK_KEY][ACCOUNT] is not fallback_block
-    # The copies change the mode and nothing else.
-    for copy, own in ((sent[ACCOUNT], before[ACCOUNT]),
-                      (sent[FALLBACK_KEY][ACCOUNT], before[FALLBACK_KEY][ACCOUNT])):
-        assert {k: v for k, v in copy.items() if k != "decision_mode"} == own
-    # Nothing of the resolution moved: same blocks, same contents, no mode.
-    assert resolved.conn == before
-    assert resolved.conn[ACCOUNT] is primary_block
-    assert resolved.attempts[1].conn[ACCOUNT] is fallback_block
-    for block in (primary_block, fallback_block):
-        assert block["operation"] == "decide" and "decision_mode" not in block
-    assert resolved.conn[FALLBACK_KEY] is resolved.attempts[1].conn
+    sent = fake.requests[-1]["chain"]
+    # Per field, so the account's other fields (slice E's billing and role)
+    # may ride beside these.
+    for target in sent.attempts:
+        assert (target.account.operation, target.account.decision_mode) == (
+            "decide", "structured")
+    assert sent.primary is not chain.primary and sent.fallback is not chain.fallback
+    # The stamp changes the mode and nothing else.
+    assert sent == chain.with_account(decision_mode="structured")
+    # Nothing of the resolution moved: same targets, no mode.
+    assert resolved.chain == chain
+    assert all(t.account.decision_mode == "" for t in chain.attempts)
+    assert resolved.attempts == before
+    for target in chain.attempts:
+        assert target.account.operation == "decide"
+    assert resolved.chain.fallback is resolved.attempts[1].target
 
 
 def test_a_generate_resolution_carries_only_its_operation(client):
     _store(client)
     resolved = _resolved("generate")
     for attempt in resolved.attempts:
-        assert attempt.conn[ACCOUNT]["operation"] == "generate"
-        assert "decision_mode" not in attempt.conn[ACCOUNT]
-    assert resolved.conn[ACCOUNT] is not resolved.attempts[1].conn[ACCOUNT]
+        assert attempt.target.account.operation == "generate"
+        assert attempt.target.account.decision_mode == ""
 
 
 # ---- failures ----
@@ -388,8 +384,8 @@ def test_the_first_error_is_raised_after_every_chunk_was_tried(client):
 
 
 class _Captures(list):
-    """A capture (spec 9.4) that keeps each `(messages, outcome, conn)` it is
-    handed, with how many calls `fake` had made by then."""
+    """A capture (spec 9.4) that keeps each `(messages, outcome, target)` it
+    is handed, with how many calls `fake` had made by then."""
 
     def __init__(self, fake=None):
         super().__init__()
@@ -402,7 +398,7 @@ class _Captures(list):
 def test_capture_records_each_structured_call_once_it_settles(client):
     """One capture per chunk, handed over after that chunk's call has
     returned: the messages it sent, its mode and normalised answers
-    (`decisions.outcome`), and the stage's account-stamped dict it was sent
+    (`decisions.outcome`), and the stage's account-stamped target it was sent
     on."""
     _store(client)
     items = [_item(f"Mara counts to {n}.") for n in range(9)]
@@ -412,13 +408,13 @@ def test_capture_records_each_structured_call_once_it_settles(client):
     got = _decide(fake, items, capture=captured)
     assert [calls for *_, calls in captured] == [1, 2]
     assert [m for m, *_ in captured] == [r["messages"] for r in fake.requests]
-    # The dict the facade stamped as sent (`llm.ATTEMPTED`): this fake
-    # stamps the one it was handed.
-    assert all(conn is r["conn"] for (_m, _o, conn, _c), r in zip(captured, fake.requests,
-                                                                   strict=True))
+    # The target the facade stamped as sent (`llm.ATTEMPTED`): this fake
+    # stamps the primary of the chain it was handed.
+    assert all(conn is r["chain"].primary
+               for (_m, _o, conn, _c), r in zip(captured, fake.requests, strict=True))
     for _m, _o, conn, _c in captured:
-        assert conn[ACCOUNT]["decision_mode"] == "structured"
-        assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
+        assert conn.account.decision_mode == "structured"
+        assert (conn.provider_id, conn.model) == ("openrouter", "vendor/active")
     first, second = (outcome for _m, outcome, _conn, _c in captured)
     assert first == decisions.outcome("structured", "openrouter", "vendor/active",
                                       got.items[:8])
@@ -444,8 +440,8 @@ def test_a_schema_refusal_retry_is_one_capture(client):
     ((messages, outcome, conn, _calls),) = captured
     assert messages == provider.requests[1]["messages"]
     # Named as re-sent: the same attempt, without the structured mode.
-    assert llm.STRUCTURED_KEY not in conn and FALLBACK_KEY not in conn
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
+    assert isinstance(conn, wire.Target) and not conn.structured
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/active")
     assert outcome == {"mode": "structured", "provider": "openrouter",
                        "model": "vendor/active",
                        "items": [{"backend": "structured",
@@ -453,7 +449,7 @@ def test_a_schema_refusal_retry_is_one_capture(client):
 
 
 def test_a_capture_names_the_fallback_that_answered(client):
-    """The facade's fallback answered: the capture's conn is the dict it was
+    """The facade's fallback answered: the capture's target is the one it was
     sent (`llm.ATTEMPTED`), so the prompt log's model, kind and preset name
     the fallback, as the outcome does -- and a preset scoped to the
     primary's connection, which stayed with it, is not reported."""
@@ -461,10 +457,12 @@ def test_a_capture_names_the_fallback_that_answered(client):
     resolved = _resolved()
     warm = {"preset_id": "warm", "preset_name": "Warm", "scope": "connection",
             "params": {"temperature": 0.9}}
-    primary = dataclasses.replace(resolved.attempts[0],
-                                  conn={**resolved.conn, "sampling": warm})
+    primary = dataclasses.replace(
+        resolved.attempts[0],
+        target=dataclasses.replace(resolved.attempts[0].target,
+                                   sampling=wire.Sampling(**warm)))
     resolved = dataclasses.replace(resolved, attempts=(primary, *resolved.attempts[1:]))
-    assert resolved.conn[FALLBACK_KEY]["id"] == "spare"
+    assert resolved.chain.fallback.provider_id == "spare"
     provider = SequencedProvider([LLMError("network", "connection reset"),
                                   [decision_reply({"over": True})]])
     captured = _Captures()
@@ -474,10 +472,10 @@ def test_a_capture_names_the_fallback_that_answered(client):
     ((messages, outcome, conn, _calls),) = captured
     assert messages == provider.requests[1]["messages"]
     assert (outcome["provider"], outcome["model"]) == ("spare", "vendor/spare")
-    assert (conn["id"], conn["model"]) == ("spare", "vendor/spare")
-    assert FALLBACK_KEY not in conn
-    assert conn.get("sampling") != warm
-    assert conn[ACCOUNT]["decision_mode"] == "structured"
+    assert (conn.provider_id, conn.model) == ("spare", "vendor/spare")
+    assert isinstance(conn, wire.Target)
+    assert conn.sampling.preset_id != "warm"
+    assert conn.account.decision_mode == "structured"
 
 
 def test_capture_records_a_failed_call_with_its_error(client):
@@ -490,7 +488,7 @@ def test_capture_records_a_failed_call_with_its_error(client):
     assert calls == 1 and messages == fake.requests[0]["messages"]
     assert outcome == {"mode": "structured", "provider": "openrouter",
                        "model": "vendor/active", "error": "rate_limit: slow down"}
-    assert conn is fake.requests[0]["conn"]
+    assert conn is fake.requests[0]["chain"].primary
 
 
 def test_a_timed_out_pick_is_captured_with_its_error(client):
@@ -562,8 +560,8 @@ def test_decision_mode_is_structured_on_every_decide_attempt(client):
     generate = _resolved("generate")
     assert [a.decision_mode for a in generate.attempts] == ["", ""]
     assert generate.decision_mode is None
-    # The replaced attempts keep their dicts: the attach still names them.
-    assert decide.conn[FALLBACK_KEY] is decide.attempts[1].conn
+    # The replaced attempts keep their targets: the chain still names them.
+    assert decide.chain.fallback is decide.attempts[1].target
 
 
 def test_a_fallback_without_structured_mode_still_answers(client):
@@ -573,8 +571,8 @@ def test_a_fallback_without_structured_mode_still_answers(client):
     _catalog("openrouter", [{"id": "vendor/active",
                              "params": ["temperature", "structured_outputs"]}])
     resolved = _resolved()
-    assert resolved.conn[llm.STRUCTURED_KEY] is True
-    assert llm.STRUCTURED_KEY not in resolved.conn[FALLBACK_KEY]
+    assert resolved.chain.primary.structured is True
+    assert resolved.chain.fallback.structured is False
     reply = f"Here is my answer: {decision_reply({'over': True})} Hope that helps."
     provider = SequencedProvider([LLMError("network", "connection reset"), [reply]])
     got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
@@ -601,7 +599,7 @@ def test_a_refused_schema_with_nowhere_to_fall_is_retried_once_without_the_mode(
     _catalog("openrouter", [{"id": "vendor/active",
                              "params": ["temperature", "structured_outputs"]}])
     resolved = _resolved()
-    assert resolved.conn[llm.STRUCTURED_KEY] is True and FALLBACK_KEY not in resolved.conn
+    assert resolved.chain.primary.structured is True and resolved.chain.fallback is None
     provider = SequencedProvider([_refused_schema(), [decision_reply({"over": True})]])
     got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
                   resolved=resolved)
@@ -615,8 +613,8 @@ def test_a_refused_schema_with_nowhere_to_fall_is_retried_once_without_the_mode(
                                                        ("scene-break", "ok")]
     assert [r["decision_mode"] for r in rows] == ["structured", "structured"]
     assert len(got.usage) == 2
-    # The resolution's own dict still says what the resolver decided.
-    assert resolved.conn[llm.STRUCTURED_KEY] is True
+    # The resolution's own target still says what the resolver decided.
+    assert resolved.chain.primary.structured is True
 
 
 def test_a_refused_schema_is_retried_once_only(client):
@@ -680,8 +678,8 @@ def test_a_refused_primary_whose_fallback_fails_is_retried_without_the_mode(clie
     provider = SequencedProvider([_refused_schema(), _busy(),
                                   [decision_reply({"over": True})]])
     fake = LLMClient(openrouter=provider, timeout=0, retries=0,
-                     observer=lambda conn, err: seen.append(
-                         (conn["model"], err.kind if err else None)))
+                     observer=lambda target, err: seen.append(
+                         (target.model, err.kind if err else None)))
     got = _decide(fake, [_item()])
     assert got.items[0].answers["over"] == decisions.Answer(True)
     assert [(r["model"], "schema" in r["kwargs"]) for r in provider.requests] == [
@@ -707,13 +705,14 @@ def test_a_chain_whose_primary_refused_reports_the_fallbacks_failure(client):
     provider = SequencedProvider([_refused_schema(), _busy()])
     fake = LLMClient(openrouter=provider, timeout=0, retries=0)
     with pytest.raises(llm.SchemaRefusalError) as exc:
-        asyncio.run(fake.complete([{"role": "user", "content": "x"}], _resolved().conn,
+        asyncio.run(fake.complete([{"role": "user", "content": "x"}], _resolved().chain,
                                   schema=decisions.schema([_item()], explain=False)))
     assert (exc.value.kind, exc.value.retry_after) == ("rate_limit", 30.0)
     assert "json_schema strict mode" in exc.value.detail and "slow down" in exc.value.detail
     primary, fallback = exc.value.attempts
-    assert primary is not None and primary["model"] == "vendor/active"
-    assert primary[llm.STRUCTURED_KEY] is True and FALLBACK_KEY not in primary
+    # The refused attempt, as the target it was sent: one attempt, no chain.
+    assert isinstance(primary, wire.Target) and primary.model == "vendor/active"
+    assert primary.structured is True
     assert fallback is None
     assert [w.kind for w in exc.value.words] == ["bad_response", "rate_limit"]
 
@@ -742,13 +741,13 @@ def test_a_refused_fallback_is_retried_without_the_mode(client):
     _store(client)
     _flagged(spare=True)
     resolved = _resolved()
-    assert resolved.conn[FALLBACK_KEY][llm.STRUCTURED_KEY] is True
+    assert resolved.chain.fallback.structured is True
     seen: list[tuple[str, str | None]] = []
     provider = SequencedProvider([LLMError("network", "connection reset"),
                                   _refused_schema(), [decision_reply({"over": False})]])
     fake = LLMClient(openrouter=provider, timeout=0, retries=0,
-                     observer=lambda conn, err: seen.append(
-                         (conn["model"], err.kind if err else None)))
+                     observer=lambda target, err: seen.append(
+                         (target.model, err.kind if err else None)))
     got = _decide(fake, [_item()], resolved=resolved)
     assert got.items[0].answers["over"] == decisions.Answer(False)
     assert [(r["model"], "schema" in r["kwargs"]) for r in provider.requests] == [
@@ -947,16 +946,16 @@ def test_resolve_serves_a_decide_only_primary_natively(client):
     assert resolved.decision_mode == "native"
     assert resolved.missing == () and inf.refusal(resolved) is None
     assert settings._problem(resolved) is None
-    assert resolved.conn is resolved.attempts[0].conn
-    assert routes.common._usable(resolved).conn is resolved.attempts[0].conn
+    assert resolved.chain.primary is resolved.attempts[0].target
+    assert routes.common._usable(resolved).chain.primary is resolved.attempts[0].target
     # The fallback is attached to nothing, and is its own stage.
     fallback = resolved.attempts[1]
     assert (fallback.provider_id, fallback.decision_mode) == ("spare", "structured")
     assert resolved.fallback_missing == () and resolved.fallback_problem is None
-    assert FALLBACK_KEY not in resolved.conn
+    assert resolved.chain.fallback is None and not resolved.rides
     assert inference.stages(resolved) == (
-        inference.Stage("native", resolved.conn, None),
-        inference.Stage("structured", fallback.conn, 0))
+        inference.Stage("native", resolved.chain, None),
+        inference.Stage("structured", wire.Chain(fallback.target), 0))
     # The settings view reads it the same way: no problem on the route row or
     # on the Decision card, and both say the model is answered natively.
     view = client.get("/api/inference/settings").json()
@@ -969,7 +968,7 @@ def test_resolve_serves_a_decide_only_primary_natively(client):
     assert got.items[0].answers["over"] == decisions.Answer(True)
     assert got.backend == "native" and fake.calls == 0
     [(_item_sent, conn, retries)] = fake.native_requests
-    assert (conn["id"], conn["model"], retries) == ("openrouter", "vendor/active", None)
+    assert (conn.provider_id, conn.model, retries) == ("openrouter", "vendor/active", None)
     # A generate resolution of the same role is unchanged: refused.
     generate = _resolved("generate")
     assert generate.missing == ("generate",) and generate.decision_mode is None
@@ -979,7 +978,7 @@ def test_resolve_serves_a_decide_only_primary_natively(client):
     alone = _resolved()
     assert alone.decision_mode == "native" and alone.missing == ()
     assert inf.refusal(alone) is None
-    assert inference.stages(alone) == (inference.Stage("native", alone.conn, None),)
+    assert inference.stages(alone) == (inference.Stage("native", alone.chain, None),)
 
 
 def test_an_openrouter_non_text_model_on_decision_resolves_native(client):
@@ -1032,9 +1031,9 @@ def test_a_decide_only_model_with_a_same_provider_fallback_keeps_it(client):
     assert inf.refusal(resolved) is None
     primary, fallback = resolved.attempts
     assert (fallback.provider_id, fallback.model) == ("openrouter", "vendor/active")
-    assert FALLBACK_KEY not in primary.conn
-    assert inference.stages(resolved) == (inference.Stage("native", primary.conn, None),
-                                          inference.Stage("structured", fallback.conn, 0))
+    assert resolved.chain.fallback is None
+    assert inference.stages(resolved) == (inference.Stage("native", wire.Chain(primary.target), None),
+                                          inference.Stage("structured", wire.Chain(fallback.target), 0))
     # Everywhere else a same-provider fallback is still a retry, and dropped:
     # on a generate resolution of the same role (refused)...
     generate = _resolved("generate")
@@ -1046,7 +1045,7 @@ def test_a_decide_only_model_with_a_same_provider_fallback_keeps_it(client):
         "selection": {"provider": "openrouter", "model": "vendor/active"},
         "fallback": {"provider": "openrouter", "model": "vendor/decider"}}}})
     capable = _resolved()
-    assert len(capable.attempts) == 1 and FALLBACK_KEY not in capable.conn
+    assert len(capable.attempts) == 1 and capable.chain.fallback is None
     assert capable.fallback_problem == inf.SAME_PROVIDER
     # The Decision card, which now reads its role as a decision, says so too.
     card = client.get("/api/inference/settings").json()["roles"]["decision"]
@@ -1069,7 +1068,7 @@ def test_a_same_provider_fallback_that_can_do_neither_is_reported(client):
     assert resolved.fallback_missing == ("generate", "decide_native")
     assert resolved.attempts[1].decision_mode == ""
     assert inf.refusal(resolved) is None
-    assert inference.stages(resolved) == (inference.Stage("native", resolved.conn, None),)
+    assert inference.stages(resolved) == (inference.Stage("native", resolved.chain, None),)
 
 
 def test_a_fallback_that_cannot_generate_either_is_a_native_stage(client):
@@ -1082,17 +1081,17 @@ def test_a_fallback_that_cannot_generate_either_is_a_native_stage(client):
     resolved = _resolved()
     assert [a.decision_mode for a in resolved.attempts] == ["native", "native"]
     assert resolved.missing == () and resolved.fallback_missing == ()
-    assert inf.refusal(resolved) is None and FALLBACK_KEY not in resolved.conn
+    assert inf.refusal(resolved) is None and resolved.chain.fallback is None
     assert inference.stages(resolved) == (
-        inference.Stage("native", resolved.conn, None),
-        inference.Stage("native", resolved.attempts[1].conn, 0))
+        inference.Stage("native", resolved.chain, None),
+        inference.Stage("native", wire.Chain(resolved.attempts[1].target), 0))
 
 
 def test_a_generating_primary_with_a_decide_only_fallback_falls_to_a_native_stage(client):
     """Rule 3's one permitted change to a structured primary's resolution: a
     fallback that cannot generate but may decide natively was F's
     `fallback_missing == ("generate",)`, never sent. Now it lacks nothing: it
-    stays unattached (the primary's `conn` is F's, no `FALLBACK_KEY`) and is
+    rides nothing (the primary's chain is F's, with no fallback) and is
     a native stage of its own, one attempt, which a failed primary reaches."""
     _store(client)
     _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"]}])
@@ -1101,15 +1100,15 @@ def test_a_generating_primary_with_a_decide_only_fallback_falls_to_a_native_stag
     primary, fallback = resolved.attempts
     assert [a.decision_mode for a in resolved.attempts] == ["structured", "native"]
     assert resolved.missing == () and resolved.fallback_missing == ()
-    assert FALLBACK_KEY not in resolved.conn
-    assert inference.stages(resolved) == (inference.Stage("structured", primary.conn, None),
-                                          inference.Stage("native", fallback.conn, 0))
+    assert resolved.chain.fallback is None
+    assert inference.stages(resolved) == (inference.Stage("structured", wire.Chain(primary.target), None),
+                                          inference.Stage("native", wire.Chain(fallback.target), 0))
     fake = FakeLLM([[""]], error=LLMError("network", "connection reset"), decisions=[_yes()])
     got = _decide(fake, [_item()], resolved=resolved)
     assert got.items[0].answers["over"] == decisions.Answer(True)
     assert got.items[0].backend == "native"
     [(_item_sent, conn, retries)] = fake.native_requests
-    assert (conn["id"], conn["model"], retries) == ("spare", "vendor/spare", 0)
+    assert (conn.provider_id, conn.model, retries) == ("spare", "vendor/spare", 0)
     assert [(r["status"], r["decision_mode"], r["model"]) for r in _rows()] == [
         ("error", "structured", "vendor/active"), ("ok", "native", "vendor/spare")]
 
@@ -1138,9 +1137,10 @@ def test_a_native_failure_falls_to_a_same_provider_generating_fallback(client):
     got = _decide(fake, [_item()], resolved=_resolved())
     assert got.items[0].answers["over"] == decisions.Answer(True)
     assert got.items[0].backend == "structured"
-    assert [(c["model"]) for _i, c, _r in fake.native_requests] == ["vendor/decider"]
-    assert (fake.conn["id"], fake.conn["model"]) == ("openrouter", "vendor/active")
-    assert FALLBACK_KEY not in fake.conn and fake.retries == [0]
+    assert [t.model for _i, t, _r in fake.native_requests] == ["vendor/decider"]
+    sent = fake.requests[-1]["chain"]
+    assert (sent.primary.provider_id, sent.primary.model) == ("openrouter", "vendor/active")
+    assert sent.fallback is None and fake.retries == [0]
     assert [(r["status"], r["decision_mode"], r["model"]) for r in _rows()] == [
         ("error", "native", "vendor/decider"), ("ok", "structured", "vendor/active")]
 
@@ -1162,30 +1162,30 @@ def _dual_capable(how: str) -> None:
 def test_a_dual_capable_primary_stays_structured(client, how):
     """C1: a model that can generate stays on structured generation whatever
     its `decide_native` says, until native wins on evals (spec 16). Its
-    resolution is F's, byte for byte -- `conn`, the attached fallback and the
-    structured flag -- and deciding on it sends no native request."""
+    resolution is F's, field for field -- the chain, its riding fallback and
+    the structured flag -- and deciding on it sends no native request."""
     _store(client)
     _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"],
                              "params": ["temperature", "structured_outputs"]}])
-    before = deepcopy(_resolved().conn)
-    assert before[llm.STRUCTURED_KEY] is True and FALLBACK_KEY in before
+    before = _resolved().chain
+    assert before.primary.structured is True and before.fallback is not None
     _dual_capable(how)
     resolved = _resolved()
     caps = resolved.attempts[0].capabilities
     assert (caps["decide_native"].value, caps["decide_native"].source) == (
         "yes", "catalog" if how == "catalog" else "test")
     assert resolved.decision_mode == "structured"
-    assert resolved.conn == before
-    assert resolved.conn[FALLBACK_KEY] is resolved.attempts[1].conn
-    assert resolved.conn[llm.STRUCTURED_KEY] is True
+    assert resolved.chain == before
+    assert resolved.chain.fallback is resolved.attempts[1].target
+    assert resolved.chain.primary.structured is True
     fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
     _decide(fake, [_item()], resolved=resolved)
     assert fake.native_requests == [] and fake.calls == 1
 
 
 def test_a_structured_primary_is_unchanged(client):
-    """A generating primary's decide resolution is F's, byte for byte: the
-    generate resolution's dicts with the operation stamped `decide` and the
+    """A generating primary's decide resolution is F's, field for field: the
+    generate resolution's targets with the operation stamped `decide` and the
     structured flag where the model takes it -- on the primary and on the
     fallback it carries -- and one structured stage that sends it whole."""
     _store(client)
@@ -1193,18 +1193,14 @@ def test_a_structured_primary_is_unchanged(client):
                              "params": ["temperature", "structured_outputs"]}])
     decide, generate = _resolved(), _resolved("generate")
 
-    def as_decided(conn: dict, flagged: bool) -> dict:
-        out = {**conn, ACCOUNT: {**conn[ACCOUNT], "operation": "decide"}}
-        out.pop(FALLBACK_KEY, None)
-        if flagged:
-            out[llm.STRUCTURED_KEY] = True
-        return out
+    def as_decided(target: wire.Target, flagged: bool) -> wire.Target:
+        return dataclasses.replace(target.with_account(operation="decide"),
+                                   structured=flagged)
 
-    expected = as_decided(generate.conn, True)
-    expected[FALLBACK_KEY] = as_decided(generate.conn[FALLBACK_KEY], False)
-    assert decide.conn == expected
+    assert decide.chain == wire.Chain(as_decided(generate.chain.primary, True),
+                                      as_decided(generate.chain.fallback, False))
     assert [a.decision_mode for a in decide.attempts] == ["structured", "structured"]
-    assert inference.stages(decide) == (inference.Stage("structured", decide.conn, None),)
+    assert inference.stages(decide) == (inference.Stage("structured", decide.chain, None),)
 
 
 def test_a_model_that_neither_generates_nor_decides_is_refused(client):

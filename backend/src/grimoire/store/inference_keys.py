@@ -2,7 +2,7 @@
 
 Everything that reads or writes a role, a route choice or the format marker
 builds the key here, so a spelling cannot drift between the resolver, the
-translation, `config.md`'s key list and (later) the migration.
+planner (`inference.legacy_plan`), `config.md`'s key list and the migration.
 
 A store-level leaf rather than a module of `store/inference/`: `config.py`
 needs the key list, and `store/inference/__init__.py` imports `resolve`, which
@@ -34,11 +34,16 @@ EMBEDDING_PARTS: tuple[str, ...] = ("provider", "model")
 FORMAT_KEY = "inference_format"
 CURRENT_FORMAT = "2"
 
+#: The retirement marker (slice I, ruling 15): "1" on a `config.md` or a
+#: `campaign.md` whose legacy keys retirement has removed, after which the
+#: legacy layout is never read there again. Not part of `GLOBAL_KEYS`: the
+#: migration does not own it, and nothing writes it before retirement does.
+RETIRED_KEY = "inference_retired"
+
 #: Set to "0" to keep the automatic layout switch off: the background
-#: migration does not start (Task 2), and a fresh store is NOT born at the
-#: current format. The suite sets it in `tests/conftest.py`, because almost
-#: every test builds legacy state on a fresh tmp store and would otherwise
-#: have each legacy write ignored by the resolver.
+#: migration does not start. It gates that thread and nothing else -- a fresh
+#: store is born at the current format either way (`born_current`). The suite
+#: sets it in `tests/conftest.py` so nothing migrates behind a test's back.
 AUTOMIGRATE_ENV = "GRIMOIRE_INFERENCE_AUTOMIGRATE"
 
 
@@ -123,12 +128,14 @@ def is_newer(meta: Mapping) -> bool:
 
 
 def automigrate() -> bool:
-    """Whether the automatic layout switch is on: unless `AUTOMIGRATE_ENV` is
-    "0". Read on every call, so a test can flip it."""
+    """Whether the background layout switch is on: unless `AUTOMIGRATE_ENV` is
+    "0". Read on every call, so a test can flip it. It gates the background
+    thread only; whether a new store is born current is `born_current`."""
     return os.environ.get(AUTOMIGRATE_ENV, "").strip() != "0"
 
 
 def born_current() -> bool:
     """Whether a store this build creates from nothing starts at the current
-    format (ruling 13): yes, unless the automatic switch is off."""
-    return automigrate()
+    format (ruling 13): always. Not tied to `automigrate()`, which gates the
+    background thread; product code never turns the birth off."""
+    return True

@@ -29,6 +29,7 @@ from grimoire.routes.common import thumb_query
 from grimoire.store import inference_keys
 from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
+from tests import inference_fixtures
 from tests.collection_fixtures import format1, format2
 
 
@@ -1204,12 +1205,16 @@ MAP, CHART = "thread:mara-s-map", "thread:winifred-s-chart"
 OATH = "commitment:mara-s-oath"
 
 
-def _configure_embeddings(depth: str = "2") -> None:
+def _configure_embeddings(client, depth: str = "2") -> None:
     conn = store.llm_connections.create_connection(
         "openai_compatible", "Vectors", base_url="https://vectors.example/v1",
-        api_key="sk-x", model="", post_process="none")
-    store.config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn,
-                              semantic_recall_depth=depth)
+        api_key="sk-x")
+    got = client.put(f"/api/llm-connections/{conn}/facts",
+                     json={"model": "embed-1", "post_process": "none"})
+    assert got.status_code == 200, got.text
+    inference_fixtures.put_settings(client, {"roles": {"embedding": {"selection": {
+        "provider": conn, "model": "embed-1"}}}, "confirm_embedding": True})
+    store.config.write_config(semantic_recall_depth=depth)
 
 
 def _run(client) -> tuple[str, str]:
@@ -1278,7 +1283,7 @@ def test_no_campaign_no_embeddings_chore(client):
 def test_embeddings_with_recall_depth_zero_show_no_chore(client, campaign):
     """It asks whether a connection and model are set, not whether recall
     uses them: semantic matching in a sweep does not read the recall depth."""
-    _configure_embeddings(depth="0")
+    _configure_embeddings(client, depth="0")
     assert store.embed_space.resolve() is not None
     assert "embeddings" not in {c["id"] for c in _todo(client, "")["chores"]}
 
@@ -1611,6 +1616,7 @@ def test_on_a_store_not_yet_migrated_no_rates_link_leads_to_an_editor_that_canno
     """`PUT .../facts` answers 409 `not_migrated` until the store is current, so
     both chores open the pricing table instead -- which can price any model --
     and say the model's own rates arrive after the upgrade."""
+    inference_fixtures.legacy_store()
     pid = store.llm_connections.create_connection(
         "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
         model="vendor/model-a")
@@ -1635,12 +1641,20 @@ def test_on_a_store_not_yet_migrated_no_rates_link_leads_to_an_editor_that_canno
 def test_on_a_store_a_newer_build_wrote_no_rates_link_is_offered(client, monkeypatch):
     """That store is already past the upgrade, and this version will never
     write its rates, so the copy says a newer version wrote it -- never "after
-    the upgrade"."""
+    the upgrade".
+
+    This build reads a store a newer build switched as format 2, best effort
+    (slice I), so the selection it sees there is the Primary role's: a
+    format-2 library's role on a provider, then a newer build's marker."""
     pid = store.llm_connections.create_connection(
-        "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
-        model="vendor/model-a")
-    store.write_config(active_connection_id=pid)
+        "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1")
+    store.write_config(**{inference_keys.role_key("primary", "provider"): pid,
+                          inference_keys.role_key("primary", "model"): "vendor/model-a"})
     store.write_config(**{inference_keys.FORMAT_KEY: str(int(inference_keys.CURRENT_FORMAT) + 1)})
+    assert inference_keys.is_newer(store.read_config())
+    # The model in use, read off that store (`in_use` is what the chore asks).
+    assert [(m["provider_id"], m["model"]) for m in store.inference.in_use.unpriced()] == [
+        (pid, "vendor/model-a")]
     monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
         {"model": "vendor/model-a", "facts_model": "vendor/model-a",
          "provider_id": pid, "calls": 2}])

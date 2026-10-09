@@ -23,6 +23,7 @@ from grimoire.main import create_app
 from grimoire.store import config, embed_space, llm_connections, logs, usage, vectors
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import effective, review, similarity
+from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
 
 S1, S2 = "001--saltmarch", "002--realm"
@@ -362,8 +363,8 @@ def _configure(depth="2"):
     conn = llm_connections.create_connection("openai_compatible", "Vectors",
                                              base_url="https://vectors.example/v1",
                                              api_key="sk-x", model="", post_process="none")
-    config.write_config(semantic_recall_depth=depth, semantic_recall_threshold="0.4",
-                        embeddings_model="embed-1", embeddings_connection_id=conn)
+    config.write_config(semantic_recall_depth=depth, semantic_recall_threshold="0.4")
+    embedding(conn, "embed-1")
 
 
 def _space():
@@ -375,8 +376,8 @@ def _soon():
 
 
 def test_unconfigured_is_off_and_never_calls(home, fake):
-    config.write_config(semantic_recall_depth="0", embeddings_connection_id="",
-                        embeddings_model="embed-1")
+    config.write_config(semantic_recall_depth="0")
+    embedding("", "embed-1")
     got = similarity.semantic(["x"], [], deadline=_soon())
     assert got.mode == "off"
     assert got.vectors == {}

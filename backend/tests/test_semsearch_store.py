@@ -25,6 +25,7 @@ from grimoire.store import (
     usage,
     worlds,
 )
+from tests.inference_fixtures import embedding, legacy_store
 
 # Vectors are 2-D and hand-picked so a similarity is readable at the call site:
 # the query points at [1, 0], so a document at [1, 0] scores 1.0 and one at
@@ -83,7 +84,7 @@ def configure(kind="openai_compatible", model="embed-1",
     if connection:
         cid = llm_connections.create_connection(kind, "Vectors", base_url=base_url,
                                                 api_key="sk-x", model="", post_process="none")
-    config.write_config(embeddings_model=model, embeddings_connection_id=cid)
+    embedding(cid, model)
     return cid
 
 
@@ -151,7 +152,17 @@ def test_an_unconfigured_store_refuses_rather_than_erroring(home, provider):
 
 
 def test_a_connection_that_serves_no_embeddings_route_is_unavailable(home, provider):
-    configure(kind="openrouter")
+    configure(kind="claude")
+    with pytest.raises(semsearch.Unavailable):
+        semsearch.search_semantic("brine")
+
+
+def test_a_legacy_openrouter_embeddings_choice_is_unavailable(home, provider):
+    """At format 1 OpenRouter serves no embeddings here (`resolve.embed_endpoint`);
+    at format 2 the Embedding role may name it."""
+    legacy_store()
+    cid = llm_connections.create_connection("openrouter", "Vectors", api_key="sk-x")
+    config.write_config(embeddings_model="embed-1", embeddings_connection_id=cid)
     with pytest.raises(semsearch.Unavailable):
         semsearch.search_semantic("brine")
 

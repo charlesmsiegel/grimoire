@@ -28,10 +28,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm, llm_usage, routes
+from grimoire import decisions, inference, llm, routes, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate
 from grimoire.inference import NATIVE_CONCURRENCY, Stage
-from grimoire.llm import FALLBACK_KEY, LLMClient
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import common
@@ -43,7 +43,6 @@ from tests.llm_fakes import FakeLLM, decision_reply
 from . import inference_fixtures as fx
 
 NATIVE, STRUCTURED = decisions.NATIVE_BACKEND, decisions.STRUCTURED_BACKEND
-ACCOUNT = llm_usage.ACCOUNT_KEY
 #: The decide-only model `inference_fixtures.decide_only` puts on the
 #: Decision role, and the generating fallback behind it.
 DECIDER = ("openrouter", "vendor/decider")
@@ -167,7 +166,7 @@ class _Endpoint(FakeLLM):
         if self.in_flight == NATIVE_CONCURRENCY:
             self.full.set()
         try:
-            self._stamp(usage, llm._without_fallback(conn))
+            self._stamp(usage, conn)
             for _ in range(3):
                 await asyncio.sleep(0)
             entry = self.native[item.context]
@@ -219,30 +218,32 @@ def _real(wire: _Wire, *, retries: int = 2) -> LLMClient:
 @pytest.mark.parametrize("shape", ["fallback_attached", "no_fallback"])
 def test_stages_for_every_f_resolution_are_fs(client, shape):
     """Every structured resolution F builds is one structured stage on the
-    dict F sends, `FALLBACK_KEY` and all -- the same object, so nothing about
-    F's call moves."""
+    chain F sends, its fallback and all -- the resolution's own targets, so
+    nothing about F's call moves."""
     _structured_store(client, fallback=shape == "fallback_attached")
     resolved = _resolved()
     chain = inference.stages(resolved)
-    assert chain == (Stage(STRUCTURED, resolved.conn, None),)
-    assert chain[0].conn is resolved.conn
-    assert (FALLBACK_KEY in chain[0].conn) == (shape == "fallback_attached")
+    assert chain == (Stage(STRUCTURED, resolved.chain, None),)
+    assert chain[0].chain.primary is resolved.attempts[0].target
+    assert (chain[0].chain.fallback is not None) == (shape == "fallback_attached")
+    assert resolved.rides == (shape == "fallback_attached")
 
 
 def test_stages_for_a_native_only_primary(client):
     resolved = _native_resolution(client, fallback=True)
-    # As a resolver might hand it over: the fallback attached to the primary.
-    primary = dataclasses.replace(resolved.attempts[0], conn={
-        **resolved.attempts[0].conn, FALLBACK_KEY: resolved.attempts[1].conn})
-    resolved = dataclasses.replace(resolved, attempts=(primary, resolved.attempts[1]))
+    # As a resolver might hand it over: the fallback riding the primary.
+    primary = resolved.attempts[0]
+    resolved = dataclasses.replace(resolved, rides=True)
+    assert resolved.chain is not None and resolved.chain.fallback is not None
     native, fallback = inference.stages(resolved)
     assert (native.mode, native.retries) == (NATIVE, None)
-    assert FALLBACK_KEY not in native.conn
-    assert native.conn == {k: v for k, v in primary.conn.items() if k != FALLBACK_KEY}
+    assert native.chain.fallback is None
+    assert native.chain == resolved.chain.alone() == wire.Chain(primary.target)
     assert (fallback.mode, fallback.retries) == (STRUCTURED, 0)
-    assert fallback.conn == resolved.attempts[1].conn
-    # Copied, never popped: the resolution still carries what it carried.
-    assert primary.conn[FALLBACK_KEY] is resolved.attempts[1].conn
+    assert fallback.chain == wire.Chain(resolved.attempts[1].target)
+    # Built, never popped: the resolution still carries what it carried.
+    assert resolved.rides
+    assert resolved.chain.fallback is resolved.attempts[1].target
 
 
 def test_stages_put_no_structured_stage_after_a_native_one(client):
@@ -260,16 +261,16 @@ def test_stages_put_no_structured_stage_after_a_native_one(client):
     assert inf.generates(both.attempts[0])
     chain = inference.stages(both)
     assert [(s.mode, s.retries) for s in chain] == [(NATIVE, None), (STRUCTURED, 0)]
-    assert chain[1].conn == both.attempts[1].conn
+    assert chain[1].chain == wire.Chain(both.attempts[1].target)
 
 
 def test_stages_for_a_native_fallback(client):
     resolved = _structured_resolution(client, fallback_mode=NATIVE)
     structured, native = inference.stages(resolved)
     assert (structured.mode, structured.retries) == (STRUCTURED, None)
-    assert structured.conn == {k: v for k, v in resolved.conn.items() if k != FALLBACK_KEY}
+    assert structured.chain == resolved.chain.alone()
     assert (native.mode, native.retries) == (NATIVE, 0)
-    assert native.conn == resolved.attempts[1].conn
+    assert native.chain == wire.Chain(resolved.attempts[1].target)
 
 
 def test_a_fallback_known_incapable_is_no_stage(client):
@@ -281,13 +282,17 @@ def test_a_fallback_known_incapable_is_no_stage(client):
 
 def test_stages_copy_and_never_pop(client):
     """M2: deciding through a chain whose first stage is the primary alone
-    leaves the resolution's own dict as it was, `FALLBACK_KEY` included."""
+    leaves the resolution as it was: its attempts, whether its fallback
+    rides, and its chain."""
     resolved = _structured_resolution(client, fallback_mode=NATIVE)
-    before = deepcopy(resolved.conn)
+    before = deepcopy(resolved.attempts)
+    rides = resolved.rides
+    chain = resolved.chain
     _decide(FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()]), [_item()],
             resolved=resolved)
-    assert resolved.conn == before
-    assert resolved.conn[FALLBACK_KEY] is resolved.attempts[1].conn
+    assert resolved.attempts == before
+    assert resolved.rides == rides
+    assert resolved.chain == chain
 
 
 def test_an_empty_chain_is_refused(client):
@@ -323,7 +328,7 @@ def test_a_native_failure_moves_to_the_fallback_stage(client):
     # Answered on the fallback: the native failure is not the batch's.
     assert got.errors == ()
     # The fallback stage is one attempt (I3), and alone: nothing behind it.
-    assert fake.retries == [0] and FALLBACK_KEY not in fake.conn
+    assert fake.retries == [0] and fake.requests[-1]["chain"].fallback is None
 
 
 def test_native_items_fall_through_alone_and_keep_their_order(client):
@@ -516,7 +521,7 @@ def test_a_structured_stage_before_a_native_fallback_still_retries_without_the_m
     resolved = _resolved()
     resolved = dataclasses.replace(resolved, attempts=(
         resolved.attempts[0], dataclasses.replace(resolved.attempts[1], decision_mode=NATIVE)))
-    assert resolved.conn[llm.STRUCTURED_KEY] is True
+    assert resolved.chain.primary.structured is True
     wire = _Wire(streams=[_refused_schema(), decision_reply({"over": True})],
                  decides=[AssertionError("the native fallback was sent")])
     got = _decide(_real(wire, retries=0), [_item()], resolved=resolved)
@@ -529,11 +534,11 @@ def test_a_structured_stage_before_a_native_fallback_still_retries_without_the_m
 
 def test_a_lone_structured_fallback_stage_gets_the_schema_refusal_retry(client):
     """M1: behind a native primary, the structured fallback stage is sent with
-    no `FALLBACK_KEY`, so its schema refusal is re-sent without the mode."""
+    no fallback riding it, so its schema refusal is re-sent without the mode."""
     fx.decide_only(client, fallback=True)
     _flag("spare", "vendor/spare")
     resolved = _resolved()
-    assert resolved.attempts[1].conn[llm.STRUCTURED_KEY] is True
+    assert resolved.attempts[1].target.structured is True
     wire = _Wire(streams=[_refused_schema(), decision_reply({"over": True})],
                  decides=[LLMError("network", "connection reset")])
     got = _decide(_real(wire, retries=0), [_item()], resolved=resolved)
@@ -610,54 +615,95 @@ def test_around_runs_inside_each_native_meter(client):
     rows = _rows()
     assert [(r["status"], r.get("error", ""), r["decision_mode"]) for r in rows] == [
         ("error", "timeout", NATIVE), ("ok", "", STRUCTURED)]
-    assert holders[0][llm.ATTEMPTED]["model"] == DECIDER[1]
+    assert holders[0][llm.ATTEMPTED].model == DECIDER[1]
 
 
 def test_native_rows_carry_operation_and_mode(client):
     resolved = _native_resolution(client, fallback=True)
-    before = deepcopy(resolved.attempts[0].conn)
-    block = resolved.attempts[0].conn[ACCOUNT]
+    before = resolved.attempts[0].target
     fake = FakeLLM([["unused"]], decisions=[_yes()])
     _decide(fake, [_item()], resolved=resolved)
     (row,) = _rows()
     assert (row["operation"], row["decision_mode"]) == ("decide", NATIVE)
     sent = fake.native_requests[0][1]
-    assert sent[ACCOUNT] is not block and sent[ACCOUNT]["decision_mode"] == NATIVE
-    # E's no-mutation rule: the resolution's own block is as it was.
-    assert resolved.attempts[0].conn == before
-    assert resolved.attempts[0].conn[ACCOUNT] is block and "decision_mode" not in block
+    assert sent.account.decision_mode == NATIVE
+    assert resolved.attempts[0].target.account.decision_mode == ""
+    # E's no-mutation rule: the resolution's own target is as it was.
+    assert resolved.attempts[0].target is before
 
 
 def test_a_native_row_files_no_preset_it_never_sent(client):
     """Brutal reviews H (🟣3, P1): a native call sends no sampling (spec 8),
     so its ledger row names no `preset`, even with one on the role --
     `llm_usage.account` documents `preset` as the one actually sent. The
-    resolution's own dict still carries the preset it resolved."""
+    resolution's own target still carries the preset it resolved."""
     fx.decide_only(client, fallback=False)
     pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
     fx.put_settings(client, {"roles": {"decision": {
         "selection": {"provider": DECIDER[0], "model": DECIDER[1], "preset": pid}}}})
     resolved = _resolved()
-    assert resolved.attempts[0].conn["sampling"]["preset_id"] == pid
+    assert resolved.attempts[0].target.sampling.preset_id == pid
     fake = FakeLLM([["unused"]], decisions=[_yes()])
     _decide(fake, [_item()], resolved=resolved)
     (row,) = _rows()
     assert row["decision_mode"] == NATIVE and "preset" not in row
-    assert "sampling" not in fake.native_requests[0][1]
+    assert fake.native_requests[0][1].sampling == wire.Sampling()
+
+
+def test_a_native_row_still_files_decision_mode_native(client):
+    """Slice I, 9c: the native stage's stamp moved from the dict's account
+    block to its target's (`wire.Chain.with_account`). Through the REAL
+    facade, the row a native call files still says `decision_mode: native`,
+    so `usage._modellable` keeps it unpriced at chat rates; it names no
+    `preset`, though the role has one; and a rate on file for exactly its
+    model models nothing (`usage_rollup.VERSION` stays 6: no row field
+    moved)."""
+    fx.decide_only(client, fallback=False)
+    pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
+    fx.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": DECIDER[0], "model": DECIDER[1], "preset": pid}}}})
+    rates = {"prompt_usd_per_1k": 0.01, "completion_usd_per_1k": 0.02}
+    facts.state(DECIDER[0], DECIDER[1], rates=rates)
+    pricing.write_pricing({DECIDER[1]: rates})
+    resolved = _resolved()
+    assert resolved.chain is not None and resolved.chain.primary.sampling.preset_id == pid
+
+    class _Counted(_Wire):
+        async def decide(self, item, model, key, *, usage=None, bound=None):
+            result = await super().decide(item, model, key, usage=usage, bound=bound)
+            usage.update({"prompt_tokens": 420, "completion_tokens": 3})
+            return result
+
+    wire_ = _Counted(decides=[_yes()])
+    _decide(_real(wire_), [_item()], resolved=resolved)
+    assert wire_.decided == [DECIDER[1]]
+    (row,) = _rows()
+    assert (row["operation"], row["decision_mode"]) == ("decide", NATIVE)
+    assert "preset" not in row and row.get("modelled_usd") is None
+    totals = store.usage.summary(days=1)["totals"]
+    assert totals["modelled_usd"] == 0.0 and totals["modelled_calls"] == 0
+    assert totals["unpriced_calls"] == 1
+    from grimoire.store import usage_rollup
+    assert usage_rollup.VERSION == 6
 
 
 def test_the_facade_drops_the_preset_from_a_native_call_it_is_handed(client):
-    """The same at the facade, for a caller that hands `decide_native` a dict
-    with a preset on it (the model test's probe): the holder it stamps, which
-    the meter files, names none."""
+    """The same at the facade, for a caller that hands `decide_native` a
+    target with a preset on it (the model test's probe): the holder it stamps,
+    which the meter files, names none, and the attempt it names carries none."""
     fx.decide_only(client, fallback=False)
-    conn = {**_resolved().attempts[0].conn,
-            "sampling": {"preset_id": "warm", "params": {}, "scope": "global"}}
+    target = dataclasses.replace(
+        _resolved().attempts[0].target,
+        sampling=wire.Sampling(preset_id="warm", preset_name="Warm", scope="global",
+                               params={"temperature": 0.4}))
     holder: dict = {}
-    wire = _Wire(decides=[_yes()])
-    asyncio.run(_real(wire).decide_native(_item(), conn, holder))
+    sent = _Wire(decides=[_yes()])
+    asyncio.run(_real(sent).decide_native(_item(), target, holder))
     assert holder["provider_id"] == DECIDER[0]     # the account was filed
-    assert "preset" not in holder and "sampling" not in holder[llm.ATTEMPTED]
+    assert "preset" not in holder
+    assert holder[llm.ATTEMPTED] == target.without_sampling()
+    assert holder[llm.ATTEMPTED].sampling == wire.Sampling()
+    assert target.sampling.preset_id == "warm"     # the caller's target is untouched
 
 
 def test_decision_names_the_one_backend_and_route_that_answered(client):
@@ -781,7 +827,7 @@ def test_a_chunk_sent_with_a_fallback_stops_only_when_both_routes_would(client, 
     may serve the next chunk."""
     _structured_store(client)
     resolved = _resolved()
-    assert FALLBACK_KEY in resolved.conn
+    assert resolved.rides
     provider = _Wire(streams=[LLMError("auth", "invalid key", status=401), then])
     with pytest.raises(LLMError):
         _decide(_real(provider, retries=0), _chunks(3), resolved=resolved)
@@ -814,8 +860,8 @@ def test_the_reviewers_two_stage_clock_script_raises_budget_refused(client):
     retries) with an `around` that always refuses -- `BudgetRefused` comes out
     as itself, not as an `LLMError` composed of two refusals."""
     resolved = _native_resolution(client, fallback=True)
-    chain = (Stage(NATIVE, resolved.attempts[0].conn, None),
-             Stage(STRUCTURED, resolved.attempts[1].conn, 0))
+    chain = (Stage(NATIVE, wire.Chain(resolved.attempts[0].target), None),
+             Stage(STRUCTURED, wire.Chain(resolved.attempts[1].target), 0))
     fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
 
     async def around(call, holder):
@@ -876,7 +922,30 @@ def test_a_connection_wide_stop_still_runs_a_stage_on_another_connection(client)
                      {i.context: LLMError("auth", "invalid key", status=401) for i in items})
     got = _decide(fake, items, resolved=resolved)
     assert {r.backend for r in got.items} == {STRUCTURED} and got.errors == ()
-    assert fake.calls == 1 and fake.requests[0]["conn"]["id"] == SPARE[0]
+    assert fake.calls == 1 and fake.requests[0]["target"].provider_id == SPARE[0]
+
+
+def test_an_id_less_stage_is_never_the_stopped_stages_connection(client):
+    """`_same_connection`: an empty provider id matches nothing, not even
+    another empty one. A native stage on an id-less target that stops on a
+    connection-wide failure (a refused key) therefore skips no later stage
+    for being "the same connection": the id-less structured stage after it
+    runs, and answers. (The resolver builds no id-less attempt; a hand-built
+    chain, or an unbuilt target, has one.)"""
+    assert not inference._same_connection("", "")
+    assert inference._same_connection("openrouter", "openrouter")
+    resolved = _native_resolution(client, fallback=True)
+    native = dataclasses.replace(resolved.attempts[0].target, provider_id="")
+    fallback = dataclasses.replace(resolved.attempts[1].target, provider_id="")
+    assert native.kind == fallback.kind
+    items = _items(2)
+    fake = FakeLLM([[decision_reply({"over": False}, {"over": False})]],
+                   decisions=[LLMError("auth", "invalid key", status=401)])
+    got = asyncio.run(inference.run_stages(
+        "scene-break", items, (Stage(NATIVE, wire.Chain(native), None),
+                               Stage(STRUCTURED, wire.Chain(fallback), 0)), client=fake))
+    assert fake.calls == 1
+    assert {r.backend for r in got.items} == {STRUCTURED} and got.errors == ()
 
 
 # ---- a hung decisions endpoint (brutal review H 🟣5) ----
@@ -971,9 +1040,9 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     """A native item is one call, and its capture is the request as sent --
     the normalised body (`llm.native_body`), holding no key or URL -- with
     its normalised answer and the distribution the endpoint reported, on
-    the stage's dict without the sampler preset it never sent (M4)."""
+    the stage's target without the sampler preset it never sent (M4)."""
     resolved = _native_resolution(client, fallback=False)
-    assert "sampling" in resolved.attempts[0].conn
+    own = resolved.attempts[0].target
     item = _choice_item()
     reported = ItemResult({"who": Answer("mara", distribution={"mara": 0.7,
                                                                "winifred": 0.3})})
@@ -987,18 +1056,18 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     body = json.loads(messages[0]["content"])
     assert body["model"] == DECIDER[1] and body["state"] == item.context
     assert set(body["questions"]) == {"who"}
-    key = resolved.attempts[0].conn.get("api_key")
+    key = resolved.attempts[0].target.api_key
     assert key and key not in messages[0]["content"]
     assert "http" not in messages[0]["content"]
     assert outcome == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
                        "items": [{"backend": NATIVE, "answers": {"who": {
                            "answer": "mara",
                            "distribution": {"mara": 0.7, "winifred": 0.3}}}}]}
-    assert "sampling" not in conn
-    assert conn[ACCOUNT]["decision_mode"] == NATIVE
-    assert {k: v for k, v in sent.items() if k != "sampling"} == conn
-    # The resolution's own dict keeps its preset.
-    assert "sampling" in resolved.attempts[0].conn
+    assert conn.sampling == wire.Sampling()
+    assert conn.account.decision_mode == NATIVE
+    assert sent == conn
+    # The resolution's own target keeps its preset.
+    assert resolved.attempts[0].target is own
 
 
 def test_each_native_item_is_one_capture_and_a_fallback_stage_its_own(client):
@@ -1126,7 +1195,7 @@ class _Held(FakeLLM):
         self.out = asyncio.Event()
 
     async def complete(self, messages, conn, usage=None, *, schema=None, retries=None):
-        self._stamp(usage, llm._without_fallback(conn))
+        self._stamp(usage, conn)
         self.out.set()
         await asyncio.Event().wait()
 

@@ -599,12 +599,12 @@ def post_world_entity_image_description_draft(
         subject = store.entities.read_entity(root, kind, eid)["meta"]["name"]
     except store.entities.EntityNotFound:
         subject = ""
-    conn, messages = image_draft_prompt(
+    resolved, messages = image_draft_prompt(
         store.assets.image_path(root, eid, "default", name, base=kind), subject)
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "image-description",
+            client, resolved, messages, "image-description",
             lambda text: {"description": store.image_drafts.parse_output(text)})
 
     return runs.run_draft(request.app, runs.world_subject(wid),

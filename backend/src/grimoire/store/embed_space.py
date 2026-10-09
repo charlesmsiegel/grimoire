@@ -23,9 +23,9 @@ from __future__ import annotations
 import zlib
 
 from . import config, llm_connections
+from . import inference_keys as keys
 from .inference import resolve as inference_resolve
 from .inference import resolved as inference_resolved
-from .inference import translate
 
 #: The exceptions reading the role can raise, every one of which means "off":
 #: the store may be hand-edited or half-synced.
@@ -49,12 +49,12 @@ def endpoint_of(got: inference_resolved.ResolvedInference | None) -> dict | None
         return None
     try:
         attempt = got.attempts[0]
-        conn = attempt.conn
+        target = attempt.target
         return {"model": attempt.model, "base_url": attempt.base_url,
-                "key": conn["api_key"], "space": got.space_id,
+                "key": target.api_key, "space": got.space_id,
                 "provider": attempt.provider_id,
-                "provider_name": str(conn.get("name") or attempt.provider_id),
-                "provider_kind": attempt.provider_kind, "conn": conn}
+                "provider_name": target.provider_name or attempt.provider_id,
+                "provider_kind": attempt.provider_kind, "target": target}
     except _OFF_ERRORS:
         return None
 
@@ -65,9 +65,9 @@ def endpoint(cfg: dict | None = None) -> dict | None:
 
     `{model, base_url, key, space}` -- what a request needs and the space its
     vectors are saved under -- plus `provider` (the connection id),
-    `provider_name` (its name, else its id), `provider_kind`, and `conn`, the
-    attempt's lowered connection dict, which carries what the operation's
-    ledger row is stamped from. Built from `resolve.embedding`, the role's one
+    `provider_name` (its name, else its id), `provider_kind`, and `target`,
+    the attempt's `wire.Target`, which carries what the operation's ledger
+    row is stamped from. Built from `resolve.embedding`, the role's one
     reader: None exactly when that names no space -- no model, no provider, a
     provider that is gone, a provider file that could not be read (a busy
     store included: the lookup reads it as no provider, so embedding is off
@@ -102,10 +102,15 @@ def _space(cfg: dict, conn: dict, model: str, *, catalog: bool = True) -> str | 
     it would embed nothing -- no endpoint, or a model it is known not to embed
     with -- for `moved_by`, whose `after` is a record not (yet) on disk. The
     rule is `resolve.embedding`'s own (`resolve.embed_attempt`); `catalog`
-    False judges it without the cached catalog row (see there)."""
-    return inference_resolve.embed_attempt(
-        str(conn["id"]), model, conn, current=translate.is_current(cfg),
-        catalog=catalog).space_id
+    False judges it without the cached catalog row (see there).
+
+    Below format 2 an OpenRouter record embeds nothing: a legacy choice of
+    one has always meant "off", and the planner maps it to no role
+    (`legacy_plan.legacy_embeds`), so no edit of it moves anything."""
+    if not keys.is_current(cfg) and conn.get("kind") == "openrouter":
+        return None
+    return inference_resolve.embed_attempt(str(conn["id"]), model, conn,
+                                           catalog=catalog).space_id
 
 
 #: `problem`'s answer when none of its specific reasons applies.
@@ -128,7 +133,7 @@ def problem(cfg: dict | None = None, *, embeds: bool | None = None) -> str | Non
         cfg = config.read_config() if cfg is None else cfg
         if endpoint(cfg) is not None if embeds is None else embeds:
             return None
-        conn_id, model = translate.embedding_role(cfg)
+        conn_id, model = inference_resolve.embedding_role(cfg)
         if not conn_id:
             return "No provider chosen"
         try:
@@ -139,10 +144,9 @@ def problem(cfg: dict | None = None, *, embeds: bool | None = None) -> str | Non
         kind = conn.get("kind")
         if kind == "openai_compatible" and not conn.get("base_url"):
             return f"{name} has no address set"
-        if kind == "openrouter" and translate.is_current(cfg) and not conn.get("api_key"):
+        if kind == "openrouter" and not conn.get("api_key"):
             return f"{name} has no key set"
-        if kind != "openai_compatible" and not inference_resolve.embed_endpoint(
-                conn, translate.is_current(cfg)):
+        if kind != "openai_compatible" and not inference_resolve.embed_endpoint(conn):
             return f"{name} cannot embed"
         if not model:
             return "No model chosen"
@@ -174,7 +178,10 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
     embedded from scratch. Never raises.
     """
     try:
-        conn_id, model = translate.embedding_role(cfg)
+        # The role as STORED, not as the mapping judges it: below format 2
+        # the mapping turns off a legacy choice whose record, as it stands,
+        # does not embed -- which is the record this edit replaces.
+        conn_id, model = inference_resolve.stored_embedding_role(cfg)
         if not model or not conn_id or conn_id != after.get("id"):
             return False
         new = _space(cfg, after, model, catalog=after.get("rev") == before.get("rev"))
@@ -199,16 +206,15 @@ def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
     `moved_by`. Turning it off re-embeds nothing. False when the role does
     not name this provider and model. Never raises."""
     try:
-        conn_id, role_model = translate.embedding_role(cfg)
+        conn_id, role_model = inference_resolve.stored_embedding_role(cfg)
         if not role_model or conn_id != provider_id or role_model != model:
             return False
         raw = llm_connections.read_connection_raw(provider_id)
-        current = translate.is_current(cfg)
-        new = inference_resolve.embed_attempt(provider_id, model, raw, current=current,
+        new = inference_resolve.embed_attempt(provider_id, model, raw,
                                               model_facts=after).space_id
         if new is None:
             return False
-        old = inference_resolve.embed_attempt(provider_id, model, raw, current=current,
+        old = inference_resolve.embed_attempt(provider_id, model, raw,
                                               model_facts=before).space_id
         return old is None or old != new
     except (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,

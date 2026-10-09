@@ -389,7 +389,7 @@ def test_the_no_model_recorders_fire_on_a_tolerant_path(client, monkeypatch):
     fake, fake_embeddings, _class_calls = _armed(client, monkeypatch)
 
     def model_call():
-        conn = common.require_inference("continuity_reconcile", cid).conn
+        conn = common.require_inference("continuity_reconcile", cid).chain
         asyncio.run(fake.complete([{"role": "system", "content": "control"}], conn))
 
     def embedding_call():

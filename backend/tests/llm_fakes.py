@@ -4,20 +4,27 @@
 is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
-    async def stream(messages, conn, usage=None, *, schema=None) -> AsyncIterator[str]
-    async def complete(messages, conn, usage=None, *, schema=None, retries=None) -> str
-    async def single(messages, conn, usage=None) -> str
-    async def decide_native(item, conn, usage=None, *, retries=None) -> ItemResult
-    async def list_models(conn) -> list[dict]
-    async def check(conn) -> None
+    async def stream(messages, chain, usage=None, *, schema=None) -> AsyncIterator[str]
+    async def complete(messages, chain, usage=None, *, schema=None, retries=None) -> str
+    async def single(messages, target, usage=None) -> str
+    async def decide_native(item, target, usage=None, *, retries=None) -> ItemResult
+    async def list_models(target) -> list[dict]
+    async def check(target) -> None
+
+Each takes what the facade takes: a `wire.Chain` (or a lone `wire.Target`)
+for `stream` and `complete`, one `wire.Target` for the rest -- and, like the
+facade, refuses a connection dict with a `TypeError`. Each request
+records `request["chain"]` and `request["target"]` (its primary).
 
 `decide_native` is a native decisions endpoint's one attempt (slice H, spec
 7.4). `FakeLLM(decisions=[...])` scripts it by call order like `turns`, each
 entry an `ItemResult` to return or an `LLMError` to raise; the calls are
-recorded in `native_requests`. Like the facade, it takes the fallback off
-the connection, and refuses a kind with no native endpoint and an item
-`decisions.native_gap` names before recording or stamping anything, with the
-facade's own errors, so a chain test sees the same refusal.
+recorded in `native_requests` as `(item, target, retries)`. Like the facade,
+it refuses a kind with no native endpoint (`adapters.decides_natively`) and
+an item `decisions.native_gap` names before recording or stamping anything,
+with the facade's own errors, so a chain test sees the same refusal, and
+stamps the target without its sampler preset, which a native call never
+sends.
 
 `schema` is the JSON Schema `decide` asks the facade for (slice F, spec 7.2).
 `complete` records it in `schemas`, one entry per call (None when the call
@@ -37,7 +44,8 @@ every inline fake written before it existed is still called as it was.
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
 but the half of the contract `store.usage.Meter` reads to tell "the request went
 out and reported nothing" from "the request was never made". That stamp includes
-the connection dict itself under `llm.ATTEMPTED`, which is where a saved
+the attempt itself under `llm.ATTEMPTED` -- the chain's primary target, as
+the facade stamps it -- which is where a saved
 variant's `made_by.connection_id` is read from. A fake built with
 `usage=` then adds what a *provider* would report on top, so a test can drive a
 route and assert on the ledger row it filed; the default adds nothing, which is
@@ -86,8 +94,8 @@ from pathlib import Path
 
 import anyio
 
-from grimoire import decisions, llm_usage
-from grimoire.llm import ATTEMPTED, _native_kind, _without_fallback, effective_model
+from grimoire import adapters, decisions, llm_usage, wire
+from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -105,6 +113,38 @@ class CassetteMiss(AssertionError):
     fixtures do not cover, or a prompt template moved out from under a matcher.
     Both are things a test run must report, not paper over with a default reply.
     """
+
+
+def _chain_of(attempt) -> wire.Chain:
+    """What a call handed a fake describes, as the facade reads it: a chain
+    as it is, and a target as a chain of one. Anything else -- a lowered
+    connection dict included -- is the facade's `TypeError`."""
+    if isinstance(attempt, wire.Chain):
+        return attempt
+    if isinstance(attempt, wire.Target):
+        return wire.Chain(attempt)
+    raise TypeError(f"the facade sends a wire.Chain or wire.Target, not {type(attempt).__name__}")
+
+
+def _target_of(attempt) -> wire.Target:
+    """One attempt, as the facade's one-attempt doors take it: a `Target`,
+    else the facade's `TypeError`."""
+    if isinstance(attempt, wire.Target):
+        return attempt
+    raise TypeError(f"the facade sends a wire.Target, not {type(attempt).__name__}")
+
+
+def carrying(attempt, fallback: wire.Target | None):
+    """`attempt` -- a target or a chain -- carrying `fallback` as the call's
+    own, the way a resolution carries the resolver's: where a call's fallback
+    comes from, now that the client holds none. None, or a chain that already
+    carries one, leaves it as it is."""
+    if fallback is None:
+        return attempt
+    chain = _chain_of(attempt)
+    if chain.fallback is not None:
+        return attempt
+    return wire.Chain(chain.primary, _target_of(fallback))
 
 
 class Cassette:
@@ -268,7 +308,7 @@ class FakeLLM:
         self.noted: list[tuple] = []
         #: The native decisions script (the last entry repeats), and each
         #: `decide_native` call that got past the gap check, as
-        #: `(item, conn, retries)`. Not counted in `calls`: no generation ran.
+        #: `(item, target, retries)`. Not counted in `calls`: no generation ran.
         self.decisions = None if decisions is None else list(decisions)
         self.native_requests: list[tuple] = []
 
@@ -296,22 +336,24 @@ class FakeLLM:
         if self.stall:
             await asyncio.sleep(STALL_SECONDS)
 
-    async def decide_native(self, item, conn, usage=None, *, retries=None):
+    async def decide_native(self, item, target, usage=None, *, retries=None):
         """The next scripted native decision. An `LLMError` entry is raised; an
         `ItemResult` is returned, stamped `backend="native"` when it names
         none. The holder is stamped as `stream` stamps it, so a meter files
         the row the real facade's would."""
         if self.decisions is None:
             raise AssertionError("FakeLLM has no native decisions scripted")
-        # The facade's own boundary, in its order: the fallback off, then a
-        # kind with no endpoint, then the gap -- each before any stamp.
-        conn = _without_fallback(conn)
-        _native_kind(conn)
+        # The facade's own boundary, in its order: a kind with no endpoint,
+        # then the gap -- each before any stamp.
+        target = _target_of(target)
+        if not adapters.decides_natively(target.kind):
+            raise LLMError("bad_response",
+                           f"{target.kind} connections have no native decisions endpoint")
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
-        self.native_requests.append((item, conn, retries))
-        self._stamp(usage, conn)
+        self.native_requests.append((item, target, retries))
+        self._stamp(usage, target.without_sampling())
         entry = self.decisions[min(len(self.native_requests), len(self.decisions)) - 1]
         if isinstance(entry, LLMError):
             raise entry
@@ -333,57 +375,55 @@ class FakeLLM:
         # still recorded, because `stream` records exactly once.
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
-    async def single(self, messages, conn, usage=None) -> str:
+    async def single(self, messages, target, usage=None) -> str:
         """The model test call's one attempt. A fake has no retries or fallback
         to skip, so this is `complete` -- consuming `stream` for the same reason
         `complete` does. That `single` itself skips both is held by the facade's
         own tests and the route's wire tests, not by this double. No `schema=`,
         exactly as the facade's `single` takes none."""
-        return "".join([delta async for delta in self.stream(messages, conn, usage)])
+        return "".join([delta async for delta in self.stream(messages, _target_of(target),
+                                                             usage)])
 
-    async def list_models(self, conn) -> list[dict]:
+    async def list_models(self, target) -> list[dict]:
         """The catalog half of the facade's surface (#149).
 
-        Records the whole connection, not just its base URL: which *provider*
+        Records the whole target, not just its base URL: which *provider*
         a catalog was fetched from is the entire question the issue is about,
         and a fake that only kept the URL could not tell an OpenRouter fetch
         from a custom endpoint's.
         """
-        self.listed.append(conn)
+        self.listed.append(_target_of(target))
         if self.models_error is not None:
             raise self.models_error
         return list(self.models)
 
-    async def check(self, conn) -> None:
+    async def check(self, target) -> None:
         """The health half (#146). Returns on healthy, raises on not."""
-        self.checked.append(conn)
+        self.checked.append(_target_of(target))
         if self.health_error is not None:
             raise self.health_error
 
-    def note_outcome(self, conn, error) -> None:
+    def note_outcome(self, target, error) -> None:
         """The outcome a route hands back because the facade could not see it —
         a generation cancelled by its total-duration ceiling (#146)."""
-        self.noted.append((conn, error))
+        self.noted.append((_target_of(target), error))
 
     @staticmethod
-    def _stamp(usage, conn) -> None:
-        """What `llm._stamp` files for an attempt, for a fake that has one."""
+    def _stamp(usage, attempt) -> None:
+        """What `llm._stamp` files for an attempt, for a fake that has one:
+        a chain or a target by its primary target, as the facade stamps it."""
         if usage is None:
             return
-        # `effective_model`, not `conn["model"]`, for the reason `llm._stamp`
-        # uses it: a claude connection with no model still runs one, and a
-        # fake that stamped the empty string would let a test assert a model
-        # the real facade never records.
-        usage.update({"model": effective_model(conn),
-                      "connection": conn.get("name") or conn.get("id")
-                      or conn.get("kind") or "?",
-                      "provider": conn.get("kind", "openrouter"), "attempts": 1,
-                      ATTEMPTED: conn})
+        target = _chain_of(attempt).primary
+        # The target's model is the one it runs (a claude connection with no
+        # model still runs one), as `llm._stamp` records it.
+        usage.update({"model": target.model, "connection": target.label or target.kind or "?",
+                      "provider": target.kind, "attempts": 1, ATTEMPTED: target})
         # What served it, as `llm._stamp` files it, so a route test sees
         # the row the real facade writes. No count: that is the facade's
         # `_resilient`, after a natural end, never a stamp.
-        usage["requested_model"] = effective_model(conn)
-        llm_usage.account(usage, conn)
+        usage["requested_model"] = usage["model"]
+        llm_usage.account(usage, target)
 
     # ---- inspection ----
     @property
@@ -391,18 +431,20 @@ class FakeLLM:
         return self.requests[-1]["messages"] if self.requests else None
 
     @property
-    def conn(self) -> dict | None:
-        return self.requests[-1]["conn"] if self.requests else None
+    def target(self) -> wire.Target | None:
+        """The last request's primary target."""
+        return self.requests[-1]["target"] if self.requests else None
 
-    def _next(self, messages, conn) -> list[str]:
-        self.requests.append({"messages": messages, "conn": conn})
+    def _next(self, messages, attempt) -> list[str]:
+        chain = _chain_of(attempt)
+        request = {"messages": messages, "chain": chain, "target": chain.primary}
+        self.requests.append(request)
         index, self.calls = self.calls, self.calls + 1
         if self.cassette is not None:
             # The model of the attempt this fake was handed: it serves that
             # attempt and no fallback, so an entry naming another model is not
             # this request's.
-            return self.cassette.reply(
-                messages, effective_model(conn) if isinstance(conn, dict) else None)
+            return self.cassette.reply(messages, chain.primary.model)
         return self.turns[min(index, len(self.turns) - 1)]
 
 
@@ -545,10 +587,10 @@ class StallingGateway(FakeCatalog):
             await asyncio.sleep(self.seconds)
         return await super().complete(messages, conn, usage, schema=schema, retries=retries)
 
-    async def single(self, messages, conn, usage=None) -> str:
+    async def single(self, messages, target, usage=None) -> str:
         if self.where == "single":
             await asyncio.sleep(self.seconds)
-        return await super().single(messages, conn, usage)
+        return await super().single(messages, target, usage)
 
 
 # ---- provider doubles ----

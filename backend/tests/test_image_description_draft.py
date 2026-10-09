@@ -14,6 +14,7 @@ import grimoire.store as store
 from grimoire import llm, routes
 from grimoire.main import create_app
 from tests import draft_runs as drafts
+from tests.inference_fixtures import put_settings
 from tests.llm_fakes import CapturingOpenRouter, FakeOpenRouterComplete
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -39,6 +40,12 @@ def art(client):
     client.put(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/gallery_1",
                files={"file": ("a.png", PNG, "image/png")})
     return wid, cid, vid
+
+
+def _primary_on_claude(client):
+    """The Primary role on the seeded Claude connection's default model."""
+    put_settings(client, {"roles": {"primary": {"selection": {
+        "provider": "claude", "model": store.config.DEFAULT_CLAUDE_MODEL}}}})
 
 
 def _url(wid, cid, vid, name="gallery_1"):
@@ -81,7 +88,7 @@ def test_a_claude_connection_is_refused_with_a_reason_rather_than_crashing(clien
     """`claude_agent` joins message content as a string, so a multimodal message
     would raise deep inside the SDK path. The refusal names the fix."""
     wid, cid, vid = art
-    client.put("/api/config", json={"active_connection_id": "claude"})
+    _primary_on_claude(client)
     client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
     r = drafts.post(client, _url(wid, cid, vid))
     assert r.status_code == 409
@@ -156,7 +163,7 @@ def test_a_library_image_can_be_drafted_with_no_subject(client, art):
 def test_every_surface_refuses_a_claude_connection_the_same_way(client, art):
     """One helper serves all four, so the refusal cannot drift between them."""
     wid, cid, vid = art
-    client.put("/api/config", json={"active_connection_id": "claude"})
+    _primary_on_claude(client)
     client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
     eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Harbour"}).json()["id"]
     client.put(f"/api/worlds/{wid}/locations/{eid}/images/gallery_1",
@@ -172,7 +179,7 @@ def test_all_five_surfaces_refuse_a_claude_connection_with_todays_body(client, a
     no longer checks the kind itself), so every surface that drafts through it
     is held to the exact body it answered before: `{"detail": UNSUPPORTED}`."""
     wid, cid, vid = art
-    client.put("/api/config", json={"active_connection_id": "claude"})
+    _primary_on_claude(client)
     fake = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     made = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"}).json()
@@ -202,7 +209,7 @@ def test_an_openrouter_model_the_catalog_says_is_blind_is_refused(client, art):
     """The new refusal: a known `no` from the catalog, named for the reader."""
     wid, cid, vid = art
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
-    model = store.llm_connections.read_connection_raw("openrouter")["model"]
+    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
     store.llm_connections.set_cached_models(
         "openrouter", [{"id": model, "vision": False}], rev)
     client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
@@ -220,15 +227,17 @@ def test_an_openrouter_model_the_catalog_says_is_blind_is_refused(client, art):
 
 
 def test_images_on_still_drafts_where_the_catalog_says_blind(client, art):
-    """The connection's "Images: on" sent drafts whatever the catalog said
-    before the seam checked capabilities, and still does (a bridge until
-    slice C moves the setting into the model's facts)."""
+    """"Images: on" sent drafts whatever the catalog said before the seam
+    checked capabilities, and still does -- the model's own fact now, where
+    it was the connection's."""
     wid, cid, vid = art
-    client.put("/api/llm-connections/openrouter", json={"vision": "on"})
+    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
+    facts = "/api/llm-connections/openrouter/facts"
+    assert client.put(facts, json={"model": model, "vision": "on"}).status_code == 200
+    assert client.get(facts, params={"model": model}).json()["vision"] == "on"
     conn = store.llm_connections.read_connection_raw("openrouter")
-    assert conn["vision"] == "on"
     store.llm_connections.set_cached_models(
-        "openrouter", [{"id": conn["model"], "vision": False}], conn["rev"])
+        "openrouter", [{"id": model, "vision": False}], conn["rev"])
     fake = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     r = drafts.post(client, _url(wid, cid, vid))

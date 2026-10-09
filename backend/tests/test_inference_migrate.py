@@ -38,6 +38,7 @@ from grimoire.store import (
 )
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, migrate
+from tests import inference_fixtures
 from tests.fixtures.frozen_campaign import sweep as frozen
 from tests.llm_fakes import FakeOpenRouter
 
@@ -51,6 +52,9 @@ def home(monkeypatch, tmp_path):
     root = tmp_path / "home"
     root.mkdir()
     monkeypatch.setenv("GRIMOIRE_HOME", str(root))
+    # The migration's subject is a format-1 library, and a missing config.md is
+    # now born at format 2: write the legacy one before anything reads the store.
+    inference_fixtures.legacy_store(root)
     return root
 
 
@@ -59,7 +63,7 @@ def home(monkeypatch, tmp_path):
 def _legacy() -> None:
     """A legacy store: `config.md` without the marker, the seeded connections,
     and an OpenRouter key and model."""
-    config.read_config()
+    inference_fixtures.legacy_store()
     llm_connections.update_connection("openrouter", api_key="sk-test-active",
                                       model="vendor/active")
     assert not inference_keys.is_current(config.read_config())
@@ -128,10 +132,14 @@ def test_a_legacy_store_migrates_roles_routes_and_marker_last(home):
     assert cfg["use_scene_break"] == "model"
     assert cfg["use_scene_break_provider"] == "spare"
     assert cfg["preset_speaker"] == "cold"
-    # The legacy keys stay, frozen, for older builds.
-    assert cfg["route_summary"] == "spare" and cfg["active_connection_id"] == "openrouter"
-    # The safety backup exists.
+    # The migration leaves the legacy keys, frozen, for older builds; the
+    # retirement that follows it in the same run deletes them (slice I).
+    assert "route_summary" not in cfg and "active_connection_id" not in cfg
+    assert cfg[inference_keys.RETIRED_KEY] == "1"
+    # The safety backup exists, and stands in for retirement's.
     assert len(_safety_archives(home)) == 1
+    assert not any(p.name.startswith(backups.RETIRE_PREFIX)
+                   for p in (home / "backups").iterdir())
 
 
 def test_migration_is_idempotent(home):
@@ -254,7 +262,8 @@ def test_a_connection_that_already_has_a_preset_is_left_alone(home):
     _legacy()
     llm_connections.update_connection("openrouter", preset="openrouter", billing="subscription")
     before = (home / "llm_connections" / "openrouter.md").read_bytes()
-    assert migrate.ensure().state == "done"
+    # The migration alone: retirement's strip rewrites the file afterwards.
+    assert inference_fixtures.migrate_as_c_h().state == "done"
     assert (home / "llm_connections" / "openrouter.md").read_bytes() == before
 
 
@@ -327,7 +336,8 @@ def test_a_campaign_is_not_migrated_while_its_connection_can_still_move(home, mo
                                               model="vendor/late")
 
     monkeypatch.setattr(migrate, "_campaign_step", then_edited)
-    assert migrate.ensure().state == "done"
+    # The migration alone: retirement's strip takes the legacy `model` off.
+    assert inference_fixtures.migrate_as_c_h().state == "done"
     model = llm_connections.read_connection_raw("openrouter")["model"]
     assert _meta(cid)[inference_keys.pin_key("scene", "model")] == model
     assert _raw_config(home)["role_primary_model"] == model
@@ -486,14 +496,16 @@ def test_a_legacy_openrouter_embedding_stays_off(home):
 def test_a_legacy_zai_embedding_is_off_and_the_migration_clears_it(home):
     """z.ai serves no embeddings (the preset's hard `no`, inferred from the
     URL), so a legacy choice of it is off at format 1 -- no request that could
-    only fail -- and the migration writes no Embedding role for it (ruling 4):
-    the choice is cleared, and the role stays off after the switch."""
+    only fail: the planner maps it to no Embedding role at all, in memory --
+    and the migration writes no Embedding role for it (ruling 4): the choice
+    is cleared, and the role stays off after the switch."""
     _legacy()
     llm_connections.create_connection("openai_compatible", "Winifred Zai",
                                       base_url="https://api.z.ai/api/paas/v4",
                                       api_key="sk-fake")
     config.write_config(embeddings_connection_id="winifred-zai", embeddings_model="embed-x")
-    assert store_pkg.inference.resolve.embedding().missing == ("embed",)
+    assert store_pkg.inference.resolve.embedding().attempts == ()
+    assert store_pkg.inference.resolve.embedding_role(config.read_config()) == ("", "")
     assert store_pkg.embed_space.resolve() is None
     assert migrate.ensure().state == "done"
     cfg = _raw_config(home)
@@ -529,7 +541,8 @@ def test_a_campaign_is_migrated_with_its_marker(home):
     assert (meta["use_voice"], meta["use_voice_provider"]) == ("model", "spare")
     assert meta["use_voice_drift_provider"] == "spare"
     assert meta["preset_speaker"] == "warm"
-    assert meta["route_voice"] == "spare"
+    # Retirement, in the same run, deleted the legacy key it was mapped from.
+    assert "route_voice" not in meta
 
 
 def test_a_busy_campaign_is_skipped_and_finished_next_time(home):
@@ -641,6 +654,7 @@ def test_a_newer_format_store_is_not_migrated(home):
 
 
 def test_a_fresh_store_is_not_migrated(home):
+    (home / "config.md").unlink()  # the fixture's legacy one: this store has none
     got = migrate.ensure()
     assert got.state == "done"
     assert not (home / "config.md").exists()
@@ -758,7 +772,7 @@ def test_a_legacy_edit_during_the_backup_survives(home, monkeypatch):
 
     cfg = _raw_config(home)
     assert cfg[FORMAT] == "2"
-    assert cfg["route_summary"] == ""
+    assert cfg.get("route_summary", "") == ""
     assert (cfg["use_summary"], cfg["use_summary_provider"]) == ("", "")
     assert (cfg["use_scene_break"], cfg["use_scene_break_provider"]) == ("", "")
     # A setting that is not the migration's is not rewritten from a stale
@@ -1313,7 +1327,9 @@ def test_a_campaign_whose_connection_is_unreadable_is_skipped_and_retried(home, 
 
     monkeypatch.setattr(migrate, "_campaign_step", step_with_a_flaky_read)
 
-    got = migrate.ensure()
+    # Retirement held off: it would migrate the campaign itself, in its own
+    # write, once the read succeeds (slice I) -- this is about step 8.
+    got = inference_fixtures.migrate_as_c_h()
 
     assert any(cid in item and "sync client" in item for item in got.skipped), got
     assert FORMAT not in _meta(cid)

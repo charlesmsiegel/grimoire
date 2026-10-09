@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import math
-from collections.abc import Callable, Iterator, Mapping
+import os
+from collections.abc import Callable, Iterable, Iterator, Mapping
 
 from . import atomic, inference_keys, locks, routing
-from .frontmatter import dump_frontmatter, parse_frontmatter
+from .frontmatter import dump_frontmatter, parse_frontmatter, read_record
 from .paths import ensure_home, home
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
@@ -245,22 +246,43 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
 #: names, so only what is new is appended -- a key listed twice would be
 #: harmless here and a lie in every reader that counts them.
 _CONFIG_KEYS += tuple(k for k in inference_keys.GLOBAL_KEYS if k not in _CONFIG_KEYS)
+#: The retirement marker (slice I), read and written beside the layout.
+_CONFIG_KEYS += (inference_keys.RETIRED_KEY,)
 
 
 def _config_path():
     return home() / "config.md"
 
 
-def _birth_marker() -> dict[str, str]:
+#: Set to `"upgraded-default"` and a `config.md` is born holding what migrating
+#: a fresh format-1 library yields (the default Primary), not the marker alone.
+#: The suite's seam: product code never sets it.
+TEST_BIRTH_ENV = "GRIMOIRE_TEST_BIRTH"
+
+
+def birth_fields() -> dict[str, str]:
     """What a `config.md` this build creates from nothing starts with, besides
     its defaults: the current format marker (spec 11.1, ruling 13). A store
     with no `config.md` has no legacy settings to translate, so it is never
     migrated -- it is born in the new layout. Only the CREATION paths call
     this: a `config.md` that exists without the marker is a legacy store and
-    stays one until the migration says otherwise."""
-    if not inference_keys.born_current():
-        return {}
-    return {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+    stays one until the migration says otherwise.
+
+    Born retired, too (`inference_keys.RETIRED_KEY`, slice I N3): a store
+    created from nothing has no legacy settings for retirement to remove, so
+    it never takes a `pre-retirement-` archive and no pass ever runs for it.
+
+    A test seam as well as a birth: with `TEST_BIRTH_ENV` set to
+    `"upgraded-default"` the store is born as an upgraded default library,
+    Primary on `openrouter` at `DEFAULT_MODEL`. Without it the two markers are
+    all there is, and `test_a_product_store_is_born_with_the_marker_alone`
+    pins that."""
+    fields = {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT,
+              inference_keys.RETIRED_KEY: "1"}
+    if os.environ.get(TEST_BIRTH_ENV) == "upgraded-default":
+        fields[inference_keys.role_key("primary", "provider")] = "openrouter"
+        fields[inference_keys.role_key("primary", "model")] = DEFAULT_MODEL
+    return fields
 
 
 def read_config() -> dict[str, str]:
@@ -273,22 +295,19 @@ def read_config() -> dict[str, str]:
                 "archive_depth": DEFAULT_ARCHIVE_DEPTH,
                 "context_budget": DEFAULT_CONTEXT_BUDGET,
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
-                "default_style_id": "", "active_connection_id": "",
+                "default_style_id": "",
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
                 "absorb_concurrency": DEFAULT_ABSORB_CONCURRENCY,
                 "setup_done": DEFAULT_SETUP_DONE,
                 "replay_fork_threshold": DEFAULT_REPLAY_FORK_THRESHOLD,
                 "advance_fork_threshold": DEFAULT_ADVANCE_FORK_THRESHOLD,
                 "llm_retries": DEFAULT_LLM_RETRIES,
-                "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
                 "character_response_mode": "individual",
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 "scene_break_every": DEFAULT_SCENE_BREAK_EVERY,
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
                 "offscene_known_limit": DEFAULT_OFFSCENE_KNOWN_LIMIT,
-                "embeddings_connection_id": DEFAULT_EMBEDDINGS_CONNECTION_ID,
-                "embeddings_model": DEFAULT_EMBEDDINGS_MODEL,
                 "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,
                 "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
                 "art_catalog_depth": DEFAULT_ART_CATALOG_DEPTH,
@@ -304,26 +323,31 @@ def read_config() -> dict[str, str]:
                 "backup_keep": DEFAULT_BACKUP_KEEP,
                 "backup_dir": DEFAULT_BACKUP_DIR,
                 "log_level": DEFAULT_LOG_LEVEL,
-                # Every route: "" is "inherit", which is what an install that
-                # has never set one has and what makes this change invisible
-                # until someone asks for it (#142).
-                **dict.fromkeys(routing.CONFIG_KEYS, ""),
                 # Every route's sampler preset, same "" = inherit, same reason.
                 **dict.fromkeys(routing.PRESET_CONFIG_KEYS, ""),
                 **dict.fromkeys(_LENGTH_KEYS, ""),
                 # The new inference layout, "" = unset. The marker's "" is
                 # format 1: a config.md that predates it is a legacy store.
-                **dict.fromkeys(inference_keys.GLOBAL_KEYS, "")}
+                **dict.fromkeys(inference_keys.GLOBAL_KEYS, ""),
+                # "" is not retired: a legacy key may still be read here.
+                inference_keys.RETIRED_KEY: ""}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
         # racing here would each publish a whole file.
         with locks.config_lock():
             if not path.exists():
-                defaults.update(_birth_marker())
+                defaults.update(birth_fields())
                 atomic.write_text(path, dump_frontmatter(defaults, ""))
                 return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-    return {k: meta.get(k, default) for k, default in defaults.items()}
+    out = {k: meta.get(k, default) for k, default in defaults.items()}
+    # The legacy inference keys (`inference_keys.LEGACY_GLOBAL_KEYS`) are read
+    # when the file holds them -- below format 2 they are the planner's input
+    # -- and never defaulted: a `config.md` born from these defaults holds
+    # none (slice I), so a fresh install has no legacy key for retirement to
+    # remove. A reader asks for them with `.get`.
+    out.update((k, meta[k]) for k in inference_keys.LEGACY_GLOBAL_KEYS if k in meta)
+    return out
 
 
 def _seconds(key: str, default: str) -> float:
@@ -704,6 +728,36 @@ def write_config_refusing_legacy(guard: Callable[[dict[str, str]], None] | None 
         return write_config(**fields)
 
 
+def retire_write(set_keys: Mapping[str, str], drop: Iterable[str]) -> None:
+    """Retirement's one `config.md` write (slice I, ruling 6(a)): `drop`'s
+    keys deleted and `set_keys` set, onto the file's raw frontmatter, in one
+    `format_hold` -- `config_lock`, reentrant, so a caller already holding
+    `llm_connections.LOCK` (the same lock) joins it.
+
+    Strict, unlike `write_config`: the file is read with
+    `frontmatter.read_record(..., require=FORMAT_KEY)`, so one that holds no
+    record or no format marker raises `RecordUnreadableError` and is never
+    written over. A newer build's marker raises `NewerFormatError` (the
+    hold's own check reads the same file), and any marker but the current one
+    raises `ValueError`: retirement is a format-2 step. Nothing outside
+    `set_keys` is added -- no default is materialized -- and a write that
+    would change nothing is not made, so a resumed pass rewrites nothing."""
+    path = _config_path()
+    dropped = frozenset(drop)
+    with format_hold():
+        meta, body = read_record(path, "config.md", require=inference_keys.FORMAT_KEY)
+        if inference_keys.is_newer(meta):
+            raise NewerFormatError("a newer build wrote this store's model settings")
+        if not inference_keys.is_current(meta):
+            raise ValueError("config.md is not at the current settings format; "
+                             "retirement waits for the migration")
+        out = {k: v for k, v in meta.items() if k not in dropped}
+        out.update(set_keys)
+        if out == meta:
+            return
+        atomic.write_text(path, dump_frontmatter(out, body))
+
+
 def write_config(**fields: str) -> dict[str, str]:
     # Merge onto the file's RAW frontmatter (not read_config()'s narrowed
     # reconstruction) so any key not in _CONFIG_KEYS — including the legacy
@@ -724,7 +778,7 @@ def write_config(**fields: str) -> dict[str, str]:
     # setting saved in the first (#194 review).
     with locks.config_lock():
         raw, _ = (parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists()
-                  else (_birth_marker(), ""))
+                  else (birth_fields(), ""))
         for key, value in fields.items():
             if key in _CONFIG_KEYS and value is not None:
                 raw[key] = value

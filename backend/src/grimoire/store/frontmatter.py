@@ -114,3 +114,41 @@ def dump_frontmatter(meta: dict[str, str], body: str) -> str:
     lines.append("---")
     lines.append("")
     return "\n".join(lines) + "\n" + body
+
+
+class RecordUnreadableError(OSError):
+    """A `config.md` or `campaign.md` a writer would rewrite that is there but
+    holds no record: zero bytes, or a frontmatter block that is unfenced or
+    never closed (a sync placeholder mid-download, a conflict stub, a hand edit
+    that lost its closing `---`). `parse_frontmatter` reads all of those as
+    `{}`, and a migration that took that for a record with no settings would
+    publish a marker-only file over it -- which a sync client can then upload
+    over the real one -- and mark it, so the settings it held are never read
+    again. The rule `llm_connections`' strict read keeps for a connection.
+
+    Moved here from `inference.migrate` (slice I), so the migration and
+    retirement -- which the migration calls, and so cannot import it --
+    share one strict read (`read_record`). A writer never replaces a record
+    that raised it."""
+
+
+def read_record(path: Path, what: str, *,
+                require: str | None = None) -> tuple[dict[str, str], str]:
+    """`path`'s frontmatter and body, read strictly, for a writer that will
+    rewrite it: `RecordUnreadableError` when it holds no record (see there)
+    -- empty or whitespace, unfenced, never closed, or a block with no keys,
+    since every record this app writes has keys -- and, with `require`, when
+    that key is missing or empty in it (a `config.md` with no format marker
+    is not one retirement may write).
+
+    An absent file raises `FileNotFoundError`, and the read's own `OSError` /
+    `UnicodeDecodeError` pass through: every caller catches them beside
+    `RecordUnreadableError`. `what` names the file in the message."""
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    if not meta:
+        raise RecordUnreadableError(f"{what} holds no settings (empty, or unfenced); "
+                                    "it is left as it is and retried on the next start")
+    if require is not None and not str(meta.get(require, "") or "").strip():
+        raise RecordUnreadableError(f"{what} holds no {require}; "
+                                    "it is left as it is and retried on the next start")
+    return meta, body

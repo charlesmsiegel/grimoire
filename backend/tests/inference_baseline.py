@@ -31,6 +31,7 @@ invented connection ids; nothing here describes a real library.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import importlib
 import json
 import os
@@ -46,12 +47,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import routes
-from grimoire.llm import effective_model
+from grimoire import routes, wire
 from grimoire.main import create_app
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import resolve as inference
+from tests.inference_fixtures import legacy_store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inference_baseline.json"
 
@@ -72,6 +73,9 @@ def client_at(home: Path) -> Iterator[TestClient]:
     os.environ["GRIMOIRE_HOME"] = str(home)
     try:
         importlib.reload(store)
+        # A fresh store is born at format 2 now; the baselines were frozen at
+        # format 1, so every one of them starts from a legacy library.
+        legacy_store(home)
         with TestClient(create_app()) as client:
             yield client
     finally:
@@ -284,9 +288,13 @@ def _failure(exc: HTTPException) -> dict:
     return {"status": exc.status_code, "detail": exc.detail}
 
 
-def _resolved(conn: dict) -> dict:
-    return {"conn": conn["id"], "model": effective_model(conn),
-            "sampling": conn["sampling"], "model_params": conn.get("model_params")}
+def _resolved(target: wire.Target) -> dict:
+    """A primary target, projected into the keys the frozen baseline recorded
+    off the connection dict it once was: the provider id as `conn`, the
+    model it runs, its sampling block and its catalog's `model_params`."""
+    return {"conn": target.provider_id, "model": target.model,
+            "sampling": dataclasses.asdict(target.sampling),
+            "model_params": None if target.model_params is None else list(target.model_params)}
 
 
 def _task(client: TestClient, task: str, cid: str) -> dict:
@@ -307,14 +315,16 @@ def _task(client: TestClient, task: str, cid: str) -> dict:
     try:
         resolved = inference.resolve(task, cid)
         routes.common._refuse_unusable(resolved)
-        conn = routes.common._narrowed(resolved).conn
+        narrowed = routes.common._narrowed(resolved)
     except HTTPException as exc:
         return _failure(exc)
-    attempts = client.app.state.llm._routes(conn)
-    fallback = attempts[1][0] if len(attempts) > 1 else None
-    return {**_resolved(conn),
+    # The routes the facade builds from the chain it is sent: the fallback's
+    # target, read back as the id and sampling block its dict carried.
+    attempts = client.app.state.llm._routes(narrowed.chain)
+    fallback = attempts[1].target if len(attempts) > 1 else None
+    return {**_resolved(narrowed.chain.primary),
             "fallback": None if fallback is None
-            else {"id": fallback["id"], "sampling": fallback["sampling"]}}
+            else {"id": fallback.provider_id, "sampling": dataclasses.asdict(fallback.sampling)}}
 
 
 #: Each body is what a reroll request carries; only the two override fields are
@@ -341,8 +351,7 @@ def _override(body: dict, cid: str) -> dict:
             SimpleNamespace(**body), "regenerate", cid)
     except HTTPException as exc:
         return _failure(exc)
-    conn = resolved.conn
-    return {**_resolved(conn), "routed": routed}
+    return {**_resolved(resolved.chain.primary), "routed": routed}
 
 
 def _connection_ids() -> list[str]:

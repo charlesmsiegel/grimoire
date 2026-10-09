@@ -22,8 +22,9 @@ def _extend(client, cid, sid, rid, reply):
 
 
 def _prefill_on(client):
-    assert client.put("/api/llm-connections/openrouter",
-                      json={"prefill": True}).status_code == 200
+    """Prefill on for the model `seed` puts on Primary (a fact of the model)."""
+    assert client.put("/api/llm-connections/openrouter/facts",
+                      json={"model": "primary", "prefill": True}).status_code == 200
 
 
 def test_a_branch_carries_the_records_of_the_posts_it_keeps(client):

@@ -14,7 +14,8 @@ import pytest
 from grimoire.embeddings import EmbeddingsClient
 from grimoire.store import config, embed_space, llm_connections
 from grimoire.store import inference_keys as keys
-from grimoire.store.inference import facts, providers, translate
+from grimoire.store.inference import facts, providers
+from grimoire.store.inference import resolve as inference_resolve
 
 
 @pytest.fixture(autouse=True)
@@ -30,15 +31,30 @@ def _local() -> str:
 
 def test_the_embedding_role_is_what_resolves(monkeypatch):
     conn = _local()
-    config.write_config(embeddings_connection_id="elsewhere", embeddings_model="legacy")
-    # `resolve.embedding` reads the role through `embedding_view` (slice D);
-    # `embedding_role` is only the stored-pair wrapper over it.
-    monkeypatch.setattr(translate, "embedding_view", lambda cfg: {
+    config.write_config(**{keys.role_key("embedding", "provider"): "elsewhere",
+                           keys.role_key("embedding", "model"): "stored"})
+    # `resolve.embedding` reads the role through `_embedding_view` (slice D;
+    # the format-2 keys of the settings the planner overlays, slice I).
+    monkeypatch.setattr(inference_resolve, "_embedding_view", lambda cfg: {
         keys.role_key("embedding", "provider"): conn,
         keys.role_key("embedding", "model"): "m2"})
     out = embed_space.resolve()
     assert out is not None
     assert out["model"] == "m2"
+
+
+def test_a_format_two_store_ignores_the_legacy_embedding_keys():
+    """At format 2 the role keys are the only answer: `embeddings_*` naming a
+    working endpoint embeds nothing while the role is empty, and does not
+    move the model once the role names one."""
+    conn = _local()
+    config.write_config(embeddings_connection_id=conn, embeddings_model="legacy")
+    assert embed_space.resolve() is None
+    config.write_config(**{keys.role_key("embedding", "provider"): conn,
+                           keys.role_key("embedding", "model"): "m"})
+    out = embed_space.resolve()
+    assert out is not None
+    assert out["model"] == "m"
 
 
 def test_a_format_two_config_resolves_from_role_keys():
@@ -53,6 +69,9 @@ def test_a_format_two_config_resolves_from_role_keys():
 
 
 def test_other_connections_are_never_read(monkeypatch):
+    """By the embedding resolution. (On a store not yet retired the planner
+    reads the settings' other slots too, for their derived presets; a retired
+    one -- every store from slice I's retirement on -- reads nothing there.)"""
     conn = _local()
     llm_connections.create_connection("openai_compatible", "Spare",
                                       base_url="https://other.example/v1",
@@ -65,7 +84,8 @@ def test_other_connections_are_never_read(monkeypatch):
         return real(conn_id)
 
     monkeypatch.setattr(llm_connections, "read_connection_raw", spy)
-    embed_space.resolve({"inference_format": "2", "role_embedding_provider": conn,
+    embed_space.resolve({"inference_format": "2", keys.RETIRED_KEY: "1",
+                         "role_embedding_provider": conn,
                          "role_embedding_model": "m", "role_primary_provider": "spare"})
     assert seen == [conn]
 

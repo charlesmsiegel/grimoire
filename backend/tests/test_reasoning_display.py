@@ -1,15 +1,19 @@
 import asyncio
+import dataclasses
 import json
 
 import httpx
 import pytest
 
-from grimoire import routes, store
+from grimoire import routes, store, wire
 from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
+from grimoire.store.inference import resolve
+from tests.inference_fixtures import primary
 from tests.test_character_turns import seed
 
-CONN = {"kind": "openai_compatible", "model": "glm-5.3", "base_url": "https://example.test/v1"}
+CONN = wire.Target(provider_id="", kind="openai_compatible", model="glm-5.3",
+                   requested_model="glm-5.3", base_url="https://example.test/v1")
 THOUGHT = "Private planning ```roll\n{not a roll}\n``` <script>alert(1)</script>"
 
 
@@ -27,8 +31,10 @@ def gateway(thought=THOUGHT, requests=None):
 async def test_reasoning_events_precede_visible_text_without_entering_complete():
     from grimoire import llm_reasoning
     client = gateway()
+    holder: dict = {}
     try:
-        events = [e async for e in llm_reasoning.stream(client, [], CONN, {})]
+        events = [e async for e in llm_reasoning.stream(
+            holder, lambda: client.stream([], CONN, holder))]
         assert ''.join(e.get("thinking_delta", "") for e in events) == THOUGHT
         assert next(i for i,e in enumerate(events) if e.get("thinking_delta")) < next(i for i,e in enumerate(events) if e.get("delta"))
         assert THOUGHT not in await client.complete([], CONN)
@@ -38,20 +44,30 @@ async def test_reasoning_events_precede_visible_text_without_entering_complete()
 
 @pytest.mark.parametrize("effort", ["", "low", "high", "max"])
 async def test_glm_effort_is_opt_in_and_sent_to_provider(effort):
+    """The preset's effort, and only the preset's (slice I): a connection's
+    legacy `reasoning_effort` sends nothing -- a legacy store's rides on a
+    derived reasoning preset instead (`legacy_plan`)."""
     requests = []
     client = gateway(requests=requests)
+    params = {"reasoning_effort": effort} if effort else {}
     try:
-        await client.complete([], {**CONN, "reasoning_effort": effort})
+        await client.complete([], dataclasses.replace(CONN, sampling=wire.Sampling(params=params)))
+        # A legacy `reasoning_effort` on a connection record is built into
+        # nothing: a target has no field for it.
+        legacy = {"kind": "openai_compatible", "model": "glm-5.3",
+                  "base_url": "https://example.test/v1", "reasoning_effort": effort or "high"}
+        await client.complete([], resolve.provider_target(legacy))
     finally:
         await client.aclose()
     assert requests[0].get("reasoning_effort") == (effort or None)
+    assert "reasoning_effort" not in requests[1]
 
 
 def test_reasoning_is_saved_per_variant_and_never_in_transcript_content(client):
     cid, sid = seed(client)
-    conn_id = store.llm_connections.create_connection("openai_compatible", "Local", **{
-        k:v for k,v in CONN.items() if k != "kind"})
-    store.config.write_config(active_connection_id=conn_id)
+    conn_id = store.llm_connections.create_connection("openai_compatible", "Local",
+                                                      base_url=CONN.base_url)
+    primary(client, CONN.model, provider=conn_id, api_key="")
     requests = []
     model = gateway(requests=requests)
     client.app.dependency_overrides[routes.get_llm] = lambda: model
@@ -76,7 +92,10 @@ def test_reasoning_is_saved_per_variant_and_never_in_transcript_content(client):
     assert store.scenes.read_scene(cid, sid)["messages"][0]["response_thinking"] == original
 
 
-def test_reasoning_effort_connection_roundtrip(client):
+def test_reasoning_effort_connection_roundtrip(legacy_client):
+    # A provider's own `reasoning_effort` is the legacy layout's: at format 2
+    # it is a model field the provider routes refuse (`MODEL_FIELDS`).
+    client = legacy_client
     response = client.post("/api/llm-connections", json={"kind":"openai_compatible", "name":"Local", "model":"glm-5.3", "reasoning_effort":"low"})
     assert response.status_code == 200, response.text
     cid = response.json()["id"]
@@ -95,7 +114,8 @@ async def test_reasoning_is_delivered_while_provider_is_still_thinking():
             yield b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
     client = LLMClient(openai_compatible=OpenAICompatibleClient(http=httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Frames())))))
-    events = llm_reasoning.stream(client, [], CONN, {})
+    holder: dict = {}
+    events = llm_reasoning.stream(holder, lambda: client.stream([], CONN, holder))
     try:
         async def first_thought():
             async for event in events:
@@ -127,8 +147,10 @@ async def test_retry_resets_failed_attempt_reasoning(monkeypatch):
     client = LLMClient(openai_compatible=OpenAICompatibleClient(http=httpx.AsyncClient(
         transport=httpx.MockTransport(handler))), retries=1)
     thought = ""
+    holder: dict = {}
     try:
-        events = [e async for e in llm_reasoning.stream(client, [], CONN, {})]
+        events = [e async for e in llm_reasoning.stream(
+            holder, lambda: client.stream([], CONN, holder))]
         for event in events:
             if event.get("thinking_reset"):
                 thought = ""
@@ -144,7 +166,9 @@ async def test_glm_effort_is_not_sent_after_switching_to_another_model():
     requests = []
     client = gateway(requests=requests)
     try:
-        await client.complete([], {**CONN, "model":"another-model", "reasoning_effort":"max"})
+        await client.complete([], dataclasses.replace(
+            CONN, model="another-model", requested_model="another-model",
+            sampling=wire.Sampling(params={"reasoning_effort": "max"})))
         assert "reasoning_effort" not in requests[0]
     finally:
         await client.aclose()

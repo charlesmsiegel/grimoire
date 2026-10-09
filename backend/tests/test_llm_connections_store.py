@@ -3,6 +3,7 @@ import importlib
 import pytest
 
 import grimoire.store as store
+from tests.inference_fixtures import legacy_store
 
 
 def reload_with_home(monkeypatch, tmp_path):
@@ -11,10 +12,18 @@ def reload_with_home(monkeypatch, tmp_path):
     return store
 
 
+def legacy_home(monkeypatch, tmp_path):
+    """`reload_with_home` on a format-1 store: the connection seeding and
+    `active_connection_id` are the legacy layout's."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    legacy_store(tmp_path)
+    return s
+
+
 # ---- migration ----
 
 def test_zero_config_seeds_both_connections_openrouter_active(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
+    s = legacy_home(monkeypatch, tmp_path)
     conns = {c["id"]: c for c in s.llm_connections.list_connections()}
     assert set(conns) == {"openrouter", "claude"}
     assert conns["openrouter"]["kind"] == "openrouter"
@@ -44,7 +53,7 @@ def test_migrates_legacy_config_fields(monkeypatch, tmp_path):
 
 
 def test_migration_is_idempotent_even_after_deleting_everything(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
+    s = legacy_home(monkeypatch, tmp_path)
     s.llm_connections.list_connections()  # triggers migration
     s.llm_connections.delete_connection("openrouter")
     s.llm_connections.delete_connection("claude")
@@ -54,7 +63,7 @@ def test_migration_is_idempotent_even_after_deleting_everything(monkeypatch, tmp
 
 
 def test_crash_recovery_resumes_a_partial_migration(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
+    s = legacy_home(monkeypatch, tmp_path)
     home = tmp_path / "llm_connections"
     home.mkdir(parents=True)
     (home / "openrouter.md").write_text(
@@ -263,12 +272,11 @@ def test_recreated_connection_never_inherits_an_orphaned_sidecar(monkeypatch, tm
 
 
 def test_deleting_the_active_connection_leaves_nothing_active(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
+    s = legacy_home(monkeypatch, tmp_path)
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
     s.write_config(active_connection_id=cid)
     s.llm_connections.delete_connection(cid)
     assert s.read_config()["active_connection_id"] == ""
-    assert s.llm_connections.get_active() is None
 
 
 def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(monkeypatch, tmp_path):
@@ -277,7 +285,7 @@ def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(
     # freed slug) must NOT make the new one active just because config.md
     # still happened to reference that id — it must require an explicit
     # Set-as-active, same as any other newly-created connection.
-    s = reload_with_home(monkeypatch, tmp_path)
+    s = legacy_home(monkeypatch, tmp_path)
     cid = s.llm_connections.create_connection(
         "openai_compatible", "Reused Name", base_url="https://old", api_key="sk-old")
     s.write_config(active_connection_id=cid)
@@ -286,7 +294,6 @@ def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(
         "claude", "Reused Name", model="opus")  # even a different kind
     assert new_id == cid  # same freed slug
     assert s.read_config()["active_connection_id"] == ""
-    assert s.llm_connections.get_active() is None
 
 
 def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tmp_path):
@@ -294,7 +301,7 @@ def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tm
     # AFTER active_connection_id has already been cleared, and confirm the
     # clear survives (rather than testing the trivial case of failing before
     # any write happens, which proves nothing about the ordering).
-    s = reload_with_home(monkeypatch, tmp_path)
+    s = legacy_home(monkeypatch, tmp_path)
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
     s.write_config(active_connection_id=cid)
 
@@ -324,26 +331,6 @@ def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tm
         s.llm_connections.read_connection_raw(cid)
 
 
-# ---- get_active ----
-
-def test_get_active_resolves_the_configured_connection(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
-    s.write_config(active_connection_id="claude")
-    active = s.llm_connections.get_active()
-    assert active is not None and active["kind"] == "claude"
-
-
-def test_get_active_none_when_unset(monkeypatch, tmp_path):
-    # Models an explicit clear that happens AFTER migration has already
-    # completed (e.g. via delete_connection on the active connection) --
-    # not the pre-migration bootstrap case, which ensure_migrated's own
-    # seeding step is responsible for (see test_zero_config_seeds_...).
-    s = reload_with_home(monkeypatch, tmp_path)
-    s.llm_connections.list_connections()  # let migration complete first (writes the .migrated marker)
-    s.write_config(active_connection_id="")  # simulate an explicit clear, e.g. via delete_connection
-    assert s.llm_connections.get_active() is None
-
-
 # ---- prefill opt-in (play controls IV) ----
 
 def test_prefill_defaults_off_and_round_trips(monkeypatch, tmp_path):
@@ -361,7 +348,10 @@ def test_prefill_defaults_off_and_round_trips(monkeypatch, tmp_path):
     assert s.llm_connections.read_connection_raw(cid)["prefill"] is False
 
 
-def test_prefill_round_trips_through_the_routes(client):
+def test_prefill_round_trips_through_the_routes(legacy_client):
+    """A provider's own `prefill`, a format-1 field: at format 2 it is a fact
+    of the model (`PUT /llm-connections/{id}/facts`)."""
+    client = legacy_client
     assert client.get("/api/llm-connections/openrouter").json()["prefill"] is False
     assert client.put("/api/llm-connections/openrouter", json={"prefill": True}).status_code == 200
     assert client.get("/api/llm-connections/openrouter").json()["prefill"] is True

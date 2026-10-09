@@ -688,7 +688,7 @@ def test_a_duplicate_opener_replays_rather_than_generating_again(client, campaig
 
 
 def test_an_opener_that_failed_is_recorded_failed_not_landed(client, campaign):
-    """`ephemeral_frames` handles an upstream failure by emitting an error frame
+    """`greetings._opener_frames` handles an upstream failure by emitting an error frame
     and finishing normally, so "did not raise" covers both a delivered opener
     and a failed one. Inferred, the run says `landed` with no error -- and a
     client that came back and polled instead of reading the frames would be

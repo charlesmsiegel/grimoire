@@ -14,6 +14,7 @@ import json
 from grimoire import routes, store
 from grimoire.routes import character_turns, streaming
 from grimoire.store.regex import rules, stream
+from tests.inference_fixtures import primary
 from tests.llm_fakes import FailingOpenRouter, FakeLLM
 
 THINK = {"name": "Strip thinking", "pattern": r"<think>[\s\S]*?</think>", "replacement": ""}
@@ -112,7 +113,7 @@ def put_rules(client, url, *rule_list):
 
 
 def seed(client, names=("Mara",)):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    primary(client)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")

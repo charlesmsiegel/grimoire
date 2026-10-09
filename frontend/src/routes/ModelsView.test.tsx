@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { api, PRESET_CLEAR, type CapabilityNeed } from "../api/client";
 import { forgetModelTests } from "../components/inference/TestCallDialog";
@@ -9,7 +9,7 @@ vi.mock("../api/client", async () => {
   return { ...actual, api: {
     getInferenceSettings: vi.fn(), putInferenceSettings: vi.fn(),
     readConnectionCapabilities: vi.fn(), previewControls: vi.fn(),
-    previewModelTest: vi.fn(), runModelTest: vi.fn(),
+    previewModelTest: vi.fn(), runModelTest: vi.fn(), dismissRetiredNote: vi.fn(),
   } };
 });
 
@@ -101,6 +101,7 @@ function settings(over: Record<string, unknown> = {}) {
     ],
     presets: [{ id: "balanced", name: "Balanced" }, { id: "tight", name: "Tight" }],
     preset_clear: PRESET_CLEAR,
+    retirement_notes: [],
     ...over,
   };
 }
@@ -144,6 +145,58 @@ async function openCards() {
   await main().findByRole("region", { name: "Primary" });
 }
 const putBody = (n = 0) => (api.putInferenceSettings as any).mock.calls[n];
+
+test("what was not carried over sits under the heading until dismissed", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ retirement_notes: [{
+    id: "a1", scope: "global", scope_name: "", subject: "summary", provider_id: "glm",
+    effort: "high", kind: "route_preset",
+    text: "On the Summary route, the preset “Cold” sets no reasoning effort, so the GLM "
+      + "provider “glm” no longer sends its reasoning effort (high) there — this was not "
+      + "carried over.",
+  }] }));
+  (api.dismissRetiredNote as any).mockResolvedValue({ ok: true });
+  open();
+  const notice = await screen.findByRole("region", { name: "Not carried over" });
+  const heading = screen.getByRole("heading", { level: 1, name: "Models" });
+  // Under the page heading: after it in the document, before the role cards.
+  expect(heading.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(notice).toHaveTextContent("— this was not carried over.");
+  fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Not carried over" }))
+    .toBeNull());
+  expect(api.dismissRetiredNote).toHaveBeenCalledWith("a1");
+});
+
+test("two dismisses in flight both stick", async () => {
+  const note = (id: string) => ({
+    id, scope: "global", scope_name: "", subject: id, provider_id: "glm", effort: "high",
+    kind: "route_preset", text: `Note ${id} — this was not carried over.`,
+  });
+  (api.getInferenceSettings as any).mockResolvedValue(
+    settings({ retirement_notes: [note("a1"), note("b2")] }));
+  const finish: Record<string, () => void> = {};
+  (api.dismissRetiredNote as any).mockImplementation((id: string) =>
+    new Promise((resolve) => { finish[id] = () => resolve({ ok: true }); }));
+  open();
+  const notice = await screen.findByRole("region", { name: "Not carried over" });
+  const [a, b] = within(notice).getAllByRole("button", { name: "Dismiss" });
+  fireEvent.click(a);
+  fireEvent.click(b);
+  await waitFor(() => expect(Object.keys(finish).sort()).toEqual(["a1", "b2"]));
+  act(() => finish.a1());
+  await waitFor(() => expect(screen.queryByText(/Note a1/)).toBeNull());
+  act(() => finish.b2());
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Not carried over" }))
+    .toBeNull());
+  expect(screen.queryByText(/Note a1/)).toBeNull();
+});
+
+test("with nothing lost, there is no notice", async () => {
+  open();
+  await screen.findByRole("heading", { level: 1, name: "Models" });
+  await screen.findByRole("region", { name: "Primary" });
+  expect(screen.queryByRole("region", { name: "Not carried over" })).toBeNull();
+});
 
 test("clicking a role shows the read-only view", async () => {
   open();

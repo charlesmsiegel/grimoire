@@ -61,6 +61,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, features
 
+from .. import wire
 from . import config, export, image_drafts, statcache
 from .inference import capabilities
 
@@ -77,17 +78,25 @@ YES, NO, UNKNOWN, OFF, NONE = "yes", "no", "unknown", "off", "none"
 MAX_LIMIT = 20
 
 
-def capability(conn: dict | None) -> str:
-    """"yes", "no" or "unknown" -- whether `conn`'s model reads images. Never
-    raises: a catalog or facts file that cannot be read says nothing."""
-    if conn is None or conn.get("kind", "openrouter") not in image_drafts.SUPPORTED_KINDS:
+def capability(target: wire.Target | None) -> str:
+    """"yes", "no" or "unknown" -- whether `target`'s model reads images. Never
+    raises: a catalog or facts file that cannot be read says nothing.
+
+    The rule is `capabilities.post_image_reach`, which the resolver asked
+    when it built the target (`Target.reads_images`): the kind first, then
+    the reach the target carries where that is decided ("yes" or "no": its
+    preference, or what its resolver read), and the model's capability, read
+    now, where it is not -- so a capability learned since the resolution
+    (a test call, a catalog refresh) is asked at dispatch."""
+    if target is None:
         return NO
-    override = conn.get("vision", "")
-    if override == "on":
-        return YES
-    if override == "off":
+    if target.kind not in image_drafts.SUPPORTED_KINDS:
         return NO
-    return capabilities.caps_for(conn)["vision"].value
+    if target.reads_images in (YES, NO):
+        return target.reads_images
+    asked = {"id": target.provider_id, "kind": target.kind, "base_url": target.base_url,
+             "model": target.model, "rev": target.rev}
+    return capabilities.post_image_reach(target.kind, "", capabilities.caps_for(asked)["vision"])
 
 
 def limit() -> int:
@@ -104,21 +113,21 @@ def limit() -> int:
     return min(n, MAX_LIMIT) if n >= 0 else int(config.DEFAULT_SEND_IMAGES_LIMIT)
 
 
-def images_for(conn: dict | None) -> int:
-    """How many images a prompt for `conn` may carry right now -- the one
+def images_for(target: wire.Target | None) -> int:
+    """How many images a prompt for `target` may carry right now -- the one
     number composition takes, and dispatch re-asks per attempt."""
     n = limit()
-    return n if n and capability(conn) == YES else 0
+    return n if n and capability(target) == YES else 0
 
 
-def reach(conn: dict | None) -> str:
-    """"off" when the setting sends nothing, "none" when there is no connection
-    to ask about, else `capability(conn)` -- what the Configuration page tells
-    a reader about the connection a turn uses. "none" is not "no": nothing has
-    said a model cannot read images, there is just no model yet."""
+def reach(target: wire.Target | None) -> str:
+    """"off" when the setting sends nothing, "none" when there is no target
+    to ask about, else `capability(target)` -- what the Configuration page
+    tells a reader about the attempt a turn starts on. "none" is not "no":
+    nothing has said a model cannot read images, there is just no model yet."""
     if limit() == 0:
         return OFF
-    return NONE if conn is None else capability(conn)
+    return NONE if target is None else capability(target)
 
 
 # ---- what gets sent ----

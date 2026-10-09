@@ -1,6 +1,8 @@
 import importlib
 
 import grimoire.store as store
+from grimoire.store import inference_keys as keys
+from tests.inference_fixtures import legacy_store
 
 
 def reload_with_home(monkeypatch, tmp_path):
@@ -143,8 +145,11 @@ def test_retry_defaults(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     cfg = s.read_config()
     assert cfg["llm_retries"] == "2"
-    assert cfg["fallback_connection_id"] == ""   # no fallback until one is picked
     assert s.config.llm_retries() == 2
+    # No fallback until one is picked: at format 2 each role carries its own.
+    assert keys.is_current(cfg)
+    for role in keys.GENERATIVE_ROLES:
+        assert cfg.get(keys.fallback_key(role, "provider"), "") == "", role
 
 
 def test_zero_retries_is_the_pre_144_behaviour(monkeypatch, tmp_path):
@@ -177,7 +182,13 @@ def test_the_retry_count_is_clamped(monkeypatch, tmp_path):
 
 
 def test_the_fallback_connection_round_trips(monkeypatch, tmp_path):
+    """The legacy layout's one fallback key (format 1; a role carries its own
+    fallback at format 2)."""
     s = reload_with_home(monkeypatch, tmp_path)
+    legacy_store(tmp_path)
+    # No fallback until one is picked -- and, since slice I, no key either:
+    # the legacy keys are never defaulted.
+    assert s.read_config().get("fallback_connection_id", "") == ""
     s.write_config(fallback_connection_id="backup")
     assert s.read_config()["fallback_connection_id"] == "backup"
 

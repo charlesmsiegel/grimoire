@@ -1,7 +1,7 @@
 """The selection, preset and fallback cascade (spec 5.1, 5.2, 5.5).
 
-Pure: the two scope dicts (already in the current layout -- `translate` makes
-them from a legacy store), an existence predicate and a preset predicate in, a
+Pure: the two scope dicts (already in the current layout -- the planner,
+`legacy_plan.overlay`, makes them from a legacy store), an existence predicate and a preset predicate in, a
 decision out. Nothing here reads a file or looks a provider up.
 
 A slot "is set" when `exists(provider)` is true for the provider id as stored.

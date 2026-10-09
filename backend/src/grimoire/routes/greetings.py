@@ -12,12 +12,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from .. import inference as operations
 from .. import store
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient
 from ..llm_errors import LLMError
 from . import runs
 from . import tracker as tracker_routes
 from .common import (
+    UsableInference,
     _campaign_root_or_404,
     _fresh_or_409,
     _record_prompt,
@@ -88,8 +90,11 @@ def _opener_parts(parts: list[dict], cast: list[dict]) -> list[dict]:
 
 
 def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
-                   completed: list[dict], conn: dict, client: LLMClient,
+                   completed: list[dict], resolved: UsableInference, client: LLMClient,
                    outcome: StreamOutcome, adapt: bool = False):
+    # The display facts of the attempt the opener asks for first.
+    primary = resolved.chain.primary
+
     async def frames():
         parts = list(completed)
         try:
@@ -97,16 +102,18 @@ def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
             for actor in _opener_speakers(cast)[len(parts):]:
                 messages, breakdown = store.context.compose_opener(
                     cid, sid, prompt, actor_ref=actor["actor_ref"], prior=parts,
-                    describe=store.prompt_log.capturing(), model=effective_model(conn),
+                    describe=store.prompt_log.capturing(), model=primary.model,
                     adapt=adapt)
                 _record_prompt(cid, sid, "opener", breakdown,
-                               model=effective_model(conn), kind=conn["kind"], messages=messages,
-                               conn=conn)
+                               model=primary.model, kind=primary.kind, messages=messages,
+                               conn=resolved.chain)
                 yield f"data: {json.dumps({'speaker_start': actor})}\n\n"
                 meter = store.usage.meter("opener", campaign=cid, scene=sid)
                 prose = ""
                 try:
-                    async for delta in client.stream(messages, conn, meter.usage):
+                    async for delta in operations.generate("opener", messages, client=client,
+                                                           resolved=resolved,
+                                                           usage=meter.usage):
                         if delta:
                             prose += delta
                             yield f"data: {json.dumps({'delta': delta})}\n\n"
@@ -599,7 +606,7 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
     if not body.adapt and not body.prompt.strip():
         raise HTTPException(status_code=422, detail="an opener needs a prompt")
     prompt = _greeting_to_adapt(cid, sid) if body.adapt else body.prompt
-    conn = require_inference("opener", cid).conn
+    resolved = require_inference("opener", cid)
     cast = _opener_cast(cid, sid)
     if body.snapshot and body.snapshot != cast:
         raise HTTPException(409, detail="opener cast changed")
@@ -611,14 +618,14 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
         # than spend a second opener-length call on the same prompt.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        # The box, not just the frames. `ephemeral_frames` handles an upstream
+        # The box, not just the frames. `_opener_frames` handles an upstream
         # `LLMError` by emitting an error frame and finishing normally, so a
         # runner inferring success from a clean exhaustion would mark the run
         # `landed` with `error: null` -- and a client polling it would be told
         # an opener arrived whose only terminal frame says it did not.
         outcome = StreamOutcome()
         runs.start_detached(request.app, run, _opener_frames(
-            cid, sid, prompt, cast, completed, conn, client, outcome, adapt=body.adapt),
+            cid, sid, prompt, cast, completed, resolved, client, outcome, adapt=body.adapt),
             outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 

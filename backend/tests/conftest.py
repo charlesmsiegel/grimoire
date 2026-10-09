@@ -25,7 +25,11 @@ from grimoire.store import (
     sheets,
     worlds,
 )
+from grimoire.store import (
+    config as store_config,
+)
 from tests import phase_profile, route_memo
+from tests.inference_fixtures import legacy_client  # noqa: F401 -- a fixture, found by name
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 
 # Before any app is built: FastAPI analyses each route once per process rather
@@ -33,13 +37,23 @@ from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 # -- see tests/route_memo.py; GRIMOIRE_TEST_ROUTE_MEMO=0 turns it off.
 route_memo.install()
 
-# The inference layout switch stays OFF in the suite (`store.inference_keys
-# .AUTOMIGRATE_ENV`): a fresh tmp store is not born at format 2, and nothing
-# migrates on its own. Almost every test builds LEGACY settings on a fresh
-# store, which a store born current would ignore. A test of the switch itself
-# unsets it with `monkeypatch.delenv`; a migration test calls the migration.
+# No background layout switch in the suite (`store.inference_keys
+# .AUTOMIGRATE_ENV`): nothing migrates on its own, so a test that wants the
+# migration calls `migrate.ensure` itself or unsets this with
+# `monkeypatch.delenv`. It gates that thread and nothing else -- a fresh tmp
+# store is still born at format 2 (`inference_keys.born_current` is always
+# true), and a test that needs a format-1 store builds one with
+# `tests.inference_fixtures.legacy_store()` before anything reads the store.
 # Set at import, not in a fixture, so a subprocess a test spawns inherits it.
 os.environ["GRIMOIRE_INFERENCE_AUTOMIGRATE"] = "0"
+# Every suite plays at format 2 on what a fresh install that has been through
+# the layout switch holds: a store a test creates from nothing is born an
+# upgraded default library (`store.config.birth_fields`) -- the format marker
+# and the Primary role on `openrouter` at `DEFAULT_MODEL`. At import for the
+# same reasons as the line above, and so that a mid-test `monkeypatch.undo()`
+# cannot reach it. `@pytest.mark.product_birth` gives one test the product's
+# own birth (the marker alone).
+os.environ[store_config.TEST_BIRTH_ENV] = "upgraded-default"
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -105,6 +119,20 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "reconcile: keep the automatic continuity sweep after End Scene on for this test")
+    config.addinivalue_line(
+        "markers",
+        "product_birth: a fresh store is born as the product births one (the format "
+        "marker alone), not as the suite's upgraded default library")
+
+
+@pytest.fixture(autouse=True)
+def _product_birth(request, monkeypatch):
+    """`@pytest.mark.product_birth` unsets `config.TEST_BIRTH_ENV` for the
+    test, so a store it creates from nothing is born holding the format marker
+    and nothing else -- the product's birth. Monkeypatched, so the suite's
+    default comes back after the test."""
+    if request.node.get_closest_marker("product_birth"):
+        monkeypatch.delenv(store_config.TEST_BIRTH_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

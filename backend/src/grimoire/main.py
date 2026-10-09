@@ -224,7 +224,7 @@ def _migrate_inference(app: FastAPI, stop: threading.Event) -> None:
     The run exclusion is held HERE and never in `store.inference.migrate`
     (CLAUDE.md: a store module knows nothing of this process's run registry).
     While an image-store run is live the pass is skipped and says so; the next
-    start retries, and until then play resolves through the translation.
+    start retries, and until then play resolves through the planner, in memory.
     Every other failure is logged rather than raised: there is nobody on a
     daemon thread to raise it to, and the status file says what happened.
     """
@@ -313,7 +313,7 @@ async def _lifespan(app: FastAPI):
             log.warning("startup step %s skipped -- %s; it will be retried",
                         step.__name__, exc)
     # In the background: a migration begins with a backup of the whole store,
-    # and the app serves (through the legacy translation) while it runs.
+    # and the app serves (through the planner, in memory) while it runs.
     # Shutdown flags it to stop (`_stop_migration`); each run has its own flag.
     start(app)
     # The ticker outlives startup and is cancelled on the way out, so a server

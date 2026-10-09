@@ -549,7 +549,7 @@ def test_a_generating_health_check_needs_confirm(client):
 
     r = client.post("/api/llm-connections/claude/health", json={"confirm": True})
     assert (r.status_code, r.json()["ok"]) == (200, True)
-    assert [c["id"] for c in fake.checked] == ["claude"]
+    assert [c.provider_id for c in fake.checked] == ["claude"]
 
 
 def test_a_free_health_check_needs_no_confirm(client):
@@ -558,7 +558,7 @@ def test_a_free_health_check_needs_no_confirm(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     r = client.post("/api/llm-connections/openrouter/health")
     assert (r.status_code, r.json()["ok"]) == (200, True)
-    assert [c["id"] for c in fake.checked] == ["openrouter"]
+    assert [c.provider_id for c in fake.checked] == ["openrouter"]
 
 
 # ---- delete sweeps ----

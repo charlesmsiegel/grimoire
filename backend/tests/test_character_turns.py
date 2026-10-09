@@ -8,6 +8,7 @@ from grimoire import routes, store
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from tests import wire_kit
 from tests.inference_fixtures import (
     SAME_PROVIDER,
     SPARE,
@@ -305,7 +306,7 @@ def test_single_npc_skips_selector_and_stop_blocks_successor(client, monkeypatch
             cid,
             sid,
             fake,
-            {"kind": "openrouter", "model": "test"},
+            wire_kit.resolution(wire_kit.target(model="test")),
             run,
             token,
             round_record,
@@ -508,7 +509,7 @@ def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, {"kind": "openrouter", "model": "test"}, run, token,
+            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
             round_record, streaming.StreamOutcome()):
             if "delta" in json.loads(frame.removeprefix("data: ")):
                 run.cancel_requested = True
@@ -662,9 +663,9 @@ def test_the_selector_capture_records_the_decision(client):
     assert {k: decision[k] for k in ("id", "label", "tier", "tokens", "dropped")} == {
         "id": "decision", "label": "decision", "tier": "lock-in", "tokens": 0,
         "dropped": False}
-    pick = fake.requests[0]["conn"]
+    pick = fake.requests[0]["target"]
     assert json.loads(decision["text"]) == {
-        "mode": "structured", "provider": pick["id"], "model": pick["model"],
+        "mode": "structured", "provider": pick.provider_id, "model": pick.model,
         "items": [{"backend": "structured",
                    "answers": {"next": {"answer": "characters:winifred"}}}]}
     assert captured["total_tokens"] == sum(row["tokens"] for row in sent) > 0
@@ -673,11 +674,46 @@ def test_the_selector_capture_records_the_decision(client):
 #: A native endpoint's pick: Mara, with no rationale.
 NATIVE_MARA = ItemResult({"next": Answer("characters:mara")})
 
+#: Mara's turn once she is picked.
+MARA_ANSWERS = 'Mara answers.\n```handoff\n{"next":null}\n```'
+
+
+def _pick_capture(client, cid, sid) -> dict:
+    """The speaker pick's prompt-log entry."""
+    (entry,) = [e for e in store.prompt_log.list_entries(cid, sid)
+                if e["task"] == "response-selector"]
+    captured = store.prompt_log.read_entry(cid, entry["id"], scene=sid)
+    assert captured is not None
+    return captured
+
+
+@pytest.mark.parametrize("model,mode", [("vendor/decider", "native"),
+                                        ("vendor/active", "structured")])
+def test_a_native_pick_captures_no_sampler_preset(client, model, mode):
+    """A native decision is sent no sampler preset (spec 8), so its capture
+    reports none -- though the Decision role has one -- where a structured
+    pick's names the preset it was sent. The rule reads the outcome's mode
+    (`character_turns._capture`): a target sent without sampling looks the
+    same as one with no preset, so the target alone cannot say it."""
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": model, "preset": pid}}}})
+    fake = FakeLLM([[decision_reply({"next": "characters:mara"})], [MARA_ANSWERS]],
+                   decisions=[NATIVE_MARA])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    captured = _pick_capture(client, cid, sid)
+    assert json.loads(captured["sections"][-1]["text"])["mode"] == mode
+    if mode == "native":
+        assert "sampling" not in captured
+    else:
+        assert captured["sampling"]["preset_id"] == pid
+
 #: What a native endpoint answers for a model it has no decisions for.
 NO_ENDPOINT = LLMError("bad_response", "no decisions endpoint for this model", status=404)
 
-#: Mara's turn once she is picked.
-MARA_ANSWERS = 'Mara answers.\n```handoff\n{"next":null}\n```'
 
 
 @pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
@@ -691,9 +727,9 @@ def test_the_speaker_on_a_decide_only_model_answers_natively(client, on):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
     [(_item, conn, _retries)] = fake.native_requests
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/decider")
     (actor,) = fake.requests
-    assert (actor["conn"]["id"], actor["conn"]["model"]) == ("openrouter", "vendor/active")
+    assert (actor["target"].provider_id, actor["target"].model) == ("openrouter", "vendor/active")
     assert _speakers(cid, sid) == ["Mara"]
 
 
@@ -711,9 +747,9 @@ def test_the_speaker_on_a_decide_only_model_answers_on_the_fallback(client, on):
     _chat(client, cid, sid)
     assert len(fake.native_requests) == 1
     pick, actor = fake.requests
-    assert (pick["conn"]["id"], pick["conn"]["model"]) == on
-    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
-    assert actor["conn"]["id"] == "openrouter"
+    assert (pick["target"].provider_id, pick["target"].model) == on
+    assert all(r["target"].model != "vendor/decider" for r in fake.requests)
+    assert actor["target"].provider_id == "openrouter"
     assert _speakers(cid, sid) == ["Mara"]
 
 
@@ -841,8 +877,8 @@ def test_the_decision_role_now_serves_the_speaker(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
     pick, actor = fake.requests
-    assert (pick["conn"]["id"], pick["conn"]["model"]) == ("spare", "vendor/spare")
-    assert (actor["conn"]["id"], actor["conn"]["model"]) == ("openrouter", "vendor/active")
+    assert (pick["target"].provider_id, pick["target"].model) == ("spare", "vendor/spare")
+    assert (actor["target"].provider_id, actor["target"].model) == ("openrouter", "vendor/active")
 
 
 def test_a_fenced_selector_reply_now_reads(client):

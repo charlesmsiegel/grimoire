@@ -468,7 +468,9 @@ class Meter:
     failed call carrying its kind, and then re-raised untouched::
 
         with store.usage.meter("chat", campaign=cid, scene=sid) as m:
-            text = await client.complete(messages, conn, usage=m.usage)
+            text = await operations.generate("chat", messages, client=client,
+                                             resolved=resolved, usage=m.usage,
+                                             stream=False)
 
     Recording happens exactly once however the meter ends, so a caller that
     finishes explicitly and is then unwound by an exception files one row rather
@@ -499,7 +501,7 @@ class Meter:
         (returning False re-raises).
 
         A cancellation is not a failure, and telling them apart matters: an
-        `asyncio.CancelledError` unwinds this block at every `.complete()` site
+        `asyncio.CancelledError` unwinds this block at every joined `generate` site
         the moment a client disconnects, and counting that as a provider error
         would make a user who closes a tab mid-suggestion look like a provider
         failing them. `_fence_stream` already takes that care on the streamed

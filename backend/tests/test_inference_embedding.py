@@ -1,6 +1,7 @@
 """The Embedding role has one reader: `resolve.embedding` (slice D, Task 1).
 
-It reads the role through the cascade (`translate.embedding_view`, then
+It reads the role through the cascade (the planner's overlay of `config.md`,
+its role keys stripped by `_embedding_view`, then
 `cascade.role_selection("embedding", campaign={})`), builds one attempt with
 no fallback, says what that attempt is known not to do (`missing`), and names
 the vector space it embeds in (`space_id`) only when it embeds. `embed_space`
@@ -16,7 +17,7 @@ import pytest
 
 from grimoire.store import config, embed_space, llm_connections, routing
 from grimoire.store import inference_keys as keys
-from grimoire.store.inference import cascade, facts, translate
+from grimoire.store.inference import cascade, facts
 from grimoire.store.inference import resolve as inference_resolve
 
 
@@ -52,14 +53,14 @@ def test_the_cascade_is_the_reader(monkeypatch):
         return real(role, campaign=campaign, glob=glob, exists=exists)
 
     views: list[dict] = []
-    real_view = translate.embedding_view
+    real_view = inference_resolve._embedding_view
 
     def view_spy(cfg):
         views.append(cfg)
         return real_view(cfg)
 
     monkeypatch.setattr(cascade, "role_selection", spy)
-    monkeypatch.setattr(translate, "embedding_view", view_spy)
+    monkeypatch.setattr(inference_resolve, "_embedding_view", view_spy)
     assert embed_space.resolve() is not None
     assert calls == [("embedding", {})]
     assert len(views) == 1
@@ -100,7 +101,7 @@ def test_the_embedding_role_has_no_fallback():
                            keys.fallback_key("primary", "model"): "m"})
     got = inference_resolve.embedding()
     assert len(got.attempts) == 1
-    assert inference_resolve.FALLBACK_KEY not in got.attempts[0].conn
+    assert not got.rides and got.chain.fallback is None
     assert got.fallback_missing == ()
 
 
@@ -161,8 +162,9 @@ def test_endpoint_names_the_provider_and_resolve_keeps_four_keys():
     got = embed_space.endpoint()
     assert got is not None
     assert set(got) == {"model", "base_url", "key", "space", "provider",
-                        "provider_name", "provider_kind", "conn"}
-    assert got["conn"]["id"] == conn
+                        "provider_name", "provider_kind", "target"}
+    assert got["target"].provider_id == conn
+    assert got["target"].account.operation == "embed"
     assert (got["provider"], got["provider_name"], got["provider_kind"]) == (
         conn, "Seraphine Vectors", "openai_compatible")
     assert (got["model"], got["base_url"], got["key"]) == (
@@ -273,9 +275,50 @@ def test_embed_tasks_are_registered_apart():
 
 
 def test_embedding_view_strips_at_both_formats():
+    """The `embeddings_*` trim rule, kept: the format-2 role keys are read
+    stripped, and so is a legacy choice, which the planner maps in memory
+    (and maps to nothing when it never embedded)."""
     role = keys.role_key("embedding", "provider"), keys.role_key("embedding", "model")
-    assert translate.embedding_view({"embeddings_connection_id": " a ",
-                                     "embeddings_model": " b "}) == {role[0]: "a", role[1]: "b"}
-    assert translate.embedding_view({keys.FORMAT_KEY: "2", role[0]: " a ",
-                                     role[1]: " b "}) == {role[0]: "a", role[1]: "b"}
-    assert translate.embedding_role({keys.FORMAT_KEY: "2", role[0]: " a "}) == ("a", "")
+    assert inference_resolve._embedding_view({keys.FORMAT_KEY: "2", role[0]: " a ",
+                                              role[1]: " b "}) == {role[0]: "a", role[1]: "b"}
+    assert inference_resolve.embedding_role({keys.FORMAT_KEY: "2", role[0]: " a "}) == ("a", "")
+    conn = _local()
+    assert inference_resolve.embedding_role({"embeddings_connection_id": f" {conn} ",
+                                             "embeddings_model": " b "}) == (conn, "b")
+    assert inference_resolve.embedding_role({"embeddings_connection_id": " gone ",
+                                             "embeddings_model": " b "}) == ("", "")
+
+
+def test_a_format_1_edit_that_turns_the_legacy_embedding_on_asks_first():
+    """The same edit on a store still at format 1 (fix round 1, I3): the
+    legacy choice is off by the old rev's catalog `no` -- the planner maps it
+    to no role -- and the key edit turns it on. `moved_by` judges the role as
+    STORED, not as the mapping judged the record the edit replaces, so the
+    edit is a move and asks (CLAUDE.md: a settings surface never spends
+    unasked)."""
+    from tests.inference_fixtures import legacy_store
+
+    legacy_store()
+    conn = _local()
+    llm_connections.set_cached_models(conn, [{"id": "m", "outputs": ["text"]}], _rev(conn))
+    config.write_config(embeddings_connection_id=conn, embeddings_model="m")
+    assert not keys.is_current(config.read_config())
+    assert embed_space.endpoint() is None
+    moved = _guarded_edit(conn, api_key="sk-fake-2")
+    assert embed_space.endpoint() is not None
+    assert moved is True
+
+
+def test_a_format_1_edit_of_a_legacy_openrouter_embedding_moves_nothing():
+    """A legacy OpenRouter Embedding choice has always meant "off", before and
+    after any edit of the provider: its key edit is no move, and asks
+    nothing -- as at the base, where the endpoint rule took the format."""
+    from tests.inference_fixtures import legacy_store
+
+    legacy_store()
+    router = llm_connections.create_connection("openrouter", "Router", api_key="sk-or-fake",
+                                               model="", post_process="none")
+    config.write_config(embeddings_connection_id=router, embeddings_model="vec-small")
+    assert not keys.is_current(config.read_config())
+    assert _guarded_edit(router, api_key="sk-or-fake-2") is False
+    assert embed_space.endpoint() is None

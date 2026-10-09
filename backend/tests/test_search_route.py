@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from tests.inference_fixtures import put_settings
 
 #: Quoted, so the four words are one term rather than four -- "the" alone
 #: matches half the store, which would make these assertions about the fixture
@@ -132,14 +133,15 @@ def test_a_hit_carries_no_internal_keys(client, library):
 def configure_embeddings(client, kind="openai_compatible"):
     """Point the store at an embeddings endpoint, through the API."""
     conn = client.post("/api/llm-connections",
-                       json={"kind": kind, "name": "Vectors", "model": "",
+                       json={"kind": kind, "name": "Vectors",
                              "base_url": "https://vectors.example/v1",
-                             "api_key": "sk-x", "post_process": "none"}).json()
-    # Moving the Embedding role's space asks first, at either format.
-    got = client.put("/api/config", json={"embeddings_connection_id": conn["id"],
-                                          "embeddings_model": "embed-1",
-                                          "confirm_embedding": True})
+                             "api_key": "sk-x"}).json()
+    got = client.put(f"/api/llm-connections/{conn['id']}/facts",
+                     json={"model": "embed-1", "post_process": "none"})
     assert got.status_code == 200, got.text
+    # Moving the Embedding role's space asks first.
+    put_settings(client, {"roles": {"embedding": {"selection": {
+        "provider": conn["id"], "model": "embed-1"}}}, "confirm_embedding": True})
     return conn["id"]
 
 

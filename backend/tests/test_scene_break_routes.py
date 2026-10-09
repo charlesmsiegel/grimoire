@@ -27,6 +27,7 @@ from .inference_fixtures import (
     SPARE,
     decide_only,
     format2,
+    legacy_store,
     neither,
     openai_decides_only,
     put_settings,
@@ -738,10 +739,10 @@ def test_a_decide_only_decision_model_answers_natively(client, on):
     assert r.status_code == 200, r.text
     assert r.json()["verdict"] == "yes"
     [(_item, conn, _retries)] = llm.native_requests
-    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert (conn.provider_id, conn.model) == ("openrouter", "vendor/decider")
     [title_call] = llm.requests
     assert llm.schemas == [None]
-    assert (title_call["conn"]["id"], title_call["conn"]["model"]) == \
+    assert (title_call["target"].provider_id, title_call["target"].model) == \
         ("openrouter", "vendor/active")
 
 
@@ -756,12 +757,12 @@ def test_a_decide_only_decision_model_falls_to_the_role_fallback(client, on):
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
     assert r.status_code == 200, r.text
     assert r.json()["verdict"] == "yes"
-    assert [c["model"] for _i, c, _r in llm.native_requests] == ["vendor/decider"]
+    assert [c.model for _i, c, _r in llm.native_requests] == ["vendor/decider"]
     decide_call, title_call = llm.requests
-    assert (decide_call["conn"]["id"], decide_call["conn"]["model"]) == on
-    assert all(req["conn"].get("model") != "vendor/decider" for req in llm.requests)
+    assert (decide_call["target"].provider_id, decide_call["target"].model) == on
+    assert all(req["target"].model != "vendor/decider" for req in llm.requests)
     # The title is the summary route's: Fast, inheriting Primary.
-    assert (title_call["conn"]["id"], title_call["conn"]["model"]) == \
+    assert (title_call["target"].provider_id, title_call["target"].model) == \
         ("openrouter", "vendor/active")
 
 
@@ -799,7 +800,7 @@ def test_an_openai_model_the_user_marks_decisions_only_answers_natively(client):
     assert r.status_code == 200, r.text
     assert r.json()["verdict"] == "yes"
     [(_item, conn, _retries)] = llm.native_requests
-    assert (conn["id"], conn["kind"], conn["model"]) == (
+    assert (conn.provider_id, conn.kind, conn.model) == (
         conn_id, "openai_compatible", OPENAI_DECIDER)
     assert llm.schemas == [None]       # the one completion is the title's
     (row,) = _rows("scene-break")
@@ -833,15 +834,16 @@ def test_the_decision_role_now_serves_scene_break(client):
     cid, sid = _scene(client, posts=40)
     assert _post(client, cid, sid)["verdict"] == "yes"
     decide_call, title_call = llm.requests
-    assert (decide_call["conn"]["id"], decide_call["conn"]["model"]) == \
+    assert (decide_call["target"].provider_id, decide_call["target"].model) == \
         ("spare", "vendor/spare")
-    assert title_call["conn"]["id"] == "openrouter"
+    assert title_call["target"].provider_id == "openrouter"
 
 
 def test_scene_break_on_a_legacy_store_resolves_as_before(client):
     """A format-1 store has no Decision role: it inherits Fast, then Primary,
     and the legacy `route_summary` key still moves the verdict -- and the
     title, which lives on that very route."""
+    legacy_store()
     _key(client)
     client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
                                               "api_key": "sk-spare",
@@ -849,11 +851,11 @@ def test_scene_break_on_a_legacy_store_resolves_as_before(client):
     llm = _use(client, _judge(YES, YES))
     cid, sid = _scene(client, posts=40)
     assert _post(client, cid, sid)["verdict"] == "yes"
-    assert [req["conn"]["id"] for req in llm.requests] == ["openrouter", "openrouter"]
+    assert [req["target"].provider_id for req in llm.requests] == ["openrouter", "openrouter"]
     store.write_config(route_summary="spare")
     _posts(cid, sid, 40, start=40)
     assert _post(client, cid, sid)["verdict"] == "yes"
-    assert [req["conn"]["id"] for req in llm.requests[2:]] == ["spare", "spare"]
+    assert [req["target"].provider_id for req in llm.requests[2:]] == ["spare", "spare"]
 
 
 def test_each_write_bumps_the_campaign_revision_and_a_refused_title_does_not(client):

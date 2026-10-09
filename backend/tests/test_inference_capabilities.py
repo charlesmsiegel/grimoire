@@ -7,8 +7,9 @@ import json
 
 import pytest
 
+from grimoire import wire
 from grimoire.store import config, llm_connections, post_images
-from grimoire.store.inference import capabilities, facts, providers
+from grimoire.store.inference import capabilities, facts, providers, resolve
 from grimoire.store.inference.capabilities import Cap
 
 P = providers.PRESETS
@@ -426,31 +427,40 @@ def test_caps_for_survives_a_failing_catalog(home, monkeypatch):
 
 
 # ---- post_images keeps its answers (Review Focus 1) ----
+def _t(conn: dict) -> wire.Target:
+    """`conn` as the target it sends at its own model, built now by the
+    store's builder (`resolve.target_for`): the post-image preference the
+    record states is its model's fact, and its catalog is read as it
+    stands."""
+    return resolve.target_for(conn, conn["model"], resolve.preset_sampling(""),
+                              model_facts={"vision": conn.get("vision", "")})
+
+
 def test_openai_preset_without_catalog_vision_sends_no_images(home):
     config.write_config(send_images="on")
     conn = _conn(base_url="https://api.openai.com/v1", model="mara-7b")
     assert providers.infer(conn).id == "openai"
     # The setting is on, so a zero below is the capability's answer, not the limit's.
     assert post_images.limit() > 0
-    assert post_images.capability(conn) == "unknown"
-    assert post_images.images_for(conn) == 0
+    assert post_images.capability(_t(conn)) == "unknown"
+    assert post_images.images_for(_t(conn)) == 0
     llm_connections.set_cached_models(conn["id"], [{"id": "mara-7b", "outputs": ["text"]}],
                                       conn["rev"])
-    assert post_images.capability(conn) == "unknown"
-    assert post_images.images_for(conn) == 0
+    assert post_images.capability(_t(conn)) == "unknown"
+    assert post_images.images_for(_t(conn)) == 0
     llm_connections.set_cached_models(conn["id"], [{"id": "mara-7b", "vision": False}],
                                       conn["rev"])
-    assert post_images.capability(conn) == "no"
-    assert post_images.images_for(conn) == 0
+    assert post_images.capability(_t(conn)) == "no"
+    assert post_images.images_for(_t(conn)) == 0
 
 
 def test_post_images_reads_model_facts_after_the_legacy_setting(home):
     conn = _conn(base_url="http://localhost:1234/v1", model="mara-7b")
     facts.record_verified(conn["id"], "mara-7b", conn["rev"], {"vision": {"ok": True}})
-    assert post_images.capability(conn) == "yes"
+    assert post_images.capability(_t(conn)) == "yes"
     # The legacy field is the post-image setting, and it still wins.
     off = {**conn, "vision": "off"}
-    assert post_images.capability(off) == "no"
+    assert post_images.capability(_t(off)) == "no"
 
 
 def test_post_images_on_zai_answers_as_it_did(home):
@@ -458,16 +468,16 @@ def test_post_images_on_zai_answers_as_it_did(home):
     config.write_config(send_images="on")
     conn = _conn(base_url="https://api.z.ai/api/paas/v4", model="mara-7b")
     assert providers.infer(conn).id == "zai"
-    assert post_images.capability(conn) == "unknown"
-    assert post_images.reach(conn) == "unknown"
-    assert post_images.images_for(conn) == 0
+    assert post_images.capability(_t(conn)) == "unknown"
+    assert post_images.reach(_t(conn)) == "unknown"
+    assert post_images.images_for(_t(conn)) == 0
     for vision, want in ((True, "yes"), (False, "no"), (None, "unknown")):
         llm_connections.set_cached_models(conn["id"], [{"id": "mara-7b", "vision": vision}],
                                           conn["rev"])
-        assert post_images.capability(conn) == want
-        assert post_images.reach(conn) == want
-    assert post_images.capability({**conn, "vision": "on"}) == "yes"
-    assert post_images.capability({**conn, "vision": "off"}) == "no"
+        assert post_images.capability(_t(conn)) == want
+        assert post_images.reach(_t(conn)) == want
+    assert post_images.capability(_t({**conn, "vision": "on"})) == "yes"
+    assert post_images.capability(_t({**conn, "vision": "off"})) == "no"
 
 
 def test_anthropic_prefill_follows_the_model():
