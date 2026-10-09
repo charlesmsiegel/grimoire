@@ -30,7 +30,7 @@ contribution, handoffs, frozen snapshots).
 | 01c-C2 | 01c | The one sampler `(distribution, seed) → selected`. | Hard for C2 sampling |
 | 01c-C3 | 01c | The replay record, persisted beside the round's speaker and the response's intent. | Hard for C2 sampling |
 | 01c-C4 | 01c | An abstention, a refusal or a missing distribution is never sampled. Section 5 builds the speaker invariants on it. | Hard for C2 sampling |
-| 01d-C1 | 01d | The per-task fallback and escalation policy. Section 10 states the row each new task needs. | Hard for C5a; hard for declaring every new task |
+| 01d-C1 | 01d | The per-task policy (`routing.TaskPolicy`, with 01c's `samples` field). Section 10 states the row each new task needs. | Hard for C5a; hard for declaring every new task |
 | 01d-C2 | 01d | The one-hop escalation helper, used by epistemic access only. | Hard for C5a |
 | 01d-C3 | 01d | Per-task, per-backend thresholds for that escalation. | Hard for C5a |
 | 01e-C1, 01e-C2 | 01e | `Rank` and a finer `Score`, which history relevance (C5b) switches to when they land. | Soft |
@@ -50,7 +50,7 @@ Nothing in C1, C2, C3 or C5 waits on 01g. C4 is a separate, last slice.
 | 02-C3 | 13 (13-C3) | The plan item's extension slot, so a legal-Action question rides the same call rather than adding one. |
 | 02-C4 | 12 | The play-side caps and placement rules for a decision asked as a tool. 12's investigation applies the same rules out of play. |
 | 02-C5a | 11 (11-C1) | The `epistemic` route, its task, item builder, mapping and fail-closed rule. |
-| 02-C5b | 09 (09-C1, 09-C2) | The `history_relevance` route, its task, item builder and mapping, with ungraded kept distinct from irrelevant. |
+| 02-C5b | 09 (09-C1, 09-C2) | The `history_check` route, its task, item builder and mapping, with ungraded kept distinct from irrelevant. |
 | 02-C6 | 13, 12, and any later play decision | The shared rules every play-facing decision keeps (section 3): soft resolution, byte-identical when off, attribution, the ceiling and the play gate. |
 
 **Changes from the checklist:** C2 is split into **C2a** (sampled next
@@ -203,7 +203,7 @@ is made today by the model's free text, or not made at all, and give 09 and
 - **C4:** **Decision as a tool** from a contribution, via 01g-C5, with a
   hard per-contribution cap and placement rules that keep the stream and the
   watcher sound.
-- **C5:** the `epistemic` and `history_relevance` decide kits (route,
+- **C5:** the `epistemic` and `history_check` decide kits (route,
   task, builder, mapping, templates, eval cases) that 11 and 09 wire in.
 - **C6:** the shared rules all of the above keep.
 
@@ -349,7 +349,7 @@ Each switch's text states the extra call per contribution it costs, on which
 route, and, for sampling, whether the current Decision model reports
 distributions (5.6).
 
-The new routes (`turn_plan`, `epistemic`, `history_relevance`) need no page
+The new routes (`turn_plan`, `epistemic`, `history_check`) need no page
 of their own. The Models page lists every route the server reports, and
 01s's "Advanced" toggle hides rarely used ones
 (`2026-10-09-inference-settings-group-design.md`, section 3).
@@ -389,7 +389,7 @@ There are two halves.
 
 - A `decide-*` eval case per new builder: `decide-turn-intent`,
   `decide-turn-plan`, `decide-play-tool`, `decide-epistemic-access`,
-  `decide-history-relevance`. Each holds the prompt contract offline, with
+  `decide-history-rerank`. Each holds the prompt contract offline, with
   recordings for compliant, undecodable, off-option, abstained and native
   shapes, on the model of `decide-continuity-identity`
   (`evals/cases.py:1870-1905`).
@@ -1056,12 +1056,19 @@ def access_of(questions, results: Sequence[decisions.ItemResult]) -> dict[tuple[
   abstained, refused, unreadable, `NOT_AN_OPTION`, an error, and an item the
   reply never reached. Never `known`. The costly error is a character knowing
   what they should not, so every failure lands on the side that withholds.
-- **Escalation (01d-C2) applies here, and only to the permissive answers.**
-  The trigger is a native `known`, `suspected` or `experienced` whose margin
-  is under the threshold (01d-C3), or a native `refused`. The item goes one
-  hop to the declared next resolver. If that fails, or no resolver is
-  declared, the answer is `UNKNOWN`. `narrator_only` and an abstention never
-  escalate: they are already the safe side.
+- **Escalation (01d-C2) applies here.** The policy row is
+  `TaskPolicy(escalate_to="primary", escalate_on=("refused", "low_margin"),
+  question="access", margins=<01d-C3's>)` (01d's draft, section 4.1). Not
+  `abstained`: an abstention is `UNKNOWN`, which is already the safe side.
+  The hop's answer replaces the first one. If the hop fails, is skipped
+  (`same_model`, the clock) or is unread, the answer is `UNKNOWN`, never the
+  first answer and never `known`.
+  - **Only permissive answers need the hop.** A low-margin `narrator_only` is
+    already safe, so escalating it only spends. 01d's triggers do not read
+    which option was chosen. **Requirement on 01d (flagged as an edge):** an
+    optional per-task filter, for example `escalate_answers=("known",
+    "suspected", "experienced")`. Without it, 02-C5a escalates every
+    low-margin answer, which costs more but is no less safe.
 - **Never sampled.** What a character knows is not behaviour.
 - **Derived, never persisted as truth.** The result is per turn (section 9 of the 11 draft). The
   kit writes nothing.
@@ -1071,15 +1078,22 @@ def access_of(questions, results: Sequence[decisions.ItemResult]) -> dict[tuple[
 
 ### 9.3 C5b: history relevance (for 09-C1/C2)
 
+The names follow 09's draft (its open question 3): task `history-rerank` on a
+route `history_check`. 10 later adds its own `history-sufficiency` task to
+the same route. Both are decide tasks on the Decision role, so they agree on
+`fallback` as 01d's `test_task_policy.py` requires of a route's tasks. 09
+names its own ceiling (`RERANK_CEILING`) rather than 3.4's, and passes
+`post`. Nothing here contradicts either.
+
 ```python
-Route("history_relevance", "History relevance",
+Route("history_check", "History checks",
       "Whether a recalled scene bears on the current turn, after retrieval has "
       "found it.",
-      ("history-relevance",), True, operation="decide", default_role="decision")
+      ("history-rerank",), True, operation="decide", default_role="decision")
 ```
 
 ```python
-# store/history_relevance.py  (pure; renders templates)
+# store/history_rerank.py  (pure; renders templates)
 RELEVANCE_ID = "relevance"
 LEVELS = ("unrelated", "background only", "related", "bears directly on this turn")
 
@@ -1112,7 +1126,7 @@ def grades_of(candidates, results) -> dict[str, Grade]
   than scoring each alone. When 01e-C2 lands, the scale may get finer. 09
   chooses which to call. The kit keeps the Score form for 09's first slice.
 - **Budget.** 09 bounds the candidates it hands over to one chunk (eight) on
-  the turn path, under 3.4's ceiling. On a native stage that is eight
+  the turn path, under its own `RERANK_CEILING`. On a native stage that is eight
   requests at `NATIVE_CONCURRENCY` (four, `inference.py:86`) at a time.
 
 ### 9.4 Kit acceptance
@@ -1131,29 +1145,40 @@ the turn path too, so 4.3 applies to them.
 
 ## 10. Fallback, escalation and sampling per task (the 01d-C1 rows)
 
-01d-C1 owns the policy's spelling. This is the row 02 asks 01d to record for
-every decide task, new and landed. The landed rows record today's behaviour
-and change nothing.
+01d-C1 owns the policy's spelling (`routing.TaskPolicy`, `routing.policy`,
+`TASK_POLICY`, which is empty at landing; 01d's draft, section 4.1). 01c adds
+`samples` to the same structure. This is the row each new task of 02 needs.
+For the landed tasks it is 02's position on 01d's candidate table (01d's
+draft, section 6.4). That table ships every row off, and switches each task
+on in a change of its own.
 
-| Task | Route fallback | Escalation | Sampling | Why |
+| Task | `fallback` | Escalation | `samples` | Why |
 |---|---|---|---|---|
-| `response-selector` | As today | None | Optional (C2a) | A flat distribution is the behaviour to sample, not doubt to resolve, and the pick is on the turn path. |
-| `turn-intent`, `turn-plan` | Allowed | None | Stance only | As above. The feature is soft, so a failure costs only the intent. |
-| `turn-tool-decision` | Allowed | None | As 6.5 | Inside a contribution, under 01g-C4's budget. |
-| `scene-break` | As today | None | None | A YES is a proposal the player confirms. |
-| `voice-drift` | As today | None | None | A verdict feeds the review. |
-| `continuity-identity` | As today | None in 02 | None | `uncertain` already escalates to the human: it flags the row for review. A model hop would add absorb cost to replace a step that has a better answerer. |
-| `continuity-reconcile` | As today | None in 02 | None | Proposals are reviewed. Unanswered candidates are asked again next sweep. |
-| `epistemic-access` | Allowed | **Yes**: permissive answers under margin, and native `refused` (9.2) | Never | Leakage is the costly error. Fail closed. |
-| `history-relevance` | Allowed | None | Never | Turn-path latency. Ungraded falls back to signals. |
+| `response-selector` | `role` (today) | Off. 01d's candidate (`refused`, `low_margin`) stays off; `refused` alone is compatible with sampling, and may be switched on after C2a's gate | Yes, per campaign (C2a) | A flat distribution is the behaviour to sample, not doubt to resolve, and the pick is on the turn path. |
+| `turn-intent`, `turn-plan`, `turn-tool-decision` | `role` (one route; they must agree) | Off | Yes (stance; the tool's selection) | As above. The feature is soft, so a failure costs only the intent. |
+| `scene-break` | `role` (today) | Off, as 01d recommends | No | A YES is a proposal the player confirms. |
+| `voice-drift` | `role` (today) | Off, as 01d recommends | No | A verdict feeds the review. |
+| `continuity-identity` | `role` (today) | Not switched by 02. 01d names it the first candidate; its switching change is its own, under 01d's bar (01d's draft, section 6.3) | No | `uncertain` already flags the row for the human review, so the hop must be shown to cut wrong merges and missed duplicates, not merely the count of `uncertain`s. The bar should say so. |
+| `continuity-reconcile` | `role` (today) | Not switched by 02 | No | Proposals are reviewed. Unanswered candidates are asked again next sweep. |
+| `epistemic-access` | `role` | **On** (9.2) | No | Leakage is the costly error. Fail closed. |
+| `history-rerank` | `role` | Off | No | Turn-path latency. Ungraded falls back to signals. |
 
-**One rule across the table: a task either samples or escalates on margin,
-never both.** Escalation treats a flat distribution as uncertainty to remove.
-Sampling treats it as the behaviour to reproduce. A task that did both would
-send exactly the items that sampling exists for to a second resolver.
-**Requirement on 01d (flagged as an edge):** 01d-C1's policy must be able to
-say "this task samples; margin is not a failure", and "escalation
-unavailable answers this value" (`UNKNOWN` for epistemic access).
+**One rule across the table: a task never both samples and escalates on
+`low_margin`.** Escalation treats a flat distribution as uncertainty to
+remove. Sampling treats it as the behaviour to reproduce. A task that did both
+would send exactly the items sampling exists for to a second resolver.
+`refused` escalation is compatible with sampling, because a refusal is never
+sampled (01c-C4).
+
+**Requirements on 01c and 01d (flagged as edges):**
+
+- `test_task_policy.py` fails a row with `samples=True` and `"low_margin" in
+  escalate_on`;
+- a failed or skipped hop leaves the item for the call site to map. For
+  epistemic access, 02-C5a maps it to `UNKNOWN` itself (9.2), so this needs
+  nothing new from 01d beyond a per-item "escalation did not answer" signal,
+  which 01d's per-item provenance already provides (01d's draft, section
+  5.6).
 
 ---
 
@@ -1230,8 +1255,8 @@ slot whose questions are owned, read and stored by their provider.
   only on permissive answers; never sampled; nothing persisted.
 
 **02-C5b — History relevance kit.** The route entry, the task
-`history-relevance`, `build_items` and `grades_of`, the templates, the
-`decide-history-relevance` case and the 01d-C1 row.
+`history-rerank`, `build_items` and `grades_of`, the templates, the
+`decide-history-rerank` case and the 01d-C1 row.
 
 - **Guarantees:** ungraded is `None`, never a level; no escalation, no
   sampling; a `Rank` variant once 01e-C1 lands.
@@ -1280,7 +1305,7 @@ gate of section 4.
   bytes. `scripts/verify_templates.py` covers the new templates.
   `evals/run.py`'s offline cases cover the new decide prompts.
 - **Import guard.** The new store modules (`turn_plan.py`,
-  `play_decisions.py`, `epistemic_access.py`, `history_relevance.py`) import
+  `play_decisions.py`, `epistemic_access.py`, `history_rerank.py`) import
   `grimoire.decisions` and `prompts` like `response_protocol.py` does
   (`response_protocol.py:10`), all at module scope. Cross-package store
   imports bind submodules.
@@ -1343,7 +1368,7 @@ honoured call; a call after visible text declined and recorded; cap answers
 from the transcript and from the watcher's input; one meter per loop turn
 under one run id.
 
-**Kits (`test_epistemic_access.py`, `test_history_relevance.py`):**
+**Kits (`test_epistemic_access.py`, `test_history_rerank.py`):**
 fail-closed mapping for every reason and detail; escalation only on
 permissive answers (with 01d's helper faked); ungraded is `None`; builders
 refuse nothing a caller could legally pass; `decide-*` replay cases green.
@@ -1377,7 +1402,7 @@ under 01a-C2's scope.
 | **02-D — Sampling** | C2a in `_select`. Stance sampling in B and C. The `decide-speaker` native recording with a distribution. | 01c-C1..C4 |
 | **02-E — Play gate** | `evals/play.py`, `--live --play`, fixtures, feature graders. | 01a-C1..C3 |
 | **02-F — Exposure** | The "Play decisions" ConfigView section and campaign overrides, one switch per ratified feature, and the inspector line. | 02-E reports, the user's yes |
-| **02-G — Kits** | `epistemic_access.py`, `history_relevance.py`, templates, `decide-*` cases. No routes (9.1). | 01d-C1..C3 for the policy rows |
+| **02-G — Kits** | `epistemic_access.py`, `history_rerank.py`, templates, `decide-*` cases. No routes (9.1). | 01d-C1..C3 for the policy rows |
 | **02-H — Tool** | C4. | 01g-C1..C5, 02-E |
 
 B and C land dark: the backend honours the key and there is no UI. 02-E can
@@ -1391,9 +1416,9 @@ run B and C before 02-D lands; argmax is a valid configuration.
   only ever run in evals.
 - **Native-first for a generating model.** It stays 01 section 16's decision.
 - **Re-tuning or re-gating F–H's sites,** beyond C2a's optional sampling.
-- **Escalation for continuity identity or reconcile.** The human review is
-  their escalation (section 10). If 01d's evals later show a model hop beats
-  it, that change is one policy row.
+- **Switching on escalation for continuity identity or reconcile.** 01d's
+  candidate table names identity first. Its switch is one policy row in a
+  change of its own, under 01d's bar (section 10).
 - **Faction and offscreen behaviour.** It follows 13's Actions and a later
   spec. An offscreen scene keeps today's director-turn path.
 - **NPC Action choice itself.** That is 13-C3. 02 provides the pattern
@@ -1441,8 +1466,14 @@ run B and C before 02-D lands; argmax is a valid configuration.
 8. **Missing edges, for the owners to accept or refuse:**
    - 01a: per-case aggregation across tasks (4.2);
    - 01c: `reports_distribution(resolved)` (5.6);
-   - 01d: "samples, margin is not failure" and "unavailable answers X" in the
-     policy (10);
+   - 01c/01d: `test_task_policy.py` refuses `samples=True` together with
+     `low_margin` escalation (10);
+   - 01d: an optional per-task answer filter on escalation
+     (`escalate_answers`), so epistemic access escalates only permissive
+     answers (9.2);
+   - 09 and 10: the `history_check` route and the `history-rerank` task follow
+     09's naming. 09 lists 02-C5 as a soft edge the checklist lacks (09 <-
+     02-C5), and that is right: 09 needs only the kit;
    - 01g: a streamed final loop turn and a decline-after-text hook (8.6).
 
    *Recommendation:* each owner states the item in its own contract. 02's
