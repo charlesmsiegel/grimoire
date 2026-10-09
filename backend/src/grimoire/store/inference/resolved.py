@@ -25,7 +25,8 @@ generate natively, so `conn` is always the primary's.
 Slice I builds each attempt's `wire.Target` beside its dict (`target`), from
 the same lowered values, and a resolution's `chain`: the primary's target,
 with the fallback's exactly where the primary's dict carries it under
-`FALLBACK_KEY`. Nothing sends them yet; the dict stays what the facade reads.
+`FALLBACK_KEY`. The facade sends targets, and reads the dict a call site
+still hands it as that same chain (`llm._as_chain`, until Task 9d).
 """
 
 from __future__ import annotations

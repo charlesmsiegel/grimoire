@@ -8,10 +8,10 @@ may be what this module imports. `test_wire.py` holds that by the AST.
 Slice I builds them BESIDE the dict for now. Each resolved attempt carries
 both (`Attempt.conn`, `Attempt.target`), from the same lowered values, and a
 resolution's `chain` carries the fallback's target exactly where the
-primary's dict carries it under `FALLBACK_KEY`. The adapter registry
-(`adapters`) sends a `Target`; the facade moves onto them in a later task,
-and the dict goes then. Until it does, `from_lowered` reads a dict as the
-chain it describes -- the one dict door, deleted with the lowering.
+primary's dict carries it under `FALLBACK_KEY`. The facade sends a `Target`
+through the adapter registry (`adapters`); a caller that still hands it the
+dict is read through `from_lowered`, which reads a dict as the chain it
+describes -- the one dict door, deleted with the lowering.
 
 Every class is frozen. A change is a new value (`with_account`,
 `without_sampling`, `Chain.alone`), never a write into a shared one -- the

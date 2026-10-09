@@ -4,12 +4,19 @@
 is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
-    async def stream(messages, conn, usage=None, *, schema=None) -> AsyncIterator[str]
-    async def complete(messages, conn, usage=None, *, schema=None, retries=None) -> str
-    async def single(messages, conn, usage=None) -> str
+    async def stream(messages, chain, usage=None, *, schema=None) -> AsyncIterator[str]
+    async def complete(messages, chain, usage=None, *, schema=None, retries=None) -> str
+    async def single(messages, target, usage=None) -> str
     async def decide_native(item, conn, usage=None, *, retries=None) -> ItemResult
     async def list_models(conn) -> list[dict]
     async def check(conn) -> None
+
+`stream`, `complete` and `single` take what the facade takes: a `wire.Chain`
+(or a `wire.Target`), or a lowered connection dict, which the facade reads
+through its shim (`llm._as_chain`) until Task 9d. Each request records
+`request["chain"]` and `request["target"]` (its primary) always -- a dict
+read with `wire.from_lowered` -- and `request["conn"]` only when the call was
+handed a dict, so every assertion written against the dict still holds.
 
 `decide_native` is a native decisions endpoint's one attempt (slice H, spec
 7.4). `FakeLLM(decisions=[...])` scripts it by call order like `turns`, each
@@ -37,7 +44,8 @@ every inline fake written before it existed is still called as it was.
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
 but the half of the contract `store.usage.Meter` reads to tell "the request went
 out and reported nothing" from "the request was never made". That stamp includes
-the connection dict itself under `llm.ATTEMPTED`, which is where a saved
+the attempt itself under `llm.ATTEMPTED` -- the dict a call was handed, or
+the chain's primary target, as the facade stamps it -- which is where a saved
 variant's `made_by.connection_id` is read from. A fake built with
 `usage=` then adds what a *provider* would report on top, so a test can drive a
 route and assert on the ledger row it filed; the default adds nothing, which is
@@ -86,8 +94,14 @@ from pathlib import Path
 
 import anyio
 
-from grimoire import decisions, llm_usage
-from grimoire.llm import ATTEMPTED, _native_kind, _without_fallback, effective_model
+from grimoire import decisions, llm_usage, wire
+from grimoire.llm import (
+    ATTEMPTED,
+    FALLBACK_KEY,
+    _native_kind,
+    _without_fallback,
+    effective_model,
+)
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -105,6 +119,30 @@ class CassetteMiss(AssertionError):
     fixtures do not cover, or a prompt template moved out from under a matcher.
     Both are things a test run must report, not paper over with a default reply.
     """
+
+
+def _chain_of(attempt) -> wire.Chain | None:
+    """What a call handed a fake describes, as the facade reads it: a chain
+    as it is, a target as a chain of one, and a dict through
+    `wire.from_lowered` (`llm._as_chain`'s door). None for anything else a
+    hand-written test passes, which the fake records as it always did."""
+    if isinstance(attempt, wire.Chain):
+        return attempt
+    if isinstance(attempt, wire.Target):
+        return wire.Chain(attempt)
+    if isinstance(attempt, dict):
+        return wire.from_lowered(attempt)
+    return None
+
+
+def carrying(conn: dict, fallback: dict | None) -> dict:
+    """`conn` carrying `fallback` as the call's own (`llm.FALLBACK_KEY`), the
+    way a resolved dict carries the resolver's -- where a call's fallback
+    comes from, now that the client holds none. None, or a conn that already
+    carries one, leaves the conn as it is."""
+    if fallback is None or FALLBACK_KEY in conn:
+        return conn
+    return {**conn, FALLBACK_KEY: fallback}
 
 
 class Cassette:
@@ -333,13 +371,13 @@ class FakeLLM:
         # still recorded, because `stream` records exactly once.
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
-    async def single(self, messages, conn, usage=None) -> str:
+    async def single(self, messages, target, usage=None) -> str:
         """The model test call's one attempt. A fake has no retries or fallback
         to skip, so this is `complete` -- consuming `stream` for the same reason
         `complete` does. That `single` itself skips both is held by the facade's
         own tests and the route's wire tests, not by this double. No `schema=`,
         exactly as the facade's `single` takes none."""
-        return "".join([delta async for delta in self.stream(messages, conn, usage)])
+        return "".join([delta async for delta in self.stream(messages, target, usage)])
 
     async def list_models(self, conn) -> list[dict]:
         """The catalog half of the facade's surface (#149).
@@ -367,22 +405,31 @@ class FakeLLM:
 
     @staticmethod
     def _stamp(usage, conn) -> None:
-        """What `llm._stamp` files for an attempt, for a fake that has one."""
+        """What `llm._stamp` files for an attempt, for a fake that has one: a
+        dict as it was handed, and a chain or target by its primary target,
+        as the facade stamps each."""
         if usage is None:
             return
+        if not isinstance(conn, dict):
+            chain = _chain_of(conn)
+            conn = conn if chain is None else chain.primary
         # `effective_model`, not `conn["model"]`, for the reason `llm._stamp`
         # uses it: a claude connection with no model still runs one, and a
         # fake that stamped the empty string would let a test assert a model
         # the real facade never records.
-        usage.update({"model": effective_model(conn),
-                      "connection": conn.get("name") or conn.get("id")
-                      or conn.get("kind") or "?",
-                      "provider": conn.get("kind", "openrouter"), "attempts": 1,
-                      ATTEMPTED: conn})
+        if isinstance(conn, wire.Target):
+            usage.update({"model": conn.model, "connection": conn.label or conn.kind or "?",
+                          "provider": conn.kind, "attempts": 1, ATTEMPTED: conn})
+        else:
+            usage.update({"model": effective_model(conn),
+                          "connection": conn.get("name") or conn.get("id")
+                          or conn.get("kind") or "?",
+                          "provider": conn.get("kind", "openrouter"), "attempts": 1,
+                          ATTEMPTED: conn})
         # What served it, as `llm._stamp` files it, so a route test sees
         # the row the real facade writes. No count: that is the facade's
         # `_resilient`, after a natural end, never a stamp.
-        usage["requested_model"] = effective_model(conn)
+        usage["requested_model"] = usage["model"]
         llm_usage.account(usage, conn)
 
     # ---- inspection ----
@@ -392,17 +439,25 @@ class FakeLLM:
 
     @property
     def conn(self) -> dict | None:
-        return self.requests[-1]["conn"] if self.requests else None
+        """The last request's dict -- None when it was handed a chain."""
+        return self.requests[-1].get("conn") if self.requests else None
 
     def _next(self, messages, conn) -> list[str]:
-        self.requests.append({"messages": messages, "conn": conn})
+        chain = _chain_of(conn)
+        request = {"messages": messages, "chain": chain,
+                   "target": None if chain is None else chain.primary}
+        if isinstance(conn, dict) or chain is None:
+            # The dict as it was handed -- and anything a hand-written test
+            # passes that is neither a dict nor a chain, as it always was.
+            request["conn"] = conn
+        self.requests.append(request)
         index, self.calls = self.calls, self.calls + 1
         if self.cassette is not None:
             # The model of the attempt this fake was handed: it serves that
             # attempt and no fallback, so an entry naming another model is not
             # this request's.
             return self.cassette.reply(
-                messages, effective_model(conn) if isinstance(conn, dict) else None)
+                messages, None if chain is None else chain.primary.model)
         return self.turns[min(index, len(self.turns) - 1)]
 
 
@@ -545,10 +600,10 @@ class StallingGateway(FakeCatalog):
             await asyncio.sleep(self.seconds)
         return await super().complete(messages, conn, usage, schema=schema, retries=retries)
 
-    async def single(self, messages, conn, usage=None) -> str:
+    async def single(self, messages, target, usage=None) -> str:
         if self.where == "single":
             await asyncio.sleep(self.seconds)
-        return await super().single(messages, conn, usage)
+        return await super().single(messages, target, usage)
 
 
 # ---- provider doubles ----

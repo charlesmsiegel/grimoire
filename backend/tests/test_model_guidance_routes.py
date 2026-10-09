@@ -4,7 +4,7 @@ import pytest
 
 from grimoire import llm, routes, store
 from grimoire.llm_errors import LLMError
-from tests.inference_fixtures import put_settings
+from tests.inference_fixtures import endpoint, primary_falling_back, put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
 
 
@@ -101,12 +101,11 @@ def test_reroll_override_keeps_frozen_prompt_and_does_not_change_next_turn(clien
 
 def test_fallback_captures_matching_profile_only_when_attempted(client):
     cid, sid = _scene(client)
-    _primary(client, "glm-5.3")
+    backup = endpoint(client, "Winifred Endpoint")
+    primary_falling_back(client, ("openrouter", "glm-5.3"), (backup, "vendor/unknown"))
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=("Mara nods.",))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                          fallback={"kind": "openai_compatible", "model": "vendor/unknown",
-                                    "base_url": "https://example.test/v1"})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     client.app.dependency_overrides[routes.get_llm] = lambda: facade
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "Shall we go?"}).status_code == 200

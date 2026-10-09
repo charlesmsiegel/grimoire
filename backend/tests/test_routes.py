@@ -4036,7 +4036,7 @@ def test_the_shipped_client_carries_the_retry_resolver_and_no_fallback(client):
     Read off the app rather than a module global: the client the routes get is
     the one `create_app` built and hung on `app.state` (#215)."""
     assert client.app.state.llm._retries is store.config.llm_retries
-    assert client.app.state.llm._fallback is None
+    assert not hasattr(client.app.state.llm, "_fallback")
 
 
 async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkeypatch, tmp_path):

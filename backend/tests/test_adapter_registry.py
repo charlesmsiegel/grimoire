@@ -12,23 +12,39 @@ What is held here:
   after the migration, and a hand-built attempt of each kind;
 - `resolve.target_for` builds the target a resolved attempt carries;
 - `wire.from_lowered` reads a resolved attempt's dict back as its chain, and
-  `llm_sampling` answers the same for a dict and its target.
+  `llm_sampling` answers the same for a dict and its target;
+- the facade, on chains, takes a dict only through its shim (`_as_chain`),
+  and files the same ledger row for a dict and its chain (Task 9b).
 """
 
 from __future__ import annotations
 
+import ast
+import asyncio
 import dataclasses
+from pathlib import Path
 
 import pytest
 
-from grimoire import adapters, decisions, llm, llm_sampling, llm_usage, wire
+import grimoire.store as store
+from grimoire import (
+    adapters,
+    content_parts,
+    decisions,
+    health,
+    llm,
+    llm_sampling,
+    llm_usage,
+    wire,
+)
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm_errors import LLMError
-from grimoire.store import image_drafts
+from grimoire.store import image_drafts, usage_rollup
 from grimoire.store.inference import providers, resolve
 
 from . import inference_baseline as baseline
 from . import inference_baseline_c as baseline_c
+from . import inference_fixtures as fx
 from .test_inference_target import _resolutions
 
 #: Every frozen baseline state, both families, keyed `<family>:<state>`.
@@ -166,30 +182,31 @@ def test_the_wire_spells_the_dict_keys_as_their_owners_do():
 
 
 # ---- an adapter sends what the facade sends ----
-def _sends(attempt_conn: dict, target: wire.Target, schema: dict | None) -> None:
-    """The adapter, handed the target, calls its client exactly as the
-    facade's per-kind dispatch does when handed the dict."""
-    via_adapter, via_facade = _clients(), _clients()
+async def _sends(attempt_conn: dict, target: wire.Target, schema: dict | None) -> None:
+    """The facade sends the same wire call for an attempt's dict (through
+    the shim) as for its chain, and both are the adapter's own, handed the
+    target. (Before the facade moved onto the registry this held the adapter
+    to the facade's per-kind `_provider`, which it copied.)"""
+    via_adapter, via_dict, via_chain = _clients(), _clients(), _clients()
     _registry(via_adapter)[target.kind].generate(
-        MESSAGES, target, {}, schema=schema if target.structured else None)
-    _facade(via_facade)._provider(MESSAGES, attempt_conn, {}, schema)
-    assert ({k: c.calls for k, c in via_adapter.items()}
-            == {k: c.calls for k, c in via_facade.items()}), target.provider_id
+        MESSAGES, target, None, schema=schema if target.structured else None)
+    await _facade(via_dict).complete(MESSAGES, attempt_conn, schema=schema)
+    await _facade(via_chain).complete(MESSAGES, wire.Chain(target), schema=schema)
+    calls = [{k: [(m, a, {**kw, "usage": None}) for m, a, kw in c.calls]
+              for k, c in clients.items()} for clients in (via_adapter, via_dict, via_chain)]
+    assert calls[0] == calls[1] == calls[2], target.provider_id
     assert sum(len(c.calls) for c in via_adapter.values()) == 1
 
 
 @_states()
 @pytest.mark.parametrize("migrated", [False, True])
-def test_a_chain_sends_what_the_lowered_dict_sent(state, migrated, tmp_path):
-    sent = 0
-    for _where, resolved in _resolved(state, tmp_path, migrated=migrated):
-        for attempt in resolved.attempts:
-            if resolved.operation == "embed":
-                continue
-            for schema in (None, SCHEMA):
-                _sends(attempt.conn, attempt.target, schema)
-                sent += 1
-    assert sent
+async def test_a_chain_sends_what_the_lowered_dict_sent(state, migrated, tmp_path):
+    attempts = [attempt for _where, resolved in _resolved(state, tmp_path, migrated=migrated)
+                if resolved.operation != "embed" for attempt in resolved.attempts]
+    assert attempts
+    for attempt in attempts:
+        for schema in (None, SCHEMA):
+            await _sends(attempt.conn, attempt.target, schema)
 
 
 HAND_BUILT = [
@@ -224,8 +241,8 @@ HAND_BUILT = [
 
 @pytest.mark.parametrize("conn", HAND_BUILT, ids=[c["id"] for c in HAND_BUILT])
 @pytest.mark.parametrize("schema", [None, SCHEMA])
-def test_a_hand_built_attempt_of_each_kind_sends_what_its_dict_sent(conn, schema):
-    _sends(conn, wire.from_lowered(conn).primary, schema)
+async def test_a_hand_built_attempt_of_each_kind_sends_what_its_dict_sent(conn, schema):
+    await _sends(conn, wire.from_lowered(conn).primary, schema)
 
 
 def _target(conn: dict) -> wire.Target:
@@ -366,3 +383,160 @@ def test_target_for_matches_the_attempt_target(state, migrated, tmp_path):
             assert built.structured is False
             assert dataclasses.replace(built, account=attempt.target.account,
                                        structured=attempt.target.structured) == attempt.target, where
+
+
+# ---- the facade on chains, behind the shim (Task 9b) ----
+def test_the_shim_is_the_only_dict_door():
+    """In `llm.py`, only `_as_chain` reads a dict as a chain: every other
+    reader of a dict a caller hands in goes through it."""
+    tree = ast.parse(Path(llm.__file__).read_text(encoding="utf-8"))
+    callers = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "from_lowered"):
+                callers.add(fn.name)
+    assert callers == {"_as_chain"}
+    mentions = [node for node in ast.walk(tree)
+                if isinstance(node, (ast.Attribute, ast.Name))
+                and getattr(node, "attr", getattr(node, "id", "")) == "from_lowered"]
+    assert len(mentions) == 1
+
+
+class _Answering:
+    """One provider, answering every call with one reply and the counts and
+    price a provider reports on its last frame."""
+
+    def __init__(self) -> None:
+        self.models: list[str] = []
+
+    async def stream(self, messages, model="", *args, usage=None, **kwargs):
+        self.models.append(model)
+        yield "{}"
+        if usage is not None:
+            usage.update({"prompt_tokens": 11, "completion_tokens": 3, "cost_usd": 0.002})
+
+
+def _filed(conn_or_chain, task: str, schema: dict | None) -> dict:
+    """The ledger row one call files, less what differs between any two calls
+    (when it ran and how long it took)."""
+    provider = _Answering()
+    client = llm.LLMClient(openrouter=provider, openai_compatible=provider, anthropic=provider,
+                           claude=provider, retries=0, timeout=0)
+    with store.usage.meter(task) as m:
+        asyncio.run(client.complete(MESSAGES, conn_or_chain, m.usage, schema=schema))
+    assert m.row is not None
+    return {k: v for k, v in m.row.items() if k not in ("ts", "duration_ms")}
+
+
+def test_the_ledger_row_is_unchanged_through_the_shim(tmp_path):
+    """A generate call and a structured decide call file the same row, field
+    for field, whether the facade is handed the resolution's dict or its
+    chain -- `operation`, `role`, `billing` and `decision_mode` included, so
+    `usage_rollup.VERSION` stays where it is."""
+    assert usage_rollup.VERSION == 6
+    with baseline.client_at(tmp_path) as client:
+        fx.format2(client)
+        fx.put_settings(client, {"roles": {"decision": {
+            "selection": {"provider": "openrouter", "model": "vendor/active"},
+            "fallback": {"provider": fx.SPARE[0], "model": fx.SPARE[1]}}}})
+        for provider, model in (("openrouter", "vendor/active"), fx.SPARE):
+            rev = store.llm_connections.read_connection_raw(provider)["rev"]
+            store.llm_connections.set_cached_models(
+                provider, [{"id": model, "params": ["temperature", "structured_outputs"]}], rev)
+        generate = resolve.resolve("chat")
+        decide = resolve.resolve("scene-break", operation="decide")
+        assert decide.chain is not None and decide.chain.primary.structured
+        stamped = llm_usage.with_account(decide.conn, decision_mode="structured")
+        for resolved, conn, chain, schema in (
+                (generate, generate.conn, generate.chain, None),
+                (decide, stamped, decide.chain.with_account(decision_mode="structured"), SCHEMA)):
+            by_dict = _filed(conn, resolved.task, schema)
+            by_chain = _filed(chain, resolved.task, schema)
+            assert by_dict == by_chain
+            assert by_dict["provider_id"] == "openrouter"
+        assert by_dict["decision_mode"] == "structured" and by_dict["operation"] == "decide"
+
+
+async def test_a_chain_hands_its_targets_back():
+    """Handed a chain, the facade hands targets to what it calls back -- the
+    observer, the image budget, the `ATTEMPTED` stamp -- and the fallback it
+    sent is the one named; handed the same as a dict, those are the dicts."""
+    provider = _Failing({"primary"})
+    seen: list = []
+    images: list = []
+    client = llm.LLMClient(openrouter=provider, retries=0, timeout=0,
+                           observer=lambda attempt, error: seen.append(attempt),
+                           images=lambda attempt: images.append(attempt) or 0)
+    primary = wire.from_lowered({"id": "a", "kind": "openrouter", "model": "primary"}).primary
+    backup = wire.from_lowered({"id": "b", "kind": "openrouter", "model": "backup"}).primary
+    usage: dict = {}
+    assert await client.complete(_REFS, wire.Chain(primary, backup), usage) == "from backup"
+    assert seen == [primary, backup] and usage[llm.ATTEMPTED] == backup
+    assert all(isinstance(x, wire.Target) for x in images)
+    assert all(not x.degrade for x in images)
+
+    seen.clear()
+    as_dict = {"id": "a", "kind": "openrouter", "model": "primary",
+               llm.FALLBACK_KEY: {"id": "b", "kind": "openrouter", "model": "backup"}}
+    usage = {}
+    assert await client.complete(_REFS, as_dict, usage) == "from backup"
+    assert [x["id"] for x in seen] == ["a", "b"] and usage[llm.ATTEMPTED]["id"] == "b"
+    assert llm.FALLBACK_KEY not in seen[0]
+
+
+class _Failing:
+    def __init__(self, failing: set[str]) -> None:
+        self.failing = failing
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        if model in self.failing:
+            raise LLMError("network", f"{model} down")
+        yield f"from {model}"
+
+
+#: A prompt holding an image reference, so the facade asks the image budget.
+_REFS = [{"role": "user", "content": [
+    {"type": "text", "text": "Mara looks at the chart."},
+    content_parts.ref("/api/campaigns/c/images/chart", "the chart", False)]}]
+
+
+def test_a_dict_or_a_chain_and_nothing_else():
+    with pytest.raises(TypeError):
+        llm._as_chain("openrouter")  # type: ignore[arg-type]
+    target = wire.from_lowered({"id": "a", "model": "m"}).primary
+    assert llm._as_chain(target) == wire.Chain(target)
+    chain = wire.Chain(target)
+    assert llm._as_chain(chain) is chain
+
+
+@_states()
+@pytest.mark.parametrize("migrated", [False, True])
+def test_what_reads_an_attempt_reads_a_target_as_its_dict(state, migrated, tmp_path):
+    """The readers the facade hands a target to -- the image budget, the
+    health registry, the ledger's account, the prefill rule -- answer for it
+    what they answer for its dict, whether the target is the resolver's or
+    the one the shim reads from the dict."""
+    for where, resolved in _resolved(state, tmp_path, migrated=migrated):
+        for attempt in resolved.attempts:
+            conn = llm._without_fallback(attempt.conn)
+            for target in (attempt.target, wire.from_lowered(conn).primary):
+                assert (store.post_images.capability(target)
+                        == store.post_images.capability(conn)), where
+                assert store.post_images.images_for(target) == store.post_images.images_for(conn)
+                assert store.post_images.reach(target) == store.post_images.reach(conn)
+                assert llm.prefill_capable(target) is llm.prefill_capable(conn)
+                assert llm.effective_model(target) == llm.effective_model(conn)
+                by_dict: dict = {}
+                by_target: dict = {}
+                llm_usage.account(by_dict, conn)
+                llm_usage.account(by_target, target)
+                assert by_dict == by_target, where
+                registry = health.ProviderHealth()
+                filed = registry.record(target, LLMError("auth", "refused"))
+                other = health.ProviderHealth().record(conn, LLMError("auth", "refused"))
+                assert ({k: v for k, v in filed.items() if k != "at"}
+                        == {k: v for k, v in other.items() if k != "at"})
+                assert registry.status(conn["id"], conn["rev"]) == filed

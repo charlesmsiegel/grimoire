@@ -7,7 +7,7 @@ import pytest
 
 from grimoire import llm, model_guidance, openai_compatible
 from grimoire.llm_errors import LLMError
-from tests.llm_fakes import ScriptedProvider
+from tests.llm_fakes import ScriptedProvider, carrying
 
 
 def _prepared(model):
@@ -29,13 +29,14 @@ def _prepared(model):
 async def test_each_dispatch_uses_its_own_model(primary_model, fallback_model):
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=("Mara nods.",))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                          fallback={"kind": "openai_compatible", "model": fallback_model})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     messages = _prepared(primary_model)
     captured = []
     messages.on_variant = lambda model, breakdown: captured.append((model, breakdown))
 
-    assert await facade.complete(messages, {"model": primary_model}) == "Mara nods."
+    chain = carrying({"model": primary_model},
+                     {"kind": "openai_compatible", "model": fallback_model})
+    assert await facade.complete(messages, chain) == "Mara nods."
 
     assert ("GLM profile." in primary.requests[0]["messages"][0]["content"]) == (
         primary_model == "glm-5.3")
@@ -62,13 +63,14 @@ async def test_same_model_retry_uses_identical_prompt_without_fallback_capture(m
 async def test_no_fallback_or_capture_after_visible_output():
     primary = ScriptedProvider(chunks=("Mara",), error=LLMError("network", "reset"))
     fallback = ScriptedProvider()
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                          fallback={"kind": "openai_compatible", "model": "vendor/unknown"})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     messages = _prepared("glm-5.3")
     captured = []
     messages.on_variant = lambda model, breakdown: captured.append(model)
+    chain = carrying({"model": "glm-5.3"},
+                     {"kind": "openai_compatible", "model": "vendor/unknown"})
     with pytest.raises(LLMError):
-        await facade.complete(messages, {"model": "glm-5.3"})
+        await facade.complete(messages, chain)
     assert fallback.calls == 0
     assert captured == []
 
@@ -76,10 +78,11 @@ async def test_no_fallback_or_capture_after_visible_output():
 async def test_plain_utility_messages_never_acquire_scene_guidance():
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=("{}",))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                          fallback={"kind": "openai_compatible", "model": "glm-5.3"})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     messages = [{"role": "system", "content": "Return a JSON object."}]
-    assert await facade.complete(messages, {"model": "vendor/unknown"}) == "{}"
+    chain = carrying({"model": "vendor/unknown"},
+                     {"kind": "openai_compatible", "model": "glm-5.3"})
+    assert await facade.complete(messages, chain) == "{}"
     assert primary.requests[0]["messages"] == fallback.requests[0]["messages"] == messages
 
 
@@ -116,15 +119,15 @@ async def test_strict_endpoint_receives_selected_profile_and_final_content_only(
 async def test_a_prefill_prompt_falls_back_with_the_instruction_tail():
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(" and left.",))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                           fallback={"kind": "openai_compatible", "model": "vendor/unknown"})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     conn = {"model": "vendor/unknown", "prefill": True}
     messages = _prepared("vendor/unknown").with_tails(
         {"prefill": [{"role": "assistant", "content": "Mara paused"}],
          "instruction": [{"role": "assistant", "content": "Mara paused"},
                          {"role": "user", "content": "Continue exactly where your last message stops."}]},
         lambda c: "prefill" if llm.prefill_capable(c) else "instruction", conn)
-    assert await facade.complete(messages, conn) == " and left."
+    chain = carrying(conn, {"kind": "openai_compatible", "model": "vendor/unknown"})
+    assert await facade.complete(messages, chain) == " and left."
     assert primary.requests[0]["messages"][-1] == {"role": "assistant", "content": "Mara paused"}
     assert fallback.requests[0]["messages"][-2] == {"role": "assistant", "content": "Mara paused"}
     assert fallback.requests[0]["messages"][-1]["role"] == "user"
@@ -136,8 +139,7 @@ async def test_a_same_model_fallback_with_another_tail_is_still_recorded():
     on the tail the attempt chose, not only on the model id (codex, PR #458)."""
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(" and left.",))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                           fallback={"kind": "openai_compatible", "model": "vendor/unknown"})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     conn = {"model": "vendor/unknown", "prefill": True}
     messages = _prepared("vendor/unknown").with_tails(
         {"prefill": [{"role": "assistant", "content": "Mara paused"}],
@@ -153,7 +155,8 @@ async def test_a_same_model_fallback_with_another_tail_is_still_recorded():
         captured.append((model, messages.for_connection(fallback_conn, model)))
     messages.on_variant = capture
 
-    assert await facade.complete(messages, conn) == " and left."
+    chain = carrying(conn, {"kind": "openai_compatible", "model": "vendor/unknown"})
+    assert await facade.complete(messages, chain) == " and left."
     assert len(captured) == 1
     model, sent = captured[0]
     assert model == "vendor/unknown"

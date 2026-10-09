@@ -1311,6 +1311,15 @@ Collected, so that nothing here has to be inferred from an absence.
   token yet. So a token that has not changed is a strong hint that nothing has
   happened, never a guarantee; the refusal it earns is a re-price, and no write
   depends on it being complete.
+- **A reply already generated can be lost to a cancel in its last moment.**
+  When a provider reports no token counts, the facade counts them locally
+  after the reply has streamed in full and before the call returns
+  (`llm._estimate`, bounded by `llm.COUNT_TIMEOUT_S`). A cancel that lands in
+  that window — a disconnect, a detached run's cancel, or the caller's own
+  ceiling — discards a reply that was generated, and a ceiling there marks the
+  connection timed out after its success was recorded. The window is open only
+  when the provider reported nothing, and is usually a warm count. Closing it
+  needs a meter that files its row asynchronously, which nothing has yet.
 - **Nothing across devices**, and nothing across OS users.
 - **No mixed-version image writes, and no cross-decoder JPEG identity.** See
   [The image store](#the-image-store).

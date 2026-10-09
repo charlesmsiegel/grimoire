@@ -4,6 +4,7 @@ rendered (on the record) and the call that wrote each variant (`made_by`)."""
 from grimoire import llm, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from tests.inference_fixtures import endpoint, primary_falling_back
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, ModelessHolder, ScriptedProvider
 from tests.test_character_turns import seed
 
@@ -163,12 +164,12 @@ def test_reroll_variant_carries_clipped_guidance(client):
 
 def test_fallback_records_the_served_connection(client):
     cid, sid = seed(client)
+    backup = endpoint(client, "backup")
+    primary_falling_back(client, ("openrouter", store.config.DEFAULT_MODEL),
+                         (backup, "vendor/fallback"))
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(HANDOFF,))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                           fallback={"id": "backup", "kind": "openai_compatible",
-                                     "model": "vendor/fallback",
-                                     "base_url": "https://example.test/v1"})
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     client.app.dependency_overrides[routes.get_llm] = lambda: facade
     base = f"/api/campaigns/{cid}/scenes/{sid}"
     response = client.post(base + "/chat", json={"content": "Hello",

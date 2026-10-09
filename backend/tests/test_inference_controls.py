@@ -14,11 +14,15 @@ import itertools
 import pytest
 
 from grimoire import llm_sampling as ls
-from grimoire.llm import LLMClient
+from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store import llm_connections, sampler_presets
 from grimoire.store.inference import capabilities, controls, providers, resolve
 from tests.llm_fakes import RefusingProvider
+
+#: The fallback a refused call carries (`FALLBACK_KEY`), which a preset
+#: refusal must never reach.
+BACKUP = {"id": "b", "kind": "openrouter", "model": "backup", "api_key": "k"}
 
 ALL = {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "min_p": 0.05,
        "repetition_penalty": 1.08, "frequency_penalty": 0.1, "presence_penalty": 0.2,
@@ -236,11 +240,9 @@ async def test_a_refusal_naming_the_translated_spelling_is_a_preset_refusal():
     provider = RefusingProvider(failing={"primary"}, status=400,
                                 why="Unsupported value: 'max_completion_tokens' too large")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
-                       timeout=0, retries=0,
-                       fallback=lambda: {"id": "b", "kind": "openrouter", "model": "backup",
-                                         "api_key": "k"})
-    conn = _conn("openai_compatible", {"max_tokens": 99999}, id="a", model="primary",
-                 base_url="https://api.openai.com/v1")
+                       timeout=0, retries=0)
+    conn = {**_conn("openai_compatible", {"max_tokens": 99999}, id="a", model="primary",
+                    base_url="https://api.openai.com/v1"), FALLBACK_KEY: BACKUP}
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], conn)]
     assert "fallback connection was not tried" in exc.value.detail
@@ -817,11 +819,9 @@ async def test_a_refused_effort_is_a_preset_refusal():
     provider = RefusingProvider(failing={"primary"}, status=400,
                                 why="Unrecognized request argument: reasoning")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
-                       timeout=0, retries=0,
-                       fallback=lambda: {"id": "b", "kind": "openrouter", "model": "backup",
-                                         "api_key": "k"})
-    conn = _conn("openrouter", {"reasoning_effort": "high"}, id="a", model="primary",
-                 api_key="k")
+                       timeout=0, retries=0)
+    conn = {**_conn("openrouter", {"reasoning_effort": "high"}, id="a", model="primary",
+                    api_key="k"), FALLBACK_KEY: BACKUP}
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], conn)]
     assert "fallback connection was not tried" in exc.value.detail
@@ -830,10 +830,9 @@ async def test_a_refused_effort_is_a_preset_refusal():
 def _adaptive_refusal(why):
     provider = RefusingProvider(failing={"claude-opus-4-7"}, status=400, why=why)
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
-                       anthropic=provider, timeout=0, retries=0,
-                       fallback=lambda: {"id": "b", "kind": "openrouter", "model": "backup",
-                                         "api_key": "k"})
-    conn = _claude_api({"reasoning_effort": "high"}, CURRENT, id="a", api_key="k")
+                       anthropic=provider, timeout=0, retries=0)
+    conn = {**_claude_api({"reasoning_effort": "high"}, CURRENT, id="a", api_key="k"),
+            FALLBACK_KEY: BACKUP}
     assert ls.effective(conn)["effective"]["output_config"] == {"effort": "high"}
     return provider, client, conn
 

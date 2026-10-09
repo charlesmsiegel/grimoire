@@ -126,6 +126,24 @@ def primary(client, model: str = "primary", *, provider: str = "openrouter",
     put_settings(client, {"roles": {"primary": {"selection": selection}}})
 
 
+def endpoint(client, name: str, *, base_url: str = "https://example.test/v1",
+             api_key: str = "sk-test-endpoint") -> str:
+    """An OpenAI-compatible provider called `name` at `base_url`, keyed; its id."""
+    got = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": name, "base_url": base_url, "api_key": api_key})
+    assert got.status_code == 200, got.text
+    return got.json()["id"]
+
+
+def primary_falling_back(client, selection: tuple[str, str], fallback: tuple[str, str]) -> None:
+    """The Primary role on `selection` (provider, model), falling back to
+    `fallback` (provider, model): the fallback a call carries, as the resolver
+    attaches it (`llm.FALLBACK_KEY`)."""
+    put_settings(client, {"roles": {"primary": {
+        "selection": {"provider": selection[0], "model": selection[1]},
+        "fallback": {"provider": fallback[0], "model": fallback[1]}}}})
+
+
 def embedding(provider: str, model: str) -> None:
     """The Embedding role on `provider` serving `model`, written through the
     store with the confirmation re-embedding asks for (nothing here sends

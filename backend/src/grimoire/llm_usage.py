@@ -48,6 +48,8 @@ in and anything unrecognized is simply not recorded.
 
 from __future__ import annotations
 
+from . import wire
+
 #: Money reported by a provider that charges per call. The other basis
 #: (`equivalent`) is `claude_agent`'s, whose calls bill against a subscription;
 #: `store.usage` keeps the two out of one total and says why.
@@ -187,33 +189,28 @@ def _text(value: object) -> str:
     return value if isinstance(value, str) and value else ""
 
 
-def account(usage: dict | None, conn: dict) -> None:
+def account(usage: dict | None, target: wire.Target | dict) -> None:
     """File what served this attempt into the holder: the provider's id
-    (`provider_id`, from `conn["id"]`), the sampler preset actually sent
-    (`preset`, `conn["sampling"]["preset_id"]` -- never the provider preset),
-    and each `ACCOUNT_FIELDS` key of the account block.
+    (`provider_id`, the target's), the sampler preset actually sent
+    (`preset`, its `sampling.preset_id` -- never the provider preset), and
+    each `ACCOUNT_FIELDS` field of its account (`wire.Account`).
 
-    Only a non-empty `str` is copied, so a hand-built conn with a stray value
-    costs the field and never the row. Reads `conn`, never writes it, and never
-    raises: this is bookkeeping beside a call that has already been made."""
+    A lowered connection dict is read as its target (`wire.from_lowered`), for
+    the callers that still hold one until Task 10: `conn["id"]`, its
+    `sampling` block and its account block (`ACCOUNT_KEY`).
+
+    Only a non-empty `str` is copied, so a hand-built attempt with a stray
+    value costs the field and never the row. Reads the attempt, never writes
+    it, and never raises: this is bookkeeping beside a call that has already
+    been made."""
     if usage is None:
         return
     try:
-        filed: dict[str, str] = {}
-        provider_id = _text(conn.get("id"))
-        if provider_id:
-            filed["provider_id"] = provider_id
-        sampling = conn.get("sampling")
-        preset = _text(sampling.get("preset_id")) if isinstance(sampling, dict) else ""
-        if preset:
-            filed["preset"] = preset
-        block = conn.get(ACCOUNT_KEY)
-        if isinstance(block, dict):
-            for key in ACCOUNT_FIELDS:
-                value = _text(block.get(key))
-                if value:
-                    filed[key] = value
-        usage.update(filed)
+        if not isinstance(target, wire.Target):
+            target = wire.from_lowered(target if isinstance(target, dict) else {}).primary
+        values = {"provider_id": target.provider_id, "preset": target.sampling.preset_id,
+                  **{key: getattr(target.account, key) for key in ACCOUNT_FIELDS}}
+        usage.update({key: value for key, value in values.items() if _text(value)})
     except Exception:  # noqa: BLE001 - see the docstring
         return
 

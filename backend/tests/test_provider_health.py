@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import health, routes
-from grimoire.llm import LLMClient
+from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests import draft_runs as drafts
@@ -182,11 +182,10 @@ async def test_a_fallback_is_reported_under_its_own_connection():
 
     client = LLMClient(openrouter=provider, claude=provider,
                        openai_compatible=provider, retries=0,
-                       fallback=lambda: fallback,
                        observer=lambda conn, err: seen.append(
                            (conn["id"], err.kind if err else None)))
 
-    assert [c async for c in client.stream([], _conn())] == ["hi"]
+    assert [c async for c in client.stream([], {**_conn(), FALLBACK_KEY: fallback})] == ["hi"]
     assert seen == [("openrouter", "network"), ("local", None)]
 
 

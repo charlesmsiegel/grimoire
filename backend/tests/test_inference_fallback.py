@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 import grimoire.store as store
-from grimoire import llm, llm_sampling, routes
+from grimoire import llm, llm_sampling, routes, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
@@ -106,8 +106,8 @@ class Recorder:
 
 
 def _facade(provider, **kw) -> LLMClient:
-    """A facade wired as `build_llm` wires the shipped one -- no `fallback` --
-    over a fake provider."""
+    """A facade wired as `build_llm` wires the shipped one over a fake
+    provider: no fallback of its own, as no client has one."""
     return LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                      timeout=0, retries=0, **kw)
 
@@ -123,8 +123,8 @@ async def test_the_facade_sends_the_resolved_fallback(at):
     _format2(**_spare_fallback())
     conn = routes.common.require_inference("chat").conn
     assert conn[KEY]["id"] == "spare" and conn[KEY]["model"] == "vendor/spare"
-    # The shipped client holds no fallback of its own.
-    assert routes.common.build_llm()._fallback is None
+    # The shipped client holds no fallback of its own: it has none to hold.
+    assert not hasattr(routes.common.build_llm(), "_fallback")
     provider = Recorder(failing={"vendor/active"})
     assert await _facade(provider).complete([], conn) == "from vendor/spare"
     assert provider.models == ["vendor/active", "vendor/spare"]
@@ -233,27 +233,30 @@ def test_an_override_preset_with_no_route_preset_leaves_the_fallback_its_own(at)
 
 # ---- the key stops at the facade's boundary ----
 async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monkeypatch):
-    """Every consumer of an attempt's dict sees the attempt, never the chain."""
-    seen: dict[str, list[dict]] = {"adapter": [], "observer": [], "stamp": [],
-                                   "sent_fields": []}
+    """Every consumer of an attempt sees the attempt, never the chain: an
+    adapter and the preset refusal are handed a `wire.Target`, which has no
+    room for a fallback, and what is handed back as the caller spelled it --
+    the stamp, the observer -- is that attempt's own dict, off the key."""
+    seen: dict[str, list] = {"adapter": [], "observer": [], "stamp": [],
+                             "sent_fields": []}
     events: list[dict] = []
-    real_provider = LLMClient._provider
+    real_generate = LLMClient._generate
     real_stamp = llm._stamp
     real_sent = llm_sampling.sent_fields
 
-    def provider_spy(self, messages, conn, usage, schema=None):
-        seen["adapter"].append(conn)
-        return real_provider(self, messages, conn, usage, schema)
+    def generate_spy(self, messages, target, usage, schema=None):
+        seen["adapter"].append(target)
+        return real_generate(self, messages, target, usage, schema)
 
-    def stamp_spy(usage, conn, attempts):
-        seen["stamp"].append(conn)
-        real_stamp(usage, conn, attempts)
+    def stamp_spy(usage, route, attempts):
+        seen["stamp"].append(route.said)
+        real_stamp(usage, route, attempts)
 
-    def sent_spy(conn):
-        seen["sent_fields"].append(conn)
-        return real_sent(conn)
+    def sent_spy(target):
+        seen["sent_fields"].append(target)
+        return real_sent(target)
 
-    monkeypatch.setattr(LLMClient, "_provider", provider_spy)
+    monkeypatch.setattr(LLMClient, "_generate", generate_spy)
     monkeypatch.setattr(llm, "_stamp", stamp_spy)
     monkeypatch.setattr(llm.llm_sampling, "sent_fields", sent_spy)
 
@@ -272,13 +275,15 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
     assert await facade.complete([], conn, usage) == "from backup"
     assert provider.models == ["primary", "backup"]
 
-    assert [c["id"] for c in seen["adapter"]] == ["a", "b"]
+    assert [t.provider_id for t in seen["adapter"]] == ["a", "b"]
     assert [c["id"] for c in seen["stamp"]] == ["a", "b"]
     assert [c["id"] for c in seen["observer"]] == ["a", "b"]
-    assert [c["id"] for c in seen["sent_fields"]] == ["a"]
+    assert [t.provider_id for t in seen["sent_fields"]] == ["a"]
     assert usage[llm.ATTEMPTED]["id"] == "b"
-    for where, conns in seen.items():
-        assert all(KEY not in c for c in conns), where
+    for where in ("adapter", "sent_fields"):
+        assert all(isinstance(t, wire.Target) for t in seen[where]), where
+    for where in ("stamp", "observer"):
+        assert all(KEY not in c for c in seen[where]), where
     assert KEY not in usage[llm.ATTEMPTED]
     assert events and "_fallback" not in json.dumps(events, default=str)
     # The caller's dict is left as it was handed in.
@@ -292,7 +297,7 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
     with pytest.raises(llm.PresetRefusalError):
         await _facade(refusing).complete([], conn)
     assert refusing.models == ["primary"]
-    assert all(KEY not in c for c in seen["sent_fields"])
+    assert all(isinstance(t, wire.Target) for t in seen["sent_fields"])
 
     # And an outcome filed from outside the facade is filed for the attempt.
     seen["observer"].clear()
@@ -301,29 +306,31 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
 
 
 async def test_single_never_uses_a_fallback(monkeypatch):
-    adapter: list[dict] = []
-    real_provider = LLMClient._provider
+    adapter: list[wire.Target] = []
+    real_generate = LLMClient._generate
 
-    def provider_spy(self, messages, conn, usage, schema=None):
-        adapter.append(conn)
-        return real_provider(self, messages, conn, usage, schema)
+    def generate_spy(self, messages, target, usage, schema=None):
+        adapter.append(target)
+        return real_generate(self, messages, target, usage, schema)
 
-    monkeypatch.setattr(LLMClient, "_provider", provider_spy)
+    monkeypatch.setattr(LLMClient, "_generate", generate_spy)
     provider = Recorder(failing={"primary"})
     conn = {**_route("a", "primary"), KEY: _route("b", "backup")}
     with pytest.raises(LLMError):
-        await _facade(provider, fallback=lambda: _route("c", "standing")).single([], conn)
+        await _facade(provider).single([], conn)
     assert provider.models == ["primary"]
-    assert [c["id"] for c in adapter] == ["a"] and KEY not in adapter[0]
+    assert [t.provider_id for t in adapter] == ["a"]
 
 
-async def test_a_client_built_with_a_fallback_still_uses_it():
+async def test_a_call_carrying_a_fallback_is_sent_that_one():
+    """The client holds no fallback of its own: each call's is the one it
+    carries, and a call that carries none has none."""
     provider = Recorder(failing={"primary"})
-    facade = _facade(provider, fallback=lambda: _route("b", "backup"))
-    assert await facade.complete([], _route("a", "primary")) == "from backup"
-    assert provider.models == ["primary", "backup"]
-    # A call that carries its own fallback is sent that one instead.
-    provider.models.clear()
+    facade = _facade(provider)
     conn = {**_route("a", "primary"), KEY: _route("c", "carried")}
     assert await facade.complete([], conn) == "from carried"
     assert provider.models == ["primary", "carried"]
+    provider.models.clear()
+    with pytest.raises(LLMError):
+        await facade.complete([], _route("a", "primary"))
+    assert provider.models == ["primary"]

@@ -37,6 +37,7 @@ true: nothing has been observed yet.
 
 from __future__ import annotations
 
+from . import wire
 from .store import paths
 
 #: No observation yet — the app has just started, or nothing has used this
@@ -66,28 +67,32 @@ class ProviderHealth:
     def __init__(self) -> None:
         self._by_id: dict[str, dict] = {}
 
-    def record(self, conn: dict, error=None) -> dict:
-        """File one outcome for `conn` and return the status it produces.
+    def record(self, conn: wire.Target | dict, error=None) -> dict:
+        """File one outcome for `conn` -- the attempt's `wire.Target`, or a
+        lowered connection dict (a caller that still holds one, until Task 10)
+        -- and return the status it produces.
 
-        A connection with no id is dropped rather than filed under `""`: the
-        facade is handed connection *dicts*, and a caller that builds one by
-        hand (tests, mostly) would otherwise collide with every other
-        anonymous connection in one shared slot.
+        A connection with no id is dropped rather than filed under `""`: a
+        caller that builds an attempt by hand (tests, mostly) would otherwise
+        collide with every other anonymous connection in one shared slot.
 
         What is filed describes the connection **as it was when the call ran**,
         so it is filed under that connection's revision — see `status`, which
         will not hand a verdict back for a revision the connection has since
-        moved past. The facade is given whole connection dicts and those carry
-        `rev` already, so this costs a key rather than a mechanism.
+        moved past. Every attempt carries `rev` already, so this costs a key
+        rather than a mechanism.
         """
-        cid = conn.get("id") or ""
+        if isinstance(conn, wire.Target):
+            cid, rev = conn.provider_id, conn.rev
+        else:
+            cid, rev = conn.get("id") or "", conn.get("rev", "")
         if not cid:
             return self.status("")
         status = {"state": OK if error is None else ERROR,
                   "kind": "" if error is None else getattr(error, "kind", "bad_response"),
                   "detail": "" if error is None else getattr(error, "detail", str(error)),
                   "at": paths.now_iso(),
-                  "rev": conn.get("rev", "")}
+                  "rev": rev}
         self._by_id[cid] = status
         return _public(status)
 

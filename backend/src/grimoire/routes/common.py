@@ -333,8 +333,8 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
 
 # Late-bound through the module attribute, so a test patching
 # `store.post_images` intercepts what the facade calls (#377).
-def _post_images_for(conn: dict) -> int:
-    return store.post_images.images_for(conn)
+def _post_images_for(attempt: wire.Target | dict) -> int:
+    return store.post_images.images_for(attempt)
 
 
 def _load_post_image(cid: str, part: dict) -> str | None:

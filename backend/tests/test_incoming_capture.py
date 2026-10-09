@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from grimoire import routes
-from grimoire.llm import LLMClient
+from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import OpenRouterClient
 from grimoire.store import logs, usage
@@ -54,9 +54,10 @@ async def test_failed_attempt_and_fallback_keep_distinct_frames():
         if json.loads(request.content)["model"] == "m":
             return httpx.Response(400, text='{"error":{"message":"bad","future":17}}')
         return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"}}]}\n')
-    client = client_for(handler, events.append, fallback={**CONN, "model": "fallback"})
+    client = client_for(handler, events.append)
+    chain = {**CONN, FALLBACK_KEY: {**CONN, "model": "fallback"}}
     try:
-        assert await client.complete([], CONN) == "ok"
+        assert await client.complete([], chain) == "ok"
     finally:
         await client.aclose()
     assert len({e["call_id"] for e in events}) == 1

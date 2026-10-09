@@ -67,7 +67,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Literal, NamedTuple, overload
 
-from . import decisions, llm, llm_errors, llm_usage, prompts, store
+from . import decisions, llm, llm_errors, llm_usage, prompts, store, wire
 from .llm import LLMClient
 from .llm_errors import LLMError
 from .store.inference import resolve
@@ -237,10 +237,13 @@ def _with_mode(conn: dict, mode: str) -> dict:
     return out
 
 
-def _without_mode(conn: dict) -> dict:
+def _without_mode(conn: dict | wire.Target) -> dict | wire.Chain:
     """`conn` as the same attempt without structured mode, and alone: no
     fallback behind it (the re-send is that one attempt's, and every other
-    route has already had its turn)."""
+    route has already had its turn). A schema refusal hands back the attempt
+    as it was sent: the dict a stage sent, or -- sent a chain -- its target."""
+    if isinstance(conn, wire.Target):
+        return wire.Chain(replace(conn, structured=False))
     return {k: v for k, v in conn.items()
             if k not in (llm.STRUCTURED_KEY, llm.FALLBACK_KEY)}
 
@@ -266,7 +269,7 @@ def _served_by(holder: dict) -> tuple[str, str]:
     return str(conn.get("id", "") or ""), llm.effective_model(conn)
 
 
-async def _once(call: _Call, sending: dict, messages: list[dict], schema: dict,
+async def _once(call: _Call, sending: dict | wire.Chain, messages: list[dict], schema: dict,
                 rows: list[dict]) -> _Reply:
     """One metered facade call: its text and the answering holder, or its
     error. Its ledger row, when the meter filed one, is appended to

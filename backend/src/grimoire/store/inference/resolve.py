@@ -40,8 +40,9 @@ Beside each dict, an attempt carries the same values typed (`Attempt.target`,
 a `wire.Target`, slice I): built by `_target` from the lowered dict, and
 stamped with the dict's account block and structured flag in the one place
 both are written (`_stamp`). `ResolvedInference.chain` carries the fallback's
-target exactly where the dict carries `FALLBACK_KEY`. Nothing sends a target
-yet, so every dict is what it was.
+target exactly where the dict carries `FALLBACK_KEY`. The facade sends
+targets, reading a dict it is still handed as its chain (`llm._as_chain`),
+so every dict is what it was.
 
 Each attempt also carries what slice B knows of it -- its provider's kind, URL,
 rev, billing and preset, its model's facts, its effective controls

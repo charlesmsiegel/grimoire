@@ -31,7 +31,7 @@ import httpx
 import pytest
 
 import grimoire.store as store
-from grimoire import catalog, decisions, embeddings, routes
+from grimoire import catalog, decisions, embeddings, llm, routes
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -611,7 +611,7 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
         _endpoint(client, "Winifred Endpoint", "backup.example"))
     seen = _wire_client(
         client, lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
-        retries=3, fallback=lambda: backup)
+        retries=3)
 
     run = _run(client, conn, ["generate"])
 
@@ -624,15 +624,16 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     assert rows[0]["task"] == "model-test"
     assert rows[0].get("attempts", 1) == 1   # the ledger omits the default
 
-    # The control: the same facade, sent the same probe through `stream`,
-    # DOES retry and fall back -- so the one request above is the test call's
-    # doing, not this setup's.
+    # The control: the same facade, sent the same probe through `stream` with
+    # a fallback the call carries, DOES retry and fall back -- so the one
+    # request above is the test call's doing, not this setup's.
     seen.clear()
     facade = client.app.dependency_overrides[routes.get_llm]()
     probe_conn = inference.lower(store.llm_connections.read_connection_raw(conn),
                                  probes.sampling(), MODEL)
     with pytest.raises(LLMError):
-        asyncio.run(facade.complete(probes.messages("generate"), probe_conn))
+        asyncio.run(facade.complete(probes.messages("generate"),
+                                    {**probe_conn, llm.FALLBACK_KEY: backup}))
     assert [r.url.host for r in seen] == ["primary.example"] * 4 + ["backup.example"]
 
 

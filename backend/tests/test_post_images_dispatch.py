@@ -12,7 +12,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.model_guidance import PreparedMessages
 from grimoire.openai_compatible import OpenAICompatibleClient
-from tests.llm_fakes import ScriptedProvider, SequencedProvider
+from tests.llm_fakes import ScriptedProvider, SequencedProvider, carrying
 
 MAP = cp.ref("/api/campaigns/c/images/coastline", "a map", False)
 HALL = cp.ref("/api/campaigns/c/images/hall", "the hall", True)
@@ -51,9 +51,10 @@ def _load(cid, part):
     return f"data:image/png;base64,{part['alt'].replace(' ', '')}"
 
 
-def _client(openrouter, *, claude=None, fallback=None, images=_images, load=_load, retries=0):
+def _client(openrouter, *, claude=None, images=_images, load=_load, retries=0):
     return LLMClient(openrouter=openrouter, claude=claude or ScriptedProvider(),
-                     retries=retries, fallback=fallback, images=images, load_image=load)
+                     retries=retries, images=images, load_image=load)
+
 
 
 async def _run(client, messages, conn, usage=None):
@@ -129,17 +130,16 @@ async def test_a_snapshot_replayed_with_the_setting_off_sends_text():
 async def test_a_claude_fallback_is_kept_and_sent_text():
     primary = SequencedProvider([LLMError("network", "down")])
     claude = SequencedProvider([("from claude",)])
-    client = _client(primary, claude=claude,
-                     fallback=lambda: {"id": "b", "kind": "claude", "model": "opus"})
-    assert await _run(client, _prepared(), _conn()) == "from claude"
+    client = _client(primary, claude=claude)
+    chain = carrying(_conn(), {"id": "b", "kind": "claude", "model": "opus"})
+    assert await _run(client, _prepared(), chain) == "from claude"
     assert claude.requests[0]["messages"] == cp.as_text(_msgs())
 
 
 async def test_a_drafts_own_image_parts_still_exclude_claude():
     draft = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "d"}}]}]
-    client = _client(SequencedProvider([("x",)]),
-                     fallback=lambda: {"id": "b", "kind": "claude"})
-    routes = client._usable_routes(draft, _conn())
+    client = _client(SequencedProvider([("x",)]))
+    routes = client._usable_routes(draft, carrying(_conn(), {"id": "b", "kind": "claude"}))
     assert [c["id"] for c, _n in routes] == ["a"]
 
 
@@ -169,9 +169,10 @@ async def test_the_combined_error_takes_the_primary_connections_last_word():
     provider = SequencedProvider([LLMError("bad_response", "no images", status=422),
                                   LLMError("rate_limit", "slow down", 7.0, status=429),
                                   LLMError("network", "backup down")])
-    client = _client(provider, fallback=lambda: _conn("b", vision="off", model="backup"))
+    client = _client(provider)
+    chain = carrying(_conn(), _conn("b", vision="off", model="backup"))
     with pytest.raises(LLMError) as err:
-        await _run(client, _prepared(), _conn())
+        await _run(client, _prepared(), chain)
     assert err.value.kind == "rate_limit" and err.value.retry_after == 7.0
     assert "fallback failed too" in err.value.detail
     assert [r["model"] for r in provider.requests] == ["m", "m", "backup"]
@@ -180,9 +181,9 @@ async def test_the_combined_error_takes_the_primary_connections_last_word():
 async def test_no_degrade_after_a_rate_limit_and_the_primary_kind_survives():
     provider = SequencedProvider([LLMError("rate_limit", "slow down", 3.0, status=429),
                                   LLMError("network", "backup down")])
-    client = _client(provider, fallback=lambda: _conn("b", model="backup"))
+    client = _client(provider)
     with pytest.raises(LLMError) as err:
-        await _run(client, _prepared(), _conn())
+        await _run(client, _prepared(), carrying(_conn(), _conn("b", model="backup")))
     assert err.value.kind == "rate_limit" and err.value.retry_after == 3.0
     assert [r["model"] for r in provider.requests] == ["m", "backup"]
 
@@ -210,8 +211,8 @@ async def test_a_fallback_that_refuses_an_image_degrades_too():
     provider = SequencedProvider([LLMError("network", "down"),
                                   LLMError("bad_response", "no images", status=400),
                                   ("ok",)])
-    client = _client(provider, fallback=lambda: _conn("b", model="backup"))
-    assert await _run(client, _prepared(), _conn()) == "ok"
+    client = _client(provider)
+    assert await _run(client, _prepared(), carrying(_conn(), _conn("b", model="backup"))) == "ok"
     assert [r["model"] for r in provider.requests] == ["m", "backup", "backup"]
     assert provider.requests[2]["messages"] == cp.as_text(_msgs())
 
@@ -227,8 +228,8 @@ async def test_a_fallback_that_kept_an_image_the_primary_packed_away_degrades():
     provider = SequencedProvider([LLMError("network", "down"),
                                   LLMError("bad_response", "no images", status=400),
                                   ("ok",)])
-    client = _client(provider, fallback=lambda: _conn("b", model="backup"))
-    assert await _run(client, prepared, _conn()) == "ok"
+    client = _client(provider)
+    assert await _run(client, prepared, carrying(_conn(), _conn("b", model="backup"))) == "ok"
     assert [r["model"] for r in provider.requests] == ["m", "backup", "backup"]
     assert _image_roles(provider.requests[1]["messages"]) == ["user", "user"]
     assert provider.requests[2]["messages"] == text
@@ -243,9 +244,9 @@ async def test_a_preset_refused_on_the_text_retry_is_still_the_primarys():
         LLMError("bad_response", "image input is not supported", status=400),
         LLMError("bad_response", "temperature must be at most 1", status=400),
         ("from the fallback",)])
-    client = _client(provider, fallback=lambda: _conn("b", model="backup"))
+    client = _client(provider)
     with pytest.raises(LLMError) as err:
-        await _run(client, _prepared(), conn)
+        await _run(client, _prepared(), carrying(conn, _conn("b", model="backup")))
     assert "fallback connection was not tried" in err.value.detail
     assert [r["model"] for r in provider.requests] == ["m", "m"]
 
