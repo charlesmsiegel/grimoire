@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import {
-  api, type CapabilityModel, type CapabilityNeed, type CapabilityValue,
-  type ModelCapabilities, type TestableCapability,
+  type CapabilityModel, type CapabilityNeed, type TestableCapability,
 } from "../../api/client";
 import { errorText } from "../../api/errors";
 import { TestCallDialog, useModelTests } from "./TestCallDialog";
+import { probesFor, useModelList } from "./useModelList";
 
 export type ProviderModel = { provider: string; model: string };
 
@@ -13,79 +13,6 @@ export type ProviderModel = { provider: string; model: string };
  *  an empty list there is not a stale one, and no Refresh would help. */
 const LISTABLE = new Set(["openrouter", "openai_compatible", "anthropic"]);
 
-/** Where one model lands for a set of needs. */
-type Placement =
-  | { group: "fits" | "unverified"; row: CapabilityModel }
-  | { group: "hidden"; id: string; reason: string };
-
-/** Several needs' answers as one list (spec 6.3: "the capabilities API takes
- *  one need per call, so a route needing two combines two calls").
- *
- *  A model **fits** when every need fits, is **hidden** when any need hides it
- *  (with that need's reason), and is otherwise **unverified** -- carrying the
- *  reason from a need that left it unverified, which is the one worth reading.
- *  A provider that rules a need out for every model answers with one `reason`
- *  and no rows, and that reason is the answer for the whole list. */
-export function combine(answers: ModelCapabilities[]): {
-  reason: string | null; placements: Map<string, Placement>;
-} {
-  const reason = answers.find((a) => a.reason)?.reason ?? null;
-  const placements = new Map<string, Placement>();
-  if (reason !== null) return { reason, placements };
-  const ids = new Set<string>();
-  for (const a of answers) {
-    for (const r of [...a.groups.fits, ...a.groups.unverified]) ids.add(r.id);
-    for (const h of a.hidden) ids.add(h.id);
-  }
-  for (const id of [...ids].sort()) {
-    const hidden = answers.map((a) => a.hidden.find((h) => h.id === id)).find(Boolean);
-    if (hidden) {
-      placements.set(id, { group: "hidden", id, reason: hidden.reason });
-      continue;
-    }
-    const fits = answers.map((a) => a.groups.fits.find((r) => r.id === id));
-    const unverified = answers.map((a) => a.groups.unverified.find((r) => r.id === id))
-      .find(Boolean);
-    const everyFits = fits.every(Boolean);
-    const row = everyFits ? fits[0] : unverified ?? fits.find(Boolean);
-    if (row) placements.set(id, { group: everyFits ? "fits" : "unverified", row });
-  }
-  return { reason, placements };
-}
-
-/** Whether `cap` is a `no` that is knowledge rather than a guess: the
- *  resolver's own rule (`resolve._known_no`), under which the name rule's
- *  `no` is a guess that hides a model but never decides how it is served. */
-function knownNo(cap: CapabilityValue | undefined): boolean {
-  return cap?.value === "no" && cap.source !== "name";
-}
-
-/** The probes a Test… sends for `needs` on `row`: each need it does not
- *  already answer yes to. A need names its own probe, except `decide`: a
- *  decision is answered by structured generation wherever a model generates
- *  (spec 7.4), so it tests `generate`. It tests `decide_native` as well only
- *  for a row the resolver would serve natively -- KNOWN unable to generate
- *  and not known unable to decide natively (`knownNo`, so a name-rule guess
- *  counts for neither): a model that generates stays structured whatever
- *  that probe finds, so the probe would spend and change nothing. The server
- *  refuses anything it has no probe for, with a reason the dialog shows. */
-function probesFor(needs: CapabilityNeed[], row: CapabilityModel | null): TestableCapability[] {
-  const all = [...new Set(needs.map((n) => (n === "decide" ? "generate" : n)))] as
-    TestableCapability[];
-  if (needs.includes("decide") && knownNo(row?.capabilities.generate)
-      && !knownNo(row?.capabilities.decide_native)) {
-    all.push("decide_native");
-  }
-  const open = all.filter((c) => row?.capabilities[c]?.value !== "yes");
-  return open.length ? open : all;
-}
-
-/** Ask each need of one provider, optionally about one model. */
-function ask(provider: string, needs: CapabilityNeed[], model?: string) {
-  return Promise.all(needs.map((need) => (model === undefined
-    ? api.readConnectionCapabilities(provider, need)
-    : api.readConnectionCapabilities(provider, need, model))));
-}
 
 /** Provider, then a model that can do what the caller needs (spec 6.3).
  *
@@ -126,9 +53,6 @@ export function ProviderModelPicker({ needs, value, onChange, providers, disable
      *  can hold that button until it is. */
     onDraft?: (draft: string) => void }) {
   const name = useId();
-  const [listed, setListed] = useState<ReturnType<typeof combine> | null>(null);
-  const [failed, setFailed] = useState<unknown>(null);
-  const [typedVerdict, setTypedVerdict] = useState<Placement | null>(null);
   const [draft, setDraft] = useState("");
   const draftSink = useRef(onDraft);
   draftSink.current = onDraft;
@@ -136,8 +60,9 @@ export function ProviderModelPicker({ needs, value, onChange, providers, disable
   useEffect(() => () => { draftSink.current?.(""); }, []);
   const [testing, setTesting] = useState<{ model: string; probes: TestableCapability[] } | null>(
     null);
-  // Bumped when a test lands: the answers it changed are stale.
-  const [asked, setAsked] = useState(0);
+  const { provider, model } = value;
+  const { listed, failed, known, needsVerdict, verdict: typedVerdict, reask } =
+    useModelList(provider, needs, model);
   const root = useRef<HTMLDivElement>(null);
   // Where focus goes back to once the rows are drawn again. A landed test
   // redraws every row, so the control focus was on -- or the Test… a dialog
@@ -151,42 +76,11 @@ export function ProviderModelPicker({ needs, value, onChange, providers, disable
     }
     // Cleared here rather than by the re-ask below, which runs a commit later:
     // until then the old rows -- and the focus on one -- would still be up.
-    setListed(null);
-    setAsked((n) => n + 1);
+    reask(true);
   });
 
   // Held as a key, so a caller passing a fresh array each render asks once.
   const needKey = needs.join(",");
-  const { provider, model } = value;
-
-  useEffect(() => {
-    setListed(null);
-    setFailed(null);
-    if (!provider || !needKey) return;
-    let current = true;
-    ask(provider, needKey.split(",") as CapabilityNeed[])
-      .then((answers) => { if (current) setListed(combine(answers)); })
-      .catch((err: unknown) => { if (current) setFailed(err); });
-    return () => { current = false; };
-  }, [provider, needKey, asked]);
-
-  // The chosen model's own verdict, when no row lists it.
-  const known = listed?.placements.get(model);
-  const needsVerdict = !!listed && !!model && listed.reason === null && !known;
-  useEffect(() => {
-    setTypedVerdict(null);
-    if (!needsVerdict) return;
-    let current = true;
-    ask(provider, needKey.split(",") as CapabilityNeed[], model)
-      .then((answers) => {
-        if (!current) return;
-        const { reason, placements } = combine(answers);
-        setTypedVerdict(placements.get(model)
-          ?? { group: "hidden", id: model, reason: reason ?? "Nothing is known of this id." });
-      })
-      .catch(() => { if (current) setTypedVerdict(null); });
-    return () => { current = false; };
-  }, [needsVerdict, provider, needKey, model, asked]);
 
   // Focus back, once the dialog is shut and the rows are drawn again: to the
   // same control, else that model's row, else the provider. Only focus that
