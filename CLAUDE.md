@@ -552,10 +552,15 @@ would answer neither question.
   missing `config.md` stamps the format marker (`inference_keys.born_current`),
   so a fresh install is never migrated and no safety archive is taken of an
   empty library. `GRIMOIRE_INFERENCE_AUTOMIGRATE=0`, which `tests/conftest.py`
-  sets, turns off that birth stamp and the background migration together; a
-  test that wants either stamps the marker or calls `migrate.ensure` itself.
-  So the older play suites run at format 1, and `test_format2_play.py` is the
-  turn path (a chat turn and a reroll) at the format a fresh install ships.
+  sets, turns off the background migration only -- the birth stamp is always
+  written, and `config.birth_fields()` is its one spelling. A test that wants
+  the migration calls `migrate.ensure` itself, and a test that needs a format-1
+  library calls `tests.inference_fixtures.legacy_store()` before anything reads
+  the store (a `config.md` that exists without the marker stays legacy).
+  `GRIMOIRE_TEST_BIRTH=upgraded-default` is the suite's seam on the birth, adding
+  the default Primary; a suite opts in with the `upgraded_birth` marker, and
+  `test_format2_play.py` is the turn path (a chat turn and a reroll) at the
+  format a fresh install ships.
 - **Model settings moved to a new layout, once, in the background**
   (`store/inference/migrate.py`, started by `main.start` at startup and after a
   data-dir move). Its first write is a full archive named

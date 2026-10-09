@@ -38,6 +38,7 @@ from grimoire.store import (
 )
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, migrate
+from tests import inference_fixtures
 from tests.fixtures.frozen_campaign import sweep as frozen
 from tests.llm_fakes import FakeOpenRouter
 
@@ -51,6 +52,9 @@ def home(monkeypatch, tmp_path):
     root = tmp_path / "home"
     root.mkdir()
     monkeypatch.setenv("GRIMOIRE_HOME", str(root))
+    # The migration's subject is a format-1 library, and a missing config.md is
+    # now born at format 2: write the legacy one before anything reads the store.
+    inference_fixtures.legacy_store(root)
     return root
 
 
@@ -59,7 +63,7 @@ def home(monkeypatch, tmp_path):
 def _legacy() -> None:
     """A legacy store: `config.md` without the marker, the seeded connections,
     and an OpenRouter key and model."""
-    config.read_config()
+    inference_fixtures.legacy_store()
     llm_connections.update_connection("openrouter", api_key="sk-test-active",
                                       model="vendor/active")
     assert not inference_keys.is_current(config.read_config())
@@ -641,6 +645,7 @@ def test_a_newer_format_store_is_not_migrated(home):
 
 
 def test_a_fresh_store_is_not_migrated(home):
+    (home / "config.md").unlink()  # the fixture's legacy one: this store has none
     got = migrate.ensure()
     assert got.state == "done"
     assert not (home / "config.md").exists()

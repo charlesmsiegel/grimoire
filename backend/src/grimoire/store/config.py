@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import os
 from collections.abc import Callable, Iterator, Mapping
 
 from . import atomic, inference_keys, locks, routing
@@ -251,16 +252,30 @@ def _config_path():
     return home() / "config.md"
 
 
-def _birth_marker() -> dict[str, str]:
+#: Set to `"upgraded-default"` and a `config.md` is born holding what migrating
+#: a fresh format-1 library yields (the default Primary), not the marker alone.
+#: The suite's seam: product code never sets it.
+TEST_BIRTH_ENV = "GRIMOIRE_TEST_BIRTH"
+
+
+def birth_fields() -> dict[str, str]:
     """What a `config.md` this build creates from nothing starts with, besides
     its defaults: the current format marker (spec 11.1, ruling 13). A store
     with no `config.md` has no legacy settings to translate, so it is never
     migrated -- it is born in the new layout. Only the CREATION paths call
     this: a `config.md` that exists without the marker is a legacy store and
-    stays one until the migration says otherwise."""
-    if not inference_keys.born_current():
-        return {}
-    return {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+    stays one until the migration says otherwise.
+
+    A test seam as well as a birth: with `TEST_BIRTH_ENV` set to
+    `"upgraded-default"` the store is born as an upgraded default library,
+    Primary on `openrouter` at `DEFAULT_MODEL`. Without it the marker is all
+    there is, and `test_a_product_store_is_born_with_the_marker_alone` pins
+    that."""
+    fields = {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+    if os.environ.get(TEST_BIRTH_ENV) == "upgraded-default":
+        fields[inference_keys.role_key("primary", "provider")] = "openrouter"
+        fields[inference_keys.role_key("primary", "model")] = DEFAULT_MODEL
+    return fields
 
 
 def read_config() -> dict[str, str]:
@@ -319,7 +334,7 @@ def read_config() -> dict[str, str]:
         # racing here would each publish a whole file.
         with locks.config_lock():
             if not path.exists():
-                defaults.update(_birth_marker())
+                defaults.update(birth_fields())
                 atomic.write_text(path, dump_frontmatter(defaults, ""))
                 return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -724,7 +739,7 @@ def write_config(**fields: str) -> dict[str, str]:
     # setting saved in the first (#194 review).
     with locks.config_lock():
         raw, _ = (parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists()
-                  else (_birth_marker(), ""))
+                  else (birth_fields(), ""))
         for key, value in fields.items():
             if key in _CONFIG_KEYS and value is not None:
                 raw[key] = value

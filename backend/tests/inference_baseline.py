@@ -52,6 +52,7 @@ from grimoire.main import create_app
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import resolve as inference
+from tests.inference_fixtures import legacy_store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inference_baseline.json"
 
@@ -72,6 +73,9 @@ def client_at(home: Path) -> Iterator[TestClient]:
     os.environ["GRIMOIRE_HOME"] = str(home)
     try:
         importlib.reload(store)
+        # A fresh store is born at format 2 now; the baselines were frozen at
+        # format 1, so every one of them starts from a legacy library.
+        legacy_store(home)
         with TestClient(create_app()) as client:
             yield client
     finally:

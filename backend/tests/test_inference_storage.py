@@ -27,6 +27,7 @@ from grimoire.store import (
 )
 from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.inference import capabilities, facts, providers, translate
+from tests import inference_fixtures
 
 
 @pytest.fixture()
@@ -99,16 +100,47 @@ def test_an_existing_config_without_the_marker_stays_legacy(home, monkeypatch):
     assert not translate.is_current(config.read_config())
 
 
-def test_the_test_switch_keeps_a_fresh_store_legacy(home, monkeypatch):
-    # conftest sets it for the whole suite: a legacy store built on a fresh tmp
-    # home must stay legacy, or every legacy write a test makes is ignored.
+def test_the_background_switch_does_not_unbirth_a_fresh_store(home, monkeypatch):
+    # `AUTOMIGRATE_ENV=0` (conftest sets it for the whole suite) means "no
+    # background thread" and nothing more: a store this build creates is born
+    # current whether or not the switch is on.
     monkeypatch.setenv(inference_keys.AUTOMIGRATE_ENV, "0")
-    assert config.read_config()[inference_keys.FORMAT_KEY] == ""
+    assert inference_keys.born_current()
+    assert config.read_config()[inference_keys.FORMAT_KEY] == "2"
+
+
+@pytest.mark.upgraded_birth
+def test_a_test_store_is_born_an_upgraded_default_library(home):
+    cfg = config.read_config()
+    assert inference_keys.is_current(cfg)
+    assert (cfg["role_primary_provider"], cfg["role_primary_model"]) == (
+        "openrouter", config.DEFAULT_MODEL)
+    assert config.birth_fields() == inference_fixtures.UPGRADED_DEFAULT
+
+
+def test_a_product_store_is_born_with_the_marker_alone(home, monkeypatch):
+    monkeypatch.delenv(config.TEST_BIRTH_ENV, raising=False)
+    cfg = config.read_config()
+    assert inference_keys.is_current(cfg) and not cfg.get("role_primary_provider")
+    assert config.birth_fields() == {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+
+
+def test_legacy_store_is_format_1(home):
+    inference_fixtures.legacy_store()
+    assert (home / "config.md").read_text(encoding="utf-8") == "---\n---\n"
+    assert not inference_keys.is_current(config.read_config())
+
+
+def test_legacy_store_names_the_root_it_is_given(tmp_path):
+    other = tmp_path / "elsewhere"
+    inference_fixtures.legacy_store(other)
+    assert (other / "config.md").read_text(encoding="utf-8") == "---\n---\n"
 
 
 # ---- config.md carries every key ----
 
 def test_read_config_round_trips_every_inference_key(home):
+    inference_fixtures.legacy_store()  # a born store already holds the marker
     cfg = config.read_config()
     for key in inference_keys.GLOBAL_KEYS:
         assert cfg[key] == "", key
@@ -123,6 +155,7 @@ def test_read_config_round_trips_every_inference_key(home):
 
 
 def test_is_current_sees_the_marker_through_read_config(home):
+    inference_fixtures.legacy_store()
     assert not translate.is_current(config.read_config())
     _make_current()
     assert translate.is_current(config.read_config())
@@ -280,6 +313,7 @@ def test_set_campaign_inference_is_locked_bumps_revision_and_refuses_other_keys(
 
 
 def test_set_campaign_inference_marks_the_campaign_on_a_current_store(home):
+    inference_fixtures.legacy_store()
     cid = _campaign()
     # A legacy store: the key is written, the campaign is not marked.
     campaigns.set_campaign_inference(cid, {"use_scene": "fast"})
@@ -306,6 +340,7 @@ def test_set_campaign_inference_that_changes_nothing_writes_nothing(home):
 
 
 def test_a_new_campaign_is_marked_on_a_current_store(home):
+    inference_fixtures.legacy_store()
     legacy = _campaign("Saltmarch")
     assert inference_keys.FORMAT_KEY not in _campaign_meta(legacy)
     _make_current()
@@ -316,6 +351,7 @@ def test_a_new_campaign_is_marked_on_a_current_store(home):
 # ---- the shared refusals (Tasks 4 and 5 call them) ----
 
 def test_refuse_newer_and_refuse_unmigrated(home):
+    inference_fixtures.legacy_store()
     def kind(fn) -> str:
         try:
             fn()

@@ -12,8 +12,32 @@ suite.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import grimoire.store as store
+from grimoire.store import config, inference_keys
 from grimoire.store.inference import migrate
+
+#: What a store born under `GRIMOIRE_TEST_BIRTH=upgraded-default` holds besides
+#: its defaults: the format marker and the default Primary (what migrating a
+#: fresh format-1 library yields). Held equal to `config.birth_fields()` by
+#: `test_a_test_store_is_born_an_upgraded_default_library`.
+UPGRADED_DEFAULT: dict[str, str] = {
+    inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT,
+    inference_keys.role_key("primary", "provider"): "openrouter",
+    inference_keys.role_key("primary", "model"): config.DEFAULT_MODEL,
+}
+
+
+def legacy_store(home: Path | None = None) -> None:
+    """Make the store under `home` (default `store.home()`) a format-1 library:
+    a `config.md` with no format marker, which is how a store from before the
+    new layout looks. Call it BEFORE anything reads the store -- the first
+    read of a missing `config.md` creates one born at format 2, and a
+    `config.md` that exists without the marker stays legacy."""
+    root = Path(home) if home is not None else store.home()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.md").write_text("---\n---\n", encoding="utf-8")  # atomic-ok: test fixture
 
 
 def put_settings(client, body: dict) -> None:
