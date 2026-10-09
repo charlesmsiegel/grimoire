@@ -7597,8 +7597,8 @@ def test_a_voice_check_the_clock_refused_on_both_stages_is_skipped_not_failed(
     spent = [False]
 
     async def run_out_at_the_native_call(self, coro, on_start=None, on_timeout=None):
-        if spent[0] or getattr(coro, "cr_code", None) is not None \
-                and coro.cr_code.co_name == "decide_native":
+        native = getattr(getattr(coro, "cr_code", None), "co_name", "") == "decide_native"
+        if spent[0] or native:
             spent[0] = True
             coro.close()
             raise routes.scenes.BudgetRefused("timeout", routes.scenes.BUDGET_EXHAUSTED)
