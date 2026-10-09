@@ -20,7 +20,7 @@ from grimoire.routes import tracker as tracker_routes
 
 from .llm_fakes import FakeLLM, HeldCassette, from_entries
 
-pytestmark = pytest.mark.tracker
+pytestmark = [pytest.mark.tracker, pytest.mark.upgraded_birth]
 
 TRACKER = {"system_contains": "You maintain the scene state tracker"}
 MARA_SAYS = 'Mara answers.\n```handoff\n{"next":null}\n```'

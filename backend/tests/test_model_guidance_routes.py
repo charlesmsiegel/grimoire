@@ -4,7 +4,10 @@ import pytest
 
 from grimoire import llm, routes, store
 from grimoire.llm_errors import LLMError
+from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 @pytest.fixture
@@ -15,9 +18,15 @@ def client(client):
     return client
 
 
+def _primary(client, model):
+    """The Primary role on the seeded OpenRouter provider at `model`."""
+    put_settings(client, {"roles": {"primary": {
+        "selection": {"provider": "openrouter", "model": model}}}})
+
+
 def _scene(client):
-    client.put("/api/llm-connections/openrouter",
-               json={"api_key": "sk-test", "model": "vendor/unknown"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+    _primary(client, "vendor/unknown")
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
@@ -37,7 +46,7 @@ def _profile_rows(breakdown):
 ])
 def test_scene_routes_follow_current_model_not_historical_stamp(client, action, body):
     cid, sid = _scene(client)
-    client.put("/api/llm-connections/openrouter", json={"model": "glm-5.3"})
+    _primary(client, "glm-5.3")
     fake = FakeLLM([["Mara nods."]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
@@ -55,8 +64,10 @@ def test_scene_routes_follow_current_model_not_historical_stamp(client, action, 
 def test_live_inspector_uses_campaign_route_and_needs_no_credentials(client):
     cid, sid = _scene(client)
     connection = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Mara", "model": "z-ai/glm-5.3"}).json()["id"]
-    store.campaigns.set_campaign_routing(cid, {"route_scene": connection})
+        "kind": "openrouter", "name": "Mara"}).json()["id"]
+    pinned = client.put(f"/api/campaigns/{cid}/inference", json={"routes": {"scene": {
+        "use": "model", "pin": {"provider": connection, "model": "z-ai/glm-5.3"}}}})
+    assert pinned.status_code == 200, pinned.text
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["model"] == "z-ai/glm-5.3"
     assert len(_profile_rows(live)) == 1
@@ -92,7 +103,7 @@ def test_reroll_override_keeps_frozen_prompt_and_does_not_change_next_turn(clien
 
 def test_fallback_captures_matching_profile_only_when_attempted(client):
     cid, sid = _scene(client)
-    client.put("/api/llm-connections/openrouter", json={"model": "glm-5.3"})
+    _primary(client, "glm-5.3")
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=("Mara nods.",))
     facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,

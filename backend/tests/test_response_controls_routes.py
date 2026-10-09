@@ -6,6 +6,8 @@ from grimoire.llm_errors import LLMError
 from tests.llm_fakes import FakeLLM, decision_reply
 from tests.test_character_turns import seed
 
+pytestmark = pytest.mark.upgraded_birth
+
 
 def _answer(client, base, text="Original."):
     fake = FakeLLM([[text + '\n```handoff\n{"next":null}\n```']])

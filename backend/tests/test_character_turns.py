@@ -18,6 +18,8 @@ from tests.inference_fixtures import (
 )
 from tests.llm_fakes import FakeLLM, decision_reply
 
+pytestmark = pytest.mark.upgraded_birth
+
 
 def seed(client, module=None):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})

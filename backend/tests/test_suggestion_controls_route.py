@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from grimoire import routes
 from grimoire.store import (
     calendars,
@@ -35,6 +37,8 @@ from tests import draft_runs as drafts
 from tests import llm_fakes
 from tests.llm_fakes import FakeOpenRouterComplete
 from tests.test_suggest_store import _break_calendar
+
+pytestmark = pytest.mark.upgraded_birth
 
 MAP = "thread:mara-s-map"
 LEDGER = "thread:find-the-ledger"

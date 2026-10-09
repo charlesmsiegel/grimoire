@@ -23,6 +23,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.store import atomic
+from grimoire.store import inference_keys as keys
 from tests import draft_runs as drafts
 from tests import review_runs
 from tests.inference_fixtures import (
@@ -30,6 +31,7 @@ from tests.inference_fixtures import (
     SPARE,
     decide_only,
     format2,
+    legacy_store,
     neither,
     put_settings,
 )
@@ -45,6 +47,8 @@ from tests.llm_fakes import (  # the shared gateway fakes (#204)
     decision_reply,
     from_entries,
 )
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 @pytest.fixture
@@ -151,6 +155,19 @@ def _campaign(client, name="Run"):
     return wid, client.post("/api/campaigns", json={"name": name, "world": wid}).json()["id"]
 
 
+def _primary(client, model, provider="openrouter"):
+    """The Primary role on `provider` at `model`: where a format-2 store keeps
+    what the legacy active connection and its model held."""
+    put_settings(client, {"roles": {"primary": {"selection": {
+        "provider": provider, "model": model}}}})
+
+
+def _fallback(client, provider, model):
+    """The Primary role's fallback (the legacy `fallback_connection_id`)."""
+    put_settings(client, {"roles": {"primary": {"fallback": {
+        "provider": provider, "model": model}}}})
+
+
 # ---- config (unchanged behavior) ----
 def test_fresh_install_active_connection_defaults_to_openrouter_via_the_real_route(client):
     # Must call GET /api/config as the FIRST request against the fixture's
@@ -187,8 +204,7 @@ def test_llm_connections_seeded_by_migration(client):
 def test_create_read_update_delete_connection(client):
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "z.ai GLM",
-        "base_url": "https://api.z.ai/v4", "api_key": "sk-z", "model": "glm-4.6",
-        "post_process": "strict",
+        "base_url": "https://api.z.ai/v4", "api_key": "sk-z",
     })
     assert r.status_code == 200
     cid = r.json()["id"]
@@ -253,7 +269,7 @@ def test_refresh_result_and_detail_list_text_models_but_the_sidecar_keeps_every_
 
     detail = client.get("/api/llm-connections/openrouter").json()
     assert [m["id"] for m in detail["models"]] == ["a/chat"]
-    saved = client.put("/api/llm-connections/openrouter", json={"prefill": True}).json()
+    saved = client.put("/api/llm-connections/openrouter", json={"name": "OpenRouter"}).json()
     assert [m["id"] for m in saved["models"]] == ["a/chat"]
 
     assert [m["id"] for m in
@@ -383,7 +399,9 @@ def test_config_llm_call_budget_roundtrip(client):
 def test_config_retry_and_fallback_roundtrip(client):
     """#144's two settings are user-visible like the durations beside them, so
     they have to survive the same GET/PUT round trip -- a key missing from
-    _CONFIG_KEYS is dropped silently, with no error to notice."""
+    _CONFIG_KEYS is dropped silently, with no error to notice. The legacy
+    `fallback_connection_id` is written only at format 1."""
+    legacy_store()
     body = client.get("/api/config").json()
     assert body["llm_retries"] == "2"
     assert body["fallback_connection_id"] == ""
@@ -405,9 +423,8 @@ def test_the_fallback_resolver_reads_the_configured_connection(client):
     facade."""
     assert _carried_fallback() is None      # nothing configured
     cid = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Backup", "model": "vendor/backup",
-        "api_key": "sk-backup"}).json()["id"]
-    client.put("/api/config", json={"fallback_connection_id": cid})
+        "kind": "openrouter", "name": "Backup", "api_key": "sk-backup"}).json()["id"]
+    _fallback(client, cid, "vendor/backup")
     conn = _carried_fallback()
     assert conn["id"] == cid and conn["model"] == "vendor/backup"
 
@@ -418,30 +435,32 @@ def test_a_fallback_that_cannot_send_is_no_fallback(client):
     using -- on exactly the request where they need the first message."""
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Keyless"}).json()["id"]
-    client.put("/api/config", json={"fallback_connection_id": cid})
+    _fallback(client, cid, "vendor/backup")
     assert _carried_fallback() is None
 
 
 def test_a_fallback_pointing_at_a_deleted_connection_is_no_fallback(client):
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Doomed", "api_key": "sk-x"}).json()["id"]
-    client.put("/api/config", json={"fallback_connection_id": cid})
+    _fallback(client, cid, "vendor/backup")
     # Deleting clears the reference, so this is belt and braces -- but a
     # config.md hand-edited to name a connection that never existed reaches the
     # same place, and must not fail a generation the primary would have served.
-    client.put("/api/config", json={"fallback_connection_id": "never-existed"})
+    store.write_config(**{keys.fallback_key("primary", "provider"): "never-existed"})
     assert _carried_fallback() is None
 
 
 def test_deleting_a_connection_clears_it_as_the_fallback(client):
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Backup", "api_key": "sk-x"}).json()["id"]
-    client.put("/api/config", json={"fallback_connection_id": cid})
+    _fallback(client, cid, "vendor/backup")
+    assert store.read_config()[keys.fallback_key("primary", "provider")] == cid
     assert client.delete(f"/api/llm-connections/{cid}").status_code == 200
-    assert client.get("/api/config").json()["fallback_connection_id"] == ""
+    assert store.read_config()[keys.fallback_key("primary", "provider")] == ""
 
 
 def test_config_active_connection_id_roundtrip(client):
+    legacy_store()
     r = client.put("/api/config", json={"active_connection_id": "claude"})
     assert r.status_code == 200
     assert r.json()["active_connection_id"] == "claude"
@@ -457,9 +476,8 @@ def test_config_exposes_the_active_connection_model(client):
     turn runs on: per-task routing (#142) can send scene prose elsewhere, and
     per campaign at that, which a global bar has no campaign to resolve. The
     routing pickers are where a reader sees what each job actually uses."""
-    r = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "OR-status", "model": "vendor/model-x"})
-    client.put("/api/config", json={"active_connection_id": r.json()["id"]})
+    r = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "OR-status"})
+    _primary(client, "vendor/model-x", r.json()["id"])
     assert client.get("/api/config").json()["active_connection"]["model"] == "vendor/model-x"
 
 
@@ -467,7 +485,8 @@ def test_config_reports_the_claude_fallback_model_not_an_empty_string(client):
     """A Claude connection with no model still generates -- llm._dispatch runs
     it on CLAUDE_DEFAULT_MODEL -- so reporting "" would put a dash in the status
     bar for a connection that is about to answer. The bar must name what will
-    actually run."""
+    actually run. At format 1: a format-2 selection always names its model."""
+    legacy_store()
     r = client.post("/api/llm-connections", json={"kind": "claude", "name": "C-status"})
     client.put("/api/config", json={"active_connection_id": r.json()["id"]})
     body = client.get("/api/config").json()
@@ -477,7 +496,9 @@ def test_config_reports_the_claude_fallback_model_not_an_empty_string(client):
 def test_config_model_is_empty_for_a_non_claude_connection_without_one(client):
     """Only the Claude path substitutes a model. An openai_compatible
     connection with none configured reaches its provider with an empty model,
-    so a dash is the honest reading -- the fallback must not leak across kinds."""
+    so a dash is the honest reading -- the fallback must not leak across kinds.
+    At format 1: a format-2 selection always names its model."""
+    legacy_store()
     r = client.post("/api/llm-connections", json={"kind": "openai_compatible", "name": "OC-status"})
     client.put("/api/config", json={"active_connection_id": r.json()["id"]})
     assert client.get("/api/config").json()["active_connection"]["model"] == ""
@@ -573,6 +594,9 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     """
     from grimoire.routes.models import ConfigUpdate
 
+    # `ConfigUpdate` still names the legacy inference keys, which only a
+    # format-1 store accepts.
+    legacy_store()
     # `active_connection_id` is answered from the connection it names rather
     # than the string that was stored, so an invented id reads back as "" --
     # correctly. `claude` is the other connection every store is seeded with,
@@ -618,6 +642,7 @@ def test_config_offscene_known_limit_defaults_and_roundtrips(client):
 
 
 def test_config_semantic_recall_defaults_to_off_and_roundtrips(client):
+    legacy_store()   # the legacy embedding keys, written at format 1 only
     body = client.get("/api/config").json()
     assert body["semantic_recall_depth"] == "0"          # off for every install
     assert body["embeddings_connection_id"] == ""
@@ -3661,7 +3686,7 @@ def test_chat_missing_key_ok_for_claude_provider(client):
     # need one — the 409 missing_key guard must be skipped. The `client`
     # fixture already overrides routes.get_llm with a FakeOpenRouter, standing
     # in for whatever connection is active.
-    client.put("/api/config", json={"active_connection_id": "claude"})
+    _primary(client, llm.CLAUDE_DEFAULT_MODEL, "claude")
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
@@ -3873,7 +3898,7 @@ def test_a_streamed_turn_retries_before_a_delta_has_been_sent(client):
     """The pre-first-token window is where the transient failures live, and it
     is the only window where a retry is safe."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
-    client.put("/api/llm-connections/openrouter", json={"model": "primary"})
+    _primary(client, "primary")
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     provider = TransientProvider(failures=2)
@@ -3918,12 +3943,12 @@ def test_a_blocking_generation_retries_too(client):
 
 
 def test_the_fallback_connection_answers_once_the_primary_is_exhausted(client):
-    client.put("/api/llm-connections/openrouter",
-               json={"api_key": "sk-or-secret", "model": "primary"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _primary(client, "primary")
     backup = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Backup", "model": "backup",
-        "api_key": "sk-backup"}).json()["id"]
-    client.put("/api/config", json={"llm_retries": "1", "fallback_connection_id": backup})
+        "kind": "openrouter", "name": "Backup", "api_key": "sk-backup"}).json()["id"]
+    _fallback(client, backup, "backup")
+    client.put("/api/config", json={"llm_retries": "1"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     provider = TransientProvider(failures=2)
@@ -3936,8 +3961,8 @@ def test_the_fallback_connection_answers_once_the_primary_is_exhausted(client):
 
 
 def test_with_no_fallback_configured_an_exhausted_connection_is_just_an_error(client):
-    client.put("/api/llm-connections/openrouter",
-               json={"api_key": "sk-or-secret", "model": "primary"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _primary(client, "primary")
     client.put("/api/config", json={"llm_retries": "0"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
@@ -4666,15 +4691,25 @@ def test_rerolling_an_empty_slot_re_aims_the_guidance(client):
 
 
 # ---- the per-reroll route override (#77) ----
-def _rerollable(client, fake=None):
+def _rerollable(client, fake=None, *, legacy=False):
     """A scene whose trailing reply a reroll would replace, plus the gateway
     fake the reroll will reach. Returned rather than read off the fixture,
     because the fixture builds a NEW `FakeOpenRouter` per call and so cannot be
-    asked afterwards which connection it was handed."""
+    asked afterwards which connection it was handed.
+
+    The Primary role runs on the keyed OpenRouter provider at
+    `campaign/model`; `legacy` builds the same on a format-1 store, where the
+    model is the connection's own (a test of what a provider ALONE means there:
+    its own model, where at format 2 it keeps the standing one)."""
     fake = fake or FakeOpenRouter(["Hel", "lo"])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    client.put("/api/llm-connections/openrouter",
-               json={"api_key": "sk-or-secret", "model": "campaign/model"})
+    if legacy:
+        legacy_store()
+        client.put("/api/llm-connections/openrouter",
+                   json={"api_key": "sk-or-secret", "model": "campaign/model"})
+    else:
+        client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+        _primary(client, "campaign/model")
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -4682,13 +4717,21 @@ def _rerollable(client, fake=None):
     return fake, cid, sid
 
 
-def _local_endpoint(client, model="llama3", key="sk-local"):
+def _local_endpoint(client, model=None, key="sk-local"):
     """A second connection of a different kind, so an override that names it is
-    expressing something a bare model string could not."""
+    expressing something a bare model string could not. Its own `model` is a
+    format-1 field: a format-2 provider holds none."""
+    own = {} if model is None else {"model": model}
     return client.post("/api/llm-connections",
                        json={"kind": "openai_compatible", "name": "Local",
                              "base_url": "http://localhost:11434/v1",
-                             "api_key": key, "model": model}).json()["id"]
+                             "api_key": key, **own}).json()["id"]
+
+
+def _stored_primary(client) -> tuple[str, str]:
+    """The Primary role's stored selection, as the Models page reads it."""
+    stored = client.get("/api/inference/settings").json()["roles"]["primary"]["stored"]
+    return stored["provider"], stored["model"]
 
 
 def test_a_reroll_with_no_override_still_runs_on_the_active_connection(client):
@@ -4709,16 +4752,17 @@ def test_a_reroll_may_name_a_model_without_naming_a_connection(client):
 
     assert fake.conn["id"] == "openrouter"          # still the active connection
     assert fake.conn["model"] == "vendor/bigger"
-    # A one-shot: the stored connection is untouched, so the next turn is back
+    # A one-shot: the stored selection is untouched, so the next turn is back
     # on the campaign's model.
-    assert client.get("/api/llm-connections/openrouter").json()["model"] == "campaign/model"
+    assert _stored_primary(client) == ("openrouter", "campaign/model")
 
 
 def test_a_reroll_may_name_a_whole_connection(client):
     """The case a bare model id cannot express — a different provider, with its
-    own base URL and credentials."""
-    fake, cid, sid = _rerollable(client)
-    other = _local_endpoint(client)
+    own base URL and credentials. At format 1, where a connection has a model of
+    its own to run (at format 2 a provider alone keeps the standing model)."""
+    fake, cid, sid = _rerollable(client, legacy=True)
+    other = _local_endpoint(client, model="llama3")
 
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"connection_id": other}).status_code == 200
@@ -4738,7 +4782,10 @@ def test_a_reroll_may_name_a_connection_and_a_model_together(client):
 
     assert fake.conn["kind"] == "openai_compatible"
     assert fake.conn["model"] == "qwen3"
-    assert client.get(f"/api/llm-connections/{other}").json()["model"] == "llama3"
+    # Nothing about the override is stored: not on the provider it named, and
+    # not on the standing selection.
+    assert client.get(f"/api/llm-connections/{other}").json().get("model", "") == ""
+    assert _stored_primary(client) == ("openrouter", "campaign/model")
 
 
 def test_an_override_steers_one_reroll_and_not_the_turn_after_it(client):
@@ -4784,7 +4831,7 @@ def test_an_override_that_cannot_send_is_refused_rather_than_quietly_rerouted(cl
     fake, cid, sid = _rerollable(client)
     blank = client.post("/api/llm-connections",
                         json={"kind": "openai_compatible", "name": "Half-set",
-                              "base_url": "", "model": "m"}).json()["id"]
+                              "base_url": ""}).json()["id"]
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                     json={"connection_id": blank})
@@ -4809,7 +4856,7 @@ def test_an_override_works_while_the_active_connection_is_unusable(client):
     # (the type-to-replace convention), which is the behaviour that makes a
     # rename safe and the reason this cannot be set up through the route.
     store.llm_connections._write_raw("openrouter", kind="openrouter",
-                                     name="OpenRouter", api_key="", model="campaign/model")
+                                     name="OpenRouter", api_key="")
 
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 409
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
@@ -4822,10 +4869,10 @@ def test_the_alternate_a_reroll_produces_is_stamped_with_the_model_that_ran(clie
     model, so a variant generated somewhere else must not inherit the
     campaign's."""
     _fake, cid, sid = _rerollable(client)
-    other = _local_endpoint(client, model="llama3")
+    other = _local_endpoint(client)
 
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
-                json={"connection_id": other, "guidance": "warmer"})
+                json={"connection_id": other, "model": "llama3", "guidance": "warmer"})
 
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
     assert [a["preview"] for a in body["alternates"]] == ["old reply", "Hello"]
@@ -4840,7 +4887,7 @@ def test_an_override_free_reroll_stamps_the_connection_it_actually_used(client):
     """Not left blank. The scene's own frontmatter is stamped once, at creation,
     so it is the stale answer the moment the active connection is repointed."""
     _fake, cid, sid = _rerollable(client)
-    client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
+    _primary(client, "repointed/model")
 
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
 
@@ -4852,12 +4899,12 @@ def test_an_override_only_reroll_still_reaches_the_variant_that_lands(client):
     """The pending pair is spent together. With no guidance to carry it, a model
     stamp on its own has to reach the run that fills the slot."""
     _fake, cid, sid = _rerollable(client)
-    other = _local_endpoint(client, model="llama3")
+    other = _local_endpoint(client)
     store.alternates.archive(cid, sid, "", "llama3")     # the stream then died
     store.scenes.remove_trailing_assistant_run(cid, sid)
 
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
-                json={"connection_id": other})
+                json={"connection_id": other, "model": "llama3"})
 
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
     assert body["alternates"][1]["model"] == "llama3"
@@ -4884,10 +4931,10 @@ def test_a_rerolls_snapshot_and_cost_name_the_model_it_ran_on(client):
     either can break alone: both are compared in one dict, and each surface is
     read again after the other so a read that wrote would show."""
     _fake, cid, sid = _rerollable(client)
-    other = _local_endpoint(client, model="llama3")
+    other = _local_endpoint(client)
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
-                    json={"connection_id": other})
+                    json={"connection_id": other, "model": "llama3"})
 
     def snapshot() -> dict | None:
         rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
@@ -4929,7 +4976,7 @@ def test_a_turn_with_no_override_records_the_resolved_model(client, task, send):
     """Both panels resolve the current route, so changing the active model
     cannot mislabel a prompt or choose guidance using historical metadata."""
     _fake, cid, sid = _rerollable(client)
-    client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
+    _primary(client, "repointed/model")
 
     send(client, cid, sid)
 
@@ -4943,8 +4990,9 @@ def test_a_turn_with_no_override_records_the_resolved_model(client, task, send):
 def test_a_reroll_onto_claude_stamps_the_model_the_dispatcher_substitutes(client):
     """`effective_model`, not `conn["model"]`: a Claude connection with none
     configured still generates, so stamping the stored "" would file a variant
-    under a model the reader cannot look a context size up for."""
-    _fake, cid, sid = _rerollable(client)
+    under a model the reader cannot look a context size up for. At format 1:
+    a format-2 override naming a provider alone keeps the standing model."""
+    _fake, cid, sid = _rerollable(client, legacy=True)
     anthropic = client.post("/api/llm-connections",
                             json={"kind": "claude", "name": "Claude",
                                   "model": ""}).json()["id"]
@@ -5005,8 +5053,9 @@ def test_a_route_with_no_model_is_not_filed_under_the_campaigns(client):
     configured generates fine on the provider's own default, and filing that
     reroll under the campaign's model is the exact mislabel #77 exists to
     prevent — `SceneInspector` sizes the frozen prompt against what is
-    recorded here."""
-    fake, cid, sid = _rerollable(client)
+    recorded here. At format 1, where a provider alone runs its own model (at
+    format 2 it keeps the standing one)."""
+    fake, cid, sid = _rerollable(client, legacy=True)
     modelless = client.post("/api/llm-connections",
                             json={"kind": "openai_compatible", "name": "Bare",
                                   "base_url": "http://localhost:11434/v1"}).json()["id"]
@@ -5025,7 +5074,7 @@ def test_naming_the_active_connection_is_not_an_override(client):
     """Explicitly choosing the standing connection records the same resolved
     model as an ordinary reroll, including a change since scene creation."""
     _fake, cid, sid = _rerollable(client)
-    client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
+    _primary(client, "repointed/model")
 
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                 json={"connection_id": "openrouter"})
@@ -7750,6 +7799,7 @@ def test_the_decision_role_now_serves_voice_drift(client):
 def test_voice_drift_on_a_legacy_store_resolves_as_before(client):
     """A format-1 store has no Decision role: the judge inherits Fast, then
     Primary, and the legacy `route_voice` key still moves it."""
+    legacy_store()
     client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
                                               "api_key": "sk-spare", "model": "vendor/spare"})
     for legacy, want in (("", "openrouter"), ("spare", "spare")):
@@ -13082,15 +13132,19 @@ def test_new_send_supersedes(client):
 # a send that dies on the missing-key guard must not have durably retired the
 # user's pending chip first — supersede only runs once the send is actually
 # going to happen (routes/scenes.py: after _require_scene *and* require_inference).
+def _no_primary(client):
+    put_settings(client, {"roles": {"primary": {"selection": {"provider": ""}}}})
+
+
 def test_chat_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     # update_connection's "type to replace" convention treats an empty api_key
     # as "keep the stored one" (never silently erases a working credential),
     # so clearing "openrouter"'s key isn't possible via PUT — instead, drop
-    # the active connection selection entirely, which require_inference
-    # also reports as status 409 kind=missing_key.
-    client.put("/api/config", json={"active_connection_id": ""})
+    # the Primary role's selection entirely, which require_inference also
+    # reports as status 409 kind=missing_key.
+    _no_primary(client)
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "never mind"})
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -13100,7 +13154,7 @@ def test_chat_missing_key_does_not_supersede_pending_proposal(client):
 def test_retry_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    client.put("/api/config", json={"active_connection_id": ""})
+    _no_primary(client)
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -13110,7 +13164,7 @@ def test_retry_missing_key_does_not_supersede_pending_proposal(client):
 def test_regenerate_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    client.put("/api/config", json={"active_connection_id": ""})
+    _no_primary(client)
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -14254,7 +14308,8 @@ def test_turn_override_with_a_non_string_value_never_500s(client):
 
 def test_turn_override_still_reaches_the_cascade(client):
     """The typing change must not quietly stop the override from applying."""
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret", "model": "glm-5.3"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _primary(client, "glm-5.3")
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     captured = {}

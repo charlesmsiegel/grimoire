@@ -13,6 +13,8 @@ from grimoire.routes import observability
 from grimoire.store import logs, usage
 from tests import review_runs
 
+pytestmark = pytest.mark.upgraded_birth
+
 
 @pytest.fixture(autouse=True)
 def _quiet_log_state():

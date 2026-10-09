@@ -17,6 +17,9 @@ from fastapi.testclient import TestClient
 from grimoire import store
 from grimoire.main import create_app
 from tests import review_runs
+from tests.inference_fixtures import put_settings
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 @pytest.fixture
@@ -178,7 +181,7 @@ def test_running_a_turn_over_an_unanswered_reply_is_a_409(client, scene):
     conn = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Local", "base_url": "http://x",
         "api_key": "sk-x"}).json()["id"]
-    client.put("/api/config", json={"active_connection_id": conn})
+    put_settings(client, {"roles": {"primary": {"selection": {"provider": conn, "model": "m"}}}})
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1})
     store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a fresh reply"}])
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay/turn")

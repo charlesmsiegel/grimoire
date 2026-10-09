@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import grimoire.store as store
-from grimoire.store import config, inference_keys
+from grimoire.store import config, inference_keys, locks
 from grimoire.store.inference import migrate
 
 #: What a store born under `GRIMOIRE_TEST_BIRTH=upgraded-default` holds besides
@@ -32,12 +32,19 @@ UPGRADED_DEFAULT: dict[str, str] = {
 def legacy_store(home: Path | None = None) -> None:
     """Make the store under `home` (default `store.home()`) a format-1 library:
     a `config.md` with no format marker, which is how a store from before the
-    new layout looks. Call it BEFORE anything reads the store -- the first
-    read of a missing `config.md` creates one born at format 2, and a
-    `config.md` that exists without the marker stays legacy."""
+    new layout looks. Call it BEFORE anything else writes the store's
+    settings -- the first read of a missing `config.md` creates one born at
+    format 2, and a `config.md` that exists without the marker stays legacy;
+    this one replaces whatever is there.
+
+    Written in the `config_lock` hold that birth takes: a test whose client is
+    already up calls this while the app's own first read (the backup ticker's,
+    on a worker thread) may be materializing a born `config.md`, and without
+    the hold that write can land after this one."""
     root = Path(home) if home is not None else store.home()
     root.mkdir(parents=True, exist_ok=True)
-    (root / "config.md").write_text("---\n---\n", encoding="utf-8")  # atomic-ok: test fixture
+    with locks.config_lock():
+        (root / "config.md").write_text("---\n---\n", encoding="utf-8")  # atomic-ok: test fixture
 
 
 def put_settings(client, body: dict) -> None:
@@ -47,14 +54,21 @@ def put_settings(client, body: dict) -> None:
 
 
 def format2(client) -> None:
-    """A format-2 store: the seeded `openrouter` provider at `vendor/active`
-    with a key, a `spare` provider at `vendor/spare`, migrated."""
-    client.put("/api/llm-connections/openrouter",
-               json={"api_key": "sk-test-active", "model": "vendor/active"})
-    client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
-                                              "api_key": "sk-spare",
-                                              "model": "vendor/spare"})
+    """A format-2 store: the Primary role on the seeded `openrouter` provider,
+    keyed, at `vendor/active`, and a keyed `spare` provider (a test that uses
+    it names its model, `vendor/spare`). A store born legacy is migrated
+    first; one born at format 2 is already current. Calling it again changes
+    nothing: `spare` is created once."""
+    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test-active"})
+    assert got.status_code == 200, got.text
+    if client.get(f"/api/llm-connections/{SPARE[0]}").status_code == 404:
+        got = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
+                                                        "api_key": "sk-spare"})
+        assert got.status_code == 200, got.text
+        assert got.json()["id"] == SPARE[0]
     assert migrate.ensure().state == "done"
+    put_settings(client, {"roles": {"primary": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"}}}})
 
 
 #: Where `decide_only`'s generating fallback is: on another provider, or on

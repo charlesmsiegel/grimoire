@@ -41,6 +41,8 @@ from grimoire.store.inference import facts, probes
 from grimoire.store.inference import resolve as inference
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter
 
+pytestmark = pytest.mark.upgraded_birth
+
 REFUSAL = ("This test sends a request to the provider and may cost money — "
            "confirm to run it.")
 MODEL = "vendor/model-a"
@@ -48,7 +50,7 @@ MODEL = "vendor/model-a"
 
 def _connection(client, **fields) -> str:
     body = {"kind": "openrouter", "name": "Realm Router", "api_key": "sk-or-fake-0001",
-            "model": MODEL, **fields}
+            **fields}
     r = client.post("/api/llm-connections", json=body)
     assert r.status_code == 200, r.text
     return r.json()["id"]
@@ -270,8 +272,7 @@ def _unreported(client) -> str:
     """A provider that does not report its own price, the only kind the
     user's rates may price (an OpenRouter row is the catalog's or unknown)."""
     return _connection(client, kind="openai_compatible", name="Saltmarch Local",
-                       base_url="https://saltmarch.example/v1", api_key="sk-fake-local",
-                       model=MODEL)
+                       base_url="https://saltmarch.example/v1", api_key="sk-fake-local")
 
 
 def test_estimate_from_rates_sums_the_probes_and_prices_images_as_tokens():
@@ -422,7 +423,7 @@ def test_a_capability_the_preset_rules_out_is_refused_before_sending(client, pat
     fake = FakeOpenRouter(["ok"])
     _use(client, fake)
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
 
     r = client.post(f"/api/llm-connections/{conn}/{path}",
                     json={"model": "claude-model-x", "capabilities": ["generate", "embed"],
@@ -601,8 +602,7 @@ def _wire_client(client, handler, **llm) -> list[httpx.Request]:
 
 def _endpoint(client, name: str, host: str) -> str:
     return _connection(client, kind="openai_compatible", name=name,
-                       base_url=f"https://{host}/v1", api_key="sk-fake-endpoint",
-                       model=MODEL)
+                       base_url=f"https://{host}/v1", api_key="sk-fake-endpoint")
 
 
 def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, monkeypatch):
@@ -805,7 +805,7 @@ def test_a_truncated_anthropic_stream_is_a_failed_probe_not_an_accepted_one(clie
     probe did not succeed: it is reported as a failure, and -- a malformed
     stream being no verdict on the model -- nothing is filed."""
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
     seen: list[httpx.Request] = []
     start = {"type": "message_start", "message": {
         "id": "msg_1", "model": "claude-model-x", "role": "assistant", "content": [],
@@ -840,7 +840,7 @@ def _anthropic_wire(client, handler) -> tuple[str, list[httpx.Request]]:
     """An Anthropic connection and a REAL facade whose Anthropic adapter talks
     to a `MockTransport` that records."""
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
     seen: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
@@ -1175,8 +1175,7 @@ def _openai(client) -> str:
     """The OpenAI preset: the one `openai_compatible` provider with a native
     endpoint, and one that does not report its own price (rates may price it)."""
     return _connection(client, kind="openai_compatible", name="Realm OpenAI",
-                       base_url="https://api.openai.com/v1", api_key="sk-fake-openai",
-                       model=MODEL)
+                       base_url="https://api.openai.com/v1", api_key="sk-fake-openai")
 
 
 def test_the_decide_native_probe_has_one_predicate_and_no_price():
@@ -1273,7 +1272,7 @@ def test_the_decide_native_probe_is_refused_on_presets_that_cannot(client, path)
     fake = FakeLLM([["unused"]], decisions=[_native_answer()])
     _use(client, fake)
     conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
-                       api_key="sk-ant-fake-0001", model="claude-model-x")
+                       api_key="sk-ant-fake-0001")
 
     r = client.post(f"/api/llm-connections/{conn}/{path}",
                     json={"model": "claude-model-x", "capabilities": ["decide_native"],

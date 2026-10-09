@@ -1,11 +1,16 @@
 """Sampler presets through the real routes: CRUD, import, attachment, and what
 a turn is actually sent."""
 
+import pytest
+
 from grimoire import llm, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
 from grimoire.store.sampler_presets import PRESET_CLEAR
+from tests.inference_fixtures import legacy_store, put_settings
 from tests.llm_fakes import ScriptedProvider
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 def _preset(client, name="Warm", **params):
@@ -14,8 +19,23 @@ def _preset(client, name="Warm", **params):
     return r.json()["id"]
 
 
+def _primary(client, model="m", preset=""):
+    """The Primary role on the seeded OpenRouter provider at `model`, wearing
+    `preset` (a preset rides the role's selection, not the provider)."""
+    put_settings(client, {"roles": {"primary": {"selection": {
+        "provider": "openrouter", "model": model, "preset": preset}}}})
+
+
+def _route_preset(client, preset, cid=None):
+    """The `scene` route's preset, globally or in campaign `cid`."""
+    url = f"/api/campaigns/{cid}/inference" if cid else "/api/inference/settings"
+    got = client.put(url, json={"routes": {"scene": {"preset": preset}}})
+    assert got.status_code == 200, got.text
+
+
 def _scene(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "m"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    _primary(client)
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
@@ -76,9 +96,11 @@ def test_import_refuses_a_non_object(client):
                        json={"name": "x", "data": [1]}).status_code == 400
 
 
-# ---- connection attachment ----
+# ---- connection attachment (the legacy layout: a format-2 provider holds no
+# preset, which rides the role or route selection instead) ----
 
 def test_a_connection_takes_a_preset_and_reports_its_split(client):
+    legacy_store()
     pid = _preset(client, temperature=0.5, min_p=0.1)
     conn = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Local", "base_url": "http://x/v1",
@@ -93,12 +115,14 @@ def test_a_connection_takes_a_preset_and_reports_its_split(client):
 
 
 def test_a_connection_naming_no_preset_is_a_400(client):
+    legacy_store()
     r = client.post("/api/llm-connections", json={"kind": "claude", "name": "C",
                                                   "sampler_preset": "nope"})
     assert r.status_code == 400
 
 
 def test_a_sampler_only_edit_keeps_the_health_verdict(client):
+    legacy_store()
     pid = _preset(client)
     before = client.get("/api/llm-connections/openrouter").json()["rev"]
     client.put("/api/llm-connections/openrouter",
@@ -106,13 +130,13 @@ def test_a_sampler_only_edit_keeps_the_health_verdict(client):
     assert client.get("/api/llm-connections/openrouter").json()["rev"] == before
 
 
-# ---- route presets (legacy keys, read through the translation) ----
+# ---- route presets ----
 
 def test_a_campaign_preset_overrides_the_global_one(client):
     cid, sid = _scene(client)
     glob, mine = _preset(client, "Global", temperature=0.2), _preset(client, "Mine", top_p=0.9)
-    store.write_config(preset_scene=glob)
-    store.campaigns.set_campaign_routing(cid, {"preset_scene": mine})
+    _route_preset(client, glob)
+    _route_preset(client, mine, cid)
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["sampling"]["preset_id"] == mine and live["sampling"]["scope"] == "campaign"
     assert live["sampling"]["applied"] == {"top_p": 0.9}
@@ -123,7 +147,7 @@ def test_a_campaign_preset_overrides_the_global_one(client):
 def test_a_chat_turn_sends_the_applied_params_and_snapshots_the_report(client):
     cid, sid = _scene(client)
     pid = _preset(client, temperature=0.6, min_p=0.05)
-    store.campaigns.set_campaign_routing(cid, {"preset_scene": pid})
+    _route_preset(client, pid, cid)
     provider = ScriptedProvider(chunks=("Mara nods.",))
     _real_facade(client, openrouter=provider)
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -138,8 +162,8 @@ def test_a_chat_turn_sends_the_applied_params_and_snapshots_the_report(client):
 def test_a_cleared_route_sends_nothing(client):
     cid, sid = _scene(client)
     pid = _preset(client, temperature=0.6)
-    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
-    store.campaigns.set_campaign_routing(cid, {"preset_scene": PRESET_CLEAR})
+    _primary(client, preset=pid)
+    _route_preset(client, PRESET_CLEAR, cid)
     provider = ScriptedProvider(chunks=("Mara nods.",))
     _real_facade(client, openrouter=provider)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Go?"})
@@ -149,7 +173,7 @@ def test_a_cleared_route_sends_nothing(client):
 def test_the_catalog_decides_what_openrouter_is_sent(client):
     cid, sid = _scene(client)
     pid = _preset(client, temperature=0.6, min_p=0.05)
-    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
+    _primary(client, preset=pid)
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
     store.llm_connections.set_cached_models("openrouter", [
         {"id": "m", "name": "m", "context": None, "prompt": None, "completion": None,
@@ -172,6 +196,7 @@ def test_no_preset_anywhere_reports_provider_defaults(client):
 
 
 def test_a_connection_whose_preset_was_deleted_can_still_be_saved(client):
+    legacy_store()
     pid = _preset(client)
     client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
     client.delete(f"/api/sampler-presets/{pid}")
@@ -188,7 +213,7 @@ def test_a_model_override_does_not_inherit_the_standing_models_param_list(client
     one the catalog does not list is unverified, never judged by the old list."""
     cid, _ = _scene(client)
     pid = _preset(client, temperature=0.6, min_p=0.05)
-    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
+    _primary(client, preset=pid)
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
     store.llm_connections.set_cached_models("openrouter", [
         {"id": "m", "name": "m", "context": None, "prompt": None, "completion": None,
@@ -211,13 +236,14 @@ def test_a_fallback_snapshot_reports_the_fallbacks_own_split(client):
     """The distinct-model fallback capture describes the request the fallback
     was sent: the route's preset, split for the fallback's kind."""
     cid, sid = _scene(client)
-    client.put("/api/llm-connections/openrouter", json={"model": "glm-5.3"})
     pid = _preset(client, temperature=0.6, min_p=0.05)
-    store.write_config(preset_scene=pid)
+    _route_preset(client, pid)
     backup = client.post("/api/llm-connections", json={
-        "kind": "openai_compatible", "name": "Backup", "base_url": "https://example.test/v1",
-        "model": "vendor/unknown"}).json()["id"]
-    client.put("/api/config", json={"fallback_connection_id": backup})
+        "kind": "openai_compatible", "name": "Backup",
+        "base_url": "https://example.test/v1"}).json()["id"]
+    put_settings(client, {"roles": {"primary": {
+        "selection": {"provider": "openrouter", "model": "glm-5.3"},
+        "fallback": {"provider": backup, "model": "vendor/unknown"}}}})
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=("Mara nods.",))
     # No `fallback`, as the shipped client: the turn's conn carries its own.
@@ -243,7 +269,7 @@ def test_a_huge_integer_is_a_400(client):
 def test_a_malformed_catalog_sidecar_degrades_to_unverified(client):
     cid, sid = _scene(client)
     pid = _preset(client, temperature=0.6)
-    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
+    _primary(client, preset=pid)
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
     sidecar = store.paths.home() / "llm_connections" / "openrouter.models.json"
     import json as _json

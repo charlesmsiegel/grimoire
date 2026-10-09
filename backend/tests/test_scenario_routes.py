@@ -20,6 +20,8 @@ from grimoire.main import create_app
 from tests import draft_runs as drafts
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouterComplete
 
+pytestmark = pytest.mark.upgraded_birth
+
 CARD = {
     "spec": "chara_card_v3",
     "spec_version": "3.0",

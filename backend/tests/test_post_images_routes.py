@@ -2,11 +2,15 @@
 
 import io
 
+import pytest
 from PIL import Image
 
 from grimoire import content_parts as cp
 from grimoire import routes, store
+from tests.inference_fixtures import put_settings
 from tests.llm_fakes import CapturingOpenRouter
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 def _png():
@@ -17,9 +21,12 @@ def _png():
 
 def _setup(client, *, send="on", vision="on"):
     conn = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Seraphine", "api_key": "k", "model": "m",
-        "vision": vision}).json()["id"]
-    client.put("/api/config", json={"active_connection_id": conn, "send_images": send})
+        "kind": "openrouter", "name": "Seraphine", "api_key": "k"}).json()["id"]
+    facts = client.put(f"/api/llm-connections/{conn}/facts",
+                       json={"model": "m", "vision": vision})
+    assert facts.status_code == 200, facts.text
+    put_settings(client, {"roles": {"primary": {"selection": {"provider": conn, "model": "m"}}}})
+    client.put("/api/config", json={"send_images": send})
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Saltmarch Nights", "world": wid}).json()["id"]
     store.campaign_images.put_image(cid, "coastline", _png(), "png")

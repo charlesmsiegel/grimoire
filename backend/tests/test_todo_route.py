@@ -29,7 +29,10 @@ from grimoire.routes.common import thumb_query
 from grimoire.store import inference_keys
 from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
+from tests import inference_fixtures
 from tests.collection_fixtures import format1, format2
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 @pytest.fixture
@@ -1204,12 +1207,16 @@ MAP, CHART = "thread:mara-s-map", "thread:winifred-s-chart"
 OATH = "commitment:mara-s-oath"
 
 
-def _configure_embeddings(depth: str = "2") -> None:
+def _configure_embeddings(client, depth: str = "2") -> None:
     conn = store.llm_connections.create_connection(
         "openai_compatible", "Vectors", base_url="https://vectors.example/v1",
-        api_key="sk-x", model="", post_process="none")
-    store.config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn,
-                              semantic_recall_depth=depth)
+        api_key="sk-x")
+    got = client.put(f"/api/llm-connections/{conn}/facts",
+                     json={"model": "embed-1", "post_process": "none"})
+    assert got.status_code == 200, got.text
+    inference_fixtures.put_settings(client, {"roles": {"embedding": {"selection": {
+        "provider": conn, "model": "embed-1"}}}, "confirm_embedding": True})
+    store.config.write_config(semantic_recall_depth=depth)
 
 
 def _run(client) -> tuple[str, str]:
@@ -1278,7 +1285,7 @@ def test_no_campaign_no_embeddings_chore(client):
 def test_embeddings_with_recall_depth_zero_show_no_chore(client, campaign):
     """It asks whether a connection and model are set, not whether recall
     uses them: semantic matching in a sweep does not read the recall depth."""
-    _configure_embeddings(depth="0")
+    _configure_embeddings(client, depth="0")
     assert store.embed_space.resolve() is not None
     assert "embeddings" not in {c["id"] for c in _todo(client, "")["chores"]}
 
@@ -1611,6 +1618,7 @@ def test_on_a_store_not_yet_migrated_no_rates_link_leads_to_an_editor_that_canno
     """`PUT .../facts` answers 409 `not_migrated` until the store is current, so
     both chores open the pricing table instead -- which can price any model --
     and say the model's own rates arrive after the upgrade."""
+    inference_fixtures.legacy_store()
     pid = store.llm_connections.create_connection(
         "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
         model="vendor/model-a")

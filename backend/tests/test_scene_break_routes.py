@@ -27,11 +27,14 @@ from .inference_fixtures import (
     SPARE,
     decide_only,
     format2,
+    legacy_store,
     neither,
     openai_decides_only,
     put_settings,
 )
 from .llm_fakes import FakeLLM, decision_reply
+
+pytestmark = pytest.mark.upgraded_birth
 
 YES = decision_reply({"over": True}, rationales=["The ledger changed hands."])
 NO = decision_reply({"over": False}, rationales=["They are still mid-argument."])
@@ -842,6 +845,7 @@ def test_scene_break_on_a_legacy_store_resolves_as_before(client):
     """A format-1 store has no Decision role: it inherits Fast, then Primary,
     and the legacy `route_summary` key still moves the verdict -- and the
     title, which lives on that very route."""
+    legacy_store()
     _key(client)
     client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
                                               "api_key": "sk-spare",

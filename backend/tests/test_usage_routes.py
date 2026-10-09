@@ -13,8 +13,10 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from tests import draft_runs as drafts
-from tests import review_runs
+from tests import inference_fixtures, review_runs
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 def _unfenced_stream(*args, **kw):
@@ -685,6 +687,7 @@ def test_the_scene_list_says_whether_a_models_own_rates_can_be_written(client):
     store at the current model-settings format (`PUT .../facts` answers 409
     `not_migrated` before it, `newer_format` after), so the page is told."""
     from grimoire.store import inference_keys
+    inference_fixtures.legacy_store()
     _, cid = _campaign(client)
 
     def flags() -> tuple:

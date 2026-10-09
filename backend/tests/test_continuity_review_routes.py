@@ -38,6 +38,8 @@ from grimoire.store.continuity import (
 from .review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER
 from .test_continuity_reconcile_routes import _held, _install, _key, _refresh, _settled
 
+pytestmark = pytest.mark.upgraded_birth
+
 LEDGER = f"thread:{LEDGER_THREAD[0]}"
 RECOVER = "thread:recover-the-harbour-ledger"
 MAP = "thread:mara-s-map"

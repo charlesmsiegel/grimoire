@@ -25,11 +25,15 @@ from PIL import Image
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.store import inference_keys as keys
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 from . import draft_runs as drafts
 from . import review_runs
+from .inference_fixtures import put_settings
 from .llm_fakes import FakeLLM
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 @pytest.fixture
@@ -53,29 +57,38 @@ def _fake(client) -> FakeLLM:
     return fake
 
 
-def _connection(client, name, model="vendor/x") -> str:
+#: The model a route is pinned at, unless a test names another.
+MODEL = "vendor/x"
+
+
+def _connection(client, name) -> str:
     return client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": name, "model": model,
-        "api_key": "sk-" + name}).json()["id"]
+        "kind": "openrouter", "name": name, "api_key": "sk-" + name}).json()["id"]
 
 
-def _route(**routes: str) -> None:
-    """Legacy global route choices, written as a store from before the roles
-    format holds them -- the `/routing` endpoints that wrote them were retired
-    in inference slice C, and the resolver still reads them through its
-    translation until the store is migrated."""
-    store.write_config(**{store.routing.config_key(k): v for k, v in routes.items()})
+def _pins(model: str, routes: dict[str, str]) -> dict:
+    """An inference settings body pinning each route to its provider at `model`."""
+    return {"routes": {k: {"use": keys.PIN, "pin": {"provider": v, "model": model}}
+                       for k, v in routes.items()}}
 
 
-def _campaign_route(cid: str, **routes: str) -> None:
-    """A campaign's legacy route choices (`_route`'s campaign half)."""
-    store.campaigns.set_campaign_routing(
-        cid, {store.routing.config_key(k): v for k, v in routes.items()})
+def _route(client, model: str = MODEL, **routes: str) -> None:
+    """Global route choices: each named route pinned to its own provider (the
+    `/routing` endpoints that wrote the legacy choices were retired in
+    inference slice C)."""
+    put_settings(client, _pins(model, routes))
+
+
+def _campaign_route(client, cid: str, model: str = MODEL, **routes: str) -> None:
+    """A campaign's own route pins (`_route`'s campaign half)."""
+    got = client.put(f"/api/campaigns/{cid}/inference", json=_pins(model, routes))
+    assert got.status_code == 200, got.text
 
 
 def _seed(client):
     """A world, a character, a campaign, a scene with a post -- and a key on the
-    active connection, so nothing here is refused for the missing-key reason."""
+    Primary role's provider, so nothing here is refused for the missing-key
+    reason."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-active"})
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
@@ -247,7 +260,7 @@ def test_every_route_has_a_driver():
 def test_a_global_route_sends_that_job_to_its_own_connection(client, route):
     wid, cid, sid = _seed(client)
     routed = _connection(client, f"for-{route}")
-    _route(**{route: routed})
+    _route(client, **{route: routed})
     fake = _fake(client)
 
     DRIVERS[route](client, wid, cid, sid)
@@ -258,7 +271,7 @@ def test_a_global_route_sends_that_job_to_its_own_connection(client, route):
 
 
 @pytest.mark.parametrize("route", sorted(DRIVERS))
-def test_an_unset_route_still_runs_on_the_active_connection(client, route):
+def test_an_unset_route_still_runs_on_the_primary_role(client, route):
     """The whole change is invisible until someone asks for it."""
     wid, cid, sid = _seed(client)
     fake = _fake(client)
@@ -274,8 +287,8 @@ def test_a_campaign_override_beats_the_global_route(client, route):
     wid, cid, sid = _seed(client)
     globally = _connection(client, f"global-{route}")
     locally = _connection(client, f"local-{route}")
-    _route(**{route: globally})
-    _campaign_route(cid, **{route: locally})
+    _route(client, **{route: globally})
+    _campaign_route(client, cid, **{route: locally})
     fake = _fake(client)
 
     DRIVERS[route](client, wid, cid, sid)
@@ -292,7 +305,9 @@ def test_a_world_scoped_route_takes_no_campaign_override(client, route):
     # Written by hand: no writer stores a world-scoped key in a campaign.
     path = store.campaigns.campaign_meta_path(cid)
     meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-    meta[store.routing.config_key(route)] = _connection(client, "nope")
+    meta[keys.use_key(route)] = keys.PIN
+    meta[keys.pin_key(route, "provider")] = _connection(client, "nope")
+    meta[keys.pin_key(route, "model")] = MODEL
     path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
     fake = _fake(client)
 
@@ -311,7 +326,7 @@ def test_absorbs_phases_each_follow_their_own_route(client):
                 json={"kind": "characters", "id": "mara"})
     extraction = _connection(client, "extraction")
     dossiers = _connection(client, "dossiers")
-    _route(absorb=extraction, dossier=dossiers)
+    _route(client, absorb=extraction, dossier=dossiers)
     fake = _fake(client)
 
     review_runs.absorb(client, cid, sid)
@@ -326,7 +341,7 @@ def test_the_reconcile_sweep_runs_on_the_continuity_route(client):
     pointing the route at a connection moves the sweep's one call there too."""
     _wid, cid, sid = _seed(client)
     routed = _connection(client, "for-continuity")
-    _route(continuity=routed)
+    _route(client, continuity=routed)
     fake = _fake(client)
     pid, title, beat = review_runs.LEDGER_THREAD
     store.plot.set_movement(cid, pid, title, "open", beat, sid)
@@ -358,7 +373,7 @@ def test_a_misrouted_secondary_phase_reports_itself_and_leaves_absorb_standing(c
                 json={"kind": "characters", "id": "mara"})
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    _route(dossier=keyless)
+    _route(client, dossier=keyless)
     _fake(client)
 
     r = review_runs.absorb(client, cid, sid)
@@ -379,7 +394,7 @@ def test_a_misrouted_extraction_still_refuses_the_whole_absorb(client):
     _wid, cid, sid = _seed(client)
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    _route(absorb=keyless)
+    _route(client, absorb=keyless)
     _fake(client)
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
@@ -394,7 +409,7 @@ def test_a_scene_turn_and_its_retry_share_the_one_route(client):
     # /retry is reserved for an unfinished one.
     _wid, cid, sid = _seed(client)
     routed = _connection(client, "prose")
-    _route(scene=routed)
+    _route(client, scene=routed)
     fake = _fake(client)
 
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -416,7 +431,7 @@ def test_a_route_naming_a_deleted_connection_falls_back_rather_than_failing(clie
     frontmatter. So a stale campaign override degrades to the next scope."""
     _wid, cid, _sid = _seed(client)
     doomed = _connection(client, "doomed")
-    _campaign_route(cid, suggestions=doomed)
+    _campaign_route(client, cid, suggestions=doomed)
     assert client.delete(f"/api/llm-connections/{doomed}").status_code == 200
     fake = _fake(client)
 
@@ -428,10 +443,11 @@ def test_a_route_naming_a_deleted_connection_falls_back_rather_than_failing(clie
 def test_deleting_a_connection_clears_it_from_the_global_routes(client):
     _seed(client)
     doomed = _connection(client, "doomed")
-    _route(summary=doomed)
-    assert store.read_config()["route_summary"] == doomed
+    _route(client, summary=doomed)
+    pinned = keys.pin_key("summary", "provider")
+    assert store.read_config()[pinned] == doomed
     client.delete(f"/api/llm-connections/{doomed}")
-    assert store.read_config()["route_summary"] == ""
+    assert store.read_config()[pinned] == ""
 
 
 def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(client):
@@ -441,7 +457,7 @@ def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(
     _wid, cid, _sid = _seed(client)
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    _route(suggestions=keyless)
+    _route(client, suggestions=keyless)
     _fake(client)
 
     r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
@@ -465,8 +481,8 @@ def test_the_ledger_records_the_connection_a_routed_call_actually_used(client):
     the ones a later refactor breaks quietly.
     """
     _wid, cid, _sid = _seed(client)
-    routed = _connection(client, "thrifty", model="vendor/haiku")
-    _route(suggestions=routed)
+    routed = _connection(client, "thrifty")
+    _route(client, model="vendor/haiku", suggestions=routed)
     _fake(client)
 
     drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")

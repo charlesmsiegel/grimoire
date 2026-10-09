@@ -13,6 +13,8 @@ from grimoire.routes import runs as runs_mod
 from grimoire.routes import scenes as routes_scenes
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter
 
+pytestmark = pytest.mark.upgraded_birth
+
 
 @pytest.fixture
 def client(client):
