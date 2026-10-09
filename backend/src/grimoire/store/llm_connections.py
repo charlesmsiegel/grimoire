@@ -324,6 +324,24 @@ def list_connections_strict() -> list[dict]:
     return out
 
 
+def unreadable_connections() -> dict[str, str]:
+    """Connection id -> why, for every connection file that is there but that
+    a strict read refuses (`ConnectionUnreadableError`). Reads only: unlike
+    every other reader here it never seeds (`ensure_migrated` writes), so a
+    status reader that must not write can ask it (`inference.retire.left`)."""
+    try:
+        found = sorted(_dir().glob("*.md")) if _dir().exists() else []
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for p in found:
+        try:
+            _read(p.stem, strict=True)
+        except ConnectionUnreadableError as exc:
+            out[p.stem] = str(exc)
+    return out
+
+
 def create_connection(kind: str, name: str, *, refuse_model_fields: bool = False,
                       **fields) -> str:
     """Create a connection; its id is the name's slug, made unique.
@@ -622,6 +640,14 @@ def _newer_on_disk() -> bool:
     return inference_keys.is_newer(meta)
 
 
+def _legacy_on_disk(path: Path, meta: dict[str, str]) -> bool:
+    """Whether `config.md` (at `path`, its frontmatter `meta`) is a legacy
+    store's: there, and not at the current format or past it. A missing one
+    is born current (`inference_keys.born_current`)."""
+    return (path.exists() and not inference_keys.is_current(meta)
+            and not inference_keys.is_newer(meta))
+
+
 def _migrate() -> None:
     marker = _dir() / ".migrated"
     if marker.exists():
@@ -642,7 +668,13 @@ def _migrate() -> None:
         _write_raw("claude", kind="claude", name="Claude",
                     model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
                     base_url="", api_key="", post_process="none")
-    if not meta.get("active_connection_id"):
+    if not meta.get("active_connection_id") and _legacy_on_disk(path, meta):
+        # Below format 2 only (slice I, ruling 7): at format 2 the key is a
+        # legacy key nothing reads, and a store born there is born retired
+        # (`config.birth_fields`) -- seeding it would hand retirement a legacy
+        # value to delete, and an archive to take first, on every fresh
+        # install. A missing `config.md` is born at format 2 too.
+        #
         # Truthiness, not presence: this whole block only ever runs once,
         # gated by the `.migrated` marker check above — there is no
         # post-migration "explicit clear" that can reach this code path,

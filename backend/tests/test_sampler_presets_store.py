@@ -77,6 +77,61 @@ def test_a_bad_stored_value_survives_the_read_for_split_to_report(tmp_path):
     assert sp.read_preset("hand")["params"] == {"temperature": "hot", "top_k": 40}
 
 
+@pytest.mark.parametrize("text", ["", "   \n", "{not json", "[]", '{"params": []}'],
+                         ids=["zero-bytes", "whitespace", "not-json", "not-object",
+                              "params-not-object"])
+def test_the_strict_read_refuses_a_file_that_holds_no_preset(tmp_path, text):
+    """Slice I: retirement's base-preset read. Absent is None, as an unsafe
+    id is; a file that is there but holds no preset raises rather than
+    reading as missing, so no derived preset is saved without its base's
+    samplers."""
+    (tmp_path / "sampler_presets").mkdir()
+    (tmp_path / "sampler_presets" / "held.json").write_text(text, encoding="utf-8")
+    with pytest.raises(store.frontmatter.RecordUnreadableError):
+        sp.read_preset_strict("held")
+    assert sp.read_preset_strict("absent") is None
+    assert sp.read_preset_strict("../x") is None
+
+
+def test_the_strict_read_answers_as_the_soft_one_does(tmp_path):
+    pid = sp.create_preset("Warm", {"temperature": 0.9})
+    assert sp.read_preset_strict(pid) == sp.read_preset(pid)
+
+
+def test_put_derived_writes_once_and_refuses_another_body(tmp_path):
+    sp.put_derived("warm-reasoning-high", "Warm · reasoning high",
+                   {"temperature": 0.9, "reasoning_effort": "high"})
+    path = tmp_path / "sampler_presets" / "warm-reasoning-high.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "name": "Warm · reasoning high",
+        "params": {"temperature": 0.9, "reasoning_effort": "high"}, "notes": "", "source": ""}
+    before = path.read_bytes()
+    sp.put_derived("warm-reasoning-high", "Warm · reasoning high",
+                   {"temperature": 0.9, "reasoning_effort": "high"})
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError):
+        sp.put_derived("warm-reasoning-high", "Warm · reasoning high",
+                       {"temperature": 0.5, "reasoning_effort": "high"})
+    assert path.read_bytes() == before
+
+
+def test_put_derived_never_writes_over_a_file_it_cannot_read(tmp_path):
+    (tmp_path / "sampler_presets").mkdir()
+    path = tmp_path / "sampler_presets" / "reasoning-high.json"
+    path.write_text("", encoding="utf-8")
+    with pytest.raises(store.frontmatter.RecordUnreadableError):
+        sp.put_derived("reasoning-high", "Reasoning high", {"reasoning_effort": "high"})
+    assert path.read_text(encoding="utf-8") == ""
+
+
+def test_put_derived_is_refused_on_a_newer_store(tmp_path):
+    store.config.read_config()
+    store.config.write_config(inference_format="3")
+    with pytest.raises(store.config.NewerFormatError):
+        sp.put_derived("reasoning-high", "Reasoning high", {"reasoning_effort": "high"})
+    assert not (tmp_path / "sampler_presets" / "reasoning-high.json").exists()
+
+
 def test_delete_clears_global_route_keys_and_nothing_else():
     pid = sp.create_preset("Cold")
     store.write_config(preset_absorb=pid, preset_scene="other")

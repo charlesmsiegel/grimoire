@@ -54,7 +54,9 @@ def _primary(provider: str, model: str, preset: str = "") -> dict:
 def test_config_reports_the_resolved_primary_on_format_2(client):
     _migrated(client)
     _put(client, _primary("spare", "vendor/chosen", "warm"))
-    # The legacy key still names the seeded connection: nothing reads it now.
+    # A legacy key an older build left naming the seeded connection: nothing
+    # reads it now. (This build seeds it below format 2 only, slice I.)
+    store.config.write_config(active_connection_id="openrouter")
     assert store.read_config()["active_connection_id"] == "openrouter"
     client.app.state.health.record(store.llm_connections.read_connection_raw("spare"))
 

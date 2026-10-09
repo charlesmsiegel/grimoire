@@ -78,5 +78,7 @@ def test_planned_equals_persisted(state, tmp_path):
         ctx = baseline.STATES[state](client)
         planned = equivalence.planned_cells(ctx["cid"])
         assert migrate.ensure().state == "done"
-        assert store.inference_keys.is_current(store.read_config())
+        cfg = store.read_config()
+        assert store.inference_keys.is_current(cfg)
+        assert cfg[store.inference_keys.RETIRED_KEY] == "1"
         assert equivalence.planned_cells(ctx["cid"]) == planned

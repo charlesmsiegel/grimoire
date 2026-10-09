@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,16 +29,20 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store import config, inference_keys, locks
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import migrate
 from grimoire.store.inference import settings as inference_settings
 from tests.llm_fakes import FakeOpenRouter
 
 #: What a store born under `GRIMOIRE_TEST_BIRTH=upgraded-default` holds besides
-#: its defaults: the format marker and the default Primary (what migrating a
-#: fresh format-1 library yields). Held equal to `config.birth_fields()` by
+#: its defaults: the format marker, the retirement marker (a born store has no
+#: legacy settings to retire, slice I N3) and the default Primary (what
+#: migrating a fresh format-1 library yields). Held equal to
+#: `config.birth_fields()` by
 #: `test_a_test_store_is_born_an_upgraded_default_library`.
 UPGRADED_DEFAULT: dict[str, str] = {
     inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT,
+    inference_keys.RETIRED_KEY: "1",
     inference_keys.role_key("primary", "provider"): "openrouter",
     inference_keys.role_key("primary", "model"): config.DEFAULT_MODEL,
 }
@@ -59,6 +64,31 @@ def legacy_store(home: Path | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
     with locks.config_lock():
         (root / "config.md").write_text("---\n---\n", encoding="utf-8")  # atomic-ok: test fixture
+
+
+def unretired(home: Path | None = None) -> None:
+    """Take the retirement marker off `config.md` under `home` (default
+    `store.home()`), materializing the born file first: a format-2 store
+    retirement has not reached yet -- one a C-H build migrated. The suite is
+    born retired (`UPGRADED_DEFAULT`), so a test about the derivation before
+    retirement persists it says so with this. In the `config_lock` hold, as
+    `legacy_store` writes."""
+    root = Path(home) if home is not None else store.home()
+    config.read_config()
+    path = root / "config.md"
+    with locks.config_lock():
+        meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        meta.pop(inference_keys.RETIRED_KEY, None)
+        path.write_text(dump_frontmatter(meta, body), encoding="utf-8")  # atomic-ok: test fixture
+
+
+def migrate_as_c_h() -> migrate.Status:
+    """`migrate.ensure()` with retirement held off: the store as a C-H build
+    migrated it -- format 2, the legacy keys and fields left in place, nothing
+    retired. For a test about the migration's own product, or about a
+    format-2 store retirement has not reached yet."""
+    with mock.patch.object(migrate, "_retire", lambda *_args: None):
+        return migrate.ensure()
 
 
 @pytest.fixture

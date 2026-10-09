@@ -128,9 +128,13 @@ def test_the_suites_birth_is_set_where_an_undo_cannot_reach_it(monkeypatch):
 
 @pytest.mark.product_birth
 def test_a_product_store_is_born_with_the_marker_alone(home):
+    """The format marker and the retirement marker (slice I, N3: a born store
+    has no legacy settings to retire), and still no Primary."""
     cfg = config.read_config()
     assert inference_keys.is_current(cfg) and not cfg.get("role_primary_provider")
-    assert config.birth_fields() == {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+    assert cfg[inference_keys.RETIRED_KEY] == "1"
+    assert config.birth_fields() == {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT,
+                                     inference_keys.RETIRED_KEY: "1"}
 
 
 def test_legacy_store_is_format_1(home):

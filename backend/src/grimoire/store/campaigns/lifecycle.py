@@ -117,7 +117,7 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         now = now_iso()
         publish_birth(cid, {"name": name, "world": world_id, "created": now,
                              "updated": now, "world_copy": "overlay",
-                             **({"module": module} if module else {})})
+                             **({"module": module} if module else {})}, retired=True)
         # copy-on-write: nothing is copied up front; records materialize on divergence
         # (store/overlay.py) and sync.md tracks bases for materialized records only
         paths.write_manifest(cid, {})
@@ -579,7 +579,7 @@ Translate = Callable[[dict[str, str]], dict[str, str]]
 
 
 def publish_birth(cid: str, meta: dict[str, str], body: str = "",
-                  translate: Translate | None = None) -> None:
+                  translate: Translate | None = None, *, retired: bool = False) -> None:
     """Write a new campaign's first `campaign.md` -- created (`create_campaign`)
     or copied (`fork._copy`): `meta` plus every marker the store's format says
     a campaign is born with. The birth-stamp seam, and the one place a new
@@ -598,7 +598,17 @@ def publish_birth(cid: str, meta: dict[str, str], body: str = "",
     before it is marked: a marker over untranslated keys would switch those
     overrides off. One whose connections cannot be read just now is born
     unmarked, and the next migration run finishes it. A copy of a campaign a
-    newer build marked keeps that mark."""
+    newer build marked keeps that mark.
+
+    `retired` is CREATION's alone (`create_campaign`; slice I, N3 and R2-1): a
+    campaign created from nothing holds no legacy settings, so where
+    `config.md` is itself retired it is born carrying the retirement marker
+    beside the format one, read in this same hold, and no retirement pass ever
+    runs for it. A copy never passes it -- a fork of a retired campaign
+    carries the marker in what it copies, and a fork of an unretired one joins
+    the next pass with its source's legacy GLM effort still to derive -- and
+    neither does any settings write: `_inference_marker` stamps the format
+    alone, because a settings write is not a retirement."""
     born = dict(meta)
     with locks.config_lock():
         if not (inference_keys.is_current(born) or inference_keys.is_newer(born)):
@@ -608,6 +618,8 @@ def publish_birth(cid: str, meta: dict[str, str], body: str = "",
                     born.update(translate(born))
                 except OSError:
                     marker = {}
+            if marker and retired and _retired(config.read_config()):
+                marker[inference_keys.RETIRED_KEY] = "1"
             born.update(marker)
         atomic.write_text(paths.campaign_meta_path(cid), dump_frontmatter(born, body))
 
@@ -620,6 +632,11 @@ def _inference_marker() -> dict[str, str]:
     if inference_keys.is_current(config.read_config()):
         return {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
     return {}
+
+
+def _retired(cfg: dict[str, str]) -> bool:
+    """Whether `config.md` (as read) carries the retirement marker."""
+    return str(cfg.get(inference_keys.RETIRED_KEY, "") or "").strip() == "1"
 
 
 def set_campaign_inference(cid: str, fields: dict) -> bool:

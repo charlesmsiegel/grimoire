@@ -495,7 +495,9 @@ def test_store_guarantees_names_the_inference_migration():
     marker it writes last -- and each of those names must still be in code,
     so a rename leaves no promise attached to nothing. The safety archive's
     prefix is stated as a value (`pre-inference-`), in the section and in
-    `CLAUDE.md`, so it is held to `backups.SAFETY_PREFIX` too."""
+    `CLAUDE.md`, so it is held to `backups.SAFETY_PREFIX` too -- and so is
+    retirement's (`pre-retirement-`, `backups.RETIRE_PREFIX`), beside the
+    entry point the migration runs it through (`migrate._retire`)."""
     from grimoire.store import backups, inference_keys
     from grimoire.store.inference import migrate
 
@@ -512,6 +514,15 @@ def test_store_guarantees_names_the_inference_migration():
         assert f"{backups.SAFETY_PREFIX}grimoire-" in text, (
             f"{doc.relative_to(ROOT)} does not name the safety archive by its "
             f"prefix ({backups.SAFETY_PREFIX})")
+        # Retirement (slice I): its archive by its prefix, and the entry
+        # point the migration runs it through, each still in code.
+        assert f"{backups.RETIRE_PREFIX}grimoire-" in text, (
+            f"{doc.relative_to(ROOT)} does not name retirement's archive by its "
+            f"prefix ({backups.RETIRE_PREFIX})")
+        assert "migrate._retire" in text, (
+            f"{doc.relative_to(ROOT)} does not name retirement's entry point")
+    assert hasattr(migrate, "_retire"), "migrate._retire no longer exists in code"
+    assert "### Retirement" in section, "the section has no Retirement subsection"
 
 
 def test_store_guarantees_names_every_public_atomic_writer():

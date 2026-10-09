@@ -132,10 +132,14 @@ def test_a_legacy_store_migrates_roles_routes_and_marker_last(home):
     assert cfg["use_scene_break"] == "model"
     assert cfg["use_scene_break_provider"] == "spare"
     assert cfg["preset_speaker"] == "cold"
-    # The legacy keys stay, frozen, for older builds.
-    assert cfg["route_summary"] == "spare" and cfg["active_connection_id"] == "openrouter"
-    # The safety backup exists.
+    # The migration leaves the legacy keys, frozen, for older builds; the
+    # retirement that follows it in the same run deletes them (slice I).
+    assert "route_summary" not in cfg and "active_connection_id" not in cfg
+    assert cfg[inference_keys.RETIRED_KEY] == "1"
+    # The safety backup exists, and stands in for retirement's.
     assert len(_safety_archives(home)) == 1
+    assert not any(p.name.startswith(backups.RETIRE_PREFIX)
+                   for p in (home / "backups").iterdir())
 
 
 def test_migration_is_idempotent(home):
@@ -535,7 +539,8 @@ def test_a_campaign_is_migrated_with_its_marker(home):
     assert (meta["use_voice"], meta["use_voice_provider"]) == ("model", "spare")
     assert meta["use_voice_drift_provider"] == "spare"
     assert meta["preset_speaker"] == "warm"
-    assert meta["route_voice"] == "spare"
+    # Retirement, in the same run, deleted the legacy key it was mapped from.
+    assert "route_voice" not in meta
 
 
 def test_a_busy_campaign_is_skipped_and_finished_next_time(home):
@@ -765,7 +770,7 @@ def test_a_legacy_edit_during_the_backup_survives(home, monkeypatch):
 
     cfg = _raw_config(home)
     assert cfg[FORMAT] == "2"
-    assert cfg["route_summary"] == ""
+    assert cfg.get("route_summary", "") == ""
     assert (cfg["use_summary"], cfg["use_summary_provider"]) == ("", "")
     assert (cfg["use_scene_break"], cfg["use_scene_break_provider"]) == ("", "")
     # A setting that is not the migration's is not rewritten from a stale
@@ -1320,7 +1325,9 @@ def test_a_campaign_whose_connection_is_unreadable_is_skipped_and_retried(home, 
 
     monkeypatch.setattr(migrate, "_campaign_step", step_with_a_flaky_read)
 
-    got = migrate.ensure()
+    # Retirement held off: it would migrate the campaign itself, in its own
+    # write, once the read succeeds (slice I) -- this is about step 8.
+    got = inference_fixtures.migrate_as_c_h()
 
     assert any(cid in item and "sync client" in item for item in got.skipped), got
     assert FORMAT not in _meta(cid)

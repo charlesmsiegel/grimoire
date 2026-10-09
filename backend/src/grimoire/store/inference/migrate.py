@@ -20,7 +20,11 @@ write), then
    run takes back a copy the record no longer says before copying afresh.
    Copied in the `llm_connections.LOCK` hold that writes the marker
    (`_switch`), so a legacy edit made before it is not switched past;
-4. *(derived reasoning presets: slice I, ruling 3)*;
+4. *(derived reasoning presets: not the migration's.)* They are
+   retirement's, persisted after the marker by `retire` (slice I, rulings 4
+   and 6, below); the migration persists the planner's `mapped` only, never a
+   repoint, so every preset key it writes names a preset file that exists
+   (N2);
 5. **roles**, 6. **routes**, 7. **split routes**, 9. **marker** -- ONE
    `config.md` write, the last, derived from a read taken inside the
    `config_lock` hold that writes it: the planner's mapping of the legacy
@@ -55,9 +59,20 @@ write), then
    campaign is translated from cannot move under its step, and an unmarked
    campaign reads the same mapping, in memory, until it is reached.
 
+10. **retirement** (`_retire`, slice I ruling 6) -- after the campaigns, in
+   the same run, and on every `ensure` of a current store that
+   `retire.left()` says has anything left: the `pre-retirement-` archive when
+   the pass deletes or replaces a stored value (skipped when this run CREATED
+   the `pre-inference-` one, reused when an earlier pass's is still there),
+   then `config.md`'s derived presets, repoint, legacy-key deletion and
+   retirement marker in one write, then each campaign likewise under its own
+   no-wait hold (an unmarked one migrated in that same write). It never moves
+   `status().state`; what it has left is `Status.retirement`.
+
 Every derived value is deterministic, so two devices migrating one synced
-store write the same bytes. The legacy keys and fields are left in place,
-frozen, for older builds.
+store write the same bytes. The migration itself leaves the legacy keys and
+fields in place, frozen, for older builds; retirement then removes the keys
+(and, in Task 6b, the connection fields).
 
 **What `ensure` holds.** The migration lock (`locks.inference_migration_lock`,
 a process lock plus a proclock), TRIED and never waited on: a second `ensure`
@@ -92,7 +107,8 @@ unreadable one is reported in `skipped`, also derived, and does not hold the
 store at `pending` -- nothing a re-run does can read it). Only `running`, a
 failure reason, the last run's skips and the safety archive's name are
 remembered, keyed by root, in `<home>/.cache/inference-migration.json` --
-derived data, outside every backup.
+derived data, outside every backup -- beside retirement's archive name and
+why its last pass stopped short (`retire_safety`, `retire_failed`).
 """
 
 from __future__ import annotations
@@ -110,6 +126,7 @@ from .. import (
     atomic,
     backups,
     config,
+    frontmatter,
     llm_connections,
     locks,
     paths,
@@ -118,8 +135,7 @@ from .. import (
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
-from ..frontmatter import dump_frontmatter, parse_frontmatter
-from . import facts, legacy_plan, providers
+from . import facts, legacy_plan, providers, retire
 
 log = logging.getLogger(__name__)
 
@@ -136,14 +152,25 @@ MOVED = "the storage location changed during the upgrade; it resumes on the next
 STOPPED = "the app shut down during the upgrade; it resumes on the next start"
 
 
+#: `Status.retirement` when nothing about retirement was asked.
+_NO_RETIREMENT: dict = {"left": [], "failed": ""}
+
+
 class Status(NamedTuple):
     state: str
     reason: str = ""
     skipped: tuple[str, ...] = ()
+    #: Retirement's own account (slice I): `left`, what it has still to do
+    #: (`retire.left()`), and `failed`, why the last pass on this root stopped
+    #: short ("" when it did not). Never moves `state`: a store whose
+    #: migration is done reads `done` whatever retirement has left.
+    retirement: dict = _NO_RETIREMENT
 
     def as_dict(self) -> dict:
         """The JSON shape (`not_migrated`'s `status`, Settings)."""
-        return {"state": self.state, "reason": self.reason, "skipped": list(self.skipped)}
+        return {"state": self.state, "reason": self.reason, "skipped": list(self.skipped),
+                "retirement": {"left": list(self.retirement.get("left") or ()),
+                               "failed": str(self.retirement.get("failed") or "")}}
 
 
 # ---- what is remembered ----
@@ -181,11 +208,15 @@ def _recall(root: Path) -> dict:
 
 
 def _remember(root: Path, *, running: bool, failed: str = "",
-              skipped: list[str] | tuple[str, ...] = (), safety: str = "") -> None:
+              skipped: list[str] | tuple[str, ...] = (), safety: str = "",
+              retire_safety: str = "", retire_failed: str = "") -> None:
     """Record the run's state for `root`. Best effort: derived data, and a
-    status that cannot be written must not stop the migration it describes."""
+    status that cannot be written must not stop the migration it describes.
+    `retire_safety` is the `pre-retirement-` archive the pass took or reused,
+    and `retire_failed` why the last retirement pass stopped short."""
     note = {"root": str(root), "running": running, "pid": os.getpid(),
-            "failed": failed, "skipped": list(skipped), "safety": safety}
+            "failed": failed, "skipped": list(skipped), "safety": safety,
+            "retire_safety": retire_safety, "retire_failed": retire_failed}
     path = _status_path(root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,11 +237,13 @@ def _is_running(root: Path, note: dict) -> bool:
     return bool(note.get("running")) and note.get("pid") != os.getpid()
 
 
-def _kept_safety(note: dict) -> str:
-    """The safety archive an earlier run on this root took, when it is still
-    in the backup directory; "" when there is none to reuse."""
-    name = note.get("safety")
-    if (not isinstance(name, str) or not name.startswith(backups.SAFETY_PREFIX)
+def _kept_safety(note: dict, key: str = "safety",
+                prefix: str = backups.SAFETY_PREFIX) -> str:
+    """The safety archive an earlier run on this root took (`key` in its note,
+    named under `prefix`), when it is still in the backup directory; "" when
+    there is none to reuse. Retirement's is `_kept_retire_safety`."""
+    name = note.get(key)
+    if (not isinstance(name, str) or not name.startswith(prefix)
             or Path(name).name != name):
         return ""
     try:
@@ -219,36 +252,49 @@ def _kept_safety(note: dict) -> str:
         return ""
 
 
+def _kept_retire_safety(note: dict) -> str:
+    """The `pre-retirement-` archive an earlier pass on this root took, when
+    it is still there (R2-3): reused, so a resumed pass takes no second one."""
+    return _kept_safety(note, "retire_safety", backups.RETIRE_PREFIX)
+
+
+def _note_retire_failed(root: Path, failed: str) -> None:
+    """Record `failed` as why retirement stopped short on `root`, keeping the
+    rest of the note -- unless the note already says it."""
+    note = _recall(root)
+    if _note_text(note, "retire_failed") == failed:
+        return
+    skipped = [s for s in note.get("skipped") or () if isinstance(s, str)]
+    _remember(root, running=False, failed=_note_text(note, "failed"), skipped=skipped,
+              safety=_kept_safety(note), retire_safety=_kept_retire_safety(note),
+              retire_failed=failed)
+
+
+def _retirement(failed: str) -> dict:
+    """`Status.retirement`: what `retire.left()` says now, and `failed`."""
+    return {"left": list(retire.left()), "failed": failed}
+
+
+def _note_text(note: dict, key: str) -> str:
+    value = note.get(key)
+    return value if isinstance(value, str) else ""
+
+
 # ---- reading the store ----
 def _config_exists(root: Path) -> bool:
     return (root / "config.md").exists()
 
 
-class RecordUnreadableError(OSError):
-    """A `config.md` or `campaign.md` the migration would rewrite that is there
-    but holds no record: zero bytes, or a frontmatter block that is unfenced or
-    never closed (a sync placeholder mid-download, a conflict stub, a hand edit
-    that lost its closing `---`). `parse_frontmatter` reads all of those as
-    `{}`, and a migration that took that for a record with no settings would
-    publish a marker-only file over it -- which a sync client can then upload
-    over the real one -- and mark it, so the settings it held are never read
-    again. The rule `llm_connections`' strict read keeps for a connection."""
-
-
-def _record(path: Path, what: str) -> tuple[dict[str, str], str]:
-    """`path`'s frontmatter and body, raising `RecordUnreadableError` when it
-    holds no record (see there). Every record this app writes has keys."""
-    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-    if not meta:
-        raise RecordUnreadableError(f"{what} holds no settings (empty, or unfenced); "
-                                    "it is left as it is and retried on the next start")
-    return meta, body
+#: C's strict record read, moved to `store/frontmatter.py` (slice I) so
+#: retirement -- which this module calls, and so cannot import -- shares it.
+#: Bound here too: `migrate.RecordUnreadableError` is what callers catch.
+RecordUnreadableError = frontmatter.RecordUnreadableError
 
 
 def _config_record(root: Path) -> dict[str, str]:
     """`config.md`'s raw frontmatter; `RecordUnreadableError` (or the read's
     own `OSError`/`UnicodeDecodeError`) when it cannot be read as a record."""
-    return _record(root / "config.md", "config.md")[0]
+    return frontmatter.read_record(root / "config.md", "config.md")[0]
 
 
 def _campaign_marks() -> tuple[dict[str, bool], dict[str, str]]:
@@ -261,8 +307,8 @@ def _campaign_marks() -> tuple[dict[str, bool], dict[str, str]]:
         if not paths.safe_id(cid):
             continue
         try:
-            meta, _ = _record(campaign_paths.campaign_meta_path(cid),
-                              f"campaign {cid}'s campaign.md")
+            meta, _ = frontmatter.read_record(campaign_paths.campaign_meta_path(cid),
+                                              f"campaign {cid}'s campaign.md")
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             unreadable[cid] = str(exc)
             continue
@@ -292,14 +338,15 @@ def status() -> Status:
     marks, unreadable = _campaign_marks()
     remembered = [str(s) for s in note.get("skipped") or () if isinstance(s, str)]
     skipped = _merged(remembered, _unreadable_skips(unreadable))
+    # Retirement's account rides beside the state and never moves it.
+    retirement = _retirement(_note_text(note, "retire_failed"))
     # Done first: what the store says outranks a note that can outlive a crash.
     if keys.is_current(cfg) and False not in marks.values():
-        return Status("done", "", skipped)
+        return Status("done", "", skipped, retirement)
     if _is_running(root, note):
-        return Status("running", "", skipped)
-    failed = note.get("failed")
-    failed = failed if isinstance(failed, str) else ""
-    return Status("failed" if failed else "pending", failed, skipped)
+        return Status("running", "", skipped, retirement)
+    failed = _note_text(note, "failed")
+    return Status("failed" if failed else "pending", failed, skipped, retirement)
 
 
 # ---- the translation, persisted ----
@@ -371,12 +418,12 @@ def campaign(cid: str) -> bool:
         raise RuntimeError(f"migrate.campaign({cid!r}) needs the caller to hold its lock")
     mp = campaign_paths.campaign_meta_path(cid)
     with config.format_hold():
-        meta, body = _record(mp, f"campaign {cid}'s campaign.md")
+        meta, body = frontmatter.read_record(mp, f"campaign {cid}'s campaign.md")
         if keys.is_current(meta) or keys.is_newer(meta):
             return False
         meta.update(campaign_fields(meta, _lookup()))
         meta[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
-        atomic.write_text(mp, dump_frontmatter(meta, body))
+        atomic.write_text(mp, frontmatter.dump_frontmatter(meta, body))
     revision.bump(cid)
     return True
 
@@ -415,14 +462,19 @@ def ensure(stop: threading.Event | None = None) -> Status:
 
 
 class _Run:
-    """One run's pinned root, stop flag, skips and safety archive."""
+    """One run's pinned root, stop flag, skips and safety archives."""
 
     def __init__(self, root: Path, stop: threading.Event | None, safety: str,
-                 skipped: list[str]):
+                 skipped: list[str], retire_safety: str = ""):
         self.root = root
         self.stop = stop
         self.safety = safety
         self.skipped = skipped
+        #: Whether THIS run created `safety` (not reused it): only then does
+        #: it stand in for retirement's archive (N13).
+        self.created_safety = False
+        self.retire_safety = retire_safety
+        self.retire_failed = ""
 
     def halted(self) -> str:
         """Why the run must stop before its next item; "" to go on."""
@@ -434,7 +486,8 @@ class _Run:
 
     def remember(self, *, running: bool, failed: str = "") -> None:
         _remember(self.root, running=running, failed=failed, skipped=self.skipped,
-                  safety=self.safety)
+                  safety=self.safety, retire_safety=self.retire_safety,
+                  retire_failed=self.retire_failed)
 
 
 def _run(root: Path, stop: threading.Event | None) -> Status | None:
@@ -451,8 +504,11 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
         _config_record(root)
     except (OSError, UnicodeDecodeError) as exc:
         reason = f"the upgrade stopped: {exc}"
-        _remember(root, running=False, failed=reason, safety=_kept_safety(_recall(root)))
-        return Status("failed", reason)
+        note = _recall(root)
+        _remember(root, running=False, failed=reason, safety=_kept_safety(note),
+                  retire_safety=_kept_retire_safety(note),
+                  retire_failed=_note_text(note, "retire_failed"))
+        return Status("failed", reason, (), _retirement(_note_text(note, "retire_failed")))
     # A newer build's store first: it is not this build's to touch at all, and
     # the connection seeding below writes (which it refuses on its own too).
     if keys.is_newer(config.read_config()):
@@ -464,13 +520,16 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
     current = keys.is_current(cfg)
     marks, unreadable = _campaign_marks()
     left = [cid for cid, marked in marks.items() if not marked]
-    if current and not left:
+    idle, planned = _idle(root, current, left)
+    if idle:
         return None
-    run = _Run(root, stop, _kept_safety(_recall(root)), _unreadable_skips(unreadable))
+    note = _recall(root)
+    run = _Run(root, stop, _kept_safety(note), _unreadable_skips(unreadable),
+               _kept_retire_safety(note))
     run.remember(running=True)
     outcome: Status | None = None
     try:
-        outcome = _steps(run, current, left)
+        outcome = _steps(run, current, left, planned)
     except (OSError, UnicodeDecodeError, locks.StoreBusy) as exc:
         outcome = Status("failed", f"the upgrade stopped: {exc}")
     except BaseException as exc:
@@ -481,12 +540,39 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
     finally:
         failed = outcome.reason if outcome is not None and outcome.state == "failed" else ""
         run.remember(running=False, failed=failed)
-    return None if outcome is None else outcome._replace(skipped=tuple(run.skipped))
+    if outcome is None:
+        return None
+    return outcome._replace(skipped=tuple(run.skipped),
+                            retirement=_retirement(run.retire_failed))
 
 
-def _steps(run: _Run, current: bool, left: list[str]) -> Status | None:
+def _idle(root: Path, current: bool, left: list[str]) -> tuple[bool, retire.PassPlan | None]:
+    """Whether this start has nothing to write -- the store current, every
+    campaign marked, and retirement with no unit it can write -- and the
+    retirement pass planned on the way, when it was.
+
+    Something left by retirement is not on its own a run: a store whose
+    leftovers cannot be read just now (an unreadable campaign, a connection a
+    sync client holds) is not re-run on every start. Why they could not be
+    planned is noted -- only when it changed, so an idle start writes
+    nothing -- and `retire.left()` names them in the status."""
+    if not current or left:
+        return False, None
+    if not retire.left():
+        return True, None
+    planned = retire.pass_plan(legacy_plan.lookup(mode="retire"))
+    if not any(unit.work for unit in planned.units):
+        _note_retire_failed(root, "; ".join(planned.dropped))
+        return True, planned
+    return False, planned
+
+
+def _steps(run: _Run, current: bool, left: list[str],
+           planned: retire.PassPlan | None = None) -> Status | None:
     """The steps; None when they all ran, else the Status to stop on. The
-    campaigns come after the switch (step 8, above)."""
+    campaigns come after the switch (step 8, above), and retirement after
+    them -- `planned` is its pass when `_run` already planned it, on a store
+    with nothing else to do (nothing has been written since)."""
     if not current:
         if (stopped := _before_campaigns(run)) is not None:
             return stopped
@@ -507,6 +593,7 @@ def _steps(run: _Run, current: bool, left: list[str]) -> Status | None:
             # A newer build switched the store while the loop ran: what is
             # left is not this build's to mark (spec 11.3).
             return Status("newer")
+    _retire(run, planned)
     return None
 
 
@@ -521,6 +608,7 @@ def _before_campaigns(run: _Run) -> Status | None:
         except (OSError, locks.StoreBusy) as exc:
             return Status("failed", f"the safety backup failed: {exc}")
         run.safety = made.name
+        run.created_safety = True
         # At once, so a run killed from here on is not backed up again.
         run.remember(running=True)
     if why := run.halted() or _providers(run):
@@ -632,3 +720,77 @@ def _campaign_step(cid: str, skipped: list[str]) -> None:
     except (OSError, UnicodeDecodeError, ValueError, campaign_paths.CampaignNotFound,
             locks.StoreBusy) as exc:
         skipped.append(f"campaign {cid}: {exc}")
+
+
+# ---- retirement (slice I, ruling 6) ----
+def _retire(run: _Run, planned: retire.PassPlan | None = None) -> None:
+    """Retirement, after the marker and the campaigns: the archive, then
+    `config.md`, then each campaign (`store.inference.retire`). Never moves
+    the migration's state: whatever stops it is recorded in
+    `run.retire_failed`, what it did not reach is `retire.left()`'s, and the
+    next `ensure` goes on from there.
+
+    0. The pass is planned whole first (`retire.pass_plan`). When any unit
+       deletes or replaces a stored value (`retire.needs_archive`), a
+       `pre-retirement-grimoire-` archive is taken before the pass's first
+       write of any kind, marker-only writes included -- unless this same run
+       CREATED the `pre-inference-` one, or an earlier pass on this root took
+       one that is still there (reused, R2-3). If it fails, nothing is
+       written. A pass that only adds markers takes none (N3).
+    1. `retire.retire_global`, then
+    2. `retire.retire_campaign` for each campaign with work, under its own
+       `campaign_lock_nowait`: a busy one is left for the next start.
+
+    Each unit is planned again inside its own hold; one that now needs the
+    archive this pass did not take is left for the next run (R3-1). A file
+    that cannot be read (`RecordUnreadableError`, the read's own errors,
+    `ConnectionUnreadableError`) stops its own unit and nothing else, and a
+    newer build's marker stops the pass. `run.halted()` is checked before
+    each unit (N19)."""
+    if run.halted():
+        return
+    plan = planned if planned is not None else retire.pass_plan(
+        legacy_plan.lookup(mode="retire"))
+    failures = list(plan.dropped)
+    archived = run.created_safety or bool(run.retire_safety)
+    if retire.needs_archive(plan) and not archived:
+        try:
+            made = backups.create_backup(prefix=backups.RETIRE_PREFIX)
+        except (OSError, locks.StoreBusy) as exc:
+            run.retire_failed = f"the retirement archive failed: {exc}"
+            return
+        run.retire_safety = made.name
+        archived = True
+        # At once, so a pass killed from here on reuses it.
+        run.remember(running=True)
+    try:
+        for unit in plan.units:
+            if not unit.work:
+                continue
+            if run.halted():
+                return
+            if why := _retire_unit(unit, archived):
+                failures.append(why)
+    except config.NewerFormatError:
+        return                      # a newer build switched the store meanwhile
+    finally:
+        run.retire_failed = "; ".join(failures)
+
+
+def _retire_unit(unit: retire.Unit, archived: bool) -> str:
+    """One unit of the pass; why it failed, or "" (done, busy, or left for
+    the next run). `config.NewerFormatError` is raised."""
+    label = f"campaign {unit.cid}" if unit.cid else "config.md"
+    try:
+        if not unit.cid:
+            retire.retire_global(legacy_plan.lookup(mode="retire"), archived=archived)
+            return ""
+        with locks.campaign_lock_nowait(unit.cid) as got:
+            if got:
+                retire.retire_campaign(unit.cid, legacy_plan.lookup(mode="retire"),
+                                       archived=archived)
+        return ""
+    except retire.ArchiveNeededError:
+        return ""                   # grew work since the plan: the next run's
+    except retire.UNIT_ERRORS as exc:
+        return f"{label}: {exc}"

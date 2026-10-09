@@ -33,8 +33,8 @@ setting. Its connection reads do not promise that: every one of them
 `llm_connections.ensure_migrated()` first, which on a store whose
 connections were never seeded writes `llm_connections/` and can write
 `active_connection_id` into `config.md` -- the format-1 seeding every
-connection read has always done. A scope carrying `RETIRED_KEY` plans nothing
-and reads nothing.
+connection read has always done. A scope carrying `RETIRED_KEY` beside the
+current format marker plans nothing and reads nothing.
 
 How strictly a plan reads is its lookup's (`lookup(mode=...)`): play reads
 fail-soft, as the translation always has; the migration and retirement read
@@ -143,6 +143,17 @@ def planned(meta: Mapping[str, str], plan: Plan) -> dict[str, str]:
 
 def _retired(meta: Mapping) -> bool:
     return str(meta.get(RETIRED_KEY, "") or "").strip() == "1"
+
+
+def _settled(meta: Mapping) -> bool:
+    """Whether a scope plans nothing at all: a newer build's, or retired AND
+    marked current. A retirement marker on a scope with no format marker (a
+    copy restored beside an older `config.md`, a hand edit) does not settle
+    it: the migration still maps that scope -- `migrate.campaign` and the
+    switch go by the format marker alone -- so the planner maps it too
+    (planned equals persisted; slice I, N1). Retirement then derives
+    nothing there, because the scope says it is retired."""
+    return keys.is_newer(meta) or (_retired(meta) and keys.is_current(meta))
 
 
 # ---- the lookups ----
@@ -680,14 +691,20 @@ def global_plan(cfg: Mapping[str, str], lookup: Lookup, presets: PresetRead) -> 
       model-facts overlay, and the derivation and notes are over the mapped
       slots.
     - At format 2 and not retired: the derivation and notes only.
-    - Retired (`RETIRED_KEY`), or a newer build's: nothing, and nothing read.
+    - Retired (`RETIRED_KEY`) at format 2, or a newer build's: nothing, and
+      nothing read.
+    - Retired below format 2 (`_settled`): `mapped` and `facts`, as the switch
+      will persist them, and no derivation -- retirement removes that
+      scope's legacy keys and derives nothing in a retired scope.
     """
-    if _retired(cfg) or keys.is_newer(cfg):
+    if _settled(cfg):
         return empty()
     if keys.is_current(cfg):
         return _planned(cfg, glob={}, mapped={}, model_facts={}, scope=GLOBAL_SCOPE,
                         campaign=False, conn=lookup, presets=presets)
     mapped = global_mapped(cfg, lookup)
+    if _retired(cfg):
+        return Plan(mapped, {}, _facts_overlay(lookup), (), ())
     return _planned({**cfg, **mapped}, glob={}, mapped=mapped,
                     model_facts=_facts_overlay(lookup), scope=GLOBAL_SCOPE,
                     campaign=False, conn=lookup, presets=presets)
@@ -710,17 +727,22 @@ def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_cu
     pass it.
 
     - Unmarked: `mapped` and the derivation.
+    - Unmarked but carrying the retirement marker: `mapped` alone. The
+      migration maps it, as it maps any unmarked campaign, and retirement
+      derives nothing in a scope that says it is retired (N1).
     - Marked, not retired: the derivation only.
-    - Retired, or a newer build's: nothing, and nothing read.
+    - Marked and retired, or a newer build's: nothing, and nothing read.
     """
     del global_current  # the campaign's own marker decides (see above)
     scope = campaign_scope(cid)
-    if _retired(meta) or keys.is_newer(meta):
+    if _settled(meta):
         return empty()
     if keys.is_current(meta):
         return _planned(meta, glob=glob, mapped={}, model_facts={}, scope=scope,
                         campaign=True, conn=lookup, presets=presets)
     mapped = campaign_mapped(meta, lookup)
+    if _retired(meta):
+        return Plan(mapped, {}, {}, (), ())
     return _planned({**meta, **mapped}, glob=glob, mapped=mapped, model_facts={},
                     scope=scope, campaign=True, conn=lookup, presets=presets)
 
@@ -789,8 +811,8 @@ def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -
     """`cfg` and `meta` (a campaign's frontmatter, {} for none; `cid` names
     its notes' scope) as format 2 sees them, planned in memory.
 
-    Identity, with nothing read, when `config.md` is retired and the
-    campaign is absent or retired too. Otherwise each scope is `planned`
+    Identity, with nothing read, when `config.md` is settled (retired and
+    current, or a newer build's) and the campaign is absent or settled too. Otherwise each scope is `planned`
     (`mapped | repoint`, N2) through one fail-soft lookup (`lookup("soft")`:
     an unreadable connection is no connection, as the translation always
     read it) and `sampler_presets.read_preset`, memoised for the call.
@@ -802,7 +824,7 @@ def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -
     aliases the other's under one id. A store a newer build switched is read
     as format 2, best effort: its `config.md` plans nothing, and its
     campaigns are planned as they would be under a current one."""
-    if _retired(cfg) and (not meta or _retired(meta)):
+    if _settled(cfg) and (not meta or _settled(meta)):
         return Overlay(dict(cfg), dict(meta), {}, {}, (), dict(cfg), dict(meta),
                        embedding_role(cfg))
     conn = lookup(mode="soft")

@@ -5,10 +5,10 @@ from __future__ import annotations
 import contextlib
 import math
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 
 from . import atomic, inference_keys, locks, routing
-from .frontmatter import dump_frontmatter, parse_frontmatter
+from .frontmatter import dump_frontmatter, parse_frontmatter, read_record
 from .paths import ensure_home, home
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
@@ -268,12 +268,17 @@ def birth_fields() -> dict[str, str]:
     this: a `config.md` that exists without the marker is a legacy store and
     stays one until the migration says otherwise.
 
+    Born retired, too (`inference_keys.RETIRED_KEY`, slice I N3): a store
+    created from nothing has no legacy settings for retirement to remove, so
+    it never takes a `pre-retirement-` archive and no pass ever runs for it.
+
     A test seam as well as a birth: with `TEST_BIRTH_ENV` set to
     `"upgraded-default"` the store is born as an upgraded default library,
-    Primary on `openrouter` at `DEFAULT_MODEL`. Without it the marker is all
-    there is, and `test_a_product_store_is_born_with_the_marker_alone` pins
-    that."""
-    fields = {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+    Primary on `openrouter` at `DEFAULT_MODEL`. Without it the two markers are
+    all there is, and `test_a_product_store_is_born_with_the_marker_alone`
+    pins that."""
+    fields = {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT,
+              inference_keys.RETIRED_KEY: "1"}
     if os.environ.get(TEST_BIRTH_ENV) == "upgraded-default":
         fields[inference_keys.role_key("primary", "provider")] = "openrouter"
         fields[inference_keys.role_key("primary", "model")] = DEFAULT_MODEL
@@ -721,6 +726,36 @@ def write_config_refusing_legacy(guard: Callable[[dict[str, str]], None] | None 
         if guard is not None:
             guard(cfg)
         return write_config(**fields)
+
+
+def retire_write(set_keys: Mapping[str, str], drop: Iterable[str]) -> None:
+    """Retirement's one `config.md` write (slice I, ruling 6(a)): `drop`'s
+    keys deleted and `set_keys` set, onto the file's raw frontmatter, in one
+    `format_hold` -- `config_lock`, reentrant, so a caller already holding
+    `llm_connections.LOCK` (the same lock) joins it.
+
+    Strict, unlike `write_config`: the file is read with
+    `frontmatter.read_record(..., require=FORMAT_KEY)`, so one that holds no
+    record or no format marker raises `RecordUnreadableError` and is never
+    written over. A newer build's marker raises `NewerFormatError` (the
+    hold's own check reads the same file), and any marker but the current one
+    raises `ValueError`: retirement is a format-2 step. Nothing outside
+    `set_keys` is added -- no default is materialized -- and a write that
+    would change nothing is not made, so a resumed pass rewrites nothing."""
+    path = _config_path()
+    dropped = frozenset(drop)
+    with format_hold():
+        meta, body = read_record(path, "config.md", require=inference_keys.FORMAT_KEY)
+        if inference_keys.is_newer(meta):
+            raise NewerFormatError("a newer build wrote this store's model settings")
+        if not inference_keys.is_current(meta):
+            raise ValueError("config.md is not at the current settings format; "
+                             "retirement waits for the migration")
+        out = {k: v for k, v in meta.items() if k not in dropped}
+        out.update(set_keys)
+        if out == meta:
+            return
+        atomic.write_text(path, dump_frontmatter(out, body))
 
 
 def write_config(**fields: str) -> dict[str, str]:

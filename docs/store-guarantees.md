@@ -1101,11 +1101,11 @@ be a 200 that changed nothing. Play is not refused.
 
 ### Older builds keep the old settings, frozen
 
-The legacy keys (`active_connection_id`, `fallback_connection_id`, the
-`route_*` keys, the two embeddings keys) and the legacy connection fields
-(`llm_connections.MODEL_FIELDS`) are left as they were at the switch. A build
-from before it keeps running on them, and nothing changed in the new settings
-reaches it. Once a store is current, writing one of them is refused, because
+The migration leaves the legacy keys (`active_connection_id`,
+`fallback_connection_id`, the `route_*` keys, the two embeddings keys) and the
+legacy connection fields (`llm_connections.MODEL_FIELDS`) as they were at the
+switch, until retirement (below) removes the keys. A build from before it
+keeps running on them, and nothing changed in the new settings reaches it. Once a store is current, writing one of them is refused, because
 it would reach older builds only: `PUT /config` answers 400 (`this setting
 moved to Models`) and a connection edit setting a legacy field answers 400
 too, each checked inside the
@@ -1132,6 +1132,88 @@ store after the route checked is therefore refused there too
 (`config.NewerFormatError`, answered as the same 409), never written past; a
 model test's verdicts that arrive after such a switch are not filed.
 `test_format_hold.py` enumerates the writers.
+
+### Retirement
+
+**Module:** `backend/src/grimoire/store/inference/retire.py` · **Run by:**
+`migrate._retire`
+
+The migration leaves the legacy layout in place, and the planner kept reading
+one thing from it in memory: the GLM reasoning effort a legacy connection
+carried. Retirement persists what the planner plans and removes what it read
+from. It is the last stage of `migrate.ensure`, after the marker and the
+campaigns, in the same run, and it runs again on any later start that
+`retire.left()` says has something left. In order:
+
+1. **The archive.** The whole pass is planned before anything is written
+   (`retire.pass_plan`). When any part of it deletes or replaces a stored
+   value — a legacy key, a repointed preset key — a full archive,
+   `pre-retirement-grimoire-<stamp>.zip` (`backups.RETIRE_PREFIX`), is taken
+   before the pass's first write of any kind, marker-only writes included.
+   **No archive, no write**: if it fails, nothing below runs, the reason is
+   in the status's `retirement.failed`, and the next start tries again. It
+   is a restore point like the safety archive — `GET /backups` lists it and
+   the schedule counts it — and, like it, `backups.sweep` never prunes it.
+   It is taken once per root and reused on resume while the note names it
+   and the file is there. It is skipped when this same run *created* the
+   `pre-inference-` archive (one reused from an earlier run predates every
+   edit since, so it does not stand in), and when the whole pass only adds
+   markers.
+2. **`config.md`**, in one hold of the model-settings lock: the derived
+   reasoning presets its slots need, then **one** write that repoints those
+   slots, deletes every legacy key and stamps the retirement marker.
+3. **Each campaign**, under `campaign_lock_nowait` (a busy one is left for the
+   next start), with its marker re-read inside the hold: its derived presets,
+   then one write holding the repoint, the deletion of its `route_*` keys and
+   both markers, and a bump of its write token. Its `updated` stamp is left
+   alone.
+
+**Derive before delete; migrate before retire.** A scope's legacy keys go in
+the same write that repoints it, after the presets the repoint names exist,
+so no stored preset key ever names a missing file. A campaign the migration
+has not reached is migrated in that same write first, exactly as the
+migration would have written it; one a newer build marked is never written.
+Each unit is planned again inside its own hold, and one that has grown work
+the pass took no archive for is left for the next run.
+
+**Fail closed.** Every read that feeds a write is strict: `config.md` and each
+`campaign.md` must hold a record (`frontmatter.read_record`, raising
+`RecordUnreadableError` for zero bytes, a fence that never arrived, or a
+`config.md` without its format marker), each connection is read as the
+migration reads it (`ConnectionUnreadableError` for a file that is there but
+cannot be read, never "absent"), and each base preset strictly
+(`sampler_presets.read_preset_strict`). A scope whose read fails writes
+nothing — not a preset, not a marker — and so does every scope that names
+what failed; the rest of the pass goes on, and the file is never written
+over.
+
+**What is kept.** Retirement never writes a connection file here, so every
+`rev` — and with it every cached catalog, verified test and vector space —
+survives. Every value is derived deterministically, so two devices retiring
+one synced store write the same bytes (the write tokens aside, which are
+unique by design).
+
+**The markers.** `inference_retired: "1"` in `config.md` and in each
+`campaign.md` says the scope's legacy layout is gone; the planner reads a
+scope carrying it beside the current format marker as nothing to plan. A
+retired scope that holds a legacy key again — an older build wrote it back —
+gets a deletion-only write on the next start. A legacy key whose value is
+empty is no key at all: it is never work on its own, and a write made anyway
+drops it.
+
+**Born retired.** A store this build creates is born carrying the marker
+(`config.birth_fields`), and so is a campaign created on a retired store
+(`campaigns.lifecycle.publish_birth`, at creation only — a settings write or
+a fork never stamps it). Neither ever takes a `pre-retirement-` archive or
+runs a pass.
+
+**The status.** Retirement never moves `migrate.status().state`: a store
+whose migration is done reads `done` whatever retirement has left. What is
+left is the status's `retirement.left` (read fail-soft, never raising), and
+why the last pass stopped short its `retirement.failed`. A campaign a newer
+build marked stays in `left` for as long as it stays newer: this build cannot
+read it as retired, and the connections' legacy fields are not stripped while
+any campaign is unretired.
 
 ---
 

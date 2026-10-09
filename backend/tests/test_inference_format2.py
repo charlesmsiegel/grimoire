@@ -40,6 +40,7 @@ from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as base
 from . import inference_baseline_c as base_c
+from . import inference_fixtures
 from .llm_fakes import FakeLLM
 
 MODEL = "vendor/active"
@@ -58,6 +59,15 @@ def _migrate() -> None:
     got = migrate.ensure()
     assert got.state == "done", got
     assert store.inference_keys.is_current(store.read_config())
+
+
+def _migrate_unretired() -> None:
+    """`_migrate` as a C-H build migrated: retirement held off, so the store
+    is at format 2 with its legacy GLM effort still planned in memory."""
+    got = inference_fixtures.migrate_as_c_h()
+    assert got.state == "done", got
+    assert store.inference_keys.is_current(store.read_config())
+    assert not store.read_config()[store.inference_keys.RETIRED_KEY]
 
 
 def _catalog(vision: bool) -> None:
@@ -227,11 +237,13 @@ def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(legacy):
     shared with the route's fallback, so it is not derived -- the GLM
     connection's legacy effort stops riding there, at format 1 (in memory) and
     once migrated alike, and the planner notes it rather than dropping it
-    silently. The Primary's own slot still carries it, on its derived preset."""
+    silently. The Primary's own slot still carries it, on its derived preset.
+    Migrated and not yet retired: once retired the notes are the retirement
+    record's (Task 6b), and the planner plans nothing there."""
     ctx = base_c.STATES["glm_max_under_route_preset"](legacy)
     for migrated in (False, True):
         if migrated:
-            _migrate()
+            _migrate_unretired()
         for cid in ("", ctx["cid"]):
             conn = _primary("rolling-summary", cid)
             assert conn["sampling"]["preset_id"] == "cold", migrated
@@ -451,7 +463,7 @@ def _retire_by_hand(cid: str) -> None:
 
 def test_a_retired_scope_never_reads_the_legacy_effort(legacy):
     ctx = base_c.STATES["glm_reasoning"](legacy)
-    _migrate()
+    _migrate_unretired()
     _retire_by_hand(ctx["cid"])
     raw = store.llm_connections.read_connection_raw("glm")
     assert raw["reasoning_effort"] == "low"
@@ -518,7 +530,7 @@ def test_a_glm_role_saved_back_unchanged_is_accepted_and_sends_the_same(legacy):
     to. Sending the stored selection back unchanged is a 200, and the wire
     does not move."""
     base_c.STATES["glm_reasoning"](legacy)
-    _migrate()
+    _migrate_unretired()
     before = llm_sampling.effective(_primary())["effective"]
     assert before == {"temperature": 0.9, "reasoning_effort": "low"}
 

@@ -1422,8 +1422,11 @@ def _format_2_campaign(monkeypatch, tmp_path) -> str:
     llm_connections.create_connection("openai_compatible", "Mara Local",
                                       base_url="http://localhost:1234/v1")
     assert inference_keys.is_current(config.read_config())   # born at format 2
+    # The legacy key as an older build left it (this build seeds it below
+    # format 2 only, slice I).
     config.write_config(role_primary_provider="mara-local",
-                        role_primary_model="local-model")
+                        role_primary_model="local-model",
+                        active_connection_id="openrouter")
     assert config.read_config()["active_connection_id"] == "openrouter"
     return cid
 

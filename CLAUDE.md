@@ -561,17 +561,26 @@ would answer neither question.
   `tests/conftest.py` sets `GRIMOIRE_TEST_BIRTH=upgraded-default` at import,
   which adds the default Primary to the birth stamp, so every suite plays at
   the format a fresh install ships. A test about the product's own birth (the
-  marker alone) takes `@pytest.mark.product_birth`; one about the legacy
-  layout takes the `legacy_client` fixture or calls `legacy_store()`.
+  format and retirement markers alone) takes `@pytest.mark.product_birth`; one
+  about the legacy layout takes the `legacy_client` fixture or calls
+  `legacy_store()`.
   `test_format2_play.py` is the focused run of the turn path (a chat turn and
   a reroll) at that format.
 - **Model settings moved to a new layout, once, in the background**
   (`store/inference/migrate.py`, started by `main.start` at startup and after a
   data-dir move). Its first write is a full archive named
-  `pre-inference-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`), and it is the
-  one archive retention leaves alone: `GET /backups` lists it beside the
-  ordinary series, but `backups.sweep` counts and deletes only the ordinary
-  series, so it stays until a person removes it. Until the switch lands the
+  `pre-inference-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`), and retention
+  leaves it alone: `GET /backups` lists it beside the ordinary series, but
+  `backups.sweep` counts and deletes only the ordinary series, so it stays
+  until a person removes it. The same run then **retires** the legacy layout
+  (`store/inference/retire.py`, run by `migrate._retire` after the marker, and
+  again on any later start that finds something left): it persists the
+  planner's derived reasoning presets, repoints and deletes the legacy keys and
+  stamps `inference_retired`, failing closed on any file it cannot read, and
+  when that deletes or replaces a stored value it first takes a second
+  never-pruned full archive, `pre-retirement-grimoire-<stamp>.zip`
+  (`backups.RETIRE_PREFIX`) -- unless this same run took the
+  `pre-inference-` one. Until the switch lands the
   new Models settings answer 409 `not_migrated` (play carries on through the
   planner, in memory -- `store/inference/legacy_plan.py`, the one reader of the
   legacy layout, which `test_legacy_reader_guard.py` holds to being the only

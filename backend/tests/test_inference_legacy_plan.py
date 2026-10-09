@@ -35,6 +35,7 @@ from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.inference import facts, legacy_plan, migrate, retired
 from tests import inference_baseline as base
 from tests import inference_baseline_c as base_c
+from tests import inference_fixtures
 from tests.inference_fixtures import legacy_store
 
 keys = inference_keys
@@ -673,7 +674,9 @@ def test_the_migration_never_persists_a_repoint(home):
     config.write_config(active_connection_id="glm", fallback_connection_id="glm2",
                         route_dossier="glm")
 
-    assert migrate.ensure().state == "done"
+    # The migration alone: retirement, which persists the repoint after its
+    # presets, is held off.
+    assert inference_fixtures.migrate_as_c_h().state == "done"
 
     raw, _ = parse_frontmatter((home / "config.md").read_text(encoding="utf-8"))
     assert raw[keys.role_key("primary", "preset")] == "warm"
@@ -974,6 +977,29 @@ def test_a_marked_campaign_is_planned_as_the_migration_persists_it():
         unmarked = _campaign({"route_scene": "local"}, global_current=global_current,
                              lookup=_conns, presets=lambda _pid: None)
         assert unmarked.mapped[keys.pin_key("scene", "provider")] == "local"
+
+
+def test_a_retired_but_unmarked_scope_is_mapped_as_the_migration_maps_it(home):
+    """N1 (Task 6a): the retirement marker settles a scope only beside the
+    current format marker. Without it the migration still maps the scope
+    (`migrate.campaign` and the switch go by the format marker alone), so the
+    planner maps it too -- and derives nothing there, because the scope says
+    it is retired. Both scopes, and the overlay's shortcut."""
+    _glm("glm", "high")
+    retired_unmarked = {legacy_plan.RETIRED_KEY: "1", "route_scene": "glm"}
+    camp = _campaign(retired_unmarked)
+    assert camp.mapped[keys.pin_key("scene", "provider")] == "glm"
+    assert (camp.repoint, camp.presets, camp.notes) == ({}, (), ())
+
+    cfg = {legacy_plan.RETIRED_KEY: "1", "active_connection_id": "glm"}
+    glob = _plan(cfg)
+    assert glob.mapped[keys.role_key("primary", "provider")] == "glm"
+    assert (glob.repoint, glob.presets, glob.notes) == ({}, (), ())
+
+    seen = legacy_plan.overlay(cfg, retired_unmarked, cid="saltmarch")
+    assert seen.cfg[keys.role_key("primary", "provider")] == "glm"
+    assert seen.meta[keys.pin_key("scene", "provider")] == "glm"
+    assert keys.is_current(seen.meta)
 
 
 # ---- the overlay: play's read, in memory ----

@@ -27,8 +27,8 @@ Three different kinds of assertion live here, deliberately:
 The copy is `tests/frozen_copy.py`'s, the one the sweep regenerating
 `snapshot.json` makes too. `home/` is a format-1 store: the turn and absorb
 tests play it as it stands, through the planner in memory (inference slice
-I), and `test_a_migrated_copy_plays_a_turn` plays the same turn once the
-model-settings migration has persisted that plan.
+I), and `test_a_migrated_and_retired_copy_plays_a_turn` plays the same turn
+once the model-settings migration and retirement have persisted that plan.
 """
 
 from __future__ import annotations
@@ -312,12 +312,17 @@ def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client
 
 
 @pytest.mark.tracker
-def test_a_migrated_copy_plays_a_turn(frozen_home):
-    """The same turn, once the model-settings migration has persisted what
-    the planner plays in memory: the copy is switched to format 2 first."""
+def test_a_migrated_and_retired_copy_plays_a_turn(frozen_home):
+    """The same turn, once the model-settings migration and retirement have
+    persisted what the planner plays in memory: the copy is switched to
+    format 2 and its legacy keys retired first. `home/` itself is never
+    touched (the copy is `frozen_home`'s)."""
     got = migrate.ensure()
     assert got.state == "done", got
-    assert store.inference_keys.is_current(store.read_config())
+    cfg = store.read_config()
+    assert store.inference_keys.is_current(cfg)
+    assert cfg[store.inference_keys.RETIRED_KEY] == "1"
+    assert got.retirement["left"] == [], got.retirement
     with _played() as client:
         _plays_a_turn(client)
 

@@ -500,6 +500,17 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "`locks.holds_campaign(cid)` -- a check this guard cannot read, which "
         "is why the module is declared here rather than in DOMAIN_MODULES."
     ),
+    "store.inference.retire": (
+        "A considered exclusion, not a gap, for `store.inference.migrate`'s "
+        "reason: the caller holds the lock. `retire_campaign` retires one "
+        "campaign's `campaign.md` (an unmarked one migrated in the same write) "
+        "and is run by `migrate.ensure`'s retirement pass, one campaign at a "
+        "time under `campaign_lock_nowait(cid)` taken by the caller -- a busy "
+        "campaign is left for the next start. It refuses with RuntimeError "
+        "unless `locks.holds_campaign(cid)`, a check this guard cannot read, "
+        "which is why the module is declared here rather than in "
+        "DOMAIN_MODULES."
+    ),
     "store.campaigns.paths": (
         "`write_manifest` republishes the whole campaign manifest from a dict "
         "its callers read a moment earlier -- `overlay`, `sync`, `migrations` "

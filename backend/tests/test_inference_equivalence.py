@@ -316,11 +316,14 @@ def planned_cells(cid: str) -> dict:
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
 def test_planned_equals_persisted(state, tmp_path):
     """What a legacy store plays in memory, through the planner, is what it
-    plays once the migration has persisted the plan (`mapped`; the
-    derivation is still in memory on both sides until retirement)."""
+    plays once the migration and retirement have persisted the plan (`mapped`,
+    then the derived presets and their repoint) and deleted the legacy keys
+    it was planned from (slice I, Task 6a)."""
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
         planned = planned_cells(ctx["cid"])
         assert baseline.migrate_state(state).state == "done"
-        assert store.inference_keys.is_current(store.read_config())
+        cfg = store.read_config()
+        assert store.inference_keys.is_current(cfg)
+        assert cfg[store.inference_keys.RETIRED_KEY] == "1"
         assert planned_cells(ctx["cid"]) == planned
