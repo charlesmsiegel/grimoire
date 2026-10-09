@@ -1185,7 +1185,7 @@ _EMBEDDINGS = {
     "why": "Grimoire still uses basic matching to find possible overlaps in your ledgers. "
            "Semantic matching improves detection when the same story business is phrased "
            "differently.",
-    "fix": "/models/role/embedding", "fix_label": "Embeddings",
+    "fix": "/models/edit", "fix_label": "Embeddings",
 }
 
 _THREADS = {
@@ -1264,16 +1264,16 @@ def test_missing_embeddings_shows_one_library_chore_on_the_global_page(client, c
     items = _items(client, "embeddings", "")
     assert items["items"] == [{"id": "embeddings", "label": "Semantic matching",
                                "detail": "No embeddings connection and model are set",
-                               "fix": "/models/role/embedding"}]
+                               "fix": "/models/edit"}]
 
 
 def test_the_todo_embeddings_links_go_to_models(client, campaign):
     """The embedding model is a role on the Models screen now (slice C,
     Task 8): the chore and its item both link to it."""
     chore = next(c for c in _todo(client, "")["chores"] if c["id"] == "embeddings")
-    assert chore["fix"] == "/models/role/embedding"
+    assert chore["fix"] == "/models/edit"
     assert [i["fix"] for i in _items(client, "embeddings", "")["items"]] == [
-        "/models/role/embedding"]
+        "/models/edit"]
 
 
 def test_no_campaign_no_embeddings_chore(client):
@@ -1494,9 +1494,9 @@ def test_unpriced_fix_opens_pricing(client, monkeypatch):
     monkeypatch.setattr(store.usage, "unpriced_models",
                         lambda: [{"model": "z-ai/glm", "calls": 3}])
     chore = next(c for c in _todo(client, "")["chores"] if c["id"] == "unpriced")
-    assert chore["fix"] == "/config?section=pricing"
+    assert chore["fix"] == "/models#rates"
     assert [i["fix"] for i in _items(client, "unpriced", "")["items"]] == [
-        "/config?section=pricing"]
+        "/models#rates"]
 
 
 def _current() -> None:
@@ -1544,7 +1544,7 @@ def test_an_unpriced_item_without_a_provider_opens_the_pricing_table(client, mon
         {"model": "vendor/gone", "facts_model": "vendor/gone",
          "provider_id": "deleted-provider", "calls": 1}])
     items = _items(client, "unpriced", "")["items"]
-    assert [i["fix"] for i in items] == ["/config?section=pricing"] * 2
+    assert [i["fix"] for i in items] == ["/models#rates"] * 2
     assert [i["id"] for i in items] == [":vendor/legacy:vendor/legacy",
                                         "deleted-provider:vendor/gone:vendor/gone"]
 
@@ -1626,16 +1626,16 @@ def test_on_a_store_not_yet_migrated_no_rates_link_leads_to_an_editor_that_canno
          "provider_id": pid, "calls": 2}])
 
     chore = _chore(client, "", "unpriced-models")
-    assert chore["fix"] == "/config?section=pricing"
-    assert chore["fix_label"] == "Pricing"
+    assert chore["fix"] == "/models#rates"
+    assert chore["fix_label"] == "Token rates"
     assert "after the upgrade" in chore["why"]
     [item] = _items(client, "unpriced-models", "")["items"]
-    assert item["fix"] == "/config?section=pricing"
+    assert item["fix"] == "/models#rates"
 
     ledger = _chore(client, "", "unpriced")
     assert "after the upgrade" in ledger["why"]
     [item] = _items(client, "unpriced", "")["items"]
-    assert item["fix"] == "/config?section=pricing"
+    assert item["fix"] == "/models#rates"
 
 
 def test_on_a_store_a_newer_build_wrote_no_rates_link_is_offered(client, monkeypatch):
@@ -1659,13 +1659,13 @@ def test_on_a_store_a_newer_build_wrote_no_rates_link_is_offered(client, monkeyp
         {"model": "vendor/model-a", "facts_model": "vendor/model-a",
          "provider_id": pid, "calls": 2}])
     [item] = _items(client, "unpriced", "")["items"]
-    assert item["fix"] == "/config?section=pricing"
+    assert item["fix"] == "/models#rates"
     ledger = _chore(client, "", "unpriced")
     assert "newer version" in ledger["why"]
     assert "after the upgrade" not in ledger["why"]
     models = _chore(client, "", "unpriced-models")
     assert models is not None
-    assert models["fix"] == "/config?section=pricing"
+    assert models["fix"] == "/models#rates"
     assert "newer version" in models["why"]
     assert "after the upgrade" not in models["why"]
 
