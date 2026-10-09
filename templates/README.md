@@ -250,9 +250,10 @@ blank optional one renders nothing.
   quoted word. `existing` is folded with the candidate it names: one option
   `existing:<id>` (`identity.EXISTING_PREFIX`) per offered candidate, in rank
   order and before `new` and `uncertain`, described under that candidate's
-  clipped title (or its id when the title is blank), quoted and followed by
-  a comma, so the option line keeps one colon between the id and its
-  description. There is no `id`
+  clipped title (or its id when the title is blank): "the listed candidate
+  "<title>", only when …", the title quoted and followed by a comma, so the
+  rendered line (`- existing:<id>: …`) chains no further colon after the
+  id's own. There is no `id`
   question: a native decisions endpoint answers each question on its own,
   so an id asked "unless the decision is existing" was answered without the
   decision (spec 7.4). An option's aliases, each folded the same way, are
@@ -487,9 +488,7 @@ context and its ordered questions, and the reply is the JSON object
 `user.j2` vars:
 - `items` -- `decisions.Item`s, numbered from 0; each question renders its id,
   its type (yes/no, choice, scale) and its instructions, a choice its options
-  (`"id": description`, the id quoted so where it ends is plain whatever it
-  holds -- a folded `existing:<id>` carries a colon of its own -- and whether
-  null is allowed), a score its levels
+  (`id: description`, and whether null is allowed), a score its levels
   (`index: description`). Option aliases are the parser's and never shown
 - `explain` -- the rationale instruction, rendered last; "" renders nothing
 

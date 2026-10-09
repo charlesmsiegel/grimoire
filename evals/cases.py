@@ -1436,7 +1436,7 @@ def grade_decide_voice_drift(ctx: dict, output: str) -> list[Check]:
         schema=_decide_voice_drift_schema(ctx))
     (choice,) = ctx["items"][0].questions
     missing = [opt.id for opt in choice.options
-               if f'- "{opt.id}": {prompts.render("voice_drift/option.j2", verdict=opt.id)}'
+               if f"- {opt.id}: {prompts.render('voice_drift/option.j2', verdict=opt.id)}"
                not in text]
     return [*graders.grade_prompt_section(messages, "question", "voice_drift/question.j2"),
             Check("prompt.options", not missing,
@@ -1524,8 +1524,8 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
         schema=_decide_speaker_schema(ctx))
     grimoire = prompts.render("scene/response_selector_grimoire.j2")
     wanted = [f"- {response_protocol.SELECTOR_QUESTION} (choice, or null for none of these): ",
-              *(f'- "{entry["ref"]}": {entry["name"]}' for entry in ctx["roster"]),
-              f'- "{response_protocol.GRIMOIRE_REF}": {grimoire}']
+              *(f"- {entry['ref']}: {entry['name']}" for entry in ctx["roster"]),
+              f"- {response_protocol.GRIMOIRE_REF}: {grimoire}"]
     missing = [line for line in wanted if line not in text]
     heard = [turn["content"] for turn in ctx["conversation"] if turn["content"] not in text]
     return [*graders.grade_prompt_section(messages, "question",
