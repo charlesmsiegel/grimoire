@@ -279,6 +279,64 @@ def test_provider_and_model_take_the_named_connections_preset_on_format_1(at):
     assert resolved.chain.primary.sampling.scope == "connection"
 
 
+#: What `main` (4e822aa) sends for a format-1 reroll naming the GLM
+#: connection below, recorded there by the facade over recording clients
+#: (`test_adapter_wire_golden._drive`): its own preset ("Warm", temperature
+#: 0.9) and its legacy reasoning effort. Slice I carries the effort on the
+#: derived preset the planner plans for that slot (`Overlay.selection`).
+_GLM_WIRE = {"reasoning_effort": "high", "sampling": {"temperature": 0.9}, "strict": False}
+
+
+def _glm_format_1(*, active: bool) -> None:
+    store.llm_connections.create_connection(
+        "openai_compatible", "glm", base_url="https://api.z.ai/api/paas/v4",
+        api_key="sk-test-glm", model="glm-5.3", reasoning_effort="high",
+        sampler_preset="warm")
+    if active:
+        store.write_config(active_connection_id="glm")
+    assert not store.inference_keys.is_current(store.read_config())
+
+
+@pytest.mark.parametrize("active", [False, True], ids=["from_openrouter", "on_glm"])
+@pytest.mark.parametrize("body, model, routed", [
+    ({"provider": "glm"}, "glm-5.3", None),
+    ({"connection_id": "glm"}, "glm-5.3", None),
+    ({"provider": "glm", "model": "glm-5.3-flash"}, "glm-5.3-flash", True),
+    ({"connection_id": "glm", "model": "glm-5.3-flash"}, "glm-5.3-flash", True),
+])
+def test_a_format_1_reroll_naming_a_glm_provider_sends_its_effort(at, active, body, model,
+                                                                  routed):
+    """Brutal re-review 🟡A: a format-1 reroll naming a GLM connection --
+    alone, as `connection_id`, or with a model, from another standing route
+    or onto the standing GLM provider itself -- sends what main sent: the
+    connection's own preset and its legacy reasoning effort, on the wire.
+    Onto the standing provider at its own model it is no move at all."""
+    from .test_adapter_wire_golden import _drive
+
+    ctx = at()
+    _glm_format_1(active=active)
+    resolved, got_routed = _run(body, ctx["cid"])
+    assert (resolved.chain.primary.provider_id, resolved.chain.primary.model) == ("glm", model)
+    record = _drive("ok", resolved.chain, frozenset())
+    sent = record["wire"]["openai_compatible"]
+    assert [call[1][1] for call in sent] == [model]
+    assert sent[0][2] == _GLM_WIRE
+    assert got_routed is (routed if routed is not None else not active)
+    if active:
+        standing = _drive("ok", _run({}, ctx["cid"])[0].chain, frozenset())
+        assert standing["wire"]["openai_compatible"][0][2] == _GLM_WIRE
+
+
+def test_a_format_1_reroll_override_preset_still_drops_the_effort(at):
+    """Ratification item 4, unchanged: a reroll whose OWN preset sets no
+    reasoning effort sends none, on a GLM provider too."""
+    ctx = at()
+    _glm_format_1(active=True)
+    resolved, _ = _run({"provider": "glm", "preset": "hot"}, ctx["cid"])
+    assert resolved.chain.primary.sampling.preset_id == "hot"
+    assert "reasoning_effort" not in resolved.chain.primary.sampling.params
+
+
 def test_a_preset_is_honoured_on_format_1_too(at):
     """Spec 5.6 settles the override preset without restricting it to the new
     layout, and a store whose migration keeps failing can stay at format 1:

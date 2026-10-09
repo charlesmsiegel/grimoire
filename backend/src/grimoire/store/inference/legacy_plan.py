@@ -617,18 +617,29 @@ def _derivation(view: Mapping, *, campaign: bool, conn: Lookup,
         return {"name": got.name, "params": got.params} if got is not None else presets(pid)
 
     for preset_key, selection in _slots(view, campaign=campaign):
-        effort = _legacy_effort(selection, conn, REPRESENTABLE)
-        if not effort:
+        made = _derived_for(selection, conn, presets, existing)
+        if made is None:
             continue
-        own = selection.preset.strip()
-        base = presets(own) if own else None
-        params = base.get("params") if base is not None else None
-        if isinstance(params, dict) and "reasoning_effort" in params:
-            continue
-        made = derive(base, effort, existing)
         derived.setdefault(made.id, made)
         repoint[preset_key] = made.id
     return repoint, tuple(derived.values())
+
+
+def _derived_for(selection: cascade.Selection, conn: Lookup, presets: PresetRead,
+                 existing: PresetRead) -> Derived | None:
+    """The derived preset one selection slot is repointed at (ruling 4), or
+    None: its provider `openai_compatible` with a legacy effort one of
+    `REPRESENTABLE`, its model GLM, and its own preset, read, setting no
+    reasoning effort. `existing` is what `derive` checks an id against."""
+    effort = _legacy_effort(selection, conn, REPRESENTABLE)
+    if not effort:
+        return None
+    own = selection.preset.strip()
+    base = presets(own) if own else None
+    params = base.get("params") if base is not None else None
+    if isinstance(params, dict) and "reasoning_effort" in params:
+        return None
+    return derive(base, effort, existing)
 
 
 class _RoutePreset(NamedTuple):
@@ -898,15 +909,35 @@ class Overlay(NamedTuple):
     #: planned): what `selection` reads, so a format-1 reroll reads the
     #: connection exactly as the mapping did, with no second plan.
     lookup: Lookup | None = None
+    #: The memoised preset reader the plan used, answering with the derived
+    #: presets (`presets`) first; None when nothing was planned.
+    read_preset: PresetRead | None = None
 
-    def selection(self, conn_id: str) -> cascade.Selection:
-        """Connection `conn_id` as the planner maps it when a legacy key names
-        it: its own model and preset (empty for an unknown id or one that sets
-        none) -- what a format-1 reroll naming the provider runs on (spec
-        5.6). Read through this overlay's lookup, so the record fallback for a
-        stripped connection applies as it does to the mapping."""
-        sel = _selection(conn_id, self.lookup or _no_connection)
-        return cascade.Selection(sel["provider"], sel["model"], sel["preset"])
+    def selection(self, conn_id: str, model: str = "") -> cascade.Selection:
+        """Connection `conn_id` as the planner plans a slot that names it --
+        what a format-1 reroll naming the provider runs on (spec 5.6): its own
+        model (or `model`, when the reroll names one) and its own preset, then
+        the planner's derivation of that slot (`_derived_for`), so a GLM
+        connection's legacy reasoning effort rides a derived preset exactly as
+        it does on a stored slot, and the reroll sends what the legacy wire
+        sent. A derived preset no stored slot planned is added to `presets`
+        here, so the resolution that asked can read it. Read through this
+        overlay's lookup, so the record fallback for a stripped connection
+        applies as it does to the mapping. Empty model and preset for an
+        unknown id or one that sets none."""
+        conn = self.lookup or _no_connection
+        sel = _selection(conn_id, conn)
+        chosen = cascade.Selection(sel["provider"], model or sel["model"], sel["preset"])
+        if self.read_preset is None or not isinstance(self.presets, dict):
+            return chosen
+        made = _derived_for(chosen, conn, self.read_preset, self.read_preset)
+        if made is None:
+            return chosen
+        got = _virtual(made)
+        held = self.presets.setdefault(made.id, got)
+        if (held["name"], held["params"]) != (got["name"], got["params"]):
+            raise OverlayError(f"derived preset {made.id!r} planned with two bodies")
+        return chosen._replace(preset=made.id)
 
     def legacy_route(self, route: routing.Route | None) -> str:
         """The legacy route `route`'s settings were stored under at format 1
@@ -995,11 +1026,11 @@ def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -
     legacy = not _settled(cfg) and not keys.is_current(cfg)
     if not meta:
         return Overlay(glob, {}, virtual, gplan.facts, gplan.notes, stored, {},
-                       embedding_role(cfg), legacy, conn)
+                       embedding_role(cfg), legacy, conn, presets)
     cplan = campaign_plan(meta, glob=glob,
                           global_current=keys.is_current(cfg) or keys.is_newer(cfg),
                           lookup=conn, presets=presets, cid=cid)
     keep(cplan)
     return Overlay(glob, _as_current(meta, cplan), virtual, gplan.facts,
                    gplan.notes + cplan.notes, stored, _persisted(meta, cplan),
-                   embedding_role(cfg), legacy, conn)
+                   embedding_role(cfg), legacy, conn, presets)

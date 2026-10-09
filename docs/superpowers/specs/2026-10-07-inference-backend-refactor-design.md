@@ -706,8 +706,12 @@ connection still has a model of its own.
 From slice I a format-1 store is read through the planner's in-memory
 overlay (§11.4), and this still holds there (user ruling 2026-10-09): a
 provider-only override runs the planner's selection of that connection — its
-own model and preset — and needs no standing selection; a provider and a model
-take that connection's own preset, not the standing route's; and a
+own model and preset, and on an `openai_compatible` GLM connection with a
+legacy reasoning effort the derived preset that carries it (§11.2 step 4), as
+a stored slot on it would, so the reroll sends that effort as the legacy wire
+did — and needs no standing selection; a provider and a model take that
+connection's own preset (derived the same way, judged on the named model), not
+the standing route's; and a
 `missing_key` refusal keeps its format-1 sentence (the bare reason, or "(name,
 routed for <legacy route>)" for a pin). The resolver reads all three off the
 overlay (`Overlay.legacy`, `Overlay.selection`), never a legacy field. Only

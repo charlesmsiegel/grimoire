@@ -220,11 +220,13 @@ def _preset_lookup(virtual: Mapping[str, dict] | None = None) -> Callable[[str],
     planner's `virtual` presets (`Overlay.presets`, the derived reasoning
     presets retirement has not written yet) answering first."""
     seen: dict[str, dict | None] = {}
-    virtual = virtual or {}
+    # The mapping itself, not a copy: a format-1 reroll's derived preset is
+    # added to it after this reader is made (`Overlay.selection`).
+    planned: Mapping[str, dict] = virtual if virtual is not None else {}
 
     def lookup(pid: str) -> dict | None:
-        if pid in virtual:
-            return virtual[pid]
+        if pid in planned:
+            return planned[pid]
         if pid not in seen:
             seen[pid] = sampler_presets.read_preset(pid)
         return seen[pid]
@@ -608,7 +610,7 @@ def own_target(raw: dict) -> wire.Target:
 # ---- the resolver ----
 def _overridden(standing: Selection | None, override: Selection | None,
                 lookup: llm_connections.Lookup, *,
-                own: Callable[[str], Selection] | None = None) -> Selection | None:
+                own: Callable[[str, str], Selection] | None = None) -> Selection | None:
     """The selection one call runs on, given a per-call override (#77).
 
     A model alone drives the STANDING provider at that model, so with no
@@ -625,7 +627,9 @@ def _overridden(standing: Selection | None, override: Selection | None,
       onto a working endpoint is how a broken standing route is fixed. A
       format-1 connection still has a model of its own, and a provider and a
       model together take the named connection's own preset too, as a
-      format-1 store always has.
+      format-1 store always has. That preset is the planner's for such a
+      slot, so a GLM connection's legacy reasoning effort rides its derived
+      preset and is sent, as the legacy wire sent it.
 
     The override's preset is never merged into the selection: it outranks the
     route's preset, which no selection's own can, so `resolve` applies it on
@@ -636,7 +640,7 @@ def _overridden(standing: Selection | None, override: Selection | None,
         if lookup(override.provider) is None:
             return None
         if own is not None:
-            base = own(override.provider)
+            base = own(override.provider, override.model)
         elif standing is not None and standing.provider == override.provider:
             base = standing
         elif standing is not None:
