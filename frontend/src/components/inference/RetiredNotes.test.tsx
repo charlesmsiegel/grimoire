@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { api, type RetiredNote } from "../../api/client";
 import { RetiredNotes } from "./RetiredNotes";
@@ -44,8 +44,21 @@ test("Dismiss records it on the server, then drops the row", async () => {
   const onDismissed = vi.fn();
   render(<RetiredNotes notes={[note(), note({ id: "b2" })]} onDismissed={onDismissed} />);
   fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0]);
-  await vi.waitFor(() => expect(onDismissed).toHaveBeenCalledWith("a1"));
+  await waitFor(() => expect(onDismissed).toHaveBeenCalledWith("a1"));
   expect(api.dismissRetiredNote).toHaveBeenCalledWith("a1");
+});
+
+test("each note's button waits on its own dismissal", async () => {
+  let finish: (v: { ok: boolean }) => void = () => {};
+  (api.dismissRetiredNote as any).mockImplementationOnce(
+    () => new Promise((resolve) => { finish = resolve; }));
+  render(<RetiredNotes notes={[note(), note({ id: "b2" })]} onDismissed={() => {}} />);
+  const [first, second] = screen.getAllByRole("button", { name: "Dismiss" });
+  fireEvent.click(first);
+  await waitFor(() => expect(first).toBeDisabled());
+  expect(second).toBeEnabled();
+  finish({ ok: true });
+  await waitFor(() => expect(first).toBeEnabled());
 });
 
 test("a dismiss the server refuses keeps the row and says why", async () => {

@@ -18,12 +18,13 @@ export function RetiredNotes({ notes, onDismissed }: {
   onDismissed: (id: string) => void;
 }) {
   const [error, setError] = useState<unknown>(null);
-  const [busy, setBusy] = useState("");
+  // Every note whose dismissal is in flight, so each button waits on its own.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
 
   if (notes.length === 0) return null;
 
   async function dismiss(id: string) {
-    setBusy(id);
+    setBusy((prev) => new Set(prev).add(id));
     setError(null);
     try {
       await api.dismissRetiredNote(id);
@@ -31,19 +32,26 @@ export function RetiredNotes({ notes, onDismissed }: {
     } catch (err) {
       setError(err);
     } finally {
-      setBusy("");
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   }
 
   return (
     <section className="banner retired-notes" aria-label="Not carried over">
-      <p>When these settings moved to the new layout, a few things could not come with them:</p>
+      <p>
+        When these settings moved to the new layout, a few things could not come with
+        them. To get one back, set it again on the route, preset or model it names.
+      </p>
       <ul>
         {notes.map((n) => (
           <li key={n.id}>
             <span className="field-hint">{where(n)}: </span>
             {n.text}{" "}
-            <button type="button" className="subtle" disabled={busy === n.id}
+            <button type="button" className="subtle" disabled={busy.has(n.id)}
                     onClick={() => void dismiss(n.id)}>
               Dismiss
             </button>

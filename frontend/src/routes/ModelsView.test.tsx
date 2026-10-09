@@ -167,6 +167,30 @@ test("what was not carried over sits under the heading until dismissed", async (
   expect(api.dismissRetiredNote).toHaveBeenCalledWith("a1");
 });
 
+test("two dismisses in flight both stick", async () => {
+  const note = (id: string) => ({
+    id, scope: "global", scope_name: "", subject: id, provider_id: "glm", effort: "high",
+    kind: "route_preset", text: `Note ${id} — this was not carried over.`,
+  });
+  (api.getInferenceSettings as any).mockResolvedValue(
+    settings({ retirement_notes: [note("a1"), note("b2")] }));
+  const finish: Record<string, () => void> = {};
+  (api.dismissRetiredNote as any).mockImplementation((id: string) =>
+    new Promise((resolve) => { finish[id] = () => resolve({ ok: true }); }));
+  open();
+  const notice = await screen.findByRole("region", { name: "Not carried over" });
+  const [a, b] = within(notice).getAllByRole("button", { name: "Dismiss" });
+  fireEvent.click(a);
+  fireEvent.click(b);
+  await waitFor(() => expect(Object.keys(finish).sort()).toEqual(["a1", "b2"]));
+  act(() => finish.a1());
+  await waitFor(() => expect(screen.queryByText(/Note a1/)).toBeNull());
+  act(() => finish.b2());
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Not carried over" }))
+    .toBeNull());
+  expect(screen.queryByText(/Note a1/)).toBeNull();
+});
+
 test("with nothing lost, there is no notice", async () => {
   open();
   await screen.findByRole("heading", { level: 1, name: "Models" });

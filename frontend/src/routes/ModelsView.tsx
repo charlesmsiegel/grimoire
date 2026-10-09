@@ -245,6 +245,10 @@ export default function ModelsView() {
   const { settings, error, install } = useInferenceSettings();
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [advanced, setAdvanced] = useState(!!routeParam);
+  // Notes dismissed on this page, by id: filtered out of whichever view is
+  // newest, so two dismisses in flight both stick and neither stands in for
+  // a fresher read (the server has recorded each before it lands here).
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   // Another record: start from its read-only view. A route opened by address
   // brings the Advanced rows out with it.
   useEffect(() => {
@@ -359,12 +363,9 @@ export default function ModelsView() {
         </div>
         <InferenceBanner status={banner} />
         {settings && (
-          <RetiredNotes notes={settings.retirement_notes ?? []}
-                        onDismissed={(id) => install({
-                          ...settings,
-                          retirement_notes: (settings.retirement_notes ?? [])
-                            .filter((n) => n.id !== id),
-                        })} />
+          <RetiredNotes
+            notes={(settings.retirement_notes ?? []).filter((n) => !dismissed.has(n.id))}
+            onDismissed={(id) => setDismissed((prev) => new Set(prev).add(id))} />
         )}
         {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         {body}
