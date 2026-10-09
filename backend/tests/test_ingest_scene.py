@@ -190,7 +190,8 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     assert applied and failures == []
     st = playstate.read_state(croot, "marisol")
     assert "wary of Julian" in st["current_state"]
-    assert client.calls[0][1]["model"] == "test/model" and client.calls[0][1]["api_key"] == "k"
+    sent = client.calls[0][1].primary
+    assert sent.model == "test/model" and sent.api_key == "k"
 
 
 def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
@@ -1443,7 +1444,7 @@ def test_the_cli_runs_where_the_apps_absorb_would(monkeypatch, tmp_path, capsys)
     assert ingest_scene.main() == 0, capsys.readouterr().err
 
     (_messages, conn), = client.calls
-    assert (conn["id"], conn["model"]) == ("mara-local", "local-model")
+    assert (conn.primary.provider_id, conn.primary.model) == ("mara-local", "local-model")
     # The scene is stamped with what chat would run on, as the app stamps one.
     sid = ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["sid"]
     from grimoire.store import scenes

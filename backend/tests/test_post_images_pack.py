@@ -7,6 +7,7 @@ from copy import deepcopy
 
 from grimoire import content_parts as cp
 from grimoire.store.context import assemble, pack
+from tests import wire_kit
 
 COUNT = len  # one token per character keeps the arithmetic legible
 
@@ -142,7 +143,7 @@ def test_a_steered_capture_counts_text_and_images(monkeypatch):
                         lambda cid, sid, task, breakdown, **k: recorded.update(breakdown))
     monkeypatch.setattr(store.context, "budget_tokens", lambda: 0)
     msgs = [{"role": "user", "content": [_t("see map"), cp.ref("/u/a", "map", False)]}]
-    character_turns._capture("c", "s", "chat", msgs, {"kind": "openrouter", "model": "m"})
+    character_turns._capture("c", "s", "chat", msgs, wire_kit.target(kind="openrouter", model="m"))
     row, = recorded["sections"]
     assert row["text"] == "see map"
     assert row["tokens"] == store.tokens.count_tokens("see map") + pack.IMAGE_TOKENS
