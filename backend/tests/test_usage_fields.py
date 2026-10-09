@@ -3,15 +3,14 @@
 A row used to say which adapter kind ran (`provider`) and the connection's
 display name. Neither is enough to price a call from the rates a user stated
 on a provider, nor to say whether it billed a subscription. So the resolver
-stamps an account block (`llm_usage.ACCOUNT_KEY`) onto each attempt's
-connection dict -- `operation`, `role`, `billing` -- and `llm._stamp` files it,
-with the provider's id, the sampler preset actually sent and the model the
-call asked for, into the usage holder `store.usage.Meter` writes.
+stamps an account (`wire.Account`) onto each attempt's target -- `operation`,
+`role`, `billing` -- and `llm._stamp` files it, with the provider's id, the
+sampler preset actually sent and the model the call asked for, into the usage
+holder `store.usage.Meter` writes.
 
-The account block is never mutated in place: `{**conn}` copies share it, so
-one in-place write would rewrite the primary's block and the fallback's copy
-at once. A stamp is laid on a target (`wire.Target.with_account`), which
-makes new ones and leaves the resolution's as they were.
+An account is never mutated in place: a target is frozen, and a stamp laid on
+one (`wire.Target.with_account`) makes a new one and leaves the resolution's
+as it was.
 
 Invented provider names, fake keys and `vendor/model-*` models only.
 """
@@ -19,6 +18,7 @@ Invented provider names, fake keys and `vendor/model-*` models only.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from copy import deepcopy
 
@@ -192,7 +192,7 @@ def test_a_fallback_row_files_the_route_preset_it_was_sent(with_fallback):
     assert store.sampler_presets.create_preset("p2", {"temperature": 0.7}) == "p2"
     store.write_config(**{keys.preset_key("scene"): "p2"})
     resolved = require_inference("chat", "")
-    assert resolved.conn[llm.FALLBACK_KEY]["sampling"]["preset_id"] == "p2"
+    assert resolved.chain.fallback.sampling.preset_id == "p2"
     row = _filed(resolved.chain, RefusingProvider(failing={MODEL_A}))
     assert row["model"] == MODEL_B
     assert row["preset"] == "p2"
@@ -222,7 +222,7 @@ def test_a_pinned_route_files_no_role(home):
 
 def test_an_override_that_changes_the_model_files_no_role(primary):
     resolved = resolve.resolve("chat", "", override=Selection(primary, MODEL_B, ""))
-    assert resolved.attempts[0].conn["model"] == MODEL_B
+    assert resolved.attempts[0].target.model == MODEL_B
     row = _filed(resolved.attempts[0].target, ScriptedProvider(["hi"]))
     assert row["model"] == MODEL_B
     assert row["operation"] == "generate"
@@ -232,14 +232,14 @@ def test_an_override_that_changes_the_model_files_no_role(primary):
 def test_an_override_that_changes_the_provider_files_no_role(primary):
     other = _openai("Mara")
     resolved = resolve.resolve("chat", "", override=Selection(other, "", ""))
-    assert resolved.attempts[0].conn["id"] == other
-    assert "role" not in resolved.attempts[0].conn[llm_usage.ACCOUNT_KEY]
+    assert resolved.attempts[0].target.provider_id == other
+    assert resolved.attempts[0].target.account.role == ""
 
 
 def test_a_preset_only_override_keeps_the_role(primary):
     assert store.sampler_presets.create_preset("p3", {"temperature": 0.1}) == "p3"
     resolved = resolve.resolve("chat", "", override=Selection("", "", "p3"))
-    assert resolved.attempts[0].conn["sampling"]["preset_id"] == "p3"
+    assert resolved.attempts[0].target.sampling.preset_id == "p3"
     row = _filed(resolved.attempts[0].target, ScriptedProvider(["hi"]))
     assert row["role"] == "primary"
     assert row["preset"] == "p3"
@@ -247,7 +247,7 @@ def test_a_preset_only_override_keeps_the_role(primary):
 
 def test_an_override_naming_the_standing_selection_keeps_the_role(primary):
     resolved = resolve.resolve("chat", "", override=Selection(primary, MODEL_A, ""))
-    assert resolved.attempts[0].conn[llm_usage.ACCOUNT_KEY]["role"] == "primary"
+    assert resolved.attempts[0].target.account.role == "primary"
 
 
 def test_a_reroll_naming_the_claude_default_keeps_the_role(home):
@@ -258,20 +258,18 @@ def test_a_reroll_naming_the_claude_default_keeps_the_role(home):
     _format2(role_primary_provider=pid, role_primary_model="")
     same = resolve.resolve("chat", "",
                            override=Selection(pid, llm.CLAUDE_DEFAULT_MODEL, ""))
-    assert same.attempts[0].conn[llm_usage.ACCOUNT_KEY]["role"] == "primary"
+    assert same.attempts[0].target.account.role == "primary"
     other = resolve.resolve("chat", "", override=Selection(pid, "sonnet", ""))
-    assert other.attempts[0].conn["model"] == "sonnet"
-    assert "role" not in other.attempts[0].conn[llm_usage.ACCOUNT_KEY]
+    assert other.attempts[0].target.model == "sonnet"
+    assert other.attempts[0].target.account.role == ""
 
 
-def test_a_lowered_conn_carries_billing_without_a_resolution(home):
+def test_a_target_carries_billing_without_a_resolution(home):
     raw = {"id": "realm", "kind": "openai_compatible", "name": "Realm",
            "base_url": "https://api.openai.com/v1", "model": MODEL_A}
-    assert resolve.lower(raw, resolve.NO_SAMPLING)[resolve.ACCOUNT_KEY] == {
-        "billing": "metered"}
+    assert resolve.provider_target(raw).account == wire.Account(billing="metered")
     plan = {**raw, "base_url": "https://api.z.ai/api/coding/paas/v4"}
-    assert resolve.lower(plan, resolve.NO_SAMPLING)[resolve.ACCOUNT_KEY] == {
-        "billing": "subscription"}
+    assert resolve.provider_target(plan).account == wire.Account(billing="subscription")
 
 
 def test_a_decision_mode_in_the_account_is_filed(primary):
@@ -282,37 +280,32 @@ def test_a_decision_mode_in_the_account_is_filed(primary):
     assert row["role"] == "primary"
 
 
-def test_account_blocks_are_never_mutated_in_place(with_fallback):
+def test_accounts_are_never_mutated_in_place(with_fallback):
     resolved = resolve.resolve("chat", "")
     first, second = resolved.attempts
-    # 1. The two attempts' blocks are distinct objects, and the attached
+    # 1. The two attempts' accounts are distinct objects, and the riding
     # fallback is the stamped one.
-    assert first.conn[resolve.ACCOUNT_KEY] is not second.conn[resolve.ACCOUNT_KEY]
-    assert first.conn[resolve.FALLBACK_KEY] is second.conn
-    assert second.conn[resolve.ACCOUNT_KEY] == {
-        "billing": "subscription", "operation": "generate", "role": "primary"}
+    assert first.target.account is not second.target.account
+    assert resolved.chain.fallback is second.target
+    assert second.target.account == wire.Account(
+        billing="subscription", operation="generate", role="primary")
 
-    # 2. A stamp makes a new target, and leaves the resolution's target, its
-    # dict's block and a shallow copy's as they were.
-    conn = first.conn
-    block = conn[resolve.ACCOUNT_KEY]
-    before = dict(block)
-    shallow = {**conn}
+    # 2. A stamp makes a new target, and leaves the resolution's as it was.
     target = first.target
+    before = target.account
     stamped = target.with_account(decision_mode="native")
-    assert conn[resolve.ACCOUNT_KEY] is block and block == before
-    assert shallow[resolve.ACCOUNT_KEY] is block and block == before
-    assert target.account.decision_mode == "" and stamped is not target
-    assert stamped.account == wire.Account(**{**before, "decision_mode": "native"})
+    assert target.account is before and target.account.decision_mode == ""
+    assert stamped is not target
+    assert stamped.account == wire.Account(**{**dataclasses.asdict(before),
+                                              "decision_mode": "native"})
 
-    # 3. `_stamp` and `account` read the attempt they are handed and write
-    # nothing to it (a target is frozen; `account` still reads a dict).
-    one = {k: v for k, v in conn.items() if k != resolve.FALLBACK_KEY}
-    snapshot = deepcopy(one)
+    # 3. `_stamp` and `account` read the target they are handed and write
+    # nothing to it (a target is frozen).
+    snapshot = deepcopy(target)
     holder: dict = {}
     llm._stamp(holder, target, 1)
-    llm_usage.account(holder, one)
-    assert one == snapshot
+    llm_usage.account(holder, target)
+    assert target == snapshot
     assert holder["operation"] == "generate"
     holder = {}
     llm._stamp(holder, stamped, 1)
@@ -321,15 +314,16 @@ def test_account_blocks_are_never_mutated_in_place(with_fallback):
 
 def test_account_never_raises_and_copies_only_strings():
     holder: dict = {}
-    llm_usage.account(holder, {"id": 3, "sampling": "nope",
-                               llm_usage.ACCOUNT_KEY: {"role": None, "billing": "",
-                                                       "operation": "generate",
-                                                       "elsewhere": "x"}})
+    odd = wire.Target(provider_id=3, kind="openrouter", model="m",  # type: ignore[arg-type]
+                      account=wire.Account(role=None, billing="",  # type: ignore[arg-type]
+                                           operation="generate"))
+    llm_usage.account(holder, odd)
     assert holder == {"operation": "generate"}
-    llm_usage.account(holder, {llm_usage.ACCOUNT_KEY: "not a block", "sampling": {}})
-    llm_usage.account(None, {"id": "realm"})
+    llm_usage.account(holder, "not a target")  # type: ignore[arg-type]
+    llm_usage.account(None, wire.Target(provider_id="realm", kind="openrouter", model="m"))
 
 
-def test_account_key_is_one_spelling():
-    assert resolve.ACCOUNT_KEY == llm_usage.ACCOUNT_KEY == "_account"
+def test_the_account_fields_are_the_ledgers():
     assert llm_usage.ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode")
+    fields = tuple(f.name for f in dataclasses.fields(wire.Account))
+    assert fields == llm_usage.ACCOUNT_FIELDS

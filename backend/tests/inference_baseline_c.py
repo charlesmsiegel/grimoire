@@ -153,17 +153,27 @@ STATES: dict[str, Callable[[TestClient], dict]] = {
 
 
 # ---- what is observed, beyond `base.observe` ----
-def _lowered(task: str, cid: str) -> dict | None:
-    """The lowered primary connection's model behaviour for `task`, or None
-    when nothing resolves. Read off the resolution, not the seam: a refusal
-    for want of a key does not change what the connection would send."""
-    conn = inference.resolve(task, cid).conn
-    if conn is None:
+def _sent(task: str, cid: str) -> dict | None:
+    """The primary attempt's model behaviour for `task`, or None when nothing
+    resolves. Read off the resolution, not the seam: a refusal for want of a
+    key does not change what the connection would send.
+
+    Projected from the attempt's target into the keys the frozen baseline
+    recorded off the lowered connection dict. `vision` is the post-image
+    preference that dict carried, which was its model's facts' (`facts.of`,
+    as the attempt read them -- below format 2, the planner's adopted
+    legacy facts), "" when they state none: the same value, read where it
+    lives."""
+    resolved = inference.resolve(task, cid)
+    if not resolved.attempts:
         return None
-    return {"prefill": conn.get("prefill"), "post_process": conn.get("post_process"),
-            "vision": conn.get("vision"),
-            "effective": llm_sampling.effective(conn)["effective"],
-            "post_images": post_images.capability(conn)}
+    attempt = resolved.attempts[0]
+    target = attempt.target
+    vision = attempt.facts.get("vision")
+    return {"prefill": target.prefill, "post_process": target.post_process,
+            "vision": vision if isinstance(vision, str) else "",
+            "effective": llm_sampling.effective(target)["effective"],
+            "post_images": post_images.capability(target)}
 
 
 def _seam(task: str, cid: str) -> str:
@@ -178,7 +188,7 @@ def _seam(task: str, cid: str) -> str:
 def extra(ctx: dict) -> dict:
     cid = ctx["cid"]
     return {
-        "lowered": {task: {"global": _lowered(task, ""), "campaign": _lowered(task, cid)}
+        "lowered": {task: {"global": _sent(task, ""), "campaign": _sent(task, cid)}
                     for task in [*sorted(routing.TASK_ROUTE), ""]},
         "image_description": {"global": _seam("image-description", ""),
                               "campaign": _seam("image-description", cid)},

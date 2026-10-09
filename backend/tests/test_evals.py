@@ -91,10 +91,11 @@ def test_a_live_run_resolves_through_the_seam_not_the_active_connection(
 
     conns = runner.resolve_connections(case_mod.CASES)
 
-    assert (conns["chat"].conn["id"], conns["chat"].conn["model"]) == ("mara-local", "big")
+    chat = conns["chat"].chain.primary
+    assert (chat.provider_id, chat.model) == ("mara-local", "big")
     # Absorb's route defaults to the Fast role.
-    assert (conns["absorb"].conn["id"],
-            conns["absorb"].conn["model"]) == ("winifred-local", "small")
+    assert (conns["absorb"].chain.primary.provider_id,
+            conns["absorb"].chain.primary.model) == ("winifred-local", "small")
 
     # A refusal is the seam's own reason.
     config.write_config(role_primary_provider="openrouter", role_primary_model="vendor/m")
@@ -144,8 +145,9 @@ def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
     resolved = conns[runner.conn_key(case)]
     assert not isinstance(resolved, dict)
     assert (resolved.task, resolved.operation) == ("scene-break", "decide")
-    assert (resolved.conn["id"], resolved.conn["model"]) == ("winifred-local", "small")
-    assert conns[runner.conn_key(plain)].conn["id"] == "mara-local"
+    assert (resolved.chain.primary.provider_id,
+            resolved.chain.primary.model) == ("winifred-local", "small")
+    assert conns[runner.conn_key(plain)].chain.primary.provider_id == "mara-local"
     assert runner.conn_key(plain) == "chat"
 
     fake = FakeLLM([[reply]])
@@ -331,7 +333,6 @@ def test_live_forces_the_structured_backend(monkeypatch, tmp_path):
 def test_a_forced_backend_measures_the_primary_alone(monkeypatch, tmp_path):
     """A forced stage is the primary without the fallback it carries, so the
     comparison is of one model on two backends."""
-    from grimoire import llm
     from grimoire.store import config, llm_connections
 
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
@@ -339,12 +340,12 @@ def test_a_forced_backend_measures_the_primary_alone(monkeypatch, tmp_path):
     config.write_config(role_decision_fallback_provider="rowan-spare",
                         role_decision_fallback_model=ACTIVE)
     target = _decide_target(case_mod.BY_ID["decide-scene-break"])
-    assert llm.FALLBACK_KEY in target.conn
+    assert target.chain.fallback is not None
     for backend in ("native", "structured"):
         (stage,) = runner.chain(target, backend)
         assert stage.mode == backend and stage.chain.fallback is None
         assert stage.retries is None
-    assert llm.FALLBACK_KEY in target.conn     # the resolution's own dict is untouched
+    assert target.chain.fallback is not None     # the resolution's own chain is untouched
 
 
 @pytest.mark.parametrize("setup,backend,says", [
@@ -607,7 +608,7 @@ def test_a_generate_case_is_sent_with_no_schema(monkeypatch, tmp_path):
     case = case_mod.BY_ID["scene-length"]
     assert case.schema is None and runner.operation(case) == "generate"
     fake = FakeLLM([["Seraphine Vale shrugs."]])
-    runner.live(case, wire_kit.resolution({"kind": "openrouter", "id": "openrouter"},
+    runner.live(case, wire_kit.resolution(wire_kit.target(model=""),
                                           case.task), client=fake)
     assert fake.schemas == [None]
 

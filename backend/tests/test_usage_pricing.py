@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire import decisions, llm_usage
+from grimoire import decisions, llm_usage, wire
 from grimoire.store import llm_connections, pricing, usage
 from grimoire.store.inference import facts
 
@@ -164,7 +164,9 @@ def test_an_account_only_holder_files_the_meters_model(pid):
     files the meter's model, and that model's rates price it."""
     facts.state(pid, "vendor/embed-a", rates=FACTS)
     m = usage.meter("embed", campaign="saltmarch", model="vendor/embed-a")
-    llm_usage.account(m.usage, {"id": pid, llm_usage.ACCOUNT_KEY: {"operation": "embed"}})
+    llm_usage.account(m.usage, wire.Target(provider_id=pid, kind="openai_compatible",
+                                           model="vendor/embed-a",
+                                           account=wire.Account(operation="embed")))
     m.usage["prompt_tokens"] = 1000
     row = m.done()
 

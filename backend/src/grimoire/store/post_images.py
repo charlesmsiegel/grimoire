@@ -77,39 +77,19 @@ YES, NO, UNKNOWN, OFF, NONE = "yes", "no", "unknown", "off", "none"
 #: use rather than measured.
 MAX_LIMIT = 20
 
-#: The `vision` capability before anything has been read (`capability`).
-_UNASKED = capabilities.Cap(UNKNOWN, "unknown")
 
-
-def capability(conn: wire.Target | dict | None) -> str:
-    """"yes", "no" or "unknown" -- whether `conn`'s model reads images. Never
+def capability(target: wire.Target | None) -> str:
+    """"yes", "no" or "unknown" -- whether `target`'s model reads images. Never
     raises: a catalog or facts file that cannot be read says nothing.
 
-    The rule is `capabilities.post_image_reach`, which a resolved attempt's
-    target asks too (`Target.reads_images`); the store is read only when the
-    preference leaves the answer to the capability. A target is asked the
-    same of what it carries (`_target_capability`)."""
-    if conn is None:
+    The rule is `capabilities.post_image_reach`, which the resolver asked
+    when it built the target (`Target.reads_images`): the kind first, then
+    the reach the target carries where that is decided ("yes" or "no": its
+    preference, or what its resolver read), and the model's capability, read
+    now, where it is not -- so a capability learned since the resolution
+    (a test call, a catalog refresh) is asked at dispatch."""
+    if target is None:
         return NO
-    if isinstance(conn, wire.Target):
-        return _target_capability(conn)
-    kind = conn.get("kind", "openrouter")
-    vision = conn.get("vision", "")
-    # Asked first with the capability unknown: a "yes" or "no" then is the
-    # kind's or the preference's, which no capability can change, so the
-    # catalog and facts are read only when the answer is theirs to give.
-    decided = capabilities.post_image_reach(kind, vision, _UNASKED)
-    if decided != UNKNOWN:
-        return decided
-    return capabilities.post_image_reach(kind, vision, capabilities.caps_for(conn)["vision"])
-
-
-def _target_capability(target: wire.Target) -> str:
-    """`capability` for a target: the kind first, then the reach it carries
-    where that is decided ("yes" or "no": its preference, or what its
-    resolver read), and the model's capability, read now, where it is not --
-    as a dict's capability is re-asked at dispatch. A target read from a
-    dict (`wire.from_lowered`) carries only what the preference decides."""
     if target.kind not in image_drafts.SUPPORTED_KINDS:
         return NO
     if target.reads_images in (YES, NO):
@@ -133,21 +113,21 @@ def limit() -> int:
     return min(n, MAX_LIMIT) if n >= 0 else int(config.DEFAULT_SEND_IMAGES_LIMIT)
 
 
-def images_for(conn: wire.Target | dict | None) -> int:
-    """How many images a prompt for `conn` may carry right now -- the one
+def images_for(target: wire.Target | None) -> int:
+    """How many images a prompt for `target` may carry right now -- the one
     number composition takes, and dispatch re-asks per attempt."""
     n = limit()
-    return n if n and capability(conn) == YES else 0
+    return n if n and capability(target) == YES else 0
 
 
-def reach(conn: wire.Target | dict | None) -> str:
-    """"off" when the setting sends nothing, "none" when there is no connection
-    to ask about, else `capability(conn)` -- what the Configuration page tells
-    a reader about the connection a turn uses. "none" is not "no": nothing has
-    said a model cannot read images, there is just no model yet."""
+def reach(target: wire.Target | None) -> str:
+    """"off" when the setting sends nothing, "none" when there is no target
+    to ask about, else `capability(target)` -- what the Configuration page
+    tells a reader about the attempt a turn starts on. "none" is not "no":
+    nothing has said a model cannot read images, there is just no model yet."""
     if limit() == 0:
         return OFF
-    return NONE if conn is None else capability(conn)
+    return NONE if target is None else capability(target)
 
 
 # ---- what gets sent ----

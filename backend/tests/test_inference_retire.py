@@ -482,8 +482,8 @@ def _glm_pinned_campaign() -> str:
 
 
 def _scene_effort(cid: str) -> str:
-    conn = inference.resolve("chat", cid).attempts[0].conn
-    return llm_sampling.effective(conn)["effective"].get("reasoning_effort", "")
+    target = inference.resolve("chat", cid).attempts[0].target
+    return llm_sampling.effective(target)["effective"].get("reasoning_effort", "")
 
 
 def test_a_settings_write_never_marks_a_campaign_retired(client):
@@ -1299,9 +1299,8 @@ def _retired_glm_store() -> str:
 
 def _chat(cid: str = "") -> tuple:
     first = inference.resolve("chat", cid).attempts[0]
-    conn = first.conn
     return (first.provider_id, first.model, first.preset_id,
-            llm_sampling.effective(conn)["effective"])
+            llm_sampling.effective(first.target)["effective"])
 
 
 def test_a_legacy_config_key_written_after_retirement_is_ignored_then_removed(home):

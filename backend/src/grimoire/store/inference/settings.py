@@ -126,12 +126,12 @@ def _sel(resolved: ResolvedInference) -> dict | None:
     if not resolved.attempts:
         return None
     first = resolved.attempts[0]
-    sampling = first.conn.get("sampling") or {}
+    target = first.target
     return {"provider": first.provider_id,
-            "provider_name": str(first.conn.get("name") or first.provider_id),
+            "provider_name": target.provider_name or first.provider_id,
             "model": first.model,
             "preset": first.preset_id,
-            "preset_name": str(sampling.get("preset_name") or ""),
+            "preset_name": target.sampling.preset_name,
             "via": resolved.via, "scope": resolved.scope}
 
 
@@ -248,7 +248,7 @@ def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:
     if why != embed_space.OFF or got is None or not got.missing or not got.attempts:
         return why
     attempt = got.attempts[0]
-    name = str(attempt.conn.get("name") or attempt.provider_id)
+    name = attempt.target.provider_name or attempt.provider_id
     return (f"{attempt.model} on {name} cannot {capabilities.CANNOT['embed']}, "
             "so embedding is off — choose another Embedding model.")
 

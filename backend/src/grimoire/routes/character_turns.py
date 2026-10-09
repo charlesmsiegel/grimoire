@@ -107,7 +107,7 @@ def _compose(cid, sid, round_record, actor, resolved, appended=()):
         "eligible_speakers": candidates,
         "describe": store.prompt_log.capturing(),
         "model": resolved.chain.primary.model,
-        "images": store.post_images.images_for(resolved.conn),
+        "images": store.post_images.images_for(resolved.chain.primary),
     }
     if appended:
         kwargs["appended"] = appended

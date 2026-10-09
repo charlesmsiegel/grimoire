@@ -28,10 +28,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm, llm_usage, routes, wire
+from grimoire import decisions, inference, llm, routes, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate
 from grimoire.inference import NATIVE_CONCURRENCY, Stage
-from grimoire.llm import FALLBACK_KEY, LLMClient
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import common
@@ -43,7 +43,6 @@ from tests.llm_fakes import FakeLLM, decision_reply
 from . import inference_fixtures as fx
 
 NATIVE, STRUCTURED = decisions.NATIVE_BACKEND, decisions.STRUCTURED_BACKEND
-ACCOUNT = llm_usage.ACCOUNT_KEY
 #: The decide-only model `inference_fixtures.decide_only` puts on the
 #: Decision role, and the generating fallback behind it.
 DECIDER = ("openrouter", "vendor/decider")
@@ -227,15 +226,14 @@ def test_stages_for_every_f_resolution_are_fs(client, shape):
     assert chain == (Stage(STRUCTURED, resolved.chain, None),)
     assert chain[0].chain.primary is resolved.attempts[0].target
     assert (chain[0].chain.fallback is not None) == (shape == "fallback_attached")
-    assert (FALLBACK_KEY in resolved.conn) == (shape == "fallback_attached")
+    assert resolved.rides == (shape == "fallback_attached")
 
 
 def test_stages_for_a_native_only_primary(client):
     resolved = _native_resolution(client, fallback=True)
-    # As a resolver might hand it over: the fallback attached to the primary.
-    primary = dataclasses.replace(resolved.attempts[0], conn={
-        **resolved.attempts[0].conn, FALLBACK_KEY: resolved.attempts[1].conn})
-    resolved = dataclasses.replace(resolved, attempts=(primary, resolved.attempts[1]))
+    # As a resolver might hand it over: the fallback riding the primary.
+    primary = resolved.attempts[0]
+    resolved = dataclasses.replace(resolved, rides=True)
     assert resolved.chain is not None and resolved.chain.fallback is not None
     native, fallback = inference.stages(resolved)
     assert (native.mode, native.retries) == (NATIVE, None)
@@ -244,7 +242,7 @@ def test_stages_for_a_native_only_primary(client):
     assert (fallback.mode, fallback.retries) == (STRUCTURED, 0)
     assert fallback.chain == wire.Chain(resolved.attempts[1].target)
     # Built, never popped: the resolution still carries what it carried.
-    assert primary.conn[FALLBACK_KEY] is resolved.attempts[1].conn
+    assert resolved.rides
     assert resolved.chain.fallback is resolved.attempts[1].target
 
 
@@ -284,15 +282,16 @@ def test_a_fallback_known_incapable_is_no_stage(client):
 
 def test_stages_copy_and_never_pop(client):
     """M2: deciding through a chain whose first stage is the primary alone
-    leaves the resolution as it was: its dict, `FALLBACK_KEY` included, and
-    its chain."""
+    leaves the resolution as it was: its attempts, whether its fallback
+    rides, and its chain."""
     resolved = _structured_resolution(client, fallback_mode=NATIVE)
-    before = deepcopy(resolved.conn)
+    before = deepcopy(resolved.attempts)
+    rides = resolved.rides
     chain = resolved.chain
     _decide(FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()]), [_item()],
             resolved=resolved)
-    assert resolved.conn == before
-    assert resolved.conn[FALLBACK_KEY] is resolved.attempts[1].conn
+    assert resolved.attempts == before
+    assert resolved.rides == rides
     assert resolved.chain == chain
 
 
@@ -522,7 +521,7 @@ def test_a_structured_stage_before_a_native_fallback_still_retries_without_the_m
     resolved = _resolved()
     resolved = dataclasses.replace(resolved, attempts=(
         resolved.attempts[0], dataclasses.replace(resolved.attempts[1], decision_mode=NATIVE)))
-    assert resolved.conn[llm.STRUCTURED_KEY] is True
+    assert resolved.chain.primary.structured is True
     wire = _Wire(streams=[_refused_schema(), decision_reply({"over": True})],
                  decides=[AssertionError("the native fallback was sent")])
     got = _decide(_real(wire, retries=0), [_item()], resolved=resolved)
@@ -535,11 +534,11 @@ def test_a_structured_stage_before_a_native_fallback_still_retries_without_the_m
 
 def test_a_lone_structured_fallback_stage_gets_the_schema_refusal_retry(client):
     """M1: behind a native primary, the structured fallback stage is sent with
-    no `FALLBACK_KEY`, so its schema refusal is re-sent without the mode."""
+    no fallback riding it, so its schema refusal is re-sent without the mode."""
     fx.decide_only(client, fallback=True)
     _flag("spare", "vendor/spare")
     resolved = _resolved()
-    assert resolved.attempts[1].conn[llm.STRUCTURED_KEY] is True
+    assert resolved.attempts[1].target.structured is True
     wire = _Wire(streams=[_refused_schema(), decision_reply({"over": True})],
                  decides=[LLMError("network", "connection reset")])
     got = _decide(_real(wire, retries=0), [_item()], resolved=resolved)
@@ -621,8 +620,7 @@ def test_around_runs_inside_each_native_meter(client):
 
 def test_native_rows_carry_operation_and_mode(client):
     resolved = _native_resolution(client, fallback=True)
-    before = deepcopy(resolved.attempts[0].conn)
-    block = resolved.attempts[0].conn[ACCOUNT]
+    before = resolved.attempts[0].target
     fake = FakeLLM([["unused"]], decisions=[_yes()])
     _decide(fake, [_item()], resolved=resolved)
     (row,) = _rows()
@@ -630,22 +628,21 @@ def test_native_rows_carry_operation_and_mode(client):
     sent = fake.native_requests[0][1]
     assert sent.account.decision_mode == NATIVE
     assert resolved.attempts[0].target.account.decision_mode == ""
-    # E's no-mutation rule: the resolution's own block is as it was.
-    assert resolved.attempts[0].conn == before
-    assert resolved.attempts[0].conn[ACCOUNT] is block and "decision_mode" not in block
+    # E's no-mutation rule: the resolution's own target is as it was.
+    assert resolved.attempts[0].target is before
 
 
 def test_a_native_row_files_no_preset_it_never_sent(client):
     """Brutal reviews H (🟣3, P1): a native call sends no sampling (spec 8),
     so its ledger row names no `preset`, even with one on the role --
     `llm_usage.account` documents `preset` as the one actually sent. The
-    resolution's own dict still carries the preset it resolved."""
+    resolution's own target still carries the preset it resolved."""
     fx.decide_only(client, fallback=False)
     pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
     fx.put_settings(client, {"roles": {"decision": {
         "selection": {"provider": DECIDER[0], "model": DECIDER[1], "preset": pid}}}})
     resolved = _resolved()
-    assert resolved.attempts[0].conn["sampling"]["preset_id"] == pid
+    assert resolved.attempts[0].target.sampling.preset_id == pid
     fake = FakeLLM([["unused"]], decisions=[_yes()])
     _decide(fake, [_item()], resolved=resolved)
     (row,) = _rows()
@@ -830,7 +827,7 @@ def test_a_chunk_sent_with_a_fallback_stops_only_when_both_routes_would(client, 
     may serve the next chunk."""
     _structured_store(client)
     resolved = _resolved()
-    assert FALLBACK_KEY in resolved.conn
+    assert resolved.rides
     provider = _Wire(streams=[LLMError("auth", "invalid key", status=401), then])
     with pytest.raises(LLMError):
         _decide(_real(provider, retries=0), _chunks(3), resolved=resolved)
@@ -1045,7 +1042,7 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     its normalised answer and the distribution the endpoint reported, on
     the stage's target without the sampler preset it never sent (M4)."""
     resolved = _native_resolution(client, fallback=False)
-    assert "sampling" in resolved.attempts[0].conn
+    own = resolved.attempts[0].target
     item = _choice_item()
     reported = ItemResult({"who": Answer("mara", distribution={"mara": 0.7,
                                                                "winifred": 0.3})})
@@ -1059,7 +1056,7 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     body = json.loads(messages[0]["content"])
     assert body["model"] == DECIDER[1] and body["state"] == item.context
     assert set(body["questions"]) == {"who"}
-    key = resolved.attempts[0].conn.get("api_key")
+    key = resolved.attempts[0].target.api_key
     assert key and key not in messages[0]["content"]
     assert "http" not in messages[0]["content"]
     assert outcome == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
@@ -1069,8 +1066,8 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     assert conn.sampling == wire.Sampling()
     assert conn.account.decision_mode == NATIVE
     assert sent == conn
-    # The resolution's own dict keeps its preset.
-    assert "sampling" in resolved.attempts[0].conn
+    # The resolution's own target keeps its preset.
+    assert resolved.attempts[0].target is own
 
 
 def test_each_native_item_is_one_capture_and_a_fallback_stage_its_own(client):

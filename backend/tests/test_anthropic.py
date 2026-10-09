@@ -9,7 +9,7 @@ import json
 import httpx
 import pytest
 
-from grimoire import catalog, llm_capture, llm_reasoning, llm_sampling
+from grimoire import catalog, llm_capture, llm_reasoning, llm_sampling, wire
 from grimoire.anthropic import (
     API_VERSION,
     PROBE_TIMEOUT,
@@ -134,8 +134,9 @@ async def test_an_off_preset_on_a_model_that_can_turn_thinking_off_sends_disable
                          "capabilities": {"thinking": {"types": {
                              "adaptive": {"supported": True}, "enabled": {"supported": True},
                              "disabled": {"supported": True}}}}})
-    conn = {"kind": "anthropic", "model": "claude-test-1", "model_features": row["features"],
-            "sampling": {"params": {"reasoning_effort": "off"}}}
+    conn = wire.Target(provider_id="", kind="anthropic", model="claude-test-1",
+                       model_features=row["features"],
+                       sampling=wire.Sampling(params={"reasoning_effort": "off"}))
     body = await _body_for(MSG, effective=llm_sampling.effective(conn)["effective"])
     assert body["thinking"] == {"type": "disabled"}
     assert "output_config" not in body

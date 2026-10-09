@@ -57,8 +57,10 @@ _CLOSE_TIMEOUT = 5.0
 # What the Claude path runs when its connection names no model. The SDK takes
 # an alias, so an unconfigured Claude connection generates perfectly happily --
 # unlike the other two kinds, whose empty model reaches the provider as an
-# empty model. `wire`'s, which reads it into every target's `model`.
-CLAUDE_DEFAULT_MODEL = wire.CLAUDE_DEFAULT_MODEL
+# empty model. The store builds every target's `model` by the same rule
+# (`store.config.DEFAULT_CLAUDE_MODEL`, restated there; a test holds the two
+# equal), so a target arrives here already naming the model it runs.
+CLAUDE_DEFAULT_MODEL = "opus"
 # The bound on counting a reply locally when its provider reported no counts
 # (spec 9.1; `_estimate`). A warm count is far below it. A cold count is an
 # encoder download, and the end of the reply must not wait on that. A count
@@ -111,7 +113,7 @@ def _count_executor() -> Executor:
 
     Its own, never asyncio's default executor: the encoder loader holds its
     lock across a download that has no timeout of its own, and a count parked
-    behind it must not occupy a default-executor worker that `_lowered`'s
+    behind it must not occupy a default-executor worker that `_parts_lowered`'s
     picture loads and httpx's DNS lookups need. One worker, so a hung download
     parks one thread; the counts queued behind it are cancelled unstarted when
     their `COUNT_TIMEOUT_S` runs out. A daemon (`_DaemonExecutor`), so that
@@ -201,29 +203,6 @@ PRESET_REFUSAL_STATUSES = frozenset({400, 422})
 #: whichever connection serves it, the fallback included (`LLMClient._routes`).
 ROUTE_SCOPES = frozenset({"campaign", "global"})
 
-#: The key under which a call's connection dict carries the fallback that call
-#: may fail over to (spec 5.5): the resolver's own fallback attempt, lowered,
-#: attached to the primary's dict by `store.inference.resolve` -- absent when
-#: there is none, or when it is known unable to do the job (spec 5.3).
-#:
-#: The facade never reads it: `LLMClient` is sent a `wire.Chain` (or a lone
-#: `wire.Target`) and refuses a dict, so the fallback rides on
-#: `wire.Chain.fallback`. The resolver's lowered dicts still carry it, which
-#: is where `ResolvedInference.chain` reads whether the fallback rides, and
-#: `wire.from_lowered` reads the same key. Deleted with the lowering (Task 10).
-FALLBACK_KEY = "_fallback"
-
-#: The key under which a call's connection dict says THIS attempt may be asked
-#: for structured output (spec 7.2): `True` on the lowered dict of each attempt
-#: of a decide resolution whose `structured_output` is `yes`, set by
-#: `store.inference.resolve` and absent everywhere else -- so a generate
-#: resolution's dicts are what they were before slice F.
-#:
-#: The facade reads it per attempt as `wire.Target.structured` (what
-#: `wire.from_lowered` and the resolver's targets read from this key), so a
-#: fallback without the mode is sent the same prompt (the schema rides in it)
-#: and no structured envelope, without the facade importing the store.
-STRUCTURED_KEY = "_structured"
 
 
 def _backoff_delay(attempt: int) -> float:
@@ -291,7 +270,7 @@ LISTABLE_KINDS = adapters.LISTABLE_KINDS
 ATTEMPTED = "_attempted_conn"
 
 
-def prefill_capable(conn: wire.Target | dict) -> bool:
+def prefill_capable(target: wire.Target) -> bool:
     """Whether a prompt ending in a partial assistant turn may be sent on `conn`
     as a prefill for the model to continue ("Keep writing", play controls IV).
 
@@ -299,10 +278,9 @@ def prefill_capable(conn: wire.Target | dict) -> bool:
     trailing assistant message is continued depends on the model behind the
     route, not on the adapter: current Claude models refuse one, and most chat
     templates read it as history and write a fresh reply. So the default is
-    the instruction, and the user says where prefill works."""
-    if isinstance(conn, wire.Target):
-        return conn.prefill
-    return conn.get("prefill") is True
+    the instruction, and the user says where prefill works: the target's
+    `prefill`, its model's fact."""
+    return target.prefill
 
 
 def _carries_parts(messages: list[dict]) -> bool:
@@ -315,12 +293,6 @@ def _carries_parts(messages: list[dict]) -> bool:
     return any(not isinstance(m.get("content", ""), str)
                and not content_parts.lowerable(m["content"]) for m in messages)
 
-
-#: The route marker for a DEGRADE sibling (#377) on a lowered dict: the same
-#: connection, sent the text lowering of a prompt whose images it just
-#: refused. The facade marks one with `wire.Target.degrade`, and only
-#: `wire.from_lowered` reads this spelling (a test holds the two equal).
-DEGRADE = "_degrade"
 
 #: The HTTP statuses that mean "not this request" -- a provider refusing an
 #: image for its format, size or content. `bad_response` alone cannot say this:
@@ -368,7 +340,7 @@ def _with_degrades(routes: list[_Route]) -> list[_Route]:
 
 def _chain_of(attempt: wire.Chain | wire.Target) -> wire.Chain:
     """What a generation is sent, as a chain: a `Chain` as it is, and a
-    `Target` as a chain of one. Anything else -- a lowered connection dict
+    `Target` as a chain of one. Anything else -- a connection dict
     included -- is a `TypeError`: the facade sends typed targets only."""
     if isinstance(attempt, wire.Chain):
         return attempt
@@ -377,7 +349,7 @@ def _chain_of(attempt: wire.Chain | wire.Target) -> wire.Chain:
 
 def _target_of(attempt: wire.Target) -> wire.Target:
     """`attempt`, when it is one attempt's `Target`; a `TypeError` for
-    anything else, a lowered connection dict included."""
+    anything else, a connection dict included."""
     if isinstance(attempt, wire.Target):
         return attempt
     raise TypeError(f"the facade sends a wire.Chain or wire.Target, not {type(attempt).__name__}")
@@ -407,21 +379,16 @@ def _same_route(a: wire.Target, b: wire.Target) -> bool:
     return bool(a.provider_id) and a.provider_id == b.provider_id
 
 
-def effective_model(conn: wire.Target | dict) -> str:
-    """The model a generation on `conn` will actually run on.
+def effective_model(target: wire.Target) -> str:
+    """The model a generation on `target` will actually run on: its `model`,
+    which the store built as the one it runs.
 
-    Only the Claude path substitutes anything, so this differs from
-    ``conn["model"]`` for exactly one kind -- but it is the difference between
-    telling the reader "no model" and naming the one about to answer them.
-    Both the dispatcher and the config route read the answer from here so the
-    status bar cannot drift from what generation does. A target's `model` is
-    already the one it runs (`wire.from_lowered` reads a dict by this rule).
+    Only the Claude path substitutes anything (`CLAUDE_DEFAULT_MODEL`, for a
+    connection that names no model), so this differs from the stored model
+    for exactly one kind -- but it is the difference between telling the
+    reader "no model" and naming the one about to answer them.
     """
-    if isinstance(conn, wire.Target):
-        return conn.model
-    if conn.get("kind") == "claude":
-        return conn.get("model") or CLAUDE_DEFAULT_MODEL
-    return conn.get("model", "")
+    return target.model
 
 
 def _swallow(task: asyncio.Task) -> None:
@@ -737,7 +704,7 @@ def _wire_spellings(share: dict, prefix: str = "") -> set[str]:
 def _structured_share(target: wire.Target) -> dict:
     """The structured-output envelope this attempt puts on the wire, as a share
     `_wire_spellings` reads: `{}` unless the attempt is flagged
-    (`STRUCTURED_KEY`), and `{}` for `claude`, which never takes it.
+    (`wire.Target.structured`), and `{}` for `claude`, which never takes it.
 
     The schema itself is emptied: its property names are question ids, and a
     question id that happened to spell a sampler (`temperature`) would be
@@ -1309,7 +1276,7 @@ class LLMClient:
         llm_usage.note_prompt(usage, messages)
         if not content_parts.needs_lowering(messages):
             return self._generate(messages, target, usage, schema)
-        return self._lowered(messages, route, usage, campaign, schema)
+        return self._parts_lowered(messages, route, usage, campaign, schema)
 
     def _generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
                   schema: dict | None):
@@ -1326,8 +1293,8 @@ class LLMClient:
         return self._adapter(target.kind).generate(
             messages, target, usage, schema=schema if target.structured else None)
 
-    async def _lowered(self, messages: list[dict], route: _Route, usage: dict | None,
-                       campaign: str, schema: dict | None = None):
+    async def _parts_lowered(self, messages: list[dict], route: _Route, usage: dict | None,
+                             campaign: str, schema: dict | None = None):
         """`messages` lowered for `route`, then streamed (#377).
 
         Lowering resolves the image budget (a catalog sidecar read) and loads
@@ -1408,8 +1375,8 @@ class LLMClient:
         still answer it.
 
         `chain` is the primary and the fallback it may fail over to (a lone
-        `Target` is a chain of one). A lowered connection dict is a
-        `TypeError`: the facade sends typed targets only.
+        `Target` is a chain of one). A connection dict is a `TypeError`:
+        the facade sends typed targets only.
         """
         return self._streamed(messages, chain, usage, schema, None)
 

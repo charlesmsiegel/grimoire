@@ -206,7 +206,6 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                        client: LLMClient, resolved: UsableInference, run):
     """The body of an adjudication, once the scene is reserved -- see
     `scenes._chat_run` for why every exit from it is wrapped."""
-    conn = resolved.conn
     primary = resolved.chain.primary
     # Validation, adjudication and projection share the scene's lock. A paused
     # run released its exclusion key so this request can own it; identity and
@@ -296,7 +295,7 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
             if round_record is None:
                 messages, breakdown = _continuation_messages(
                     cid, sid, resolution, model=primary.model,
-                    images=store.post_images.images_for(conn))
+                    images=store.post_images.images_for(primary))
             else:
                 on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
                 block = prompts.render("scene/roll_result.j2", resolution=resolution,
@@ -305,7 +304,7 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
             if round_record is None:
                 messages, breakdown = _declined_continuation_messages(
                     cid, sid, model=primary.model,
-                    images=store.post_images.images_for(conn))
+                    images=store.post_images.images_for(primary))
             else:
                 block = prompts.render("scene/roll_declined.j2")
         else:  # defensive: a race moved the record out from under us

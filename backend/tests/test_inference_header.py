@@ -58,7 +58,8 @@ def test_config_reports_the_resolved_primary_on_format_2(client):
     # reads it now. (This build seeds it below format 2 only, slice I.)
     store.config.write_config(active_connection_id="openrouter")
     assert store.read_config()["active_connection_id"] == "openrouter"
-    client.app.state.health.record(store.llm_connections.read_connection_raw("spare"))
+    client.app.state.health.record(
+        inference.provider_target(store.llm_connections.read_connection_raw("spare")))
 
     body = client.get("/api/config").json()
 

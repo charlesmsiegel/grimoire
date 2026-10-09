@@ -15,18 +15,17 @@ from dataclasses import fields
 
 import pytest
 
-from grimoire import inference, llm, llm_reasoning, wire
+from grimoire import inference, llm_reasoning, wire
 from grimoire.llm_errors import LLMError
 from grimoire.store.inference.resolved import ResolvedInference
 from tests import wire_kit
 from tests.llm_fakes import FakeLLM
 
-CONN = {"id": "openrouter", "kind": "openrouter", "model": "vendor/active",
-        "api_key": "sk-test"}
-#: `CONN` carrying a fallback, as a resolution's primary dict does.
-FALLING_BACK = {**CONN, llm.FALLBACK_KEY: {"id": "spare", "kind": "openai_compatible",
-                                           "model": "local/spare", "api_key": "sk-spare",
-                                           "base_url": "http://localhost:1234/v1"}}
+CONN = wire_kit.target(provider_id="openrouter", model="vendor/active", api_key="sk-test")
+#: `CONN` with a fallback riding it, as a resolution's chain carries one.
+SPARE = wire_kit.target(provider_id="spare", kind="openai_compatible", model="local/spare",
+                        api_key="sk-spare", base_url="http://localhost:1234/v1")
+FALLING_BACK = wire.Chain(CONN, SPARE)
 
 
 def _nothing() -> ResolvedInference:
@@ -52,7 +51,7 @@ def test_a_stream_yields_the_facades_deltas_and_sends_the_chain():
     assert deltas == ["The tide ", "turns."]
     assert fake.calls == 1
     assert fake.requests[0]["chain"] == resolved.chain
-    assert fake.target == wire.from_lowered(CONN).primary
+    assert fake.target == CONN
     assert fake.requests[0]["messages"] == [{"role": "user", "content": "go"}]
 
 
@@ -61,7 +60,7 @@ def test_the_chain_carries_the_fallback_the_resolution_attaches():
     resolved = wire_kit.resolution(FALLING_BACK)
     _drain(inference.generate("chat", [], client=fake, resolved=resolved))
     chain = fake.requests[0]["chain"]
-    assert chain == wire.from_lowered(FALLING_BACK)
+    assert chain == FALLING_BACK
     assert chain.fallback is not None and chain.fallback.provider_id == "spare"
 
 
@@ -105,7 +104,7 @@ def test_note_outcome_files_against_the_primary():
     error = LLMError("timeout", "the reply did not finish")
     inference.note_outcome(fake, wire_kit.resolution(FALLING_BACK), error)
     # The primary's target alone: never the chain, never the fallback.
-    assert fake.noted == [(wire.from_lowered(CONN).primary, error)]
+    assert fake.noted == [(CONN, error)]
     inference.note_outcome(fake, _nothing(), error)
     assert len(fake.noted) == 1
 

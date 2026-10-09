@@ -815,17 +815,19 @@ would answer neither question.
   send's `chat` -- says so with `operations.for_task(resolved, <task>)`.
   `client.stream`/`complete` are spelled only in `inference.py`, and
   `test_routing_guard.py` fails one anywhere else. What the seam returns
-  still carries the connection dict the facade is sent as `.conn`: hand that
-  on, never read it, and read the display facts (`.kind`, `.model`,
-  `.provider_id`) off `resolved.chain.primary`.
+  carries the `wire.Chain` the facade is sent as `.chain` (`generate` hands it
+  on), and the facade dispatches each of its typed `wire.Target`s through the
+  adapter registry (`adapters.py`); read the display facts (`.kind`, `.model`,
+  `.provider_id`) off `resolved.chain.primary`. There is no connection dict:
+  the lowering is deleted, and `test_lowering_retired_guard.py` keeps it so.
   `store/routing.py` maps the task to a route (each one declares its
   `operation`, its `default_role` and what it `requires`), and
   `store/inference/` resolves the route to a role (Primary, Fast, Decision,
   Embedding) or a pinned model. Every store is resolved as format 2: the
   roles and their fallbacks, each route's choice, pin and preset, a campaign's
   own overrides of both, and the facts of the chosen model -- `vision`,
-  `prefill` and `post_process`, which the lowering lays over the connection
-  dict in place of the connection's legacy fields. A layout the migration has
+  `prefill` and `post_process`, which each attempt's target is built with in
+  place of the connection's legacy fields. A layout the migration has
   not reached is read through the planner, in memory (`resolve._overlay`, the
   one call of `legacy_plan.overlay`): the legacy keys seen as that same
   layout, a legacy GLM effort as a derived reasoning preset, and nothing
@@ -833,10 +835,10 @@ would answer neither question.
   stay in memory on a migrated store too, until retirement (inference slice
   I, Task 6) writes them and marks each scope retired; a retired scope will
   read nothing of the planner. The fallback rides on
-  the resolved conn: the primary's dict carries the fallback attempt, lowered
-  (wearing the route's preset when the route has one), under `FALLBACK_KEY`,
-  and the facade sends that one. A fallback *known* unable to do what the route needs is reported
-  (`fallback_missing`) and never attached, so the facade never sends it -- nor
+  the resolved chain: `chain.fallback` is the fallback attempt's target
+  (wearing the route's preset when the route has one), and the facade sends
+  that one. A fallback *known* unable to do what the route needs is reported
+  (`fallback_missing`) and never rides, so the facade never sends it -- nor
   one that names the primary's own connection (a retry, which the retry budget
   covers -- except behind a Decision model that cannot generate, where it is a
   decide stage of its own), nor one that cannot carry the call's images. A reroll's connection override goes through `override_inference`, and

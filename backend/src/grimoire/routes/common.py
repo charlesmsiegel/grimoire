@@ -29,10 +29,11 @@ from pydantic import BaseModel
 from .. import decisions, llm, llm_sampling, model_guidance, store, wire
 from .. import inference as operations
 from ..health import ProviderHealth
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from ..store.inference import cascade as inference_cascade
+from ..store.inference import facts as inference_facts
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
@@ -310,8 +311,8 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     the store (#239), and reading config.md per call is what lets a
     Configuration-page change land without a restart (#243). The retry count
     rides the same seam for the same two reasons. The fallback (#144) does not:
-    each call's resolved connection carries its own (`llm.FALLBACK_KEY`, set by
-    `store.inference.resolve`), so the client holds none.
+    each call's resolved chain carries its own (`wire.Chain.fallback`, resolved
+    by `store.inference.resolve`), so the client holds none.
 
     The token counter rides the seam too (`_count_tokens`): the facade counts
     what a provider did not report, on a worker thread, and the gateway may not
@@ -333,7 +334,7 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
 
 # Late-bound through the module attribute, so a test patching
 # `store.post_images` intercepts what the facade calls (#377).
-def _post_images_for(attempt: wire.Target | dict) -> int:
+def _post_images_for(attempt: wire.Target) -> int:
     return store.post_images.images_for(attempt)
 
 
@@ -1136,19 +1137,13 @@ def _sheet_failure_status(exc: Exception) -> int:
 
 @dataclass(frozen=True)
 class UsableInference(ResolvedInference):
-    """A resolution the seam has checked can send: its `conn` is never None.
+    """A resolution the seam has checked can send: its `chain` is never None.
 
     What `require_inference` and `override_inference` hand back. The same
     fields, narrowed in the one place the narrowing is true -- after the
-    refusals -- so a call site's `.conn` is the `dict` the facade takes rather
-    than an Optional every caller would have to re-check.
+    refusals -- so a call site's `.chain` is the `wire.Chain` the facade takes
+    rather than an Optional every caller would have to re-check.
     """
-
-    @property
-    def conn(self) -> dict:
-        """The connection dict the facade is sent: the primary attempt's."""
-        assert self.attempts, "a usable resolution always resolved an attempt"
-        return self.attempts[0].conn
 
     @property
     def chain(self) -> wire.Chain:
@@ -1161,7 +1156,8 @@ class UsableInference(ResolvedInference):
 
 
 def _narrowed(resolved: ResolvedInference) -> UsableInference:
-    """`resolved` as a `UsableInference`; the caller has refused a None `conn`."""
+    """`resolved` as a `UsableInference`; the caller has refused a resolution
+    with no attempt (a None `chain`)."""
     assert resolved.attempts, "narrowed a resolution that resolved nothing"
     return UsableInference(**{f.name: getattr(resolved, f.name) for f in fields(resolved)})
 
@@ -1300,8 +1296,8 @@ def require_inference(task: str = "", cid: str = "", *,
     resolver (`store.inference.resolve`) answers, and this refuses what cannot
     send -- a missing key or connection first, then a primary known unable to
     do what the route needs (`inference.refusal`, pure, so the settings view
-    reports the same decision). `.conn` is the connection dict the facade
-    reads.
+    reports the same decision). `.chain` is what the facade is sent, and
+    `.chain.primary` the attempt a call site reads its display facts off.
 
     `task` is the same string the call site meters under (`store.usage.meter`),
     and `store/routing.py` maps it to a route; `cid` lets a campaign override
@@ -1326,7 +1322,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
     sentinel the caller has to re-resolve:
 
         resolved, routed = override_inference(body, "regenerate", cid)
-        conn = resolved.conn
+        chain = resolved.chain
 
     A tuple rather than "None means no override", which is what this was and
     which review broke in two ways at once. It could not say *both* "the caller
@@ -1411,7 +1407,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
     connection is *primary*; the fallback is the route's policy about what
     happens when a primary is exhausted, and silently suspending it for one
     call would make a reroll the one turn a rate limit can simply lose. The
-    resolution carries it (`llm.FALLBACK_KEY`), with the sampling it would have
+    resolution carries it (`wire.Chain.fallback`), with the sampling it would have
     had without the override; a fallback on the override's own provider is
     dropped there (`llm._same_route`'s rule), so "reroll this on the fallback"
     does not double up.
@@ -1432,14 +1428,13 @@ def override_inference(body, task: str = "", cid: str = "", *,
     # keyless connection with no 409, and a repoint sent "the same provider,
     # its bigger model" to another provider entirely. The resolver reads each
     # connection once per resolution (`resolve.connection_lookup`), so
-    # everything here is decided on the dict that is handed to the facade.
+    # everything here is decided on the target that is handed to the facade.
     override = (inference_cascade.Selection(conn_id, model, preset)
                 if conn_id or model or preset else None)
     resolved = inference.resolve(  # routing-ok: this IS the seam, for a per-call override
         task, cid, operation=operation, override=override)
-    conn = resolved.conn
-    if preset and conn is not None \
-            and resolved.attempts[0].conn["sampling"]["scope"] != "override":
+    primary = resolved.attempts[0].target if resolved.attempts else None
+    if preset and primary is not None and primary.sampling.scope != "override":
         # The preset was named and the resolver found nothing by that name (it
         # fell back to the route's), so the reroll would run on a preset the
         # reader did not pick. A body error, so before the connection's own
@@ -1456,7 +1451,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
         # describe the standing choice -- a routed connection that cannot
         # send says so here too.
         _refuse_unusable(resolved)
-    elif conn is None:
+    elif primary is None:
         # Written for the banner it lands in, not for a log. `errorText`
         # renders `detail` verbatim, and the reader's next move is the one
         # worth naming: the connection they picked is gone (deleted in
@@ -1465,14 +1460,14 @@ def override_inference(body, task: str = "", cid: str = "", *,
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
-    elif not model and not _has_standing_model(resolved, conn):
+    elif not model and not _has_standing_model(resolved, primary):
         # A provider alone keeps the standing model, and there is none to keep.
         # The body's fault, so before the connection's own refusals.
         raise HTTPException(
             status_code=400,
             detail="Name a model for this provider — there is no standing model to keep.")
     else:
-        problem = inference.problem(conn)
+        problem = inference.target_problem(primary)
         if problem is not None:
             # NAMED, unlike `require_inference`'s copy of this. There the
             # connection is the one the whole app is using and needs no
@@ -1481,17 +1476,18 @@ def override_inference(body, task: str = "", cid: str = "", *,
             # the connection they have been playing on has broken.
             raise HTTPException(
                 status_code=409,
-                detail={"detail": f"{conn['name']}: {problem}", "kind": "missing_key"})
+                detail={"detail": f"{primary.provider_name}: {problem}", "kind": "missing_key"})
     # Then what the call needs, on the attempt that would serve it: an override
     # onto a model known unable to do the job is refused like the standing one.
     _refuse_incapable(resolved)
     served = _narrowed(resolved)
     standing = resolved.standing
-    # Same provider means the same connection dict, so the standing model's
-    # effective value is read off it with only the model swapped back.
-    same = (standing is not None and served.conn["id"] == standing.provider
-            and effective_model(served.conn)
-            == effective_model({**served.conn, "model": standing.model}))
+    # Same provider means the same connection, so the standing model's
+    # effective value is read on its kind with only the model swapped back.
+    sent = served.chain.primary
+    same = (standing is not None and sent.provider_id == standing.provider
+            and sent.model == inference_facts.model_of({"kind": sent.kind,
+                                                        "model": standing.model}))
     if same and preset:
         # The preset is the third thing a route is: the same provider and model
         # under another preset is another route. Effective on both sides, so
@@ -1501,12 +1497,12 @@ def override_inference(body, task: str = "", cid: str = "", *,
     return served, not same
 
 
-def _has_standing_model(resolved: ResolvedInference, conn: dict) -> bool:
+def _has_standing_model(resolved: ResolvedInference, primary: wire.Target) -> bool:
     """Whether a provider-only override on a current layout has a model to run:
     the standing selection's, or the provider IS the standing one (nothing to
     keep, nothing changed)."""
     standing = resolved.standing
-    return standing is not None and (conn["id"] == standing.provider
+    return standing is not None and (primary.provider_id == standing.provider
                                      or bool(standing.model))
 
 

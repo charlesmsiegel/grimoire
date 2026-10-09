@@ -8,7 +8,7 @@ take one since every generation goes through `inference.generate`."""
 
 from __future__ import annotations
 
-from grimoire import llm, wire
+from grimoire import wire
 from grimoire.routes.common import UsableInference
 from grimoire.store import routing
 from grimoire.store.inference.resolved import Attempt
@@ -21,7 +21,11 @@ DEFAULTS: dict = {"provider_id": "openrouter", "kind": "openrouter",
 
 
 def target(**fields) -> wire.Target:
-    """A `Target`: `DEFAULTS` with `fields` laid over them."""
+    """A `Target`: `DEFAULTS` with `fields` laid over them. A `model` given
+    without a `requested_model` is also the model asked for, as the resolver
+    builds every target."""
+    if "model" in fields and "requested_model" not in fields:
+        fields["requested_model"] = fields["model"]
     return wire.Target(**{**DEFAULTS, **fields})
 
 
@@ -30,23 +34,17 @@ def chain(primary: wire.Target, fallback: wire.Target | None = None) -> wire.Cha
     return wire.Chain(primary, fallback)
 
 
-def resolution(conn: dict, task: str = "chat", *,
+def resolution(sent: wire.Chain | wire.Target, task: str = "chat", *,
                operation: str = "generate") -> UsableInference:
-    """A hand-built resolution of `task` whose attempts send `conn`, as is:
-    the dict a test used to hand the helper, now handed to
-    `inference.generate` inside it as the chain it describes. Its targets are
-    the dict's own and the fallback's it carries (`llm.FALLBACK_KEY`), read
-    the way the resolver lowers them (`wire.from_lowered`), so a fake sees
-    `request["target"]` say what the dict said."""
+    """A hand-built resolution of `task` whose chain is `sent` (a lone target
+    is a chain of one): what a test hands a generation helper it drives
+    directly, which passes it to `inference.generate` -- so a fake sees
+    `request["chain"]` be `sent`. Its fallback, when `sent` has one, rides."""
     route = routing.route(task)
-    chain = wire.from_lowered(conn)
-    attempts = [Attempt(chain.primary.provider_id, str(conn.get("model", "") or ""), "", conn,
-                        target=chain.primary)]
-    if chain.fallback is not None:
-        fallback = conn[llm.FALLBACK_KEY]
-        attempts.append(Attempt(chain.fallback.provider_id,
-                                str(fallback.get("model", "") or ""), "", fallback,
-                                target=chain.fallback))
+    chain = sent if isinstance(sent, wire.Chain) else wire.Chain(sent)
+    attempts = tuple(Attempt(t.provider_id, t.model, t.sampling.preset_id, target=t)
+                     for t in chain.attempts)
     return UsableInference(
         task=task, operation=operation, route=route.key if route else "",
-        role="", via="", scope="none", attempts=tuple(attempts))
+        role="", via="", scope="none", attempts=attempts,
+        rides=chain.fallback is not None)

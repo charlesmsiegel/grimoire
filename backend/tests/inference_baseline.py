@@ -47,8 +47,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import routes
-from grimoire.llm import effective_model
+from grimoire import routes, wire
 from grimoire.main import create_app
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
@@ -289,9 +288,13 @@ def _failure(exc: HTTPException) -> dict:
     return {"status": exc.status_code, "detail": exc.detail}
 
 
-def _resolved(conn: dict) -> dict:
-    return {"conn": conn["id"], "model": effective_model(conn),
-            "sampling": conn["sampling"], "model_params": conn.get("model_params")}
+def _resolved(target: wire.Target) -> dict:
+    """A primary target, projected into the keys the frozen baseline recorded
+    off the connection dict it once was: the provider id as `conn`, the
+    model it runs, its sampling block and its catalog's `model_params`."""
+    return {"conn": target.provider_id, "model": target.model,
+            "sampling": dataclasses.asdict(target.sampling),
+            "model_params": None if target.model_params is None else list(target.model_params)}
 
 
 def _task(client: TestClient, task: str, cid: str) -> dict:
@@ -315,12 +318,11 @@ def _task(client: TestClient, task: str, cid: str) -> dict:
         narrowed = routes.common._narrowed(resolved)
     except HTTPException as exc:
         return _failure(exc)
-    conn = narrowed.conn
     # The routes the facade builds from the chain it is sent: the fallback's
     # target, read back as the id and sampling block its dict carried.
     attempts = client.app.state.llm._routes(narrowed.chain)
     fallback = attempts[1].target if len(attempts) > 1 else None
-    return {**_resolved(conn),
+    return {**_resolved(narrowed.chain.primary),
             "fallback": None if fallback is None
             else {"id": fallback.provider_id, "sampling": dataclasses.asdict(fallback.sampling)}}
 
@@ -349,8 +351,7 @@ def _override(body: dict, cid: str) -> dict:
             SimpleNamespace(**body), "regenerate", cid)
     except HTTPException as exc:
         return _failure(exc)
-    conn = resolved.conn
-    return {**_resolved(conn), "routed": routed}
+    return {**_resolved(resolved.chain.primary), "routed": routed}
 
 
 def _connection_ids() -> list[str]:

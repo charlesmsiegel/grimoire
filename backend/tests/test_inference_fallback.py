@@ -2,14 +2,14 @@
 
 The resolver decides the fallback per call -- the role the route resolves
 through, campaign before global -- and the facade sends exactly that one: the
-primary's lowered connection carries the fallback's under `llm.FALLBACK_KEY`.
+resolution's chain carries the fallback's target (`wire.Chain.fallback`).
 There is no global fallback on the shipped client any more. A fallback KNOWN
 unable to do what the route needs is reported (`fallback_missing`, and still
-an attempt) but never attached, so the facade never sends it.
+an attempt) but never rides, so the facade never sends it.
 
-The key is the facade's to read and nobody else's: `LLMClient` strips it
-before any adapter, capture, health record, `ATTEMPTED` stamp or preset
-refusal sees the dict, and `single` never reads it at all.
+The chain is the facade's to read and nobody else's: `LLMClient` hands each
+adapter, capture, health record, `ATTEMPTED` stamp and preset refusal one
+attempt's target, and `single` takes no chain at all.
 
 Invented connection ids and fake keys only.
 """
@@ -29,8 +29,6 @@ from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import resolve as inf
 
 from . import inference_baseline as base
-
-KEY = llm.FALLBACK_KEY
 
 
 @pytest.fixture(autouse=True)
@@ -123,8 +121,8 @@ async def test_the_facade_sends_the_resolved_fallback(at):
     at()
     _format2(**_spare_fallback())
     resolved = routes.common.require_inference("chat")
-    conn = resolved.conn
-    assert conn[KEY]["id"] == "spare" and conn[KEY]["model"] == "vendor/spare"
+    fallback = resolved.chain.fallback
+    assert fallback.provider_id == "spare" and fallback.model == "vendor/spare"
     # The shipped client holds no fallback of its own: it has none to hold.
     assert not hasattr(routes.common.build_llm(), "_fallback")
     provider = Recorder(failing={"vendor/active"})
@@ -138,9 +136,9 @@ async def test_a_campaign_role_fallback_is_used_in_that_campaign(at):
     _campaign_keys(ctx["cid"], {"role_primary_fallback_provider": "local",
                                 "role_primary_fallback_model": "local-model"})
     in_campaign = routes.common.require_inference("chat", ctx["cid"])
-    assert in_campaign.conn[KEY]["id"] == "local"
+    assert in_campaign.chain.fallback.provider_id == "local"
     # Everywhere else the global role's fallback stands.
-    assert routes.common.require_inference("chat").conn[KEY]["id"] == "spare"
+    assert routes.common.require_inference("chat").chain.fallback.provider_id == "spare"
     provider = Recorder(failing={"vendor/active"})
     assert await _facade(provider).complete([], in_campaign.chain) == "from local-model"
     assert provider.models == ["vendor/active", "local-model"]
@@ -155,37 +153,37 @@ async def test_an_incapable_fallback_is_not_sent_and_is_reported(at):
     _catalog("spare", [{"id": "vendor/spare", "vision": False}])
     image = inf.resolve("image-description")
     assert image.missing == () and image.fallback_missing == ("vision",)
-    assert image.fallback["id"] == "spare"          # reported
-    assert KEY not in image.conn                      # never sent
+    assert image.attempts[1].provider_id == "spare"   # reported
+    assert image.chain.fallback is None                # never sent
     sent = routes.common.build_llm()._routes(image.chain)
     assert [route.target.provider_id for route in sent] == ["openrouter"]
     # The seam does not refuse over a fallback.
-    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+    assert routes.common.require_inference(
+        "image-description").chain.primary.provider_id == "openrouter"
     # A route that needs nothing the fallback lacks still carries it.
-    assert routes.common.require_inference("chat").conn[KEY]["id"] == "spare"
+    assert routes.common.require_inference("chat").chain.fallback.provider_id == "spare"
     provider = Recorder(failing={"vendor/active"})
     with pytest.raises(LLMError):
         await _facade(provider).complete([], image.chain)
     assert provider.models == ["vendor/active"]
 
 
-def test_no_fallback_attaches_nothing(at):
+def test_no_fallback_rides_nothing(at):
     at()
     _format2()
-    conn = inf.resolve("chat").conn
-    assert KEY not in conn
+    assert inf.resolve("chat").chain.fallback is None
     # And a fallback naming the primary's own provider is no fallback.
     _format2(role_primary_fallback_provider="openrouter",
              role_primary_fallback_model="vendor/other")
-    assert KEY not in inf.resolve("chat").conn
+    assert inf.resolve("chat").chain.fallback is None
 
 
-def test_the_attached_fallback_is_the_fallback_attempts_conn(at):
+def test_the_riding_fallback_is_the_fallback_attempts_target(at):
     at()
     _format2(**_spare_fallback())
     resolved = inf.resolve("chat")
-    assert resolved.conn[KEY] is resolved.attempts[1].conn
-    assert KEY not in resolved.attempts[1].conn
+    assert resolved.rides
+    assert resolved.chain.fallback is resolved.attempts[1].target
 
 
 def test_the_primary_carries_the_retry_budget_and_the_fallback_none(at):
@@ -197,10 +195,6 @@ def test_the_primary_carries_the_retry_budget_and_the_fallback_none(at):
     assert resolved.attempts[0].retries == 4
 
 
-def test_the_fallback_key_is_the_facades():
-    assert inf.FALLBACK_KEY == llm.FALLBACK_KEY == "_fallback"
-
-
 # ---- an override preset is the primary's alone (ruling 1) ----
 def test_an_override_preset_leaves_the_fallback_the_route_preset(at):
     """The fallback gets what it would have had without the override: the
@@ -208,14 +202,14 @@ def test_an_override_preset_leaves_the_fallback_the_route_preset(at):
     ctx = at()
     _format2(**_spare_fallback(role_primary_fallback_preset="warm"), preset_scene="cold")
     standing, _ = routes.common.override_inference(None, "regenerate", ctx["cid"])
-    assert standing.conn[KEY]["sampling"]["preset_id"] == "cold"
+    assert standing.chain.fallback.sampling.preset_id == "cold"
     body = SimpleNamespace(preset="warm")
     resolved, routed = routes.common.override_inference(body, "regenerate", ctx["cid"])
     assert routed is True
-    assert resolved.conn["sampling"]["scope"] == "override"
-    fallback = resolved.conn[KEY]
-    assert (fallback["id"], fallback["sampling"]["preset_id"],
-            fallback["sampling"]["scope"]) == ("spare", "cold", "global")
+    assert resolved.chain.primary.sampling.scope == "override"
+    fallback = resolved.chain.fallback
+    assert (fallback.provider_id, fallback.sampling.preset_id,
+            fallback.sampling.scope) == ("spare", "cold", "global")
     assert resolved.attempts[1].preset_id == "cold"
     # And the facade sends that.
     sent = routes.common.build_llm()._routes(resolved.chain)
@@ -227,10 +221,9 @@ def test_an_override_preset_with_no_route_preset_leaves_the_fallback_its_own(at)
     _format2(**_spare_fallback(role_primary_fallback_preset="warm"))
     body = SimpleNamespace(preset="cold")
     resolved, _ = routes.common.override_inference(body, "regenerate", ctx["cid"])
-    assert resolved.conn["sampling"]["preset_id"] == "cold"
-    fallback = resolved.conn[KEY]
-    assert (fallback["sampling"]["preset_id"], fallback["sampling"]["scope"]) == (
-        "warm", "connection")
+    assert resolved.chain.primary.sampling.preset_id == "cold"
+    fallback = resolved.chain.fallback
+    assert (fallback.sampling.preset_id, fallback.sampling.scope) == ("warm", "connection")
 
 
 # ---- the chain stops at the facade's boundary ----

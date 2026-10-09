@@ -3,28 +3,27 @@
 The impure half of `store/inference/`: this reads `config.md`, the campaign's
 `campaign.md`, the connection files, the sampler presets and the model-catalog
 sidecars, and hands the pure pieces -- `cascade` (spec §5.1, §5.2, §5.5) --
-dicts and predicates. What comes back is a
-`ResolvedInference`, whose attempts are lowered to the connection dict the
-facade reads today (`{**connection, "model", "sampling", "model_params"}`), so
-nothing downstream of a call site changes.
+dicts and predicates. What comes back is a `ResolvedInference`, whose attempts
+each carry the `wire.Target` an adapter sends (`_target`, built directly from
+the provider's record, the model, the preset and the model's facts), and whose
+`chain` is what a call site hands the facade.
 
 Behaviour-neutral by construction for every store the app can hold today: the
-equivalence tests compare each answer with the route layer's own
-(`routes.common`), over the frozen baseline's states.
+equivalence tests compare each answer with the frozen baseline's, over its
+states.
 
 Never imports `llm`: the one thing borrowed from it, a connection's effective
-model, differs from the stored one only for `claude`, and `model_params`
-consults the catalog for OpenRouter alone. The two facade rules the fallback
-attempt mirrors (`llm.fallback_sampling`, `llm._same_route`) are restated here,
-with `ROUTE_SCOPES` and `FALLBACK_KEY`, and the tests hold them to the facade's
-own answers.
+model, differs from the stored one only for `claude` (`facts.model_of`), and
+`model_params` consults the catalog for OpenRouter alone. The facade rule the
+fallback attempt mirrors (`llm.fallback_sampling`) is restated here, with
+`ROUTE_SCOPES`, and the tests hold it to the facade's own answer.
 
-The fallback the facade sends is the one resolved here (slice C): the
-primary's lowered dict carries the fallback attempt's under `FALLBACK_KEY`,
-unless that fallback is known unable to do what the route needs (spec 5.3) --
-then it is reported (`fallback_missing`) and not attached. On a decide
-resolution, each attempt whose `structured_output` is `yes` is flagged on its
-own dict (`STRUCTURED_KEY`, slice F), which is how the facade asks that
+The fallback the facade sends is the one resolved here (slice C): it rides the
+primary (`ResolvedInference.rides`, so `chain.fallback`), unless it is known
+unable to do what the route needs (spec 5.3) -- then it is reported
+(`fallback_missing`) and does not ride. On a decide resolution, each attempt
+whose `structured_output` is `yes` is flagged on its target
+(`wire.Target.structured`, slice F), which is how the facade asks that
 attempt, and only that one, for its provider's structured mode. Each attempt
 of a decide resolution also says which backend would answer it
 (`decision_mode`, slice H): its provider's native decisions endpoint for a
@@ -32,24 +31,18 @@ model known unable to generate that may decide natively (`native_only`),
 structured generation for one that can generate, whatever its
 `decide_native` says.
 
-Each attempt's dict carries an account block (`ACCOUNT_KEY`): what the ledger
+Each attempt's target carries an account (`wire.Account`): what the ledger
 files about the attempt that the wire does not say -- its `billing`, its
-`operation` and the `role` whose slot supplied it (`_account`).
-
-Beside each dict, an attempt carries the same values typed (`Attempt.target`,
-a `wire.Target`, slice I): built by `_target` from the lowered dict, and
-stamped with the dict's account block and structured flag in the one place
-both are written (`_stamp`). `ResolvedInference.chain` carries the fallback's
-target exactly where the dict carries `FALLBACK_KEY`. The facade is sent
-that chain (`inference.generate`), and takes no dict; what each attempt's
-dict carried is what its target carries, so every request is what it was.
+`operation` and the `role` whose slot supplied it (`_account`, laid on by
+`_stamp`, the one place a resolution writes a target's account or structured
+flag).
 
 Each attempt also carries what slice B knows of it -- its provider's kind, URL,
 rev, billing and preset, its model's facts, its effective controls
-(`llm_sampling.effective` over the lowered connection), and every capability
-with its source (`capabilities.resolve_caps`, fed the catalog row the lowering
-already read, so a sidecar is read once per attempt) -- and the resolution says
-which of the route's needs the primary and the fallback are known not to meet
+(`llm_sampling.effective` over its target), and every capability with its
+source (`capabilities.resolve_caps`, fed the catalog row the target was built
+from, so a sidecar is read once per attempt) -- and the resolution says which
+of the route's needs the primary and the fallback are known not to meet
 (`missing`, `fallback_missing`). `resolve` refuses on none of it; whether the
 seam serves a resolution is `refusal`, a pure function of it, which the seam
 raises from and the settings view reports -- one decision, not two copies.
@@ -60,10 +53,12 @@ is read through the planner, in memory: `_overlay` is the one call into
 `legacy_plan`, and what it returns (the settings as format 2 sees them, the
 derived reasoning presets, the legacy model facts) is resolved as though it
 were stored. Nothing on that path writes. The model's facts drive its
-behaviour: the lowering overlays the facts' `vision`, `prefill` and
-`post_process` onto the connection dict (`with_facts`), replacing the
-connection's legacy fields, so every consumer of that dict answers per model
-unchanged.
+behaviour: a target's `prefill`, `post_process` and post-image reach are its
+model's facts (`_stated`), never the connection's legacy fields.
+
+There is no connection dict. Slice I built the target beside a lowered dict
+(Task 7) and deleted the dict once the facade took targets (Task 10);
+`test_lowering_retired_guard.py` keeps it deleted.
 """
 
 from __future__ import annotations
@@ -97,10 +92,6 @@ NO_SAMPLING = {"preset_id": "", "preset_name": "", "scope": "none", "params": {}
 #: `llm`; a test holds the two equal.
 ROUTE_SCOPES = frozenset({"campaign", "global"})
 
-#: Where the primary's connection dict carries the fallback the facade sends
-#: (`llm.FALLBACK_KEY`, restated for the same reason; a test holds them equal).
-FALLBACK_KEY = "_fallback"
-
 #: Why a fallback on the primary's own provider is left out of `attempts`
 #: (`fallback_problem`): a second try on the connection that just failed is not
 #: a fallback (`llm._same_route`). A name of its own, so the one resolution
@@ -110,21 +101,6 @@ FALLBACK_KEY = "_fallback"
 #: The same model there is still a second try, and still dropped with it.
 SAME_PROVIDER = "it is on the primary's own provider"
 
-#: Where an attempt's connection dict says it may be asked for structured
-#: output (`llm.STRUCTURED_KEY`, restated for the same reason; a test holds them
-#: equal). Set only on a decide resolution's attempts whose `structured_output`
-#: is `yes`, so a generate resolution's dicts are what they were before it.
-STRUCTURED_KEY = "_structured"
-
-#: Where a lowered connection dict carries its account block -- what the
-#: ledger files about an attempt that the wire does not say: its `billing`
-#: (stamped on every lowered dict), and, on a resolved attempt, the
-#: `operation` and the `role` whose slot supplied it (spec 9.3).
-#: `llm_usage.ACCOUNT_KEY`, restated for the same reason; a test holds them
-#: equal. A block is never written in place (`_stamp` replaces it whole):
-#: every `{**conn}` copy shares it.
-ACCOUNT_KEY = "_account"
-
 #: The ways reading one connection can fail, every one of which reads as "no
 #: such connection" -- a dangling reference is walked past, never raised.
 _UNREADABLE = (llm_connections.ConnectionNotFound, locks.StoreBusy,
@@ -132,18 +108,28 @@ _UNREADABLE = (llm_connections.ConnectionNotFound, locks.StoreBusy,
 
 
 def problem(conn: dict) -> str | None:
-    """Why this connection cannot send, or None if it can.
+    """Why this connection record cannot send, or None if it can.
 
     The credential check the seam turns into a 409 and the fallback turns into
     "there is no fallback" -- one function, because a fallback that is
     silently unusable is exactly the failure a fallback exists to prevent, and
-    two copies of this rule would drift.
+    two copies of this rule would drift. `target_problem` asks it of a target.
     """
-    if conn["kind"] == "openrouter" and not conn.get("api_key"):
+    return _credential_problem(conn["kind"], conn.get("api_key"), conn.get("base_url"))
+
+
+def target_problem(target: wire.Target) -> str | None:
+    """`problem` asked of an attempt's target: its kind, key and address are
+    its provider record's (`_target`), so the answer is the record's."""
+    return _credential_problem(target.kind, target.api_key, target.base_url)
+
+
+def _credential_problem(kind: object, api_key: object, base_url: object) -> str | None:
+    if kind == "openrouter" and not api_key:
         return "OpenRouter key not set"
-    if conn["kind"] == "anthropic" and not conn.get("api_key"):
+    if kind == "anthropic" and not api_key:
         return "Anthropic API key not set"
-    if conn["kind"] == "openai_compatible" and not conn.get("base_url"):
+    if kind == "openai_compatible" and not base_url:
         return "Endpoint base URL not set"
     return None
 
@@ -330,7 +316,7 @@ def _read_facts(provider_id: str, model: str, rev: str,
         return {}
 
 
-# ---- lowering ----
+# ---- the target ----
 def _sampling(choose: Callable[[Callable[[str], bool]], tuple[str, str]],
               presets: Callable[[str], dict | None]) -> dict:
     """`{preset_id, preset_name, scope, params}` for the preset `choose` picks.
@@ -349,70 +335,29 @@ def _sampling(choose: Callable[[Callable[[str], bool]], tuple[str, str]],
             "params": dict(preset["params"]) if preset else {}}
 
 
-def _lowered(raw: dict, sampling: dict, model: str | None = None, *,
-             catalog: bool = True) -> tuple[dict, dict | None]:
-    """`raw` as the facade reads it, and the catalog row that was read for it:
-    `sampling` attached, `model` set (when given), and `model_params` and
-    `model_features` recomputed for that model. `catalog` False reads no row
-    (`embed_attempt`: a record whose rev the cached catalog is not for).
-
-    A copy, never a mutation: `raw` can be the dict the store handed back. Any
-    `model_params` / `model_features` already on it is dropped first -- it may
-    belong to another model, and inheriting it would report a parameter the
-    new model was never checked for as verified, in either direction."""
-    out = {k: v for k, v in raw.items() if k not in ("model_params", "model_features")}
-    if model is not None:
-        out["model"] = model
-    out["sampling"] = sampling
-    # A fresh block per lowering, never `raw`'s: `resolve` replaces it whole
-    # with what the resolution knows, and `lower`'s callers (the model test,
-    # `controls.preview`) carry the billing alone.
-    out[ACCOUNT_KEY] = {"billing": providers.billing(out)}
-    row = _catalog_row(out, str(out.get("model", "") or "")) if catalog else None
-    params = _params_of(out, row)
-    if params is not None:
-        out["model_params"] = params
-    features = row.get("features") if row is not None else None
-    if isinstance(features, dict):
-        out["model_features"] = dict(features)
-    return out, row
-
-
-#: What an unstated fact lowers to (spec 4.2): post images on auto, no
-#: prefill, no post-processing -- the defaults a legacy connection carried.
+#: The facts a target is built with, and what each sends unstated (spec 4.2):
+#: post images on auto, no prefill, no post-processing -- the defaults a
+#: legacy connection carried (`_stated`).
 _UNSTATED = {"vision": "", "prefill": False, "post_process": "none"}
 
 
-def with_facts(conn: dict, model_facts: dict) -> dict:
-    """`conn` with its model's stated behaviour -- `vision`, `prefill` and
-    `post_process` -- taken from `model_facts` (`facts.of`) rather than the
-    connection's legacy fields. A copy.
-
-    The format-2 overlay. Every consumer reads these three off the connection
-    dict -- `llm.prefill_capable`, the strict post-processing, and
-    `post_images.capability` -- so replacing the values here is what makes them
-    per model without touching any of them. An unstated fact is the default
-    (`_UNSTATED`), never the connection's flag: a model nothing was said of
-    runs as one nothing was said of.
-
-    Two legacy fields are deliberately left as they are, and neither is read:
-    `sampler_preset` (the selection's preset comes from the cascade) and
-    `reasoning_effort` (a GLM effort rides on a derived reasoning preset,
-    slice I, never on the connection).
+def _stated(model_facts: dict) -> tuple[str, bool, str]:
+    """`(vision, prefill, post_process)` -- the model's stated behaviour, from
+    `model_facts` (`facts.of`), never the connection's legacy fields. An
+    unstated fact is the default (`_UNSTATED`), never the connection's flag: a
+    model nothing was said of runs as one nothing was said of.
 
     `vision` is the post-image preference and nothing more: `off` stops post
-    images here and is NOT a capability `no` (`capabilities._stated`), so it
-    never refuses an image description."""
+    images (`_target`'s `reads_images`) and is NOT a capability `no`
+    (`capabilities._stated`), so it never refuses an image description."""
     vision = model_facts.get("vision")
-    prefill = model_facts.get("prefill")
     post_process = model_facts.get("post_process")
-    return {**conn,
-            "vision": vision if isinstance(vision, str) else _UNSTATED["vision"],
-            "prefill": prefill if isinstance(prefill, bool) else _UNSTATED["prefill"],
+    return (vision if isinstance(vision, str) else "",
+            model_facts.get("prefill") is True,
             # Only a value the facts module would write: a hand-edited sidecar
-            # lowers to the default rather than to a string nothing reads.
-            "post_process": (post_process if post_process in facts.POST_PROCESS_VALUES
-                             and post_process else _UNSTATED["post_process"])}
+            # sends the default rather than a string nothing reads.
+            (post_process if isinstance(post_process, str)
+             and post_process in facts.POST_PROCESS_VALUES and post_process else "none"))
 
 
 def _current_layout() -> bool:
@@ -423,23 +368,6 @@ def _current_layout() -> bool:
         return keys.is_current(config.read_config())
     except (locks.StoreBusy, OSError, UnicodeDecodeError):
         return False
-
-
-def lower(raw: dict, sampling: dict, model: str | None = None, *,
-          current: bool | None = None) -> dict:
-    """`_lowered`'s connection dict alone: `raw` as the facade reads it, with
-    `sampling` attached and `model` (when given) and its catalog facts set --
-    and, at format 2, its model's stated behaviour (`with_facts`). `current`
-    is the layout, read from `config.md` when not given.
-
-    Public for `controls.preview` and the model test, which lower a preset the
-    same way, and for `own_sampling` (a connection outside any route): at
-    format 2 each sends the model's own facts, as a resolved attempt does."""
-    conn = _lowered(raw, sampling, model)[0]
-    if not (_current_layout() if current is None else current):
-        return conn
-    return with_facts(conn, _model_facts(str(conn.get("id", "") or ""),
-                                         facts.model_of(conn), _rev(conn)))
 
 
 def preset_sampling(preset_id: str, scope: str = "connection") -> dict:
@@ -459,6 +387,18 @@ def _model_facts(provider_id: str, model: str, rev: str) -> dict:
         return {}
 
 
+def facts_for(raw: dict, model: str) -> dict:
+    """The facts a target outside any route (`target_for`) is built with:
+    at format 2, `model`'s on `raw` (`facts.of`, never raising, under the
+    model the record runs -- `facts.model_of`); below format 2 the record's
+    own legacy `vision`, `prefill` and `post_process`, which is what the
+    record sends until the migration moves them onto its model. What the
+    model test's probes and the screens' previews send and show."""
+    if not _current_layout():
+        return {k: raw[k] for k in _UNSTATED if k in raw}
+    return _model_facts(_text(raw, "id"), _sent_model(raw, model), _rev(raw))
+
+
 def _rev(conn: dict) -> str:
     rev = conn.get("rev", "")
     return rev if isinstance(rev, str) else ""
@@ -469,56 +409,54 @@ def _text(conn: dict, key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _target(conn: dict, attempt_caps: dict, model_facts: dict) -> wire.Target:
-    """`conn`, a lowered connection dict, as the `wire.Target` an adapter
-    sends: the same values, typed. Built beside the dict (slice I), never
-    from anything the dict does not carry, so the two cannot disagree --
-    `test_inference_target.py` holds every field to it.
+def _sent_model(raw: dict, model: str) -> str:
+    """The model a target on `raw` sends when asked for `model`: `model`
+    itself, except an unset Claude model, which runs the default
+    (`facts.model_of`, `llm.effective_model`'s rule)."""
+    return facts.model_of({"kind": raw.get("kind"), "model": model})
 
-    `model` is the one sent (`facts.model_of`, `llm.effective_model`'s rule),
-    and so is `requested_model`: what the usage holder files as asked for. The
-    account block and the structured flag are the dict's as it stands; the
-    resolver lays a stamp on both together (`_stamp`). `reads_images` is
-    `post_images.capability`'s rule (`capabilities.post_image_reach`) over the
-    attempt's own `vision` capability, which `attempt_caps` already holds --
-    the dict's `vision` field is the preference that rule reads
-    (`model_facts`' overlay, `with_facts`), so the store is not read again.
 
-    `model_facts` (`facts.of`'s shape) is what `_attempt` read. Every field
-    the target takes from it is already on `conn` (`with_facts`), so nothing
-    here reads it while the dict exists. It is in the signature for the
-    builder that outlives the dict (`target_for`, which lays the facts on
-    without one)."""
-    sampling: dict = conn.get("sampling") or NO_SAMPLING
-    block = conn.get(ACCOUNT_KEY)
-    account = ({k: v for k, v in block.items() if k in _ACCOUNT_FIELDS}
-               if isinstance(block, dict) else {})
-    params = conn.get("model_params")
-    features = conn.get("model_features")
-    model = facts.model_of(conn)
+def _target(raw: dict, model: str, sampling: dict, row: dict | None,
+            caps: dict[str, capabilities.Cap], model_facts: dict) -> wire.Target:
+    """The `wire.Target` an adapter sends for record `raw` serving `model`
+    with `sampling` (`_sampling`'s shape): built from the record, the
+    catalog row read for this model (`row`, or None), the attempt's resolved
+    capabilities (`caps`) and its model's facts (`model_facts`, `facts.of`'s
+    shape). Every target the store hands out is built here -- a resolved
+    attempt's (`_attempt`) and one outside any route (`target_for`) -- so the
+    two cannot disagree.
+
+    `model` is the one sent (`_sent_model`), and so is `requested_model`:
+    what the usage holder files as asked for. `model_params` and
+    `model_features` are the catalog row's, never anything already on the
+    record (it may belong to another model, and inheriting it would report a
+    parameter the model was never checked for as verified). `prefill`,
+    `post_process` and the post-image preference are the model's facts
+    (`_stated`); `reads_images` is `post_images.capability`'s rule
+    (`capabilities.post_image_reach`, a kind left off is OpenRouter's) over
+    that preference and the attempt's own `vision` capability, so the store
+    is not read again. The account is the billing alone, and the target is
+    never flagged structured: those are a resolution's stamps (`_stamp`)."""
+    sent = _sent_model(raw, model)
+    params = _params_of(raw, row)
+    features = row.get("features") if row is not None else None
+    vision, prefill, post_process = _stated(model_facts)
     return wire.Target(
-        provider_id=_text(conn, "id"), kind=_text(conn, "kind"), model=model,
-        provider_name=_text(conn, "name"), base_url=_text(conn, "base_url"),
-        api_key=_text(conn, "api_key"), rev=_rev(conn), requested_model=model,
+        provider_id=_text(raw, "id"), kind=_text(raw, "kind"), model=sent,
+        provider_name=_text(raw, "name"), base_url=_text(raw, "base_url"),
+        api_key=_text(raw, "api_key"), rev=_rev(raw), requested_model=sent,
         sampling=wire.Sampling(preset_id=sampling["preset_id"],
                                preset_name=sampling["preset_name"],
                                scope=sampling["scope"], params=dict(sampling["params"])),
-        sampler_support=_text(conn, "sampler_support"),
-        model_params=tuple(params) if isinstance(params, list) else None,
+        sampler_support=_text(raw, "sampler_support"),
+        model_params=tuple(params) if params is not None else None,
         model_features=dict(features) if isinstance(features, dict) else None,
-        prefill=conn.get("prefill") is True,
-        post_process=_text(conn, "post_process"),
-        # `post_images.capability`'s own reading of the dict: a kind left
-        # off is OpenRouter's.
+        prefill=prefill, post_process=post_process,
         reads_images=capabilities.post_image_reach(
-            str(conn.get("kind", "openrouter")), _text(conn, "vision"),
-            attempt_caps.get("vision", _UNKNOWN_CAP)),
-        structured=conn.get(STRUCTURED_KEY) is True,
-        account=wire.Account(**account))
+            str(raw.get("kind", "openrouter")), vision,
+            caps.get("vision", _UNKNOWN_CAP)),
+        account=wire.Account(billing=providers.billing(raw)))
 
-
-#: The account block keys a `wire.Account` holds (`llm_usage.ACCOUNT_FIELDS`).
-_ACCOUNT_FIELDS = frozenset(f.name for f in dataclasses.fields(wire.Account))
 
 #: A capability nothing has said anything about.
 _UNKNOWN_CAP = capabilities.Cap(capabilities.UNKNOWN, "unknown")
@@ -528,65 +466,82 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
              retries: int = 0, catalog: bool = True,
              model_facts: dict | None = None,
              stated: Mapping[str, Mapping[str, dict]] | None = None) -> Attempt:
-    """One attempt: the lowered connection, and what is known of it.
+    """One attempt: its target, and what is known of it.
 
-    Capabilities are resolved from the catalog row the lowering read and the
-    model's facts, once -- never by `capabilities.caps_for`, which would read
-    the same sidecar again. The facts are read under the model the attempt
-    runs (`facts.model_of`: an unset Claude model is `opus`, where the
-    migration wrote them) -- below format 2, as the migration will leave them
-    (`stated`, `Overlay.facts`; `_read_facts`).
+    Capabilities are resolved from the catalog row the target is built from
+    and the model's facts, once -- never by `capabilities.caps_for`, which
+    would read the same sidecar again. `catalog` False reads no row
+    (`embed_attempt`: a record whose rev the cached catalog is not for). The
+    facts are read under the model the attempt runs (`facts.model_of`: an
+    unset Claude model is `opus`, where the migration wrote them) -- below
+    format 2, as the migration will leave them (`stated`, `Overlay.facts`;
+    `_read_facts`).
 
-    Those same facts are overlaid onto the connection (`with_facts`), so an
-    attempt carries ITS model's prefill, post-processing and post-image
-    preference. A reroll onto another model therefore runs with that model's
-    facts, not the connection's -- per-model facts are the design (spec 4.2).
-    The baseline's override cells observe neither prefill nor vision, so
-    nothing frozen records the difference.
+    Those same facts are what the target sends (`_stated`), so an attempt
+    carries ITS model's prefill, post-processing and post-image preference.
+    A reroll onto another model therefore runs with that model's facts, not
+    the connection's -- per-model facts are the design (spec 4.2). The
+    baseline's override cells observe neither prefill nor vision, so nothing
+    frozen records the difference.
 
     `model_facts` stands in for the read (`facts.of`'s shape): facts not yet
     written, which a facts write's guard judges (`embed_attempt`)."""
-    conn, row = _lowered(raw, sampling, model, catalog=catalog)
-    preset = providers.infer(conn)
-    rev = _rev(conn)
+    row = _catalog_row(raw, model) if catalog else None
+    preset = providers.infer(raw)
+    rev = _rev(raw)
     if model_facts is None:
-        model_facts = _read_facts(provider_id, facts.model_of(conn), rev, stated)
-    conn, caps, target = _typed(conn, row, preset, model, model_facts)
-    base_url = conn.get("base_url", "")
+        model_facts = _read_facts(provider_id, _sent_model(raw, model), rev, stated)
+    caps, target = _typed(raw, model, sampling, row, preset, model_facts)
+    base_url = raw.get("base_url", "")
     return Attempt(
-        provider_id, model, sampling["preset_id"], conn,
-        provider_kind=str(conn.get("kind", "") or ""),
+        provider_id, model, sampling["preset_id"],
+        provider_kind=str(raw.get("kind", "") or ""),
         base_url=(base_url if isinstance(base_url, str) and base_url else preset.base_url),
-        rev=rev, billing=providers.billing(conn), provider_preset=preset.id,
+        rev=rev, billing=providers.billing(raw), provider_preset=preset.id,
         facts=model_facts, capabilities=caps,
-        controls=llm_sampling.effective(conn), retries=retries, target=target)
+        controls=llm_sampling.effective(target), retries=retries, target=target)
 
 
-def _typed(conn: dict, row: dict | None, preset: providers.Preset, model: str,
-           model_facts: dict) -> tuple[dict, dict[str, capabilities.Cap], wire.Target]:
-    """A lowered dict made an attempt's: its model's stated behaviour laid on
-    (`with_facts`), its capabilities resolved from the catalog row the
-    lowering read and those facts -- never by `capabilities.caps_for`, which
-    would read the same sidecar again -- and its target built from both. The
-    one builder `_attempt` and `target_for` share."""
-    conn = with_facts(conn, model_facts)
+def _typed(raw: dict, model: str, sampling: dict, row: dict | None,
+           preset: providers.Preset, model_facts: dict
+           ) -> tuple[dict[str, capabilities.Cap], wire.Target]:
+    """`raw` at `model` made an attempt's: its capabilities resolved from the
+    catalog row and its model's facts -- never by `capabilities.caps_for`,
+    which would read the same sidecar again -- and its target built from
+    both. The one builder `_attempt` and `target_for` share."""
     caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
-    return conn, caps, _target(conn, caps, model_facts)
+    return caps, _target(raw, model, sampling, row, caps, model_facts)
 
 
 def target_for(raw: dict, model: str, sampling: dict, *, model_facts: dict) -> wire.Target:
     """The `wire.Target` for `raw` (a connection record) sending `model` with
     `sampling` (`_sampling`'s shape), its model's stated behaviour taken from
-    `model_facts` (`facts.of`'s shape): a target outside any route, built by
-    the builder a resolved attempt's is (`_typed`), so the two cannot
-    disagree.
+    `model_facts` (`facts.of`'s shape; `facts_for` reads them as a target
+    outside any route sends them): a target outside any route, built by the
+    builder a resolved attempt's is (`_typed`), so the two cannot disagree.
 
     For what sends or describes one attempt without resolving a task: the
-    controls preview, the settings view's effective controls and the model
-    test's probes. Its account block is the billing alone, and it is never
+    controls preview, the connection editor's display (`own_target`), a call
+    that asks the provider rather than a model (`provider_target`) and the
+    model test's probes. Its account is the billing alone, and it is never
     flagged structured: those are a resolution's stamps (`_stamp`)."""
-    conn, row = _lowered(raw, sampling, model)
-    return _typed(conn, row, providers.infer(conn), model, model_facts)[2]
+    row = _catalog_row(raw, model)
+    return _typed(raw, model, sampling, row, providers.infer(raw), model_facts)[1]
+
+
+def provider_target(raw: dict) -> wire.Target:
+    """`raw` as a target at its own model, with no preset and nothing said of
+    the model: what a call that asks the PROVIDER rather than a model is
+    handed -- the catalog listing, the catalog probe of a provider not yet
+    saved, the health check -- and where a screen reads the model the record
+    runs (`.model`: an unset Claude model is the default)."""
+    return target_for(raw, _own_model(raw), dict(NO_SAMPLING), model_facts={})
+
+
+def _own_model(raw: dict) -> str:
+    """The model `raw` names, "" for none."""
+    model = raw.get("model", "")
+    return model if isinstance(model, str) else ""
 
 
 #: The capabilities an operation needs of itself, as ALTERNATIVES: an attempt
@@ -637,14 +592,16 @@ def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple
                                             known=known)
 
 
-def own_sampling(conn: dict) -> dict:
-    """`conn` with its OWN sampler preset (scope `connection`, or `none`) and its
-    model's `model_params` attached -- what a connection carries outside any
-    route: the connection editor's display. (A resolved fallback brings its own
-    preset through the cascade instead, `resolve`.)"""
-    own = Selection(str(conn.get("id", "") or ""), str(conn.get("model", "") or ""),
-                    llm_connections.own_preset(conn))
-    return lower(conn, _sampling(_own_preset(own), _preset_lookup()))
+def own_target(raw: dict) -> wire.Target:
+    """`raw` as a target at its own model with its OWN sampler preset (scope
+    `connection`, or `none`) and its model's facts (`facts_for`) -- what a
+    connection sends outside any route: the connection editor's display. (A
+    resolved fallback brings its own preset through the cascade instead,
+    `resolve`.)"""
+    model = _own_model(raw)
+    own = Selection(_text(raw, "id"), model, llm_connections.own_preset(raw))
+    return target_for(raw, model, _sampling(_own_preset(own), _preset_lookup()),
+                      model_facts=facts_for(raw, model))
 
 
 # ---- the resolver ----
@@ -736,7 +693,7 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     at all is an empty `attempts`.
 
     The fallback attempt is the one the facade sends (spec 5.2, 5.4, 5.5),
-    attached to the primary's connection dict under `FALLBACK_KEY`: it is
+    riding the primary on the resolution's chain (`rides`): it is
     dropped when it cannot be read or cannot send (so a misconfigured fallback
     never replaces the primary's real error) and when it names the primary's
     own connection (`llm._same_route`: a second try on the connection that just
@@ -751,10 +708,10 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     (`llm.fallback_sampling`). Its
     `model_params` stay its own model's. A fallback KNOWN unable to do what
     the route needs is kept in `attempts` and reported (`fallback_missing`) but
-    not attached, so it is never sent (spec 5.3). On a decide resolution the
-    fallback is attached only where both attempts are structured (`_rides`);
-    otherwise it stays in `attempts`, unattached, and `inference.stages` sends
-    it as a stage of its own.
+    does not ride, so it is never sent (spec 5.3). On a decide resolution the
+    fallback rides only where both attempts are structured (`_rides`);
+    otherwise it stays in `attempts`, riding nothing, and `inference.stages`
+    sends it as a stage of its own.
 
     A per-call preset (`override.preset`, scope `override`) is the primary's
     alone. The fallback gets what it would have had without it: the route's
@@ -829,7 +786,6 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
             sampling = unforced = _sampling(cascaded(primary), presets)
         first = _attempt(primary.provider, primary.model, sampling, raw,
                          retries=config.llm_retries(cfg), stated=seen.facts)
-        conn = first.conn
         attempts.append(first)
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
@@ -843,8 +799,8 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         fallback_problem = (problem(fb_raw)
                             if fb_raw is not None and fallback is not None
                             and _apart(first, operation)
-                            and not _same_model(conn, fb_raw, fallback.model)
-                            else _fallback_problem(conn, fb_raw))
+                            and not _same_model(first.target, fb_raw, fallback.model)
+                            else _fallback_problem(first.target.provider_id, fb_raw))
         if fallback is not None and fb_raw is not None and fallback_problem is None:
             # A copy, so the two attempts never share a mutable block.
             fb_sampling = ({**unforced, "params": dict(unforced["params"])}
@@ -861,7 +817,8 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         role=choice.role, via=choice.via, scope=choice.scope,
         attempts=tail.attempts, standing=choice.selection,
         standing_preset=standing_preset, missing=tail.missing,
-        fallback_missing=tail.fallback_missing, fallback_problem=fallback_problem)
+        fallback_missing=tail.fallback_missing, fallback_problem=fallback_problem,
+        rides=tail.rides)
 
 
 class _Tail(NamedTuple):
@@ -870,32 +827,27 @@ class _Tail(NamedTuple):
     attempts: tuple[Attempt, ...]
     missing: tuple[str, ...]
     fallback_missing: tuple[str, ...]
+    #: Whether the fallback rides the primary (`ResolvedInference.rides`).
+    rides: bool
 
 
 def _chain(attempts: list[Attempt], operation: str, needs: tuple[frozenset[str], ...], *,
            choice: cascade.Choice, selection: Selection | None) -> _Tail:
-    """The tail of `resolve`: stamp each attempt's account block, flag the
+    """The tail of `resolve`: stamp each attempt's account, flag the
     structured-capable ones, say what each is known to lack, give a decide
-    resolution's attempts their `decision_mode`, and attach the fallback the
-    facade sends (`_rides`)."""
-    # Stamped BEFORE the fallback is attached, so the dict the facade sends
-    # is the stamped one. Each lays the same stamp on the attempt's target
-    # (`_stamp`), so the attempts are replaced.
+    resolution's attempts their `decision_mode`, and say whether the fallback
+    rides the facade behind the primary (`_rides`; spec 5.3: a fallback known
+    incapable never does, so it is never sent). Each stamp replaces the
+    attempt around a new target (`_stamp`)."""
     attempts = _account(attempts, operation, choice, selection)
     attempts = _flag_structured(attempts, operation)
     fallback_missing = _missing(attempts[1], needs) if len(attempts) > 1 else ()
     missing = _missing(attempts[0], needs) if attempts else ()
     if operation == "decide":
-        # Before the attach, which reads them. The same dict objects, so the
-        # attach below writes into the dicts the attempts carry.
+        # Before `_rides`, which reads the fallback's mode.
         attempts = [_decide_attempt(a) for a in attempts]
-    if len(attempts) > 1 and not fallback_missing and _rides(attempts, operation):
-        # The facade sends what the primary's dict carries (spec 5.3: a
-        # fallback known incapable is dropped from the chain, never sent). The
-        # dict is this resolution's own copy (`_lowered`), so nothing the store
-        # handed back is touched.
-        attempts[0].conn[FALLBACK_KEY] = attempts[1].conn
-    return _Tail(tuple(attempts), missing, fallback_missing)
+    rides = len(attempts) > 1 and not fallback_missing and _rides(attempts, operation)
+    return _Tail(tuple(attempts), missing, fallback_missing, rides)
 
 
 def _decide_attempt(attempt: Attempt) -> Attempt:
@@ -908,17 +860,17 @@ def _decide_attempt(attempt: Attempt) -> Attempt:
         return dataclasses.replace(attempt, decision_mode=mode)
     return dataclasses.replace(
         attempt, decision_mode=mode,
-        controls=llm_sampling.not_applicable(attempt.conn, llm_sampling.WHY_NATIVE))
+        controls=llm_sampling.not_applicable(attempt.target, llm_sampling.WHY_NATIVE))
 
 
 def _rides(attempts: list[Attempt], operation: str) -> bool:
     """Whether the fallback rides the facade behind the primary
-    (`FALLBACK_KEY`): always on a generate resolution; on a decide one only
+    (`ResolvedInference.rides`): always on a generate resolution; on a decide one only
     when both are structured -- the primary `generates` and the fallback's
     mode is "structured". A native attempt, on either side, is a stage of its
     own (`inference.stages`), which a structured call cannot carry. Under
-    ruling 1 a generating primary is structured, so every attach slice F
-    made is still made."""
+    ruling 1 a generating primary is structured, so every fallback slice F
+    sent behind its primary still rides."""
     if operation != "decide":
         return True
     return attempts[1].decision_mode == "structured" and generates(attempts[0])
@@ -974,11 +926,9 @@ def _apart(primary: Attempt, operation: str) -> bool:
 
 
 def _flag_structured(attempts: list[Attempt], operation: str) -> list[Attempt]:
-    """Flag each attempt whose `structured_output` is `yes` (spec 7.2), on its
-    own lowered dict -- the resolution's copy, as the fallback attach writes --
-    and on its target (`_stamp`). A decide resolution only: a generate
-    resolution's dicts stay byte-identical to what they were before slice F
-    (plan Minor 4)."""
+    """Flag each attempt whose `structured_output` is `yes` (spec 7.2) on its
+    target (`_stamp`). A decide resolution only: a generate resolution's
+    targets are what they were before slice F (plan Minor 4)."""
     if operation != "decide":
         return attempts
     out = []
@@ -991,22 +941,14 @@ def _flag_structured(attempts: list[Attempt], operation: str) -> list[Attempt]:
 
 def _stamp(attempt: Attempt, *, account: dict | None = None,
            structured: bool = False) -> Attempt:
-    """`attempt` with `account` laid over its account block and, when
-    `structured`, flagged for its provider's structured mode -- on its dict and
-    its target together, the one place either is written (until the dict
-    goes).
-
-    The dict is written in place: it is the resolution's own copy
-    (`_lowered`), and the fallback attach reads the very dict the attempt
-    carries. Its account block is REPLACED, never `update()`d: `{**conn}`
-    copies share it, and an in-place write would reach every one of them. The
-    target is frozen, so the attempt is replaced around a new one."""
+    """`attempt` with `account` laid over its target's account and, when
+    `structured`, its target flagged for its provider's structured mode --
+    the one place a resolution writes either. The target is frozen, so the
+    attempt is replaced around a new one."""
     target = attempt.target
     if account:
-        attempt.conn[ACCOUNT_KEY] = {**attempt.conn.get(ACCOUNT_KEY, {}), **account}
         target = target.with_account(**account)
     if structured:
-        attempt.conn[STRUCTURED_KEY] = True
         target = dataclasses.replace(target, structured=True)
     return dataclasses.replace(attempt, target=target)
 
@@ -1100,14 +1042,15 @@ def embed_attempt(provider_id: str, model: str, raw: dict, *,
     return EmbedAttempt(attempt, missing, space_id)
 
 
-def _fallback_problem(primary: dict, fallback: dict | None) -> str | None:
+def _fallback_problem(primary_id: str, fallback: dict | None) -> str | None:
     """Why a fallback that exists is left out of the chain: it is on the
-    primary's own provider (`SAME_PROVIDER`), or it cannot send (`problem`).
-    Said either way -- without a reason the settings view showed a dropped
-    fallback as a working one. None for no fallback, or one that is sent."""
+    primary's own provider (`primary_id`; `SAME_PROVIDER`), or it cannot send
+    (`problem`). Said either way -- without a reason the settings view showed
+    a dropped fallback as a working one. None for no fallback, or one that is
+    sent."""
     if fallback is None:
         return None
-    if _same_provider(primary, fallback):
+    if _same_provider(primary_id, fallback):
         return SAME_PROVIDER
     return problem(fallback)
 
@@ -1162,7 +1105,6 @@ def embedding(cfg: dict | None = None, *,
     # The account block a chat resolution's attempts get from `_account`: the
     # operation, and the role whose slot supplied the selection -- always the
     # Embedding role's, since nothing overrides it per call (spec 9.3).
-    # Replaced, never updated in place: the block is shared by `{**conn}` copies.
     attempt = _stamp(got.attempt, account={"operation": "embed", "role": "embedding"})
     return ResolvedInference(
         task="", operation="embed", route="",
@@ -1187,35 +1129,35 @@ def _role_supplied(standing: Selection | None, selection: Selection | None,
 
 def _account(attempts: list[Attempt], operation: str, choice: cascade.Choice,
              selection: Selection | None) -> list[Attempt]:
-    """Stamp each attempt's account block (spec 9.3): the `operation`, and the
+    """Stamp each attempt's account (spec 9.3): the `operation`, and the
     `role` whose slot supplied the resolution, on both attempts (ruling 9) --
-    on the dict and the target together (`_stamp`, which replaces the block).
+    on its target (`_stamp`).
 
     No role for a pin (`choice.role` is empty), nor when a per-call override
     chose the provider or the model -- the user supplied that selection, not a
     role."""
     stamp = {"operation": operation}
-    kind = str(attempts[0].conn.get("kind", "") or "") if attempts else ""
+    kind = attempts[0].provider_kind if attempts else ""
     if choice.role and _role_supplied(choice.selection, selection, kind):
         stamp["role"] = choice.role
     return [_stamp(attempt, account=stamp) for attempt in attempts]
 
 
-def _same_model(primary: dict, fallback: dict, model: str) -> bool:
+def _same_model(primary: wire.Target, fallback: dict, model: str) -> bool:
     """Whether a fallback on record `fallback`, at `model`, is the primary's
     own connection AND model (`facts.model_of`, so an unset Claude model is
-    the default it runs): a second send of the very call that failed, which
-    no stage boundary turns into a fallback (#144)."""
-    return (_same_provider(primary, fallback)
-            and facts.model_of({**fallback, "model": model}) == facts.model_of(primary))
+    the default it runs -- the primary target's `model` already is): a
+    second send of the very call that failed, which no stage boundary turns
+    into a fallback (#144)."""
+    return (_same_provider(primary.provider_id, fallback)
+            and facts.model_of({**fallback, "model": model}) == primary.model)
 
 
-def _same_provider(primary: dict, fallback: dict) -> bool:
-    """Whether the fallback is the primary's own connection, by store id --
-    `llm._same_route`'s rule (two dicts read from disk are never the same
-    object, so the id is what decides)."""
-    pid = primary.get("id", "")
-    return bool(pid) and pid == fallback.get("id", "")
+def _same_provider(primary_id: str, fallback: dict) -> bool:
+    """Whether the fallback is the primary's own connection (`primary_id`, its
+    record's id), by store id -- `llm._same_route`'s rule (two records read
+    from disk are never the same object, so the id is what decides)."""
+    return bool(primary_id) and primary_id == fallback.get("id", "")
 
 
 # ---- the refusal ----
@@ -1233,10 +1175,10 @@ def unusable(resolved: ResolvedInference) -> Refusal | None:
     drives the standing route and must be refused on exactly the same terms --
     including the routed-connection wording below.
     """
-    conn = resolved.conn
-    if conn is None:
+    if not resolved.attempts:
         return 409, {"detail": "No LLM connection selected", "kind": "missing_key"}
-    why = problem(conn)
+    primary = resolved.attempts[0].target
+    why = target_problem(primary)
     if why is None:
         return None
     # Refused before the facade, so a configured fallback does not rescue it.
@@ -1251,7 +1193,7 @@ def unusable(resolved: ResolvedInference) -> Refusal | None:
     # split route's pin is its own, not its legacy parent's): a ROUTED
     # connection that cannot send is reported, not walked past -- the user
     # pointed this task at it.
-    name = conn.get("name") or conn["id"]
+    name = primary.label
     where = (f"routed for {routing.label_for(resolved.route).lower()}"
              if resolved.via == "route"
              else f"the {resolved.role.capitalize()} role" if resolved.role else "")
@@ -1335,10 +1277,11 @@ def _cannot(resolved: ResolvedInference, cap: str) -> str:
 def _on(attempt: Attempt) -> str:
     """"<model> on <provider>": the model the connection runs, and the
     provider's name (else its preset's label, else its id)."""
-    conn = attempt.conn
+    target = attempt.target
     preset = providers.PRESETS.get(attempt.provider_preset)
-    provider = conn.get("name") or (preset.label if preset is not None else conn.get("id", ""))
-    return f"{facts.model_of(conn)} on {provider}"
+    provider = target.provider_name or (preset.label if preset is not None
+                                        else target.provider_id)
+    return f"{target.model} on {provider}"
 
 
 def _primary_phrases(resolved: ResolvedInference) -> tuple[str, str, str]:

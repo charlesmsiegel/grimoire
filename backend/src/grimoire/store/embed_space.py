@@ -49,12 +49,12 @@ def endpoint_of(got: inference_resolved.ResolvedInference | None) -> dict | None
         return None
     try:
         attempt = got.attempts[0]
-        conn = attempt.conn
+        target = attempt.target
         return {"model": attempt.model, "base_url": attempt.base_url,
-                "key": conn["api_key"], "space": got.space_id,
+                "key": target.api_key, "space": got.space_id,
                 "provider": attempt.provider_id,
-                "provider_name": str(conn.get("name") or attempt.provider_id),
-                "provider_kind": attempt.provider_kind, "conn": conn}
+                "provider_name": target.provider_name or attempt.provider_id,
+                "provider_kind": attempt.provider_kind, "target": target}
     except _OFF_ERRORS:
         return None
 
@@ -65,9 +65,9 @@ def endpoint(cfg: dict | None = None) -> dict | None:
 
     `{model, base_url, key, space}` -- what a request needs and the space its
     vectors are saved under -- plus `provider` (the connection id),
-    `provider_name` (its name, else its id), `provider_kind`, and `conn`, the
-    attempt's lowered connection dict, which carries what the operation's
-    ledger row is stamped from. Built from `resolve.embedding`, the role's one
+    `provider_name` (its name, else its id), `provider_kind`, and `target`,
+    the attempt's `wire.Target`, which carries what the operation's ledger
+    row is stamped from. Built from `resolve.embedding`, the role's one
     reader: None exactly when that names no space -- no model, no provider, a
     provider that is gone, a provider file that could not be read (a busy
     store included: the lookup reads it as no provider, so embedding is off

@@ -169,7 +169,7 @@ def test_sitting_out_mid_round_is_skipped(client):
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, wire_kit.resolution({"kind": "openrouter", "model": "test"}), run, token,
+            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
             round_record, streaming.StreamOutcome(),
         ):
             if "response_end" in json.loads(frame.removeprefix("data: ")):
@@ -345,7 +345,7 @@ def _drive(cid, sid, fake, run, round_record, on_frame):
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, wire_kit.resolution({"kind": "openrouter", "model": "test"}), run, token,
+            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
             round_record, streaming.StreamOutcome(),
         ):
             if frame.startswith("data: "):
@@ -617,7 +617,7 @@ def test_stop_at_round_start_of_a_planned_round_leaves_nothing_to_retry(client):
 
     async def collect():
         frames = character_turns._frames(
-            cid, sid, fake, wire_kit.resolution({"kind": "openrouter", "model": "test"}), run, token,
+            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
             round_record, streaming.StreamOutcome())
         # Stop lands while the announcement is being delivered: the run is
         # closed at that yield, so the rescue path is what ends the round.

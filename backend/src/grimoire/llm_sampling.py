@@ -222,16 +222,6 @@ def validate(params: object) -> dict:
     return {name: out[name] for name in CONTROLS if name in out}
 
 
-def _target(x: wire.Target | dict | None) -> wire.Target:
-    """`x` as the target this module reads: a `Target` as it is; a lowered
-    connection dict through `wire.from_lowered` -- the dict door, which Task
-    10 closes with the lowering -- and anything else as an empty dict, read
-    as OpenRouter with nothing set."""
-    if isinstance(x, wire.Target):
-        return x
-    return wire.from_lowered(x if isinstance(x, dict) else {}).primary
-
-
 def _stored(t: wire.Target) -> dict:
     return t.sampling.params
 
@@ -535,8 +525,8 @@ def _reasoning(c: _Conn, value: str | None, max_tokens: int) -> _Control:
     return _openrouter_reasoning(c, value)
 
 
-def effective(conn: wire.Target | dict) -> dict:
-    """What `conn` is sent from its attached preset, control by control.
+def effective(target: wire.Target) -> dict:
+    """What `target` is sent from its attached preset, control by control.
 
     `{"requested": {name: stored value}, "effective": {wire name: value},
     "controls": {name: {"state", "wire", "why", "source"}}}`, every control in
@@ -548,15 +538,13 @@ def effective(conn: wire.Target | dict) -> dict:
     for every state but `supported` (and on a `supported` value it changed).
 
     Reads only the target's `kind`, `model`, `base_url`, `sampling.params`,
-    `sampler_support`, `model_params` and `model_features` -- a lowered dict's
-    through `wire.from_lowered` (`_target`). Never raises: this runs per
+    `sampler_support`, `model_params` and `model_features`. Never raises: this runs per
     attempt on the generation path, and a preset file edited by hand into
     nonsense costs that one control, reported as unsupported (`WHY_INVALID`),
     rather than the turn.
     """
-    t = _target(conn)
-    stored = _stored(t)
-    c = _context(t)
+    stored = _stored(target)
+    c = _context(target)
     requested = {name: stored[name] for name in CONTROLS if name in stored}
     values: dict = {}
     invalid: set[str] = set()
@@ -605,12 +593,12 @@ def effective(conn: wire.Target | dict) -> dict:
     return {"requested": requested, "effective": sent, "controls": controls}
 
 
-def not_applicable(conn: wire.Target | dict, why: str) -> dict:
+def not_applicable(target: wire.Target, why: str) -> dict:
     """`effective`'s answer for an operation that takes no sampling at all (a
-    native decision): what `conn`'s preset stores is still `requested`, as
+    native decision): what `target`'s preset stores is still `requested`, as
     `effective` reports it, nothing is sent, and every control in `CONTROLS`
     is `n/a` for `why`."""
-    stored = _stored(_target(conn))
+    stored = _stored(target)
     return {"requested": {name: stored[name] for name in CONTROLS if name in stored},
             "effective": {},
             "controls": {name: {"state": NOT_APPLICABLE, "wire": "", "why": why,
@@ -635,7 +623,7 @@ def _dropped(eff: dict, names: tuple[str, ...]) -> list[dict]:
             if name in eff["requested"] and eff["controls"][name]["state"] == UNSUPPORTED]
 
 
-def split(conn: wire.Target | dict) -> tuple[dict, list[dict]]:
+def split(target: wire.Target) -> tuple[dict, list[dict]]:
     """What this connection will be sent from its attached preset's SAMPLER
     parameters, and what not -- a view over `effective`.
 
@@ -645,7 +633,7 @@ def split(conn: wire.Target | dict) -> tuple[dict, list[dict]]:
     `[{param, reason}]` in `PARAMS` order. The reasoning control is not here:
     it is `reasoning_wire`'s. Never raises (see `effective`).
     """
-    eff = effective(conn)
+    eff = effective(target)
     applied: dict = {}
     for name in NAMES:
         if _sent(eff, name):
@@ -656,13 +644,13 @@ def split(conn: wire.Target | dict) -> tuple[dict, list[dict]]:
     return applied, _dropped(eff, NAMES)
 
 
-def sent_names(conn: wire.Target | dict) -> list[str]:
-    """The preset controls this connection actually sends, canonical names."""
-    eff = effective(conn)
+def sent_names(target: wire.Target) -> list[str]:
+    """The preset controls this target actually sends, canonical names."""
+    eff = effective(target)
     return [name for name in CONTROLS if _sent(eff, name)]
 
 
-def sent_fields(conn: wire.Target | dict) -> dict[str, dict]:
+def sent_fields(target: wire.Target) -> dict[str, dict]:
     """`{canonical name: that control's share of the wire body}` for every
     control `sent_names` lists, in the same order.
 
@@ -671,7 +659,7 @@ def sent_fields(conn: wire.Target | dict) -> dict[str, dict]:
     field it wrote -- adaptive thinking is `thinking` AND `output_config`, and a
     provider refusing it may name either. `llm._preset_refusal` reads the
     spellings a refusal could echo from here."""
-    eff = effective(conn)
+    eff = effective(target)
     shares: dict[str, dict] = {}
     for name in CONTROLS:
         if not _sent(eff, name):
@@ -687,8 +675,8 @@ def sent_fields(conn: wire.Target | dict) -> dict[str, dict]:
     return shares
 
 
-def report(conn: wire.Target | dict | None) -> dict | None:
-    """What a reader is shown about this connection's sampling, or None when
+def report(target: wire.Target | None) -> dict | None:
+    """What a reader is shown about this target's sampling, or None when
     nothing was resolved for it at all.
 
     `applied` is every control the preset set that is honoured, under its
@@ -699,19 +687,12 @@ def report(conn: wire.Target | dict | None) -> dict | None:
     catalog for its model, which sends everything and cannot say whether the
     model takes it.
     """
-    if isinstance(conn, wire.Target):
-        t = conn
-        head = {"preset_id": t.sampling.preset_id, "preset_name": t.sampling.preset_name,
-                "scope": t.sampling.scope, "kind": t.kind}
-    elif isinstance(conn, dict) and isinstance(conn.get("sampling"), dict):
-        t = _target(conn)
-        sampling = conn["sampling"]
-        head = {"preset_id": sampling.get("preset_id", ""),
-                "preset_name": sampling.get("preset_name", ""),
-                "scope": sampling.get("scope", ""), "kind": conn.get("kind", "openrouter")}
-    else:
+    if not isinstance(target, wire.Target):
         return None
-    eff = effective(t)
+    sampling = target.sampling
+    head = {"preset_id": sampling.preset_id, "preset_name": sampling.preset_name,
+            "scope": sampling.scope, "kind": target.kind}
+    eff = effective(target)
     applied: dict = {}
     for name in CONTROLS:
         entry = eff["controls"][name]

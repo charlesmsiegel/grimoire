@@ -129,7 +129,7 @@ def messages(cap: str) -> list[dict]:
 
 
 def sampling() -> dict:
-    """The `sampling` block a chat probe's connection is lowered with: the cap
+    """The `sampling` block a chat probe's target is built with: the cap
     and nothing else, so no preset of the connection's own reaches a test. Named
     so a provider refusing the cap is reported as refusing a setting of the
     test's (`llm._preset_refusal`), not of a preset the user chose -- and,

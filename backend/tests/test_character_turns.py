@@ -306,7 +306,7 @@ def test_single_npc_skips_selector_and_stop_blocks_successor(client, monkeypatch
             cid,
             sid,
             fake,
-            wire_kit.resolution({"kind": "openrouter", "model": "test"}),
+            wire_kit.resolution(wire_kit.target(model="test")),
             run,
             token,
             round_record,
@@ -509,7 +509,7 @@ def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, wire_kit.resolution({"kind": "openrouter", "model": "test"}), run, token,
+            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
             round_record, streaming.StreamOutcome()):
             if "delta" in json.loads(frame.removeprefix("data: ")):
                 run.cancel_requested = True

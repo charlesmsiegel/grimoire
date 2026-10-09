@@ -38,7 +38,10 @@ Each attempt was recorded driven twice, as the resolver's dict (through the
 facade's shim) and as its chain, and every record held both to agree. Task
 9d deleted the shim, so each attempt is now driven once, as its chain (the
 target alone for `single` and a native decision), and still matches the
-record both spellings wrote.
+record both spellings wrote. Task 10 deleted the dict, so the edges, recorded
+from connection dicts, are spelled as the chains those dicts read as
+(`test_adapter_registry.hand`, field for field what `wire.from_lowered` read
+from each), under the names the golden records them by.
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ import pytest
 from grimoire import adapters, decisions, llm, wire
 from grimoire.llm_errors import LLMError
 
-from .test_adapter_registry import HAND_BUILT, ITEM, NATIVE, PASSES, STATES, _resolved
+from .test_adapter_registry import HAND_BUILT, ITEM, NATIVE, PASSES, STATES, _resolved, hand
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "adapter_wire_golden.json"
 
@@ -63,36 +66,34 @@ MESSAGES = [{"role": "system", "content": "You narrate Saltmarch."},
             {"role": "user", "content": "Mara unrolls the charts."}]
 SCHEMA = {"type": "object", "properties": {"over": {"type": "boolean"}}}
 
-#: Attempts no baseline state resolves to: no `kind`, an unknown one, a
-#: Claude alias, a structured and accounted chain whose route preset follows
-#: it onto an Anthropic fallback, a fallback on the primary's own id, two
-#: anonymous ones, and a Claude fallback.
-EDGE = [*HAND_BUILT,
-        {"id": "nk", "model": "vendor/nokind", "api_key": "sk-test-k"},
-        {"id": "weird", "kind": "mystery", "model": "x", "api_key": "sk-test-k"},
-        {"id": "cl2", "kind": "claude", "model": "sonnet"},
-        {"id": "fb", "kind": "openrouter", "model": "a", "api_key": "sk-test-k",
-         "sampling": {"preset_id": "g", "preset_name": "G", "scope": "global",
-                      "params": {"temperature": 0.3}},
-         llm.FALLBACK_KEY: {
-             "id": "fb2", "kind": "anthropic", "model": "claude-haiku-4-5",
-             "api_key": "sk-test-k2",
-             "sampling": {"preset_id": "own", "preset_name": "Own", "scope": "connection",
-                          "params": {"top_k": 5}},
-             llm.STRUCTURED_KEY: True,
-             "_account": {"operation": "decide", "role": "decision", "billing": "metered",
-                          "decision_mode": "structured"}},
-         llm.STRUCTURED_KEY: True,
-         "_account": {"operation": "decide", "role": "decision", "billing": "metered",
-                      "decision_mode": "structured"}},
-        {"id": "same", "kind": "openrouter", "model": "a", "api_key": "sk-test-k",
-         llm.FALLBACK_KEY: {"id": "same", "kind": "openrouter", "model": "b",
-                            "api_key": "sk-test-k"}},
-        {"id": "", "kind": "openrouter", "model": "a", "api_key": "sk-test-k",
-         llm.FALLBACK_KEY: {"id": "", "kind": "openrouter", "model": "b",
-                            "api_key": "sk-test-k"}},
-        {"id": "toclaude", "kind": "openrouter", "model": "a", "api_key": "sk-test-k",
-         llm.FALLBACK_KEY: {"id": "c", "kind": "claude", "model": ""}}]
+#: An account stamped as a structured decision files it.
+_DECIDED = wire.Account(operation="decide", role="decision", billing="metered",
+                        decision_mode="structured")
+
+#: Attempts no baseline state resolves to, each under the name the golden
+#: records it by: a dict with no `kind` (read as OpenRouter's), an unknown
+#: kind, a Claude alias, a structured and accounted chain whose route preset
+#: follows it onto an Anthropic fallback, a fallback on the primary's own id,
+#: two anonymous ones, and a Claude fallback (an unset model, the default).
+EDGE: list[tuple[str, wire.Chain]] = [
+    *((t.provider_id, wire.Chain(t)) for t in HAND_BUILT),
+    ("nk", wire.Chain(hand("nk", "openrouter", "vendor/nokind", api_key="sk-test-k"))),
+    ("weird", wire.Chain(hand("weird", "mystery", "x", api_key="sk-test-k"))),
+    ("cl2", wire.Chain(hand("cl2", "claude", "sonnet"))),
+    ("fb", wire.Chain(
+        hand("fb", "openrouter", "a", api_key="sk-test-k",
+             sampling=wire.Sampling("g", "G", "global", {"temperature": 0.3}),
+             structured=True, account=_DECIDED),
+        hand("fb2", "anthropic", "claude-haiku-4-5", api_key="sk-test-k2",
+             sampling=wire.Sampling("own", "Own", "connection", {"top_k": 5}),
+             structured=True, account=_DECIDED))),
+    ("same", wire.Chain(hand("same", "openrouter", "a", api_key="sk-test-k"),
+                        hand("same", "openrouter", "b", api_key="sk-test-k"))),
+    ("", wire.Chain(hand("", "openrouter", "a", api_key="sk-test-k"),
+                    hand("", "openrouter", "b", api_key="sk-test-k"))),
+    ("toclaude", wire.Chain(hand("toclaude", "openrouter", "a", api_key="sk-test-k"),
+                            hand("c", "claude", "opus"))),
+]
 
 KINDS = ("openrouter", "claude", "openai_compatible", "anthropic")
 
@@ -160,21 +161,18 @@ def _drive(case: str, attempt, failing: frozenset[str]) -> dict:
             "holder": holder, "observed": observed, "error": error}
 
 
-def _cases(conn: dict) -> list[tuple[str, frozenset[str]]]:
-    primary = frozenset({llm.effective_model(conn)})
+def _cases(chain: wire.Chain) -> list[tuple[str, frozenset[str]]]:
+    primary = frozenset({chain.primary.model})
     cases = [("ok", frozenset()), ("fallback", primary), ("structured", frozenset()),
              ("structured_fallback", primary), ("single", frozenset())]
-    if adapters.decides_natively(conn.get("kind", "openrouter")):
+    if adapters.decides_natively(chain.primary.kind):
         cases.append(("native", frozenset()))
     return cases
 
 
-def _spellings(conn: dict, chain: wire.Chain | None, case: str) -> list:
+def _spellings(chain: wire.Chain, case: str) -> list:
     """The attempt, as the facade takes it: its chain (the target alone, for
-    `single` and a native decision). The resolver's own chain for a resolved
-    attempt; an edge's dict read as one (`wire.from_lowered`)."""
-    if chain is None:
-        chain = wire.from_lowered(conn)
+    `single` and a native decision)."""
     return [chain.primary if case in ("single", "native") else chain]
 
 
@@ -187,21 +185,20 @@ def _observe_state(state: str, stage: str, tmp_path) -> dict[str, list[dict]]:
     `stage` names (`test_adapter_registry.PASSES`)."""
     out: dict[str, list[dict]] = {}
     for where, resolved in _resolved(state, tmp_path, stage=stage):
-        if resolved.operation == "embed" or not resolved.conn:
+        if resolved.operation == "embed" or resolved.chain is None:
             continue
-        for case, failing in _cases(resolved.conn):
+        for case, failing in _cases(resolved.chain):
             out[f"{where}/{case}"] = [_drive(case, attempt, failing)
-                                      for attempt in _spellings(resolved.conn, resolved.chain,
-                                                                case)]
+                                      for attempt in _spellings(resolved.chain, case)]
     return out
 
 
 def _observe_edges() -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
-    for conn in [*EDGE, *NATIVE]:
-        for case, failing in _cases(conn):
-            out[f"{conn['id'] or '<anonymous>'}/{case}"] = [
-                _drive(case, attempt, failing) for attempt in _spellings(conn, None, case)]
+    for name, chain in [*EDGE, *((t.provider_id, wire.Chain(t)) for t in NATIVE)]:
+        for case, failing in _cases(chain):
+            out[f"{name or '<anonymous>'}/{case}"] = [
+                _drive(case, attempt, failing) for attempt in _spellings(chain, case)]
     return out
 
 

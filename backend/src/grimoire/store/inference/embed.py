@@ -46,7 +46,7 @@ import asyncio
 import time
 from typing import Any
 
-from ... import embeddings, llm_usage
+from ... import embeddings, llm_usage, wire
 from .. import logs, routing, tokens, usage
 
 
@@ -61,10 +61,10 @@ def _stamp(holder: dict, space: dict) -> None:
 
     Then what served the call (slice E, spec 9.3): `requested_model`, the
     model asked for (the client refills `model` with what the endpoint
-    named), and `llm_usage.account` over the attempt's lowered `conn` --
-    `provider_id`, the provider's `billing`, and the account block
+    named), and `llm_usage.account` over the attempt's `target` --
+    `provider_id`, the provider's `billing`, and the account
     `resolve.embedding` stamped (`operation: "embed"`, `role: "embedding"`).
-    A space without a `conn` (a test double's) files no account fields; the
+    A space without a `target` (a test double's) files no account fields; the
     identity keys still make the row. If what those keys mean changes,
     `llm._stamp` and this change together.
     """
@@ -76,8 +76,9 @@ def _stamp(holder: dict, space: dict) -> None:
         "operation": usage.EMBED_OPERATION,
         "requested_model": space["model"],
     })
-    conn = space.get("conn")
-    llm_usage.account(holder, conn if isinstance(conn, dict) else {})
+    target = space.get("target")
+    if isinstance(target, wire.Target):
+        llm_usage.account(holder, target)
 
 
 def estimate_prompt(holder: dict, texts: list[str]) -> None:

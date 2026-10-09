@@ -38,7 +38,6 @@ from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
 from grimoire.store.inference import facts, probes
-from grimoire.store.inference import resolve as inference
 from tests import wire_kit
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
 
@@ -628,8 +627,8 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     from grimoire import llm as llm_mod
     monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
     conn = _endpoint(client, "Mara Endpoint", "primary.example")
-    backup = wire.from_lowered(inference.lower(store.llm_connections.read_connection_raw(
-        _endpoint(client, "Winifred Endpoint", "backup.example")), probes.sampling(), MODEL)).primary
+    backup = config_routes._probe_target(store.llm_connections.read_connection_raw(
+        _endpoint(client, "Winifred Endpoint", "backup.example")), MODEL)
     seen = _wire_client(
         client, lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
         retries=3, offer=backup)
@@ -650,10 +649,9 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     # request above is the test call's doing, not this setup's.
     seen.clear()
     facade = client.app.dependency_overrides[routes.get_llm]()
-    probe_conn = inference.lower(store.llm_connections.read_connection_raw(conn),
-                                 probes.sampling(), MODEL)
+    probe = config_routes._probe_target(store.llm_connections.read_connection_raw(conn), MODEL)
     with pytest.raises(LLMError):
-        asyncio.run(facade.complete(probes.messages("generate"), wire.from_lowered(probe_conn)))
+        asyncio.run(facade.complete(probes.messages("generate"), wire.Chain(probe)))
     assert [r.url.host for r in seen] == ["primary.example"] * 4 + ["backup.example"]
 
 

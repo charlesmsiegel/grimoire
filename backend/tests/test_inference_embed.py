@@ -30,7 +30,7 @@ import types
 import httpx
 import pytest
 
-from grimoire import embeddings
+from grimoire import embeddings, wire
 from grimoire.store import (
     config,
     embed_space,
@@ -184,13 +184,12 @@ def test_the_resolution_never_writes_the_stored_record():
     assert raw is not None
     before = copy.deepcopy(raw)
     got = inference_resolve.embedding(lookup=lookup)
-    assert got.attempts[0].conn[inference_resolve.ACCOUNT_KEY] == {
-        "billing": "metered", "operation": "embed", "role": "embedding"}
-    assert got.attempts[0].conn is not raw
+    assert got.attempts[0].target.account == wire.Account(
+        billing="metered", operation="embed", role="embedding")
+    # The record the lookup read is the record still, written nowhere.
     assert lookup(conn) is raw
     assert raw == before
-    assert inference_resolve.ACCOUNT_KEY not in raw
-    assert inference_resolve.ACCOUNT_KEY not in llm_connections.read_connection_raw(conn)
+    assert raw == llm_connections.read_connection_raw(conn)
 
 
 # ---- a prompt count nobody reported (slice E, ruling I1) ----------------------

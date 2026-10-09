@@ -18,6 +18,7 @@ import dataclasses  # noqa: E402 - deliberate late import; see the lines above
 from grimoire import llm, wire  # noqa: E402 - deliberate late import; see the lines above
 from grimoire.anthropic import AnthropicClient  # noqa: E402 - deliberate late import
 from grimoire.llm import LLMClient  # noqa: E402 - deliberate late import; see the lines above
+from grimoire.store.inference import resolve  # noqa: E402 - deliberate late import
 
 
 class FakeProvider:
@@ -69,8 +70,8 @@ async def test_claude_missing_model_defaults_to_opus():
     built by), so the target the facade is sent already names it."""
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
-    model = llm.effective_model({"kind": "claude", "model": ""})
-    assert model == "opus"
+    model = resolve.provider_target({"kind": "claude", "model": ""}).model
+    assert model == "opus" == llm.CLAUDE_DEFAULT_MODEL
     [c async for c in client.stream([], _conn("claude", model=model))]
     assert cl.calls == [(("opus",), {"usage": None})]
 
@@ -1485,11 +1486,10 @@ async def test_a_fallback_that_refuses_the_preset_reports_both_failures():
     assert "not tried" not in exc.value.detail
 
 
-@pytest.mark.parametrize("conn,expected", [
-    ({"kind": "openrouter"}, False), ({"kind": "openrouter", "prefill": True}, True),
-    ({"kind": "claude", "prefill": True}, True), ({"kind": "openrouter", "prefill": "true"}, False)])
-def test_prefill_capable_reads_only_the_flag(conn, expected):
-    assert llm.prefill_capable(conn) is expected
+@pytest.mark.parametrize("kind,prefill", [
+    ("openrouter", False), ("openrouter", True), ("claude", True), ("claude", False)])
+def test_prefill_capable_reads_only_the_flag(kind, prefill):
+    assert llm.prefill_capable(_conn(kind, prefill=prefill)) is prefill
 
 
 # ---- `single`: exactly one attempt, for the model test call (Task 9) ----

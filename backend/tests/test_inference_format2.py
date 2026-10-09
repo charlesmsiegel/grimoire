@@ -30,7 +30,7 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import llm, llm_sampling, routes
+from grimoire import llm, llm_sampling, routes, wire
 from grimoire.store import post_images
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, legacy_plan, migrate
@@ -76,10 +76,18 @@ def _catalog(vision: bool) -> None:
         "openrouter", [{"id": MODEL, "vision": vision, "params": ["temperature"]}], rev)
 
 
-def _primary(task: str = "chat", cid: str = "") -> dict:
-    conn = inference.resolve(task, cid).conn
-    assert conn is not None
-    return conn
+def _primary(task: str = "chat", cid: str = "") -> Attempt:
+    resolved = inference.resolve(task, cid)
+    assert resolved.attempts
+    return resolved.attempts[0]
+
+
+def _vision(attempt: Attempt) -> str:
+    """The post-image preference the attempt's target was built with: its
+    model's facts' `vision` (`facts.of`, as the attempt read them), "" when
+    they state none."""
+    vision = attempt.facts.get("vision")
+    return vision if isinstance(vision, str) else ""
 
 
 def test_format_2_prefill_and_post_process_come_from_facts(legacy):
@@ -90,20 +98,20 @@ def test_format_2_prefill_and_post_process_come_from_facts(legacy):
     assert raw["prefill"] is False and raw["post_process"] in ("", "none")
     facts.set_stated("openrouter", MODEL, prefill=True, post_process="strict")
 
-    conn = _primary()
-    assert conn["prefill"] is True and conn["post_process"] == "strict"
-    assert llm.prefill_capable(conn)
-    # The connection's own lowering (the standing fallback, the list) agrees.
-    own = inference.own_sampling(raw)
-    assert own["prefill"] is True and own["post_process"] == "strict"
+    target = _primary().target
+    assert target.prefill is True and target.post_process == "strict"
+    assert llm.prefill_capable(target)
+    # The connection's own target (the editor's display) agrees.
+    own = inference.own_target(raw)
+    assert own.prefill is True and own.post_process == "strict"
 
     # And the other way: the facts' False outranks a legacy True.
     store.llm_connections.update_connection("openrouter", prefill=True,
                                             post_process="strict")
     facts.set_stated("openrouter", MODEL, prefill=False, post_process="none")
-    conn = _primary()
-    assert conn["prefill"] is False and conn["post_process"] == "none"
-    assert not llm.prefill_capable(conn)
+    target = _primary().target
+    assert target.prefill is False and target.post_process == "none"
+    assert not llm.prefill_capable(target)
 
 
 def test_format_2_unstated_facts_map_to_the_defaults(legacy):
@@ -114,12 +122,13 @@ def test_format_2_unstated_facts_map_to_the_defaults(legacy):
     store.llm_connections.update_connection("openrouter", prefill=True,
                                             post_process="strict", vision="on")
     _migrate()
-    assert _primary()["prefill"] is True  # migrated onto the connection's model
+    assert _primary().target.prefill is True  # migrated onto the connection's model
     resolved, _ = routes.common.override_inference(
         SimpleNamespace(model="vendor/bigger"), "regenerate", "")
-    conn = resolved.conn
-    assert conn["model"] == "vendor/bigger"
-    assert (conn["prefill"], conn["post_process"], conn["vision"]) == (False, "none", "")
+    target = resolved.chain.primary
+    assert target.model == "vendor/bigger"
+    assert (target.prefill, target.post_process, _vision(resolved.attempts[0])) == (
+        False, "none", "")
 
 
 def test_format_1_reads_the_facts_as_format_2_does(legacy):
@@ -130,8 +139,9 @@ def test_format_1_reads_the_facts_as_format_2_does(legacy):
     facts.set_stated("openrouter", MODEL, prefill=True, post_process="strict",
                      vision="off")
     assert not store.inference_keys.is_current(store.read_config())
-    conn = _primary()
-    assert (conn["prefill"], conn["post_process"], conn["vision"]) == (True, "strict", "off")
+    first = _primary()
+    assert (first.target.prefill, first.target.post_process, _vision(first)) == (
+        True, "strict", "off")
 
 
 def test_format_2_post_images_read_the_model_facts(legacy):
@@ -139,12 +149,12 @@ def test_format_2_post_images_read_the_model_facts(legacy):
     base._config(send_images="on")
     _catalog(vision=False)
     _migrate()
-    assert post_images.capability(_primary()) == "no"
+    assert post_images.capability(_primary().target) == "no"
     facts.set_stated("openrouter", MODEL, vision="on")
-    conn = _primary()
-    assert conn["vision"] == "on"
-    assert post_images.capability(conn) == "yes"
-    assert post_images.images_for(conn) > 0
+    first = _primary()
+    assert _vision(first) == "on"
+    assert post_images.capability(first.target) == "yes"
+    assert post_images.images_for(first.target) > 0
     assert legacy.get("/api/config").json()["send_images_reach"] == "yes"
 
 
@@ -153,13 +163,13 @@ def test_vision_off_stops_post_images_but_not_image_descriptions(legacy):
     base._config(send_images="on")
     _catalog(vision=True)
     _migrate()
-    assert post_images.capability(_primary()) == "yes"
+    assert post_images.capability(_primary().target) == "yes"
 
     facts.set_stated("openrouter", MODEL, vision="off")
-    conn = _primary()
-    assert conn["vision"] == "off"
-    assert post_images.capability(conn) == "no"
-    assert post_images.images_for(conn) == 0
+    first = _primary()
+    assert _vision(first) == "off"
+    assert post_images.capability(first.target) == "no"
+    assert post_images.images_for(first.target) == 0
     assert legacy.get("/api/config").json()["send_images_reach"] == "no"
 
     # "off" is the post-image preference, not a capability `no` (ruling 2):
@@ -182,7 +192,7 @@ def test_vision_on_is_a_user_yes(legacy):
     facts.set_stated("openrouter", MODEL, vision="on")
     usable = routes.common.require_inference("image-description")
     assert usable.attempts[0].capabilities["vision"] == Cap("yes", "user")
-    assert post_images.capability(usable.conn) == "yes"
+    assert post_images.capability(usable.chain.primary) == "yes"
 
 
 def test_a_legacy_images_on_is_a_user_yes_until_the_facts_say_otherwise(legacy):
@@ -207,10 +217,13 @@ def test_a_legacy_images_on_is_a_user_yes_until_the_facts_say_otherwise(legacy):
 
 
 def _by_hand(*, vision_flag: str, source: str) -> ResolvedInference:
-    conn = {"id": "openrouter", "kind": "openrouter", "name": "OpenRouter",
-            "api_key": "sk-test", "model": MODEL, "vision": vision_flag}
-    attempt = Attempt("openrouter", MODEL, "", conn, provider_preset="openrouter",
-                      capabilities={"vision": Cap("no", source)})
+    """A resolution built by hand whose primary is known (by `source`) unable
+    to read images, and whose post-image preference is `vision_flag`."""
+    target = wire.Target(provider_id="openrouter", kind="openrouter", model=MODEL,
+                         provider_name="OpenRouter", api_key="sk-test",
+                         reads_images="yes" if vision_flag == "on" else "unknown")
+    attempt = Attempt("openrouter", MODEL, "", provider_preset="openrouter",
+                      capabilities={"vision": Cap("no", source)}, target=target)
     return ResolvedInference(
         task="image-description", operation="generate", route="image",
         role="fast", via="role", scope="global",
@@ -245,12 +258,12 @@ def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(legacy):
         if migrated:
             _migrate_unretired()
         for cid in ("", ctx["cid"]):
-            conn = _primary("rolling-summary", cid)
-            assert conn["sampling"]["preset_id"] == "cold", migrated
-            assert "reasoning_effort" not in llm_sampling.effective(conn)["effective"], \
+            summary = _primary("rolling-summary", cid).target
+            assert summary.sampling.preset_id == "cold", migrated
+            assert "reasoning_effort" not in llm_sampling.effective(summary)["effective"], \
                 migrated
-            chat = _primary("chat", cid)
-            assert chat["sampling"]["preset_id"] == "warm-reasoning-max", migrated
+            chat = _primary("chat", cid).target
+            assert chat.sampling.preset_id == "warm-reasoning-max", migrated
             assert llm_sampling.effective(chat)["effective"]["reasoning_effort"] == "max"
             noted = {(n.subject, n.provider_id, n.effort, n.kind)
                      for n in inference.retirement_notes(cid)}
@@ -258,32 +271,42 @@ def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(legacy):
                              ("scene_break", "glm", "max", "route_preset")}, migrated
 
 
-def test_an_unreadable_facts_sidecar_lowers_to_the_defaults(legacy):
-    """A corrupt `<id>.facts.json` is no facts: resolve and lower keep working,
-    every behaviour unstated, and the store's own dict is never mutated."""
+def test_an_unreadable_facts_sidecar_builds_to_the_defaults(legacy):
+    """A corrupt `<id>.facts.json` is no facts: resolving and building a
+    target keep working, every behaviour unstated, and the store's own record
+    is never mutated."""
     base._fresh(legacy)
     _migrate()
     store.llm_connections.facts_path("openrouter").write_text("{not json", encoding="utf-8")
-    conn = _primary()
-    assert (conn["prefill"], conn["post_process"], conn["vision"]) == (False, "none", "")
+    first = _primary()
+    assert (first.target.prefill, first.target.post_process, _vision(first)) == (
+        False, "none", "")
     raw = store.llm_connections.read_connection_raw("openrouter")
     before = dict(raw)
-    lowered = inference.lower(raw, inference.preset_sampling(""), current=True)
-    assert lowered["post_process"] == "none" and raw == before
+    built = inference.target_for(raw, raw["model"], inference.preset_sampling(""),
+                                 model_facts=inference.facts_for(raw, raw["model"]))
+    assert built.post_process == "none" and raw == before
 
 
-def test_an_unknown_post_process_value_lowers_to_none():
-    conn = inference.with_facts({"id": "x"}, {"post_process": "shouting"})
-    assert conn["post_process"] == "none"
+def test_an_unknown_post_process_value_builds_to_none():
+    target = inference.target_for({"id": "x", "kind": "openrouter"}, "m",
+                                  inference.preset_sampling(""),
+                                  model_facts={"post_process": "shouting"})
+    assert target.post_process == "none"
 
 
 def test_the_facts_model_key_is_the_effective_model():
     """The overlay keys facts the way the migration wrote them: by the model a
-    connection actually runs (`llm.effective_model`, restated because the
-    store never imports `llm`)."""
+    connection actually runs -- the facade's rule (an unset Claude model is
+    `llm.CLAUDE_DEFAULT_MODEL`), restated because the store never imports
+    `llm`."""
+    assert store.config.DEFAULT_CLAUDE_MODEL == llm.CLAUDE_DEFAULT_MODEL
     for conn in ({"kind": "claude", "model": ""}, {"kind": "claude", "model": "sonnet"},
                  {"kind": "openrouter", "model": MODEL}, {"kind": "openrouter", "model": ""}):
-        assert facts.model_of(conn) == llm.effective_model(conn)
+        runs = (conn["model"] or llm.CLAUDE_DEFAULT_MODEL if conn["kind"] == "claude"
+                else conn["model"])
+        assert facts.model_of(conn) == runs
+        assert inference.provider_target(conn).model == runs
 
 
 # ---- slice I: a layout the migration has not reached plays in memory ----
@@ -384,8 +407,8 @@ def test_an_unmarked_campaign_resolves_its_overrides_in_memory(client):
     path = store.campaigns.campaign_root(cid) / "campaign.md"
     before = path.read_bytes()
 
-    assert routes.common.require_inference("chat", cid).conn["id"] == "spare"
-    assert routes.common.require_inference("chat").conn["id"] == "openrouter"
+    assert routes.common.require_inference("chat", cid).chain.primary.provider_id == "spare"
+    assert routes.common.require_inference("chat").chain.primary.provider_id == "openrouter"
     # Still unmarked: nothing was written.
     assert not store.inference_keys.is_current(store.campaigns.read_campaign(cid)["meta"])
     assert path.read_bytes() == before
@@ -411,7 +434,7 @@ def test_a_busy_unmarked_campaign_still_resolves_and_nothing_is_written(client):
     thread.start()
     try:
         assert held.wait(10)
-        assert routes.common.require_inference("chat", cid).conn["id"] == "spare"
+        assert routes.common.require_inference("chat", cid).chain.primary.provider_id == "spare"
     finally:
         release.set()
         thread.join(10)
@@ -430,7 +453,8 @@ def test_a_newer_store_still_plays_and_refuses_settings_writes(client):
     assert store.inference_keys.is_newer(store.read_config())
 
     served = routes.common.require_inference("chat")
-    assert (served.conn["id"], served.conn["model"]) == ("openrouter", store.config.DEFAULT_MODEL)
+    assert (served.chain.primary.provider_id, served.chain.primary.model) == (
+        "openrouter", store.config.DEFAULT_MODEL)
     refused = client.put("/api/inference/settings", json={"roles": {"primary": {
         "selection": {"provider": "openrouter", "model": "vendor/bigger"}}}})
     assert refused.status_code == 409, refused.text
@@ -442,10 +466,10 @@ def test_a_format_1_glm_store_still_sends_its_effort(legacy):
     retirement writes it: the wire is what the legacy connection sent."""
     ctx = base_c.STATES["glm_reasoning"](legacy)
     for cid in ("", ctx["cid"]):
-        conn = _primary("chat", cid)
-        assert conn["sampling"]["preset_id"] == "warm-reasoning-low"
-        assert conn["sampling"]["params"] == {"temperature": 0.9, "reasoning_effort": "low"}
-        assert llm_sampling.effective(conn)["effective"] == {
+        target = _primary("chat", cid).target
+        assert target.sampling.preset_id == "warm-reasoning-low"
+        assert target.sampling.params == {"temperature": 0.9, "reasoning_effort": "low"}
+        assert llm_sampling.effective(target)["effective"] == {
             "temperature": 0.9, "reasoning_effort": "low"}
     assert not (store.home() / "sampler_presets" / "warm-reasoning-low.json").exists()
 
@@ -468,19 +492,19 @@ def test_a_retired_scope_never_reads_the_legacy_effort(legacy):
     raw = store.llm_connections.read_connection_raw("glm")
     assert raw["reasoning_effort"] == "low"
     for cid in ("", ctx["cid"]):
-        conn = _primary("chat", cid)
-        assert conn["sampling"]["preset_id"] == "warm"
-        assert "reasoning_effort" not in llm_sampling.effective(conn)["effective"]
+        target = _primary("chat", cid).target
+        assert target.sampling.preset_id == "warm"
+        assert "reasoning_effort" not in llm_sampling.effective(target)["effective"]
     assert inference.retirement_notes(ctx["cid"]) == ()
 
 
 def test_glm_with_no_preset_effort_reports_supported_and_sends_nothing():
-    for effort in ("", "high"):
-        eff = llm_sampling.effective({"id": "glm", "kind": "openai_compatible",
-                                      "model": "glm-5.3", "base_url": base_c.GLM_URL,
-                                      "reasoning_effort": effort, "sampling": {"params": {}}})
-        assert eff["controls"]["reasoning_effort"]["state"] == "supported"
-        assert "reasoning_effort" not in eff["effective"]
+    """A target has nowhere to carry a connection's legacy effort: a GLM one
+    whose preset sets none sends none."""
+    eff = llm_sampling.effective(wire.Target(provider_id="glm", kind="openai_compatible",
+                                             model="glm-5.3", base_url=base_c.GLM_URL))
+    assert eff["controls"]["reasoning_effort"]["state"] == "supported"
+    assert "reasoning_effort" not in eff["effective"]
 
 
 def test_overlay_is_free_on_a_retired_store(monkeypatch):
@@ -518,9 +542,13 @@ def test_a_format_1_store_reads_its_facts_as_the_migration_will_leave_them(
     store.llm_connections.update_connection("openrouter", **{field: default})
     assert not store.inference_keys.is_current(store.read_config())
 
-    in_memory = _primary()[field]
+    def stated(attempt: Attempt) -> object:
+        return {"prefill": attempt.target.prefill, "post_process": attempt.target.post_process,
+                "vision": _vision(attempt)}[field]
+
+    in_memory = stated(_primary())
     _migrate()
-    assert in_memory == _primary()[field] == default
+    assert in_memory == stated(_primary()) == default
 
 
 def test_a_glm_role_saved_back_unchanged_is_accepted_and_sends_the_same(legacy):
@@ -531,7 +559,7 @@ def test_a_glm_role_saved_back_unchanged_is_accepted_and_sends_the_same(legacy):
     does not move."""
     base_c.STATES["glm_reasoning"](legacy)
     _migrate_unretired()
-    before = llm_sampling.effective(_primary())["effective"]
+    before = llm_sampling.effective(_primary().target)["effective"]
     assert before == {"temperature": 0.9, "reasoning_effort": "low"}
 
     view = legacy.get("/api/inference/settings").json()
@@ -542,5 +570,5 @@ def test_a_glm_role_saved_back_unchanged_is_accepted_and_sends_the_same(legacy):
     saved = legacy.put("/api/inference/settings",
                        json={"roles": {"primary": {"selection": card["stored"]}}})
     assert saved.status_code == 200, saved.text
-    assert llm_sampling.effective(_primary())["effective"] == before
+    assert llm_sampling.effective(_primary().target)["effective"] == before
     assert not (store.home() / "sampler_presets" / "warm-reasoning-low.json").exists()

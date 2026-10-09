@@ -1046,7 +1046,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         return _start_round(cid, sid, turn, request, client, resolved, run, ephemeral=ephemeral,
                             posted_at=posted_at, content=content, post_id=post_id)
     resolved = _resolved_for_a_turn(resolved)
-    conn, primary = resolved.conn, resolved.chain.primary
+    primary = resolved.chain.primary
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default
@@ -1057,7 +1057,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
             describe=store.prompt_log.capturing(), model=primary.model,
-            images=store.post_images.images_for(conn))
+            images=store.post_images.images_for(primary))
         # AFTER the stream is constructed, not before. `_chat_stream` claims the
         # turn under the campaign lock synchronously, before it returns -- so a
         # contended campaign raises StoreBusy there and nothing is ever sent.
@@ -1085,7 +1085,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn),
         describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(conn))
+        images=store.post_images.images_for(primary))
 
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
@@ -1201,11 +1201,11 @@ def _retry_run(cid: str, sid: str, body, request: Request,
         store.proposals.heal(cid, sid)
         _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
-    conn, primary = resolved.conn, resolved.chain.primary
+    primary = resolved.chain.primary
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body),
         describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(conn))
+        images=store.post_images.images_for(primary))
     outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, resolved, client,   # claims the turn; see above
                           task="retry", identity=run.scene_identity, outcome=outcome,
@@ -1324,7 +1324,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # connection's model, and a Claude connection with none configured
     # reports the one the dispatcher substitutes rather than the empty string
     # it stores.
-    conn, primary = resolved.conn, resolved.chain.primary
+    primary = resolved.chain.primary
     ran_on = primary.model
     # `routed` is whether this turn ran somewhere it would NOT have gone
     # anyway -- not merely whether the caller typed something. A body naming
@@ -1476,7 +1476,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),
             describe=store.prompt_log.capturing(), model=primary.model,
-            images=store.post_images.images_for(conn))
+            images=store.post_images.images_for(primary))
     except BaseException:
         if restore is not None:
             restore()
@@ -5371,8 +5371,8 @@ def put_scene_response(cid: str, sid: str, body: ResponseSettings):
 
 
 def _chat_target(cid: str) -> tuple[ResolvedInference, str]:
-    """What chat would run on in campaign `cid`: the resolution (its `conn`
-    and `chain` None when nothing resolves) and the model its primary target
+    """What chat would run on in campaign `cid`: the resolution (its `chain`
+    None when nothing resolves) and the model its primary target
     sends ("" then).
 
     A display read -- the context view's, and the `model` a new scene is
@@ -5382,6 +5382,11 @@ def _chat_target(cid: str) -> tuple[ResolvedInference, str]:
     # routing-ok: what chat WOULD run on, shown and stamped on a new scene; never refuses
     resolved = inference.resolve("chat", cid)
     return resolved, _target_model(resolved.chain)
+
+
+def _primary(chain: wire.Chain | None) -> wire.Target | None:
+    """A resolution's primary target, None when nothing resolved."""
+    return chain.primary if chain is not None else None
 
 
 def _target_model(chain: wire.Chain | None) -> str:
@@ -5417,11 +5422,11 @@ def get_scene_context(cid: str, sid: str):
     # facade dropping it in silence (sampler presets spec). A frozen snapshot
     # carries the same block for the attempt it captured.
     breakdown = store.context.context_breakdown(
-        cid, sid, model=model, images=store.post_images.images_for(resolved.conn))
+        cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)))
     return {"model": model, **breakdown,
             "token_count": store.tokens.counting(model, _target_kind(resolved.chain),
                                                  breakdown.get("counted_with", "")),
-            "sampling": llm_sampling.report(resolved.conn)}
+            "sampling": llm_sampling.report(_primary(resolved.chain))}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts")
@@ -5508,7 +5513,8 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         chat = inference.resolve("chat", cid)
         model = _target_model(chat.chain)
         live = store.context.context_breakdown(cid, sid, model=model,
-                                               images=store.post_images.images_for(chat.conn))
+                                               images=store.post_images.images_for(
+                                                   _primary(chat.chain)))
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,
                 "token_count": store.tokens.counting(model, _target_kind(chat.chain),
                                                      live.get("counted_with", ""))}
@@ -6025,10 +6031,10 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
         return character_turns.start(cid,sid,request,client,resolved,run,
             actor_ref=character_turns.replay_actor(cid,sid),automatic=False,
             note=prompts.render("scene/director_note.j2"))
-    conn, primary = resolved.conn, resolved.chain.primary
+    primary = resolved.chain.primary
     messages, breakdown = store.context.compose_turn(
         cid, sid, describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(conn))
+        images=store.post_images.images_for(primary))
     # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not
     # this request's to take back: `stage` recorded them as staged, a retry
     # re-uses them, and cancelling the replay is what puts the scene back.

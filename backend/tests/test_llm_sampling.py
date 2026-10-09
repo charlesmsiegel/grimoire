@@ -1,14 +1,31 @@
 """The sampler parameter table and the per-backend split (sampler presets)."""
 
+import dataclasses
+
 import pytest
 
 from grimoire import llm_sampling as ls
+from grimoire import wire
+
+
+def _target(fields: dict, params: dict | None = None) -> wire.Target:
+    """A target stating `fields` -- named as a connection names them (`kind`,
+    `model`, `base_url`, `sampler_support`, `model_params`, `model_features`)
+    -- and nothing else, with a preset of `params` attached (None: none)."""
+    model = fields.get("model", "m")
+    listed = fields.get("model_params")
+    return wire.Target(
+        provider_id="", kind=fields.get("kind", "openrouter"), model=model,
+        requested_model=model, base_url=fields.get("base_url", ""),
+        sampler_support=fields.get("sampler_support", ""),
+        model_params=None if listed is None else tuple(listed),
+        model_features=fields.get("model_features"),
+        sampling=(wire.Sampling("p", "P", "connection", dict(params)) if params is not None
+                  else wire.Sampling()))
 
 
 def _conn(kind, params, **fields):
-    return {"kind": kind, "model": "m", **fields,
-            "sampling": {"preset_id": "p", "preset_name": "P", "scope": "connection",
-                         "params": params}}
+    return _target({"kind": kind, **fields}, params)
 
 
 ALL = {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "min_p": 0.05,
@@ -57,7 +74,7 @@ def test_validate_refuses_a_non_object():
 # ---- split ----
 
 def test_no_preset_sends_nothing():
-    assert ls.split({"kind": "openrouter"}) == ({}, [])
+    assert ls.split(_target({"kind": "openrouter"})) == ({}, [])
 
 
 def test_openrouter_without_a_catalog_sends_everything():
@@ -114,16 +131,9 @@ def test_a_malformed_stored_preset_never_raises():
     assert [d["param"] for d in dropped] == ["temperature"]
 
 
-def test_missing_kind_is_openrouter():
-    conn = _conn("openrouter", {"min_p": 0.1})
-    del conn["kind"]
-    assert ls.split(conn) == ({"min_p": 0.1}, [])
-
-
 # ---- report ----
 
-def test_report_is_none_without_a_preset():
-    assert ls.report({"kind": "openrouter"}) is None
+def test_report_is_none_without_a_target():
     assert ls.report(None) is None
 
 
@@ -136,8 +146,8 @@ def test_report_describes_the_split():
 
 
 def test_report_names_a_cleared_route_too():
-    conn = {"kind": "openrouter", "sampling": {"preset_id": "", "preset_name": "",
-                                               "scope": "global", "params": {}}}
+    conn = dataclasses.replace(_target({"kind": "openrouter"}),
+                               sampling=wire.Sampling("", "", "global", {}))
     assert ls.report(conn)["scope"] == "global"
 
 
@@ -175,10 +185,9 @@ def test_a_malformed_catalog_list_costs_its_entries_not_the_split():
 def test_anthropic_takes_temperature_or_top_p_not_both():
     """Models that take sampling at all (Claude before 4.7) refuse the pair
     with a 400; temperature wins, and top_p says why it was not sent."""
-    conn = {"kind": "anthropic", "model": "claude-sonnet-4-5",
-            "model_features": {"enabled_thinking": True, "adaptive_thinking": False},
-            "sampling": {"preset_id": "p", "preset_name": "Warm", "scope": "connection",
-                         "params": {"temperature": 0.8, "top_p": 0.9, "top_k": 40}}}
+    conn = _target({"kind": "anthropic", "model": "claude-sonnet-4-5",
+                    "model_features": {"enabled_thinking": True, "adaptive_thinking": False}},
+                   {"temperature": 0.8, "top_p": 0.9, "top_k": 40})
     eff = ls.effective(conn)
     assert eff["effective"] == {"temperature": 0.8, "top_k": 40, "max_tokens": 16000}
     assert eff["controls"]["top_p"]["state"] == ls.UNSUPPORTED
@@ -187,7 +196,8 @@ def test_anthropic_takes_temperature_or_top_p_not_both():
     assert "top_p" not in applied
     assert {"param": "top_p", "reason": ls.WHY_ANTHROPIC_TOP_P} in dropped
     # top_p alone is still sent.
-    alone = {**conn, "sampling": {**conn["sampling"], "params": {"top_p": 0.9}}}
+    alone = dataclasses.replace(conn, sampling=dataclasses.replace(conn.sampling,
+                                                                  params={"top_p": 0.9}))
     assert ls.effective(alone)["effective"]["top_p"] == 0.9
 
 
@@ -231,9 +241,7 @@ def test_max_is_a_glm_only_effort(row):
     it unsupported, by the adapter, and sends no reasoning field at all."""
     fields = ({"kind": "openai_compatible", "base_url": _GLM_URL, "model": "glm-5.3"}
               if row == "glm" else _NOT_GLM[row])
-    conn = {"model": "m", **fields, "sampling": {"preset_id": "p", "preset_name": "P",
-                                                 "scope": "connection",
-                                                 "params": {"reasoning_effort": "max"}}}
+    conn = _target(fields, {"reasoning_effort": "max"})
     eff = ls.effective(conn)
     control = eff["controls"]["reasoning_effort"]
     if row == "glm":

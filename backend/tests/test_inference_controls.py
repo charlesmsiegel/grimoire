@@ -9,6 +9,7 @@ the spec asks for (`max_completion_tokens` at api.openai.com).
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 
 import pytest
@@ -21,9 +22,26 @@ from grimoire.store import llm_connections, sampler_presets
 from grimoire.store.inference import capabilities, controls, providers, resolve
 from tests.llm_fakes import RefusingProvider
 
+
+def _conn(kind="openrouter", params=None, *, model="m", provider_id="", model_params=None,
+          **fields) -> wire.Target:
+    """A target of `kind` sending `model`, with a preset of `params` attached
+    (None: no preset, provider defaults), stating nothing else it is not
+    given -- no name, key or account, as the connection dicts these tests
+    were first written against. A connection's legacy `reasoning_effort` has
+    no field on a target, so one passed is dropped, as the resolver drops it."""
+    fields.pop("reasoning_effort", None)
+    sampling = (wire.Sampling("p", "P", "connection", dict(params)) if params is not None
+                else wire.Sampling())
+    return wire.Target(provider_id=provider_id, kind=kind, model=model, requested_model=model,
+                       sampling=sampling,
+                       model_params=None if model_params is None else tuple(model_params),
+                       **fields)
+
+
 #: The fallback a refused call carries (`wire.Chain.fallback`), which a preset
 #: refusal must never reach.
-BACKUP = {"id": "b", "kind": "openrouter", "model": "backup", "api_key": "k"}
+BACKUP = _conn("openrouter", provider_id="b", model="backup", api_key="k")
 
 ALL = {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "min_p": 0.05,
        "repetition_penalty": 1.08, "frequency_penalty": 0.1, "presence_penalty": 0.2,
@@ -37,23 +55,14 @@ CURRENT = {"adaptive_thinking": True, "enabled_thinking": False,
 OLDER = {"adaptive_thinking": False, "enabled_thinking": True, "max_tokens": 64000}
 
 
-def _chain(conn) -> wire.Chain:
-    """What the facade is sent for `conn`: a lowered dict here (the shape
-    `llm_sampling`'s dict door still reads), as the chain it describes."""
-    return conn if isinstance(conn, wire.Chain) else wire.from_lowered(conn)
+def _chain(conn: wire.Target | wire.Chain) -> wire.Chain:
+    """What the facade is sent for `conn`: a chain (a lone target is one)."""
+    return conn if isinstance(conn, wire.Chain) else wire.Chain(conn)
 
 
-def _falling_back(conn: dict) -> wire.Chain:
+def _falling_back(conn: wire.Target) -> wire.Chain:
     """`conn`, carrying `BACKUP` as its fallback."""
-    return wire.Chain(_chain(conn).primary, _chain(BACKUP).primary)
-
-
-def _conn(kind, params=None, **fields):
-    conn = {"kind": kind, "model": "m", **fields}
-    if params is not None:
-        conn["sampling"] = {"preset_id": "p", "preset_name": "P", "scope": "connection",
-                            "params": params}
-    return conn
+    return wire.Chain(conn, BACKUP)
 
 
 #: Model ids on either side of the sampling line: Claude 4.7 and later refuse
@@ -63,10 +72,7 @@ OLDER_ID = "claude-sonnet-4-5-20250929"
 
 
 def _claude_api(params=None, features=None, model=CURRENT_ID, **fields):
-    conn = _conn("anthropic", params, model=model, **fields)
-    if features is not None:
-        conn["model_features"] = features
-    return conn
+    return _conn("anthropic", params, model=model, model_features=features, **fields)
 
 
 # ---- the frozen pre-refactor split, the reference for the existing kinds ----
@@ -84,14 +90,14 @@ def _today_why_not(kind, extended, listed, name, value):
     return ls.WHY_CATALOG if listed is not None and name not in listed else ""
 
 
-def _today_split(conn):
-    sampling = conn.get("sampling") if isinstance(conn, dict) else None
-    stored = sampling.get("params") if isinstance(sampling, dict) else None
-    stored = stored if isinstance(stored, dict) else {}
-    kind = conn.get("kind", "openrouter") if isinstance(conn, dict) else "openrouter"
-    extended = conn.get("sampler_support") == "extended"
-    listed = conn.get("model_params")
-    listed = {x for x in listed if isinstance(x, str)} if isinstance(listed, list) else None
+def _today_split(conn: wire.Target):
+    """The pre-refactor split, frozen, reading what the connection dict it
+    was written against carried -- now the target's same fields."""
+    stored = conn.sampling.params
+    kind = conn.kind
+    extended = conn.sampler_support == "extended"
+    listed = conn.model_params
+    listed = {x for x in listed if isinstance(x, str)} if listed is not None else None
     applied, dropped = {}, []
     for p in ls.PARAMS:
         if p.name not in stored:
@@ -111,17 +117,15 @@ def _today_split(conn):
     return applied, dropped
 
 
-def _today_report(conn):
-    if not isinstance(conn, dict) or not isinstance(conn.get("sampling"), dict):
-        return None
-    sampling = conn["sampling"]
-    kind = conn.get("kind", "openrouter")
+def _today_report(conn: wire.Target):
+    sampling = conn.sampling
+    kind = conn.kind
     applied, dropped = _today_split(conn)
     verified = not (kind not in ("claude", "openai_compatible")
-                    and not isinstance(conn.get("model_params"), list) and bool(applied))
-    return {"preset_id": sampling.get("preset_id", ""),
-            "preset_name": sampling.get("preset_name", ""),
-            "scope": sampling.get("scope", ""), "kind": kind,
+                    and conn.model_params is None and bool(applied))
+    return {"preset_id": sampling.preset_id,
+            "preset_name": sampling.preset_name,
+            "scope": sampling.scope, "kind": kind,
             "applied": {n: applied[n] for n in ls.NAMES if n in applied},
             "dropped": dropped, "verified": verified}
 
@@ -131,11 +135,9 @@ _PRESETS = [ALL, {}, {"temperature": 0.7, "min_p": 0.1}, {"stop": list("abcde")}
             {"repetition_penalty": 1.1}, {"top_k": 40, "max_tokens": 300.0}]
 _CASES = [
     *({"kind": k} for k in ("openrouter", "claude", "openai_compatible")),
-    {},                                                         # no kind: openrouter
     {"kind": "openrouter", "model_params": ["temperature", "top_p", "max_tokens", "stop"]},
     {"kind": "openrouter", "model_params": []},
     {"kind": "openrouter", "model_params": ["temperature", {"bad": 1}, 3]},
-    {"kind": "openrouter", "model_params": "not a list"},
     {"kind": "openai_compatible", "sampler_support": "extended"},
     {"kind": "openai_compatible", "base_url": "http://localhost:1234/v1"},
     {"kind": "openai_compatible", "base_url": "https://api.z.ai/api/paas/v4",
@@ -146,8 +148,7 @@ _CASES = [
 
 @pytest.mark.parametrize("fields, params", list(itertools.product(_CASES, _PRESETS)))
 def test_the_existing_kinds_split_exactly_as_before(fields, params):
-    conn = {"model": "m", **fields, "sampling": {"preset_id": "p", "preset_name": "P",
-                                                 "scope": "connection", "params": params}}
+    conn = _conn(params=params, **fields)
     assert ls.split(conn) == _today_split(conn)
     assert ls.report(conn) == _today_report(conn)
     applied, _ = _today_split(conn)
@@ -155,9 +156,8 @@ def test_the_existing_kinds_split_exactly_as_before(fields, params):
 
 
 def test_no_preset_is_still_no_report_and_no_split():
-    assert ls.report({"kind": "openrouter"}) is None
-    assert ls.split({"kind": "openrouter"}) == ({}, [])
-    assert ls.split(None) == ({}, [])  # type: ignore[arg-type]
+    assert ls.report(None) is None
+    assert ls.split(_conn("openrouter")) == ({}, [])
 
 
 # ---- the vocabulary ----
@@ -196,11 +196,10 @@ def test_effective_has_the_documented_shape():
     assert eff["requested"] == {"temperature": 0.5}
 
 
-@pytest.mark.parametrize("conn", [None, "x", {}, {"kind": "anthropic"},
-                                  {"kind": "anthropic", "model_features": "junk",
-                                   "sampling": {"params": {"max_tokens": "lots"}}},
-                                  {"kind": "openrouter", "sampling": "junk"},
-                                  {"kind": "openai_compatible", "base_url": 7}])
+@pytest.mark.parametrize("conn", [_conn("anthropic"),
+                                  _conn("anthropic", {"max_tokens": "lots"}, model_features={}),
+                                  _conn("openai_compatible", base_url=7),
+                                  _conn("mystery", {"temperature": "hot"})])
 def test_effective_never_raises(conn):
     eff = ls.effective(conn)  # type: ignore[arg-type]
     assert set(eff) == {"requested", "effective", "controls"}
@@ -212,7 +211,7 @@ def test_every_state_but_supported_says_why():
                  _conn("openai_compatible", ALL, base_url="https://api.openai.com/v1")):
         for name, entry in ls.effective(conn)["controls"].items():
             if entry["state"] != "supported":
-                assert entry["why"], (conn["kind"], name)
+                assert entry["why"], (conn.kind, name)
 
 
 # ---- OpenAI: max_tokens is max_completion_tokens there ----
@@ -235,7 +234,7 @@ def test_the_openai_api_is_sent_max_completion_tokens():
 def test_the_openai_host_rule_agrees_with_the_provider_presets(url):
     conn = _conn("openai_compatible", {"max_tokens": 10}, base_url=url)
     translated = ls.effective(conn)["controls"]["max_tokens"]["wire"] == "max_completion_tokens"
-    assert translated == (providers.infer(conn).id == "openai")
+    assert translated == (providers.infer({"kind": conn.kind, "base_url": url}).id == "openai")
 
 
 async def test_the_openai_endpoint_receives_max_completion_tokens():
@@ -253,7 +252,7 @@ async def test_a_refusal_naming_the_translated_spelling_is_a_preset_refusal():
                                 why="Unsupported value: 'max_completion_tokens' too large")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        timeout=0, retries=0)
-    conn = _falling_back(_conn("openai_compatible", {"max_tokens": 99999}, id="a",
+    conn = _falling_back(_conn("openai_compatible", {"max_tokens": 99999}, provider_id="a",
                                model="primary", base_url="https://api.openai.com/v1"))
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _chain(conn))]
@@ -306,7 +305,7 @@ async def test_a_non_reasoning_openai_model_never_sees_reasoning_effort_on_the_w
     from tests.test_llm import FakeProvider
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
-    conn = {**_openai_model("gpt-4.1"), "api_key": "k"}
+    conn = dataclasses.replace(_openai_model("gpt-4.1"), api_key="k")
     [c async for c in client.stream([], _chain(conn))]
     sent = oc.calls[0][1]
     assert sent["sampling"] == {"temperature": 0.5}
@@ -832,7 +831,7 @@ async def test_a_refused_effort_is_a_preset_refusal():
                                 why="Unrecognized request argument: reasoning")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        timeout=0, retries=0)
-    conn = _falling_back(_conn("openrouter", {"reasoning_effort": "high"}, id="a",
+    conn = _falling_back(_conn("openrouter", {"reasoning_effort": "high"}, provider_id="a",
                                model="primary", api_key="k"))
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _chain(conn))]
@@ -843,7 +842,7 @@ def _adaptive_refusal(why):
     provider = RefusingProvider(failing={"claude-opus-4-7"}, status=400, why=why)
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        anthropic=provider, timeout=0, retries=0)
-    conn = _falling_back(_claude_api({"reasoning_effort": "high"}, CURRENT, id="a",
+    conn = _falling_back(_claude_api({"reasoning_effort": "high"}, CURRENT, provider_id="a",
                                      api_key="k"))
     assert ls.effective(conn.primary)["effective"]["output_config"] == {"effort": "high"}
     return provider, client, conn
@@ -937,10 +936,10 @@ def test_preview_is_effective_over_the_lowered_preset(home):
     assert got["controls"]["top_k"]["state"] == "unsupported"
     assert got["controls"]["temperature"]["source"] == "catalog"
     # The same decisions the gateway makes for the same lowered connection.
-    eff = ls.effective({**conn, "model": "vendor/winifred-2",
-                        "model_params": ["temperature"],
-                        "sampling": {"params": {"temperature": 0.8, "top_k": 30,
-                                                "reasoning_effort": "low"}}})
+    eff = ls.effective(_conn("openrouter", {"temperature": 0.8, "top_k": 30,
+                                            "reasoning_effort": "low"},
+                             provider_id=conn["id"], model="vendor/winifred-2",
+                             model_params=["temperature"]))
     assert {k: {**v, "source": None} for k, v in got["controls"].items()} == {
         k: {**v, "source": None} for k, v in eff["controls"].items()}
 
@@ -1019,10 +1018,11 @@ def test_a_decide_preview_on_a_model_that_generates_keeps_its_controls(home):
 
 def test_a_generate_preview_is_unchanged_by_the_operation(home):
     """The decide-only model previewed for anything but a decision is what
-    the preview always said: `effective` over the lowered preset."""
+    the preview always said: `effective` over the target with the preset."""
     conn = _openrouter(rows=[{"id": "vendor/decider", "outputs": ["decisions"]}])
     pid = sampler_presets.create_preset("Warm", {"temperature": 0.8})
-    today = ls.effective(resolve.lower(conn, resolve.preset_sampling(pid), "vendor/decider"))
+    today = ls.effective(resolve.target_for(conn, "vendor/decider", resolve.preset_sampling(pid),
+                                            model_facts={}))
     for operation in ("", "generate"):
         assert controls.preview(pid, conn, "vendor/decider", operation=operation) == today
     assert controls.preview(pid, conn, "vendor/decider") == today

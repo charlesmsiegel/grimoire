@@ -1,17 +1,18 @@
-"""Every resolved attempt's `wire.Target` mirrors its lowered connection dict
-(slice I, Task 7).
+"""Every resolved attempt's `wire.Target` is what its provider record, its
+model, its preset, its catalog row and its model's facts say (slice I, Tasks 7
+and 10).
 
-The resolver builds both from the same lowered values, and a resolution's
-`chain` carries the fallback's target exactly where the primary's dict carries
-it under `FALLBACK_KEY`. Held over every frozen baseline state
+Task 7 built the target beside a lowered connection dict and held every field
+to the dict; Task 10 deleted the dict, so each field is now held to the store
+it was read from, and a resolution's `chain` carries the fallback's target
+exactly where the fallback `rides`. Held over every frozen baseline state
 (`inference_baseline.STATES`), for every task at both scopes, every reroll
-override and the Embedding role -- in memory (format 1) and after the
-settings migration (format 2).
+override and the Embedding role -- in memory (format 1), after the settings
+migration (format 2) and after retirement.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from types import SimpleNamespace
 from unittest import mock
 
@@ -19,8 +20,8 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import llm, routes, wire
-from grimoire.store import post_images, routing
+from grimoire import routes, wire
+from grimoire.store import routing
 from grimoire.store.inference import capabilities, migrate, resolve, resolved
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference.capabilities import Cap
@@ -56,47 +57,65 @@ def _resolutions(cid: str) -> list[tuple[str, ResolvedInference]]:
     return out
 
 
-def _assert_mirrors(where: str, a: Attempt) -> None:
-    c, t = a.conn, a.target
-    assert (t.provider_id, t.kind, t.model) == (c["id"], c["kind"], llm.effective_model(c)), where
-    assert t.requested_model == llm.effective_model(c), where
+def _assert_mirrors(where: str, a: Attempt, operation: str) -> None:
+    """`a`'s target, field by field, against what it was read from: the
+    provider's record, the attempt's model and preset, the cached catalog row
+    for that model, and the model's facts as the attempt read them
+    (`Attempt.facts`). Each read independently of the resolver's builder."""
+    t = a.target
+    raw = store.llm_connections.read_connection_raw(a.provider_id)
+    sent = inference_facts.model_of({**raw, "model": a.model})
+    assert (t.provider_id, t.kind, t.model, t.requested_model) == (
+        raw["id"], raw["kind"], sent, sent), where
     assert (t.provider_name, t.base_url, t.api_key, t.rev) == (
-        c["name"], c["base_url"], c["api_key"], c["rev"]), where
-    assert asdict(t.sampling) == c["sampling"], where
-    assert t.sampler_support == c.get("sampler_support", ""), where
-    assert t.model_params == (None if c.get("model_params") is None
-                              else tuple(c["model_params"])), where
-    assert t.model_features == c.get("model_features"), where
-    assert t.structured == (c.get(resolve.STRUCTURED_KEY) is True), where
-    assert asdict(t.account) == {**asdict(wire.Account()), **c.get(resolve.ACCOUNT_KEY, {})}, where
-    assert t.reads_images == post_images.capability(c), where
-    assert (t.prefill, t.post_process) == (c["prefill"], c["post_process"]), where
+        raw["name"], raw["base_url"], raw["api_key"], raw["rev"]), where
+    assert (t.kind, t.rev) == (a.provider_kind, a.rev), where
+    assert t.sampling.preset_id == a.preset_id, where
+    assert t.sampler_support == raw.get("sampler_support", ""), where
+    row = store.llm_connections.cached_row(raw["id"], a.model)
+    params = row.get("params") if row is not None and raw["kind"] == "openrouter" else None
+    assert t.model_params == (tuple(params) if isinstance(params, list) else None), where
+    features = row.get("features") if row is not None else None
+    assert t.model_features == (features if isinstance(features, dict) else None), where
+    found = a.capabilities.get("structured_output")
+    assert t.structured == (operation == "decide" and found is not None
+                            and found.value == "yes"), where
+    assert (t.account.billing, t.account.operation) == (a.billing, operation), where
+    vision = a.facts.get("vision")
+    vision = vision if isinstance(vision, str) else ""
+    assert t.reads_images == capabilities.post_image_reach(
+        raw["kind"], vision, capabilities.caps_for(raw, a.model)["vision"]), where
+    post_process = a.facts.get("post_process")
+    assert (t.prefill, t.post_process) == (
+        a.facts.get("prefill") is True,
+        post_process if post_process in inference_facts.POST_PROCESS_VALUES and post_process
+        else "none"), where
     assert t.degrade is False, where
 
 
 def _assert_every_target_mirrors(cid: str) -> None:
     for where, r in _resolutions(cid):
         for a in r.attempts:
-            _assert_mirrors(where, a)
+            _assert_mirrors(where, a, r.operation)
         if not r.attempts:
             assert r.chain is None, where
             continue
         assert r.chain is not None, where
         assert r.chain.primary is r.attempts[0].target, where
-        assert (r.chain.fallback is not None) == (resolve.FALLBACK_KEY in (r.conn or {})), where
+        assert (r.chain.fallback is not None) == (r.rides and len(r.attempts) > 1), where
         if r.chain.fallback is not None:
             assert r.chain.fallback is r.attempts[1].target, where
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_every_target_mirrors_its_lowered_dict(state, tmp_path):
+def test_every_target_mirrors_what_it_was_read_from(state, tmp_path):
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
         _assert_every_target_mirrors(ctx["cid"])
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_every_target_mirrors_its_lowered_dict_after_migration(state, tmp_path):
+def test_every_target_mirrors_what_it_was_read_from_after_migration(state, tmp_path):
     """Migrated as a C-H build migrated: format 2, nothing retired, the
     legacy GLM effort still planned in memory."""
     with baseline.client_at(tmp_path) as client:
@@ -108,10 +127,10 @@ def test_every_target_mirrors_its_lowered_dict_after_migration(state, tmp_path):
 
 
 @pytest.mark.parametrize("state", sorted({*baseline.STATES, *baseline_c.STATES}))
-def test_every_target_mirrors_its_lowered_dict_after_retirement(state, tmp_path):
+def test_every_target_mirrors_what_it_was_read_from_after_retirement(state, tmp_path):
     """The retired pass (slice I, Task 6): migrated, retired and stripped --
     the derived presets real files, no legacy key or field left -- every
-    attempt's target still mirrors what it lowers to."""
+    attempt's target still mirrors what it was read from."""
     builders = {**baseline.STATES, **baseline_c.STATES}
     with baseline.client_at(tmp_path) as client:
         ctx = builders[state](client)
@@ -133,7 +152,7 @@ def _flag(conn_id: str, model: str) -> None:
 def _decide() -> ResolvedInference:
     got = resolve.resolve("scene-break", operation="decide")
     for a in got.attempts:
-        _assert_mirrors("scene-break", a)
+        _assert_mirrors("scene-break", a, "decide")
     return got
 
 
@@ -154,12 +173,12 @@ def test_a_structured_decide_flags_both_targets_and_the_fallback_rides(tmp_path)
 
 def test_a_native_decide_primary_carries_no_fallback_on_its_chain(tmp_path):
     """The generating fallback behind a native-only primary is a stage of its
-    own (`inference.stages`): listed in `attempts`, not on the chain, exactly
-    as it is not under the primary's `FALLBACK_KEY`."""
+    own (`inference.stages`): listed in `attempts`, not on the chain, because
+    it does not ride."""
     with baseline.client_at(tmp_path) as client:
         fx.decide_only(client, fallback=True)
         got = _decide()
-        assert len(got.attempts) == 2 and resolve.FALLBACK_KEY not in got.conn
+        assert len(got.attempts) == 2 and not got.rides
         assert got.chain == wire.Chain(got.attempts[0].target)
 
 
@@ -168,14 +187,14 @@ def test_a_target_reads_images_by_the_post_image_preference(tmp_path):
         baseline._fresh(client)
         store.llm_connections.update_connection("openrouter", vision="on")
         (a,) = resolve.resolve("chat").attempts
-        _assert_mirrors("chat", a)
+        _assert_mirrors("chat", a, "generate")
         assert a.target.reads_images == "yes"
 
 
 def test_a_target_reads_images_by_the_model_facts_at_format_2(tmp_path):
-    """At format 2 the post-image preference is the model's facts, laid on by
-    `with_facts`: `vision: on` there reads "yes" over a catalog `no`, with the
-    connection's own (frozen) field left blank."""
+    """At format 2 the post-image preference is the model's facts: `vision:
+    on` there reads "yes" over a catalog `no`, with the connection's own
+    (frozen) field left blank."""
     with baseline.client_at(tmp_path) as client:
         baseline._fresh(client)
         assert baseline.migrate_state("fresh").state == "done"
@@ -186,39 +205,34 @@ def test_a_target_reads_images_by_the_model_facts_at_format_2(tmp_path):
         assert resolve.resolve("chat").attempts[0].target.reads_images == "no"
         inference_facts.set_stated("openrouter", model, vision="on")
         (a,) = resolve.resolve("chat").attempts
-        _assert_mirrors("chat", a)
+        _assert_mirrors("chat", a, "generate")
         assert store.llm_connections.read_connection_raw("openrouter")["vision"] == ""
-        assert a.conn["vision"] == "on"
+        assert a.facts["vision"] == "on"
         assert a.target.reads_images == "yes"
-
-
-def test_the_restated_fallback_key_is_the_resolvers():
-    assert resolved.FALLBACK_KEY == resolve.FALLBACK_KEY == llm.FALLBACK_KEY
 
 
 def test_a_hand_built_attempt_has_no_chain_to_send():
     """An attempt built by hand (as tests build them) carries the unbuilt
     target, as it carries empty `controls`; nothing resolved, nothing sent."""
-    a = Attempt("p", "m", "", {})
+    a = Attempt("p", "m", "")
     assert a.target == resolved.UNBUILT
     empty = ResolvedInference(task="", operation="generate", route="",
                               role="", via="", scope="none", attempts=())
     assert empty.chain is None
 
 
-def test_a_chain_carries_the_fallback_only_where_the_dict_does():
-    fb = Attempt("spare", "m", "", {"id": "spare"}, target=wire_kit.target(provider_id="spare"))
-    attached = Attempt("p", "m", "", {"id": "p", resolve.FALLBACK_KEY: fb.conn},
-                       target=wire_kit.target(provider_id="p"))
-    unattached = Attempt("p", "m", "", {"id": "p"}, target=wire_kit.target(provider_id="p"))
+def test_a_chain_carries_the_fallback_only_where_it_rides():
+    fb = Attempt("spare", "m", "", target=wire_kit.target(provider_id="spare"))
+    primary = Attempt("p", "m", "", target=wire_kit.target(provider_id="p"))
 
-    def chain(*attempts: Attempt) -> wire.Chain | None:
-        return ResolvedInference(task="", operation="generate", route="",
-                                 role="", via="", scope="none", attempts=attempts).chain
+    def chain(*attempts: Attempt, rides: bool) -> wire.Chain | None:
+        return ResolvedInference(task="", operation="generate", route="", role="", via="",
+                                 scope="none", attempts=attempts, rides=rides).chain
 
-    assert chain(attached, fb) == wire.Chain(attached.target, fb.target)
-    assert chain(unattached, fb) == wire.Chain(unattached.target)
-    assert chain(unattached) == wire.Chain(unattached.target)
+    assert chain(primary, fb, rides=True) == wire.Chain(primary.target, fb.target)
+    assert chain(primary, fb, rides=False) == wire.Chain(primary.target)
+    assert chain(primary, rides=True) == wire.Chain(primary.target)
+    assert chain(primary, rides=False) == wire.Chain(primary.target)
 
 
 # ---- post_image_reach ----

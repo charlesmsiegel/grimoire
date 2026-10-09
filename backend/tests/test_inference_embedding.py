@@ -101,7 +101,7 @@ def test_the_embedding_role_has_no_fallback():
                            keys.fallback_key("primary", "model"): "m"})
     got = inference_resolve.embedding()
     assert len(got.attempts) == 1
-    assert inference_resolve.FALLBACK_KEY not in got.attempts[0].conn
+    assert not got.rides and got.chain.fallback is None
     assert got.fallback_missing == ()
 
 
@@ -162,8 +162,9 @@ def test_endpoint_names_the_provider_and_resolve_keeps_four_keys():
     got = embed_space.endpoint()
     assert got is not None
     assert set(got) == {"model", "base_url", "key", "space", "provider",
-                        "provider_name", "provider_kind", "conn"}
-    assert got["conn"]["id"] == conn
+                        "provider_name", "provider_kind", "target"}
+    assert got["target"].provider_id == conn
+    assert got["target"].account.operation == "embed"
     assert (got["provider"], got["provider_name"], got["provider_kind"]) == (
         conn, "Seraphine Vectors", "openai_compatible")
     assert (got["model"], got["base_url"], got["key"]) == (

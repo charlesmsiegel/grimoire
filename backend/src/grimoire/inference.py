@@ -766,9 +766,9 @@ def generate(task: str, messages: list[dict], *, client: LLMClient,
     generate resolution never is.
 
     The facade is sent `resolved.chain` -- the primary's target, and the
-    fallback's where the resolution attaches it -- positionally, with
-    `schema=` only when one is given, so every request, ledger row and
-    capture is what the connection dict it describes sent."""
+    fallback's where it rides (`ResolvedInference.rides`) -- positionally,
+    with `schema=` only when one is given, so every request, ledger row and
+    capture is what that chain describes."""
     chain = _generating(task, resolved)
     if stream:
         return (client.stream(messages, chain, usage) if schema is None

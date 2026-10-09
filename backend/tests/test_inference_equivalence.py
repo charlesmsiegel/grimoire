@@ -17,6 +17,7 @@ it plays in memory equal to what it plays once migrated.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 from typing import NamedTuple
 from unittest import mock
@@ -359,12 +360,12 @@ def planned_cells(cid: str) -> dict:
             return out
         first = resolved.attempts[0]
         out.update(provider=first.provider_id, model=first.model, preset=first.preset_id,
-                   sampling=first.conn["sampling"],
-                   effective=llm_sampling.effective(first.conn)["effective"])
+                   sampling=dataclasses.asdict(first.target.sampling),
+                   effective=llm_sampling.effective(first.target)["effective"])
         if len(resolved.attempts) > 1:
             fb = resolved.attempts[1]
             out["fallback"] = {"provider": fb.provider_id, "model": fb.model,
-                               "preset": fb.preset_id, "sampling": fb.conn["sampling"],
+                               "preset": fb.preset_id, "sampling": dataclasses.asdict(fb.target.sampling),
                                "sent": resolved.chain is not None
                                and resolved.chain.fallback is not None}
         return out

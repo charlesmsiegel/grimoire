@@ -18,6 +18,7 @@ from grimoire import health, routes, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
+from grimoire.store.inference import resolve as inference
 from tests import draft_runs as drafts
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import (
@@ -36,9 +37,11 @@ def client(monkeypatch, tmp_path):
         yield c
 
 
-def _conn(**fields):
-    return {"id": "openrouter", "kind": "openrouter", "name": "OpenRouter",
-            "model": "m", "api_key": "k", "base_url": "", **fields}
+def _conn(id: str = "openrouter", kind: str = "openrouter", rev: str = "") -> wire.Target:  # noqa: A002 - a connection's id, as the registry files it
+    """One attempt, as the registry is handed it: its provider id and the
+    revision a verdict is filed under."""
+    return wire.Target(provider_id=id, kind=kind, model="m", provider_name="OpenRouter",
+                       api_key="k", requested_model="m", rev=rev)
 
 
 def _target(provider_id: str = "openrouter", kind: str = "openrouter") -> wire.Target:
@@ -93,10 +96,10 @@ def test_connections_are_recorded_independently():
 
 
 def test_a_connection_with_no_id_is_not_filed_under_a_shared_slot():
-    """The facade is handed connection dicts, and a hand-built one has no id.
-    Filing those under "" would pool every anonymous connection's verdict."""
+    """A hand-built attempt has no provider id. Filing those under "" would
+    pool every anonymous connection's verdict."""
     registry = health.ProviderHealth()
-    registry.record({"kind": "openrouter"}, LLMError("auth", "bad key"))
+    registry.record(_conn(id=""), LLMError("auth", "bad key"))
 
     assert registry.status("")["state"] == "unknown"
 
@@ -115,7 +118,7 @@ def test_a_verdict_about_an_older_revision_is_not_handed_back():
 
 
 def test_a_reader_who_does_not_care_about_revisions_still_gets_an_answer():
-    """The facade files whole connection dicts and every route reads one beside
+    """The facade files each attempt's target and every route reads one beside
     the connection it describes, but the argument stays optional: a caller with
     no revision in hand is asking a coarser question, not a wrong one."""
     registry = health.ProviderHealth()
@@ -524,7 +527,8 @@ def test_a_verdict_from_a_request_that_outlived_an_edit_is_not_shown(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-fresh"})
 
     # ...and now the in-flight attempt from before the edit settles.
-    client.app.state.health.record(stale, LLMError("auth", "bad key"))
+    client.app.state.health.record(inference.provider_target(stale),
+                                   LLMError("auth", "bad key"))
 
     assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "unknown"
     assert client.get("/api/config").json()["health"]["state"] == "unknown"

@@ -221,10 +221,10 @@ def test_a_model_override_does_not_inherit_the_standing_models_param_list(client
         model = "other/model"
 
     resolved, routed = common.override_inference(Body(), "chat", cid)
-    conn = resolved.conn
-    assert routed and "model_params" not in conn
+    target = resolved.chain.primary
+    assert routed and target.model_params is None
     from grimoire import llm_sampling
-    report = llm_sampling.report(conn)
+    report = llm_sampling.report(target)
     assert report["applied"] == {"temperature": 0.6, "min_p": 0.05}
     assert report["verified"] is False
 

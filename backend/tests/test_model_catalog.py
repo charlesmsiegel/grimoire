@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import catalog, routes
+from grimoire import catalog, routes, wire
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests.llm_fakes import FakeCatalog
@@ -278,8 +278,9 @@ def test_an_anthropic_row_with_no_capability_tree_keeps_what_else_it_states():
     assert got["outputs"] == ["text"]
     assert got["vision"] is None
     assert got["features"] == {"max_tokens": 64000}
-    conn = {"kind": "anthropic", "model": "claude-test-1", "model_features": got["features"],
-            "sampling": {"params": {"max_tokens": 100000}}}
+    conn = wire.Target(provider_id="", kind="anthropic", model="claude-test-1",
+                       model_features=got["features"],
+                       sampling=wire.Sampling(params={"max_tokens": 100000}))
     assert ls.effective(conn)["effective"]["max_tokens"] == 64000
 
 

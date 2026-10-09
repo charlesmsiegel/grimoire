@@ -67,10 +67,9 @@ class ProviderHealth:
     def __init__(self) -> None:
         self._by_id: dict[str, dict] = {}
 
-    def record(self, conn: wire.Target | dict, error=None) -> dict:
-        """File one outcome for `conn` -- the attempt's `wire.Target`, or a
-        lowered connection dict (a caller that still holds one, until Task 10)
-        -- and return the status it produces.
+    def record(self, target: wire.Target, error=None) -> dict:
+        """File one outcome for `target` -- the attempt's `wire.Target` --
+        and return the status it produces.
 
         A connection with no id is dropped rather than filed under `""`: a
         caller that builds an attempt by hand (tests, mostly) would otherwise
@@ -82,10 +81,7 @@ class ProviderHealth:
         moved past. Every attempt carries `rev` already, so this costs a key
         rather than a mechanism.
         """
-        if isinstance(conn, wire.Target):
-            cid, rev = conn.provider_id, conn.rev
-        else:
-            cid, rev = conn.get("id") or "", conn.get("rev", "")
+        cid, rev = target.provider_id, target.rev
         if not cid:
             return self.status("")
         status = {"state": OK if error is None else ERROR,

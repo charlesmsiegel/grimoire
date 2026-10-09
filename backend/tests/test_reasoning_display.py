@@ -8,6 +8,7 @@ import pytest
 from grimoire import routes, store, wire
 from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
+from grimoire.store.inference import resolve
 from tests.inference_fixtures import primary
 from tests.test_character_turns import seed
 
@@ -51,10 +52,11 @@ async def test_glm_effort_is_opt_in_and_sent_to_provider(effort):
     params = {"reasoning_effort": effort} if effort else {}
     try:
         await client.complete([], dataclasses.replace(CONN, sampling=wire.Sampling(params=params)))
-        # A legacy `reasoning_effort` on the lowered dict is read into nothing.
+        # A legacy `reasoning_effort` on a connection record is built into
+        # nothing: a target has no field for it.
         legacy = {"kind": "openai_compatible", "model": "glm-5.3",
                   "base_url": "https://example.test/v1", "reasoning_effort": effort or "high"}
-        await client.complete([], wire.from_lowered(legacy).primary)
+        await client.complete([], resolve.provider_target(legacy))
     finally:
         await client.aclose()
     assert requests[0].get("reasoning_effort") == (effort or None)

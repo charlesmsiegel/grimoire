@@ -172,17 +172,12 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
 
 
 # ---- what served a call (slice E; spec 9.1-9.3) ----
-#: Where a connection dict carries its ACCOUNT block: what the resolver knows
-#: of the attempt that the wire does not say -- the `operation` it runs, the
-#: `role` whose slot supplied it, the provider's `billing`, and (slice F) the
-#: `decision_mode` one call used. `store.inference.resolve.ACCOUNT_KEY`,
-#: restated because the gateway imports no store (#239); a test holds the two
-#: spellings equal. Private-looking for the reason `llm.FALLBACK_KEY` is: no
-#: adapter reads it, and nothing here sends it. A stamp is laid on a target's
-#: account (`wire.Target.with_account`), never on a dict's block.
-ACCOUNT_KEY = "_account"
-
-#: The account block's keys that `account` files, each as its own ledger field.
+#: A target's ACCOUNT (`wire.Account`) is what the resolver knows of the
+#: attempt that the wire does not say -- the `operation` it runs, the `role`
+#: whose slot supplied it, the provider's `billing`, and (slice F) the
+#: `decision_mode` one call used. No adapter reads it, and nothing here sends
+#: it. A stamp is laid on a target's account (`wire.Target.with_account`).
+#: These are its fields `account` files, each as its own ledger field.
 ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode")
 
 
@@ -190,15 +185,11 @@ def _text(value: object) -> str:
     return value if isinstance(value, str) and value else ""
 
 
-def account(usage: dict | None, target: wire.Target | dict) -> None:
+def account(usage: dict | None, target: wire.Target) -> None:
     """File what served this attempt into the holder: the provider's id
     (`provider_id`, the target's), the sampler preset actually sent
     (`preset`, its `sampling.preset_id` -- never the provider preset), and
     each `ACCOUNT_FIELDS` field of its account (`wire.Account`).
-
-    A lowered connection dict is read as its target (`wire.from_lowered`), for
-    the callers that still hold one until Task 10: `conn["id"]`, its
-    `sampling` block and its account block (`ACCOUNT_KEY`).
 
     Only a non-empty `str` is copied, so a hand-built attempt with a stray
     value costs the field and never the row. Reads the attempt, never writes
@@ -207,8 +198,6 @@ def account(usage: dict | None, target: wire.Target | dict) -> None:
     if usage is None:
         return
     try:
-        if not isinstance(target, wire.Target):
-            target = wire.from_lowered(target if isinstance(target, dict) else {}).primary
         values = {"provider_id": target.provider_id, "preset": target.sampling.preset_id,
                   **{key: getattr(target.account, key) for key in ACCOUNT_FIELDS}}
         usage.update({key: value for key, value in values.items() if _text(value)})

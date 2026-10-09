@@ -1,10 +1,9 @@
 """`schema=` on the facade: structured mode, decided per attempt (slice F, spec 7.2).
 
 The resolver flags an attempt of a decide resolution whose `structured_output`
-is `yes` (`STRUCTURED_KEY` on its own lowered dict, `wire.Target.structured`
-on its target); the facade reads the flag from the target each attempt
-carries, so a fallback without the mode is sent the same prompt and no
-structured envelope. Each adapter owns its wire
+is `yes` (`wire.Target.structured` on its target); the facade reads the flag
+from the target each attempt carries, so a fallback without the mode is sent
+the same prompt and no structured envelope. Each adapter owns its wire
 spelling: `response_format` on OpenRouter and OpenAI-compatible endpoints,
 `output_config.format` on the Anthropic API, merged beside an effort control.
 A 400 naming the structured field is not a sampler-preset refusal (I3), so the
@@ -26,7 +25,7 @@ import pytest
 import grimoire.store as store
 from grimoire import decisions, llm, llm_sampling, wire
 from grimoire.anthropic import AnthropicClient
-from grimoire.llm import FALLBACK_KEY, STRUCTURED_KEY, LLMClient
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import OpenRouterClient
@@ -380,38 +379,38 @@ def test_the_resolver_flags_only_a_decide_resolutions_capable_attempts(at_state)
     _catalog("openrouter", [{"id": "vendor/active",
                              "params": ["temperature", "structured_outputs"]}])
     decide = inf.resolve("chat", operation="decide")
-    assert decide.conn["id"] == "openrouter" and decide.conn[STRUCTURED_KEY] is True
+    assert decide.chain.primary.provider_id == "openrouter"
+    assert decide.chain.primary.structured is True
     # The fallback is flagged on its own capability, which nobody stated.
-    assert decide.fallback is not None and decide.fallback["id"] == "spare"
-    assert STRUCTURED_KEY not in decide.conn[FALLBACK_KEY]
-    # A generate resolution of the same task carries no key at all.
+    assert decide.chain.fallback is not None and decide.chain.fallback.provider_id == "spare"
+    assert decide.chain.fallback.structured is False
+    # A generate resolution of the same task is flagged nowhere.
     generate = inf.resolve("chat")
-    assert STRUCTURED_KEY not in generate.conn
-    # Otherwise the same dict, but for the operation its account block names.
-    assert {k: v for k, v in decide.conn.items() if k not in (STRUCTURED_KEY, FALLBACK_KEY,
-                                                               inf.ACCOUNT_KEY)} == \
-        {k: v for k, v in generate.conn.items() if k not in (FALLBACK_KEY, inf.ACCOUNT_KEY)}
-    # Per key, so the block's other fields (slice E's billing and role) may
+    assert generate.chain.primary.structured is False
+    # Otherwise the same target, but for the operation its account names.
+    assert (dataclasses.replace(decide.chain.primary, structured=False, account=wire.Account())
+            == dataclasses.replace(generate.chain.primary, account=wire.Account()))
+    # Per field, so the account's other fields (slice E's billing and role)
     # ride beside the operation.
-    assert (decide.conn[inf.ACCOUNT_KEY]["operation"],
-            generate.conn[inf.ACCOUNT_KEY]["operation"]) == ("decide", "generate")
-    assert ({k: v for k, v in decide.conn[inf.ACCOUNT_KEY].items() if k != "operation"}
-            == {k: v for k, v in generate.conn[inf.ACCOUNT_KEY].items() if k != "operation"})
-    # A capable fallback is flagged on its own dict, the one the facade sends.
+    assert (decide.chain.primary.account.operation,
+            generate.chain.primary.account.operation) == ("decide", "generate")
+    assert (dataclasses.replace(decide.chain.primary.account, operation="")
+            == dataclasses.replace(generate.chain.primary.account, operation=""))
+    # A capable fallback is flagged on its own target, the one the facade sends.
     _catalog("spare", [{"id": "vendor/spare", "params": ["structured_outputs"]}])
     both = inf.resolve("chat", operation="decide")
-    assert both.conn[FALLBACK_KEY][STRUCTURED_KEY] is True
+    assert both.chain.fallback.structured is True
 
 
-def test_an_unknown_or_response_format_only_capability_leaves_the_key_absent(at_state):
+def test_an_unknown_or_response_format_only_capability_leaves_the_flag_off(at_state):
     at_state("fresh")
-    assert STRUCTURED_KEY not in inf.resolve("scene-break", operation="decide").conn
+    assert inf.resolve("scene-break", operation="decide").chain.primary.structured is False
     # Minor 5: `response_format` alone also covers JSON mode, which is not a schema.
     _catalog("openrouter", [{"id": "vendor/active",
                              "params": ["temperature", "response_format"]}])
     resolved = inf.resolve("scene-break", operation="decide")
     assert resolved.attempts[0].capabilities["structured_output"].value == "unknown"
-    assert STRUCTURED_KEY not in resolved.conn
+    assert resolved.chain.primary.structured is False
 
 
 @pytest.mark.parametrize("row", [
@@ -419,16 +418,12 @@ def test_an_unknown_or_response_format_only_capability_leaves_the_key_absent(at_
     # The features' explicit answer outranks the params' within the catalog step.
     {"id": "vendor/active", "params": ["structured_outputs"],
      "features": {"structured_output": False}}])
-def test_an_explicit_no_leaves_the_key_absent(at_state, row):
+def test_an_explicit_no_leaves_the_flag_off(at_state, row):
     at_state("fresh")
     _catalog("openrouter", [row])
     resolved = inf.resolve("scene-break", operation="decide")
     assert resolved.attempts[0].capabilities["structured_output"].value == "no"
-    assert STRUCTURED_KEY not in resolved.conn
-
-
-def test_structured_key_is_restated_equal():
-    assert inf.STRUCTURED_KEY == llm.STRUCTURED_KEY
+    assert resolved.chain.primary.structured is False
 
 
 # ---- the fakes ----

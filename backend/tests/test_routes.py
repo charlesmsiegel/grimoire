@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
-from grimoire import llm, routes
+from grimoire import llm, routes, wire
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -426,10 +426,11 @@ def test_config_retries_roundtrip_at_format_2(client):
     assert client.get("/api/config").json()["llm_retries"] == "0"
 
 
-def _carried_fallback() -> dict | None:
-    """The fallback a generation's resolved connection carries to the facade
-    (`llm.FALLBACK_KEY`), or None."""
-    return store.inference.resolve.resolve("chat").conn.get(llm.FALLBACK_KEY)
+def _carried_fallback() -> wire.Target | None:
+    """The fallback a generation's resolved chain carries to the facade
+    (`wire.Chain.fallback`), or None."""
+    chain = store.inference.resolve.resolve("chat").chain
+    return chain.fallback if chain is not None else None
 
 
 def test_the_fallback_resolver_reads_the_configured_connection(client):
@@ -440,8 +441,9 @@ def test_the_fallback_resolver_reads_the_configured_connection(client):
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Backup", "api_key": "sk-backup"}).json()["id"]
     _fallback(client, cid, "vendor/backup")
-    conn = _carried_fallback()
-    assert conn["id"] == cid and conn["model"] == "vendor/backup"
+    fallback = _carried_fallback()
+    assert fallback is not None
+    assert fallback.provider_id == cid and fallback.model == "vendor/backup"
 
 
 def test_a_fallback_that_cannot_send_is_no_fallback(client):
@@ -3779,7 +3781,7 @@ async def test_a_disconnect_mid_turn_still_persists_what_arrived(monkeypatch, tm
     was dropped silently."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter(["The tide ", "turns."]))
     frames = resp.body_iterator
     assert "The tide " in await frames.__anext__()
@@ -3795,7 +3797,7 @@ async def test_a_cancelled_turn_keeps_the_post_it_could_not_answer(monkeypatch, 
     reserved for turns that failed."""
     cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         # One empty frame, so the generator is suspended on a heartbeat yield
         # when the close arrives. Two ways this test can pass without testing
         # anything, both of which review caught in one form or another:
@@ -3820,7 +3822,7 @@ async def test_a_cancelled_turn_drops_its_partial_once_a_newer_turn_owns_the_tai
     displaces the live one. Losing the partial is the cheaper outcome."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter(["The tide ", "turns."]))
     frames = resp.body_iterator
     await frames.__anext__()
@@ -3840,7 +3842,7 @@ async def test_a_cancelled_turn_drops_its_partial_when_a_newer_turn_appended_not
     is what distinguishes them."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     msgs = [{"role": "user", "content": "and then?"}]
-    conn = {"kind": "openrouter", "model": "m"}
+    conn = wire_kit.target(provider_id="", model="m")
     older = _unfenced_stream(       # a retry, appending nothing
         cid, sid, msgs, conn, StallingOpenRouter(["The tide ", "turns."]))
     frames = older.body_iterator
@@ -3859,7 +3861,7 @@ async def test_a_cancelled_turn_still_persists_while_it_owns_the_tail(monkeypatc
     is kept. This is the case the whole safety net exists for."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter(["The tide ", "turns."]))
     frames = resp.body_iterator
     await frames.__anext__()
@@ -4030,7 +4032,7 @@ def test_the_shipped_client_carries_the_retry_resolver_and_no_fallback(client):
     lands without a restart — and so `llm.py` never imports the store. A client
     built with the numbers baked in would satisfy every test above and still
     ignore the user. The fallback is no longer the client's: each call's
-    resolved connection carries its own (`llm.FALLBACK_KEY`), so a client-wide
+    resolved chain carries its own (`wire.Chain.fallback`), so a client-wide
     one could only ever disagree with it.
 
     Read off the app rather than a module global: the client the routes get is
@@ -4046,7 +4048,7 @@ async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkey
     generating *from* it — and deleting it there takes away the question the
     newer reply is about to answer."""
     cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
-    conn = {"kind": "openrouter", "model": "m"}
+    conn = wire_kit.target(provider_id="", model="m")
     older = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], conn, FailingOpenRouter(),
         undo_user_post=lambda: store.scenes.remove_trailing_user_post(cid, sid, at, "and then?"))
@@ -4094,7 +4096,7 @@ async def test_a_cancelled_reroll_puts_the_old_reply_back(monkeypatch, tmp_path)
     removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
 
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter([""]),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
     frames = resp.body_iterator
@@ -4213,7 +4215,7 @@ def test_a_turn_claims_its_scene_under_the_campaign_lock(monkeypatch, tmp_path):
 
     _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, StallingOpenRouter())
+        wire_kit.target(provider_id="", model="m"), StallingOpenRouter())
 
     assert held_at_claim == [1], "the claim must happen while holding the campaign lock"
 
@@ -4247,7 +4249,7 @@ async def test_a_failed_turns_rollback_runs_under_the_campaign_lock(monkeypatch,
 
     resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, FailingOpenRouter(),
+        wire_kit.target(provider_id="", model="m"), FailingOpenRouter(),
         undo_user_post=undo)
     frames = [f async for f in resp.body_iterator]
 
@@ -4272,7 +4274,7 @@ async def test_a_cancelled_reroll_restores_past_an_unrelated_transition(monkeypa
     removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
 
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter([""]),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
     frames = resp.body_iterator
@@ -4306,7 +4308,7 @@ async def test_a_cancelled_reroll_restores_instead_of_minting_a_proposal(monkeyp
     # it parks the generator on a heartbeat *after* the opener, which is where
     # a cancel has an open fence and no narration to weigh against each other.
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "and then?"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter(['```roll\n{"check": "wits"}\n', ""]),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
     frames = resp.body_iterator
@@ -13085,7 +13087,7 @@ async def test_a_disconnect_on_a_closed_fence_still_writes_the_proposal(client):
     one_chunk = ('She lunges—\n```roll\n'
                  '{"check": "brawl", "actor": "characters:mara"}\n```')
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "go"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "go"}], wire_kit.target(provider_id="", model="m"),
         FakeOpenRouter([one_chunk]))
     frames = resp.body_iterator
     assert "She lunges" in await frames.__anext__()   # suspended on the delta yield
@@ -15338,7 +15340,7 @@ async def test_a_failure_mid_tracker_block_shows_what_it_persists(monkeypatch, t
 
     resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, BlockThenNarrationThenFails())
+        wire_kit.target(provider_id="", model="m"), BlockThenNarrationThenFails())
     streamed = "".join([f async for f in resp.body_iterator])
     assert '"kind": "network"' in streamed
     stored = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
@@ -15362,7 +15364,7 @@ async def test_a_tracker_only_regenerate_puts_the_old_reply_back(monkeypatch, tm
 
     resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, TrackerOnly(),
+        wire_kit.target(provider_id="", model="m"), TrackerOnly(),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, token))
     frames = "".join([f async for f in resp.body_iterator])
     assert '"done": true' in frames
@@ -15389,7 +15391,7 @@ async def test_a_tracker_only_continuation_stays_retryable(monkeypatch, tmp_path
 
     resp = _unfenced_continuation(
         cid, sid, rec["id"], [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, TrackerOnly())
+        wire_kit.target(provider_id="", model="m"), TrackerOnly())
     frames = "".join([f async for f in resp.body_iterator])
     assert '"done": true' in frames
     # Nothing landed, so the record must still be committable.
@@ -15412,7 +15414,7 @@ async def test_a_bare_speaker_marker_regenerate_puts_the_old_reply_back(
 
     resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
-        {"kind": "openrouter", "model": "m"}, BareMarker(),
+        wire_kit.target(provider_id="", model="m"), BareMarker(),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, token))
     frames = "".join([f async for f in resp.body_iterator])
     assert '"done": true' in frames

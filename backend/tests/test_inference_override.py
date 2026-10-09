@@ -25,6 +25,7 @@ Invented connection ids and fake keys only.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -32,7 +33,6 @@ from fastapi import HTTPException
 
 import grimoire.store as store
 from grimoire import routes
-from grimoire.llm import effective_model
 from grimoire.routes.models import RegenerateBody
 from grimoire.store.inference import resolve as inf
 
@@ -117,15 +117,15 @@ def test_connection_id_is_read_as_provider(at):
     _format2(**_standing())
     legacy, legacy_routed = _run(RegenerateBody(connection_id="spare"), ctx["cid"])
     named, named_routed = _run(RegenerateBody(provider="spare"), ctx["cid"])
-    assert base._resolved(legacy.conn) == base._resolved(named.conn)
+    assert base._resolved(legacy.chain.primary) == base._resolved(named.chain.primary)
     assert legacy_routed is named_routed is True
     # Both present: `provider` is the field, `connection_id` only stands in for
     # its absence.
     both, _ = _run(RegenerateBody(provider="spare", connection_id="local"), ctx["cid"])
-    assert both.conn["id"] == "spare"
+    assert both.chain.primary.provider_id == "spare"
     # An empty `provider` is absent.
     blank, _ = _run(RegenerateBody(provider="  ", connection_id="local"), ctx["cid"])
-    assert blank.conn["id"] == "local"
+    assert blank.chain.primary.provider_id == "local"
 
 
 # ---- a provider alone ----
@@ -135,7 +135,7 @@ def test_provider_only_keeps_the_standing_model_on_format_2(at):
     resolved, routed = _run({"provider": "spare"}, ctx["cid"])
     # The standing model, not spare's own (`vendor/spare`); the catalog of the
     # provider it now runs on says what that model takes.
-    assert {**base._resolved(resolved.conn), "routed": routed} == {
+    assert {**base._resolved(resolved.chain.primary), "routed": routed} == {
         "conn": "spare", "model": "vendor/active", "sampling": NO_PRESET,
         "model_params": ["temperature", "top_p"], "routed": True}
 
@@ -144,7 +144,7 @@ def test_provider_only_keeps_the_standing_preset_on_format_2(at):
     ctx = at()
     _format2(**_standing(preset="cold"))
     resolved, routed = _run({"provider": "spare"}, ctx["cid"])
-    sampling = resolved.conn["sampling"]
+    sampling = asdict(resolved.chain.primary.sampling)
     assert (sampling["preset_id"], sampling["scope"]) == ("cold", "connection")
     assert routed is True
 
@@ -153,8 +153,8 @@ def test_provider_only_on_the_standing_provider_is_not_routed(at):
     ctx = at()
     _format2(**_standing())
     resolved, routed = _run({"provider": "openrouter"}, ctx["cid"])
-    assert resolved.conn["id"] == "openrouter"
-    assert effective_model(resolved.conn) == "vendor/active"
+    assert resolved.chain.primary.provider_id == "openrouter"
+    assert resolved.chain.primary.model == "vendor/active"
     assert routed is False
 
 
@@ -173,8 +173,8 @@ def test_a_provider_and_a_model_need_no_standing_selection(at):
     ctx = at()
     _format2()
     resolved, routed = _run({"provider": "spare", "model": "vendor/spare"}, ctx["cid"])
-    assert resolved.conn["id"] == "spare" and routed is True
-    assert effective_model(resolved.conn) == "vendor/spare"
+    assert resolved.chain.primary.provider_id == "spare" and routed is True
+    assert resolved.chain.primary.model == "vendor/spare"
 
 
 def test_provider_only_with_an_empty_standing_model(at):
@@ -188,11 +188,11 @@ def test_provider_only_with_an_empty_standing_model(at):
     assert "name a model for this provider" in str(exc.detail).lower()
     # The standing provider itself is no move: nothing to keep, nothing changed.
     resolved, routed = _run({"provider": "openrouter"}, ctx["cid"])
-    assert resolved.conn["id"] == "openrouter"
+    assert resolved.chain.primary.provider_id == "openrouter"
     assert routed is False
     # Naming the model as well is how the caller answers the 400.
     resolved, routed = _run({"provider": "spare", "model": "vendor/spare"}, ctx["cid"])
-    assert resolved.conn["id"] == "spare" and routed is True
+    assert resolved.chain.primary.provider_id == "spare" and routed is True
 
 
 def test_a_model_alone_still_needs_the_standing_selection(at):
@@ -226,12 +226,12 @@ def test_provider_only_keeps_the_standing_model_on_format_1_too(at):
     assert not store.inference_keys.is_current(store.read_config())
     standing, _ = _run({}, ctx["cid"])
     resolved, routed = _run({"provider": "spare"}, ctx["cid"])
-    assert resolved.conn["id"] == "spare"
-    assert effective_model(resolved.conn) == effective_model(standing.conn) != "vendor/spare"
+    assert resolved.chain.primary.provider_id == "spare"
+    assert resolved.chain.primary.model == standing.chain.primary.model != "vendor/spare"
     assert routed is True
     # ... and `connection_id` says the same thing it always did.
     legacy, _ = _run({"connection_id": "spare"}, ctx["cid"])
-    assert base._resolved(legacy.conn) == base._resolved(resolved.conn)
+    assert base._resolved(legacy.chain.primary) == base._resolved(resolved.chain.primary)
 
 
 def test_a_preset_is_honoured_on_format_1_too(at):
@@ -243,18 +243,18 @@ def test_a_preset_is_honoured_on_format_1_too(at):
     base._config(preset_scene="cold", fallback_connection_id="local")
     assert not store.inference_keys.is_current(store.read_config())
     plain, plain_routed = _run({}, ctx["cid"])
-    assert plain.conn["sampling"]["preset_id"] == "cold"
+    assert plain.chain.primary.sampling.preset_id == "cold"
     assert plain_routed is False
 
     named, named_routed = _run({"preset": "hot"}, ctx["cid"])
-    assert named.conn["id"] == plain.conn["id"]
-    assert effective_model(named.conn) == effective_model(plain.conn)
-    assert named.conn["sampling"]["preset_id"] == "hot"
-    assert named.conn["sampling"]["scope"] == "override"
+    assert named.chain.primary.provider_id == plain.chain.primary.provider_id
+    assert named.chain.primary.model == plain.chain.primary.model
+    assert named.chain.primary.sampling.preset_id == "hot"
+    assert named.chain.primary.sampling.scope == "override"
     assert named_routed is True
     # The primary's alone: the fallback keeps the route's preset.
-    assert named.fallback["id"] == "local"
-    assert named.fallback["sampling"]["preset_id"] == "cold"
+    assert named.attempts[1].target.provider_id == "local"
+    assert named.attempts[1].target.sampling.preset_id == "cold"
     # Naming what the route already runs is no override.
     assert _run({"preset": "cold"}, ctx["cid"])[1] is False
     assert _refused({"preset": "nosuch"}, ctx["cid"]).status_code == 400
@@ -274,26 +274,26 @@ def test_an_override_preset_outranks_the_route_preset_on_the_primary_only(at):
     ctx = at()
     _route_preset_with_fallback()
     standing, _ = _run({}, ctx["cid"])
-    assert standing.conn["sampling"]["preset_id"] == "cold"
-    assert standing.conn["sampling"]["scope"] == "global"
+    assert standing.chain.primary.sampling.preset_id == "cold"
+    assert standing.chain.primary.sampling.scope == "global"
     # Unrouted, the route's preset follows the route onto the fallback.
-    assert standing.fallback["id"] == "local"
-    assert standing.fallback["sampling"]["preset_id"] == "cold"
+    assert standing.attempts[1].target.provider_id == "local"
+    assert standing.attempts[1].target.sampling.preset_id == "cold"
 
     resolved, routed = _run({"preset": "hot"}, ctx["cid"])
-    assert resolved.conn["id"] == "openrouter"
-    assert resolved.conn["sampling"]["preset_id"] == "hot"
-    assert resolved.conn["sampling"]["scope"] == "override"
-    assert resolved.conn["sampling"]["params"] == {"temperature": 1.4}
+    assert resolved.chain.primary.provider_id == "openrouter"
+    assert resolved.chain.primary.sampling.preset_id == "hot"
+    assert resolved.chain.primary.sampling.scope == "override"
+    assert resolved.chain.primary.sampling.params == {"temperature": 1.4}
     assert routed is True
     # The override is for the primary alone: the fallback gets what it would
     # have had without it -- the route's preset, as on the standing call.
-    assert resolved.fallback["id"] == "local"
-    assert resolved.fallback["sampling"]["preset_id"] == "cold"
-    assert resolved.fallback["sampling"]["scope"] == "global"
+    assert resolved.attempts[1].target.provider_id == "local"
+    assert resolved.attempts[1].target.sampling.preset_id == "cold"
+    assert resolved.attempts[1].target.sampling.scope == "global"
     # What the facade will send is what the resolver says: the fallback this
     # call carries.
-    assert resolved.conn[routes.common.llm.FALLBACK_KEY] is resolved.fallback
+    assert resolved.chain.fallback is resolved.attempts[1].target
     sent = routes.common.build_llm()._routes(resolved.chain)
     assert [route.target.provider_id for route in sent] == ["openrouter", "local"]
     assert sent[1].target.sampling.preset_id == "cold"
@@ -304,9 +304,9 @@ def test_an_override_preset_composes_with_a_provider_and_a_model(at):
     _route_preset_with_fallback()
     resolved, routed = _run({"provider": "spare", "model": "vendor/spare",
                              "preset": "hot"}, ctx["cid"])
-    assert resolved.conn["id"] == "spare"
-    assert effective_model(resolved.conn) == "vendor/spare"
-    assert resolved.conn["sampling"]["preset_id"] == "hot"
+    assert resolved.chain.primary.provider_id == "spare"
+    assert resolved.chain.primary.model == "vendor/spare"
+    assert resolved.chain.primary.sampling.preset_id == "hot"
     assert routed is True
 
 
@@ -314,12 +314,12 @@ def test_preset_clear_in_an_override(at):
     ctx = at()
     _route_preset_with_fallback()
     resolved, routed = _run({"preset": PRESET_CLEAR}, ctx["cid"])
-    sampling = resolved.conn["sampling"]
+    sampling = asdict(resolved.chain.primary.sampling)
     assert sampling["preset_id"] == "" and sampling["params"] == {}
     assert sampling["scope"] == "override"
     assert routed is True    # the standing route runs `cold`
     # Still the primary alone: the fallback keeps the route's preset.
-    assert resolved.fallback["sampling"]["preset_id"] == "cold"
+    assert resolved.attempts[1].target.sampling.preset_id == "cold"
     sent = routes.common.build_llm()._routes(resolved.chain)
     assert sent[1].target.sampling.preset_id == "cold"
 
@@ -401,8 +401,8 @@ def test_provider_only_override_cells_after_migration(state, tmp_path):
         else:
             assert standing.standing is not None, state
             assert standing.standing.provider == legacy["conn"], state
-            assert effective_model(standing.conn) == legacy["model"], state
-            migrated = standing.conn["sampling"]
+            assert standing.chain.primary.model == legacy["model"], state
+            migrated = asdict(standing.chain.primary.sampling)
             assert migrated["preset_id"] == legacy["sampling"]["preset_id"], state
             assert migrated["params"] == legacy["sampling"]["params"], state
         for name, body in provider_only.items():
@@ -426,8 +426,8 @@ def test_provider_only_override_cells_after_migration(state, tmp_path):
                 model = standing.standing.model
                 conn = {**raw, "model": model}
                 expected = base._normalise({
-                    "conn": raw["id"], "model": effective_model(conn),
-                    "sampling": standing.conn["sampling"],
+                    "conn": raw["id"], "model": inf.provider_target(conn).model,
+                    "sampling": asdict(standing.chain.primary.sampling),
                     "model_params": inf.model_params(conn),
                     "routed": raw["id"] != standing.standing.provider,
                 }, base._revs())

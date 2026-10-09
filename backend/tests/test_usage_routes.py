@@ -228,7 +228,7 @@ async def test_a_cancelled_turn_is_recorded_as_aborted_not_as_a_failure(client, 
     _, cid = _campaign(client)
     sid = _scene(client, cid)
     resp = _unfenced_stream(
-        cid, sid, [{"role": "user", "content": "hi"}], {"kind": "openrouter", "model": "m"},
+        cid, sid, [{"role": "user", "content": "hi"}], wire_kit.target(provider_id="", model="m"),
         StallingOpenRouter([""]))
     frames = resp.body_iterator
     assert await frames.__anext__() == ": heartbeat\n\n"

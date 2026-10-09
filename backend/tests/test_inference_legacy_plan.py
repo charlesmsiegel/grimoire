@@ -33,7 +33,7 @@ from grimoire.store import (
 )
 from grimoire.store import inference_retired as retired
 from grimoire.store.frontmatter import parse_frontmatter
-from grimoire.store.inference import facts, legacy_plan, migrate
+from grimoire.store.inference import facts, legacy_plan, migrate, resolve
 from tests import inference_baseline as base
 from tests import inference_baseline_c as base_c
 from tests import inference_fixtures
@@ -205,8 +205,11 @@ def _derived(plan: legacy_plan.Plan) -> dict[str, legacy_plan.Derived]:
 
 
 def _wire(conn: dict, params: dict) -> dict:
-    """What `conn` sends with a preset of `params` attached."""
-    return llm_sampling.effective({**conn, "sampling": {"params": params}})["effective"]
+    """What connection record `conn` sends at its own model with a preset of
+    `params` attached (`resolve.target_for`, the store's one target builder)."""
+    target = resolve.target_for(conn, conn["model"], {**resolve.NO_SAMPLING, "params": params},
+                                model_facts={})
+    return llm_sampling.effective(target)["effective"]
 
 
 def _legacy_wire(conn: dict, params: dict) -> dict:
@@ -1113,9 +1116,8 @@ def test_a_campaign_derivation_never_aliases_a_global_one(home):
     meta = store.campaigns.read_campaign(cid)["meta"]
     _write_campaign(cid, {**{k: v for k, v in meta.items() if k != keys.FORMAT_KEY},
                           "route_scene": "glm2"})
-    glob = resolve.resolve("chat").conn
-    camp = resolve.resolve("chat", cid).conn
-    assert (glob["sampling"]["preset_id"], glob["sampling"]["params"]["temperature"]) == (
-        glob_id, 0.9)
-    assert camp["id"] == "glm2" and camp["sampling"]["params"]["temperature"] == 0.5
+    glob = resolve.resolve("chat").chain.primary
+    camp = resolve.resolve("chat", cid).chain.primary
+    assert (glob.sampling.preset_id, glob.sampling.params["temperature"]) == (glob_id, 0.9)
+    assert camp.provider_id == "glm2" and camp.sampling.params["temperature"] == 0.5
     assert llm_sampling.effective(camp)["effective"]["reasoning_effort"] == "high"

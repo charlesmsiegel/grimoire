@@ -305,7 +305,7 @@ def own_preset(raw: dict) -> str:
     (`sampler_preset`, one of `MODEL_FIELDS`), stripped; "" for none.
 
     What the record carries, for the connection editor's readout
-    (`resolve.own_sampling`) -- never a selection: since slice I the resolver
+    (`resolve.own_target`) -- never a selection: since slice I the resolver
     takes a selection's preset from the format-2 settings alone, which the
     planner (`inference.legacy_plan`) maps a legacy connection's preset into.
     Read here, beside the fields it belongs to, so nothing outside the

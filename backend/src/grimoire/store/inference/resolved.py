@@ -1,31 +1,22 @@
 """What a task resolved to: the attempts it runs, and how they were chosen.
 
 Built by `resolve.resolve` (and, for the Embedding role, `resolve.embedding`)
-and nowhere else. Until the facade takes attempts directly (spec §13), each
-`Attempt` carries its lowered connection dict -- the shape `LLMClient` reads
-today -- so `conn` is what a call site hands the facade.
-From slice C that dict carries the fallback too: the fallback attempt's own
-lowered dict, under `llm.FALLBACK_KEY` (`resolve.FALLBACK_KEY`), which is what
-the facade sends when that primary fails (spec §5.2, §5.4, §5.5). There is no
-other fallback on the shipped client.
+and nowhere else. Each `Attempt` carries what it IS (its provider's kind, URL,
+rev, billing and preset), what is known of its model (`facts`), what it can do
+(`capabilities`, each a `capabilities.Cap` with its source) -- and, from
+those, `missing` / `fallback_missing`: what the route needs that an attempt is
+known not to have. The seam refuses on `missing`. A non-empty
+`fallback_missing` drops the fallback from the chain (spec §5.3): it stays in
+`attempts`, so a surface can say why, but it never rides the primary, so it is
+never sent.
 
-Slice B adds what each attempt IS (its provider's kind, URL, rev, billing and
-preset), what is known of its model (`facts`), and what it can do
-(`capabilities`, each a `capabilities.Cap` with its source) -- and, from those,
-`missing` / `fallback_missing`: what the route needs that an attempt is known
-not to have. The seam refuses on `missing`. A non-empty `fallback_missing`
-drops the fallback from the chain (spec §5.3): it stays in `attempts`, so a
-surface can say why, but it is never attached to the primary, so it is never
-sent.
-
-Slice F adds what a decide resolution needs: each attempt's `decision_mode`
-(which backend would answer it). Slice H serves a primary that cannot
-generate natively, so `conn` is always the primary's.
-
-Slice I builds each attempt's `wire.Target` beside its dict (`target`), from
-the same lowered values, and a resolution's `chain`: the primary's target,
-with the fallback's exactly where the primary's dict carries it under
-`FALLBACK_KEY`. The facade is sent that chain (Task 9d), and takes no dict.
+Each attempt is sent as its `target`, a `wire.Target` the resolver builds
+directly (slice I), and a resolution's `chain` is what a call site hands the
+facade: the primary's target, and the fallback's when it `rides` (spec §5.2,
+§5.4, §5.5). Slice F adds each attempt's `decision_mode` (which backend would
+answer it on a decide resolution). There is no connection dict: slice I
+deleted the lowering (Task 10), and `test_lowering_retired_guard.py` keeps it
+deleted.
 """
 
 from __future__ import annotations
@@ -35,12 +26,6 @@ from dataclasses import dataclass, field
 from ... import wire
 from .capabilities import Cap
 from .cascade import Selection
-
-#: Where the primary's connection dict carries the fallback the facade sends:
-#: `resolve.FALLBACK_KEY`, restated because `resolve` imports this module; a
-#: test holds the two equal. What `ResolvedInference.chain` reads to decide
-#: whether the fallback rides, so the chain and the dict cannot disagree.
-FALLBACK_KEY = "_fallback"
 
 #: The target of an attempt built by hand, as tests build them -- its twin is
 #: the empty `controls`. Every attempt the resolver builds carries its own
@@ -57,11 +42,6 @@ class Attempt:
     #: The sampler preset the attempt runs with ("" for provider defaults). On
     #: a fallback, the primary's when the primary's came from a route scope.
     preset_id: str
-    #: The attempt lowered to today's connection dict (`sampling` and, where
-    #: the catalog says, `model_params` and `model_features` attached; the
-    #: model's `vision`, `prefill` and `post_process` facts in place of the
-    #: connection's legacy fields -- `resolve.with_facts`).
-    conn: dict
     #: The connection's adapter (`kind`).
     provider_kind: str = ""
     #: Where requests go: the connection's own URL, else its preset's.
@@ -78,7 +58,7 @@ class Attempt:
     #: Every capability name -> `Cap(value, source, error)` (`capabilities.resolve_caps`;
     #: `error` is set only on a failed test, which reads `unknown`).
     capabilities: dict[str, Cap] = field(default_factory=dict)
-    #: Effective controls (spec 8): `llm_sampling.effective(conn)` -- what each
+    #: Effective controls (spec 8): `llm_sampling.effective(target)` -- what each
     #: preset control sends on this attempt and why. Empty only on an attempt
     #: built by hand.
     controls: dict = field(default_factory=dict)
@@ -93,9 +73,10 @@ class Attempt:
     #: "" on a generate resolution. The capability answer only -- the backend
     #: stamps the mode a call actually used on a copy of its account block.
     decision_mode: str = ""
-    #: The attempt as an adapter sends it (`resolve._target`): built from the
-    #: same lowered values as `conn`, with the same account block and
-    #: structured flag. `UNBUILT` only on an attempt built by hand.
+    #: The attempt as an adapter sends it (`resolve._target`): the provider's
+    #: record at this model and preset, its model's stated behaviour laid on,
+    #: and the resolution's account stamp and structured flag. `UNBUILT` only
+    #: on an attempt built by hand.
     target: wire.Target = UNBUILT
 
 
@@ -132,8 +113,8 @@ class ResolvedInference:
     #: name rule's `no` (a guess, `resolve._GUESSES`). What the seam refuses on.
     missing: tuple[str, ...] = ()
     #: The same check on the fallback attempt. Never refused on: a fallback
-    #: with anything here is reported, and not attached to the primary's
-    #: connection (`llm.FALLBACK_KEY`), so the facade does not send it.
+    #: with anything here is reported, and does not ride (`rides`), so the
+    #: facade does not send it.
     fallback_missing: tuple[str, ...] = ()
     #: Why the chosen fallback is left out of `attempts` though it exists: it
     #: cannot send at all (`resolve.problem`: no key, no base URL), or it is on
@@ -148,34 +129,23 @@ class ResolvedInference:
     #: a model, an endpoint, and nothing in `missing`; None otherwise, and
     #: always None for a generative resolution.
     space_id: str | None = None
-
-    @property
-    def conn(self) -> dict | None:
-        """The connection dict the facade is sent: the primary attempt's.
-        None when nothing resolved."""
-        return self.attempts[0].conn if self.attempts else None
-
-    @property
-    def fallback(self) -> dict | None:
-        """The fallback attempt's connection dict (`llm.fallback_sampling`
-        applied, `llm._same_route` honoured), or None when there is none. What
-        the facade sends behind the primary, unless `fallback_missing` dropped
-        it (spec 5.3) -- or what `inference.stages` sends as a stage of its own
-        where either attempt is native."""
-        return self.attempts[1].conn if len(self.attempts) > 1 else None
+    #: Whether the fallback attempt rides the facade behind the primary
+    #: (`chain`'s `fallback`): always on a generate resolution whose fallback
+    #: is not known incapable; on a decide one only where both attempts are
+    #: structured (`resolve._rides`) -- elsewhere `inference.stages` sends the
+    #: fallback as a stage of its own. False with no fallback.
+    rides: bool = False
 
     @property
     def chain(self) -> wire.Chain | None:
-        """What the facade is sent, typed: the primary attempt's target, and
-        the fallback attempt's exactly where the primary's dict carries it
-        (`FALLBACK_KEY`) -- so a fallback known incapable, or one a decide
-        resolution sends as a stage of its own, is not on it. None when
-        nothing resolved."""
+        """What the facade is sent: the primary attempt's target, and the
+        fallback attempt's when it `rides` -- so a fallback known incapable,
+        or one a decide resolution sends as a stage of its own, is not on it.
+        None when nothing resolved."""
         if not self.attempts:
             return None
-        primary = self.attempts[0]
-        rides = len(self.attempts) > 1 and FALLBACK_KEY in primary.conn
-        return wire.Chain(primary.target, self.attempts[1].target if rides else None)
+        rides = self.rides and len(self.attempts) > 1
+        return wire.Chain(self.attempts[0].target, self.attempts[1].target if rides else None)
 
     @property
     def decision_mode(self) -> str | None:

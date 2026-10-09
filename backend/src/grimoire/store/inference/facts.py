@@ -124,7 +124,7 @@ def model_of(conn: dict) -> str:
 
     `llm.effective_model`'s rule, restated because the store never imports
     `llm` (a test holds the two equal). The migration writes a connection's
-    facts under this key and the format-2 lowering reads them back under it,
+    facts under this key and the resolver reads them back under it,
     so the two cannot disagree about which model a fact belongs to."""
     model = str(conn.get("model") or "")
     if not model and conn.get("kind") == "claude":

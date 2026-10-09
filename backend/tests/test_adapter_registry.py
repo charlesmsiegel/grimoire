@@ -11,13 +11,12 @@ What is held here:
   every resolved attempt of every frozen baseline state, in memory, after
   the migration (as a C-H build left it) and after retirement (Task 6), and
   a hand-built attempt of each kind. What the facade sent for the lowered
-  dict, before Task 9d took the dict door away, is frozen in
-  `test_adapter_wire_golden`;
+  dict, before Task 9d took the dict door away and Task 10 the dict, is
+  frozen in `test_adapter_wire_golden`;
 - `resolve.target_for` builds the target a resolved attempt carries;
-- `wire.from_lowered` reads a resolved attempt's dict back as its chain, and
-  `llm_sampling` answers the same for a dict and its target;
 - the facade takes chains of targets and no dict (Task 9d), and files the
-  ledger row the lowered dict filed (Task 9b).
+  ledger row the lowered dict filed (Task 9b), as recorded at Task 10's
+  base, before the dict was deleted.
 """
 
 from __future__ import annotations
@@ -37,7 +36,6 @@ from grimoire import (
     decisions,
     health,
     llm,
-    llm_sampling,
     llm_usage,
     wire,
 )
@@ -200,15 +198,15 @@ def test_the_derived_kind_sets_are_the_facades():
     assert adapters.TEXT_ONLY_KINDS == llm.TEXT_ONLY_KINDS == {"claude"}
     assert adapters.LISTABLE_KINDS == llm.LISTABLE_KINDS
     assert ({k for k in adapters.KINDS if k not in adapters.TEXT_ONLY_KINDS}
-            == set(image_drafts.SUPPORTED_KINDS) == wire._IMAGE_KINDS)
+            == set(image_drafts.SUPPORTED_KINDS))
 
 
-def test_the_wire_spells_the_dict_keys_as_their_owners_do():
-    assert wire._FALLBACK == llm.FALLBACK_KEY == resolve.FALLBACK_KEY
-    assert wire._STRUCTURED == llm.STRUCTURED_KEY == resolve.STRUCTURED_KEY
-    assert wire._ACCOUNT == llm_usage.ACCOUNT_KEY == resolve.ACCOUNT_KEY
-    assert wire._DEGRADE == llm.DEGRADE
-    assert wire.CLAUDE_DEFAULT_MODEL == llm.CLAUDE_DEFAULT_MODEL
+def test_the_claude_default_is_the_stores():
+    """An unset Claude model runs the facade's default, and the store builds
+    every target's `model` by the same rule (`facts.model_of`)."""
+    assert llm.CLAUDE_DEFAULT_MODEL == store.config.DEFAULT_CLAUDE_MODEL
+    assert resolve.provider_target({"id": "c", "kind": "claude", "model": ""}).model \
+        == llm.CLAUDE_DEFAULT_MODEL
 
 
 # ---- an adapter sends what the facade sends ----
@@ -239,49 +237,59 @@ async def test_a_chain_sends_what_its_adapter_sends(state, stage, tmp_path):
             await _sends(attempt.target, schema)
 
 
+#: What a hand-built target says when it says nothing: no name, key, account
+#: or post-processing of its own (the edges were written as connection dicts
+#: stating only what they needed, and are held to the wire those dicts sent).
+_BARE = {"provider_name": "", "api_key": "", "account": wire.Account(), "post_process": ""}
+
+
+def hand(provider_id: str, kind: str, model: str, **fields) -> wire.Target:
+    """A hand-built attempt of `kind` sending `model`: what `fields` state and
+    nothing else (`_BARE`), its post images left to its model (`unknown`), or
+    refused by a kind that carries no image part (`no`)."""
+    reach = "unknown" if kind in image_drafts.SUPPORTED_KINDS else "no"
+    return wire_kit.target(**{**_BARE, "reads_images": reach, "provider_id": provider_id,
+                              "kind": kind, "model": model, **fields})
+
+
 HAND_BUILT = [
-    {"id": "or", "kind": "openrouter", "model": "vendor/warm", "api_key": "sk-test-or",
-     "sampling": {"preset_id": "warm", "preset_name": "Warm", "scope": "global",
-                  "params": {"temperature": 0.9, "top_p": 0.8, "reasoning_effort": "high"}},
-     "model_params": ["temperature", "reasoning"], llm.STRUCTURED_KEY: True},
-    {"id": "glm", "kind": "openai_compatible", "model": "glm-5.3", "api_key": "sk-test-glm",
-     "base_url": "https://glm.example.test/v1", "post_process": "strict",
-     "sampler_support": "extended",
-     "sampling": {"preset_id": "r", "preset_name": "Reasoning max", "scope": "connection",
-                  "params": {"reasoning_effort": "max", "repetition_penalty": 1.1}},
-     llm.STRUCTURED_KEY: True},
-    {"id": "oa", "kind": "openai_compatible", "model": "o4-mini", "api_key": "sk-test-oa",
-     "base_url": "https://api.openai.com/v1",
-     "sampling": {"preset_id": "c", "preset_name": "Cold", "scope": "campaign",
-                  "params": {"max_tokens": 300, "reasoning_effort": "low"}}},
-    {"id": "an", "kind": "anthropic", "model": "claude-haiku-4-5", "api_key": "sk-test-an",
-     "base_url": "https://anthropic.example.test",
-     "sampling": {"preset_id": "w", "preset_name": "Warm", "scope": "global",
-                  "params": {"temperature": 0.7, "top_p": 0.9, "stop": ["END"]}},
-     "model_features": {"max_tokens": 4000}, llm.STRUCTURED_KEY: True},
-    {"id": "an2", "kind": "anthropic", "model": "claude-opus-5", "api_key": "sk-test-an",
-     "sampling": {"preset_id": "t", "preset_name": "Think", "scope": "global",
-                  "params": {"reasoning_effort": "medium", "temperature": 0.5}}},
-    {"id": "cl", "kind": "claude", "model": "",
-     "sampling": {"preset_id": "w", "preset_name": "Warm", "scope": "global",
-                  "params": {"temperature": 0.7}}},
-    {"id": "bare", "kind": "openrouter", "model": "vendor/bare", "api_key": "sk-test-b"},
+    hand("or", "openrouter", "vendor/warm", api_key="sk-test-or",
+         sampling=wire.Sampling("warm", "Warm", "global",
+                                {"temperature": 0.9, "top_p": 0.8, "reasoning_effort": "high"}),
+         model_params=("temperature", "reasoning"), structured=True),
+    hand("glm", "openai_compatible", "glm-5.3", api_key="sk-test-glm",
+         base_url="https://glm.example.test/v1", post_process="strict",
+         sampler_support="extended",
+         sampling=wire.Sampling("r", "Reasoning max", "connection",
+                                {"reasoning_effort": "max", "repetition_penalty": 1.1}),
+         structured=True),
+    hand("oa", "openai_compatible", "o4-mini", api_key="sk-test-oa",
+         base_url="https://api.openai.com/v1",
+         sampling=wire.Sampling("c", "Cold", "campaign",
+                                {"max_tokens": 300, "reasoning_effort": "low"})),
+    hand("an", "anthropic", "claude-haiku-4-5", api_key="sk-test-an",
+         base_url="https://anthropic.example.test",
+         sampling=wire.Sampling("w", "Warm", "global",
+                                {"temperature": 0.7, "top_p": 0.9, "stop": ["END"]}),
+         model_features={"max_tokens": 4000}, structured=True),
+    hand("an2", "anthropic", "claude-opus-5", api_key="sk-test-an",
+         sampling=wire.Sampling("t", "Think", "global",
+                                {"reasoning_effort": "medium", "temperature": 0.5})),
+    # An unset Claude model is the default it runs.
+    hand("cl", "claude", "opus",
+         sampling=wire.Sampling("w", "Warm", "global", {"temperature": 0.7})),
+    hand("bare", "openrouter", "vendor/bare", api_key="sk-test-b"),
 ]
 
 
-@pytest.mark.parametrize("conn", HAND_BUILT, ids=[c["id"] for c in HAND_BUILT])
+@pytest.mark.parametrize("target", HAND_BUILT, ids=[t.provider_id for t in HAND_BUILT])
 @pytest.mark.parametrize("schema", [None, SCHEMA])
-async def test_a_hand_built_attempt_of_each_kind_sends_what_its_adapter_sends(conn, schema):
-    await _sends(wire.from_lowered(conn).primary, schema)
+async def test_a_hand_built_attempt_of_each_kind_sends_what_its_adapter_sends(target, schema):
+    await _sends(target, schema)
 
 
-def _target(conn: dict) -> wire.Target:
-    return wire.from_lowered(conn).primary
-
-
-@pytest.mark.parametrize("conn", HAND_BUILT, ids=[c["id"] for c in HAND_BUILT])
-async def test_models_and_check_ask_what_the_facade_asks(conn):
-    target = _target(conn)
+@pytest.mark.parametrize("target", HAND_BUILT, ids=[t.provider_id for t in HAND_BUILT])
+async def test_models_and_check_ask_what_the_facade_asks(target):
     adapter, facade = _clients(), _clients()
     registry = _registry(adapter)
     if target.kind in adapters.LISTABLE_KINDS:
@@ -301,15 +309,14 @@ async def test_models_and_check_ask_what_the_facade_asks(conn):
 
 
 NATIVE = [
-    {"id": "or", "kind": "openrouter", "model": "typesafe/jev-1.13", "api_key": "sk-test-or"},
-    {"id": "oa", "kind": "openai_compatible", "model": "gpt-6-luna", "api_key": "sk-test-oa",
-     "base_url": "https://decisions.example.test/v1/"},
+    hand("or", "openrouter", "typesafe/jev-1.13", api_key="sk-test-or"),
+    hand("oa", "openai_compatible", "gpt-6-luna", api_key="sk-test-oa",
+         base_url="https://decisions.example.test/v1/"),
 ]
 
 
-@pytest.mark.parametrize("conn", NATIVE, ids=[c["id"] for c in NATIVE])
-async def test_a_native_decide_asks_what_the_facade_asks(conn):
-    target = _target(conn)
+@pytest.mark.parametrize("target", NATIVE, ids=[t.provider_id for t in NATIVE])
+async def test_a_native_decide_asks_what_the_facade_asks(target):
     adapter, facade = _clients(), _clients()
     # No holder: the facade stamps the one it is given, which the adapter
     # (a single POST) never does.
@@ -322,7 +329,7 @@ async def test_a_native_decide_asks_what_the_facade_asks(conn):
 @pytest.mark.parametrize("kind", ["anthropic", "claude"])
 async def test_a_kind_with_no_native_endpoint_refuses_it(kind):
     registry = _registry(_clients())
-    target = _target({"id": kind, "kind": kind, "model": "m", "api_key": "sk-test"})
+    target = hand(kind, kind, "m", api_key="sk-test")
     with pytest.raises(LLMError) as asked:
         await registry[kind].decide(ITEM, target, None)
     with pytest.raises(LLMError) as built:
@@ -336,62 +343,16 @@ async def test_a_kind_with_no_native_endpoint_refuses_it(kind):
 @_passes()
 def test_a_native_body_is_its_adapters(stage, tmp_path):
     registry = _registry(_clients())
-    for conn in NATIVE:
-        target = _target(conn)
+    for target in NATIVE:
         assert registry[target.kind].decision_body(ITEM, target) == llm.native_body(ITEM, target)
     seen = 0
     for _where, resolved in _resolved("base:routed", tmp_path, stage=stage):
         for attempt in resolved.attempts:
             if adapters.decides_natively(attempt.target.kind):
                 assert (registry[attempt.target.kind].decision_body(ITEM, attempt.target)
-                        == llm.native_body(ITEM, attempt.target)
-                        == llm.native_body(ITEM, _target(attempt.conn)))
+                        == llm.native_body(ITEM, attempt.target))
                 seen += 1
     assert seen
-
-
-# ---- the dict, read as its chain ----
-@_states()
-@_passes()
-def test_from_lowered_round_trips_every_baseline_attempt(state, stage, tmp_path):
-    for where, resolved in _resolved(state, tmp_path, stage=stage):
-        if resolved.chain is None:
-            continue
-        assert wire.from_lowered(resolved.conn) == resolved.chain, where
-
-
-@_states()
-@_passes()
-def test_effective_answers_the_same_for_a_dict_and_its_target(state, stage, tmp_path):
-    for where, resolved in _resolved(state, tmp_path, stage=stage):
-        for attempt in resolved.attempts:
-            for answer in (llm_sampling.effective, llm_sampling.split,
-                           llm_sampling.sent_fields, llm_sampling.sent_names):
-                assert answer(attempt.conn) == answer(attempt.target), (where, answer)
-            assert (llm_sampling.not_applicable(attempt.conn, llm_sampling.WHY_NATIVE)
-                    == llm_sampling.not_applicable(attempt.target, llm_sampling.WHY_NATIVE))
-
-
-def test_from_lowered_reads_a_dict_as_the_facade_does():
-    """The facade's own readings: a `kind` left off is OpenRouter's, an unset
-    Claude model is the one it runs, a mistyped field is unset, a falsy
-    fallback is none, and the post-image preference decides what it can."""
-    bare = wire.from_lowered({"model": "vendor/m"})
-    assert (bare.primary.kind, bare.primary.model, bare.fallback) == ("openrouter", "vendor/m", None)
-    assert bare.primary.reads_images == "unknown"
-    claude = wire.from_lowered({"kind": "claude", "vision": "on", llm.FALLBACK_KEY: {}})
-    assert (claude.primary.model, claude.primary.requested_model) == ("opus", "opus")
-    assert claude.primary.reads_images == "no" and claude.fallback is None
-    odd = wire.from_lowered({"id": 3, "sampling": "nope", "model_params": "x",
-                             llm_usage.ACCOUNT_KEY: "not a block", "vision": "off"})
-    assert odd.primary.provider_id == "" and odd.primary.sampling == wire.Sampling()
-    assert odd.primary.model_params is None and odd.primary.account == wire.Account()
-    assert odd.primary.reads_images == "no"
-    chained = wire.from_lowered({"id": "a", "kind": "openrouter", "model": "m", "vision": "on",
-                                 llm.DEGRADE: True,
-                                 llm.FALLBACK_KEY: {"id": "b", "model": "n"}})
-    assert chained.primary.reads_images == "yes" and chained.primary.degrade is True
-    assert chained.fallback is not None and chained.fallback.provider_id == "b"
 
 
 # ---- `resolve.target_for` ----
@@ -409,7 +370,8 @@ def test_target_for_matches_the_attempt_target(state, stage, tmp_path):
         for attempt in resolved.attempts:
             raw = lookup(attempt.provider_id)
             assert raw is not None, where
-            built = resolve.target_for(raw, attempt.model, attempt.conn["sampling"],
+            built = resolve.target_for(raw, attempt.model,
+                                       dataclasses.asdict(attempt.target.sampling),
                                        model_facts=attempt.facts)
             assert built.account == wire.Account(billing=attempt.target.account.billing)
             assert built.structured is False
@@ -418,13 +380,12 @@ def test_target_for_matches_the_attempt_target(state, stage, tmp_path):
 
 
 # ---- the facade on chains, with no dict door (Tasks 9b, 9d) ----
-_DICT = {"id": "a", "kind": "openrouter", "model": "m", "api_key": "sk-test",
-         llm.FALLBACK_KEY: {"id": "b", "kind": "openrouter", "model": "n"}}
+_DICT = {"id": "a", "kind": "openrouter", "model": "m", "api_key": "sk-test"}
 
 
 async def test_the_facade_takes_no_dict():
-    """Every door of the facade refuses a lowered connection dict with a
-    `TypeError`, before any provider is asked or any holder stamped."""
+    """Every door of the facade refuses a connection dict with a `TypeError`,
+    before any provider is asked or any holder stamped."""
     clients = _clients()
     facade = _facade(clients)
     usage: dict = {}
@@ -482,12 +443,28 @@ def _filed(conn_or_chain, task: str, schema: dict | None) -> dict:
     return {k: v for k, v in m.row.items() if k not in ("ts", "duration_ms")}
 
 
+#: The rows `test_the_ledger_row_is_the_lowered_dicts` files, as the lowered
+#: dict filed them: recorded at Task 10's base (302eb8e), where the chain and
+#: the dict it lowered from were both driven and agreed, before the dict was
+#: deleted.
+_LOWERED_ROWS = [
+    {"billing": "metered", "completion_tokens": 3, "connection": "OpenRouter",
+     "cost_basis": "billed", "cost_usd": 0.002, "kind": "llm", "model": "vendor/active",
+     "operation": "generate", "prompt_tokens": 11, "provider": "openrouter",
+     "provider_id": "openrouter", "role": "primary", "status": "ok", "task": "chat"},
+    {"billing": "metered", "completion_tokens": 3, "connection": "OpenRouter",
+     "cost_basis": "billed", "cost_usd": 0.002, "decision_mode": "structured", "kind": "llm",
+     "model": "vendor/active", "operation": "decide", "prompt_tokens": 11,
+     "provider": "openrouter", "provider_id": "openrouter", "role": "decision",
+     "status": "ok", "task": "scene-break"},
+]
+
+
 def test_the_ledger_row_is_the_lowered_dicts(tmp_path):
-    """A generate call and a structured decide call file the same row, field
-    for field, from the resolution's chain as from the chain its lowered
-    dict reads as (`wire.from_lowered`, which the facade's shim read until
-    Task 9d) -- `operation`, `role`, `billing` and `decision_mode` included,
-    so `usage_rollup.VERSION` stays where it is."""
+    """A generate call and a structured decide call file, from the
+    resolution's chain, the row the lowered dict filed (`_LOWERED_ROWS`) --
+    `operation`, `role`, `billing` and `decision_mode` included, so
+    `usage_rollup.VERSION` stays where it is."""
     assert usage_rollup.VERSION == 6
     with baseline.client_at(tmp_path) as client:
         fx.format2(client)
@@ -501,32 +478,24 @@ def test_the_ledger_row_is_the_lowered_dicts(tmp_path):
         generate = resolve.resolve("chat")
         decide = resolve.resolve("scene-break", operation="decide")
         assert decide.chain is not None and decide.chain.primary.structured
-        # The dict spelling of the stamp `decide` makes (`_with_mode`):
-        # the primary's account block, replaced whole.
-        stamped = {**decide.conn, llm_usage.ACCOUNT_KEY: {
-            **decide.conn[llm_usage.ACCOUNT_KEY], "decision_mode": "structured"}}
-        for resolved, conn, chain, schema in (
-                (generate, generate.conn, generate.chain, None),
-                (decide, stamped, decide.chain.with_account(decision_mode="structured"), SCHEMA)):
-            by_dict = _filed(wire.from_lowered(conn), resolved.task, schema)
-            by_chain = _filed(chain, resolved.task, schema)
-            assert by_dict == by_chain
-            assert by_dict["provider_id"] == "openrouter"
-        assert by_dict["decision_mode"] == "structured" and by_dict["operation"] == "decide"
+        filed = [_filed(chain, resolved.task, schema) for resolved, chain, schema in (
+            (generate, generate.chain, None),
+            (decide, decide.chain.with_account(decision_mode="structured"), SCHEMA))]
+        assert filed == _LOWERED_ROWS
 
 
 async def test_a_chain_hands_its_targets_back():
     """Handed a chain, the facade hands targets to what it calls back -- the
     observer, the image budget, the `ATTEMPTED` stamp -- and the fallback it
-    sent is the one named; the same chain as a dict is refused unsent."""
+    sent is the one named; a connection dict is refused unsent."""
     provider = _Failing({"primary"})
     seen: list = []
     images: list = []
     client = llm.LLMClient(openrouter=provider, retries=0, timeout=0,
                            observer=lambda attempt, error: seen.append(attempt),
                            images=lambda attempt: images.append(attempt) or 0)
-    primary = wire.from_lowered({"id": "a", "kind": "openrouter", "model": "primary"}).primary
-    backup = wire.from_lowered({"id": "b", "kind": "openrouter", "model": "backup"}).primary
+    primary = hand("a", "openrouter", "primary")
+    backup = hand("b", "openrouter", "backup")
     usage: dict = {}
     assert await client.complete(_REFS, wire.Chain(primary, backup), usage) == "from backup"
     assert seen == [primary, backup] and usage[llm.ATTEMPTED] == backup
@@ -535,8 +504,7 @@ async def test_a_chain_hands_its_targets_back():
 
     seen.clear()
     images.clear()
-    as_dict = {"id": "a", "kind": "openrouter", "model": "primary",
-               llm.FALLBACK_KEY: {"id": "b", "kind": "openrouter", "model": "backup"}}
+    as_dict = {"id": "a", "kind": "openrouter", "model": "primary"}
     usage = {}
     with pytest.raises(TypeError):
         await client.complete(_REFS, as_dict, usage)
@@ -576,32 +544,27 @@ def test_a_chain_or_a_target_and_nothing_else():
 
 @_states()
 @_passes()
-def test_what_reads_an_attempt_reads_a_target_as_its_dict(state, stage, tmp_path):
+def test_what_reads_an_attempt_reads_its_target(state, stage, tmp_path):
     """The readers the facade hands a target to -- the image budget, the
-    health registry, the ledger's account, the prefill rule -- answer for it
-    what they answered for its dict, whether the target is the resolver's or
-    the one `wire.from_lowered` reads from the dict."""
+    health registry, the ledger's account, the prefill rule -- read the
+    target's own fields: what the resolver built, nothing re-read."""
     for where, resolved in _resolved(state, tmp_path, stage=stage):
         for attempt in resolved.attempts:
-            conn = {k: v for k, v in attempt.conn.items() if k != llm.FALLBACK_KEY}
-            for target in (attempt.target, wire.from_lowered(conn).primary):
-                assert (store.post_images.capability(target)
-                        == store.post_images.capability(conn)), where
-                assert store.post_images.images_for(target) == store.post_images.images_for(conn)
-                assert store.post_images.reach(target) == store.post_images.reach(conn)
-                assert llm.prefill_capable(target) is llm.prefill_capable(conn)
-                assert llm.effective_model(target) == llm.effective_model(conn)
-                by_dict: dict = {}
-                by_target: dict = {}
-                llm_usage.account(by_dict, conn)
-                llm_usage.account(by_target, target)
-                assert by_dict == by_target, where
-                registry = health.ProviderHealth()
-                filed = registry.record(target, LLMError("auth", "refused"))
-                other = health.ProviderHealth().record(conn, LLMError("auth", "refused"))
-                assert ({k: v for k, v in filed.items() if k != "at"}
-                        == {k: v for k, v in other.items() if k != "at"})
-                assert registry.status(conn["id"], conn["rev"]) == filed
+            target = attempt.target
+            assert llm.prefill_capable(target) is target.prefill
+            assert llm.effective_model(target) == target.model
+            if target.reads_images in ("yes", "no") and target.kind in image_drafts.SUPPORTED_KINDS:
+                assert store.post_images.capability(target) == target.reads_images, where
+            filed: dict = {}
+            llm_usage.account(filed, target)
+            assert filed.get("provider_id", "") == target.provider_id, where
+            assert filed.get("preset", "") == target.sampling.preset_id, where
+            for key in llm_usage.ACCOUNT_FIELDS:
+                assert filed.get(key, "") == getattr(target.account, key), (where, key)
+            registry = health.ProviderHealth()
+            status = registry.record(target, LLMError("auth", "refused"))
+            if target.provider_id:
+                assert registry.status(target.provider_id, target.rev) == status, where
 
 
 #: Models whose names the preset-sensitive rules read: a Claude version before

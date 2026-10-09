@@ -91,11 +91,11 @@ MODEL_TEST_CEILING = 90.0
 # ---- config ----
 class _Chat(NamedTuple):
     """What chat would run on with no campaign in front of it, for the header:
-    the primary attempt's connection (None when nothing resolves), whether
-    the resolution could be made at all, and whether the seam would serve it
+    the primary attempt's target (None when nothing resolves), whether the
+    resolution could be made at all, and whether the seam would serve it
     (`inference.refusal`, the one decision -- the header's `ready`)."""
 
-    conn: dict | None
+    target: wire.Target | None
     resolved: bool
     ready: bool = False
 
@@ -111,7 +111,9 @@ def _chat() -> _Chat:
     try:
         # routing-ok: a display of where chat would run; it must never refuse
         resolved = inference.resolve("chat")
-        return _Chat(resolved.conn, True, inference.refusal(resolved) is None)
+        chain = resolved.chain
+        return _Chat(chain.primary if chain is not None else None, True,
+                     inference.refusal(resolved) is None)
     except Exception:    # a display read; see the docstring
         # Logged at error: the resolver refuses nothing by design, so reaching
         # here is a bug or a broken store, and the header alone would only
@@ -127,7 +129,7 @@ def _send_images_reach(chat: _Chat) -> str:
     if not chat.resolved:
         return "unknown"
     try:
-        return store.post_images.reach(chat.conn)
+        return store.post_images.reach(chat.target)
     except Exception:  # noqa: BLE001 - a display hint; see the docstring
         return "unknown"
 
@@ -150,7 +152,7 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
     anything (`settings.summary`).
     """
     chat = _chat()
-    active = chat.conn
+    active = chat.target
     setup_done, first_run = _setup_state(cfg)
     return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
             "quote_color": cfg.get("quote_color", "off"),
@@ -232,18 +234,19 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # nothing that plays. Before the migration the two agree unless a
             # legacy `route_scene` moves chat -- and then this says where it
             # went (the legacy picker that writes the key goes with Task 13).
-            "active_connection_id": active["id"] if active else "",
+            "active_connection_id": active.provider_id if active else "",
             # `model` rides along because the global status bar names the model
             # a scene with no campaign choice of its own will use (a campaign's
             # own is the scene header's business). Reading it here keeps the
             # bar off /llm-connections/{id}, whose payload carries key_set and
             # the base URL it has no business fetching to print one string. It
-            # is the *effective* model: a Claude connection with none configured
-            # still generates, on the dispatcher's fallback, so reporting the
-            # bare "" would show a dash for a connection that is about to run.
-            "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"],
-                                   "model": llm.effective_model(active)}
-                                   if active else None),
+            # is the *effective* model (the target's): a Claude connection with
+            # none configured still generates, on the dispatcher's fallback, so
+            # reporting the bare "" would show a dash for a connection that is
+            # about to run.
+            "active_connection": ({"id": active.provider_id, "kind": active.kind,
+                                   "name": active.provider_name, "model": active.model}
+                                  if active else None),
             # The seam's own decision (`inference.refusal`): a key or an
             # address missing, or a model known unable to generate -- never a
             # third copy of the credential rule that misses the second half.
@@ -255,7 +258,7 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # navigation, and a network call per navigation is a poller nobody
             # asked for. `unknown` until something -- a real turn, or the
             # reader pressing Test connection -- has an answer.
-            "health": registry.status(active["id"], active["rev"]) if active else None,
+            "health": registry.status(active.provider_id, active.rev) if active else None,
             # The roles, named, for the header and the Models link -- the
             # cascade alone, so it adds no resolve to this read.
             "inference": inference_settings.summary(),
@@ -577,17 +580,18 @@ def _with_effective(conn: dict) -> dict:
     substitute. Every other connection reported its raw stored model, so the
     reroll route picker (#77) — which has to tell the reader what an empty
     model box will run for a connection that is not the active one — briefly
-    carried a copy of `llm.effective_model`'s rule AND of
+    carried a copy of the effective-model rule AND of
     `CLAUDE_DEFAULT_MODEL`, pinned by a test that scraped a `.tsx` file with a
     regex. Reporting the answer here deletes the rule, the constant and the
     scrape together, and a fourth kind that substitutes a model is then one
-    change in `llm.effective_model` rather than two in two languages.
+    change where a target's model is built (`inference.provider_target`)
+    rather than two in two languages.
 
     Added beside `model` rather than replacing it: the connection editor edits
     the stored value, and a form that round-tripped the effective one would
     write the substitute into the file the substitution exists to avoid needing.
     """
-    return {**conn, "effective_model": llm.effective_model(conn)}
+    return {**conn, "effective_model": inference.provider_target(conn).model}
 
 
 @router.get("/llm-connections")
@@ -639,12 +643,13 @@ def _connection_sampling(conn_id: str) -> dict | None:
 
     Task-less, so a route's preset never shows here: the connection editor
     describes the connection, and each route row on the Models screen says
-    what that route sends. None for an unreadable connection."""
+    what that route sends (`inference.own_target`). None for an unreadable
+    connection."""
     try:
         conn = store.llm_connections.read_connection_raw(conn_id)
     except store.llm_connections.ConnectionNotFound:
         return None
-    return llm_sampling.report(inference.own_sampling(conn))
+    return llm_sampling.report(inference.own_target(conn))
 
 
 #: The 400 for a legacy model field written to a provider at format 2.
@@ -941,7 +946,7 @@ def post_connection_models_refresh(
 
     async def work():
         try:
-            models = await client.list_models(wire.from_lowered(conn).primary)
+            models = await client.list_models(inference.provider_target(conn))
         except LLMError as exc:
             return {"state": "failed", "error": run_error(_llm_http_error(exc))}
         fetched_at = store.now_iso()
@@ -983,7 +988,7 @@ async def post_model_catalog(body: CatalogProbe, client: LLMClient = Depends(get
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     try:
         return {"models": catalog.listable(
-            await client.list_models(wire.from_lowered(conn).primary))}
+            await client.list_models(inference.provider_target(conn)))}
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
 
@@ -1043,9 +1048,10 @@ async def post_connection_health(
         raise HTTPException(status_code=404, detail="connection not found") from exc
     if conn.get("kind") in GENERATING_CHECK_KINDS and (body is None or body.confirm is not True):
         raise HTTPException(status_code=400, detail=HEALTH_UNCONFIRMED)
+    target = inference.provider_target(conn)
     problem = inference.problem(conn)
     if problem is not None:
-        return _health_body(registry.record(conn, LLMError("missing_key", problem)))
+        return _health_body(registry.record(target, LLMError("missing_key", problem)))
     try:
         # A ceiling of its own, NOT the one-shot generation budget (#272).
         # `llm_call_budget` supports `0` for "no ceiling at all", which is a
@@ -1056,11 +1062,10 @@ async def post_connection_health(
         # and the reader's spinner — open forever, on exactly the connection
         # they already suspect. Bounded here at a value nobody can switch off,
         # and an overrun arrives as `timeout`: a health verdict like any other.
-        await _bounded_call(client.check(wire.from_lowered(conn).primary),
-                            ceiling=HEALTH_CHECK_CEILING)
+        await _bounded_call(client.check(target), ceiling=HEALTH_CHECK_CEILING)
     except LLMError as exc:
-        return _health_body(registry.record(conn, exc))
-    return _health_body(registry.record(conn))
+        return _health_body(registry.record(target, exc))
+    return _health_body(registry.record(target))
 
 
 def _health_body(status: dict) -> dict:
@@ -1125,7 +1130,7 @@ def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dic
         raise HTTPException(status_code=400, detail=(
             f"{preset.label} cannot do {', '.join(ruled_out)} on any model, so there "
             "is nothing to test"))
-    model = body.model.strip() or llm.effective_model(raw)
+    model = body.model.strip() or inference.provider_target(raw).model
     if not model:
         raise HTTPException(status_code=400, detail="name a model to test")
     if len(model) > store.alternates.MAX_MODEL_CHARS:
@@ -1134,6 +1139,16 @@ def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dic
     if problem is not None:
         raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
     return raw, model, caps
+
+
+def _probe_target(raw: dict, model: str) -> wire.Target:
+    """The target every probe of a test of `model` on `raw` is sent on (and
+    its preview describes): the probe's reply cap and no preset of the
+    connection's own (`probes.sampling`), with the model's facts as a target
+    outside any route sends them (`inference.facts_for`) -- built by the
+    resolver's own builder (`inference.target_for`)."""
+    return inference.target_for(raw, model, store.inference.probes.sampling(),
+                                model_facts=inference.facts_for(raw, model))
 
 
 def _embed_endpoint(raw: dict) -> str:
@@ -1150,7 +1165,7 @@ def _embed_endpoint(raw: dict) -> str:
     return str(raw.get("base_url") or "")
 
 
-async def _embed_probe(raw: dict, conn: dict, model: str) -> dict:
+async def _embed_probe(raw: dict, target: wire.Target, model: str) -> dict:
     """The `embed` probe: one fixed string, once, metered under `model-test`
     with `operation: "embed"`, on the provider under test (ruling 8: it is not
     an embed task and resolves no role).
@@ -1160,7 +1175,7 @@ async def _embed_probe(raw: dict, conn: dict, model: str) -> dict:
     and the client folds into it whatever counts the endpoint reports (a
     prompt count it did not report is estimated, `embed.estimate_prompt`).
     What served it -- the provider id and the `embed` operation -- is filed
-    from the probe's lowered `conn` through `llm_usage.account` (slice E, M9). A
+    from the probe's `target` through `llm_usage.account` (slice E, M9). A
     failure is finished as the embed operation finishes one
     (`inference.embed.record_failure`): its recorded detail is the kind and HTTP status
     only, because a redirect's `Location` can carry a key. The verdict still
@@ -1172,8 +1187,7 @@ async def _embed_probe(raw: dict, conn: dict, model: str) -> dict:
         m.usage.update({"model": model, "connection": raw.get("name") or raw["id"],
                         "provider": raw.get("kind", "openrouter"), "attempts": 1,
                         "requested_model": model})
-        llm_usage.account(m.usage,
-                          wire.from_lowered(conn).primary.with_account(operation="embed"))
+        llm_usage.account(m.usage, target.with_account(operation="embed"))
         try:
             # Off the loop: the embeddings client is synchronous by design.
             vectors = await asyncio.to_thread(lambda: _EMBEDDINGS.embed(
@@ -1250,7 +1264,8 @@ class _Outcome(NamedTuple):
     halts: bool
 
 
-async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str) -> _Outcome:
+async def _probe(client: LLMClient, cap: str, raw: dict, target: wire.Target,
+                 model: str) -> _Outcome:
     """One probe's outcome. Its result is `{"ok": True}` (plus `dims` for
     embed), or `{"ok": False, "kind", "error"}` with the error scrubbed of any
     picture and of the connection's key. One attempt, never retried, never
@@ -1260,13 +1275,11 @@ async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str)
     probe = probes.PROBES[cap]
     try:
         if probe.operation == "embed":
-            return _Outcome(await _embed_probe(raw, conn, model), True, False)
+            return _Outcome(await _embed_probe(raw, target, model), True, False)
         with store.usage.meter("model-test") as m:
             # Completed is accepted; the text is not read. The row names the
-            # probe's operation (M9) on a new target: `conn` serves every
-            # probe. Read as a target through `wire.from_lowered` until Task 10
-            # builds the probes' targets directly (`resolve.target_for`).
-            target = wire.from_lowered(conn).primary
+            # probe's operation (M9) on a new target: `target` serves every
+            # probe (`_probe_target`).
             if probe.operation == "decide":
                 # One native request, one attempt: any `ItemResult` is a body
                 # the endpoint accepted and the adapter normalised. The row
@@ -1288,8 +1301,8 @@ async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str)
     return _Outcome({"ok": True}, True, False)
 
 
-async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict, conn: dict,
-                     model: str) -> tuple[dict[str, dict], dict[str, dict]]:
+async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict,
+                     target: wire.Target, model: str) -> tuple[dict[str, dict], dict[str, dict]]:
     """`(results, verdicts)` for `caps`, probed in order.
 
     After a failure that answers for every probe (`_halts`) the rest are NOT
@@ -1303,7 +1316,7 @@ async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict, conn: 
         if stopped is not None:
             results[cap] = {"ok": False, "kind": "not_sent", "error": f"not sent: {stopped}"}
             continue
-        outcome = await _probe(client, cap, raw, conn, model)
+        outcome = await _probe(client, cap, raw, target, model)
         results[cap] = outcome.result
         if outcome.records:
             verdicts[cap] = {k: outcome.result[k] for k in ("ok", "error", "dims")
@@ -1354,7 +1367,7 @@ def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
     test is "cost unknown"."""
     raw, model, caps = _test_plan(conn_id, body)
     probes = store.inference.probes
-    capped = "max_tokens" in llm_sampling.sent_names(inference.lower(raw, probes.sampling(), model))
+    capped = "max_tokens" in llm_sampling.sent_names(_probe_target(raw, model))
     # A missing or mangled sidecar is "no price known" (`cached_row` never
     # raises), not a failed preview.
     estimate = probes.estimate_usd(store.llm_connections.cached_row(conn_id, model), caps)
@@ -1403,10 +1416,10 @@ def post_connection_test(
     if body.confirm is not True:
         raise HTTPException(status_code=400, detail=TEST_UNCONFIRMED)
     rev = raw["rev"]
-    conn = inference.lower(raw, store.inference.probes.sampling(), model)
+    target = _probe_target(raw, model)
 
     async def work():
-        results, verdicts = await _probe_all(client, caps, raw, conn, model)
+        results, verdicts = await _probe_all(client, caps, raw, target, model)
         # Off the loop, as `_embed_probe` sends: filing reads the connection
         # and writes the facts file under its lock, and the lifespan loop is
         # the one every other run streams through.
@@ -1665,7 +1678,7 @@ def put_connection_facts(conn_id: str, body: FactsUpdate,
     409 `facts_unreadable` when it does not parse (a person fixes it).
 
     A model-settings write like any other (spec 11.2, 12): 409 `not_migrated`
-    until the store is at format 2, where the lowering reads facts rather than
+    until the store is at format 2, where the resolver reads facts rather than
     the connection's legacy fields -- a write before then would answer 200 and
     change nothing, and the migration would merge the legacy values over it --
     and 409 `newer_format` on a store a newer build wrote.
