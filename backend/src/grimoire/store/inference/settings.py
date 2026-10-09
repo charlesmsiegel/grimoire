@@ -371,8 +371,8 @@ def _planner_notes(names: Mapping[str, str]) -> list[retired.Note]:
     campaign -- on a retired store too, where a retired campaign costs one
     read of its `campaign.md` (the overlay plans nothing) -- because a late
     unmarked campaign can arrive at any time, and its loss must show. The
-    cost is accepted (the 6b re-review measured it at about 0.15 s per GET
-    for 200 campaigns on a retired store). `config.md` is read
+    cost is accepted: it is linear in campaigns, one small frontmatter read
+    each, on a settings page rather than the play path. `config.md` is read
     once per call."""
     cfg = config.read_config()
     out: dict[str, retired.Note] = {}
