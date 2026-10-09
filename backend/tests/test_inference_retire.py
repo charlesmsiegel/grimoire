@@ -1705,3 +1705,28 @@ def test_a_retired_but_unmarked_config_notes_its_lost_effort_at_the_switch(home)
     cfg = _raw_config()
     assert cfg[keys.role_key("primary", "provider")] == "glm"
     assert not cfg.get(keys.role_key("primary", "preset"))
+
+
+def test_an_unreadable_record_leaves_a_campaign_with_nothing_written(home):
+    """6b re-review N-3, the campaign twin of the global case: a campaign
+    with a route-preset loss to record and a pin that derives a preset, over
+    a record that cannot be read, writes neither."""
+    _legacy()
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    cid = _campaign("Saltmarch")
+    campaigns.set_campaign_routing(cid, {"route_scene": "glm", "preset_scene": "cold"})
+    _c_era()
+    retire.retire_global(legacy_plan.lookup(mode="retire"))
+    plan = retire.pass_plan(legacy_plan.lookup(mode="retire"))
+    unit = next(u for u in plan.units if u.cid == cid)
+    assert unit.notes and unit.work
+    retired.path().write_text("{not json", encoding="utf-8")
+    before = campaigns.paths.campaign_meta_path(cid).read_bytes()
+
+    got = migrate.ensure()
+
+    assert not (store.home() / "sampler_presets" / "reasoning-high.json").exists()
+    assert campaigns.paths.campaign_meta_path(cid).read_bytes() == before
+    assert f"campaign {cid}" in got.retirement["failed"]
+    assert retired.path().read_text(encoding="utf-8") == "{not json"
