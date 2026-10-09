@@ -341,11 +341,11 @@ would let the model probe for the existence of what it may not read.
 | `search_history` | `query: str (<=200 chars)`, `max: int (<=6)` | 09-C1 retrieval for this campaign, with the run's perspective; units filtered through 11-C1 in R | R N C Q | Returns unit ids, scene refs, titles and short texts. Embeds through 08-C3's history task under 09's rules. With no embeddings it runs structural plus lexical, as 09-C2 does |
 | `get_scene_summary` | `scene` | `chronicle.get_record` + `scenes.read.read_scene_meta` (date, location, cast names) | R N C Q | In R only when 11-C1 classes the scene unit `witnessed` (whole-scene attendance, 11 rule R6) or `known` |
 | `get_scene_excerpt` | `scene`, `query: str`, `max_posts: int (<=8)` | 08-C3 transcript expansion (prompt view) | R N C Q | In R, only the actor's visible slices of the window are returned |
-| `read_scene_window` | `scene`, `before: int | null`, `limit: int (<=12)` | `scenes.read.read_scene_window` (`store/scenes/read.py:169`), then rule 2 | C Q | The draft's "expensive, explicit" transcript read, paged and capped. Never in RP |
+| `read_scene_window` | `scene`, `before: int or null`, `limit: int (<=12)` | `scenes.read.read_scene_window` (`store/scenes/read.py:169`), then rule 2 | C Q | The draft's "expensive, explicit" transcript read, paged and capped. Never in RP |
 | `get_record` | `ref` | `effective.records`, `facts.get`, `events.get`, `overlay.read_entity` | N C Q (R: `lore`, `locations`, `items` only, through `actor.knows`) | Thread and commitment titles, status and latest beat. Lore bodies honour secrecy and `known_by` in R |
-| `get_record_history` | `ref` | beats; facts supersession; `relationship_history.for_pair` for `pair:<a>|<b>` | N C Q | Bounded to the latest `HISTORY_ROWS` rows |
+| `get_record_history` | `ref` | beats; facts supersession; `relationship_history.for_pair` for `pair:<a>+<b>` | N C Q | Bounded to the latest `HISTORY_ROWS` rows |
 | `get_related` | `ref` | `effective.links`, `involvement.of` | N C Q | Reviewed links and touched scenes/actors; candidates are not included |
-| `get_timeline` | `from: str | null`, `to: str | null` | `timeline.build`, `events.list_events` | N C Q | Dates through the calendar provider's own rendering, never model arithmetic (capstone §3.8) |
+| `get_timeline` | `from`, `to` (str or null) | `timeline.build`, `events.list_events` | N C Q | Dates through the calendar provider's own rendering, never model arithmetic (capstone §3.8) |
 | `get_pressure` | (none) | `pressure.build` | C | Deadlines and staleness, as the sweep sees them |
 | `get_actor` | `ref` | `casefile.build`, plus 11-C3 overrides naming the actor | N C Q (R: own ref only, returning own `state.md` and `actor.own_relationships`) | Another actor's interiority is never visible in R |
 | `get_group` | `ref` | entity + 07-C1 effective members + `groupstate` | N C Q | Secret groups' state only in C and Q, as an author's view; gm-only bodies never (rule 3) |
