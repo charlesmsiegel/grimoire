@@ -358,6 +358,25 @@ already documents (`:290-295`). A legacy value such as a hand-typed
 the file byte for byte, and shows in the editor as two dangling chips, which is
 what it is (section 13.1).
 
+**Writers edit the raw token list, never the parsed one.** `parse_members` is
+for readers. The two writers this spec adds (absorb apply, section 9.4, and
+the membership undo, section 9.5) go through one helper:
+
+```python
+def edited_line(raw: object, actor: str, change: Literal["join", "leave"]) -> str:
+    """`members` after one change, on `entity_schema.parse_refs(raw)` -- the
+    raw tokens, stripped, in order. Every token the change does not touch is
+    kept verbatim (a legacy name, a duplicate, a non-actor ref). A join appends
+    `actor` only when `parse_members` does not already hold it; a leave removes
+    exactly the tokens equal to `actor`. Joined with ", "."""
+```
+
+Rewriting from `parse_members` instead would turn `Mara, characters:seraphine`
+plus a join for Winifred into `characters:seraphine, pcs:winifred`, deleting
+the hand-written `Mara` with no review row saying so. The cost of the raw rule
+is that whitespace around commas is normalised to ", " on a write, which
+changes no token.
+
 ### 4.4 Leader and members are independent
 
 `leader` stays its own field and is never written by anything this spec adds:
