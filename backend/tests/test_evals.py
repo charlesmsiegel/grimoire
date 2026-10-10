@@ -1002,7 +1002,8 @@ class _FollowUps:
     ends, and that thread, which files its row once `release` is set or
     `delay` has passed -- after the case's own call returned."""
 
-    def __init__(self, home: Path, delay: float):
+    def __init__(self, home: Path, delay: float,
+                 tasks: tuple[str, ...] = ("scene-break",)):
         import threading
         from types import SimpleNamespace
 
@@ -1014,8 +1015,10 @@ class _FollowUps:
             self.release.wait(delay)
             # Resolved at write time, as a detached run's row is.
             assert str(home) in str(usage.ledger_dir())
-            usage.record(task="scene-break", prompt_tokens=4, completion_tokens=1,
-                         status="ok", operation="decide")
+            for task in tasks:
+                usage.record(task=task, prompt_tokens=4, completion_tokens=1,
+                             status="ok", operation="decide", decision_mode="structured",
+                             cost_usd=0.0005)
 
         self.thread = threading.Thread(target=follow_up, daemon=True)
         self.state = SimpleNamespace(runs=SimpleNamespace(any_live=self.any_live))
@@ -1025,7 +1028,7 @@ class _FollowUps:
         return object() if self.thread.is_alive() else None
 
 
-def _play_case(holder: dict, delay: float):
+def _play_case(holder: dict, delay: float, tasks: tuple[str, ...] = ("scene-break",)):
     """The scene-length case, but its fixture hands over an app with a
     follow-up still running, as a play case through the routes would."""
     import dataclasses
@@ -1036,7 +1039,7 @@ def _play_case(holder: dict, delay: float):
 
     def build():
         ctx = plain.build()
-        holder["app"] = ctx["app"] = _FollowUps(paths.home(), delay)
+        holder["app"] = ctx["app"] = _FollowUps(paths.home(), delay, tasks)
         return ctx
 
     return dataclasses.replace(plain, build=build)
@@ -1169,3 +1172,153 @@ def test_live_all_trips_on_the_home_active_when_it_starts(monkeypatch, tmp_path)
     (result,) = runner.live_all((case,), {runner.conn_key(case): target}, not_isolated,
                                 client=fake)
     assert result.error == runner.ISOLATE_ERROR and fake.calls == 0
+
+
+# ---- 01a-S3: cost, latency and token reporting ----
+
+def _live_generate(monkeypatch, tmp_path, fake, **kwargs):
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    with isolate():
+        return runner.live(case, target, client=fake, real_home=real, **kwargs)
+
+
+def test_a_billed_generate_case_reports_its_bucket(monkeypatch, tmp_path):
+    """Test 1 (bucket): the bucket is the production fold of the rows; the
+    metrics line gives wall time, tokens and the billed column."""
+    from tests.llm_fakes import FakeLLM
+
+    case = case_mod.BY_ID["scene-length"]
+    result = _live_generate(monkeypatch, tmp_path, FakeLLM([[_compliant(case)]], usage=BILLED))
+    assert result.bucket["cost_usd"] == 0.0042 and result.bucket["calls"] == 1
+    assert result.wall_ms is not None and result.calls == () and result.items == ()
+    assert list(result.by_task) == ["chat"]
+    text = runner.report([result])
+    assert "tokens 12 / 3  billed $0.0042" in text and "wall " in text
+    assert "by task" not in text
+    assert "  scene / generate / -: wall -  calls 1  tokens 12 / 3  billed $0.0042" in text
+
+
+def test_an_unpriced_case_is_not_reported_and_a_rate_models_it(monkeypatch, tmp_path):
+    """Test 2: no cost and no rates is `cost: not reported`, with no `$0.00`
+    anywhere; with a rate the same call is `modelled ~$...`, never billed."""
+    from grimoire.store import pricing, usage
+    from tests.llm_fakes import FakeLLM
+
+    case = case_mod.BY_ID["scene-length"]
+    counts = {"prompt_tokens": 1000, "completion_tokens": 500}
+    bare = _live_generate(monkeypatch, tmp_path / "a", FakeLLM([[_compliant(case)]], usage=counts))
+    text = runner.report([bare])
+    assert "cost: not reported" in text and "$0.00" not in text
+
+    rates = usage.Rates({pricing.DEFAULT_KEY: {pricing.PROMPT: 0.001, pricing.COMPLETION: 0.002}})
+    priced = _live_generate(monkeypatch, tmp_path / "b",
+                            FakeLLM([[_compliant(case)]], usage=counts), rates=rates)
+    line = runner.report([priced])
+    assert "modelled ~$0.0020" in line and "billed" not in line
+
+
+def test_a_mixed_chains_items_name_the_stage_that_answered(monkeypatch, tmp_path):
+    """Test 5: native stage 0 fails two of three items, the structured
+    fallback stage answers them. The records name stage, mode, batch items
+    and an empty hop; the failed calls keep kind and status, no detail; the
+    two items name stage 1 and the one call that carried both."""
+    from grimoire import decisions
+    from grimoire.llm_errors import LLMError
+    from grimoire.store import config, llm_connections
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", DECIDER)
+    llm_connections.create_connection("openrouter", "Rowan Spare", api_key="sk-spare")
+    config.write_config(role_decision_fallback_provider="rowan-spare",
+                        role_decision_fallback_model=ACTIVE)
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    target = _decide_target(case)
+    ctx = runner.prepare(case)
+    recorded = json.loads(_compliant(case))
+    parsed = decisions.parse(_compliant(case), ctx["items"], explain=True)
+    failure = LLMError("bad_response", "the decisions endpoint sent no answers", status=502)
+    fake = FakeLLM([[json.dumps({"0": recorded["1"], "1": recorded["2"]})]],
+                   decisions=[decisions.ItemResult(parsed[0].answers), failure, failure])
+    monkeypatch.setattr(inference_module(), "NATIVE_CONCURRENCY", 1)
+    isolate, _made = _isolates(monkeypatch, tmp_path, tmp_path / "home")
+    with isolate():
+        result = runner.live(case, target, client=fake, real_home=tmp_path / "home")
+    assert result.passed, result.error or result.failures
+    assert [(c.stage, c.mode, c.items, c.hop) for c in result.calls] == [
+        (0, "native", (0,), ""), (0, "native", (1,), ""), (0, "native", (2,), ""),
+        (1, "structured", (1, 2), "")]
+    assert [(c.error_kind, c.error_status) for c in result.calls[1:3]] == [
+        ("bad_response", 502)] * 2
+    assert all("no answers" not in repr(c) for c in result.calls)
+    assert [(i["stage"], i["backend"], i["call"]) for i in result.items] == [
+        (0, "native", 0), (1, "structured", 3), (1, "structured", 3)]
+    assert "(stage 0: native 1/3; stage 1: structured 1/1)" in runner.report([result])
+
+
+def inference_module():
+    from grimoire import inference
+    return inference
+
+
+def test_a_structured_chunks_items_share_its_call_and_carry_no_money(monkeypatch, tmp_path):
+    """Test 6: three items answered by one structured call share its `call`
+    index, and no item record carries a money or token figure."""
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", BOTH)
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    target = _decide_target(case)
+    isolate, _made = _isolates(monkeypatch, tmp_path, tmp_path / "home")
+    with isolate():
+        result = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                             backend="structured", real_home=tmp_path / "home")
+    assert result.passed, result.error or result.failures
+    (call,) = result.calls
+    assert call.items == (0, 1, 2)
+    assert {i["call"] for i in result.items} == {0}
+    money = {"cost_usd", "estimated_usd", "modelled_usd", "prompt_tokens",
+             "completion_tokens", "bucket"}
+    assert all(not (money & set(i)) for i in result.items)
+
+
+def test_a_case_that_ran_several_tasks_is_summed_and_split(monkeypatch, tmp_path):
+    """Test 15: a play case whose rows fall under three tasks has one bucket
+    folding all three, and a `by task` entry per task, printed beneath."""
+    from evals import costs
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    _plain, target = _generate_store(monkeypatch, real)
+    holder: dict = {}
+    case = _play_case(holder, delay=0.05, tasks=("response-selector", "scene-break"))
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    with isolate():
+        result = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                             real_home=real)
+    assert result.bucket == costs.fold(result.rows)
+    assert set(result.by_task) == {"chat", "response-selector", "scene-break"}
+    assert result.bucket["cost_usd"] == costs.merge(result.by_task.values())["cost_usd"]
+    text = runner.report([result])
+    assert "by task:" in text
+    assert "  scene-break: calls 1  tokens 4 / 1  billed $0.0005" in text
+    assert "  scene_break / structured / -: wall -" in text
+
+
+def test_a_decide_case_with_no_answer_is_reported_from_its_rows(monkeypatch, tmp_path):
+    """No item answered, so no `Decision`: the case fails with the provider's
+    error and its metrics come from its rows alone."""
+    from grimoire.llm_errors import LLMError
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", DECIDER)
+    case = case_mod.BY_ID["decide-scene-break"]
+    target = _decide_target(case)
+    fake = FakeLLM([["unused"]], decisions=[LLMError("network", "connection reset")])
+    isolate, _made = _isolates(monkeypatch, tmp_path, tmp_path / "home")
+    with isolate():
+        result = runner.live(case, target, client=fake, real_home=tmp_path / "home")
+    assert not result.passed and result.calls == () and result.items == ()
+    assert result.bucket["calls"] == 1 and result.bucket["errors"] == 1
+    assert "calls 1  tokens: not reported  cost: not reported" in runner.report([result])
