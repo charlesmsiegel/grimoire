@@ -1063,27 +1063,25 @@ withheld slice with its basis and posts an accept.
 - Classifying for PCs, or filtering the player's view.
 - Any per-unit Decision call for the narrator.
 
-## 13. Interface requirements on parallel specs (missing edges)
+## 13. What to re-check against the parallel specs
 
-These are not in the checklist's edge list for 11 and must be confirmed with
-the owning spec before planning:
+The earlier missing edges are now contracts in `ROADMAP-CHECKLIST.md`: 09-C1
+carries scene identity, post indices, keys and texts; 09-C3 is an edge; 09-C3
+renders no history into NPC prompts until 11-C2 (a recorded cross-spec
+decision); 10-C1 takes a perspective; 02-C5a names the task
+`epistemic-access`. Three points remain for the plan to confirm against the
+landed specs:
 
-1. **09-C1** evidence items carry `sid`, scene identity, the transcript
-   indices of an excerpt, per-post keys where they exist, and per-post
-   prompt-view texts (3.2). Scene-level and fact-level items are marked as
-   such.
-2. **09-C1 / 09-C3 run before compose and are handed in.** Retrieval (and so
-   classification and the Decision stage) must be computable outside
-   `campaign_lock` and passed to compose. `_prepare` composes under the lock
-   (`routes/character_turns.py:476-477`). The edge `11 ← 09-C3` should be
-   added to the checklist.
-3. **09-C3 renders nothing into an actor-scoped compose until 11-C2 lands**
-   (6.5).
-4. **10-C1** accepts a perspective, and for an actor builds its input from
-   actor-visible material only (6.4).
-5. **02-C5** names the task (assumed `epistemic-classify`) and route, with
-   `operation="decide"` and the Decision role, and supplies its `--gate`
-   corpus seed from 8.1's cases 7 and 10.
+1. **Retrieval runs before compose and is handed in.** 09's turn-phase
+   wrapper (`routes/history_recall.gather`, an async step outside any
+   campaign lock) is where 11's `classify` and `refine` attach, so that both
+   finish before `_prepare` composes under the lock
+   (`routes/character_turns.py:476-477`).
+2. **02-C5a's class set** (`known`, `suspected`, `experienced`,
+   `narrator_only`) is read through the 5.3 table: `experienced` as `known`,
+   and a model's `narrator_only` as withheld but not established.
+3. **02-C5a's `decide-epistemic-access` gate case** is seeded from 8.1's
+   cases 7 and 10.
 
 ## 14. Open questions
 
@@ -1101,9 +1099,10 @@ the owning spec before planning:
    perception (whispers, thoughts)? *Recommendation:* not in this spec. The
    perception contract plus `unaware` overrides cover it. Revisit only if
    live case 3 leaks.
-4. **Task and route names for the Decision stage.** *Recommendation:* route
-   `epistemic` ("Knowledge checks"), task `epistemic-classify`, Decision
-   role, campaign-scoped. 02-C5 owns the final spelling.
+4. **Should a model's `experienced` ever become `witnessed`?** 02-C5a offers
+   it as a class. *Recommendation:* no. Read it as `known` (5.3). Presence is
+   structural, and a model saying a character "experienced" something is not
+   evidence that they stood in the room.
 5. **Prefilter in 09** (drop units no present actor attended before ranking,
    for actor turns)? *Recommendation:* no for v1. It couples 09 to 11 and
    saves little, since 09's set is already bounded. Revisit if the Decision

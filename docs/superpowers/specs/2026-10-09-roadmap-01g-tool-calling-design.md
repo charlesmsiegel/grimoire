@@ -1,6 +1,6 @@
 # 01g. Tool calling: a bounded loop, Decision-as-tool, and run budgets
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01g in `ROADMAP-CHECKLIST.md`. Lane: retrieval (it waits on 01f;
 12 waits on it). Size L.
@@ -31,19 +31,25 @@
 | 01f-C2 (schema refusal re-sent without the mode) | 01f | The finalize turn inherits it. | Hard |
 | 01f-C3 (`schemas.check`, `schemas.find_object`) | 01f | Every tool's parameter schema passes `schemas.check`. Arguments and the final record are read with `find_object`. | Hard |
 | 01d-C1 (task-level fallback policy) | 01d | Whether a loop's task may fall back at all. 01g honours `chain.fallback is None` and adds no policy of its own. | Soft |
-| 01i-C1 (context window and max output as resolved facts) | 01i | A tighter per-turn output cap and prompt-growth check where known (section 3.9). Without it the loop uses its own declared cap. | Soft |
+| 01f-C1 (`generate(max_tokens=)`, `wire.Target.with_output_cap`) | 01f | The per-turn output cap of section 3.9 is 01f's per-call cap, applied to every turn. | Hard |
+| 01i-C1 (`wire.Limits`: window and max output) | 01i | A tighter per-turn output cap and prompt-growth check where known (section 3.9). Without it the loop uses its own declared cap. | Soft |
 | 01c-C2/C3 (distribution and seeded sampling) | 01c | The decide tool passes a distribution through when one exists. It never samples, and never fabricates one. | Soft |
 | 01b-C1 (capture at every decide site) | 01b | The decide tool's inner `decide` call captures through 01b's mechanism once it exists, and through `decide(capture=)` before then. | Soft |
 
 ## Required by
 
+Rebuilt from the edges in `ROADMAP-CHECKLIST.md`: 02 ← 01g-C1..C6 (H, for
+02-C4 only); 12 ← 01g-C1..C5 (H); 01h ← 01g-C3 run id (S).
+
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01g-C1 | 12 (12-C1) | Its investigation route declares `requires=("tools",)`. The seam refuses a model known unable to call tools. |
-| 01g-C2a/C2b | 12 (12-C1) | The read-only investigation toolset runs through `operations.run_tools`. |
-| 01g-C3 | 12 (12-C2) | Every turn files a ledger row under one `run_id`, and the loop returns a trace. |
-| 01g-C4 | 12 (12-C2) | Max turns, tool calls, wall clock and spend, enforced before each send. |
-| 01g-C5 | 02 (02-C4), 12 | A generating model may call `decide()` as a tool, capped per run, from play (02-C4) or from an investigation. |
+| 01g-C1 | 12 (hard), 02-C4 (hard) | 12's `investigation` route declares `requires=("tools",)`, and the seam refuses a primary known unable to call tools. 02-C4 offers its play tool only where the scene route's primary is not a known `no`. |
+| 01g-C2a/C2b | 12 (hard), 02-C4 (hard) | The loop primitive: the caller executes its tools, supplies the run id, and gets the terminal call (or the final turn) back. |
+| 01g-C3 | 12 (hard), 02-C4 (hard) | Every model turn is a ledger row under the caller's `run_id`, with capture and a trace. |
+| 01g-C3 | 01h (soft; 01h-C5) | 01h-C5's optional `run_id` on `embed_sync` / `embed_groups_sync` is filed in 01g-C3's `run_id` ledger field, so embeds made inside a tool belong to their run. |
+| 01g-C4 | 12 (hard), 02-C4 (hard) | Turns, tool calls, decisions, wall clock, spend and per-turn output cap, enforced before each send; the result names the limit that stopped the run. An unpriced model under a ceiling is refused before sending (a recorded cross-spec decision 12 follows). |
+| 01g-C5 | 12 (hard, for its `decide` tool), 02-C4 (hard) | A generating model calls `decide()` as a tool, capped per run, metered under a task the caller names (12's `investigation-decide`, 02's `turn-tool-decision`). |
+| 01g-C6 | 02-C4 (hard) | The final loop turn streams through the generate streaming path, and a tool call after visible text is declined. |
 
 ## 1. Current state (reconciled against main)
 
@@ -270,6 +276,7 @@ class ToolSpec:
     parameters: dict          # JSON Schema object; passes schemas.check (01f-C3)
     fn: Callable[[dict, ToolContext], ToolOutput | Awaitable[ToolOutput]]
     effect: Literal["read", "propose"] = "read"
+    terminal: bool = False    # ends the loop; returned to the caller, never executed
     timeout: float = TOOL_TIMEOUT_S   # per execution, seconds
     max_result_chars: int = MAX_RESULT_CHARS
 
@@ -438,8 +445,26 @@ before any text, it retries as today, and the collector has been reset.
 
 ### 3.6 Who executes tools, and what they may do
 
-The loop executes tools. An adapter never does, and neither does a provider
-SDK.
+**The caller executes its tools.** An adapter never does, and neither does a
+provider SDK. The loop hands each validated call to the caller's executor and
+sends back what the executor returns:
+
+```python
+Execute = Callable[[ToolCall, ToolContext], Awaitable[ToolOutput]]
+```
+
+- `run_tools(..., execute=...)` takes the caller's executor. The caller runs
+  its tools however it must: 12 runs its reads through
+  `anyio.to_thread.run_sync`, and 02-C4 answers its one decide tool in place.
+- `tool_calls.registered(toolset)` is the default executor for a caller that
+  has nothing special to do. It dispatches by name to each `ToolSpec.fn`
+  under the rules below. The bullets below describe that default, and bind
+  any executor a caller writes on the read-only rule.
+- **A terminal tool is never executed.** A `ToolSpec` with `terminal=True`
+  (12's "finish" and "propose" endings) ends the loop when it is called:
+  its arguments are validated and the call is handed back to the caller as
+  `LoopResult.final_call` for the caller to act on. The loop never acts on
+  it.
 
 - **Sync tools** (`def fn(args, ctx)`) run in a worker thread
   (`asyncio.to_thread`). Store reads touch the filesystem, and the loop runs
@@ -494,13 +519,17 @@ SDK.
 ```python
 # inference.py
 async def run_tools(task: str, messages: list[dict] | PreparedMessages, *,
-                    toolset: tool_calls.Toolset, client: LLMClient,
+                    toolset: tool_calls.Toolset, execute: tool_calls.Execute,
+                    client: LLMClient,
                     resolved: ResolvedInference, budget: tool_calls.RunBudget,
+                    run_id: str,
                     campaign: str = "", scene: str = "", scene_identity: str = "",
                     post: int | None = None, final_schema: dict | None = None,
                     tool_choice: Literal["auto", "required"] = "auto",
                     capture: TurnCapture | None = None,
-                    run_id: str | None = None) -> tool_calls.LoopResult
+                    decline_after_text: bool = False,
+                    reasoning: llm_reasoning.Buffer | None = None
+                    ) -> tool_calls.LoopResult
 
 def stream_tools(...same...) -> AsyncIterator[tool_calls.LoopEvent]
     # run_tools is stream_tools, drained; one implementation.
@@ -515,7 +544,11 @@ def stream_tools(...same...) -> AsyncIterator[tool_calls.LoopEvent]
 - `final_schema` fails `schemas.check`;
 - the prompt ends in an assistant turn (a prefill), or a `PreparedMessages`
   carries per-attempt tails;
-- `run_tools` is already running in this task (section 3.12, no recursion).
+- `run_tools` is already running in this task (section 3.12, no recursion);
+- `run_id` is empty. **The caller supplies the run id.** A loop inside a
+  detached run passes that run's `Run.id` (`routes/runs.py:252`), so the run
+  registry, the ledger and the trace name it the same way. The loop never
+  mints one.
 
 Also before anything is sent, `tool_calls.RunRefused(kind="unpriceable")`
 is raised when the budget sets a spend ceiling and any attempt on the chain

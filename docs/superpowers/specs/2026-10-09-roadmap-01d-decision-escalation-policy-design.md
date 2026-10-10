@@ -1,6 +1,6 @@
 # 01d. Decision escalation and per-task fallback policy
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01d in `ROADMAP-CHECKLIST.md`. Lane: decision.
 **Baseline:** `main` at `35c1fb7`.
@@ -20,22 +20,24 @@ what a backend actually reports". It leaves both rules unchanged.
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | `routing.ROUTES`, `resolve` (fallback, `SAME_PROVIDER`, `fallback_missing`, `role=`), `inference.stages` / `run_stages`, `around` | 01 (landed) | The fallback this policy can switch off, the resolution of the escalation target, and the chain the hop reuses | Hard, and met |
-| 01a-C1 per-item wall time, tokens and cost per backend and route | 01a | Measuring what escalation costs and how long it takes (section 6.3) | Hard for enabling escalation on any task. Not needed to land the mechanism. **Missing edge:** 01a-C1 should also break its figures down by the ledger's new `hop` field (section 5.7) |
-| 01a-C3 comparison table across configurations | 01a | Comparing "no escalation" with "escalation at margin m" on one task | Hard, as above |
-| 01b-C1 capture at every decide site | 01b | Escalation calls are captured wherever the site captures. Today only the speaker pick does | Soft. **Missing edge:** not in the checklist |
-| `routing.TaskPolicy` (shared with 01c) | this spec, or 01c if it lands first | 01c adds `samples` and `native_first` to the same structure | Coordination |
+| 01a-C1 per-case and per-call wall time, tokens and money, aggregated per route, backend and `hop` | 01a | Measuring what escalation costs and how long it takes, apart from the base call (section 6.3) | Hard to enable escalation on any task; not needed to land the mechanism |
+| 01a-C3 repeatable `--decide-backend`, `--out`, `--compare` | 01a | Comparing "no escalation" with "escalation at margin m" on one task | Hard to enable |
+| 01b-C1 capture at every decide site | 01b | Hop calls are captured wherever the site captures. Today only the speaker pick does | Soft |
+| `routing.TaskPolicy` (shared structure) | this spec, or 01c if it lands first | 01c adds `samples` and `native_first` to the same structure | Shared structure |
+| `decisions.CallRecord`, `Decision.calls` (shared structure) | 01a | Each hop call appears in `Decision.calls` as any call does, marked with its `hop` | Shared structure. Until it lands, `Decision.usage` and `Decision.escalations` carry the hop |
 
 ## Required by
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01d-C1 task-level policy | 02, 10, 12, 13 | Enabling escalation on continuity identity and reconcile (02). Turning the role fallback off for a planner or a tool loop where a second model would only spend (10, 12). An NPC action-choice task's policy (13, soft) |
-| 01d-C2a trigger evaluation (pure) | 12 | Deciding whether cheap Decision judgments were unsure enough to start an investigation, with no decide hop |
-| 01d-C2b one-hop escalation in `decide` | 02, 10 | A second opinion from a stronger role on low-margin, abstained or refused items (02's continuity, 10's sufficiency judgment) |
-| 01d-C3 thresholds | 02, 10, 12 | Where the margin lies, per task and per reporting endpoint |
+| 01d-C1 `routing.TaskPolicy` | 02 (H for 02-C5a), 01g (S), 10 (S), 11 (S) | Policies for 02's play and kit tasks; the `tool-decision` route's policy (01g-C5); `fallback="none"` and escalation on 10's `history_check` and `history_plan` tasks; 11's capped Decision pass |
+| 01d-C2a trigger evaluation | 02 (H for 02-C5a), 10 (S), 11 (S), 12 (S) | Deciding which items are unsure, with the answer filter (`escalate_answers`) 02 asked for; 10's sufficiency verdict; 11's epistemic classes; 12 deciding, with no decide hop, that cheap judgments were unsure enough to start an investigation |
+| 01d-C2b one escalation hop | 02 (H for 02-C5a), 10 (S), 11 (S), 12 (H for RP mode) | A second opinion from a stronger role (02's continuity and epistemic kit); 10's repair hop escalation; 12 supplies a tool-loop resolver as the next hop after 10's repair hop |
+| 01d-C3 thresholds | 02 (H for 02-C5a) | Where the margin lies, per task and per native endpoint kind |
 
-01d-C2 is split here into C2a and C2b (section 5). The checklist's C2 is the
-union of the two.
+09 and 10 also reach this spec through 02-C5b (history relevance), whose
+policy 02 states. 13 has no edge to 01d: an NPC action decision may set a
+policy here, but nothing in 13-C3 requires one.
 
 ## 1. Current state (reconciled against main)
 
@@ -154,6 +156,7 @@ structure.
 TRIGGERS = ("low_margin", "abstained", "refused")
 FALLBACKS = ("role", "none")
 ESCALATION_ROLES = ("primary", "fast")
+CALLER = "caller"   # a caller-supplied resolver (section 5.2)
 
 class TaskPolicy(NamedTuple):
     #: "role": the role's fallback, as today. "none": the resolver attaches
@@ -169,6 +172,10 @@ class TaskPolicy(NamedTuple):
     margins: tuple[tuple[str, float], ...] = ()
     #: Items one decide call may escalate (section 6.2).
     escalate_max: int = 8
+    #: Optional answer filter (02 named it): when non-empty, `low_margin`
+    #: fires only on an item whose deciding answer, as a key (option id,
+    #: `str(level)`, "true"/"false"), is listed. Empty = every answer.
+    escalate_answers: tuple[str, ...] = ()
 
 TASK_POLICY: dict[str, TaskPolicy] = {}   # empty at landing: today's behaviour
 
@@ -211,7 +218,15 @@ decide tasks. No existing task changes.
   `escalate_on` and `margins` are empty without it. `question` is shared
   with 01c: it is also required by `samples`, so a sampling task that does
   not escalate sets `question` alone;
-- `escalate_to` is in `ESCALATION_ROLES`, and is not the route's
+- `samples=True` (01c) is refused together with `low_margin` in
+  `escalate_on`. A low-margin answer is the one sampling exists for, and a
+  hop that replaced its distribution with one that may carry none would turn
+  the draws that most needed a distribution into `basis: answer` (02 asked
+  for this rule);
+- `escalate_answers` is set only beside `low_margin`, and each key is one the
+  deciding question can answer (checked against the store constant's
+  question builder where one exists);
+- `escalate_to` is `CALLER`, or is in `ESCALATION_ROLES` and not the route's
   `default_role`. Otherwise the hop would resolve to the same selection and
   always be skipped as `same_model`;
 - `question` equals the store constant the call site builds its item with.
@@ -241,8 +256,8 @@ class Trigger:
     margin: float | None  # set for low_margin; None otherwise
 
 def triggers(results: Sequence[ItemResult], *, question: str,
-             escalate_on: Sequence[str], margins: Mapping[str, float]
-             ) -> tuple[Trigger, ...]:
+             escalate_on: Sequence[str], margins: Mapping[str, float],
+             answers: Collection[str] = ()) -> tuple[Trigger, ...]:
     """Each item whose `question` answer meets a listed trigger, in priority
     order: refused, then abstained, then low_margin by margin ascending; ties
     by index."""
@@ -255,6 +270,14 @@ def triggers(results: Sequence[ItemResult], *, question: str,
   entry, and `margin < margins[kind]`. A kind with no entry never triggers.
   An unlisted endpoint therefore keeps today's behaviour; it is not given
   some default threshold.
+- **The answer filter** (`answers`, the policy's `escalate_answers`) narrows
+  `low_margin` only: when it is non-empty, an item whose deciding answer is
+  not listed does not trigger, however small its margin. 02 uses it to
+  escalate, for example, a low-margin `existing:<id>` merge but not a
+  low-margin `new`, where the cost of a wrong answer differs. `refused` and
+  `abstained` carry no answer, so the filter does not apply to them. Keys
+  are compared as the record spells them: an option id, `str(i)` for a score
+  level, `"true"`/`"false"` for a predicate.
 - `unreadable` and `error` never trigger. The first is an answer the item
   got and read badly, and 01 says it is not re-asked. The second is the
   failure chain's business.
@@ -269,7 +292,12 @@ would be the synthetic one 01 forbids (01c-C1). This is the main way 01c's
 `inference.decide` gains one keyword:
 
 ```python
-Escalator = Callable[[], Awaitable[tuple[ResolvedInference | None, str]]]
+#: A caller-supplied next resolver: given the triggered items and their
+#: triggers, one result per item (None where it produced nothing).
+Resolver = Callable[[tuple[Item, ...], tuple[Trigger, ...]],
+                    Awaitable[tuple[ItemResult | None, ...]]]
+
+Escalator = Callable[[], Awaitable[tuple[ResolvedInference | Resolver | None, str]]]
 
 async def decide(task, items, *, client, resolved, explain="", campaign="",
                  scene="", post=None, round_id="", capture=None, around=None,
@@ -293,6 +321,21 @@ async def decide(task, items, *, client, resolved, explain="", campaign="",
   the call site in the same change.
 - A returned resolution must be for the same `task` and `operation="decide"`,
   checked as `decide` checks `resolved`.
+- **The declared next resolver may be a caller-supplied `Resolver`**, when
+  the policy's `escalate_to` is `CALLER`. 12 uses this: after 10's repair hop
+  (10-C2) has run, its next hop is a bounded tool-loop resolver (01g-C2a
+  under a 12-C2a budget) rather than a stronger role. The rules that do not
+  change: it is one hop, run once, on the triggered subset only, after the
+  unchanged chain; its results are merged by section 5.3's replacement rule;
+  a resolver that raises `LLMError` (or returns None for an item) leaves the
+  original answer; `CancelledError` passes through. What moves to the
+  caller: the resolver opens its own meters and must stamp
+  `hop="escalation"` on the rows it files (01g-C3's rows carry it through
+  their targets' account), captures its own calls, and runs under its own
+  budget, since `decide`'s `around` cannot bound a loop. `same_model` is not
+  checked for it: the resolver is not one model. `decide` raises `TypeError`
+  before any meter opens if a `Resolver` comes back for a policy that names
+  a role, or a resolution for a `CALLER` policy.
 
 ### 5.3 The flow
 
@@ -512,32 +555,38 @@ starting point for each task's own switching change.
 
 ## 7. Contract
 
-- **01d-C1. Task policy.** `routing.TaskPolicy` and `routing.policy(task)`,
-  where the default is today's behaviour. `fallback="none"` makes `resolve`
-  attach no fallback, with `fallback_problem = NO_FALLBACK_POLICY`. A route's
-  tasks agree on it. The escalation fields exist only on decide tasks, are
-  validated by `test_task_policy.py`, and decide whether `decide` may (and
-  must) be handed an `escalation`. Failure behaviour: a call site and its
-  policy that disagree raise `ValueError` before any meter opens.
+- **01d-C1. `routing.TaskPolicy`** (shared with 01c) and
+  `routing.policy(task)`, whose default is today's behaviour.
+  `fallback="none"` makes `resolve` attach no fallback, with
+  `fallback_problem = NO_FALLBACK_POLICY`, and must agree across a route's
+  tasks. The escalation fields exist only on decide tasks, are validated by
+  `test_task_policy.py` (including the refusal of `samples=True` with
+  `low_margin`), and decide whether `decide` may, and must, be handed an
+  `escalation`. Failure behaviour: a call site and its policy that disagree
+  raise `ValueError` before any meter opens.
 - **01d-C2a. Trigger evaluation.** `decisions.margin(answer)` and
-  `decisions.triggers(results, question=, escalate_on=, margins=)`. Both are
-  pure, read only what a backend reported, never trigger on `unreadable` or
-  `error`, and never trigger `low_margin` for an endpoint kind with no
-  threshold. Priority order: refused, abstained, then low margin ascending.
-- **01d-C2b. One-hop escalation.** `decide(..., escalation=)` runs the
-  unchanged chain. It then sends at most `escalate_max` triggered items, once,
-  to the policy's role: primary alone, `retries=0`, a different model from
-  the item's server, and under the same `around`, meters (`hop="escalation"`
-  on the ledger row) and capture. An answered or typed-declined hop result
-  replaces the item. A failed, garbled or skipped hop leaves the original.
-  The record is `Decision.escalations`, and `Decision.errors` is untouched.
-  Guarantees: never more than one hop; never the same model; never a new
+  `decisions.triggers(results, question=, escalate_on=, margins=,
+  answers=)`: low margin, abstention, native `refused`, with an optional
+  answer filter (`escalate_answers`) that narrows `low_margin`. Pure; reads
+  only what a backend reported; never triggers on `unreadable` or `error`;
+  never triggers `low_margin` for an endpoint kind with no threshold.
+  Priority: refused, abstained, then low margin ascending.
+- **01d-C2b. One escalation hop** after the unchanged chain.
+  `decide(..., escalation=)` sends at most `escalate_max` triggered items,
+  once, to the declared next resolver: the policy's role (primary alone,
+  `retries=0`, a different model from the item's server, under the same
+  `around`, meters and capture), or a caller-supplied `Resolver`
+  (`escalate_to=CALLER`), which meters, captures and budgets itself. Rows
+  carry `hop: escalation`. An answered or typed-declined result replaces the
+  item; a failed, garbled or skipped hop leaves the original. The record is
+  `Decision.escalations`, and `Decision.errors` is untouched. Guarantees:
+  never more than one hop; never the same model on a role hop; never a new
   failure reported for an item that had an answer.
 - **01d-C3. Thresholds.** `TaskPolicy.margins` per task and per native
   endpoint kind, each in `(0, MAX_MARGIN]` with `MAX_MARGIN = 0.5`, starting
-  from `DEFAULT_MARGIN = 0.2`, and `escalate_max <= 8`. These are argued in
-  section 6.2. A task's values are set only with the section 6.3 evidence in
-  `evals/README.md`.
+  at `DEFAULT_MARGIN = 0.2`, and `escalate_max <= 8`, argued in section 6.2.
+  All existing tasks are off. A task's values are set only with the section
+  6.3 evidence in `evals/README.md`.
 
 ## 8. Interaction with repo rules
 
