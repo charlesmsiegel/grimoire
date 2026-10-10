@@ -75,9 +75,12 @@ dates each feature to a release:
 - the `tools` option: before 0.1.60;
 - `setting_sources=[]` passed as empty: fixed in 0.1.60;
 - the `"defer"` decision, `DeferredToolUse` and `strict_mcp_config`:
-  0.1.74.
+  0.1.76 (corrected by the brutal-review round: 0.1.74 and 0.1.75 were
+  never published, and the 0.1.73 wheel has none of the three).
 
-The `claude` extra's floor is therefore `claude-agent-sdk>=0.1.74`.
+The `claude` extra's floor is therefore `claude-agent-sdk>=0.1.76`, and the
+adapter gates on the features themselves (`claude_agent._declares_tools`),
+not the version.
 
 ### Metering and spend
 
