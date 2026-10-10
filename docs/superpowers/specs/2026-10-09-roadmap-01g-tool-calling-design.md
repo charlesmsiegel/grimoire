@@ -468,9 +468,19 @@ Execute = Callable[[ToolCall, ToolContext], Awaitable[ToolOutput]]
   `LoopResult.final_call` for the caller to act on. The loop never acts on
   it.
 
-- **Sync tools** (`def fn(args, ctx)`) run in a worker thread
-  (`asyncio.to_thread`). Store reads touch the filesystem, and the loop runs
-  on the lifespan loop inside a detached run.
+- **Sync tools** (`def fn(args, ctx)`) run in a worker thread. Store reads
+  touch the filesystem, and the loop runs on the lifespan loop inside a
+  detached run.
+  - The default executor runs them on **its own bounded executor**
+    (`TOOL_WORKERS = 4`), never the shared default one. That pool
+    (`min(32, cpu + 4)`, about a dozen workers on a phone) also serves
+    httpx's DNS lookups, `decide`'s template render and `_parts_lowered`.
+    `llm.py:111-121` moved token counting off it for the same reason.
+  - An abandoned thread (below) keeps its worker until it returns. Once
+    every worker is held by an abandoned thread, further calls get the error
+    result `"tool capacity exhausted"` and are not started.
+  - A caller with its own executor bounds its threads the same way (12: an
+    anyio `CapacityLimiter`).
 - **Async tools** (`async def`) are awaited on the loop and must not block.
   The decide tool (section 3.12) is the one shipped here.
 - **A tool's timeout is a wait, not a kill.** The loop stops waiting after
@@ -495,16 +505,34 @@ Execute = Callable[[ToolCall, ToolContext], Awaitable[ToolOutput]]
   - The **caller** applies proposals after the loop, under its own lock and
     through the store's existing validation and review. This is the 12
     draft's "proposal tools", made structural.
-- **The guard** is `test_tool_guard.py` (new). It parses the package's ASTs,
-  finds every `ToolSpec(...)` construction and resolves its `fn` to a
-  function in the package. It fails if that function's module imports
-  `store.atomic`, or if the function calls `campaign_lock`, `hold_all` or any
-  `runs.run_*` / `start_detached`. It is a guard of the same honesty as
-  `test_atomic_guard.py`: it sees direct calls, not a write three helpers
-  down. A clearance is `# tool-ok: <reason>`, capped like the other markers.
+- **The accounting carve-out.** A tool, the decide tool included, may file
+  what every LLM call files: ledger rows, error-store entries and a
+  prompt-log capture. The capture path takes `campaign_lock_nowait` and
+  bumps the campaign revision (`routes.common._record_prompt`,
+  `routes/common.py:470-500`), so "takes no lock" means **no blocking lock
+  and no store write other than that accounting**. A contended capture is
+  dropped, as `prompt_log.record` already does.
+- **The guard** is `test_tool_guard.py` (new). It parses the package's ASTs
+  and resolves to functions in the package:
+  - every `ToolSpec(...)` construction's `fn`;
+  - every function passed as `execute=` to `run_tools` / `stream_tools`,
+    because a caller's executor (02-C4 answers its tool in place) is a tool
+    in all but name.
+
+  It fails if such a function's module imports `store.atomic`, or if the
+  function calls `campaign_lock`, `hold_all` or any `runs.run_*` /
+  `start_detached`. The accounting writes above are reached through
+  `usage`, `errors` and `_record_prompt`, which the guard allows by name. It
+  is a guard of the same honesty as `test_atomic_guard.py`: it sees direct
+  calls, not a write three helpers down. A clearance is
+  `# tool-ok: <reason>`, capped like the other markers, and the new marker
+  family is listed in `CONTRIBUTING.md`'s guard table, as
+  `test_docs_guard.py` requires.
 - **The store root is pinned at loop start** (`ToolContext.root`), and the
   loop stops with `failed` (error `store_moved`) if `store.home()` no longer
-  answers it between turns. That is the `maintenance` class's rule for a
+  answers it between turns. The check runs in a worker thread with the
+  turn's other pre-send work, because `store.home()` can read the bootstrap
+  pointer. That is the `maintenance` class's rule for a
   root that changes mid-run (CLAUDE.md, "It pins the store root"). It applies
   here because a tool reading the new root would hand the model another
   library's records under this run's ids. `PUT /config/data-dir` already
@@ -526,7 +554,10 @@ async def run_tools(task: str, messages: list[dict] | PreparedMessages, *,
                     resolved: ResolvedInference, budget: tool_calls.RunBudget,
                     run_id: str,
                     campaign: str = "", scene: str = "", scene_identity: str = "",
-                    post: int | None = None, final_schema: dict | None = None,
+                    post: int | None = None, round_id: str = "",
+                    response_id: str = "",
+                    cancelled: Callable[[], bool] | None = None,
+                    final_schema: dict | None = None,
                     tool_choice: Literal["auto", "required"] = "auto",
                     capture: TurnCapture | None = None,
                     decline_after_text: bool = False,
@@ -541,12 +572,29 @@ def stream_tools(...same...) -> AsyncIterator[tool_calls.LoopEvent]
 
 - `resolved` is for another task or operation, or resolved nothing (as
   `generate`);
-- `task`'s route does not list `"tools"` in `requires`;
+- `task`'s route neither lists `"tools"` in `requires` nor is in
+  `routing.TOOLS_OPTIONAL`, or it is in that set but its primary is
+  **known** unable to call tools (`resolve.known_lacks(resolved, "tools")`,
+  the seam's own `_missing` test).
+  - `TOOLS_OPTIONAL` holds routes whose ordinary calls must not require
+    tools but which may run a loop when the model can. The scene route is
+    02-C4's: adding `requires=("tools",)` to it would make the seam refuse
+    every scene turn on a known-`no` model, including the turns that offer
+    no tool.
+  - 02-C4 offers its tool only when the primary is not a known `no`, and
+    otherwise generates as today.
 - the toolset is empty;
 - `final_schema` fails `schemas.check`;
 - the prompt ends in an assistant turn (a prefill), or a `PreparedMessages`
   carries per-attempt tails;
 - `run_tools` is already running in this task (section 3.12, no recursion);
+- a `PreparedMessages` that has no frozen profiles. Extending it needs
+  `snapshot()`, which raises `"Prepared messages have no durable frozen
+  profiles"` for anything but a scene composer's prompt
+  (`model_guidance.py:188-196`). Refusing at entry means turn 1 is never
+  billed for a loop that would fail at turn 2. The append keeps the
+  prompt's `on_variant` and `settings`: `with_appended` gains that, or the
+  loop uses a factory-preserving twin, `with_appended_keeping`;
 - `run_id` is empty. **The caller supplies the run id.** A loop inside a
   detached run passes that run's `Run.id` (`routes/runs.py:252`), so the run
   registry, the ledger and the trace name it the same way. The loop never
@@ -563,7 +611,15 @@ before reserving, like the seam's.
    finalize turn is reserved and still affordable, go to step 7. Otherwise
    stop with `budget_exhausted`.
 2. **Open a meter**:
-   `store.usage.meter(task, campaign=, scene=, post=, run_id=, loop_turn=k)`.
+   `store.usage.meter(task, campaign=, scene=, post=, round_id=,
+   response_id=, run_id=, loop_turn=k)`. The round and reply ids keep a play
+   contribution's turn rows grouped as today's contribution meter groups
+   them (`character_turns.py:1063-1069`). **The per-turn meters replace the
+   caller's meter for the loop.** A caller that also holds a meter of its
+   own (02's `turn.meter`) gets no stamp from the loop, so `Meter.done` files
+   nothing for it. The caller's finalizers read the outcome from
+   `LoopResult.rows`, and how 02's streaming finalizers adapt is 02-C4's
+   plan.
    Install a fresh `Collector` in `m.usage`.
 3. **Call the facade.** Send `client.complete(messages, chain, m.usage,
    tools=wire_tools, tool_choice=...)` under the turn's wall-clock bound
