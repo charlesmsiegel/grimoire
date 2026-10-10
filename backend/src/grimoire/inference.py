@@ -124,7 +124,8 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 #: messages are the request as sent (a structured chunk's
 #: `structured_messages`; a native item's normalised body, `llm.native_body`,
 #: as one user message), and `[]` for a call refused before anything went
-#: out; the outcome is `decisions.outcome`'s record of it; the target is the
+#: out; the outcome is `decisions.outcome`'s record of it, with the call's
+#: `stage` and `at` (its batch indices, 01b §3.2); the target is the
 #: one the attempt that answered was sent (`llm.ATTEMPTED`, a fallback's or a
 #: prompt-only re-send's included), or the stage's account-stamped primary
 #: when the call failed -- a native stage's `without_sampling`, as it was
@@ -425,16 +426,20 @@ async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dic
         return _Reply("", None, exc, sent)
 
 
-def _outcome(mode: str, target: wire.Target, holder: dict | None,
-             results: Sequence[decisions.ItemResult], error: LLMError | None) -> dict:
+def _outcome(call: _Call, unit: Sequence[int], mode: str, target: wire.Target,
+             holder: dict | None, results: Sequence[decisions.ItemResult],
+             error: LLMError | None) -> dict:
     """A settled call's record for the capture (`decisions.outcome`): what
     answered it and its results, or -- failed -- the primary its stage sent
-    (`target`) and its error."""
+    (`target`) and its error; and, either way, the call's `stage` and `at`,
+    the BATCH indices of the stage positions `unit` it carried (01b §3.2)."""
     if error is not None:
-        return decisions.outcome(mode, target.provider_id, target.model,
-                                 error=f"{error.kind}: {error.detail}")
-    provider, model = _served_by(holder or {})
-    return decisions.outcome(mode, provider, model, results)
+        record = decisions.outcome(mode, target.provider_id, target.model,
+                                   error=f"{error.kind}: {error.detail}")
+    else:
+        provider, model = _served_by(holder or {})
+        record = decisions.outcome(mode, provider, model, results)
+    return {**record, "stage": call.stage, "at": list(call.batch(unit))}
 
 
 async def _captured(call: _Call, messages: list[dict] | Callable[[], list[dict]],
@@ -498,7 +503,8 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
         # primary.
         ran = holder.get(llm.ATTEMPTED) if holder is not None else None
         await _captured(call, messages if sent else [],
-                        partial(_outcome, STRUCTURED, chain.primary, holder, answered, error),
+                        partial(_outcome, call, unit, STRUCTURED, chain.primary, holder,
+                                answered, error),
                         ran if isinstance(ran, wire.Target) else chain.primary)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
@@ -625,7 +631,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
         answered = results[index]
         await _captured(
             call, partial(_native_request, item, named) if m.usage else [],
-            partial(_outcome, NATIVE, named, holders[index],
+            partial(_outcome, call, (index,), NATIVE, named, holders[index],
                     () if answered is None else (answered,), errors[index]),
             named)
 

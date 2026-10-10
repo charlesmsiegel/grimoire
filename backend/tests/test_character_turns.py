@@ -667,7 +667,8 @@ def test_the_selector_capture_records_the_decision(client):
     assert json.loads(decision["text"]) == {
         "mode": "structured", "provider": pick.provider_id, "model": pick.model,
         "items": [{"backend": "structured",
-                   "answers": {"next": {"answer": "characters:winifred"}}}]}
+                   "answers": {"next": {"answer": "characters:winifred"}}}],
+        "stage": 0, "at": [0]}
     assert captured["total_tokens"] == sum(row["tokens"] for row in sent) > 0
 
 

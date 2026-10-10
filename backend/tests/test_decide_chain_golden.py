@@ -26,6 +26,12 @@ It was recorded from `670a543`, and this test passes unchanged against the
 pre-target code (`501fcec`, where `decide` still handed the facade dicts):
 the 9c review found the two decide paths identical, and so does this.
 
+Re-recorded once, by roadmap spec 01b §3.2 (decision capture): every
+capture outcome gained `stage` and `at` (the call's stage index and the
+batch indices it carried), and nothing else moved -- checked run by run with
+those two keys stripped and each run's captures re-counted, since a native
+batch's like outcomes now differ by `at`.
+
 It is stored packed (`_encode`): each distinct run once, by a digest, which
 each run's key names, and repeated rows and captures counted.
 It pins the mode stamp, the native strip, the stops, the fallback stage and
