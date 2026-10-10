@@ -227,3 +227,13 @@ class PreparedMessages(list):
         snapshot["unprofiled"] = append(snapshot["unprofiled"])
         snapshot["profiles"] = {k: append(v) for k, v in snapshot["profiles"].items()}
         return self.from_snapshot(snapshot, self._primary_model, campaign=self.campaign)
+
+    def with_appended_keeping(self, message: dict) -> PreparedMessages:
+        """`with_appended`, keeping this prompt's `on_variant` observer and its
+        response `settings`: a tool loop (01g spec 3.7) extends one prompt
+        turn after turn, and each turn's fallback variant is still the
+        caller's to record."""
+        copy = self.with_appended(message)
+        copy.on_variant = self.on_variant
+        copy.settings = deepcopy(self.settings)
+        return copy

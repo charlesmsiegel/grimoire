@@ -11,7 +11,6 @@ import from one.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import math
@@ -26,7 +25,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import decisions, llm, llm_sampling, model_guidance, store, wire
+from .. import deadline, decisions, llm, llm_sampling, model_guidance, store, wire
 from .. import inference as operations
 from ..health import ProviderHealth
 from ..llm import LLMClient
@@ -639,19 +638,6 @@ def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str 
         return   # gone, contended, or unreadable: capture nothing, cost nothing
 
 
-def _abandon(task: asyncio.Task) -> None:
-    """Ask an overrun call to stop, then stop waiting on it.
-
-    Retrieving the exception in a callback is what keeps asyncio from logging
-    the abandoned task as never-retrieved (`llm._swallow`'s job, kept local:
-    routes does not reach into that module's privates). Cancellation is not
-    awaited here on purpose -- awaiting it is the very thing that lets the
-    ceiling be overrun.
-    """
-    task.cancel()
-    task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
-
-
 async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
     """Await one non-streaming generation under a total-duration ceiling (#272).
 
@@ -695,19 +681,10 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
     seconds = store.config.llm_call_budget() if ceiling is None else ceiling
     if seconds <= 0:
         return await coro
-    task = asyncio.ensure_future(coro)
-    try:
-        done, _ = await asyncio.wait({task}, timeout=seconds)
-    except asyncio.CancelledError:
-        # The caller went away (SSE disconnect, shutdown). `wait_for` propagated
-        # that inward for free; `asyncio.wait` does not, and an uncancelled task
-        # here would outlive the request that wanted it.
-        _abandon(task)
-        raise
-    if not done:
-        _abandon(task)
-        overrun = LLMError(
-            "timeout", f"the reply did not finish within {seconds:g}s — giving up")
+
+    def overrun(limit: float) -> LLMError:
+        error = LLMError(
+            "timeout", f"the reply did not finish within {limit:g}s — giving up")
         # The one failure the facade cannot see for itself: cancelling the call
         # unwinds `_resilient` through `GeneratorExit`, not through its
         # `except LLMError`, so without this the connection that just held a
@@ -715,10 +692,11 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
         # over a 504 (#146). Only the holder of the ceiling can tell this from
         # a caller who simply walked away, which is why the facade does not try.
         if on_timeout is not None:
-            on_timeout(overrun)
-        raise overrun
+            on_timeout(error)
+        return error
+
     try:
-        return task.result()
+        return await deadline.bounded(coro, seconds, overrun)
     except TimeoutError as exc:
         # asyncio.TimeoutError IS the builtin TimeoutError from 3.11 on, so an
         # upstream that gives up on its own lands in the same handler as an

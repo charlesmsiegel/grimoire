@@ -1278,6 +1278,17 @@ for _set, _items_all in (("decide", _DECIDE_ITEMS), ("decide 01e", _DECIDE_NEW_I
                                (_bullet in _messages[0]["content"]) == _asked,
                                f"the {_kind} bullet is {'missing' if _asked else 'present'}")
 
+# The tool loop's finalize turn (01g-S4): `inference.finalize_message` against
+# a direct render of `tools/finalize.j2`, both branches of each var.
+_FINAL_SCHEMA = {"type": "object", "properties": {"keeper": {"type": "string"}},
+                 "required": ["keeper"], "additionalProperties": False}
+for _schema in (None, _FINAL_SCHEMA):
+    for _stopped in (False, True):
+        check_messages(f"tool loop finalize (schema={_schema is not None}, stopped={_stopped})",
+                       [{"role": "user", "content": render("tools/finalize.j2", schema=_schema,
+                                                           stopped=_stopped)}],
+                       [inference.finalize_message(_schema, stopped=_stopped)])
+
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402

@@ -247,6 +247,16 @@ class Target:
         return dataclasses.replace(self, sampling=dataclasses.replace(
             self.sampling, params=params, call_cap=n, preset_cap=preset))
 
+    def with_thinking_off(self) -> Target:
+        """A NEW target whose preset asks for no reasoning (`reasoning_effort`
+        `off`), everything else kept: what a tool loop sends a model that
+        inherits tool turns another model wrote (01g spec 3.11 rule 4), which
+        the Anthropic API refuses beside thinking. Built the way
+        `with_output_cap` is: the preset's id, name and scope are kept."""
+        params = {**self.sampling.params, "reasoning_effort": "off"}
+        return dataclasses.replace(self, sampling=dataclasses.replace(self.sampling,
+                                                                      params=params))
+
     def without_sampling(self) -> Target:
         """This target with no sampler preset: what a native decision is sent,
         whose endpoint takes no sampling (and whose row files no `preset`)."""
