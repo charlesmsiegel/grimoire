@@ -50,7 +50,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [x] |
 | 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [x] |
 | 01c | Decision distributions and seeded sampling | now (01a has landed: a task is switched on with its evidence) | [x] | [~] substitute | 3 | [x] |
-| 01d | Decision escalation and per-task policy | now (01a has landed: escalation is enabled with its evidence) | [x] | [~] substitute | 5 | [ ] |
+| 01d | Decision escalation and per-task policy | now (01a has landed: escalation is enabled with its evidence) | [x] | [~] substitute | 5 | [x] |
 | 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
 | 01f | Structured generation | now | [x] | [~] substitute | 4 | [x] |
 | 01g | Tool calling, Decision as a tool, run budgets | now (01f has landed) | [x] | [~] substitute | 8 | [ ] |
@@ -71,7 +71,7 @@ all of them have landed. `check` holds both to the slice checklist.
 
 ## Parallel lanes
 
-- **Landed:** 01s, 01a, 01b, 01c, 01e, 01f, 01i. 01s was ticked after the fact:
+- **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01i. 01s was ticked after the fact:
   every task of its plan is in the tree and its tests pass, but the history
   that would show its Codex review gates was not available to check.
 - **Now:** 01c, 01d, 01g, 01h, 02 (from 02-S1), 03, 07, 13 (II-A to II-D).
@@ -146,14 +146,14 @@ These are headlines. The owning spec's Contract section is authoritative.
   02-C2a, the first change that lists a kind.
 
 ### 01d: Escalation and per-task policy
-- [ ] **01d-C1** `routing.TaskPolicy` (shared with 01c). `fallback="none"`
+- [x] **01d-C1** `routing.TaskPolicy` (shared with 01c). `fallback="none"`
   must agree across a route.
-- [ ] **01d-C2a** A pure trigger evaluation (low margin, abstention, native
+- [x] **01d-C2a** A pure trigger evaluation (low margin, abstention, native
   `refused`), with an optional answer filter.
-- [ ] **01d-C2b** One escalation hop after the unchanged chain. The next
+- [x] **01d-C2b** One escalation hop after the unchanged chain. The next
   resolver is declared and may be a caller-supplied resolver. Rows carry
   `hop: escalation`.
-- [ ] **01d-C3** Thresholds per task and native endpoint kind, capped at 0.5,
+- [x] **01d-C3** Thresholds per task and native endpoint kind, capped at 0.5,
   starting at 0.2. All existing tasks are off.
 - **Erratum (01d-S2):** `low_margin` fires on `margin < threshold - MASS_TIE`,
   not the bare `margin < margins[kind]` that §5.1, C2a and §9 write. With the
@@ -172,6 +172,11 @@ These are headlines. The owning spec's Contract section is authoritative.
   S3, per §8, not S4. The §5.2 resolver `TypeError` can only precede the
   hop's meters. S4's call sites note skipped escalations in their capture
   scope. S3 onward landed in speed mode: no review round, no Codex gate.
+- **Deviation (01d-S5):** §6.3 has `runner.escalator` resolve the role inside
+  the eval's throwaway home, which has no settings; the role is resolved in
+  the real store before any case runs (as each case's own resolution is),
+  and the hop is metered in the throwaway home. No task escalates: the live
+  evidence (`evals/README.md`, "Decision escalation") is owed per task.
 
 ### 01e: Decision vocabulary
 - [x] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
@@ -424,8 +429,8 @@ alone. This table is generated: after a spec's slices change, run
 | 01d-S1 | The task policy and `fallback="none"` | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01d-S2 | Per-item provenance and trigger evaluation | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01d-S3 | The escalation hop in `decide` | L | 2 | 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01d-S4 | The escalation seam in `routes/` | M | 3 | 01d-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01d-S5 | Threshold tooling in evals | M | 4 | 01a-S2, 01a-S3, 01a-S4, 01d-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S4 | The escalation seam in `routes/` | M | 3 | 01d-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01d-S5 | Threshold tooling in evals | M | 4 | 01a-S2, 01a-S3, 01a-S4, 01d-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01e
 
