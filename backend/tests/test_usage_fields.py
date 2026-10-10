@@ -324,6 +324,37 @@ def test_account_never_raises_and_copies_only_strings():
 
 
 def test_the_account_fields_are_the_ledgers():
-    assert llm_usage.ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode")
+    assert llm_usage.ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode",
+                                        "hop")
     fields = tuple(f.name for f in dataclasses.fields(wire.Account))
     assert fields == llm_usage.ACCOUNT_FIELDS
+
+
+# ---- the escalation hop's mark (roadmap 01d-S3) ----
+
+def test_a_hop_is_filed_only_when_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    row = usage.record(task="scene-break", model="vendor/active", hop="escalation")
+    assert row is not None and row["hop"] == "escalation"
+    row = usage.record(task="scene-break", model="vendor/active")
+    assert row is not None and "hop" not in row
+
+
+def test_a_meter_files_the_hop_its_target_carried(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    target = wire.Target(provider_id="openrouter", kind="openrouter", model="vendor/active")
+    for account, hop in (({"hop": "escalation", "operation": "decide"}, "escalation"),
+                         ({"operation": "decide"}, None)):
+        with usage.meter("scene-break") as m:
+            llm._stamp(m.usage, target.with_account(**account), 1)
+        assert m.row is not None
+        assert m.row.get("hop") == hop
+
+
+def test_every_account_field_reaches_the_row():
+    """An account field the facade stamps but `Meter.done` does not file would
+    be dropped silently: each is in `Meter.SERVED` and a `record` parameter."""
+    import inspect
+    assert set(llm_usage.ACCOUNT_FIELDS) <= set(usage.Meter.SERVED)
+    params = inspect.signature(usage.record).parameters
+    assert all(field in params for field in llm_usage.ACCOUNT_FIELDS)

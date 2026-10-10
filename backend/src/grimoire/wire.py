@@ -82,12 +82,15 @@ class Sampling:
 class Account:
     """The ledger's view of an attempt (spec 9.3): what it files that the wire
     does not say. The fields are `llm_usage.ACCOUNT_FIELDS`, in order, and a
-    test holds the two equal. "" is "not stated", which files nothing."""
+    test holds the two equal. "" is "not stated", which files nothing.
+    `hop` is "escalation" on an attempt an escalation hop sends (roadmap 01d
+    §5.7), "" on every other."""
 
     operation: str = ""
     role: str = ""
     billing: str = ""
     decision_mode: str = ""
+    hop: str = ""
 
 
 @dataclass(frozen=True)
