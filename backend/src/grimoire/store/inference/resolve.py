@@ -1444,6 +1444,42 @@ def refusal(resolved: ResolvedInference) -> Refusal | None:
     return unusable(resolved) or incapable(resolved)
 
 
+def escalation_refusal(resolved: ResolvedInference, task: str) -> Refusal | None:
+    """Why the escalation role's resolution of `task` cannot serve its hop
+    (roadmap 01d §5.2), or None when it can. Pure, like `refusal`.
+
+    `resolved` is `resolve(task, operation="decide", role=...)`, which has no
+    route: its `missing` covers only the operation's own needs. A hop answers
+    for the BASE route, though, so it is held to that route's `requires`
+    too, and never runs on a model the route itself could not. `unusable`
+    (no key, nothing selected) comes first, as at the seam; then a known gap,
+    as 409 `incapable` with `escalation_text`'s sentence naming the route."""
+    found = unusable(resolved)
+    if found is not None or not resolved.attempts:
+        return found
+    route = routing.route(task)
+    missing = _missing(resolved.attempts[0], _needs(route, resolved.operation))
+    if not missing:
+        return None
+    held = dataclasses.replace(resolved, route=route.key if route is not None else "",
+                               missing=missing)
+    return 409, {"detail": escalation_text(held, missing[0]), "kind": "incapable"}
+
+
+def escalation_text(resolved: ResolvedInference, cap: str) -> str:
+    """The `incapable` sentence for an escalation hop: the BASE route it
+    escalates (`resolved.route`), the role and the model it would be handed
+    to, what that model cannot do (`_cannot`), and the remedy -- another
+    model for that role. Not `incapable_text`, whose "or pin this route"
+    would not move the hop: a pin moves the route's own calls, never its
+    escalation role."""
+    role = resolved.role.capitalize()
+    subject = (f"The {routing.label_for(resolved.route)} route" if resolved.route
+               else "This decision")
+    return (f"{subject} escalates to the {role} role ({_on(resolved.attempts[0])}), "
+            f"which cannot {_cannot(resolved, cap)} — choose another {role} model.")
+
+
 def incapable_text(resolved: ResolvedInference, cap: str) -> str:
     """The `incapable` sentence (spec 5.3): the route, the role when one
     supplied the model, the model on its provider, what it cannot do
