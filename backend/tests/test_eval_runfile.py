@@ -111,8 +111,9 @@ def test_a_generate_case_fills_every_config_it_stands_for(tmp_path, capsys):
                [_entry("scene-length", ["c1", "c2"], bucket=_bucket(0.002, prompt=8))])
     path = _write(tmp_path / "run.json", doc)
     assert run.main(["--compare", str(path)]) == 0
-    (_header, row, _totals) = capsys.readouterr().out.splitlines()
+    (header, row, _totals) = capsys.readouterr().out.splitlines()
     assert row.count("billed $0.0020") == 2
+    assert "(backend=native feature=z)" in header and "(backend=structured)" in header
 
 
 def test_repeats_are_summed_and_their_wall_is_the_median(tmp_path, capsys):
@@ -158,3 +159,29 @@ def test_a_hand_edited_bucket_is_not_costed_rather_than_zero(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "$0.00" not in out
     assert "1/1 ok  1.00s  - / -  -" in out
+
+
+def test_configs_sharing_a_label_are_told_apart_by_their_axes(tmp_path, capsys):
+    doc = _doc([runfile.config("c1", "x", {"feature": "off"}),
+                runfile.config("c2", "x", {"feature": "on"})],
+               [_entry("scene-length", ["c1", "c2"], bucket=_bucket(0.002, prompt=8))])
+    assert run.main(["--compare", str(_write(tmp_path / "f.json", doc))]) == 0
+    header = capsys.readouterr().out.splitlines()[0]
+    assert "run:c1" not in header      # the file's own stem names the columns
+    assert "f:c1 x (feature=off)" in header and "f:c2 x (feature=on)" in header
+
+
+def test_a_native_call_refused_unsent_is_not_a_chunk(tmp_path, capsys):
+    """A native item refused before it was sent has a record, no row and no
+    bucket: its cell says it was not costed, never `(chunk)`."""
+    item = {"index": 0, "backend": "", "stage": 0, "reasons": ["error"],
+            "distribution": False, "escalated": False, "call": 0}
+    unsent = {**_native_call(0.0), "bucket": None,
+              "error": {"kind": "bad_response", "status": None}}
+    doc = _doc([runfile.config("c1", "x", {"backend": "native"})],
+               [_entry("decide-speaker", ["c1"], passed=False, bucket=_bucket(0.0006),
+                       items=[item], calls=[unsent])])
+    assert run.main(["--compare", str(_write(tmp_path / "n.json", doc))]) == 0
+    item_row = capsys.readouterr().out.splitlines()[2]
+    assert item_row.startswith("decide-speaker.0")
+    assert "(chunk)" not in item_row and "(1 not costed)" in item_row
