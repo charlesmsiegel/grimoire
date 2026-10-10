@@ -55,6 +55,14 @@ backend\.venv\Scripts\python.exe evals\run.py --live --record
 backend/.venv/bin/python evals/run.py --live --provider ID --model NAME --decide-backend native
 backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME --decide-backend native
 
+# live on two decide backends, three times each, saved as a run file
+backend/.venv/bin/python evals/run.py --live --decide-backend native --decide-backend structured --repeat 3 --out evals/out/run.json
+backend\.venv\Scripts\python.exe evals\run.py --live --decide-backend native --decide-backend structured --repeat 3 --out evals\out\run.json
+
+# compare saved run files. Offline: reads the files and nothing else.
+backend/.venv/bin/python evals/run.py --compare evals/out/a.json evals/out/b.json
+backend\.venv\Scripts\python.exe evals\run.py --compare evals\out\a.json evals\out\b.json
+
 # the decide gate: today's parse against the structured one. Offline.
 backend/.venv/bin/python evals/run.py --gate
 backend\.venv\Scripts\python.exe evals\run.py --gate
@@ -168,17 +176,41 @@ Two flags change what a live run sends, and both need `--live`:
   for a model known unable to generate. An `unknown` refuses neither. A
   chain with no stage at all (`chain` on a model that can do neither) is
   refused too. A refusal is one sentence and exit 2, before any case is
-  sent.
+  sent. The flag can be **repeated**: each backend is a configuration of
+  its own (`c1`, `c2`, ...), every decide case runs once per backend on the
+  same resolution, and a generate case, which no backend changes, runs once
+  and stands for every configuration. Every backend is checked before
+  anything is sent, so one refusal refuses the run.
+- **`--repeat N`** (1 to 10) runs each (configuration, case) N times, to see
+  the variance. It **multiplies what the run spends by N**. `--record` with
+  `--repeat` over 1, or with several backends, is refused: it would be
+  ambiguous which reply becomes the baseline.
+- **`--out PATH`** writes the run file (`eval-run`, version 1): each case's
+  checks, wall time, harvested ledger rows, calls and items, and the
+  aggregate -- never a prompt, a reply or a provider's error text (errors
+  are kept as kind and HTTP status, and each check's detail is cut to 200
+  characters). It does name your providers and models, so nothing is
+  written without `--out`; `evals/out/` is the suggested place, and git
+  ignores it. A replay run can write one too (no money, no time).
+- **`--compare FILE ...`** prints one table from run files alone: a row per
+  case (and per item of a decide case), a column per configuration of each
+  file, each cell the pass count over repeats, the median wall time, and the
+  tokens and money summed across repeats. A structured chunk's money is the
+  chunk's, on the case's row; an item cell says `(chunk)`. A case a
+  configuration did not run is a blank cell, never a zero. It reads no
+  store, no settings and no rates, and takes no other mode flag; a file it
+  does not know (another format or version) is one sentence and exit 2.
 
 To compare the two backends, compare them **on one model**: a model that
-both generates and decides natively, run twice --
+both generates and decides natively, in one run --
 
 ```sh
-backend/.venv/bin/python evals/run.py --live --provider ID --model NAME --decide-backend native --case decide-scene-break --case decide-voice-drift --case decide-speaker --case decide-continuity-identity --case decide-continuity-reconcile
-backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME --decide-backend native --case decide-scene-break --case decide-voice-drift --case decide-speaker --case decide-continuity-identity --case decide-continuity-reconcile
+backend/.venv/bin/python evals/run.py --live --provider ID --model NAME --decide-backend native --decide-backend structured --case decide-scene-break --case decide-voice-drift --case decide-speaker --case decide-continuity-identity --case decide-continuity-reconcile --out evals/out/backends.json
+backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME --decide-backend native --decide-backend structured --case decide-scene-break --case decide-voice-drift --case decide-speaker --case decide-continuity-identity --case decide-continuity-reconcile --out evals\out\backends.json
 ```
 
--- then the same with `--decide-backend structured`. A native-only model
+-- which prints the comparison table after the report, and keeps it in the
+run file for `--compare` later. A native-only model
 against a structured one would compare the models as well as the backends.
 That comparison is the measurement the later "native first" decision (spec
 16) waits on: the chain serves a model that can generate structured until
@@ -186,6 +218,35 @@ native wins on evals. Like every live run it **costs money**, and is never
 run without the user's explicit approval; point it at a throwaway
 `GRIMOIRE_HOME` holding only the chosen provider's connection and key,
 rather than repointing your real store's Decision role.
+
+### What a live run reports
+
+Beside pass or fail, each live case prints what it cost and how long it took,
+in the ledger's own words:
+
+```
+  [ok  ] decide-continuity-reconcile.compliant  (backend: native 3, structured 4)
+           wall 4.21s  calls 5 (stage 0: native 3/3; stage 1: structured 2/2)  tokens 8,112 / 1,040  billed $0.0091  modelled ~$0.0012  incomplete: 3 unpriced
+```
+
+- **Wall time** is measured once around the case's model work. A call's own
+  `duration_ms` is summed only where it is labelled `call time` (per
+  escalation hop): native items run several at once, so their durations can
+  add up to more than the case took.
+- **The three money columns** -- `billed` (what a provider charged),
+  `sub-equiv` (a subscription's per-token equivalent) and `modelled` (your
+  rates times the counts, for a call no provider priced) -- are each under
+  their own label and are **never added together**. A column with no calls in
+  it is left out; a price nobody reported is never shown as `$0.00`. A case
+  with nothing priced says `cost: not reported`; one with some calls unpriced
+  says `incomplete: N unpriced`.
+- **Tokens** print `in / out`. A side no call counted is `not reported`, one
+  some calls counted says `(N of M counted)`, never a `0`.
+- A case that ran several tasks (a play case's pick, turn and follow-ups) is
+  summed across all of them, with a `by task` block beneath. After the cases
+  comes an aggregate keyed by route, backend and hop.
+- A structured call answers up to eight items at one price, so its figures
+  are the call's: they are never divided among its items.
 
 ### What a live run reads
 
