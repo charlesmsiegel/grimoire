@@ -450,7 +450,7 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01g-S1 | The `tools` capability and its seam refusal | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S1 | The `tools` capability and its seam refusal | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01g-S2 | Neutral tool shapes, wire lowering and stream parsing on the HTTP adapters | L | 2 | 01f-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01g-S3 | Run attribution on the ledger and the capture | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01g-S4 | The loop primitive (joined) | L | 4 | 01d-S1 (S), 01f-S1, 01f-S2, 01f-S3, 01g-S2, 01g-S3, 01i-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
