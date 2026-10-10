@@ -22,7 +22,7 @@ from dataclasses import replace
 import pytest
 
 import grimoire.store as store
-from grimoire import decisions, inference, tool_calls
+from grimoire import decisions, inference, tool_calls, wire
 from grimoire.llm_errors import LLMError
 from grimoire.routes import tool_decision
 from grimoire.routes.tool_decision import SpendGuard, ToolShape, decision_tool
@@ -521,3 +521,125 @@ def test_a_ceiling_the_tool_could_never_be_priced_under_refuses_it_at_the_build(
     with pytest.raises(ValueError):
         decision_tool(TASK, _resolved(), FakeLLM([["x"]]), cid="c",
                       spend=SpendGuard(1.0), ceiling=2.0)
+
+
+# ---- brutal review round 3 (R3-1, R3-2, R3-3) ----
+def _task_errors():
+    return [r.get("kind") for r in store.errors.summary()["rows"] if r.get("module") == TASK]
+
+
+_TWO = {**CATALOG, ("other", "vendor/judge2"): CATALOG[("openrouter", "vendor/judge")]}
+
+
+def _walled(view, seconds_left, call_budget=300.0):
+    """A context whose wall leaves `seconds_left` before the finalize reserve."""
+    return replace(_ctx(view), call_budget=call_budget, reserve=tool_calls.MIN_TURN_SECONDS,
+                   deadline=time.monotonic() + tool_calls.MIN_TURN_SECONDS + seconds_left)
+
+
+def test_a_decide_inside_the_finalize_reserve_is_refused_before_it_takes_a_decision(
+        monkeypatch):
+    """R3-1: a call whose wall share is already spent sends nothing, so it
+    takes no decision, charges nothing and files no error row -- the run's
+    own clock, not a provider failure -- and says so on the trace. Neither
+    the primary nor its fallback is sent anything."""
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: _TWO.get((conn, model)))
+    other = wire_kit.target(provider_id="other", model="vendor/judge2", api_key="k")
+    resolved = wire_kit.resolution(wire.Chain(TARGET, other), TASK, operation="decide")
+    judge = FakeLLM([[decision_reply({"choice": "truth"})]] * 3)
+    for shape, want in ((ToolShape(), None),
+                        (ToolShape(result="selection"), {"selected": None, "reason": "cap"})):
+        spec, why = decision_tool(TASK, resolved, judge, cid="c", shape=shape)
+        assert spec is not None, why
+        view = _View(decisions_left=2, room=100.0)
+        if want is None:
+            with pytest.raises(ToolError, match="wall clock"):
+                asyncio.run(spec.fn(ARGS, _walled(view, -2.0)))
+        else:
+            assert json.loads(asyncio.run(spec.fn(ARGS, _walled(view, -2.0))).text) == want
+        assert view.left == 2 and view.charged == [] and view.noted == [("wall", None)]
+    assert judge.calls == 0 and _task_errors() == []
+
+
+def test_a_call_the_wall_refuses_unstarted_is_neither_charged_nor_an_error(monkeypatch):
+    """R3-1: past the check, a wall share spent by the time the call is
+    sent abandons it unstarted as the run's own stop: no charge, no error
+    row, no health mark on the primary or its fallback."""
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: _TWO.get((conn, model)))
+    lefts = iter([10.0])
+    monkeypatch.setattr(tool_decision, "_wall_left", lambda ctx: next(lefts, -1.0))
+    other = wire_kit.target(provider_id="other", model="vendor/judge2", api_key="k")
+    resolved = wire_kit.resolution(wire.Chain(TARGET, other), TASK, operation="decide")
+    judge = FakeLLM([[decision_reply({"choice": "truth"})]] * 3)
+    spec, _ = decision_tool(TASK, resolved, judge, cid="c")
+    view = _View(room=100.0)
+    with pytest.raises(ToolError, match="wall clock"):
+        asyncio.run(spec.fn(ARGS, _walled(view, 10.0)))
+    assert view.charged == [] and view.noted == [("wall", None)]
+    assert judge.calls == 0 and judge.noted == [] and _task_errors() == []
+
+
+def test_a_decide_the_wall_leaves_no_room_for_never_ends_the_run_on_spend(monkeypatch):
+    """R3-1: inside the finalize reserve the decide is never sent and never
+    charged, so it cannot stop the run on `spend` (its projection, charged
+    as a phantom, used to)."""
+    monkeypatch.setattr(store.routing, "TOOLS_OPTIONAL",
+                        frozenset({store.routing.route("chat").key}))
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: CATALOG.get((conn, model)))
+    monkeypatch.setattr(store.config, "llm_call_budget", lambda: 300.0)
+    judge = _SlowJudge(0.0, [[decision_reply({"choice": "truth"})]],
+                       usage={"prompt_tokens": 100, "completion_tokens": 10})
+    result, _ = _looped(judge, RunBudget(wall_seconds=5.3, spend_ceiling_usd=5.0),
+                        spend=SpendGuard(5.0))
+    (entry,) = [e for e in result.trace if e.kind == "decide"]
+    assert entry.note == "wall" and result.limit != "spend"
+    assert judge.calls == 0 and _task_errors() == []
+
+
+def test_a_decide_cut_by_the_wall_files_no_error_row_and_marks_no_connection():
+    """R3-2: the run's own wall cutting a decide mid-call is a budget stop,
+    as it is for a model turn (spec 3.9): no error row, no health mark --
+    but the request went out, so it is charged."""
+    judge = _SlowJudge(30.0, [[decision_reply({"choice": "truth"})]])
+    spec, _ = decision_tool(TASK, _resolved(), judge, cid="c")
+    view = _View()
+    with pytest.raises(ToolError, match="timeout"):
+        asyncio.run(spec.fn(ARGS, _walled(view, 1.5)))
+    assert judge.started is not None and view.noted == [("failed", None)]
+    assert _task_errors() == [] and judge.noted == []
+
+
+def test_a_decide_past_the_per_call_ceiling_is_noted_against_its_connection():
+    """R3-2: an `llm_call_budget` overrun is a provider timeout (#146): an
+    error row, and the connection that held the request is told."""
+    judge = _SlowJudge(3.0, [[decision_reply({"choice": "truth"})]])
+    spec, _ = decision_tool(TASK, _resolved(), judge, cid="c")
+    with pytest.raises(ToolError, match="timeout"):
+        asyncio.run(spec.fn(ARGS, replace(_ctx(_View()), call_budget=0.3)))
+    ((target, error),) = judge.noted
+    assert target == TARGET and error.kind == "timeout"
+    assert _task_errors() == ["timeout"]
+
+
+@pytest.mark.parametrize("cap", [0, -5, 2.5, True])
+def test_an_output_cap_decide_would_refuse_is_not_offered(cap):
+    """R3-3: `decide` refuses a cap that is not a positive whole number
+    before sending, so a tool built with one is never offered."""
+    spec, why = decision_tool(TASK, _resolved(), FakeLLM([["x"]]), cid="c", max_tokens=cap)
+    assert spec is None and "max_tokens" in why
+
+
+def test_a_pre_send_refusal_takes_no_decision(monkeypatch):
+    """R3-3: a refusal no model argument decides -- here a policy that
+    changed after the build -- is checked before the call takes a decision."""
+    judge = FakeLLM([[decision_reply({"choice": "truth"})]])
+    built, _ = decision_tool(TASK, _resolved(), judge, cid="saltmarch")
+    monkeypatch.setitem(store.routing.TASK_POLICY, TASK, store.routing.TaskPolicy(
+        escalate_to="primary", escalate_on=("abstained",), question="choice"))
+    view = _View(decisions_left=1)
+    with pytest.raises(ToolError, match="not sent"):
+        _call(built, view=view)
+    assert view.left == 1 and view.noted == [("failed", None)] and judge.calls == 0

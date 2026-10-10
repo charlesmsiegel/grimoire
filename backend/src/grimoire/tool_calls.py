@@ -851,7 +851,16 @@ class TraceEntry:
 @dataclass(frozen=True)
 class LoopResult:
     """How a run ended (spec 3.7). `error` is the `LLMError` a `failed` run
-    stopped on."""
+    stopped on.
+
+    `declined` holds calls the model made that were never run, of two kinds
+    that never share a run, told apart by the note on each call's `tool`
+    trace entry. `declined: after_text` (C6, `decline_after_text`): calls a
+    turn ended with after it had shown visible text, and the run is
+    `completed` with that text. `declined: final` (R2-2): calls a finalize
+    turn made anyway -- in practice on a chain that sends `tool_choice:
+    none` as `auto` (z.ai) -- whatever the run's status, and possibly
+    before any visible text. A consumer that wants only C6's meaning reads the trace notes."""
     status: Literal["completed", "budget_exhausted", "failed"]
     limit: str = ""
     text: str = ""

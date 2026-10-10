@@ -1827,9 +1827,11 @@ def _tool_chain(resolved: ResolvedInference, chain: wire.Chain
     return chain, None
 
 
-class _WallSpentError(LLMError):
-    """The run's own wall clock ran out while a turn was in flight: a budget
-    stop, not a failure, so the turn's meter files `aborted`."""
+class WallSpentError(LLMError):
+    """The run's own wall clock ran out while a turn, or a decide-tool call
+    (`routes.tool_decision`), was in flight: a budget stop, not a failure,
+    so the meter files `aborted` and nothing reaches the error store or the
+    connection's health (spec 3.9)."""
 
     #: `store.usage.NOT_A_FAILURE`, as absorb's `BudgetRefused` declares it.
     llm_call_failed = False
@@ -2199,7 +2201,7 @@ class _Loop:
         try:
             text, holder = await self._metered(k, chain, sending, choice, collector, final,
                                                projection)
-        except _WallSpentError:
+        except WallSpentError:
             self._trace(k, "model", ok=False, note="wall", started=started)
             self.limit = "wall"
             return self._result("budget_exhausted")
@@ -2322,7 +2324,7 @@ class _Loop:
 
                 def overrun(limit: float) -> LLMError:
                     if by_wall:
-                        return _WallSpentError("timeout", "the run's wall clock ran out")
+                        return WallSpentError("timeout", "the run's wall clock ran out")
                     error = LLMError("timeout", f"the reply did not finish within "
                                                 f"{limit:g}s — giving up")
                     self._note_overrun(m.usage, chain, error)
