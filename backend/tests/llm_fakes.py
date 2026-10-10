@@ -101,7 +101,7 @@ from pathlib import Path
 import anyio
 import httpx
 
-from grimoire import adapters, decisions, llm_usage, tool_calls, wire
+from grimoire import adapters, decisions, llm_reasoning, llm_usage, tool_calls, wire
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
@@ -977,6 +977,12 @@ class ToolTurn:
     delay: float = 0.0
     fallback: bool = False
     finish: str = ""
+    #: What `stream` yields, in place of `text` as one delta (01g-S6).
+    deltas: tuple[str, ...] = ()
+    #: Seconds held after the first delta, mid-stream.
+    pause: float = 0.0
+    #: Display reasoning fed to the holder before any delta.
+    thinking: str = ""
 
 
 class FakeToolTurns(FakeLLM):
@@ -997,6 +1003,22 @@ class FakeToolTurns(FakeLLM):
 
     async def complete(self, messages, conn, usage=None, *, schema=None, retries=None,
                        tools=None, tool_choice=None) -> str:
+        step = await self._begin(messages, conn, usage, schema, retries, tools, tool_choice)
+        self._settle(step, usage)
+        return step.text
+
+    async def stream(self, messages, conn, usage=None, *, schema=None, tools=None,
+                     tool_choice=None):
+        """`complete`'s turn, streamed: its `deltas` (else its text as one),
+        the calls noted after the last, as a provider's stream ends."""
+        step = await self._begin(messages, conn, usage, schema, None, tools, tool_choice)
+        for n, delta in enumerate(step.deltas or ((step.text,) if step.text else ())):
+            yield delta
+            if n == 0 and step.pause:
+                await asyncio.sleep(step.pause)
+        self._settle(step, usage)
+
+    async def _begin(self, messages, conn, usage, schema, retries, tools, tool_choice):
         if tools is not None or tool_choice is not None:
             tool_calls.check(tools, tool_choice)
         chain = _chain_of(conn)
@@ -1017,13 +1039,22 @@ class FakeToolTurns(FakeLLM):
         found = usage.get(tool_calls.KEY) if usage is not None else None
         if isinstance(found, tool_calls.Collector):
             found.begin(kind=served.kind, provider_id=served.provider_id, model=served.model)
+        buffer = usage.get(llm_reasoning.KEY) if usage is not None else None
+        if isinstance(buffer, llm_reasoning.Buffer):
+            buffer.begin()
+        if step.thinking:
+            llm_reasoning.feed(usage, step.thinking)
+        return step
+
+    def _settle(self, step, usage) -> None:
+        found = usage.get(tool_calls.KEY) if usage is not None else None
+        if isinstance(found, tool_calls.Collector):
             for n, (name, args) in enumerate(step.calls):
-                found.note(f"call_{index}_{n}", name,
+                found.note(f"call_{self.calls - 1}_{n}", name,
                            args if isinstance(args, str) else json.dumps(args))
             found.finish(step.finish or ("tool_calls" if step.calls else "stop"))
         if usage is not None and self.usage is not None:
             usage.update(self.usage)
-        return step.text
 
 
 class StallingOpenRouter(FakeLLM):
