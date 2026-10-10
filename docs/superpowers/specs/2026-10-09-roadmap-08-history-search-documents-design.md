@@ -1,6 +1,6 @@
 # 08. Derived history SearchDocuments
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 08 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 → 05, with 07 and
 01h) feeding retrieval (09, then 12).
@@ -18,29 +18,35 @@ SearchDocuments today; the only prior mention is 03's section 2a.
 
 ## Depends on
 
+The checklist's 08 edge: 03-C1, 03-C2, 03-C6, 03-C7 (H); 03-C3, 05-C3 (H for
+C2c); 01h-C3 (H once C1 sends a type); 07-C2, 07-C3c, 01h-C1 (S).
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | 03-C1 | 03 | The document's composite key: kind, version, `BUILD`, and per-slice digests carried as inputs that are not files (section 5). | Hard |
-| 03-C2 | 03 | Liveness by construction: a superseded document has no live key that reaches it, so no "retire the old one" step exists here (section 6). | Hard (implied by C6; not listed in the checklist edge) |
-| 03-C3 | 03 | The `materialized` record: which scene paths a document, and a document's vector, were built from. 08-C2c's hot rebuild reads it (section 9). | Hard for 08-C2c, soft for the rest |
+| 03-C2 | 03 | Liveness by construction: a superseded document has no live key that reaches it, so no "retire the old one" step exists here (section 6). | Hard |
 | 03-C6 | 03 | Batch lookup of documents by the caller's live key set; the index-ranking rule that 09's lexical ranking inherits (section 6). | Hard |
 | 03-C7 | 03 | Vectors keyed by space and exact text, never by `BUILD`: a re-render that yields the same text costs no embedding (section 8). | Hard |
+| 03-C3 | 03 | The `materialized` record, including the vector kind `vector:<projection>:<space-digest>` and its optional `instance` column: which scene paths a document, and a document's vector, were built from. 08-C2c's hot rebuild reads it (section 9). | Hard for 08-C2c |
 | 05-C3 | 05 | Eager rebuild of what was hot after an edit, embedding only what was already embedded. 08-C2c is the hook it calls (section 9). | Hard for 08-C2c only. 08-C1, C2a, C2b and C3 do not need it and can land first. |
-| 07-C2 | 07 | Derived inverse membership (actor to groups) for the `groups` metadata field (section 4.6). | **Soft** (the checklist says hard): groups are metadata only, never document text, so the field can follow 07 without re-embedding anything. |
+| 01h-C3 | 01h | The input type (and any dimensions) is part of the space identity and so of the `vectors.py` key, so a document vector can never be read as a query vector (section 8). | Hard once 01h-C1 sends a type |
+| 07-C2 | 07 | Derived inverse membership (actor to groups) for the `groups` metadata field (section 4.6). | Soft: groups are metadata only, never document text, so the field can follow 07 without re-embedding anything. |
+| 07-C3c | 07 | Retrieval projections (`scene_groups`): where it has landed, the `groups` slice reads `scene_groups` rather than joining 07-C2 per cast member itself (section 4.6). | Soft |
 | 01h-C1 | 01h | Embedding documents with the provider's `document` input type, where the provider takes one (section 8). | Soft: until it lands, documents embed untyped, exactly as lore does today. |
-| 01h-C3 | 01h | The input type (and any dimensions) is part of the space identity and so of the `vectors.py` key, so a document vector can never be read as a query vector (section 8). | Hard as soon as 01h-C1 sends an input type |
+
+03-C8 (the purge on a world or campaign delete) is not an edge: 08 adds no
+storage of its own, and 03-C8 covers its documents (section 12).
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 08-C1 | 09 | The per-scene document text (lexical and semantic candidates) and metadata (structural prefilter). |
-| 08-C1 | 12 | Scene listing and metadata for the read-only investigation toolset (12-C1). |
-| 08-C2a | 09 | The live document set for a campaign, per query, without parsing transcripts. |
-| 08-C2b | 09 | Cached document vectors and a bounded warm step. The query vector is 09's. |
-| 08-C2c | 05 | The rebuild hook 05-C3's sync calls for document and vector kinds. |
-| 08-C3a | 09 | The `history-index` embed task its document warming meters under. |
-| 08-C3b | 09, 12 | Bounded, phase-correct transcript excerpts from a selected scene: 09's evidence, 12's investigation tool. |
+| Contract (provided here) | Consumer | What the consumer uses it for | Hard or soft |
+|---|---|---|---|
+| 08-C1 | 09 | The per-scene document text (lexical and semantic candidates) and metadata (structural prefilter). | Hard |
+| 08-C2a, C2b | 09 | The live document set for a campaign without parsing transcripts; cached document vectors and a bounded warm step (the query vector is 09's). | Hard |
+| 08-C3a, C3b | 09 | The `history-index` task its document warming meters under; prompt-phase excerpts as evidence. | Hard |
+| 08-C3b | 11 | Excerpts for actor-knowledge classification. | Soft |
+| 08-C3a, C3b | 12 | The investigation toolset's excerpt tool (12-C1), always in the prompt phase. | Hard |
+| 08-C2c | 05 | The rebuild hook 05-C3's `WarmHook` calls in its searchdocs and vectors steps. | Soft |
 
 ## 1. Current state (reconciled against main)
 
@@ -641,7 +647,9 @@ class DocVectors:
    (`inference/embed.py:199`).
 5. Each returned vector is saved with `vectors.save` under the document space
    key and the exact text, and a `materialized` row
-   `(scenes/<sid>.md, vector:<space key>)` is written for its scene (03-C3).
+   `(scenes/<sid>.md, vector:searchdocs.scene:<space-digest>)` is written for
+   its scene (03-C3's kind form; `instance` unused). The projection name is what
+   keeps it apart from a `semantic-search` row over the same text.
    A hit also writes that row (coarse `last_used`, 03 section 10), so "this
    scene's document was embedded in this space" stays answerable for 05.
 6. Failure is never raised. `LLMError` or `OSError` from the call returns the
@@ -699,7 +707,9 @@ what indexing cost apart from what recall cost.
 
 05-C3 rebuilds "what was hot" after an edit, and embeds only what was already
 embedded. 08 supplies the hook for its two kinds, `searchdocs.scene` and
-`vector:<space>` over a scene path, split by whether it touches the network:
+`vector:searchdocs.scene:<space-digest>` over a scene path (03-C3's form, the
+checklist's cross-spec decision: a bare `vector:<space>` would collide with
+library search's rows on the same text), split by whether it touches the network:
 
 ```python
 def affected(paths: list[str]) -> dict[str, frozenset[str]]:
@@ -728,7 +738,7 @@ def reembed(cid: str, docs: list[SceneDocument], *, space: dict,
   for each campaign whose world is `wid` (`campaigns.read.world_refs()`). A
   campaign holding its own copy re-derives the same keys and does nothing.
 
-Of the rebuilt documents, those whose scene path has a `vector:<space key>`
+Of the rebuilt documents, those whose scene path has a `vector:searchdocs.scene:<space-digest>`
 row for the **current** document space, and whose new text has no vector, go
 to `reembed`, bounded by `limit` per campaign; the rest stay lazy for 09's
 next warm. A scene never embedded is never embedded by a rebuild (05-C3). A

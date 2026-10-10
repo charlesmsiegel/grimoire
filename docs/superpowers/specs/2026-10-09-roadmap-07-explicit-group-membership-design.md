@@ -1,6 +1,6 @@
 # 07. Explicit group membership
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 07 in `ROADMAP-CHECKLIST.md`. Lane: "Now" (no hard upstream);
 feeds the cache lane at 08 and the retrieval lane at 09 and 11.
@@ -18,9 +18,9 @@ ruling f3, §33), which this spec lifts for one family, groups, and says so.
 
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 03-C1 composite keys over collection digests and non-file inputs | 03 | The persistent tier of the inverse index (section 7.4): a key over the world's and the campaign's `groups/*.md` digests plus the tombstone ledger | Soft. Section 7.3's in-process tier answers every caller without it |
-| 03-C2 liveness by construction | 03 | An edit to any group file moves the key, so a stale inverse is unreachable rather than invalidated | Soft, same reason |
-| 03-C3 the `materialized` record | 03 | Lets 05 rebuild a hot inverse eagerly after an external edit | Soft. Without it the inverse is rebuilt lazily on the next read |
+| 03-C1 composite keys over collection digests and non-file inputs | 03 | The persistent tier of the inverse index (section 7.4): a key over the world's and the campaign's `groups/*.md` digests plus the tombstone ledger | Soft (S). Section 7.3's in-process tier answers every caller without it |
+| 03-C2 liveness by construction | 03 | An edit to any group file moves the key, so a stale inverse is unreachable rather than invalidated | Soft (S), same reason |
+| 03-C3 the `materialized` record | 03 | Lets 05 rebuild a hot inverse eagerly after an external edit | Soft (S). Without it the inverse is rebuilt lazily on the next read |
 | Continuity graph (capstone Slices A-G, landed) | not a roadmap contract | Section 10 adds one node family and two edge kinds to `store/continuity/graph.py` | Existing code, not an edge |
 
 There is no hard upstream. Nothing here calls a model, so nothing depends on 01
@@ -28,19 +28,17 @@ or any 01x item.
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 07-C1 authoritative members and leader on the group record, with overlay semantics | 11; every reader below | The stored fact everything else derives from; 11 needs its secrecy and "membership is not knowledge" rules |
-| 07-C2 derived inverse membership, cacheable under 03 | 08, 09 | Actor -> groups and group -> members without re-reading prose; a digest to key derived documents on |
-| 07-C3a absorb membership proposals | (play) | Membership that changes in the story reaches the record through review, never silently |
-| 07-C3b Story Graph group nodes and edges | (UI) | `member_of` and `leads` edges on the existing graph payload |
-| 07-C3c retrieval projections and their rules | 08, 09, 11 | Per-scene "groups relevant", co-membership, and the visibility rules a prompt-bound consumer must apply |
-| 07-C3d structural presence through members | (prompt) | A group whose member is in the scene opens the gate on lore the group owns |
-
-C3 is split into C3a-C3d (the checklist lists one C3, "absorb, graph and
-retrieval integration points"). The split lets 08, 09 and 11 cite the one
-projection they consume (C3c) rather than all of C3. The final report says so,
-and the checklist should be amended in the same PR that accepts this spec.
+| Contract (provided here) | Consumer | What the consumer uses it for | Hard or soft |
+|---|---|---|---|
+| 07-C1 `members` on the group record, with overlay and sync semantics | 11 | Group overrides: the stored fact 11's actor-perspective rules read, with its secrecy and "membership is not knowledge" rules | Hard (H) for group overrides |
+| 07-C2 inverse membership, with a digest and routes | 08 | Actor -> groups without re-reading prose; a digest to key derived documents on | Soft (S) |
+| 07-C2 inverse membership, with a digest and routes | 09 | Co-membership and group lookups as structural recall signals | Soft (S) |
+| 07-C3c retrieval projections (`scene_groups`, `co_affiliates`, `prompt_visible`) | 08 | Per-scene "groups relevant", keyed on the scene's projection, gm-only filtered | Soft (S) |
+| 07-C3c retrieval projections | 09 | Co-affiliation candidates and the visibility rule for prompt-bound text | Soft (S) |
+| 07-C3c retrieval projections | 11 | Visibility and "membership is not knowledge, not history" rules | Soft (S) |
+| 07-C3a absorb join/leave proposals | (no roadmap consumer; play) | Membership that changes in the story reaches the record through review | n/a |
+| 07-C3b graph group nodes | (no roadmap consumer; UI) | `member_of` and `leads` edges on the Story Graph payload | n/a |
+| 07-C3d a present member makes their group present for lore | (no roadmap consumer; prompt) | A group whose member is in the scene opens the gate on lore the group owns | n/a |
 
 ---
 

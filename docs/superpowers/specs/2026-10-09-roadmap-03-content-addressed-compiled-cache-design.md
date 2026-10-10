@@ -1,7 +1,8 @@
 # Content-addressed compiled cache: the files stay the database, SQLite caches what is compiled from them
 
-**Status:** Design. The spec gate was run with a substitute reviewer (section
-15) and its findings are folded in. The plan is next.
+**Status:** Draft — cross-linked. A substitute reviewer and the PR's Codex
+review are both folded in (section 15). The `/codex:adversarial-review` spec
+gate is still pending.
 **Date:** 2026-10-09
 **Series:** 03. Depends on 01, the inference refactor
 (`2026-10-07-inference-backend-refactor-design.md`, landed as slices A
@@ -40,9 +41,13 @@ roadmap bundle of 2026-10-06 (specs 04–09).
 | 03-C5 artifacts storable at write time | 04, 05 | No stale overview after Grimoire's own write |
 | 03-C6 batch lookups over a live key set; index ranking restricted to it | 08, 09 | Metadata prefilters and lexical ranking |
 | 03-C7 vectors keyed by text, never `BUILD` | 08, 09 | Upgrades re-embed only changed text |
+| 03-C8 a callable purge for a world or campaign delete | 05 | Sync performs the purge when it finds a world or campaign root gone (05 section 7.6) |
+| 03-C9 a synthetic-library generator | 04 (extends it for 04-C3b) | Benchmarks and equivalence tests on a library no user owns |
 
-Section 2a states each contract item in full. Its numbered items map to
-C1–C7 in this order: item 1 to C1, item 2 to C2, and so on.
+Section 2a states C1–C7 in full. Its numbered items map to them in order:
+item 1 to C1, item 2 to C2, and so on. Two later additions refine C1 and C6:
+a collection can take a member filter (section 7), and lookups report hit and
+miss counts (section 9). C8 is in section 12, and C9 is in section 14.
 
 ## 1. Goal
 
@@ -302,8 +307,19 @@ That makes one place list everything that persists and what each key covers.
 | field | meaning |
 |---|---|
 | `path` | a source the artifact read, relative to the store root |
-| `kind` | the registry kind built from it, or `vector:<space>` for an embedding of a projection of it |
+| `kind` | the registry kind built from it, or `vector:<projection>:<space-digest>` for an embedding of a projection of it |
+| `instance` | optional: which instance of a collection-keyed kind the path feeds (for example, the campaign a scene summary belongs to) |
 | `last_used` | as for artifacts |
+
+**The vector kind names the projection and a digest of the space**, never the
+raw space id:
+
+- A raw space id contains NUL bytes (01h-C3).
+- A bare `vector:<space>` would let two projections of one source collide. For
+  example, 08's SceneDocument vector and semantic search's vector over the same
+  transcript would share a key.
+
+05, 08 and the checklist's cross-spec decisions all use this form.
 
 05 needs this record to rebuild "what was hot" for an edited path, and 08
 needs it to keep a hot SearchDocument and its vector current (section 2a,
@@ -541,7 +557,15 @@ Directory membership is authoritative and is always read from the directory:
 4. Hash the ordered `(relpath, content_hash)` list.
 
 An add, a delete, a rename or an edit each change the digest, and the cache
-never answers membership. A collection-keyed artifact saves the compute and
+never answers membership.
+
+**A collection can take a member filter.** This is a predicate on the
+relative path, declared by the kind in the registry and applied after the
+listing. Without it, a file that sits in the directory but is not an input
+would move the digest for nothing. 04's scene summary is the case: review
+files live in `scenes/`, and they are not scenes. The filter is part of the
+key's identity, so changing it changes the key. It never hides a member from
+any reader other than the kind that declared it. A collection-keyed artifact saves the compute and
 the read for each member. It does not save the listing.
 
 The draft hoped that counts which currently need directory sweeps could come
@@ -665,6 +689,10 @@ and the cache's tables, and the guard fails both of these:
 
 - a read API that does not take the caller's keys or live key set;
 - an import of `sqlite3` anywhere else.
+
+**Lookups report what they found.** Every batch lookup returns hit and miss
+counts beside the rows, for 04-C3a's per-request counters and the benchmark.
+This is a count, never a list of keys. No API answers "what is cached".
 
 An index may *rank* within a live set. 09's lexical candidates might come from
 SQLite FTS5, if the Android build has it, but every such query is restricted
@@ -807,6 +835,17 @@ SQLite's free pages. So:
   already unreachable, because no live path hashes to them. What the purge
   removes is data at rest. This is a whole-cache purge at the delete route,
   not a hook on record writes, and every device then starts cold.
+
+  **03-C8: the purge is one callable**, `compiled.purge_for_delete(root)`. It
+  writes the marker and purges this device's file. The world and campaign
+  delete routes call it. So does 05's sync when it finds that a world or
+  campaign root has gone because someone deleted it outside Grimoire. It is
+  idempotent, never raises into its caller, and logs one line on failure.
+- **Vectors are a stated residual.** `.cache/embeddings/*.vec` files are keyed
+  by space and text, never by campaign (section 4). So a campaign's vectors
+  cannot be told apart from another's, and they cannot be purged selectively.
+  Deleting a world or campaign leaves them until the user clears the folder.
+  08 says the same, and the checklist records it as a cross-spec decision.
 - The Settings text on sharing boundaries says this, and says the same is
   already true of `.cache/embeddings/` and the thumbnails.
 
@@ -902,7 +941,17 @@ codebase's placeholder names.
 
 **Performance.** Measure on a generated synthetic library, large enough to show
 the difference. The generator is committed. No figure from any real store is
-committed. Measure four cases:
+committed.
+
+**03-C9: the synthetic-library generator is owned here.**
+
+- It lives with the cache's tests and is built by 03's plan.
+- It writes a marked store, holding placeholder names only (Realm, Saltmarch,
+  Seraphine, Mara, Winifred), with sizes set by flags.
+- It refuses to write into a directory that already holds a store that is not
+  marked synthetic.
+- 04-C3b extends it with the page shapes 04's benchmark needs. It does not fork
+  a second generator. Measure four cases:
 
 - the cold first-ever load;
 - a warm load in the same process, which must not regress against today;

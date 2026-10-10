@@ -1,6 +1,6 @@
 # 02. Decision integration: what slices F–H left, and the play-facing uses
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 02 in `ROADMAP-CHECKLIST.md`. Lane: Decision (01a, 01b → 01c,
 01d → **02** → 11; 13 and 12 consume it too).
@@ -19,45 +19,51 @@ contribution, handoffs, frozen snapshots).
 
 ## Depends on
 
+This matches the checklist's edge: 02 ← 01a-C1/C2/C3 (H for every play
+gate), 01b-C1/C2 (H for C2b/C3/C4/C5), 01c-C1..C4 (H for C2 sampling),
+01d-C1..C3 (H for C5a); 01g-C1..C6 (H for C4 only); 01e-C1..C3 (S). Landed 01
+is the baseline.
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 01 (landed) | 01, slices F–I | `inference.decide`, `decisions.Item/Answer/Decision`, the route registry, the Decision role, the native chain, `--gate` and `--decide-backend`. Section 1 is the record of it. | Hard |
-| 01a-C1 | 01a | Wall time, tokens and the three money columns per decide and generate call, which the play gate (section 4) reports per post. | Hard for every play gate |
-| 01a-C2 | 01a | Live eval rows filed under an eval scope, so a play-gate run never lands in a campaign's spend. | Hard for every play gate |
-| 01a-C3 | 01a | One comparison table across configurations (feature off vs on; the reasoning matrix of section 7.5). | Hard for every play gate |
-| 01b-C1, 01b-C2 | 01b | A prompt-log capture at each new decide site (intent, plan, tool, relevance, epistemic), off the decide path. | Hard for C2b, C3, C4, C5 |
-| 01c-C1 | 01c | Whether a generating Decision model returns a distribution at all. Decides whether sampling is ever live on a structured backend. | Hard for C2 sampling |
-| 01c-C2 | 01c | The one sampler `(distribution, seed) → selected`. | Hard for C2 sampling |
-| 01c-C3 | 01c | The replay record, persisted beside the round's speaker and the response's intent. | Hard for C2 sampling |
-| 01c-C4 | 01c | An abstention, a refusal or a missing distribution is never sampled. Section 5 builds the speaker invariants on it. | Hard for C2 sampling |
-| 01d-C1 | 01d | The per-task policy (`routing.TaskPolicy`, with 01c's `samples` field). Section 10 states the row each new task needs. | Hard for C5a; hard for declaring every new task |
-| 01d-C2 | 01d | The one-hop escalation helper, used by epistemic access only. | Hard for C5a |
-| 01d-C3 | 01d | Per-task, per-backend thresholds for that escalation. | Hard for C5a |
-| 01e-C1, 01e-C2 | 01e | `Rank` and a finer `Score`, which history relevance (C5b) switches to when they land. | Soft |
-| 01e-C3 | 01e | Joint choice, which would let one question pick the speaker and the stance together (section 7.4). | Soft |
-| 01g-C1..C4 | 01g | The `tools` capability, the loop primitive, its metering and its run budget. | Hard for C4 only |
-| 01g-C5 | 01g | The Decision-as-tool shim. C4 is its play-side policy. | Soft for 02 as a whole, hard for C4 |
+| 01 (landed) | 01, slices F–I | `inference.decide`, `decisions.Item/Answer/Decision`, the route registry, the Decision role, the native chain, `--gate` and `--decide-backend`. Section 1 is the record of it. | Baseline |
+| 01a-C1 | 01a | Wall time, tokens and the three money columns per call, never added together. A play case summed across its tasks (`turn-plan`, then `chat`), which the play gate (section 4) reports per post. | H for every play gate |
+| 01a-C2 | 01a | Live evals metered inside a throwaway home and stamped `scope: "eval"`, so a play-gate run never reaches a library's ledger. | H for every play gate |
+| 01a-C3 | 01a | `--repeat` and `--compare`: one table across configurations (feature off vs on; the reasoning matrix of section 7.5). | H for every play gate |
+| 01b-C1, 01b-C2 | 01b | A prompt-log capture at each new decide site (intent, plan, tool, relevance, epistemic), off the decide path. | H for C2b, C3, C4, C5 |
+| 01c-C1 | 01c | The recorded distribution policy, and the `reports_distribution(resolved)` predicate that 5.6's settings text asks. | H for C2 sampling |
+| 01c-C2 | 01c | The one sampler (`draws.py`), `(distribution, seed) → selected`. | H for C2 sampling |
+| 01c-C3 | 01c | The replay record, persisted beside the round's speaker and the response's intent. | H for C2 sampling |
+| 01c-C4 | 01c | An abstention, a refusal or a missing distribution is never sampled. Section 5 builds the speaker invariants on it. | H for C2 sampling |
+| 01d-C1 | 01d | `routing.TaskPolicy` (shared with 01c's `samples`), which refuses `samples` together with `low_margin` escalation. Section 10 states the row each new task needs. | H for C5a; needed to declare every new task |
+| 01d-C2a | 01d | Trigger evaluation with its optional answer filter, so epistemic access escalates only permissive answers (9.2). | H for C5a |
+| 01d-C2b | 01d | The one-hop escalation, used by epistemic access only. | H for C5a |
+| 01d-C3 | 01d | Per-task, per-endpoint-kind thresholds for that escalation. | H for C5a |
+| 01e-C1, 01e-C2 | 01e | `Rank` and a finer `Score`, which history relevance (C5b) switches to when they land. | S |
+| 01e-C3 (C3a/C3b) | 01e | `Joint` choice, which would let one question pick the speaker and the stance together (section 7.4). | S |
+| 01g-C1..C5 | 01g | The `tools` capability, the loop primitive, its metering, its run budget and the decide tool. C4 is the play-side policy of 01g-C5. | H for C4 only |
+| 01g-C6 | 01g | The final loop turn streams, and the loop can decline a tool call after visible text (8.2, 8.6). | H for C4 only |
 
 Nothing in C1, C2, C3 or C5 waits on 01g. C4 is a separate, last slice.
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 02-C1 | 01a, 01b, 01c, 01d, 09, 11, 12, 13 | The baseline of what `decide` already does in play and absorb, so no consumer re-specifies a landed call site. |
-| 02-C2a | 13 (13-C3, soft seam) | The pattern and code for a sampled choice among legal options in play: eligibility decided by code, the answer sampled by Grimoire, the record kept with the outcome. |
-| 02-C2b | 13 (13-C3) | A Decision-chosen intent on the contribution, which an NPC Action choice can be conditioned on. |
-| 02-C3 | 13 (13-C3) | The plan item's extension slot, so a legal-Action question rides the same call rather than adding one. |
-| 02-C4 | 12 | The play-side caps and placement rules for a decision asked as a tool. 12's investigation applies the same rules out of play. |
-| 02-C5a | 11 (11-C1) | The `epistemic` route, its task, item builder, mapping and fail-closed rule. |
-| 02-C5b | 09 (09-C1, 09-C2) | The `history_check` route, its task, item builder and mapping, with ungraded kept distinct from irrelevant. |
-| 02-C6 | 13, 12, and any later play decision | The shared rules every play-facing decision keeps (section 3): soft resolution, byte-identical when off, attribution, the ceiling and the play gate. |
+Rebuilt from the checklist's edges.
 
-**Changes from the checklist:** C2 is split into **C2a** (sampled next
-speaker) and **C2b** (turn intent). C5 is split into **C5a** (epistemic
-access, for 11) and **C5b** (history relevance, for 09). **C6** is new: the
-shared rules for play decisions, stated once so 13's NPC Action choice and
-12's tool use can cite them rather than restate them.
+| Contract (provided here) | Consumer | Edge | What the consumer uses it for |
+|---|---|---|---|
+| 02-C2 (C2a, C2b) | 13 (13-C3) | S | The pattern for a sampled choice among legal options in play (eligibility decided by code, the answer sampled by Grimoire, the record kept with the outcome), and a Decision-chosen intent an NPC Action choice can be conditioned on. |
+| 02-C3 | 13 (13-C3) | S (via the 02-C2 seam) | The plan item's `extra` slot, so a legal-Action question rides the same call rather than adding one. |
+| 02-C5a | 11 (11-C1, Decision stage) | H for the Decision stage | The `epistemic` route, its task, item builder, mapping and fail-closed rule. |
+| 02-C5b | 09 | S | The `history_check` route and the `history-rerank` task, item builder and mapping, with ungraded kept distinct from irrelevant. |
+| 02-C5b | 10 (10-C3) | S | The `history_check` route, to which 10 adds its `history-sufficiency` task. |
+
+02-C1 and 02-C6 have no edge of their own. 02-C1 is the baseline every
+Decision-lane spec reads. 02-C6 is the rule set that 13's NPC seam and any
+later play decision cite. 02-C4 has no consumer edge: 12 uses 01g-C5
+directly.
+
+**Contract IDs** match the checklist: 02-C1, C2a, C2b, C3, C4, C5a, C5b, C6.
 
 ---
 

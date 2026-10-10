@@ -1,6 +1,6 @@
 # 01e. Decision vocabulary: Rank, finer Score, multi-select and joint choice
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01e in `ROADMAP-CHECKLIST.md`. Lane: decision.
 **Baseline:** `main` at `35c1fb7`.
@@ -29,10 +29,12 @@ need it, and this spec is that change.
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01e-C1 `Rank` | 09 | Reranking a bounded candidate set of scenes after structural, lexical and semantic candidate generation (09-C1) |
-| 01e-C2 finer Score: `expected`, `tiers` | 09 | Pointwise relevance with ties explicit, when the Decision model is native-only |
-| 01e-C3a `MultiSelect` | 13, 11, 10 | Multi-target Actions (13-C3); "which of these present actors witnessed this" (11-C1); which planned sub-queries to run (10, optional) |
-| 01e-C3b `Joint` | 13 | One Action plus a target conditioned on it, with a joint distribution 01c can sample (13-C3) |
+| 01e-C1 `Rank` | 09 (S) | Reranking a bounded candidate set of scenes after structural, lexical and semantic candidate generation (09-C1) |
+| 01e-C2 finer Score: `expected`, `tiers` | 09 (S) | Pointwise relevance with ties explicit, when the Decision model is native-only |
+| 01e-C1..C3 | 02 (S) | The vocabulary 02's decide routes may ask (02-C5); 02 works without it |
+| 01e-C3b `Joint` | 13 (H for multi-target actions and legal sets over 254 options; otherwise not needed) | One Action plus a target conditioned on it, with a joint distribution 01c can sample (13-C3) |
+| 01e-C3a `MultiSelect` | 13 (with C3b) | The target set of a multi-target Action, asked after the action (section 6.2) |
+| 01e-C4 `Answer.marginals` apart from `distribution` | 01c | 01c's sampler reads C4 to refuse sampling marginals (01c-C2/C4) |
 
 ## 1. Current state (reconciled against main)
 
@@ -165,7 +167,7 @@ order — the order of the accepted proposal's `targets` list"
 and replayable, so it is the caller's. A caller that needs an order the model
 chooses asks a `Rank`.
 
-### 3.2 Two new optional fields on `Answer`
+### 3.2 Two new optional fields on `Answer` (01e-C4 and part of 01e-C2)
 
 - `marginals: dict[str, float] | None`: per-key probabilities a native
   endpoint reported **independently**: each candidate's or option's P(true)
@@ -637,8 +639,12 @@ flattened `Choice` on both paths, so a native answer carries a joint
 `head_first` give the head-level reading. The number of legal pairs is
 bounded by the choice limit, 255.
 
-**Shared.** `Answer.marginals` is never a `distribution` and is never
-sampled. Every refusal of a request is a `DecideRequestError` raised before
+**01e-C4 `Answer.marginals`.** Per-key probabilities a native endpoint
+reported independently (a lowered `Rank` or `MultiSelect`). It is never a
+`distribution`, never sums to 1, and is never sampled: 01c's sampler refuses
+it. Every structured answer has `marginals is None`.
+
+**Shared.** Every refusal of a request is a `DecideRequestError` raised before
 anything is sent. Every native-only incapacity is a `native_gap` sentence,
 refused unsent.
 
@@ -748,7 +754,6 @@ decide gate and `test_decide_chain_golden.py` are unchanged.
    ship 32, which is structural (section 4.1), and tune it with 01a-C1
    against 09's real candidate pools. If 09 needs more, it reranks in two
    rounds rather than raising the bound blind.
-5. **Missing edge (soft).** 01c-C2's sampler must refuse `marginals` and any
-   answer whose `distribution` is None. 01c-C4 states the second; the first
-   should be stated in 01c explicitly. Recommendation: 01c cites 01e-C1 and
-   01e-C3a and refuses any answer to a `Rank` or `MultiSelect`.
+5. **01c and marginals.** 01c-C2's sampler must refuse `marginals` (01e-C4)
+   and any answer whose `distribution` is None (01c-C4). Recommendation: 01c
+   cites 01e-C4 and refuses any answer to a `Rank` or `MultiSelect`.

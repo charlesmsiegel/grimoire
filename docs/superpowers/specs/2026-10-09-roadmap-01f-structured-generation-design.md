@@ -1,6 +1,6 @@
 # 01f. Structured generation: a provider's schema mode on `generate`
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01f in `ROADMAP-CHECKLIST.md`. Lane: Now (minor spec under 01;
 feeds the retrieval lane through 10 and the tool-calling spec 01g).
@@ -23,13 +23,16 @@ structured backend uses it").
 
 ## Required by
 
+Rebuilt from the edges in `ROADMAP-CHECKLIST.md` (01g ← 01f-C1/C2/C3 H;
+10 ← 01f-C1 H, 01f-C2 S).
+
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01f-C1 | 10 (10-C1, `history-query-plan`) | The query plan is generated on Fast with a schema, held to it where the provider can. |
-| 01f-C1 | 12 (12-C2, final results) | An investigation's final answer is a structured record. |
-| 01f-C1, 01f-C3 | 01g (01g-C2, the finalize turn) | A tool loop asks for its final answer with a schema and tools off. |
-| 01f-C2 | 10, 12, 01g | A provider that refuses the field still answers from the prompt. |
-| 01f-C3 | 10, 12, 01g, and any adopter in section 3.8 | One checker for "is this schema portable", and one tolerant reader of the reply. |
+| 01f-C1 | 01g (hard; 01g-C2a's finalize turn) | A tool loop asks for its final record with a schema, tools off, under the turn's output cap. |
+| 01f-C2 | 01g (hard) | The finalize turn inherits the refusal re-send. |
+| 01f-C3 | 01g (hard) | Every tool's parameter schema passes `schemas.check`; arguments and the final record are read with `schemas.find_object`. |
+| 01f-C1 | 10 (hard; 10-C1, the `history_plan` route on Fast) | The query plan is generated with a schema and the per-call `max_tokens` cap, held to the schema where the provider can. |
+| 01f-C2 | 10 (soft) | A provider that refuses the field still answers the plan from the prompt. |
 
 ## 1. Current state (reconciled against main)
 
