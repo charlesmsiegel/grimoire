@@ -2549,3 +2549,15 @@ picker; newer-format banner.
 These are planning-time facts (the two decisions pages re-read 2026-10-08 for
 slice H). The slice that implements each adapter re-checks its reference before
 coding, and records an open point here.
+
+**Re-checked 2026-10-10 for 01e-S5** (the pointwise lowering of `Rank` and
+`MultiSelect`, and `Joint`'s flattened choice). Nothing moved that 01e relies
+on. OpenRouter's reference still documents exactly three question types
+(`noul`, `choice`, `score`) and no rank, multi-select or joint type; it
+documents no bound on questions per request (a 413 "Request payload exceeds
+size limits" names none), and none on a choice's criteria or a score's levels
+in the schema itself. OpenAI's guide still lists `predicate`, `choice` and
+`score` and states no limits; the API reference URL above returned 404 on
+2026-10-10, so its "2 to 255 choices" could not be re-read and
+`NATIVE_MAX_OPTIONS` stays 255 on the 2026-10-08 reading. Neither provider's
+structured-output reference was re-read in this session.

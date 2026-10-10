@@ -1256,9 +1256,12 @@ def test_outcome_and_render_spell_a_ranking():
     json.dumps(out)
 
 
-def test_native_gap_names_a_rank():
-    gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _rank(pointwise="Relevant?"))))
-    assert "relevant" in gap and "rank" in gap
+def test_native_gap_names_a_rank_without_pointwise():
+    gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _rank())))
+    assert gap == ("Question relevant ranks its candidates and names no pointwise question; "
+                   "a decisions endpoint cannot order them.")
+    assert decisions.native_gap(Item("c", (Predicate("p", "i"),
+                                           _rank(pointwise="Relevant?")))) == ""
 
 
 # --- 01e: MultiSelect, on the structured path ---------------------------------
@@ -1352,9 +1355,8 @@ def test_outcome_and_render_spell_a_selection():
         assert back.answers["saw"] == Answer(chosen)
 
 
-def test_native_gap_names_a_select():
-    gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _select())))
-    assert "saw" in gap and "multi-select" in gap
+def test_native_gap_takes_a_select():
+    assert decisions.native_gap(Item("c", (Predicate("p", "i"), _select()))) == ""
 
 
 # --- 01e: Joint, and the native lowering ----------------------------------------
@@ -1556,6 +1558,118 @@ def test_native_gap_counts_a_joints_pairs_with_none():
     assert decisions.native_gap(Item("c", (_wide_joint(255),))) == ""
     gap = decisions.native_gap(Item("c", (_wide_joint(255, allow_none=True),)))
     assert "act" in gap and "256" in gap
+
+
+def test_native_form_lowers_a_rank_and_a_select_to_predicates():
+    rank = _rank(pointwise="Does this scene bear on the turn?")
+    select = _select(options=CAST[:2])
+    item = Item("ctx", (Predicate("over", "i"), rank, select))
+    lowered, lift = decisions.native_form(item)
+    assert lowered.context == "ctx"
+    assert lowered.questions == (
+        Predicate("over", "i"),
+        Predicate("relevant#0", "Does this scene bear on the turn?\n\n"
+                                "Candidate scene:pier: The pier scene"),
+        Predicate("relevant#1", "Does this scene bear on the turn?\n\n"
+                                "Candidate scene:market: The market scene"),
+        Predicate("relevant#2", "Does this scene bear on the turn?\n\n"
+                                "Candidate scene:storm: The storm scene"),
+        Predicate("saw#0", "Who saw it?\n\nOption characters:mara: Mara\n\n"
+                           "Is this option one of those selected?"),
+        Predicate("saw#1", "Who saw it?\n\nOption characters:winifred: Winifred\n\n"
+                           "Is this option one of those selected?"))
+    assert lift == decisions.Lift((("over", ("over",)),
+                                   ("relevant", ("relevant#0", "relevant#1", "relevant#2")),
+                                   ("saw", ("saw#0", "saw#1"))))
+    # The caller's text is a value, never a template.
+    braces = MultiSelect("s", "Pick {any}", (Option("o", "{id}"),))
+    (low,) = decisions.native_form(Item("c", (braces,)))[0].questions
+    assert low.instructions.startswith("Pick {any}\n\nOption o: {id}")
+    with pytest.raises(ValueError, match="pointwise"):
+        decisions.native_form(Item("c", (_rank(),)))
+
+
+def test_native_gap_names_a_lowered_id_that_collides():
+    rank = _rank(pointwise="Relevant?")
+    for questions in ((rank, Predicate("relevant#1", "i")),
+                      (Predicate("relevant#1", "i"), rank),
+                      (_select(), Predicate("saw#0", "i"))):
+        gap = decisions.native_gap(Item("c", questions))
+        lowered = "saw" if questions[0].id == "saw" else "relevant"
+        assert gap.startswith(f"Question {lowered} is asked natively as "), gap
+        assert "already uses" in gap
+    # An id holding `#` is legal; only a collision is refused.
+    assert decisions.native_gap(Item("c", (rank, Predicate("relevant#9", "i")))) == ""
+
+
+def _lifted(q, answers: list[Answer]) -> Answer:
+    item = Item("ctx", (q,))
+    lowered, lift = decisions.native_form(item)
+    result = ItemResult({low.id: a for low, a in zip(lowered.questions, answers, strict=True)},
+                        backend="native")
+    return decisions.native_lift(item, result, lift).answers[q.id]
+
+
+def _p(*ps) -> list[Answer]:
+    return [_native(PRED, probability=p) for p in ps]
+
+
+def test_a_native_rank_is_its_candidates_tiers_by_p_true():
+    rank = _rank(pointwise="Relevant?", top=1, allow_none=True)
+    answer = _lifted(rank, _p(0.2, 0.9, 0.5))
+    assert answer.answer == Ranking((("scene:market",), ("scene:storm",), ("scene:pier",)))
+    assert answer.marginals == {"scene:pier": 0.2, "scene:market": 0.9, "scene:storm": 0.5}
+    assert answer.distribution is None and answer.probability is None
+    # Equal P(true) is one tier, never broken; 0.5 places a candidate.
+    tied = _lifted(rank, _p(0.7, 0.7, 0.5))
+    assert tied.answer == Ranking((("scene:pier", "scene:market"), ("scene:storm",)))
+    with pytest.raises(ValueError):
+        tied.answer.flat()
+
+
+def test_a_native_rank_with_a_candidate_unanswered_is_unreadable():
+    rank = _rank(pointwise="Relevant?")
+    missing = _lifted(rank, [*_p(0.8, 0.3), Answer(None, "unreadable")])
+    assert (missing.answer, missing.reason, missing.detail) == (None, "unreadable", "")
+    assert missing.marginals == {"scene:pier": 0.8, "scene:market": 0.3}
+    part = _lifted(rank, [*_p(0.8, 0.3), Answer(None, "refused")])
+    assert part.reason == "unreadable" and part.marginals == {"scene:pier": 0.8,
+                                                              "scene:market": 0.3}
+    refused = _lifted(rank, [Answer(None, "refused")] * 3)
+    assert refused == Answer(None, "refused") and refused.marginals is None
+    # A bool chosen with no probability cannot be placed.
+    blind = _lifted(rank, [Answer(True), *_p(0.3, 0.2)])
+    assert blind.reason == "unreadable"
+
+
+def test_a_native_select_is_its_options_answered_true():
+    select = _select(max=2)
+    answer = _lifted(select, _p(0.8, 0.1, 0.6))
+    assert answer.answer == ("characters:mara", "characters:seraphine")
+    assert answer.marginals == {"characters:mara": 0.8, "characters:winifred": 0.1,
+                                "characters:seraphine": 0.6}
+    assert answer.distribution is None
+    assert _lifted(select, _p(0.1, 0.2, 0.3)) == Answer((), marginals={
+        "characters:mara": 0.1, "characters:winifred": 0.2, "characters:seraphine": 0.3})
+
+
+def test_a_native_select_at_one_half_abstains_only_with_allow_none():
+    at_half = _p(0.8, 0.5, 0.1)
+    assert _lifted(_select(allow_none=True), at_half).reason == "abstained"
+    strict = _lifted(_select(), at_half)
+    assert (strict.answer, strict.reason, strict.detail) == (None, "unreadable", "")
+    assert strict.marginals == {"characters:mara": 0.8, "characters:winifred": 0.5,
+                                "characters:seraphine": 0.1}
+
+
+def test_a_native_select_out_of_bounds_is_unreadable_never_repaired():
+    three = _p(0.9, 0.8, 0.7)
+    over = _lifted(_select(max=2), three)
+    assert over.reason == "unreadable" and over.marginals["characters:seraphine"] == 0.7
+    under = _lifted(_select(min=1), _p(0.1, 0.2, 0.3))
+    assert under.reason == "unreadable" and under.marginals is not None
+    assert _lifted(_select(), [Answer(None, "refused")] * 3) == Answer(None, "refused")
+    assert _lifted(_select(), [*_p(0.9, 0.1), Answer(None, "refused")]).reason == "unreadable"
 
 
 def test_native_questions_are_the_three_an_endpoint_has():

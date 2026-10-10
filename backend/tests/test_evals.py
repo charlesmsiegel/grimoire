@@ -622,6 +622,33 @@ def test_the_native_joint_recording_is_read_as_a_pair_with_its_distribution():
     assert decisions.head_first(answer, joint) is None
 
 
+def _native_reading(case_id: str, variant: str):
+    case = case_mod.BY_ID[case_id]
+    (recording,) = [r for r in case.recordings if r.variant == variant]
+    ctx = case.build()
+    runner.native_output(ctx, recording.native,
+                         recording.path(case.id).read_text(encoding="utf-8"))
+    (question,) = ctx["items"][0].questions
+    return ctx["native_results"][0].answers[question.id]
+
+
+def test_the_native_rank_and_select_recordings_are_lifted_from_their_predicates():
+    """Each is read through its production adapter, which sent one pointwise
+    predicate per candidate or option: the answer carries every P(true) on
+    `marginals`, never a distribution."""
+    from grimoire import decisions
+
+    rank = _native_reading("decide-rank", "native")
+    assert isinstance(rank.answer, decisions.Ranking) and rank.answer.rest == ()
+    assert rank.answer.flat()[:2] == ("scene:ledger-search", "scene:lost-ledger")
+    assert len(rank.marginals) == 5 and rank.distribution is None
+    select = _native_reading("decide-select", "native")
+    assert select.answer == ("characters:mara",) and len(select.marginals) == 3
+    undecided = _native_reading("decide-select", "native-undecided")
+    assert (undecided.answer, undecided.reason) == (None, "unreadable")
+    assert undecided.marginals["characters:winifred"] == 0.5
+
+
 @pytest.mark.parametrize("case", DECIDE_CASES, ids=[c.id for c in DECIDE_CASES])
 def test_every_decide_case_runs_through_live(monkeypatch, tmp_path, case):
     """Every decide case, F's and G's, runs down the chain: its compliant

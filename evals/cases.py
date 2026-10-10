@@ -2139,7 +2139,10 @@ CASES: tuple[Case, ...] = (
              # Two ranked where at least three were asked for.
              Recording("short", ("decide.answer",), "json"),
              # A null, which this rank does not allow.
-             Recording("null", ("decide.answer",), "json"))),
+             Recording("null", ("decide.answer",), "json"),
+             # OpenRouter's decisions endpoint, sent one pointwise predicate
+             # per scene in one request: the scenes in tiers of P(true).
+             Recording("native", (), "json", native="openrouter"))),
     Case(id="decide-select",
          task="continuity-identity",
          hypothesis="asked through decide() which of three characters present saw "
@@ -2159,7 +2162,14 @@ CASES: tuple[Case, ...] = (
              # `min`, so unreadable -- never padded.
              Recording("short", ("decide.answer",), "json"),
              # A null, which this select does not allow.
-             Recording("null", ("decide.answer",), "json"))),
+             Recording("null", ("decide.answer",), "json"),
+             # OpenAI's decisions endpoint, sent one "is this option selected"
+             # predicate per character: the watcher alone above 0.5.
+             Recording("native", (), "json", native="openai"),
+             # The same, with one option at exactly 0.5: the selection cannot
+             # be stated, and this select allows no null, so it is unreadable
+             # rather than abstained.
+             Recording("native-undecided", ("decide.answer",), "json", native="openai"))),
     Case(id="decide-joint",
          task="response-selector",
          hypothesis="asked through decide() for one action and its target in one "
