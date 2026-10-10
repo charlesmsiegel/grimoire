@@ -149,8 +149,8 @@
   "recall-q03": [
    "recall-d01x",
    "identity-d05x",
-   "recall-d03x",
    "filler-02",
+   "recall-d03x",
    "identity-d10x",
    "filler-07",
    "filler-36",
@@ -239,8 +239,8 @@
    "identity-d01p",
    "recall-d05x",
    "filler-04",
-   "filler-36",
-   "filler-07"
+   "filler-07",
+   "filler-36"
   ],
   "search-q01": [
    "search-d01x",
@@ -336,7 +336,7 @@
    "identity-d07p",
    "filler-04",
    "recall-d04x",
-   "recall-d09x"
+   "filler-09"
   ],
   "search-q09": [
    "search-d09x",
