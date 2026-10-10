@@ -119,7 +119,7 @@ SCORE_SLACK = 1e-6
 #:
 #: It has to be a bound and not just a batch size. Without it, turning recall
 #: on over a large store sends every uncached entry in one `embed` call: many
-#: sequential requests with the event loop blocked behind them, and a rate
+#: sequential requests with a worker held behind them, and a rate
 #: limit anywhere in that run raises before a single vector is saved — so the
 #: next turn repeats the whole thing and fails in the same place.
 #:
@@ -129,8 +129,8 @@ WARM_LIMIT = embeddings.BATCH - 1
 
 #: One process-wide client, for its connection pool: a recall runs on nearly
 #: every turn, and a fresh TLS handshake each time is a needless share of a
-#: budget that is blocking the event loop. Lazy — constructing this opens
-#: nothing.
+#: budget that is holding a worker and delaying the turn. Lazy — constructing
+#: this opens nothing.
 _CLIENT = embeddings.EmbeddingsClient()
 
 
