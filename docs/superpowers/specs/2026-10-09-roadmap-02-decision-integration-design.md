@@ -983,9 +983,8 @@ never both, so a contribution never pays for two pre-generation calls.
 ### 7.2 The questions
 
 ```python
-def plan_item(actor: dict, conversation: list[dict], brief: str,
-              extra: tuple[decisions.Question, ...] = ()) -> decisions.Item:
-    """(stance, disclosure, tension, *extra) over intent_item's context."""
+def plan_item(actor: dict, conversation: list[dict], brief: str) -> decisions.Item:
+    """(stance, disclosure, tension) over intent_item's context."""
 
 DISCLOSURE_ID = "disclosure"   # Choice, allow_none: share | hint | withhold
 TENSION_ID = "tension"         # Score: ("ease off", "hold steady", "raise the stakes")
@@ -997,7 +996,7 @@ TENSION_ID = "tension"         # Score: ("ease off", "hold steady", "raise the s
 | `disclosure` | Choice, none allowed | Of what *this character already knows*, how much they let out | **Never** (argmax) | A random reveal of a secret is a continuity event nobody chose. A deterministic answer can be reviewed in the inspector; a draw cannot be argued with. |
 | `tension` | Score, three levels | Whether the reply cools, holds or raises the scene | Never | It shapes pacing. A coin flip on pacing is noise. |
 
-The section (6.5) renders one line per read answer and nothing for an
+The block (6.5) renders one line per read answer and nothing for an
 abstained or unread one. Disclosure's line says "of what they already know".
 That keeps knowledge in the actor prompt's existing rules: perception and
 "Use a fact ... only when their own established knowledge ... supplies it"
@@ -1005,21 +1004,44 @@ That keeps knowledge in the actor prompt's existing rules: perception and
 It can never grant knowledge.
 
 The task is `turn-plan`, on the `turn_plan` route. The record is
-`"intent"` with `disclosure` and `tension` added, and the stance's replay as
+`"intent"` with `disclosure` and `tension` added, and the stance's `draw` as
 in C2b.
 
 ### 7.3 The extension slot (for 13-C3)
 
-`extra` lets a later spec add questions to the same item, so they ride the
-same call instead of adding one:
+The slot carries extra **items**, not extra questions on the plan's item.
+13's NPC Action decision needs a context of its own: a sheet summary, the
+actor's conditions, and descriptions of the legal set (13 section 24.3). The
+plan's item context is the conversation and the actor's brief.
 
-- each extra question is built and read back by its owner (13's legal-Action
-  `Choice`, from `available_actions`);
-- the plan code renders none of them, and stores their answers under the
-  owner's key in the record, untouched;
+```python
+def plan_items(plan: decisions.Item,
+               extra: tuple[decisions.Item, ...] = ()) -> tuple[decisions.Item, ...]:
+    """(plan, *extra): one `decide("turn-plan", ...)` call."""
+```
+
+**What "one call" means with extra items:**
+
+- On a **structured** stage, the plan and up to seven extra items are one
+  chunk, so one call (`decisions.MAX_ITEMS_PER_CALL`, `decisions.py:101`).
+- On a **native** stage, every item is its own request (`_native`, at most
+  `NATIVE_CONCURRENCY` in flight, `inference.py:86`). It is still one
+  `decide()` under one deadline (3.4), but it is not one request.
+
+**What the slot cannot do:** an extra item answered in the same call cannot
+be conditioned on that call's stance. Both are answered together, and
+neither sees the other. A 13 Action that must follow the stance needs a
+second, ordered call. That is 13's choice to make and to gate.
+
+**Rules for the owner:**
+
+- each extra item is built, read back and drawn from by its owner (13's
+  legal-Action `Choice` or `Joint`, from `available_actions`);
+- the plan code stores the owner's `ItemResult` and any 01c record under the
+  owner's key in `intent`, untouched, and renders none of it;
 - the owner keeps every 02-C6 rule.
 
-This is the seam 13-C3 cites. 02 adds no Action question itself.
+02 adds no Action item itself.
 
 ### 7.4 What the plan does not batch: the speaker
 
@@ -1089,9 +1111,13 @@ provider-neutral parameters (01g-C2):
 
 ### 8.2 Where a tool call is honoured
 
-**Only before any visible text.** The first turn of the loop may be a tool
-call. Once the stream has produced a visible delta, a later tool call is
-**not executed**. The contribution ends as written and the call is recorded
+**Only before any visible text.** "Visible" means text the watcher would
+show: `ResponseWatcher`'s visible output, not any non-empty delta. With
+`perception_rider` on, the hidden perception fence is a non-empty delta that
+is never shown, so testing raw deltas would decline every later tool call.
+The test handed to 01g-C6's decline hook is the watcher's. The first turn of
+the loop may be a tool call. Once the watcher has produced visible text, a
+later tool call is **not executed**. The contribution ends as written and the call is recorded
 as `declined: "after_text"`.
 
 **Why:** display frames already sent cannot be withdrawn. `ResponseWatcher`
@@ -1121,13 +1147,17 @@ The tool is offered only when **all** of these hold:
 - the actor is an NPC (not `grimoire`);
 - the scene route's primary is not known to lack `tools` (01g-C1: a `no`
   refuses; an `unknown` offers, as with every capability, 01 section 5.3);
-- the contribution is composed fresh (C2b's `_plans` conditions, minus the
-  typed-note rule: a model may still meet an unanticipated choice under a
-  note).
+- the generation is a fresh contribution **or a reroll of one**. C2b's
+  `_plans` conditions apply, minus the typed-note rule (a model may still
+  meet an unanticipated choice under a note). A reroll is the one replay
+  that offers the tool.
 
-A reroll offers the tool again. The loop's turns come after the snapshot,
-so a reroll is a new response and may decide differently. The snapshot itself
-never holds a tool result.
+A reroll is a new **variant** of the same response, not a new response:
+`regenerate_response` → `_reroll_frames` → `_land_variant` → `save_variant`
+and `activate` (`character_turns.py:1521-1588`, `:1738-1760`). Its loop turns
+come after the snapshot, so it may decide differently, and the snapshot
+never holds a tool result. Retry, roll resume and Keep writing do not offer
+the tool: they continue a reply whose loop is already over.
 
 ### 8.5 Cost, stated plainly
 
@@ -1143,9 +1173,11 @@ The play gate reports all three separately.
 
 ### 8.6 Records, invariants and gate
 
-**Record.** The tool decision is stored on the response record under
-`"tool"`: the question, the options, the selection, 01c-C3's replay where
-sampled, and the backend. 01b-C1 captures it. The transcript holds only the
+**Record.** The tool decision is stored **per variant**, beside the
+variant's `made_by`, under `"tool"`: the question, the options, the
+selection, 01c-C3's record, and the backend. Swiping back to variant 1 then
+shows variant 1's decision, and a reroll's decision never overwrites another
+variant's. 01b-C1 captures it. The transcript holds only the
 final visible text (3.1 rule 2). Tool turns are never shown.
 
 **Invariants.** 3.1 holds, with rule 1's exception bounded by 8.2–8.3. The
