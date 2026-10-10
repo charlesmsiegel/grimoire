@@ -717,6 +717,14 @@ in the slice whose call site names the task (`test_routing_guard.py:659`,
 model for "how does Mara answer" wants it for all three. The ledger still
 tells the tasks apart.
 
+`legacy=routing.NO_LEGACY` marks a route born at format 2 that has no
+legacy key. `Route.legacy` is `""` today, which means "this route *is* a
+legacy route", and that would add `route_turn_plan` to `LEGACY_ROUTES` and
+`CONFIG_KEYS` (`store/routing.py:55-58`, `:142-158`, `:183`). The sentinel is
+a checklist shared structure: 01g, 09, 10 and 02-C5 need it, and whichever
+lands first adds it. The `epistemic` and `history_check` routes (9.2, 9.3)
+carry it too.
+
 ### 6.5 Sampling, the record and the section
 
 **Sampling.** It follows the same "whether by argmax, which by sample" rule

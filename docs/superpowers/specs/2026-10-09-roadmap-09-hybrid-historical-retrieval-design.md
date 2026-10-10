@@ -206,7 +206,7 @@ Concretely:
  |   -> merge.order(...)                admission per signal, RRF order   |
  |   -> [rerank]                        optional decide, 01e Rank/Score   |
  |   -> coverage + widening             tier 1 -> tier 2 (09-C2)          |
- |   -> expand.excerpts (08-C3)         bounded windows, prompt view      |
+ |   -> expand.excerpts (08-C3b)        bounded windows, prompt view      |
  |   -> budget.fit                      01i-C1 ceiling, per-scene units   |
  +------------------------------------------------------------------------+
                                    | Evidence (frozen, JSON-safe detail)
@@ -231,7 +231,7 @@ place a turn calls into the package.
 | `store/history/semantic.py` | Query embedding, warm run, cosine over a live set; the outage memo |
 | `store/history/merge.py` | Admission, ordering, `merge(Evidence, Evidence)` for 10 |
 | `store/history/coverage.py` | The deterministic sufficiency verdict and widening decision |
-| `store/history/expand.py` | Excerpts through 08-C3, through the regex prompt view |
+| `store/history/expand.py` | Excerpts through 08-C3b, through the regex prompt view |
 | `store/history/budget.py` | The ceiling (01i-C1) and the fit |
 | `store/history/retrieve.py` | `retrieve()`, the one async entry, composing the above |
 | `store/context/history.py` | The section's data, render and `shed` hook (context side) |
@@ -749,7 +749,7 @@ async def retrieve(cid: str, sid: str, query: Query, *, ceiling: int,
 ```
 
 File and CPU stages run in `anyio.to_thread.run_sync`; the query embedding
-goes through 01h-C4's async path; the rerank (a `Reranker`, the callable the
+goes through 01h-C4b's async path; the rerank (a `Reranker`, the callable the
 route layer builds around `operations.decide`) is already async. Nothing in
 `retrieve` takes a campaign lock: its reads are the context builder's
 fail-soft reads, and it writes nothing to a campaign (vectors go to the
@@ -1016,7 +1016,7 @@ metered under the eval scope.
 - **Reasons never reach the prompt.** Extended to the history row (9.5).
 - **Routing and operation guards.** `history-recall` joins `EMBED_TASKS`
   (`routing.py:174`) and is held by `test_operation_guard.py`'s embed half:
-  the door is `embed` (or 01h-C4's async door), the `space=` traces back to
+  the door is `embed` (or 01h-C4b's async door), the `space=` traces back to
   `embed_space.endpoint`. The rerank's decide task lands with its call site,
   on a decide route (`test_routing_guard.py`), resolved through
   `require_inference(..., operation="decide")` in `routes/`.

@@ -1,6 +1,6 @@
 # 01b. Decision capture at every decide site
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01b in `ROADMAP-CHECKLIST.md`. Lane: Decision (01a, 01b → 01c,
 01d → 02).
@@ -21,16 +21,25 @@ continuity decisions". That ruling's three reasons are answered in §3 below.
 |---|---|---|---|
 | (no ID) `inference.Capture` and `_captured`, `decisions.outcome`, `llm.ATTEMPTED` | 01 (landed, slice H) | the per-call hook and the outcome record | Hard |
 | (no ID) `store.prompt_log`, `routes.common._record_prompt` | #157 (landed) | the store a capture is filed to | Hard |
-| `_Call.stage` / `_Call.positions` | defined identically in 01a §5 | the stage and batch items each call carried | Soft (whichever lands first adds them) |
+| `_Call.stage` / `_Call.positions` | shared structure of 01a and 01b (`ROADMAP-CHECKLIST.md`, "Shared structures"; 01a §5) | the stage and batch items each call carried | Soft (whichever lands first adds them) |
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 01b-C1 | 01c | a sampled decision's distribution, seed and selection are visible beside the request (01c-C3's record is persisted by the caller; the capture shows it) |
-| 01b-C1 | 01d | an escalation hop is captured as a later stage of the same entry (01d-C2 says "metered and captured") |
-| 01b-C1 | 02 | every decide site 02 adds or changes is captured by the same helper |
-| 01b-C2 | 01c, 01d, 02 | adding a capture cannot change or fail a decision |
+Rebuilt from the "Dependency edges" list in `ROADMAP-CHECKLIST.md`.
+
+| Contract (provided here) | Consumer | Edge | What the consumer uses it for |
+|---|---|---|---|
+| 01b-C1 | 01c | S | a sampled decision's distribution and selection are visible beside its request. The replay record (01c-C3) is persisted by the caller, and the capture only shows it |
+| 01b-C1 | 01d | S | an escalation call is captured in the same scope's entry as the chain's calls. Its call record carries 01d's `hop: escalation` beside `stage` and `at` |
+| 01b-C1 | 01e | S | `Rank`, multi-select and joint-choice outcomes captured with no new capture code (the outcome is `decisions.outcome`) |
+| 01b-C1 | 01g | S | a Decision-as-tool call inside a loop is captured through the same helper |
+| 01b-C1, 01b-C2 | 02 | H for 02-C2b, C3, C4 and C5 | every decide site 02 adds or changes uses the helper, and the AST test in §6 holds that |
+| 01b-C1 | 10 | S | the retrieval-relevance decision a query plan's repair hop may ask is captured |
+| 01b-C1 | 11 | S | the epistemic classification decision (11-C1's Decision stage) is captured |
+| 01b-C1 | 13 | S | a Decision-chosen NPC action's distribution and legal set are visible beside its request |
+
+01f, 01h, 09 and 12 cite no 01b contract. A new decide site those specs add
+is still held to the helper by the §6 AST test.
 
 ## 1. Current state (reconciled against main)
 

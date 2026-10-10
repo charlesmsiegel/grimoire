@@ -1,6 +1,6 @@
 # 06. Store-editing skill
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 06 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06).
 **Baseline:** `main` at `35c1fb7`.
@@ -19,7 +19,8 @@ guards, and against 05 (`2026-10-09-roadmap-05-direct-edit-cache-sync-design.md`
 |---|---|---|---|
 | 05-C2 | 05 | The `python -m grimoire.cache sync` command and its flags, exit status and report, which the skill's procedure ends with. The drift test checks every flag the skill names against the real parser. | Hard |
 | 05-C1 / 05-C4 | 05 | `cache_sync.collecting()`, the in-process form for an agent that writes through `grimoire.store` from Python. | Soft (the skill can fall back to the CLI alone) |
-| 05-C2 (API) | 05 | `POST /api/cache/sync`, for a store the agent cannot run Python against (a phone). A tab that observes the API run end also forgets its remembered overview reads (05 section 3.2, 04-C2b). | Soft |
+| 05-C2 (API) | 05 | `POST /api/cache/sync`, for a store the agent cannot run Python against (a phone). | Soft (part of the hard 05-C2 edge, but the skill only mentions it) |
+| 04-C2b | 04 | The client's consistency bound, which the skill states so that an agent does not read a one-frame stale page as a failed sync (section 4.2, item 9). A tab that observes an API sync run end also forgets its remembered reads. | Soft |
 
 ## Required by
 

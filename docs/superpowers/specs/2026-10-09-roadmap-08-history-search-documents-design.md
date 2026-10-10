@@ -474,6 +474,10 @@ scene the actor ever appeared in. As metadata it costs a key change and a
 re-render (no embedding, 03-C7), and it is exactly what a structural
 prefilter wants. Open question 1.
 
+Where 07-C3c has landed, the `groups` slice reads its `scene_groups`
+projection instead of joining 07-C2 per cast member here, so 08 and 09 name
+the same groups for a scene. Both edges are soft.
+
 ## 5. Keys and `search_document_version` (08-C1)
 
 Each slice's digest is
@@ -1199,6 +1203,6 @@ embeddings client is injected at `vectors_for`'s `client` parameter.
    two are separate requests once input types differ.*
 10. **`allow_whole` default.** *Recommendation: off; the caller opts in when
     its budget is meant for whole short scenes.*
-11. **Is 07-C2 a hard edge?** *Recommendation: soft. Groups are metadata, so
-    08 can land before 07 and add the field later with a version bump that
-    re-embeds nothing.*
+11. **Is 07-C2 a hard edge?** Settled: soft in the checklist, with 07-C3c
+    soft beside it. Groups are metadata, so 08 can land before 07 and add the
+    field later with a version bump that re-embeds nothing.
