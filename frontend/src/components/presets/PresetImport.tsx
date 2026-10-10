@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Field } from "../Field";
 
 /** The SillyTavern import form. It owns the file as parsed, the name to save
@@ -25,6 +25,10 @@ export function PresetImport(
   function retireReads() {
     picked.current += 1;
   }
+  // Left any other way -- the column, the rail -- a read still in flight
+  // belongs to no session at all, and its failure must not land as an error
+  // on whatever page is open by then.
+  useEffect(() => { const reads = picked; return () => { reads.current += 1; }; }, []);
 
   function pickFile(f: File | undefined) {
     onError("");
