@@ -307,7 +307,7 @@ not automatic NPC play in II-A.
 The draft adds nothing MII does not say except the Decision seam (its section
 27), which becomes 13-C3.
 
-## 4. Milestones and slices
+## 4. Slices
 
 Milestones group the slices: **II-A** (13-S1 to 13-S9) is the substrate and
 delivers 13-C1a/b/c; **II-A2** (13-S10) adds the list ops of 7.7; **II-B**
@@ -317,9 +317,9 @@ each a new unit kind and new ops inside the II-A transaction; the **NPC seam**
 sketch that needs its own spec and is not sliced here.
 
 Landing order within this spec: S1 → S2 → S3 → S4 → S5, then S6, S7, S8 and
-S9 in parallel (each needs only S5); S10 after S4; S11 → S12, S13 and S14
-after S5, in parallel with each other once S11 has landed the unit-kind
-seam; S15 after S5 (and S6 for the shared payload parsing it reuses), then S16.
+S9 in parallel (each needs only S5; S9 also takes S7's authoring routes when
+present); S10 after S4; S11 after S5, then S12 and S13 in parallel, then S14
+after S12; S15 after S5 (S6 helps but is soft), then S16.
 Nothing in II-A to II-D needs another spec.
 
 The first demonstration (MII 38, kept), reachable at 13-S5: a checked Action

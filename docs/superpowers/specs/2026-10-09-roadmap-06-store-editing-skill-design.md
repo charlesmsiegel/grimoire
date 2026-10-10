@@ -417,6 +417,55 @@ procedure is *right*, whether an example uses a real name (a reviewer's job,
 and the privacy rule's), and whether an agent other than Claude Code actually
 discovers the adapter.
 
+## Slices
+
+Landing order within this spec: S1 -> S2.
+
+### 06-S1: The skill, its adapter and the drift test
+
+- **Delivers:** 06-C1 (part: the canonical `SKILL.md`, the `.agents/`
+  adapter, `test_skills_guard.py` with checks 1 to 6, the canonical file
+  added to `test_install_scripts.py`'s `DOCS`, and the CONTRIBUTING.md guard
+  row).
+- **Needs (this spec):** none.
+- **Needs (other specs):** 05-C2 (H: the CLI `python -m grimoire.cache sync`
+  with its parser `grimoire.cache.build_parser()`, and the exported report
+  vocabulary `PATH_STATUSES`, `REFUSAL_REASONS`, `KIND_OUTCOMES` and
+  `BATCH_FIELDS`); 05-C1 (S: `cache_sync.collecting()` with its `deleted`
+  keyword; until it lands, item 4 drops the in-process form and the skill
+  ends with the CLI alone); 05-C2 (S: `POST /api/cache/sync`; until it lands,
+  item 9 names no API path, and check 5 has none to resolve); 04-C2b (S: the
+  consistency bound the skill states in item 9; until it lands, that sentence
+  is left out).
+- **Scope:** Writes `.claude/skills/grimoire-store-editing/SKILL.md` per
+  section 4 and `.agents/skills/grimoire-store-editing/SKILL.md` per section
+  3.1, and adds `backend/tests/test_skills_guard.py` per section 6. The plan's
+  first task confirms which adapter directories are read (Open question 2);
+  if none is, `ADAPTER_DIRS` is empty and check 1's reverse half has nothing
+  to require.
+- **Acceptance:** the guard passes on the new files and fails on each fixture
+  section 9 lists; `test_install_scripts.py` fails on a Unix-only venv command
+  added to the skill.
+- **Size:** M
+
+### 06-S2: Routing to the skill
+
+- **Delivers:** 06-C1 (full: `AGENTS.md` names the skill, and the four
+  store-writing skills end by pointing to it).
+- **Needs (this spec):** 06-S1 (H).
+- **Needs (other specs):** none.
+- **Scope:** One sentence in `AGENTS.md`'s "Skills" section and one closing
+  line in each of `world-card-integration`, `create-world`,
+  `populate-world-content` and `ingest-campaign-log` (section 5). It is
+  separate from S1 because it edits documents the docs guard maintains, and a
+  restated run there is easier to review alone.
+- **Acceptance:** `test_docs_guard.py` passes, including
+  `test_no_document_restates_another` on the new `AGENTS.md` sentence and
+  `test_relative_links_resolve` on its link; check 6 still passes against the
+  new `AGENTS.md`; the manual dry run of section 9, with its summary in the PR
+  description.
+- **Size:** S
+
 ## 7. Contract
 
 **06-C1. A canonical skill in `.claude/skills/grimoire-store-editing/`, an
@@ -542,3 +591,4 @@ Each finding was verified against the code before it was folded in.
   link. M3 the phone case says loopback and `adb forward`. M4 05's acceptance
   now uses `image_descriptions`, the door this skill names. M5 the manual dry
   run's result goes in the PR description.
+- **Slices added (2 slices).**

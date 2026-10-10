@@ -29,7 +29,7 @@ Edges as `ROADMAP-CHECKLIST.md` lists them for 10.
 | 01f-C3 the portable schema subset, `schemas.render`, `schemas.find_object` | 01f | The plan schema stays inside the subset, the prompt carries its rendering, and the parse uses the shared tolerant reader (5.2, 5.4) | Hard (part of 01f-C1's refusal) |
 | 01a-C1 eval cost, latency and token reporting | 01a | The planning arms report the calls, tokens, time and three money columns they add (section 11) | Hard for live evals; offline needs nothing |
 | 01f-C2 schema refusal re-sent through the helper shared with decide | 01f | A provider that refuses the field still yields a plan | Soft |
-| 01d-C1 task policy; 01d-C2 one-hop escalation | 01d | Declaring that `history-sufficiency` may escalate, and escalating a non-answer or low margin once (section 7.3) | Soft: without it a non-answer is `unknown` and the repair hop does not run |
+| 01d-C1 task policy; 01d-C2a trigger evaluation; 01d-C2b one escalation hop | 01d | Declaring that `history-sufficiency` may escalate, and escalating a non-answer or low margin once (section 7.3) | Soft: without it a non-answer is `unknown` and the repair hop does not run |
 | 01a-C3 comparison table | 01a | Planning arms against 09's hybrid arm in one table | Soft |
 | 02-C5b history relevance kit, the shared `history_check` route | 02 | The decide route `history-sufficiency` lands on, shared with 09's rerank | Soft |
 | 01b-C1 decision capture at every decide site | 01b | Capturing the sufficiency decision to the prompt log | Soft: without it the decision is visible only in the history row |
@@ -71,7 +71,7 @@ route has no legacy layout to read, and neither existing option fits it
 **Decide has no escalation and never re-asks on an answer.** The decide chain
 moves on only on a failed call (`CLAUDE.md`, "What moves an item on to the
 next stage is a failed call, never an answer"); an abstention, a native
-`refused` and a `None` are answers. 01d-C2 is the one declared exception, a
+`refused` and a `None` are answers. 01d-C2b is the one declared exception, a
 single metered hop for a non-answer, and 10 uses it for exactly one question.
 
 **And 09 changed where this runs.** 09 moves retrieval out of `compose` into a
@@ -497,12 +497,12 @@ starting new calls once the turn-phase deadline has passed (review S1).
 a non-answer would turn "the checker could not say" into "go and spend more",
 which is the opposite of the cost rule.
 
-### 7.3 Escalation through 01d-C2
+### 7.3 Escalation through 01d-C2a and 01d-C2b
 
 When 01d has landed, `history-sufficiency` declares in its 01d-C1 policy that
 escalation is allowed, and a non-answer (abstention, native `refused`) or a
 low margin (where the backend reports one: a native distribution, never a
-fabricated one) is handed to 01d-C2's helper, which asks the declared next
+fabricated one) is evaluated by 01d-C2a and handed to 01d-C2b's hop, which asks the declared next
 resolver once, metered and captured. Its answer maps through 7.2 again; a
 second non-answer is `unknown`. A failed *call* is not escalated by 01d: it
 already moved down the decide chain to its fallback, which is the chain's
@@ -566,7 +566,7 @@ class RoundRecord:
 fields 12's RP trigger reads, and they are part of 10-C2: renaming or
 re-meaning one is a contract change, never a refactor. `sufficiency_source`
 says whether the last verdict was the check's own answer, an answer only
-after 01d-C2's escalation hop, or `unknown` (a non-answer that stayed one).
+after 01d-C2b's escalation hop, or `unknown` (a non-answer that stayed one).
 Evidence ids are 09-C1's (`EvidenceItem.evidence_ids`), copied unchanged, so
 12 can name exactly which evidence each round added; 10 defines no spelling of
 its own. `steps` is diagnostic and not stable.
@@ -703,6 +703,38 @@ false-trigger rate stays low and the added cost per planned turn is within a
 bound agreed in conversation. Figures are compared, never committed against a
 user's library.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3. `history_plan` defaults to
+`off` in every slice, so no turn plans until a reader turns it on.
+
+### 10-S1: The planner and one planned round
+
+- **Delivers:** 10-C1 (full); 10-C2 (part: the free gate on `thin`/`empty`, one planned round merged into `E0`, the shared turn-phase deadline, `MAX_PLAN_STEPS`, once per player post, and `PlanTrace`'s `terminal`, `trigger`, `e0` and `rounds`, with `sufficiency` always `not_asked`)
+- **Needs (this spec):** none
+- **Needs (other specs):** 09-C1 (H: `retrieve(Query)`, `history.merge(..., expand)`, `SceneRef.key` and evidence ids); 09-C2 (H: the `Coverage` verdict with `exhausted` and `error`, and the turn-phase deadline 10 draws from); 09-C3 (H: the history row the trace rides on); 01f-C1 (H: `generate(schema=)` structured mode per attempt, and the per-call `max_tokens` cap); 01f-C3 (H: `schemas.check`, `schemas.render`, `schemas.find_object`); 01f-C2 (S: a schema refusal re-sent without the mode — until it lands, a refusing provider fails the call and the trace says `unusable`)
+- **Scope:** The `history_plan` route lands with its one call site (the routing guard forces both into one slice), with `routing.NO_LEGACY`, its explicit `is NO_LEGACY` tests, the `NO_LEGACY_TASKS` baseline mechanism and the `test_routing.py` registry edits, unless 09-S5 already landed the sentinel and the mechanism. `store/history/plan.py` (`build_messages`, `schema_for`, `parse`, `query_of`), `templates/history_plan/`, the planner call in `routes/history_recall.py` (resolution in a worker, `_bounded_call` with `_noting`), the `history_plan` config key, the `plan` key on the history row. No repair and no check yet.
+- **Acceptance:** section 14's store tests (parse, `schemas.check` with zero and many offered records, the rendered schema in the prompt, `query_of`, `build_messages` caps and quoted data); the Routes tests for off, `sufficient`/`exhausted`/`error`, `thin` with one round (an `empty` `E0` gains items), resolution off the loop, unresolvable route, planner timeout with `_noting`, the deadline, one plan per round; the `NO_LEGACY` pins of section 13; `test_reasons_never_reach_the_prompt` with a plan.
+- **Size:** L
+
+### 10-S2: The sufficiency check and the repair hop
+
+- **Delivers:** 10-C3 (full); 10-C2 (full)
+- **Needs (this spec):** 10-S1 (H)
+- **Needs (other specs):** 02-C5b (S: the `history_check` route entry — until it lands, this slice lands 02's entry as written with `("history-sufficiency",)` alone, per section 4.1); 01d-C1 (S: the `TaskPolicy` row for `history-sufficiency` — until it lands, no row and the chain's default); 01d-C2a (S: the trigger evaluation — until it lands, a non-answer is `unknown`); 01d-C2b (S: one escalation hop after the unchanged chain — until it lands, `sufficiency_source` is never `escalated` and a non-answer stops planning); 01b-C1 (S: the decide capture helper — until it lands, the verdict is visible only in the history row)
+- **Scope:** `store/history/sufficiency.py`, `templates/history_check/`, the public `sufficient(...)` in `routes/history_recall.py`, its `decide-history-sufficiency` replay case, the repair hop (`tried`, novelty, quoted data), `final_check` passed by `gather` when 12's RP mode is on, and the rest of `PlanTrace` (`sufficiency`, `sufficiency_source`, `cheap_retrieval_failed`, the full terminal table). The `history-sufficiency` task lands with this call site on `history_check`. The `history_plan_repair` key lands here, default `on` but inert while `history_plan` is off.
+- **Acceptance:** section 14's Routes tests for repair (`insufficient` -> second plan, `sufficient`/`unknown` stop, `repair_redundant`, `unrepaired`), `final_check` and `cheap_retrieval_failed`, the trace's stable-field snapshot, escalation once 01d lands, the step cap; `sufficiency.item` asks no rationale; the replay case.
+- **Size:** M
+
+### 10-S3: Planning evals
+
+- **Delivers:** none in full (acceptance item 5)
+- **Needs (this spec):** 10-S2 (H)
+- **Needs (other specs):** 09-C4 (H: the long-history generator, harness and arms in `evals/history/`); 01a-C1 (H: per-case and per-call wall time, tokens and the three money columns, for the live arms); 01a-C2 (H: live evals metered by the production meter, for the live arms); 01a-C3 (S: the comparison table — until then, one report per arm)
+- **Scope:** Cases 1 to 10 of section 11 on 09's generator, the recorded planner replies and sufficiency decisions, the `plan`, `plan+repair` and `plan-always` arms beside 09's `hybrid`, `evals/run.py --history --plan` offline inside `pytest backend`, and the live arms with 09's downstream grader. The gate for making `auto` a default reads this slice's output; the default itself does not change here.
+- **Acceptance:** the offline validation cases parse as documented; the controls (young campaign included) do not trigger; live arms report steps, rows and the three money columns through 01a.
+- **Size:** M
+
 ## 12. Contract
 
 ### 10-C1: the `history_plan` route and a structured, validated plan
@@ -747,7 +779,7 @@ user's library.
   post-repair 10-C3 check said insufficient); per round, the questions,
   terms and subjects tried; and the scene keys and evidence ids of `E0` and
   of each round (`e0`, `rounds`).
-- **Escalation**: only the sufficiency check escalates, through 01d-C2, one
+- **Escalation**: only the sufficiency check escalates, through 01d-C2a/C2b, one
   hop, and only for a non-answer or a reported low margin.
 - **Failure**: never raises into the turn; the trace says where it stopped.
 
@@ -964,6 +996,8 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 | M4 no downstream metric | Fixed: live arms add 09's consistency grader (11) |
 | M5 `NO_LEGACY` truthiness | Fixed: explicit `is NO_LEGACY`, `str | None` noted for mypy (4.1) |
 | M6 excluded refs offered to the planner | Fixed: 09's filtered seeds only (5.1) |
+
+Slices added (3 slices), before the Contract section. The 01d-C2 citations now name 01d-C2a and 01d-C2b, the checklist's split.
 
 Coordinator inputs applied in the same pass: the schema fits 01f-C3; 10 has
 no 01i edge; 12's RP trigger is the stable `cheap_retrieval_failed` field with

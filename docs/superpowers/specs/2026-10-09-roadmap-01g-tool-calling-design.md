@@ -1336,6 +1336,245 @@ an honest `incapable` sentence, and such a fallback never rides.
   warning"). A tools-requiring route shows `tools` there with no new
   component. 01g adds no settings.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8.
+
+- S1 (capability), S2 (wire and adapters) and S3 (ledger fields) are
+  independent of each other and can land in parallel.
+- After S4, slices S5 (spend), S6 (streaming) and S8 (Claude SDK) can land
+  in parallel.
+- S7 (the decide tool) needs S5.
+
+**Routes.** No slice adds a tools route or the `tool_decision` route,
+because `test_routing_guard.py` fails a route whose tasks nothing uses.
+`tool_decision` (with `routing.NO_LEGACY`, if no other spec has added it
+yet) lands in the slice of its first consumer (12, or 02-C4 for its own
+route). The S4 guard rules are therefore vacuous until a consumer calls
+`run_tools`; each one is proven on a planted source instead.
+
+### 01g-S1: The `tools` capability and its seam refusal
+
+- **Delivers:** 01g-C1 (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:**
+  - `tools` joins `capabilities.NAMES`, `providers.CAPABILITIES`, `CANNOT`
+    and `_GERUND`.
+  - Presets: `claude` `never` (until S8), `anthropic` `always`, and
+    `possible` elsewhere. The adapter flag `calls_tools`, held equal to the
+    presets' `never`.
+  - The OpenRouter catalog rule (subject to the plan's verification).
+  - The user override.
+  - The `tools` probe through `client.single`, which gains `tools=` and
+    `tool_choice=`, behind the existing confirm.
+  - The frontend `CapabilityName`, `TESTABLE`, `OVERRIDABLE` and phrase
+    entries.
+  - The seam's `incapable` refusal needs no new code: a route declaring
+    `requires=("tools",)` gets it through `_needs`.
+- **Acceptance:**
+  - `resolve_caps` places `tools` from each source, and `claude` is `no`
+    (adapter);
+  - a planted route requiring tools refuses a known `no` with the
+    `incapable` sentence, and drops a `no` fallback into `fallback_missing`;
+  - the probe passes on a call, and gives `unknown` on a reply without one.
+- **Size:** M
+
+### 01g-S2: Neutral tool shapes, wire lowering and stream parsing on the HTTP adapters
+
+- **Delivers:** 01g-C2a (part: `tool_calls.py` shapes and `Toolset`
+  validation; lowering and the `Collector` on OpenRouter, OpenAI-compatible
+  and Anthropic; the facade's `tools=` / `tool_choice=`; `tools_refused`)
+- **Needs (this spec):** none
+- **Needs (other specs):** 01f-C3 (H: `schemas.check` for tool parameter
+  schemas, and `conforms` over the same subset)
+- **Scope:**
+  - New stdlib leaf `tool_calls.py`: shapes, `Toolset`, `conforms` and the
+    `Collector`.
+  - Adapter `generate(..., tools=, tool_choice=)`, sent only when given.
+  - Message lowering in `openai_compatible._strict_messages` and
+    `anthropic._messages`.
+  - Stream fragment parsing, including a new `id` at an already-used index,
+    and opaque state.
+  - `_stamp` preserves the `Collector`.
+  - `llm._tools_refusal`, which is not observed and is composed by
+    `routes_failed`.
+  - `note_prompt` counts tool definitions.
+  - `llm_fakes` gains tool-call SSE bodies per kind.
+  - Nothing calls tools yet.
+- **Acceptance:**
+  - `test_tool_calls.py` (shapes, lowering round-trips, strict and
+    Anthropic folding);
+  - the per-adapter stream parsing tests, including a retried attempt's
+    fragments being discarded;
+  - a call without tools is byte-identical to the baseline.
+- **Size:** L
+
+### 01g-S3: Run attribution on the ledger and the capture
+
+- **Delivers:** 01g-C3 (part: `run_id`, `loop_turn` and `tool_calls` on
+  `usage.record` / `Meter` / `meter`; `decide(run_id=, loop_turn=,
+  response_id=)`; `llm_capture.RUN_KEY` preserved by `_stamp`)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:**
+  - Optional ledger fields, written only when set; `usage_rollup.VERSION`
+    is unchanged.
+  - `decide` threads the new keywords to every meter it opens.
+  - The incoming-response capture carries `run_id` when the holder has one.
+  - This is the field 01h-C5's `run_id` lands in.
+  - No caller passes them yet.
+- **Acceptance:**
+  - a row with `run_id` and `loop_turn` round-trips, and an older row reads
+    unchanged;
+  - `decide(run_id=...)` stamps every stage's row;
+  - the capture's meta carries `run_id` across a retried attempt.
+- **Size:** S
+
+### 01g-S4: The loop primitive (joined)
+
+- **Delivers:**
+  - 01g-C2a (full);
+  - 01g-C3 (full);
+  - 01g-C4 (part: turns, tool calls, decisions-count plumbing, result
+    characters, the wall clock with its three cases, the per-turn output cap
+    through `call_chain`, `cancelled`, finalize-on-limit, and `limit`
+    reporting).
+- **Needs (this spec):** 01g-S2 (H); 01g-S3 (H)
+- **Needs (other specs):**
+  - 01f-C1 (H: per-attempt structured mode on `generate(schema=)` for the
+    finalize turn, and `call_chain(max_tokens=)` for the per-call cap);
+  - 01f-C2 (H: the schema-refusal re-send helper, for the finalize turn);
+  - 01f-C3 (H: `schemas.find_value` for the final record);
+  - 01d-C1 (S: `TaskPolicy.fallback`. Until it lands, the chain's own
+    fallback is honoured);
+  - 01i-C1 (S: `wire.Limits.max_output`. Until it lands, the cap is the
+    budget's alone).
+- **Scope:**
+  - `inference.run_tools` over an internal event generator.
+  - The caller's `execute`, with terminal calls returned as `final_call`.
+  - `tool_calls.registered` on its own bounded executor.
+  - Argument validation, truncation and the finalize turn
+    (`templates/tools/finalize.j2`).
+  - Per-turn meters carrying `run_id`, `loop_turn`, `round_id` and
+    `response_id`.
+  - `TurnCapture` and the trace.
+  - Sticky fallback, id rewriting at a switch, thinking off on inheriting
+    targets, and the `required` downgrade.
+  - The store-root pin, and the unfrozen-`PreparedMessages` refusal with
+    `with_appended` keeping `on_variant` and `settings`.
+  - The task `WeakSet` recursion check.
+  - `routing.TOOLS_OPTIONAL` (empty) and `resolve.known_lacks`.
+  - The new routing and operation guard recognisers.
+  - `test_tool_guard.py` with `# tool-ok:`, and the `CONTRIBUTING.md` row
+    that guard needs.
+  - `FakeToolTurns` in `llm_fakes`.
+  - Rule 6 forces the guards to land with the primitive they police: a
+    `run_tools` added without its guard would be unpoliced from the start.
+- **Acceptance:**
+  - the loop tests of section 6: happy path, finalize, each count and wall
+    limit with its `limit`, fallback, failure, structure, the caller's side;
+  - the gate additions for wall, limits, routes, fallback and execution;
+  - `test_tool_guard.py` flags a planted writer and allows accounting;
+  - a scripted three-turn run over a `frozen_copy` home.
+- **Size:** L
+
+### 01g-S5: The spend ceiling
+
+- **Delivers:** 01g-C4 (full: spend projection, preflight)
+- **Needs (this spec):** 01g-S4 (H)
+- **Needs (other specs):** 01f-C1 (H: `cap_sent(target)`)
+- **Scope:**
+  - `inference.price_for`: catalog price, then the user's rates for a
+    provider that does not report its own, else unpriceable.
+  - The projection: counted in a thread with `PROJECTION_MARGIN`, and the
+    reported counts from turn 2.
+  - "Spent so far" over the run's rows.
+  - `RunRefused("unpriceable")` at entry, and `inference.tool_run_refusal`
+    as the pure preflight.
+  - The spend check before each turn.
+  - Off unless a caller sets `spend_ceiling_usd`.
+- **Acceptance:**
+  - the spend tests of section 6 and the gate additions: catalog pricing,
+    a `"": 0` default not pricing a billed attempt, uncapped is unpriceable,
+    a priced chain stops before crossing, an unpriced chain refused with
+    nothing sent, a reported `cost_usd` never read into the guard;
+  - the preflight answers before reserving.
+- **Size:** M
+
+### 01g-S6: Streaming the loop
+
+- **Delivers:** 01g-C6 (full)
+- **Needs (this spec):** 01g-S4 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - Public `stream_tools`, with each turn on `client.stream` (the
+    `generate(stream=True)` path), and `tool_calls.text_deltas`.
+  - Heartbeats every `HEARTBEAT_INTERVAL` between turns and during tools.
+  - The `reasoning=` buffer, with its per-turn reset stated.
+  - `decline_after_text`.
+  - The streamed wall rule: visible text is never cut.
+  - `run_tools` becomes `stream_tools`, drained.
+- **Acceptance:**
+  - event order and the `interstitial` flag;
+  - a call after visible text is declined with no further turn, and one
+    before text runs;
+  - `text_deltas` equals `generate(stream=True)`'s deltas and heartbeats;
+  - heartbeats arrive during a slow tool;
+  - the reasoning buffer receives each turn.
+- **Size:** M
+
+### 01g-S7: The decide tool
+
+- **Delivers:** 01g-C5 (full)
+- **Needs (this spec):** 01g-S4 (H); 01g-S5 (H, the decide spend check)
+- **Needs (other specs):**
+  - 01b-C1 (S: the capture helper. Until it lands, the caller's
+    `decide(capture=)` is passed through as given);
+  - 01c-C3 (S: the replay record a consumer's `select` hook would persist.
+    01g itself never samples, so nothing here waits).
+- **Scope:**
+  - `routes/tool_decision.decision_tool`, with `ToolShape`, `context`,
+    `select`, `result` and `on_cap`.
+  - `decide(max_tokens=)` applied to the structured stage targets.
+  - The pre-send decide projection, with `Decision.usage` added to "spent
+    so far".
+  - The `test_operation_guard.py` change for `decision_tool(...)` and the
+    inner `decide(resolved.task, ...)`.
+  - No route is added here (see above).
+- **Acceptance:**
+  - the decide-as-tool tests of section 6, and the gate additions
+    (`selection` shape, `on_cap`, `capture` pass-through, round and reply
+    ids);
+  - no offer under a ceiling with a native or unpriceable stage;
+  - the guard accepts the shim's call and rejects a planted non-literal
+    elsewhere.
+- **Size:** M
+
+### 01g-S8: The Claude Agent SDK adapter
+
+- **Delivers:** 01g-C2b (full)
+- **Needs (this spec):** 01g-S4 (H); 01g-S1 (H, its `claude` `never` entry
+  is lifted here)
+- **Needs (other specs):** none
+- **Scope:**
+  - The `claude` adapter's tool path: one `query()` per turn, with
+    `setting_sources=[]`, `strict_mcp_config=True` and `tools=[]`; an
+    in-process MCP server declaring schemas; a `"*"` `PreToolUse` hook that
+    defers or denies.
+  - Prefix mapping and the 49-character name cap.
+  - Dropped parallel calls traced as `not_run`.
+  - The `claude` extra's SDK floor is raised.
+  - `calls_tools` becomes True and the preset's `never` drops `tools`, in
+    the same PR, as the S1 test requires.
+- **Acceptance:** the C2b tests of section 6, which check that:
+  - a deferred call becomes a loop call;
+  - no `@tool` handler runs;
+  - the isolation options are present;
+  - a non-Grimoire tool is denied;
+  - a missing SDK still raises `missing_dependency`.
+- **Size:** M
+
 ## 4. Contract
 
 **01g-C1 — a `tools` capability with provenance, and a seam refusal.**
@@ -1830,3 +2069,5 @@ Coordinator inputs folded in:
 
 - The per-turn cap is 01f-C1's `max_tokens`, through `call_chain` (from 01i).
 - `capture` is passed through to the inner decide (from 01b).
+
+Slices added (8 slices).

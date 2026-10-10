@@ -908,6 +908,186 @@ latency it pays. Until then the setting's hint says it is experimental. **E2
 is the pilot**: off the turn path, reviewable, with the reconcile corpus to
 start from. E1 is last, because it is the only entry point a player waits on.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4 → (S5 and S6 in parallel) →
+S7. Every entry point lands with its switch `off`. E2 (S3) is the pilot, and
+E1 (S6) the last entry point a player can reach.
+
+### 12-S1: The narrator-side toolset
+
+- **Delivers:** 12-C1 (part: the 4.1 envelope and the 4.2 rules for the
+  `rp_narrator`, `continuity` and `question` modes; every 4.3 tool except
+  `decide`, and except the rp_actor filtering)
+- **Needs (this spec):** none
+- **Needs (other specs):**
+  - 01g-C2a (H: the `tool_calls.Tool`, `Toolset`, `ToolOutput` and
+    `ToolContext` types);
+  - 09-C1 (H: `retrieve` over a `Query` with `perspective="narrator"` and
+    `tier_limit=2`);
+  - 08-C3b (H: `expand(..., phase="prompt")` over a scene, with posts keyed
+    `r-<response_id>` / `p-<post_id>` plus `part`).
+- **Scope:** Adds `store/investigation/tools.py` and the scene-free,
+  best-effort readers behind `get_actor` and `get_timeline`. The package is
+  read-only and declared in no lock list. Extends
+  `test_regex_prompt_guard.py` to scan the package and pins the excerpt,
+  window and summary readers. Adds `test_investigation_writer_guard.py` and
+  generalises `test_continuity_writer_guard.py` to `(package, modules)`
+  pairs. No route, no model call, no switch.
+- **Acceptance:** section 14's "Toolset" tests for N, C and Q: modes, refs,
+  hidden posts, regex depth in a window, gm-only names, `tier_limit=2`, no
+  `campaign_lock`, truncation. The writer guards fail on a planted violation.
+- **Size:** L
+
+### 12-S2: The loop driver, budgets and trace recorder
+
+- **Delivers:** 12-C2a (full); 12-C2b (part: the 8.1 trace shape and its
+  recorder, with no storage yet)
+- **Needs (this spec):** 12-S1 (H)
+- **Needs (other specs):**
+  - 01g-C2a (H: `run_tools` with `execute=`, the caller's run id, and the
+    terminal call returned);
+  - 01g-C3 (H: per-turn ledger rows with `run_id` and `loop_turn`);
+  - 01g-C4 (H: `RunBudget`, the reported stopping limit, and
+    `RunRefused("unpriceable")`; S for `tool_calls.check_priceable` — until
+    it lands, `investigation.priceable` applies the same rule);
+  - 01i-C2 (H: `prompt_ceiling(resolved, max_tokens=…)` returning `None` when
+    unknown).
+- **Scope:** Adds `routes/investigation.investigate`, `Outcome`, the executor
+  (threadpool), the per-entry-point `RunBudget`s in
+  `store/investigation/budget.py` (including `E1_WALL_S`), the pre-reservation
+  priceable check, the `context` stop with its fallback, and
+  `store/investigation/trace.py`. It is exercised only by tests through a new
+  scripted tool-call fake in `backend/tests/llm_fakes.py`. No route is added
+  yet, because a route lands with its call site.
+- **Acceptance:** section 14's "Loop and budgets" tests: each limit with
+  01g's names, the context stop and fallback, the prose-only final turn,
+  cancel, a failed call by kind, and unpriced-under-ceiling refusal including
+  a rate removed after the check.
+- **Size:** M
+
+### 12-S3: E2, continuity investigation (the pilot)
+
+- **Delivers:** 12-C3 (part: E2's proposal write); 12-C4 (part: E2's entry
+  point and its `background` run); 12-C2b (part: the candidate proposal's
+  `investigation` field); 12-C2c (part: the E2 corpus and offline graders)
+- **Needs (this spec):** 12-S2 (H)
+- **Needs (other specs):** 01g-C1 (H: the `tools` capability and the seam's
+  `incapable` refusal for a route that `requires=("tools",)`)
+- **Scope:**
+  - Adds the `investigation` route with `legacy=routing.NO_LEGACY` and only
+    its `investigation-continuity` task. A route lands with its call site,
+    and each later task joins with its own.
+  - Adds `reconcile.persist_investigation` and the public `reconcile.rebuild`,
+    the `candidates.read` handling of `investigation`, and the
+    `reserve_campaign_background` `match` predicate.
+  - Adds `post_candidate_investigate` (202, `@computes_only`, refusals before
+    reserving), the `investigation_continuity` switch (default `off`), and
+    the review's Investigate action showing the trace.
+  - Updates CLAUDE.md's Detached runs section (+1 handler) and the docs guard.
+- **Acceptance:** section 14's E2 "Write posture" tests (the inspected-set
+  floor, fencing, generation and basis untouched, no-change writes nothing,
+  one revision bump, trace round-trip) and E2's "Runtime" tests (refusals
+  before reserving, adopt or `busy`, polling, data-dir refusal, campaign
+  delete). The offline `--investigate continuity` graders run in
+  `pytest backend`.
+- **Size:** L
+
+### 12-S4: Decision as a tool for maintenance modes
+
+- **Delivers:** 12-C1 (part: the `decide` tool, 4.4)
+- **Needs (this spec):** 12-S3 (H)
+- **Needs (other specs):** 01g-C5 (H: the decide tool with the task name
+  supplied by the caller, a consumer's own decide route accepted, the
+  per-run cap, and no recursion)
+- **Scope:** Adds the `investigation_decide` route
+  (`legacy=routing.NO_LEGACY`, task `investigation-decide`) with its call
+  site, and offers the tool in the continuity toolset with
+  `max_decisions = 2`. The question toolset gains it in 12-S5. The tool is
+  not offered under a spend ceiling when its resolution would answer
+  natively (01g section 3.9).
+- **Acceptance:** E2 runs with and without the tool (a soft resolution
+  failure means the tool is not offered). `max_decisions` is enforced. The
+  routing and operation guards accept the route with its literal task.
+- **Size:** S
+
+### 12-S5: E3, history question
+
+- **Delivers:** 12-C3 (part: E3 writes nothing); 12-C4 (part: E3's entry
+  point and its `draft` run); 12-C2b (part: the trace on the run result)
+- **Needs (this spec):** 12-S2 (H); 12-S4 (S: the `decide` tool, with
+  `max_decisions = 1` — until it lands, E3 runs without it)
+- **Needs (other specs):** 01g-C1 (H: the seam's `incapable` refusal)
+- **Scope:** Adds the `investigation-question` task to the route,
+  `post_history_question` through `runs.run_draft`, the `answer` validation
+  against the inspected set, the `investigation_question` switch (default
+  `off`), and the ledger's "Ask the history" action via `api.draftRun`.
+  Updates CLAUDE.md's Detached runs section (+1 handler, +1 draft).
+- **Acceptance:** section 14's E3 tests: uncited answers become
+  `insufficient_evidence`, `run_draft` dedupes a repeated attempt, and the
+  refusals are answered before reserving.
+- **Size:** M
+
+### 12-S6: E1, RP escalation
+
+- **Delivers:** 12-C1 (full: rp_actor filtering); 12-C3 (full: E1's
+  selection); 12-C4 (full: E1's trigger and its stage in the turn run);
+  12-C2b (full: E1's prompt-log capture section)
+- **Needs (this spec):** 12-S2 (H)
+- **Needs (other specs):**
+  - 11-C1 (H: `classify` and `EpistemicView.visible()` for an actor
+    perspective);
+  - 11-C2 (H: per-step `gather` with a perspective, and `history_view`
+    rendering);
+  - 10-C2 (H: `PlanTrace` exposing the terminal state, the trigger, the
+    questions and terms each round tried, and the evidence ids of `E0` and
+    of each round);
+  - 10-C3 (H: the last sufficiency verdict, and whether it was an answer, an
+    escalated answer or `unknown`, on the trace);
+  - 08-C3b (S: an admission predicate on `expand` — until it lands,
+    rp_actor does not offer `get_scene_excerpt`);
+  - 02-C6 (H: the turn-path play-decision rules E1 keeps — soft resolution,
+    `except Exception` recorded as `skipped`, and off byte-identical).
+- **Scope:**
+  - Adds the `investigation-turn` task, the trigger read in the step's
+    `gather`, and `investigated` on the round record.
+  - Adds the rp_actor toolset (filtering, omission, title rule, unknown
+    entities `not_found`, no overrides, no ledger tools), `finish_evidence`
+    validation and re-classification, and the merge ahead of 10's evidence.
+  - Adds the deep-history send option, the `investigation_rp` switch
+    (default `off`), the prompt-log `investigation` section, and the two
+    status frames. The frames are added only after the turn stream reader
+    handles them, in this slice.
+- **Acceptance:**
+  - section 14's rp_actor "Toolset" tests (a hidden-only search is
+    indistinguishable from a nonexistent term);
+  - E1's "Write posture" tests;
+  - E1's "Runtime" tests: the trigger on each `PlanTrace` state, once per
+    round across a resume, never on a reroll, replay or opener, and
+    fail-soft;
+  - 11-C4's offline graders pass with E1 on.
+- **Size:** L
+
+### 12-S7: The adoption gate
+
+- **Delivers:** 12-C2c (full)
+- **Needs (this spec):** 12-S3 (H); 12-S5 (S: the E3 arm — absent until
+  then); 12-S6 (S: the E1 arm and selection leakage — absent until then)
+- **Needs (other specs):** 01a-C1 (H: per-case wall time, tokens and the three
+  money columns, aggregated per route and backend); 01a-C2 (H: live evals
+  metered in a throwaway home under the eval scope); 11-C4 (S: the leakage
+  graders and corpus — until they land, the E1 arm reports no leakage line
+  and cannot pass)
+- **Scope:** Adds `evals/run.py --investigate <mode>` with arms A, B and C, the
+  10.2 corpus including the hidden-route case, the selection-leakage metric
+  replayed from traces, and the `evals/README.md` recording format for 10.4's
+  adoption rule. It changes no default. Turning a switch on is a later PR that
+  attaches a passing table.
+- **Acceptance:** the offline arms and the selection-leakage grader run in
+  `pytest backend` on the synthetic corpus. The live arms run opt-in and are
+  metered under 01a-C2's scope.
+- **Size:** M
+
 ## 11. Contract
 
 **12-C1: A read-only toolset, perspective-filtered in RP** (over 01g-C2a).
@@ -988,7 +1168,9 @@ a recorded run meets 10.4.
   4.4's `investigation_decide`. `Route.legacy == ""` means "this route IS a
   legacy route" (`store/routing.py:55-58`), so both new routes carry the
   shared `NO_LEGACY` sentinel (checklist, "Shared structures"); whichever of
-  01g, 02, 09, 10 or 12 lands first adds it. Every task is resolved through
+  01g, 02, 09, 10 or 12 lands first adds it. Each task joins the route in
+  the slice of its own call site (12-S3, S5, S6), because the guard fails a
+  route task nothing uses. Every task is resolved through
   `require_inference`, and no `inference.resolve` call appears in `routes/`.
 - **Operation guard** (`test_operation_guard.py`): the loop goes through
   01g-C2a's `run_tools`, which 01g teaches the guard to recognise. The decide
@@ -1212,4 +1394,5 @@ The substitute spec-gate review (`reviews/12.md`: 1 blocking, 11 should-fix,
 | M5 letters, not refs | Fixed (4.3, 6.2) |
 | M6 `api.streamDraft` | Fixed (9.1) |
 | 02 addendum (02-C6) | E1 takes a named total deadline (`E1_WALL_S`), soft resolution, `except Exception` and off-is-identical from 02-C6 (7.1) |
+| Slicing | Slices added (7 slices). Section 12 now says each route task joins in the slice of its call site; no contract item re-worded |
 | Coordinator and cross-spec inputs | 01i: `prompt_ceiling`, never `max_output` as the reserve (7.3); unpriced under a ceiling refused (7.2); 08's revision: `search_history` embeds under 09's `history-recall`, posts carry `r-`/`p-` keys and `part` (Depends on, 4.3, 6.1) |

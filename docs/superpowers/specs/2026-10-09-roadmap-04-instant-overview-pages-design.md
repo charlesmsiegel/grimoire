@@ -25,9 +25,9 @@ records why it does not land layer 3 (section 6.6).
 |---|---|---|---|
 | 03-C1 | 03 | Composite keys: the card rows over one file, `scene_turns` over a file plus a non-file input (player names), `continuity_summary` over five absent-ok files (section 3). As amended in parallel, 03-C1 keys an absent-ok input as an explicit sentinel, which 3.7 relies on. The collection member filter is not used in v1 (`scene_summary` is in-process only, section 3.4); it is what a persisted summary would use later. | Hard |
 | 03-C2 | 03 | Liveness by construction. It is why Grimoire's own writes need no server-side retirement step (section 5.1) and why an external edit is seen on the next read (section 6.5). | Hard |
-| 03-C4 | 03 | The validate-and-hash primitive behind every key, and its rule 5 registry flag: every kind here is registered "may use persisted `sources`", and 03's guard keeps them away from decision sites (section 3.8). As amended, a failed read of any input makes the derivation uncacheable for that request and falls back to the live path; 3.3 and 3.7 cite that rule rather than defining one. | Hard |
+| 03-C4 | 03 | The validate-and-hash primitive behind every key, and its rule 5 registry flag: every kind here is registered "may use persisted `sources`", and 03's guard keeps them away from decision sites (section 3.8). As amended, a failed read of any input raises a typed `InputUnavailable`, so the derivation is uncacheable for that request and falls back to the live path; 3.3 and 3.7 cite that rule rather than defining one. Its batch form over listed paths is used softly (one lookup per path without it, 4.2, 7). Its `known_hashes` form is not used in v1 (Open question 11). | Hard |
 | 03-C5 | 03 | Storing artifacts at write time: the turn path warms `scene_turns` for the scene it just wrote. | Hard for 04-C2a only; the rest of 04 works without it |
-| 03-C6 | 03 | Batch artifact lookup over a request's live key set: every campaign's `campaign_row` and `continuity_summary` on the global pages, every open scene's `scene_turns` on the shell. Also the hit and miss counts 04-C3a surfaces (section 8). | Soft: without it each key is looked up on its own, and the compiled counters read zero |
+| 03-C6 | 03 | Batch artifact lookup over a request's live key set: every campaign's `campaign_row` and `continuity_summary` on the global pages, every open scene's `scene_turns` on the shell. Also the per-kind hit and miss counts 04-C3a surfaces (section 8). | Soft: without it each key is looked up on its own, and the compiled counters read zero |
 | 03-C9 | 03 | The synthetic-library generator, owned by 03's plan. 04-C3b extends it with the overview scenarios and the harness (section 9). | Soft: without it 04-C3b builds the generator core to section 9.1 itself |
 
 03-C3 (`materialized`) is not used directly: every artifact 04 stores leaves
@@ -1236,6 +1236,285 @@ has not landed when 04's plan starts, 04 builds the core to this section and
   the style of `backend/tests/perf_budget.json` is a later decision (Open
   question 10).
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 → S9 →
+S10.
+
+- S2 (client first paint) needs nothing and can land at any point, in parallel
+  with everything else.
+- S3 (live-path fixes) needs nothing and can go in parallel with S1.
+- S4, S5 and S6 can go in parallel once S1 has landed.
+- S1 to S6 need nothing from 03. S7 to S10 need 03 to have landed.
+
+### 04-S1: Request counters and the debug line
+
+- **Delivers:** 04-C3a (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** 03-C6 (S: per-kind hit and miss counts returned by
+  batch lookups. Until 03 lands, the `compiled.*` counters read zero.)
+- **Scope:** adds `store/readstats.py`, a leaf module with `collect`, `bump`
+  and `snapshot`. Bumps `statcache.hit/miss.<kind>`, `frontmatter.parse`,
+  `frontmatter.parse_head` and `transcript.parse` in `statcache`, `frontmatter`
+  and `scenes/serialize`. The four overview routes open a collector and write
+  one Debug `overview_read` row through `logs.record`, holding the endpoint,
+  scope kind, milliseconds and cache state, and no counters. The
+  `overview.*` and `todo.*` counter names are reserved here and bumped by the
+  slices that add their code. No answer changes.
+- **Acceptance:** `test_import_guard.py` still passes with `readstats` as a
+  leaf. A unit test covers `collect`, `bump` and `snapshot` under nested
+  contexts and threads, and `bump` with no collector is a no-op. 12.4: the
+  `overview_read` row carries only its stated fields and never raises.
+- **Size:** S
+
+### 04-S2: Client first paint, then revalidate
+
+- **Delivers:** 04-C2b (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:** delivers all of section 6 except 6.6, which is a decision and not
+  code.
+  - `listWorlds`, `listCampaigns` and `getTodo` become remembered reads, with
+    `rememberedWorlds`, `rememberedCampaigns` and `rememberedTodo`.
+  - `writing()` forgets every remembered read and retires in-flight GETs at
+    both points. `noteRunSettled()` is wired from `draftRun`, the stream
+    helpers and `RunRegistryProvider`. `issuedEpoch` is exported.
+  - The `useRevalidated` hook: keyed, sequenced, epoch-checked, with
+    `reload()`.
+  - `WorldsView`, `CampaignsView` and `TodoView` move onto the hook. They get
+    `aria-busy`, destructive actions disabled while stale, empty states only
+    after a successful read, and the new failure banners for Worlds and
+    Campaigns. Post-mutation refreshes go through `reload()`, covering every
+    item in the 4.5.4 inventory.
+  - The 6.5 subsection is added to `docs/store-guarantees.md`, and
+    `test_docs_guard.py` runs with it.
+  - It is frontend only, so the server answers exactly as before.
+- **Acceptance:** 12.5 in full, including the overtaking, joined-pre-write and
+  key-change cases. `test_docs_guard.py` passes. Existing frontend suites pass
+  unchanged.
+- **Size:** M
+
+### 04-S3: Live-path fixes
+
+- **Delivers:** 04-C1c (part: the live-path fixes in 4.5 items 1 to 3)
+- **Needs (this spec):** S1 (S: the counter assertions. Without it, the
+  assertions use the audit hook alone.)
+- **Needs (other specs):** none
+- **Scope:**
+  - `modules.binding.resolve` reads the world's `module` key without
+    `read_world`'s counts, and still raises `WorldNotFound` on a missing
+    `world.md`.
+  - `characters.roster` rows are memoised with `memo_stamped` on the character
+    directory and `character.md`.
+  - `_chore_unreviewed` walks the review glob itself. `_items_unreviewed`
+    builds its title map only when a sidecar exists.
+  - Every output stays byte-identical.
+- **Acceptance:** the 12.3 "Live-path fixes" assertions: no world-directory
+  scan on a shell read for an inheriting campaign, and each `character.md`
+  parsed at most once across two global Todo reads. The existing
+  roster-versus-listing test passes. `test_todo_route.py` and
+  `test_shell_route.py` pass unchanged.
+- **Size:** S
+
+### 04-S4: `scene_summary`, in-process, and its consumers
+
+- **Delivers:** 04-C1b (part: `overview.scene_summary`, in-process); 04-C1c
+  (part: the open-scenes chore, `has_campaign`, the shell's scene count and
+  open list, and `GET /campaigns`' scene fields)
+- **Needs (this spec):** S1 (H: the `frontmatter.parse_head` counter and
+  `readstats` in the acceptance tests)
+- **Needs (other specs):** none
+- **Scope:**
+  - Adds the `store/overview/` package with `overview.scene_summary(cid)`: the
+    fold over head-only `_scene_row` reads, `memo_stamped` in `_OVERVIEW_POOL`,
+    per-member degradation of unreadable scenes, the `updated`-then-`sid`
+    tie-break, and clock-free `stamps` (3.4).
+  - `GET /campaigns`, the shell's campaign block and Todo's `_Ctx` read the
+    scene fields from it. `has_campaign` keeps today's `CampaignNotFound` and
+    `OSError` mapping.
+  - Amends the "nothing is cached" docstrings (`routes/todo.py`,
+    `store/chores.py`, `TodoView.tsx`), with the residual wording in 4.4.
+  - The frozen sweep gains its `scene_summary` entry, and `snapshot.json` is
+    regenerated and reviewed.
+- **Acceptance:**
+  - 12.1: the tie-break and head-bad-byte expected differences, and a body
+    bad byte past 8 KiB unchanged.
+  - 12.2: scene append, rename, delete and add; a non-listable `scenes/`.
+  - 12.3: `warm_same_process` lists no `scenes/`; `relevant_change` costs one
+    head parse and one listing; closed scenes are never opened.
+  - 12.6 for this entry.
+- **Size:** M
+
+### 04-S5: `continuity_summary`, in-process, with the text seam
+
+- **Delivers:** 04-C1b (part: `overview.continuity_summary`, in-process);
+  04-C1c (part: the `owed` and continuity chores and the shell's
+  `ledger_open`)
+- **Needs (this spec):** S1 (H: the `overview.computed.<kind>` counter)
+- **Needs (other specs):** none
+- **Scope:**
+  - Adds `*_from_text` twins to the five continuity readers (`plot`,
+    `commitments`, `events`, `continuity/doc`, `continuity/candidates`). The
+    path forms read, then call the twin, so there is one parser per file.
+  - `overview.continuity_summary(cid)` is computed from the five texts.
+    `memo_stamped` on the five files, with an absent file vouched for by the
+    campaign root, in `_OVERVIEW_POOL`.
+  - Todo's `owed`, `continuity-overlaps` and `continuity-closures`, and the
+    shell's `ledger_open`, read it.
+  - The deliberate change lands here: any exception means unknown (3.5).
+  - The frozen sweep gains its entry.
+- **Acceptance:**
+  - 12.1: the `commitments.json` holding `[]` expected difference.
+  - 12.2: each of the five files edited, created and deleted, and a same-size
+    rewrite with the mtime restored.
+  - 12.3: shell reuse (one `continuity_summary` computation per process).
+  - 12.4: the audit-hook "fed, not reading" test over the text twins, and the
+    clock trap.
+- **Size:** M
+
+### 04-S6: `scene_turns`, in-process, on the shell
+
+- **Delivers:** 04-C1b (part: `overview.scene_turns`, in-process)
+- **Needs (this spec):** S1 (H: the `transcript.parse` counter)
+- **Needs (other specs):** none
+- **Scope:**
+  - `overview.scene_turns(cid, sid)` is `memo_stamped` on `(scene path,
+    players)`, with `players` from `cast.player_names`. The appearances record
+    is read once per request.
+  - The shell's `open[].turns` reads it, inside today's `try` and with
+    today's `null` mapping (4.3).
+  - The turn count's algorithm is unchanged: `read_scene` plus
+    `_model_blocks`.
+- **Acceptance:**
+  - 12.2: a player cast change misses on `players`.
+  - 12.3: a second shell read in the same process records
+    `transcript.parse == 0` for unchanged open scenes.
+  - `test_shell_route.py` passes unchanged.
+- **Size:** S
+
+### 04-S7: Persisted card rows, and the `module` chip
+
+- **Delivers:** 04-C1a (full)
+- **Needs (this spec):** S4 (H: `store/overview/` and `campaign_cards()`'s
+  scene fields)
+- **Needs (other specs):**
+  - 03-C1 (H: kind registry entries with a `version`; composite keys over
+    file inputs);
+  - 03-C2 (H: liveness by construction);
+  - 03-C4 (H: the validate-and-hash primitive with `InputUnavailable` and
+    fallback to the caller's path reader; the rule 5 "may use persisted
+    `sources`" flag and its decision-site guard);
+  - 03-C4 (S: the batch form over listed paths. Until it lands, one lookup per
+    path.);
+  - 03-C6 (S: batch lookup over a live key set. Until it lands, one lookup per
+    key.)
+- **Scope:**
+  - Registers `overview.world_row` and `overview.campaign_row` as byte-fed 03
+    kinds, with their live paths (`_world_row`, `_campaign_row` plus `module`),
+    `null`-for-absent names, and the name fallback applied outside the cache.
+  - Adds `overview.world_rows()` and `overview.campaign_cards()`.
+    `GET /worlds`, `GET /campaigns` and the shell's rows and `world_name` use
+    them.
+  - Adds `module` with the `"none"` rule, per Open question 4's answer. If
+    that answer is (b), `world_row` and `GET /worlds` gain `module` here.
+  - Gives 03's decision-site guard the 3.8 allowlist.
+  - The frozen sweep gains its two entries.
+- **Acceptance:**
+  - 12.1: five-state equivalence for `GET /worlds` and `GET /campaigns`, the
+    `module` expected difference, and identical bytes at two directories.
+  - 12.2: `campaign.md` and `world.md` changes.
+  - 12.3: `warm_after_restart` records no `campaign.md` parse.
+  - 12.4: the guard and degradation cases for these kinds.
+  - 12.6 for the two entries.
+- **Size:** M
+
+### 04-S8: Persisted `scene_turns` and `continuity_summary`
+
+- **Delivers:** 04-C1b (full); 04-C1c (full)
+- **Needs (this spec):**
+  - S5 (H: the text twins and the in-process layer);
+  - S6 (H: the in-process `scene_turns`);
+  - S7 (H: the registry wiring and the decision-site guard allowlist).
+- **Needs (other specs):**
+  - 03-C1 (H: absent-ok input roles; `params` for non-file inputs);
+  - 03-C2 (H: liveness by construction);
+  - 03-C4 (H: `InputUnavailable` with fallback to the caller's path reader);
+  - 03-C6 (S: batch lookup over a live key set, plus per-kind counts. Until it
+    lands, one lookup per key.)
+- **Scope:**
+  - Registers `overview.scene_turns` (scene bytes plus sorted `players`) and
+    `overview.continuity_summary` (five absent-ok files) as byte-fed 03 kinds
+    beneath the in-process layers from S5 and S6.
+  - The live path runs when the cache is off, absent, busy or corrupt, or an
+    input is unavailable. Content-determined failures are cached; failed reads
+    are not.
+  - The `overview.live_path.<kind>` counter is wired.
+  - This completes C1b and C1c: the chore classification table (4.4) is now
+    the registry of what is projected and what is live.
+- **Acceptance:**
+  - 12.1: five-state equivalence for `GET /todo` (both forms) and
+    `GET /api/shell`.
+  - 12.3: `warm_after_restart` (no transcript parse for unchanged open
+    scenes; `overview.computed.continuity_summary == 0` on `GET /todo`);
+    `unrelated_change`.
+  - 12.3: no closed-scene transcript opened, in any state.
+  - 12.4: degradation with the database locked, corrupt or absent, and with
+    an input failing to read.
+- **Size:** M
+
+### 04-S9: Post-turn warm and `warm_paths`
+
+- **Delivers:** 04-C2a (full)
+- **Needs (this spec):** S7 (H: card-row kinds for `warm_paths`); S8 (H:
+  persisted `scene_turns` and `continuity_summary`)
+- **Needs (other specs):** 03-C5 (H: storing artifacts at write time while the
+  `sources` row waits out the racy window)
+- **Scope:**
+  - `overview.warm_scene(cid, sid)` is called from
+    `routes/streaming._fire_follow_up` on a worker thread. It holds no lock or
+    exclusion key, reads the file back, stores `scene_turns` only, and never
+    raises.
+  - `overview.warm_paths(paths)` follows the 5.3 mapping, coalesces
+    instances, and reports `"none"` for paths no overview kind reads.
+  - Nothing else calls `warm_paths` until 05 registers it.
+- **Acceptance:**
+  - 12.3 `relevant_change`: the shell after a turn records
+    `compiled.hit.overview.scene_turns` and `transcript.parse == 0`.
+  - 12.4: `warm_scene` swallows a raising compute, a missing scene, a failed
+    player read and a cache that is off, and the turn's outcome is unchanged.
+  - 12.4: the `warm_paths` mapping and coalescing cases.
+- **Size:** S
+
+### 04-S10: Overview benchmark on synthetic libraries
+
+- **Delivers:** 04-C3b (full)
+- **Needs (this spec):**
+  - S1 (H: counters);
+  - S8 (H: persisted kinds for the restart scenarios);
+  - S9 (H: the warm, for `relevant_change` and `visit_after_turn`).
+- **Needs (other specs):**
+  - 03-C9 (S: the synthetic-library generator. Until it lands, this slice
+    builds the generator core to 9.1 and 03 adopts it.);
+  - 03-C4 (H: the injectable clock behind the `PERSIST_WINDOW` age test, the
+    `migrations._clock` precedent).
+- **Scope:**
+  - Extends the generator with what 9.1 asks for: backdated file and
+    directory mtimes, a seeded clock, the `.synthetic-library` marker, and
+    profiles sized to the boundaries in 9.1.
+  - Adds `backend/scripts/bench_overview.py`, with its privacy guard, the
+    scenarios in 9.2 (including `visit_after_turn` and `cache_off`), and
+    output that holds counters and timings only.
+  - Moves the 12.3 counter assertions onto the `small` profile, with injected
+    clocks, inside `make check-py`.
+  - No timing figure is committed.
+- **Acceptance:**
+  - 12.3 as a whole, on the `small` profile.
+  - The harness refuses an unmarked directory, the default store, the
+    pointer's store, an inherited `GRIMOIRE_HOME`, and any path inside them.
+  - Its JSON output carries no name, id or path.
+  - The suite stays within `perf_budget.json`'s slow-test line.
+- **Size:** M
+
 ## 10. Contract
 
 **04-C1a. Card projections.**
@@ -1671,8 +1950,9 @@ compiled cache never writes into it (03 section 14).
     if its key can be built without hashing whole transcripts, which needs
     03-C4 to answer "the hash, if known without reading" (from `sources` or
     the in-process layer). A campaign with any member unknown would then take
-    the in-process path. *Recommendation:* raise that mode with 03 as a
-    **soft missing edge**, and wire the persisted summary (with 03-C1's
+    the in-process path. 03 now provides that mode as `known_hashes(paths)`,
+    a form of 03-C4, so this is no longer a missing edge. *Recommendation:*
+    wire the persisted summary (with 03-C1's
     member filter, `scenes/*.md` with `safe_id` stems) only if
     `one_campaign_in_large` and `warm_after_restart` show the head reads
     matter once 08's SearchDocuments are hashing scene files anyway.
@@ -1753,4 +2033,6 @@ folded in. `/codex:adversarial-review` is still owed before the plan.
   failed read makes the derivation uncacheable and falls back to the live
   path) is cited in 3.3, 3.5 and 3.7, not redefined.
 - 05's `warm_paths` example needs restating (5.3).
-- A "hash if known" mode on 03-C4 is a new soft edge (Open question 11).
+- A "hash if known" mode on 03-C4 was raised as a soft edge (Open question 11). 03 has since added it as `known_hashes`.
+
+Slices added (10 slices).

@@ -24,14 +24,14 @@ where.
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | 03-C2 | 03 | Liveness by construction. It is the reason sync is a warm-up and never a correctness step (section 3). | Hard |
-| 03-C3 | 03 | The `materialized` record: which kinds were built from a path, with the vector kind form `vector:<projection>:<space-digest>` and an optional `instance` column (a recorded cross-spec decision). It is the whole of "what was hot" (section 6). | Hard |
+| 03-C3 | 03 | The `materialized` record: which kinds were built from a path, keyed by `(path, kind, instance)`, with the vector kind form `vector:<projection>:<space-digest>` (a recorded cross-spec decision), `built_from` (section 7.3) and `copy_materialized` (section 7.5). It is the whole of "what was hot" (section 6). | Hard |
 | 03-C4 | 03 | The one validate-and-hash primitive. Sync calls it for every path, and never hashes or stamps on its own (section 4). | Hard |
 | 03-C5 | 03 | Artifacts may be stored at once, inside the racy window, and only the `sources` row waits. Sync runs seconds after an agent's edit and depends on this (section 4.4). | Hard |
 | 03-C1 | 03 | Composite keys, so that a hook can rebuild a collection-keyed kind for the instance a path feeds. | Soft (only composite hooks need it) |
 | 03-C8 | 03 | The callable purge for a world or campaign delete, through a purge marker. Sync performs it only for a world or campaign root named in `--deleted` that is gone (section 7.6). | Soft |
 | 04-C2a | 04 | `overview.warm_paths(paths)`, the hook through which sync rebuilds 04's overview kinds (section 6.2). | Soft (without it, overview kinds rebuild lazily) |
 | 04-C2b | 04 | The client's consistency bound. Sync inherits it unchanged and adds no retirement step (section 3.2). | Hard (a property relied on, no call made) |
-| 01h-C5 | 01h | `attribute(claims)` and `embed_groups_sync(task, groups, ...)`: one ledger row per campaign, with no request spanning campaigns. Without it, sync makes one `embed_sync` call per campaign group itself (section 6.6). | Soft (the fallback is complete, only less shared) |
+| 01h-C5 | 01h | `attribute(claims)`, `embed_groups_sync(task, groups, ...)` and its `on_group` callback: one ledger row per group, no request spanning campaigns, each group saved as it lands. Without it, sync makes one `embed_sync` call per chunk itself (section 6.6). | Soft (the fallback is complete, only less shared) |
 | 01h-C3 | 01h | Embedding options in the space identity. Sync names a space only through `embed_space.endpoint()["space"]`, so it inherits whatever 01h-C3 adds. | Soft |
 | 01h-C1 | 01h | Input type. Sync only ever embeds documents, which under 01h-C1 means passing no `queries` (section 6.6), so nothing changes when it lands. | Soft |
 | 08-C2c | 08 | 08's hot-rebuild hook (`affected`, `rebuild_documents`, `reembed`), registered into 05's `WarmHook` protocol as the `searchdocs` hook (section 6.2). Without it, SearchDocuments rebuild lazily. | Soft |
@@ -613,9 +613,12 @@ class WarmHook(Protocol):
   `overview` (04's composites, which hit the file artifacts just rebuilt), then
   `searchdocs` (08), then `vectors` (the existing producers). All the local
   phases run before any network phase.
-- Within a hook, instances are coalesced across the batch. Forty entity edits
-  in one world warm that world's card once, because `warm_paths` receives the
-  forty paths in one call.
+- Within a hook, instances are coalesced across the batch. Edits to all five
+  of one campaign's continuity ledgers warm that campaign's
+  `continuity_summary` once, because `warm_paths` receives the paths in one
+  call (04 section 5.3). Entity, character, greeting and image paths warm no
+  overview kind at all: a world's counts are live listings, and the world row
+  reads only `world.md`.
 - A materialized kind that no hook claims is never rebuilt, and is reported as
   `lazy`.
 
@@ -801,15 +804,14 @@ edit.
   nothing was ever embedded: the `confirm_embedding` bypass that step 1 of
   section 6.5 exists to prevent. The texts are then sent with the batch's
   space (`ctx.space`), never with the re-read one.
-- **Chunks, each its own call, saved as it lands.** The hook splits each
-  campaign group into chunks of at most `embeddings.BATCH` texts and makes one
-  door call per chunk: one ledger row each. It saves each chunk's vectors
-  before the next chunk is sent. The `WARM_LIMIT` comment in `semantic.py`
-  records why: in one large call, a rate limit late in the run otherwise
-  "raises before a single vector is saved", and the retry repeats all of it.
-  01h-C5's `embed_groups_sync` returns all its groups' results at the end, so
-  the hook calls it with one chunk's groups at a time (or 01h adds a per-group
-  callback; see the review record).
+- **Chunks, saved as they land.** The hook splits each attributed group into
+  groups of at most `embeddings.BATCH` texts (one ledger row each), and saves
+  each one's vectors before the next is sent. The `WARM_LIMIT` comment in
+  `semantic.py` records why: in one large call, a rate limit late in the run
+  otherwise "raises before a single vector is saved", and the retry repeats
+  all of it. With 01h-C5, that is one `embed_groups_sync` call whose
+  `on_group` callback saves each group as it lands. Without it, it is one
+  `embed_sync` call per chunk.
 - **Door and attribution.** With 01h-C5, the chunk call is
   `embed_groups_sync(task, attribute(claims), space=ctx.space, client=...)`. A
   text claimed by one campaign is charged to that campaign. A text claimed by
@@ -983,10 +985,10 @@ listing, never from the cache:
    - every one of its `materialized` rows was built from that hash. A
      `sources` row proves only that *some* read hashed the file after the edit
      (a GET of the lore page, say). It does not prove that recall's vector,
-     the overview card or 08's document was rebuilt. So this spec asks 03-C3
-     for a `built_from` column on each `materialized` row: the content hash of
-     that path's bytes when the artifact was built. Without that column, every
-     file with rows is a candidate.
+     the overview card or 08's document was rebuilt. So this rule reads 03-C3's
+     `built_from` on each `materialized` row: the content hash of that path's
+     bytes when the artifact was built. An empty `built_from` (a rename copy)
+     is never current, so such a file is always a candidate.
 5. **Sync the candidates** through `sync_paths`.
 
 The `sources` table serves only as a hint about which files to read, never as
@@ -1019,11 +1021,10 @@ That is the draft's rule, and it is right. The caller may state one:
 - `--renamed OLD=NEW` (and `renamed=` on the primitive) copies OLD's
   `materialized` kinds, without their instances or `built_from`, to NEW before
   NEW is classified, so NEW is rebuilt as hot. Each hook derives NEW's
-  instance from NEW's path. OLD is then handled as an intended delete. 03-C3
-  allows these rename-copy rows with no artifact behind them. 05 still needs
-  the write call that makes them, `copy_materialized(old, new)`, which writes
-  rows for NEW naming the same kinds (multi-unit vector rows included) and
-  nothing else.
+  instance from NEW's path. OLD is then handled as an intended delete. The
+  copy is 03-C3's `copy_materialized(old, new)`, which writes rows for NEW
+  naming the same kinds (multi-unit vector rows included), with an empty
+  `built_from`, and nothing else.
 - A wrong statement costs some compute and, at worst, embeddings of NEW's
   projections, up to the units OLD had embedded and each producer's lazy
   limit. That is the one way sync can embed text whose predecessor was not
@@ -1242,6 +1243,174 @@ and `missing` paths bump nothing.
   stamped by the middleware, or by the run that wrote them.
 - `--dry-run` bumps nothing.
 
+## Slices
+
+Landing order within this spec: S1 -> S2 -> S3, then S4, S5, S6 and S7 in
+any order or in parallel (S4 needs S1 and S2; S5 and S6 need S2; S7 needs
+S3). 05-C3 is complete when both S5 and S6 have landed.
+
+### 05-S1: The write set
+
+- **Delivers:** 05-C4 (full).
+- **Needs (this spec):** none.
+- **Needs (other specs):** none.
+- **Scope:** Adds `store/writeset.py` (`Scope`, `collecting(isolated=...)`,
+  `note`), the one `writeset.note` call in each of `atomic`'s four publishing
+  functions, and `test_writeset_guard.py` with its CONTRIBUTING.md row. Adds
+  `_WriteSetCollector` in `main.py` and isolated scopes in `runner._guarded`
+  and `runner._guarded_thread`. With no queue yet, each boundary closes its
+  scope and hands the snapshot to a sink that drops it, which is also the
+  tolerated "no `app.state.cache_warm`" path. Nothing is warmed, and no
+  behaviour changes. It needs nothing from 03, so 04 may take it early.
+- **Acceptance:** the write-set tests in section 13: each writer notes only
+  after success, nested and isolated scopes, thread propagation, the
+  run-outlives-its-request test, a `note` into a closed scope, the no-lifespan
+  handoff, and the guard's planted failures.
+- **Size:** M
+
+### 05-S2: The sync primitive and the `files` hook
+
+- **Delivers:** 05-C1 (part: `cache_sync.sync_paths` with validation,
+  classification, the token bump, `stop`, the root checks, dry run and
+  verify); 05-C3 (part: the `WarmHook` protocol, `WarmContext` through
+  `cache_sync._context()`, the `HOOKS` tuple and its order, and the `files`
+  hook); 05-C2 (part: the report vocabulary `PATH_STATUSES`,
+  `REFUSAL_REASONS`, `KIND_OUTCOMES` and `BATCH_FIELDS`, and the content-free
+  report).
+- **Needs (this spec):** none.
+- **Needs (other specs):** 03-C2 (H: liveness by construction); 03-C3 (H:
+  `materialized` keyed by `(path, kind, instance)`, read by listed paths);
+  03-C4 (H: the validate-and-hash primitive); 03-C5 (H: artifacts stored at
+  write time, the `sources` row waiting out the racy window).
+- **Scope:** Adds `store/cache_sync.py` with sections 4, 6.1 to 6.3, 8, 9 and
+  10 implemented for single-file kinds: path validation, the per-hook
+  hot/cold classification, `missing` versus `deleted`, the write-token bump
+  before any rebuild, the sync lane, and the `files` hook calling 03's
+  `derive`. `HOOKS` holds `files` only. There is no door yet: the primitive is
+  reached by tests. No embedding is possible.
+- **Acceptance:** cold paths read and send nothing; hooks run in order; every
+  refusal in section 8 with its reason; `missing` versus `--deleted`; the
+  token bumps once, before the first rebuild, for campaign paths only;
+  `--dry-run` stores and bumps nothing; `--verify` catches a kind whose key
+  omits an input; the sentinel test for the report and the log; a moved root
+  stops the batch.
+- **Size:** L
+
+### 05-S3: The CLI, scoped modes and scripts
+
+- **Delivers:** 05-C2 (part: `python -m grimoire.cache sync` with
+  `grimoire.cache.build_parser()`, every flag, exit statuses 0 to 3, the
+  scoped modes, `--renamed` and the `--deleted` root purge); 05-C1 (part:
+  `cache_sync.collecting()` for scripts, and `create_world.py` and
+  `ingest_scene.py` wrapped in it).
+- **Needs (this spec):** 05-S2 (H).
+- **Needs (other specs):** 03-C3 (H: `built_from` and `copy_materialized`);
+  03-C4 (H: the batch form over listed paths that returns their
+  `materialized` rows); 03-C8 (S: `compiled.purge_for_delete()`; until it
+  lands, a `--deleted` root is reported deleted with the purge not run).
+- **Scope:** Adds `backend/src/grimoire/cache.py` (section 7.1) with
+  `logs.install()` and the stdout reconfigure, the scoped candidate rule of
+  section 7.3, renames (7.5), the explicit-root purge (7.6), and
+  `collecting()` (5.5). The CLI's Windows and PowerShell forms appear only in
+  this spec; 06 carries them into the skill.
+- **Acceptance:** the exit-status tests; a scoped sync reads only hot files
+  not proved current, and a GET that refreshed `sources` does not hide a stale
+  `built_from`; `not_found` for a missing scope, with no purge; a `--deleted`
+  root purges and a plain path does not; a stated rename with unchanged text
+  embeds nothing; the CLI in a subprocess leaves artifacts the app's next read
+  hits.
+- **Size:** M
+
+### 05-S4: The write-through queue
+
+- **Delivers:** 05-C1 (full: the write-through queue, its quiet period, the
+  syncable-root filter, the sync hold on `PUT /config/data-dir`, root pinning,
+  the bound, shutdown through `stop`, and `GRIMOIRE_CACHE_WARM`).
+- **Needs (this spec):** 05-S1 (H); 05-S2 (H).
+- **Needs (other specs):** none.
+- **Scope:** Installs `app.state.cache_warm` from `runner.install` and its
+  worker in the lifespan's task group, replacing S1's dropping sink. Adds the
+  sync hold to the run registry and the refusal to `put_data_dir`, and the
+  queue clear beside `drop_pending_touched`. `tests/conftest.py` sets
+  `GRIMOIRE_CACHE_WARM=0`. With only the `files` hook registered, the queue
+  rebuilds local artifacts and never embeds.
+- **Acceptance:** the write-through tests in section 13: a quiet-period
+  warm-up after an entity edit (local kinds only at this slice); a raising
+  route still hands its paths over; a detached turn's writes reach the queue;
+  repeated transcript writes coalesce; a data-dir move clears the queue and
+  answers 409 `busy` only while a batch runs; non-syncable paths are dropped
+  silently; `MAX_PENDING`; a failure logged once; shutdown stops a batch.
+- **Size:** M
+
+### 05-S5: The `overview` hook adapter
+
+- **Delivers:** 05-C3 (part: the `overview` entry in `HOOKS`, calling
+  `warm_paths` once per batch).
+- **Needs (this spec):** 05-S2 (H).
+- **Needs (other specs):** 04-C2a (H: `overview.warm_paths(paths)` with the
+  path-to-kind mapping in 04 section 5.3).
+- **Scope:** Wraps `warm_paths` as the `overview` `WarmHook` (section 6.2),
+  mapping its per-path outcomes to the report. `store.overview.warm` is added
+  to `HOOKS`, and its module does not import `cache_sync`. The `searchdocs`
+  slot in `HOOKS` is filled by 08-C2c's own slice, not here.
+- **Acceptance:** edits to a campaign's five continuity ledgers reach
+  `warm_paths` in one call; in a fresh subprocess every materializable kind is
+  claimed by a hook; the section 13 acceptance's continuity-summary hit.
+- **Size:** S
+
+### 05-S6: The `vectors` hook and the three producers
+
+- **Delivers:** 05-C3 (full: the `vectors` hook, its network phase, the
+  per-unit replacement rule and lazy-limit cap, the space checks before
+  sending, the producers' `on_write` policies, rows recorded by recall, art
+  and library search, and the operation-guard extension); 05-C2 (part:
+  embedding chunks saved as they land, grouped by campaign).
+- **Needs (this spec):** 05-S2 (H); 05-S5 (S: S6 does not use the overview
+  hook, but 05-C3 is complete only when both have landed).
+- **Needs (other specs):** 03-C3 (H: the vector kind
+  `vector:<projection>:<space-digest>` through `compiled.space_digest`, the
+  `instance` column, and rows with no artifact touched on a hit); 01h-C5 (S:
+  `attribute`, `embed_groups_sync` and `on_group`; until it lands, one
+  `embed_sync` call per chunk per campaign group); 01h-C1 (S: documents pass
+  no `queries`; nothing to change when it lands); 01h-C3 (S: options in the
+  space id, inherited through `embed_space.endpoint()`).
+- **Scope:** Adds the projection kinds and `materialized` writes beside each
+  `vectors.save` in `context/semantic.py`, `context/art.py` and
+  `semsearch.py`, the source path on recall's and art's candidates, and the
+  `vectors` entry in `HOOKS`. `test_operation_guard.py` gains the
+  `cache_sync._context()` exception with its planted-fail cases in the same
+  slice, because the first network phase cannot pass the guard without it.
+  Library search is `on_write="explicit"`; recall and art are `quiet`.
+- **Acceptance:** the policy tests in section 13: `stale_space`,
+  `embedding_off`, a role moved between phases sends nothing, one changed
+  passage embeds one passage, a partly embedded transcript never embeds its
+  tail, two producers' rows on one path stay apart, a connection-wide failure
+  stops the rest, per-campaign rows and the unattributed shared text, a late
+  rate limit keeps earlier chunks; dropping `materialized` changes no
+  producer's answer; under write-through a lore edit re-embeds recall's
+  vector and nothing for search.
+- **Size:** L
+
+### 05-S7: The API
+
+- **Delivers:** 05-C2 (full: `POST /api/cache/sync` as a `background` run on
+  the global subject, 409 `sync_in_flight`, `attempt_id` repeats, Cancel
+  through `stop`, and progress and final frames).
+- **Needs (this spec):** 05-S3 (H); 05-S6 (S: until it lands, an API sync
+  embeds nothing and reports vectors `lazy`).
+- **Needs (other specs):** 04-C2b (S: the client forgets remembered reads when
+  it observes a run end; without it, an open tab revalidates on its next
+  visit as it would anyway).
+- **Scope:** Adds `routes/cache.py` with `post_cache_sync` and its plain
+  request model. CLAUDE.md's "Detached runs" handler count and `background`
+  bullet change in the same slice, since the docs guard and the count must
+  agree with the handler.
+- **Acceptance:** a second request answers 409 with the live run id whatever
+  its options, and its dry run spends nothing; a repeated `attempt_id` gets
+  the same run; Cancel stops at the next check; `PUT /config/data-dir` answers
+  409 while the run is live; the report is the final frame.
+- **Size:** M
+
 ## 11. Contract
 
 **05-C1. `cache_sync.sync_paths`, reached by Grimoire's writers through a
@@ -1459,7 +1628,8 @@ turns the queue on.
   sent.
 - Hooks run in order, and every local phase finishes before any network
   phase.
-- Forty edited entities in Realm reach `overview.warm_paths` in one call.
+- Edits to Saltmarch's five continuity ledgers reach `overview.warm_paths` in
+  one call and warm one `continuity_summary`.
 - A vector row in a space other than the current one is `stale_space`, and
   sends nothing. With embedding off, it is `embedding_off`.
 - The Embedding role moved between the local and network phases (a test
@@ -1533,14 +1703,14 @@ turns the queue on.
 **Acceptance.** An agent edits a hot lore entry in Realm, changes an image
 description through `image_descriptions` (which writes the object through
 `image_store.update`), and deletes an obsolete lore file,
-then runs one `cache sync` naming the two edited paths and the deleted one
-under `--deleted`. Afterwards:
+edits Saltmarch's `commitments.json`, then runs one `cache sync` naming the
+three edited paths and the deleted one under `--deleted`. Afterwards:
 
 - recall's next turn sends no embedding request for the edited entry;
 - search finds the new description and not the old one;
-- the Worlds page's next read is a hit for Realm's card;
-- the report lists one `refreshed`, one `refreshed` and one `deleted`, and
-  contains no body text.
+- the campaign hub's next read of Saltmarch's continuity summary is a hit;
+- the report lists three `refreshed` and one `deleted`, and contains no body
+  text.
 
 ## 14. Non-goals
 
@@ -1593,16 +1763,10 @@ Cross-spec requests raised by the spec gate (section 16) are listed first.
    `searchdocs` hook with `on_write="explicit"`, so a played scene's document
    is rebuilt only by an explicit sync or by 08's own lazy read.
 
-6. **Two more 03-C3 operations (cross-spec, 03).** Section 7.3 needs a
-   `built_from` column on each `materialized` row, and section 7.5 needs
-   `copy_materialized(old, new)`. *Recommendation:* add both to 03-C3 in 03's
-   plan. Without `built_from`, scoped syncs read every hot file; without the
-   copy, `--renamed` warms nothing.
-7. **A per-group save callback in 01h-C5 (cross-spec, 01h).**
-   `embed_groups_sync` returns every group's result at the end, so 05 calls it
-   one chunk at a time to save as it goes (section 6.6). *Recommendation:* let
-   01h add an optional `on_group(result)` callback, which would let 05 make one
-   call per batch; until then the per-chunk calls are correct.
+6. **Two more 03-C3 operations (cross-spec, 03).** *Resolved:* 03-C3 now
+   carries `built_from` and `copy_materialized` (sections 7.3 and 7.5).
+7. **A per-group save callback in 01h-C5 (cross-spec, 01h).** *Resolved:*
+   01h-C5 now has `on_group` (section 6.6).
 8. **08's per-campaign limit and input rows (cross-spec, 08).** 05 passes
    08's own `limit` to `reembed` (section 6.2), and relies on 08 recording a
    `materialized` row on every input path its document reads (section 6.1).
@@ -1662,6 +1826,12 @@ finding below was verified against the code before it was folded in.
   `compiled.purge_for_delete()` takes no root, and `compiled.space_digest` is
   the one spelling of the digest (4.4, 6.4, 6.5, 7.3, 7.5, 7.6, 11). 03 does
   not yet carry `built_from` or the rename-copy write call (Open question 6).
+- **Slices added (7 slices).** Slicing also folded in three upstream
+  changes: 03-C3 now provides `built_from` and `copy_materialized`, 01h-C5
+  provides `on_group` (Open questions 6 and 7 resolved), and 04 section 5.3
+  showed that entity paths warm no overview kind, so the "forty entity edits"
+  example, its test and the acceptance now use a campaign's continuity
+  ledgers instead (6.2, 13).
 - **From the 06 review.** The image description door is now
   `image_descriptions` in both specs (06 M4), and the report vocabulary is
   exported for 06's drift test (06 S1, S2).
