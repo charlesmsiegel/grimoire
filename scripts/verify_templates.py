@@ -28,8 +28,13 @@ os.environ["GRIMOIRE_HOME"] = tempfile.mkdtemp(prefix="grimoire-verify-")
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined  # noqa: E402
 
+from grimoire import schemas  # noqa: E402
+
 env = Environment(loader=FileSystemLoader(str(REPO / "templates")),
                   undefined=StrictUndefined)
+# The prompts environment's one filter of its own (01f): a `generate` schema's
+# spelling is `schemas.render`, never `tojson`, so this env needs the same one.
+env.filters["schema_json"] = schemas.render
 
 class Report:
     """The running tally: how many comparisons were made, and which failed.
@@ -2007,10 +2012,12 @@ iexp = suggest.build_intent_prompt(cid, TYPED)
 isnap = suggest.build_snapshot(cid, drivers=False)
 check("intent system (store)", iexp[0]["content"],
       render("scene_intent/system.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
+             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED,
+             schema=suggest.intent_schema(cid)))
 check("intent user (store)", iexp[1]["content"],
       render("scene_intent/user.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
+             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED,
+             schema=suggest.intent_schema(cid)))
 
 ioff_exp = suggest.build_intent_prompt(cid, TYPED, offscreen=True)
 ioff_snap = suggest.build_snapshot(cid, offscreen=True, drivers=False)

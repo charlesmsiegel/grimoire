@@ -3,6 +3,7 @@ import textwrap
 
 import pytest
 
+from grimoire import schemas
 from grimoire.store import (
     appearances,
     calendars,
@@ -1262,3 +1263,48 @@ def test_parse_survives_a_raising_plugin(monkeypatch, tmp_path):
     intent = suggest.parse_intent('{"title": "A", "date": "2026-05-12"}', cid)
     assert (intent["title"], intent["date"]) == ("A", "")
     assert suggest.ref_validator(cid)([], "", "2026-05-12")["date"] == ""
+
+
+# ---- the intent reply's schema (01f's pilot) ----
+
+def _ids(monkeypatch, chars=(), players=(), locs=()):
+    monkeypatch.setattr(suggest, "valid_ids",
+                        lambda cid: (set(chars), set(players), set(locs)))
+
+
+def test_intent_schema_offers_the_campaigns_ids_as_enums(monkeypatch):
+    _ids(monkeypatch, chars={"mara", "seraphine"}, players={"pcs:winifred"},
+         locs={"saltmarch"})
+    schema = suggest.intent_schema("realm")
+    schemas.check(schema)
+    props = schema["properties"]
+    assert props["location"] == {"type": "string", "enum": ["saltmarch", ""]}
+    assert props["cast"]["items"]["enum"] == ["characters:mara", "characters:seraphine",
+                                              "pcs:winifred"]
+    # Offscreen: the player is not a cast member to offer.
+    offscreen = suggest.intent_schema("realm", offscreen=True)
+    assert offscreen["properties"]["cast"]["items"]["enum"] == ["characters:mara",
+                                                                "characters:seraphine"]
+
+
+def test_intent_schema_with_nothing_to_offer_is_plain_strings(monkeypatch):
+    """An empty enum is not portable (`schemas.check`), so a field with no ids
+    to offer is a plain string."""
+    _ids(monkeypatch)
+    props = suggest.intent_schema("realm")["properties"]
+    assert props["location"] == {"type": "string"}
+    assert props["cast"] == {"type": "array", "items": {"type": "string"}}
+    _ids(monkeypatch, players={"pcs:winifred"})
+    assert suggest.intent_schema("realm", offscreen=True)["properties"]["cast"] == {
+        "type": "array", "items": {"type": "string"}}
+
+
+def test_intent_schema_past_the_enum_budget_drops_the_cast_enum_first(monkeypatch):
+    many = {f"c{i:04d}" for i in range(schemas.MAX_ENUM_VALUES)}
+    _ids(monkeypatch, chars=many, locs={"saltmarch"})
+    props = suggest.intent_schema("realm")["properties"]
+    assert props["cast"]["items"] == {"type": "string"}
+    assert props["location"]["enum"] == ["saltmarch", ""]
+    _ids(monkeypatch, chars=many, locs=many)
+    props = suggest.intent_schema("realm")["properties"]
+    assert props["location"] == {"type": "string"}

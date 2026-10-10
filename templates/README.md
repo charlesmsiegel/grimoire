@@ -183,9 +183,18 @@ file's vars plus `typed`. It renders with `drivers=False` and `view=None`, over
 `build_snapshot(drivers=False)` — the legacy snapshot, `upcoming` included —
 so the intent prompt is byte-identical whatever drivers exist (spec §15).
 
+`system.j2` also takes `schema` (`suggest.intent_schema`), the reply's JSON
+Schema, which the route hands `inference.generate(schema=)` too (01f's pilot):
+the campaign's location ids and cast tokens as enums, or plain strings where
+there is nothing to offer. It is rendered **last**, after the date notation,
+with `schema_json` -- `schemas.render`, the one spelling `generate` checks
+the prompt for. Any other spelling (`tojson` escapes `'`) fails that check at
+the first call. `tests/test_suggest_golden.py` pins the rest of the prompt
+byte for byte, and the schema block as the only thing appended to it.
+
 `instruction/date_notation.j2` is a **shared** partial, and the one file here
 included from outside its own family: `date_addendum.j2` and
-`scene_intent/system.j2` both end with it. It spells out how the campaign's
+`scene_intent/system.j2` both include it (the intent prompt's schema follows). It spells out how the campaign's
 calendar writes a date (`s.notation.example`, plus `s.notation.months` when the
 set is small enough to list), which every prompt asking for a `date` needs and
 none can get from `s.friendly` — that is the human form, not one

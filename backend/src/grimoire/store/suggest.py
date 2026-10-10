@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import prompts
+from .. import prompts, schemas
 from . import (
     birthdays,
     calendars,
@@ -704,23 +704,67 @@ def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
 INTENT_LIMIT = 2000
 
 
-def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[dict]:
+def build_intent_prompt(cid: str, typed: str, offscreen: bool = False,
+                        schema: dict | None = None) -> list[dict]:
     """Prompt for extracting metadata from the user's own scene description.
 
     Over the FULL snapshot, story-so-far included: "the morning after the
     funeral" is exactly the kind of phrase this has to resolve, and only the
     recent chronicle can resolve it. The legacy (`drivers=False`) snapshot and
     render: the intent prompt is promised byte-identical (spec §15), so it
-    keeps its Upcoming line and does no pressure or driver work."""
+    keeps its Upcoming line and does no pressure or driver work.
+
+    The system message ends with the reply's JSON Schema (`intent_schema`,
+    01f's pilot), rendered with `schema_json` -- the spelling
+    `inference.generate(schema=)` checks the prompt for. `schema` is the one
+    the call will send; None builds it here."""
     # `direction`, `drivers` and `view` are here because scene_intent/user.j2
     # INCLUDES scene_suggestions/user.j2, which reads them — and both this env
     # and verify_templates render with StrictUndefined, so omitting one is a
     # hard failure, not a silently-empty block.
     vars = {"s": build_snapshot(cid, offscreen=offscreen, drivers=False),
             "offscreen": offscreen, "greeting_candidates": None, "direction": "",
-            "drivers": False, "view": None, "typed": typed.strip()[:INTENT_LIMIT]}
+            "drivers": False, "view": None, "typed": typed.strip()[:INTENT_LIMIT],
+            "schema": intent_schema(cid, offscreen) if schema is None else schema}
     return [{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
             {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}]
+
+
+def _intent_shape(locations: list[str] | None, cast: list[str] | None) -> dict:
+    """The intent reply's schema, with `locations` and `cast` as enums, or a
+    plain string field where one is None."""
+    location: dict = ({"type": "string"} if locations is None
+                      else {"type": "string", "enum": [*locations, ""]})
+    member: dict = {"type": "string"} if cast is None else {"type": "string", "enum": cast}
+    properties = {"title": {"type": "string"}, "date": {"type": "string"},
+                  "location": location, "cast": {"type": "array", "items": member}}
+    return {"type": "object", "additionalProperties": False,
+            "required": list(properties), "properties": properties}
+
+
+def intent_schema(cid: str, offscreen: bool = False) -> dict:
+    """The JSON Schema of an intent reply (01f's pilot): `title` and `date`
+    strings, `location` one of the campaign's location ids or "", and `cast`
+    a list of the cast tokens `parse_intent` would keep (`valid_ids`,
+    `token_ok`). The enums are what structured mode buys: a provider that
+    enforces them cannot answer with an id the campaign does not have.
+
+    An empty enum is not portable (`schemas.check` refuses it), so a field
+    with nothing to offer -- no locations, no cast -- is a plain string. So is
+    one past strict mode's budgets: the cast first, then the locations too.
+    `parse_intent` drops an unknown id either way."""
+    char_ids, player_tokens, loc_ids = valid_ids(cid)
+    tokens = sorted({f"characters:{c}" for c in char_ids} | set(player_tokens))
+    cast = [t for t in tokens if token_ok(t, char_ids, player_tokens, offscreen)] or None
+    locations = sorted(i for i in loc_ids if i) or None
+    for shape in ((locations, cast), (locations, None), (None, None)):
+        schema = _intent_shape(*shape)
+        try:
+            schemas.check(schema)
+        except schemas.SchemaError:
+            continue
+        return schema
+    raise AssertionError("the plain intent schema is portable")  # unreachable
 
 
 def valid_ids(cid: str):

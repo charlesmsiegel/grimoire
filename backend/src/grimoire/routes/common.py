@@ -220,7 +220,8 @@ def run_error(exc: HTTPException) -> dict:
 
 async def draft_completion(client: LLMClient, resolved: UsableInference,
                            messages: list[dict], task: str, shape, cid: str = "",
-                           sid: str = "") -> dict:
+                           sid: str = "", *, schema: dict | None = None,
+                           max_tokens: int | None = None) -> dict:
     """One metered non-stream generation, as the outcome a detached run reports.
 
     THE helper the twelve computing `draft` routes share, and the reason they
@@ -244,12 +245,18 @@ async def draft_completion(client: LLMClient, resolved: UsableInference,
     `resolved` is the route's resolution of `task` (`require_inference`, at
     the call site that names the task), which `inference.generate` refuses
     for any other task.
+
+    `schema` and `max_tokens` are `inference.generate`'s (01f), which hands
+    the facade neither unless given, so a draft that names neither sends
+    exactly what it always did. A schema must already be rendered into
+    `messages`.
     """
     try:
         with store.usage.meter(task, campaign=cid, scene=sid) as m:
             text = await _bounded_call(
                 operations.generate(task, messages, client=client, resolved=resolved,
-                                    usage=m.usage, stream=False),
+                                    usage=m.usage, schema=schema, max_tokens=max_tokens,
+                                    stream=False),
                 on_timeout=_noting(client, resolved, m.usage))
     except LLMError as exc:
         return {"state": "failed", "error": run_error(_llm_http_error(exc))}

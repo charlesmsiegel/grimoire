@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
-from grimoire import llm, routes, wire
+from grimoire import llm, routes, schemas, wire
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -10226,6 +10226,44 @@ def test_scene_intent_forwards_offscreen_to_the_parser(client):
     r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
                     json={"text": "while she sleeps", "offscreen": True})
     assert r.json()["cast"] == []
+
+
+def test_scene_intent_sends_its_schema_and_the_prompt_carries_it(client):
+    """01f's pilot: the reply's schema -- the campaign's own ids as enums --
+    is rendered into the system prompt and handed to `generate`, which sends
+    it where the provider can hold the reply to it."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    fake = FakeOpenRouterComplete('{"title": "T", "date": "", "location": "saltmarch", '
+                                  '"cast": ["characters:mara"]}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "back at the marsh house", "offscreen": False})
+    assert r.status_code == 200 and r.json()["location"]["id"] == "saltmarch"
+    schema = store.suggest.intent_schema(cid)
+    assert fake.schemas == [schema]
+    assert schema["properties"]["location"]["enum"] == ["saltmarch", ""]
+    assert schema["properties"]["cast"]["items"]["enum"] == ["characters:mara"]
+    system = fake.messages[0]
+    assert system["role"] == "system" and schemas.render(schema) in system["content"]
+
+
+def test_scene_intent_drops_an_id_outside_the_enum(client):
+    """An attempt not held to the schema can still name an id the campaign
+    does not have; `parse_intent` drops it, as before."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    reply = ('{"title": "T", "date": "", "location": "the-moon", '
+             '"cast": ["characters:mara", "characters:nobody"]}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "somewhere new", "offscreen": False})
+    assert r.json()["location"] is None
+    assert [c["id"] for c in r.json()["cast"]] == ["mara"]
 
 
 # ---- the scene ledger (#88) ----

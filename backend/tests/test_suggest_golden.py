@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from grimoire import prompts
+from grimoire import prompts, schemas
 from grimoire.store import suggest
 from tests import suggest_golden
 
@@ -26,12 +26,25 @@ def test_the_instruction_section_is_pinned():
         assert got == golden[f"system/{label}"], label
 
 
+#: What 01f's pilot appends to the intent system message, and the only
+#: change to the pinned prompt it makes: the reply's JSON Schema, after
+#: everything the golden holds, in the one spelling `inference.generate`
+#: checks the prompt for.
+SCHEMA_BLOCK = "\n\nThe object matches this JSON Schema:\n\n{}"
+
+
 def test_the_intent_prompt_is_pinned(monkeypatch, tmp_path):
+    """Byte for byte, the golden's user message, and its system message
+    followed by exactly the schema block (01f's pilot) -- the golden itself
+    is not regenerated."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     golden = _golden()
     for label, (cid, offscreen) in suggest_golden.intent_campaigns().items():
         got = suggest.build_intent_prompt(cid, suggest_golden.TYPED, offscreen=offscreen)
-        assert got == golden[f"intent/{label}"], label
+        pinned = golden[f"intent/{label}"]
+        block = SCHEMA_BLOCK.format(schemas.render(suggest.intent_schema(cid, offscreen)))
+        assert got[1] == pinned[1], label
+        assert got[0] == {**pinned[0], "content": pinned[0]["content"] + block}, label
 
 
 def test_the_golden_file_has_every_variant(monkeypatch, tmp_path):
