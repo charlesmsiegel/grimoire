@@ -35,10 +35,10 @@ Three rules the rest of the module follows:
   integer, null, array), `enum`, `anyOf`, `items`, `required`, `properties`
   and `additionalProperties: false`. Anthropic refuses numeric bounds, so a
   score is an integer `enum`; a nullable choice is `anyOf` with a null
-  branch, never a type array; and a ranking is an `array` of an `enum` with
-  no `minItems`, `maxItems` or `uniqueItems` (Anthropic takes a `minItems` of
-  only 0 or 1, OpenAI documents no `uniqueItems`), so the parser holds its
-  count and its uniqueness.
+  branch, never a type array; and a ranking or a selection is an `array` of
+  an `enum` with no `minItems`, `maxItems` or `uniqueItems` (Anthropic takes
+  a `minItems` of only 0 or 1, OpenAI documents no `uniqueItems`), so the
+  parser holds its count and its uniqueness.
 - **The parser never raises.** It answers every item it was handed, so one
   unreadable reply costs the answers it held and nothing more.
 """
@@ -104,6 +104,11 @@ MIN_LEVELS, MAX_LEVELS = 2, 10
 #: a pool it has already narrowed. To be tuned against real prompts later
 #: (01a's reports), never against a measured library.
 MIN_RANK_CANDIDATES, MAX_RANK_CANDIDATES = 2, 32
+
+#: Options one `MultiSelect` may offer (01e-C3a), argued as for
+#: `MAX_RANK_CANDIDATES`: a native selection is one predicate per option in
+#: one request. To be tuned later, the same way.
+MIN_SELECT_OPTIONS, MAX_SELECT_OPTIONS = 1, 32
 
 #: Items per structured call (ruling 16). Each item carries its own transcript
 #: context, so one call's prompt grows linearly with the batch, and one
@@ -251,7 +256,35 @@ class Rank:
     pointwise: str = ""
 
 
-Question = Predicate | Choice | Score | Rank
+@dataclass(frozen=True)
+class MultiSelect:
+    """Pick any subset of `options` (01e-C3a); answered with a tuple of
+    option ids in the CALLER'S option order -- a set has no order the model
+    can be trusted to mean, and a consumer that fans out over the selection
+    must do so deterministically (a caller that wants the model's order asks
+    a `Rank`).
+
+    `()` -- none of these -- is a real answer. `None`, reason `abstained`, is
+    "cannot say", which only `allow_none` permits; a consumer must never read
+    one as the other. The selection holds `min` to `max` options, `max` None
+    meaning all of them (and 0 meaning none, not "all")."""
+
+    KIND: ClassVar[str] = "select"
+
+    id: str
+    instructions: str
+    options: tuple[Option, ...]
+    min: int = 0
+    max: int | None = None
+    allow_none: bool = False
+
+    @property
+    def most(self) -> int:
+        """The selection's upper bound: `max`, or every option when None."""
+        return len(self.options) if self.max is None else self.max
+
+
+Question = Predicate | Choice | Score | Rank | MultiSelect
 
 
 @dataclass(frozen=True)
@@ -340,7 +373,7 @@ class Answer:
     None on every structured answer.
     """
 
-    answer: bool | str | int | Ranking | None
+    answer: bool | str | int | Ranking | tuple[str, ...] | None
     reason: str = ""
     probability: float | None = None
     distribution: dict[str, float] | None = None
@@ -492,6 +525,19 @@ def _check_choice(q: Choice) -> None:
     _check_options("choice", q.id, q.options, low, MAX_OPTIONS)
 
 
+def _count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _check_select(q: MultiSelect) -> None:
+    _check_options("selection", q.id, q.options, MIN_SELECT_OPTIONS, MAX_SELECT_OPTIONS)
+    if not (_count(q.min) and (q.max is None or _count(q.max))
+            and 0 <= q.min <= q.most <= len(q.options)):
+        raise DecideRequestError(
+            f"selection {q.id!r} selects {q.min!r} to {q.max!r} of {len(q.options)} "
+            f"options; it needs 0 <= min <= max <= {len(q.options)}")
+
+
 def _check_rank(q: Rank) -> None:
     _check_options("rank", q.id, q.candidates, MIN_RANK_CANDIDATES, MAX_RANK_CANDIDATES,
                    "candidates")
@@ -503,7 +549,7 @@ def _check_rank(q: Rank) -> None:
 
 
 def _check_question(q: object, index: int) -> None:
-    if not isinstance(q, (Predicate, Choice, Score, Rank)):
+    if not isinstance(q, (Predicate, Choice, Score, Rank, MultiSelect)):
         raise DecideRequestError(f"item {index} has a question of unknown type")
     if not q.id.strip():
         raise DecideRequestError(f"item {index} has a question with an empty id")
@@ -513,6 +559,8 @@ def _check_question(q: object, index: int) -> None:
         _check_choice(q)
     elif isinstance(q, Rank):
         _check_rank(q)
+    elif isinstance(q, MultiSelect):
+        _check_select(q)
     elif isinstance(q, Score) and not MIN_LEVELS <= len(q.levels) <= MAX_LEVELS:
         raise DecideRequestError(
             f"score {q.id!r} has {len(q.levels)} levels; "
@@ -526,12 +574,15 @@ def _enum_count(q: Question) -> int:
         return len(q.levels)
     if isinstance(q, Rank):
         return len(q.candidates)
+    if isinstance(q, MultiSelect):
+        return len(q.options)
     return 0
 
 
 def enum_values(item: Item) -> int:
     """How many enum values `item` adds to a batch schema: each choice's
-    options, each score's levels and each rank's candidates (a predicate is a
+    options, each score's levels, each rank's candidates and each
+    selection's options (a predicate is a
     plain boolean, and a nullable question's null branch is a type, not a
     value)."""
     return sum(_enum_count(q) for q in item.questions)
@@ -600,11 +651,12 @@ def _question_schema(q: Question) -> dict[str, Any]:
     if isinstance(q, Choice):
         ids = {"type": "string", "enum": [opt.id for opt in q.options]}
         return {"anyOf": [ids, {"type": "null"}]} if q.allow_none else ids
-    if isinstance(q, Rank):
+    if isinstance(q, (Rank, MultiSelect)):
         # No minItems, maxItems or uniqueItems (the module docstring): the
         # parser enforces the count and the uniqueness.
+        offered = q.candidates if isinstance(q, Rank) else q.options
         listed = {"type": "array",
-                  "items": {"type": "string", "enum": [opt.id for opt in q.candidates]}}
+                  "items": {"type": "string", "enum": [opt.id for opt in offered]}}
         return {"anyOf": [listed, {"type": "null"}]} if q.allow_none else listed
     return {"type": "integer", "enum": list(range(len(q.levels)))}
 
@@ -870,6 +922,22 @@ def _read_rank(q: Rank, value: object) -> Answer:
                           rest=tuple(opt.id for opt in q.candidates if opt.id not in listed)))
 
 
+def _read_select(q: MultiSelect, value: object) -> Answer:
+    """A structured selection: the ids named, in OPTION order. `[]` is the
+    empty selection, a real answer; null is `abstained` only with
+    `allow_none`; a count outside `min` to `max` is `unreadable`, never
+    repaired."""
+    if value is None:
+        return Answer(None, "abstained") if q.allow_none else _UNREADABLE
+    ids = _read_ids(q.options, value)
+    if isinstance(ids, Answer):
+        return ids
+    if not q.min <= len(ids) <= q.most:
+        return _UNREADABLE
+    named = set(ids)
+    return Answer(tuple(opt.id for opt in q.options if opt.id in named))
+
+
 def _read(q: Question, answers: dict[str, Any]) -> Answer:
     if q.id not in answers:
         return _UNREADABLE
@@ -880,6 +948,8 @@ def _read(q: Question, answers: dict[str, Any]) -> Answer:
         return _read_choice(q, value)
     if isinstance(q, Rank):
         return _read_rank(q, value)
+    if isinstance(q, MultiSelect):
+        return _read_select(q, value)
     if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(q.levels):
         return Answer(value)
     return _UNREADABLE
@@ -1014,13 +1084,16 @@ def native_gap(item: Item) -> str:
     """`""` when a decisions endpoint can carry `item`; otherwise one sentence
     naming what it cannot (ruling 25), which the native call refuses unsent.
     Today that is a choice whose options, with the reserved none, pass
-    `NATIVE_MAX_OPTIONS`, and any rank: no decisions endpoint has one, and
-    its native lowering has not landed (01e-S5). A limit is named here, never
-    met by truncating."""
+    `NATIVE_MAX_OPTIONS`, and any rank or selection: no decisions endpoint
+    has either, and their native lowering has not landed (01e-S5). A limit is
+    named here, never met by truncating."""
     for q in item.questions:
         if isinstance(q, Rank):
             return (f"Question {q.id} ranks its candidates; a decisions endpoint "
                     f"cannot order them until the native lowering lands.")
+        if isinstance(q, MultiSelect):
+            return (f"Question {q.id} selects any of its options; a decisions endpoint "
+                    f"cannot carry a selection until the native lowering lands.")
         if isinstance(q, Choice) and (n := len(native_choice_keys(q))) > NATIVE_MAX_OPTIONS:
             return (f"Question {q.id} offers {n} options including none; "
                     f"a decisions endpoint takes at most {NATIVE_MAX_OPTIONS}.")
@@ -1254,21 +1327,26 @@ def _present(record: dict[str, Any]) -> dict[str, Any]:
 
 def _spelled(value: object) -> object:
     """An answer value as JSON: a `Ranking` as `{"tiers": [[...]], "rest":
-    [...]}`, anything else as itself."""
+    [...]}`, a selection as its list, anything else as itself."""
     if isinstance(value, Ranking):
         return {"tiers": [list(tier) for tier in value.tiers], "rest": list(value.rest)}
+    if isinstance(value, tuple):
+        return list(value)
     return value
 
 
 def _rendered(value: object) -> object:
     """An answer value as the structured reply would have written it: a
-    ranking of singleton tiers as its id list, and a ranking with a tie as
+    selection as its list, a ranking of singleton tiers as its id list, and
+    a ranking with a tie as
     null, since no structured reply can state one (a grader reads the native
     result itself, so the null is never scored as a model's answer)."""
     if isinstance(value, Ranking):
         if any(len(tier) > 1 for tier in value.tiers):
             return None
         return [tier[0] for tier in value.tiers]
+    if isinstance(value, tuple):
+        return list(value)
     return value
 
 
@@ -1278,7 +1356,7 @@ def outcome(mode: str, provider: str, model: str,
     it, then each item's backend, normalised answers -- `answer`, always
     present (None as null), with its `reason`, `detail`, `probability`,
     `distribution`, `marginals` and `expected`, a `Ranking` as its tiers and
-    rest -- and rationale; or, on a failure, the `error`. A key
+    rest and a selection as a list -- and rationale; or, on a failure, the `error`. A key
     whose value is empty or None is left out (an answer's own `answer`
     excepted)."""
     head = _present({"mode": mode, "provider": provider, "model": model})

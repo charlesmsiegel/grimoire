@@ -18,6 +18,7 @@ from grimoire.decisions import (
     DecideRequestError,
     Item,
     ItemResult,
+    MultiSelect,
     Option,
     Predicate,
     Rank,
@@ -1272,3 +1273,104 @@ def test_native_gap_refuses_every_rank_until_its_lowering_lands():
     gap = decisions.native_gap(Item("c", (PRED, _rank(pointwise="Does it bear on this?"))))
     assert "order" in gap and "ranks" in gap
     assert decisions.native_gap(Item("c", (PRED, TONE))) == ""
+
+
+
+# --- 01e: MultiSelect ---------------------------------------------------------
+
+SAW = (Option("characters:winifred", "Winifred", aliases=("Winnie",)),
+       Option("characters:seraphine", "Seraphine"),
+       Option("characters:mara", "Mara"))
+
+
+def _select(**kw) -> MultiSelect:
+    return MultiSelect("saw", "Who saw it?", SAW, **kw)
+
+
+def _read_select(value, **kw) -> Answer:
+    item = Item("ctx", (_select(**kw),))
+    (result,) = decisions.parse(json.dumps({"0": {"answers": {"saw": value}}}), [item],
+                                explain=False)
+    return result.answers["saw"]
+
+
+def test_validate_select_bounds():
+    decisions.validate([Item("c", (_select(),))])
+    decisions.validate([Item("c", (MultiSelect("s", "i", _options(1)),))])
+    decisions.validate([Item("c", (MultiSelect("s", "i",
+                                               _options(decisions.MAX_SELECT_OPTIONS)),))])
+    for n in (0, decisions.MAX_SELECT_OPTIONS + 1):
+        with pytest.raises(DecideRequestError, match="options"):
+            decisions.validate([Item("c", (MultiSelect("s", "i", _options(n)),))])
+    for kw in ({"min": 0, "max": 0}, {"min": 3}, {"min": 1, "max": 1}, {"max": 3}):
+        decisions.validate([Item("c", (_select(**kw),))])
+    for kw in ({"min": -1}, {"min": 4}, {"max": 4}, {"min": 2, "max": 1}, {"max": -1},
+               {"min": True}, {"max": 1.0}):
+        with pytest.raises(DecideRequestError, match="selects"):
+            decisions.validate([Item("c", (_select(**kw),))])
+    with pytest.raises(DecideRequestError, match="collides"):
+        decisions.validate([Item("c", (MultiSelect("s", "i", (SAW[0], Option("winnie", ""))),))])
+
+
+def test_select_max_zero_means_zero_not_all():
+    assert _select(max=0).most == 0
+    assert _select().most == 3
+    assert _read_select([], max=0) == Answer(())
+    assert _unreadable(_read_select(["characters:mara"], max=0))
+
+
+def test_select_schema_and_counts():
+    ids = [o.id for o in SAW]
+    listed = {"type": "array", "items": {"type": "string", "enum": ids}}
+    def answers(q):
+        return decisions.schema([Item("c", (q,))], explain=False)["properties"]["0"][
+            "properties"]["answers"]["properties"]
+    assert answers(_select())["saw"] == listed
+    assert answers(_select(allow_none=True))["saw"] == {"anyOf": [listed, {"type": "null"}]}
+    assert "minItems" not in json.dumps(answers(_select(min=1, max=2)))
+    assert decisions.enum_values(Item("c", (_select(), PRED))) == 3
+    assert decisions.kinds([Item("c", (_select(),))]) == {"select"}
+
+
+def test_parse_select_answers_in_option_order():
+    assert _read_select(["characters:mara", "winnie"]) == Answer(
+        ("characters:winifred", "characters:mara"))
+    assert _read_select(["CHARACTERS:SERAPHINE"]) == Answer(("characters:seraphine",))
+    answer = _read_select(["characters:mara"])
+    assert answer.marginals is None and answer.distribution is None
+
+
+def test_parse_select_empty_is_a_real_answer_not_abstention():
+    answer = _read_select([])
+    assert answer == Answer(())
+    assert answer.answer == () and answer.answer is not None and not answer.reason
+    assert _read_select(None, allow_none=True) == Answer(None, "abstained")
+    assert _unreadable(_read_select(None))
+
+
+def test_parse_select_refusals():
+    unknown = _read_select(["characters:winifred", "characters:rowan"])
+    assert _unreadable(unknown, decisions.NOT_AN_OPTION) and unknown.stated == ""
+    duplicate = _read_select(["characters:winifred", "Winnie"])
+    assert _unreadable(duplicate) and decisions.was_read(duplicate)
+    assert _unreadable(_read_select([], min=1))
+    assert _unreadable(_read_select(["characters:mara", "characters:winifred"], max=1))
+    for value in ("characters:mara", {"a": 1}, 0, True):
+        assert _unreadable(_read_select(value))
+
+
+def test_outcome_and_render_spell_a_selection_as_a_list():
+    item = Item("c", (_select(),))
+    for value in ((), ("characters:winifred", "characters:mara")):
+        results = (ItemResult({"saw": Answer(value)}),)
+        assert decisions.outcome("structured", "", "", results)["items"][0]["answers"] == {
+            "saw": {"answer": list(value)}}
+        text = decisions.render(results, [item], explain=False)
+        assert json.loads(text) == {"0": {"answers": {"saw": list(value)}}}
+        (back,) = decisions.parse(text, [item], explain=False)
+        assert back.answers["saw"] == Answer(value)
+
+
+def test_native_gap_refuses_every_selection_until_its_lowering_lands():
+    gap = decisions.native_gap(Item("c", (PRED, _select())))
+    assert "saw" in gap and "select" in gap

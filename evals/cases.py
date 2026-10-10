@@ -1773,6 +1773,37 @@ def build_decide_rank() -> dict:
     return {"items": (item,), "judge": judge}
 
 
+#: The select case's onlookers: who saw the purse change hands, in option
+#: order -- the answer a correct reply gives, whatever order it names them in.
+SELECT_WITNESSES = ("characters:winifred", "characters:the-harbourmaster")
+
+
+def build_decide_select() -> dict:
+    """Four onlookers at the pier, two of whom saw Seraphine hand Mara the
+    purse: a selection of at least one."""
+    select = decisions.MultiSelect(
+        "witnesses",
+        "Which of these onlookers saw the purse change hands?",
+        (decisions.Option("characters:winifred", "Winifred, sitting on the crates."),
+         decisions.Option("characters:the-lamplighter", "The lamplighter, on the sea wall."),
+         decisions.Option("characters:the-harbourmaster",
+                          "The harbourmaster, at her office window."),
+         decisions.Option("characters:the-dockhand", "The dockhand, under a tarpaulin.")),
+        min=1)
+    item = decisions.Item(
+        "At the Saltmarch pier, Seraphine counts a purse into Mara's hands. Winifred "
+        "watches every coin from the crates, and the harbourmaster leans out of her "
+        "office window to see. The lamplighter keeps his back to the pier the whole "
+        "time, lighting the sea wall, and the dockhand sleeps under a tarpaulin.",
+        (select,))
+
+    def judge(answer: decisions.Answer) -> tuple[bool, str]:
+        return (answer.answer == SELECT_WITNESSES,
+                f"selected {answer.answer!r}; expected {SELECT_WITNESSES}")
+
+    return {"items": (item,), "judge": judge}
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -2056,6 +2087,28 @@ CASES: tuple[Case, ...] = (
              # A null, which this rank does not allow.
              Recording("null", ("decide.answered", "decide.answer"), "json"),
              # Well formed, and the storm and the market first.
+             Recording("wrong", ("decide.answer",), "json"))),
+    Case(id="decide-select",
+         task="scene-break",
+         hypothesis="asked through decide() which of four onlookers saw a purse change "
+                    "hands, the reply is a list of offered ids, each once, naming exactly "
+                    "the two who watched",
+         build=build_decide_select,
+         prompt=_vocabulary_prompt,
+         grade=grade_decide_vocabulary,
+         schema=_vocabulary_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Winifred twice: read, and refused, never deduplicated.
+             Recording("duplicate", ("decide.answered", "decide.answer"), "json"),
+             # An onlooker nobody offered.
+             Recording("unknown-id", ("decide.known_ids", "decide.answered",
+                                      "decide.answer"), "json"),
+             # The empty selection, below this question's `min` of one.
+             Recording("short", ("decide.answered", "decide.answer"), "json"),
+             # A null, which this selection does not allow.
+             Recording("null", ("decide.answered", "decide.answer"), "json"),
+             # Well formed, and the lamplighter who had his back turned.
              Recording("wrong", ("decide.answer",), "json"))),
     Case(id="decide-speaker",
          task="response-selector",

@@ -1221,6 +1221,7 @@ _DECIDE_ITEMS = [
 #: question line `decide/user.j2` opens it with.
 _DECIDE_NEW_KINDS = {
     "rank": ("- a ranking is answered with", "(ranking, best first"),
+    "select": ("- a selection is answered with", "(selection"),
 }
 _DECIDE_NEW_ITEMS = {
     "rank": dec.Rank("order", "Which scene matters most to Mara's question?",
@@ -1228,6 +1229,10 @@ _DECIDE_NEW_ITEMS = {
                       dec.Option("scenes:ledger", "The ledger changes hands"),
                       dec.Option("scenes:tide", "The tide comes in")),
                      top=2, allow_none=True, pointwise="Does this scene bear on it?"),
+    "select": dec.MultiSelect("saw", "Who saw the ledger change hands?",
+                              (dec.Option("characters:winifred", "Winifred, on the crates"),
+                               dec.Option("characters:seraphine", "Seraphine, at the rail")),
+                              min=1, max=2, allow_none=True),
 }
 for _explain in ("", "Say in one sentence what settled it."):
     for _n in (1, 2):
