@@ -15,8 +15,11 @@ back (`native_key`), what an endpoint cannot carry (`native_gap`), how a
 provider's report becomes an `Answer` (`native_answer`) and a reply an
 `ItemResult` (`native_result`),
 the capture's record of a call (`outcome`) and the structured rendering of a
-native result (`render`) -- and the one grouping rule for any ordered signal,
-`tiers`, which makes a tie explicit rather than breaking it.
+native result (`render`) -- the one grouping rule for any ordered signal,
+`tiers`, which makes a tie explicit rather than breaking it -- and what hands
+an answered item to a second opinion: an answer's key (`answer_key`), its
+margin over its rival in its own report (`margin`) and the triggers an item
+meets (`triggers`, roadmap 01d-C2a).
 
 It is a gateway leaf on purpose, and imports nothing from the package but
 the standard-library leaf `schemas` (spec §7.4, ruling 15; 01f-C3, whose
@@ -54,7 +57,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar, Final
 
@@ -491,15 +494,32 @@ class ItemResult:
     `backend` is the backend that answered this item (one of `BACKENDS`), the
     per-item truth when one batch is split across stages; `""` on an item
     nothing answered (`unanswered`) and on what `parse` returns, since the
-    backend stamps it, not the parser."""
+    backend stamps it, not the parser.
+
+    `served` is `(kind, provider id, model)` of the server of the ATTEMPT
+    whose reply this result was read from -- its adapter kind, its provider
+    id and the model it was sent -- stamped by the backend, as `backend` is,
+    and `()` on an item nothing stamped (`unanswered`, `parse`, a result
+    built by hand). It names the attempt, not a verdict that this item was
+    answered: an item of a structured chunk the reply never reached
+    (`unreadable` with `NO_ITEM` or `NO_OBJECT`) carries its chunk's server
+    too. It is not compared, so two results that read alike are equal whoever
+    answered them (01d §5.6). The escalation triggers read `served[0]` for
+    the threshold (`triggers`) and `served[1:]` for the same-model skip; a
+    sampler's record reads all three (01c)."""
 
     answers: dict[str, Answer]
     rationale: str = ""
     backend: str = ""
+    served: tuple[()] | tuple[str, str, str] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
         if self.backend and self.backend not in BACKENDS:
             raise ValueError(f"unknown backend {self.backend!r}")
+        if self.served != () and not (
+                isinstance(self.served, tuple) and len(self.served) == 3
+                and all(isinstance(part, str) for part in self.served)):
+            raise ValueError("served is () or (kind, provider_id, model)")
 
 
 @dataclass(frozen=True)
@@ -1243,7 +1263,8 @@ def native_lift(item: Item, lowered: ItemResult, lift: Lift) -> ItemResult:
     back into a `Pair` for a joint (its distribution stays keyed by the
     flattened keys, the pair's one spelling); and built from its predicates'
     answers for a rank (`_lift_rank`) or a multi-select (`_lift_select`).
-    The backend and the (empty) rationale are the lowered result's."""
+    The backend, the server and the (empty) rationale are the lowered
+    result's."""
     by_id = dict(lift.lowered)
     answers: dict[str, Answer] = {}
     for q in item.questions:
@@ -1255,7 +1276,8 @@ def native_lift(item: Item, lowered: ItemResult, lift: Lift) -> ItemResult:
         else:
             (answered,) = got
             answers[q.id] = _lift_joint(answered) if isinstance(q, Joint) else answered
-    return ItemResult(answers, rationale=lowered.rationale, backend=lowered.backend)
+    return ItemResult(answers, rationale=lowered.rationale, backend=lowered.backend,
+                      served=lowered.served)
 
 
 def _pointwise_read(options: Sequence[Option], got: Sequence[Answer]
@@ -1554,7 +1576,9 @@ def _native_score(q: Score, chosen: object, dist: dict[str, float] | None) -> _R
 
 #: How far apart two summed masses may be and still tie in `regrouped`: a sum
 #: of reported probabilities carries float error (0.1 + 0.2 is not 0.3), and
-#: an error must not decide which of two equal meanings wins.
+#: an error must not decide which of two equal meanings wins. `triggers`
+#: reads a margin against its threshold within it too, for the same reason:
+#: P = 0.6 has a margin of 0.19999999999999996, which is ON a 0.2 threshold.
 MASS_TIE = 1e-9
 
 
@@ -1654,6 +1678,177 @@ def head_first(answer: Answer, q: Joint) -> str | None:
         return None
     return regrouped(replace(answer, answer=answer.answer.key),
                      lambda key: split_joint(key).head, [head.id for head in q.heads])
+
+
+# --- trigger evaluation (roadmap 01d-C2a) ------------------------------------
+
+#: What hands an answered item to a second opinion (01d §5.1): a native
+#: refusal, an abstention, and an answer its own report puts too narrowly
+#: ahead of a rival. The same name and value as `routing.TRIGGERS` (01d-S1),
+#: which this leaf may not import; `test_decision_triggers.py` pins the two.
+TRIGGERS: tuple[str, ...] = ("low_margin", "abstained", "refused")
+
+#: `triggers`' order: a refusal first, then an abstention, then low margins.
+_PRIORITY = {"refused": 0, "abstained": 1, "low_margin": 2}
+
+
+def answer_key(answer: Answer) -> str | None:
+    """The answer as a record spells its key (01c §6, 01d §5.1): a
+    predicate's ``"true"``/``"false"``, a score level's ``str(level)``, a
+    choice's option id, a joint pair's `key`; None for an answer of None (an
+    abstention included: a record that spells one as `NONE_KEY` does so
+    itself), a `Ranking` and a selection, which no single key names. A bool
+    is read before an int, since `True` is an `int`."""
+    value = answer.answer
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Pair):
+        return value.key
+    return None
+
+
+def margin(answer: Answer) -> float | None:
+    """How far the answer's own report puts the ANSWERED key above its best
+    rival (01d §6.1), as a float: negative when the report ranks another key
+    higher. None when the answer is None, or the report it needs is absent
+    or empty -- a predicate's `probability`, a choice's, a score's or a
+    joint's `distribution` -- and when any value in it is not a probability
+    (a finite number in [0, 1], never a bool): `native_answer` never keeps
+    such a report, and a hand-built one gets no margin rather than a
+    non-finite one that `Trigger` would refuse. `marginals` are never read: they are independent
+    per-key probabilities, not a distribution (01e-C4), so a rank and a
+    selection have no margin.
+
+    A predicate answered `a` with P(true) `p`: ``2 * p(a) - 1``, with
+    ``p(a) = p`` for True and ``1 - p`` for False. A distribution `w` with
+    mass ``M = math.fsum(w.values())`` (correctly rounded, so the same on
+    every supported interpreter, which builtin `sum` over floats is not),
+    ``w(a)`` the answered key's weight (0 when the report omits it) and `r`
+    the largest other weight (0 when there is none; `NONE_KEY` is a rival):
+    ``(w(a) - r) / M`` when ``M >= 1``, and ``w(a) - max(r, 1 - M)`` when
+    ``M < 1`` -- mass the report left out could all be a rival's, so it may
+    not be assumed otherwise. The keys are read raw, never regrouped (01d
+    §11 Q1): mass split between two spellings of one meaning (two
+    ``existing:<id>`` candidates) lowers the margin, as an ambiguity about
+    which one."""
+    value = answer.answer
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        p = _probability(answer.probability)
+        if p is None:
+            return None
+        return 2.0 * (p if value else 1.0 - p) - 1.0
+    key = answer_key(answer)
+    if key is None or not answer.distribution:
+        return None
+    weights: dict[str, float] = {}
+    for k, w in answer.distribution.items():
+        if (checked := _probability(w)) is None:
+            return None
+        weights[k] = checked
+    mass = math.fsum(weights.values())
+    own = weights.get(key, 0.0)
+    rival = max((w for k, w in weights.items() if k != key), default=0.0)
+    if mass >= 1.0:
+        return (own - rival) / mass
+    return own - max(rival, 1.0 - mass)
+
+
+@dataclass(frozen=True)
+class Trigger:
+    """One item `triggers` found: its index in the batch, which of `TRIGGERS`
+    it met, and -- for `low_margin`, and only for it -- its margin."""
+
+    index: int
+    trigger: str
+    margin: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.trigger not in TRIGGERS:
+            raise ValueError(f"unknown trigger {self.trigger!r}")
+        if (self.trigger == "low_margin") != (self.margin is not None):
+            raise ValueError("a trigger carries a margin exactly when it is low_margin")
+        if self.margin is not None and _finite(self.margin) is None:
+            raise ValueError("a margin is a finite number")
+
+
+def _threshold(kind: str, value: object) -> float:
+    if isinstance(value, bool) or (number := _finite(value)) is None or number <= 0:
+        raise ValueError(f"the {kind!r} threshold is not a positive number: {value!r}")
+    return number
+
+
+def _filtered(key: str | None, answers: Collection[str]) -> bool:
+    """Whether the answer filter lets `key` through: always when it is empty;
+    else `key` equals an entry, or starts with one ending in ":"."""
+    if not answers:
+        return True
+    if key is None:
+        return False
+    return any(key.startswith(entry) if entry.endswith(":") else key == entry
+               for entry in answers)
+
+
+def triggers(results: Sequence[ItemResult], *, question: str,
+             escalate_on: Collection[str], margins: Mapping[str, float],
+             answers: Collection[str] = ()) -> tuple[Trigger, ...]:
+    """Each item whose `question` answer meets a trigger in `escalate_on`, in
+    priority order: refused, then abstained, then low_margin by margin
+    ascending; ties by index (01d §5.1, C2a). At most one per item, since an
+    answer has one reason.
+
+    - `refused` and `abstained` are the answer's `reason`.
+    - `low_margin` is an answer that is not None, whose `margin` is not None,
+      from an item whose server kind (`ItemResult.served[0]`) has an entry in
+      `margins`, with ``margin < margins[kind] - MASS_TIE`` -- a margin float
+      error put a hair under its threshold is on it, not under it. A kind
+      with no entry, an unstamped item's included, never triggers: an
+      unlisted endpoint keeps today's behaviour rather than a default
+      threshold. A structured answer reports no margin, so on a structured
+      model only an abstention can fire.
+    - `answers`, when non-empty, narrows `low_margin` only: the answer's
+      `answer_key` must equal an entry, or start with an entry that ends in
+      ":" (a per-row option such as ``existing:<id>``). `refused` and
+      `abstained` carry no answer to filter.
+    - `unreadable` and `error` never trigger: the first is an answer read
+      badly, which is never re-asked, the second the failure chain's.
+
+    Pure. A trigger not in `TRIGGERS`, a threshold that is not a positive
+    finite number, and a result with no answer to `question` are each a
+    `ValueError`, and a bare `str` for `escalate_on` or `answers` (a
+    collection of its characters) a `TypeError`: each a caller's mistake
+    that would otherwise read as "nothing was unsure"."""
+    for name, given in (("escalate_on", escalate_on), ("answers", answers)):
+        if isinstance(given, str):
+            raise TypeError(f"{name} is a collection of strings, not the string {given!r}")
+    unknown = [name for name in escalate_on if name not in TRIGGERS]
+    if unknown:
+        raise ValueError(f"unknown triggers {unknown!r}; known: {list(TRIGGERS)!r}")
+    limits = {kind: _threshold(kind, value) for kind, value in margins.items()}
+    found: list[Trigger] = []
+    for index, result in enumerate(results):
+        if question not in result.answers:
+            raise ValueError(f"item {index} has no answer to {question!r}")
+        answer = result.answers[question]
+        if answer.reason in ("refused", "abstained"):
+            if answer.reason in escalate_on:
+                found.append(Trigger(index, answer.reason))
+            continue
+        if "low_margin" not in escalate_on or answer.answer is None:
+            continue
+        limit = limits.get(result.served[0]) if result.served else None
+        lead = margin(answer)
+        if (limit is not None and lead is not None and lead < limit - MASS_TIE
+                and _filtered(answer_key(answer), answers)):
+            found.append(Trigger(index, "low_margin", lead))
+    return tuple(sorted(found, key=lambda t: (_PRIORITY[t.trigger],
+                                              0.0 if t.margin is None else t.margin,
+                                              t.index)))
 
 
 def _present(record: dict[str, Any]) -> dict[str, Any]:

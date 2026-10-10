@@ -31,6 +31,7 @@ from tests.llm_fakes import (
     FailingOpenRouter,
     FakeLLM,
     SequencedProvider,
+    UnstampedHolder,
     decision_reply,
     from_entries,
 )
@@ -1416,3 +1417,99 @@ def test_a_captured_outcome_carries_its_failure_beside_the_record(client):
     assert (failed.failure.kind, failed.failure.status) == ("rate_limit", 429)
     assert json.loads(json.dumps(failed)) == dict(failed)
     assert type(dict(failed)) is dict and dict(failed) == failed
+
+
+# ---- per-item provenance (01d-S2, spec 01d §5.6) ----
+def _named(target: wire.Target) -> tuple[str, str, str]:
+    return (target.kind, target.provider_id, target.model)
+
+
+def test_each_structured_item_names_the_server_that_answered_it(client):
+    _store(client)
+    resolved = _resolved()
+    got = _decide(FakeLLM([[decision_reply({"over": True}, {"over": False})]]),
+                  [_item(), _item("Winifred waits at the gate.")], resolved=resolved)
+    primary = _named(resolved.chain.primary)
+    assert primary[1:] == ("openrouter", "vendor/active")
+    assert [r.served for r in got.items] == [primary, primary]
+
+
+def test_a_chunk_the_fallback_answered_names_the_fallback(client):
+    """The chunk's own answering holder (`llm.ATTEMPTED`) names its server:
+    the primary for the first chunk, the fallback for the second."""
+    _store(client)
+    resolved = _resolved()
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([[decision_reply(*[{"over": False}] * 8)],
+                                  LLMError("network", "connection reset"),
+                                  [decision_reply({"over": True})]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items,
+                  resolved=resolved)
+    primary, fallback = _named(resolved.chain.primary), _named(resolved.chain.fallback)
+    assert fallback[1:] == ("spare", "vendor/spare")
+    assert [r.served for r in got.items] == [primary] * 8 + [fallback]
+
+
+def test_a_refused_fallbacks_re_send_names_the_fallback(client):
+    """The primary fails on the network and the fallback refuses the
+    structured field, so the fallback is re-sent without the mode and
+    answers: the item names that re-sent fallback, never `chain.primary`."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active",
+                             "params": ["temperature", "structured_outputs"]}])
+    _catalog("spare", [{"id": "vendor/spare",
+                        "params": ["temperature", "structured_outputs"]}])
+    resolved = _resolved()
+    provider = SequencedProvider([LLMError("network", "connection reset"),
+                                  _refused_schema(), [decision_reply({"over": False})]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+                  resolved=resolved)
+    assert [(r["model"], "schema" in r["kwargs"]) for r in provider.requests] == [
+        ("vendor/active", True), ("vendor/spare", True), ("vendor/spare", False)]
+    fallback = _named(resolved.chain.fallback)
+    assert fallback != _named(resolved.chain.primary)
+    assert got.items[0].served == fallback
+
+
+def test_a_refused_primarys_re_send_names_the_primary(client):
+    """The primary refuses the field and the fallback fails, so the primary
+    is re-sent without the mode and answers: the item names the primary, not
+    the fallback the chain tried last."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active",
+                             "params": ["temperature", "structured_outputs"]}])
+    resolved = _resolved()
+    provider = SequencedProvider([_refused_schema(),
+                                  LLMError("rate_limit", "slow down", status=429),
+                                  [decision_reply({"over": True})]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+                  resolved=resolved)
+    assert [r["model"] for r in provider.requests] == [
+        "vendor/active", "vendor/spare", "vendor/active"]
+    assert got.items[0].served == _named(resolved.chain.primary)
+
+
+def test_an_item_left_unanswered_names_no_server(client):
+    _store(client)
+    resolved = _resolved()
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)]],
+                   error=LLMError("network", "connection reset"), fail_after=1)
+    got = _decide(fake, items, resolved=resolved)
+    assert got.items[8].answers["over"] == decisions.Answer(None, "error")
+    assert [r.served for r in got.items] == [_named(resolved.chain.primary)] * 8 + [()]
+
+
+def test_a_server_is_three_strings_or_nothing():
+    target = wire.Target(provider_id="spare", kind="openrouter", model="vendor/spare")
+    assert inference._server(target) == ("openrouter", "spare", "vendor/spare")
+    assert inference._server(None) == ()
+    assert inference._server({}) == ()
+    assert inference._server(dataclasses.replace(target, model=None)) == ()
+
+
+def test_an_unstamped_holder_names_no_server(client):
+    _store(client)
+    got = _decide(UnstampedHolder([[decision_reply({"over": True})]]), [_item()])
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert got.items[0].served == ()
