@@ -390,6 +390,13 @@ These are fiction facts the author controls. Derived views report **roles**
 consumers choose. Section 7.2's `affiliated` is the one helper that unions
 them, for the retrieval signals where the distinction does not matter.
 
+So **`members` excludes a leader nobody listed**, and a consumer that means
+"everyone in the Salt Circle" must say which set it means. A rule that expands
+a group audience (11's group overrides) reads `members_of` and silently leaves
+out an unlisted leader; reading `affiliated` includes them. 07 recommends
+`affiliated` for audience expansion and leaves the choice to the consumer
+(section 12.4).
+
 ### 4.5 What reclassify, delete and rename do
 
 - **The group is reclassified** (groups -> lore, say): `members` becomes an
@@ -406,6 +413,12 @@ them, for the retrieval signals where the distinction does not matter.
   10.2, section 12.1).
 - **A group is renamed**: ids are stable for life (`entities.py:1-5`), so
   nothing changes.
+- **A group with a membership journal entry is reclassified**:
+  `journal.repoint_records` repoints only `w == "entity"` targets
+  (`store/journal.py:222-235`), so a `{"w": "membership"}` undo (section 9.5)
+  keeps naming `groups:<id>`. That is correct, not a gap: the field is inert on
+  any other kind, and reclassifying back makes the entry live again. Nobody
+  should "fix" the repoint to follow it.
 
 ---
 
@@ -462,10 +475,23 @@ Without this, a membership change is invisible in the review panel (section
   (`overlay.character_roster`, `overlay.pc_roster`, `overlay.list_entities` for
   entity kinds), leaving an unresolved ref spelled as stored. It is display
   text and nothing compares it.
+- `incoming()` builds **one** `overlay.View` and one name map per call and
+  hands it to every blob, so the cost is a constant number of roster reads per
+  sync read, not one per pending item.
+- Both sides are named through the **campaign's** view, on purpose: the
+  reviewer is deciding what the campaign will read. A world-side ref naming an
+  id this campaign has detached (section 7.6) is therefore shown with the
+  campaign's own actor's name, and marked "(this campaign's own; not the
+  library's)" so the reviewer can see the stranger before taking the world's
+  copy.
 - `IncomingReview.rowsOf` (`IncomingReview.tsx:46-64`) appends a row per field
   after Name and before Body, and `pairs` lines them up as it already does.
-- `invisibleChangeHint`'s entity sentence drops "fields" from what it cannot
-  show; it still names keys, owners and secrecy, which remain unsent.
+- `invisibleChangeHint`'s entity sentence today names "keys, owners, or
+  secrecy". Slice A (which ships the field before this panel can show it)
+  extends it to "keys, owners, secrecy, or typed fields such as its members",
+  so a world-side membership change is never presented as a change with
+  nothing in it; this slice then drops "typed fields" again once they are
+  sent.
 
 This is general to every entity field (a world-side `leader` or `climate`
 change becomes visible too), because a membership-only rule would be a second
@@ -557,6 +583,35 @@ widgets, `kinds`, `multi`, bounds and option sources to
 `entity_schema.FIELDS`, the way `test_the_frontend_ships_the_same_kind_list`
 holds the kinds.
 
+### 6.4 Hand edits: journal and lock
+
+**Journal.** The campaign entity route journals a hand edit with the
+`{"w": "entity"}` descriptor, which snapshots the body only, and `journalled`
+writes no row when that value did not move (`routes/entities.py:189-215`,
+`store/undo.py:452-460`). Left alone, a members-only edit in the editor would
+leave no Changes row and no Undo, while the same change approved through
+absorb gets both (section 9.5). So the route opens a second `journalled`
+block, nested in the first, with `{"w": "entity_fields", "kind": kind, "id":
+eid, "fields": ["members"]}` (the descriptor the adopt path already uses,
+`undo.py:298-304`, `:355-358`), kind `lore`, field `members`, label
+"<name> -- members". It is only opened when the request carries `members`, and
+like the body row it writes nothing when the line did not move. Its undo
+restores the whole line under a compare-and-swap on the whole line, which is
+right for a hand edit: the reader is undoing what they typed, and any later
+change to the line refuses rather than being overwritten. World-scope edits
+are not journalled, as today.
+
+**Lock.** The route checks `rev` and writes outside `campaign_lock`
+(`routes/entities.py:203-210`), while absorb's apply writes under it. A save
+whose `rev` check passes just before an absorb membership write lands can
+overwrite that write with the stale line. This is the residual every campaign
+entity field already carries (an editor body save against a `lore_edits`
+append is the same race), because `store.overlay` sits in the frozen
+`UNREVIEWED` backlog (`locks.py:548`). 07 names it and does not close it:
+closing it means taking `campaign_lock(cid)` around the check and the write in
+every campaign entity mutation and moving `store.overlay` out of the backlog,
+a concurrency change with its own review (section 19, Q12).
+
 ---
 
 ## 7. Derived inverse membership (07-C2)
@@ -587,6 +642,11 @@ class Index:
     digest: str                                      # section 7.2
 ```
 
+The memoized `Index` is shared between callers, so it is immutable all the way
+down: `groups` and `by_actor` are `types.MappingProxyType` over dicts nothing
+else holds, and every sequence in it is a tuple. `memo_stamped`'s callers are
+told to hand out copies of anything mutable; this hands out nothing mutable.
+
 ### 7.2 The functions
 
 ```python
@@ -596,7 +656,8 @@ def index_from_rows(rows: Iterable[Mapping[str, object]]) -> Index
 
 def world_index(wroot: Path) -> Index          # entities.list_entities(wroot, "groups")
 def campaign_index(cid: str, *, v: overlay.View | None = None) -> Index
-                                                # overlay.list_entities(cid, "groups", v=v)
+    # overlay.group_listing(cid, v=v): the effective rows, each marked with the
+    # layer that answered, with section 7.6's detached filter applied
 
 def groups_for(index: Index, actor: str) -> tuple[Affiliation, ...]
 def members_of(index: Index, group: str) -> tuple[str, ...]
@@ -607,10 +668,15 @@ def co_affiliates(index: Index, actor: str) -> dict[str, tuple[str, ...]]
     # the actor itself excluded; empty when the actor is in no group
 ```
 
-`digest` is the SHA-256 of the canonical JSON of
-`[(ref, secrecy, leader, members) for each roster in ref order]`. It covers
-only what membership consumers read, so a body edit to a group does not move
-it. Member order is included because 08 may render members in stored order.
+`digest` is the SHA-256 of the canonical JSON of every `Roster` field,
+`[(ref, name, secrecy, leader, members, headquarters) for each roster in ref
+order]`. It covers everything the index hands out, so a consumer keying an
+artifact on it can never keep a renamed group's old name or a moved
+headquarters. A body, keys or group-state edit does not move it. Member order
+is included because a consumer may render members in stored order. A consumer
+that keys on less than the whole index (08's per-scene projection, section
+12.2) keys on its own projection instead, and that is the recommended form:
+the digest moves whenever any group anywhere is renamed.
 
 **Refs are reported as stored, existence unchecked.** The index answers what
 the records say. A consumer that draws a ref (the graph, a prompt) intersects
@@ -625,18 +691,45 @@ view; section 12.1 says which consumers must drop them.
 
 `campaign_index` and `world_index` memoize through
 `statcache.memo_stamped` in a pool this module owns (never the shared pool,
-for `search.py`'s reason, `store/search.py:10-14`), keyed `("membership",
-scope, id)`. The compute returns the stamps of:
+for `search.py`'s reason, `store/search.py:10-14`), with `max_entries = 64`:
+one entry per world or campaign touched in a process, and a process rarely
+holds more than a handful open (a structural bound, tuned later).
 
-- the world's `groups/` directory and each `groups/*.md` it read;
-- for a campaign, the campaign's `groups/` directory and each of its
-  `groups/*.md`, `deleted.json` (or its parent directory when absent), and
-  `campaign.md` (which names the world).
+**The key carries the resolved roots, never the ids:**
+`("membership", "world", os.fspath(wroot))` and
+`("membership", "campaign", os.fspath(croot), os.fspath(wroot))`.
+`memo_stamped` reuses an entry whenever its stamps re-stat unchanged
+(`statcache.py:141-170`), and the stamps are absolute paths. Keyed by id, a
+`PUT /config/data-dir` to a copy of the same library (the old tree still on
+disk), or two tests building the same cid under different `GRIMOIRE_HOME`s,
+would be served the other store's index until one of its files moved. Every
+existing `memo_stamped` caller keys on the root for this reason
+(`store/characters.py:545`, `:674`).
 
-Each stamp is taken before what it vouches for is read, per `memo_stamped`'s
-contract (`statcache.py:141-170`). A group's record directory
-(`groups/<id>/state.md`, assets) is not an input: an absorb's group-state write
-must not recompute the index.
+The stamps come from the overlay, not from this module:
+`overlay.listing_stamps(cid, "groups")` returns, in the order `memo_stamped`
+requires (each stamp taken before what it vouches for is read):
+
+- the campaign's `groups/` directory, or **the campaign root** when `groups/`
+  is absent (the common, thin-campaign case: the first materialization creates
+  the directory and moves the root's mtime), and each campaign `groups/*.md`;
+- the world's `groups/` directory, or the world root when absent, and each
+  world `groups/*.md`;
+- `deleted.json` and `detached.json`, each vouched for by the campaign root
+  when absent;
+- `campaign.md`, which names the world.
+
+`overlay.group_listing(cid, v=None)` returns the effective rows of
+`list_entities` with each row's layer (`"campaign"` or `"world"`) attached, so
+section 7.6 can tell an inherited roster from the campaign's own. Both helpers
+live in `store/overlay.py` because building `campaign_root(cid) / "groups"`
+anywhere else is the raw-root read `test_overlay_guard.py` exists to flag;
+`membership` never names a campaign path. `world_index` builds its stamps from
+`wroot` through `entities` the same way, with the parent rule for an absent
+`groups/`.
+
+A group's record directory (`groups/<id>/state.md`, assets) is not an input:
+an absorb's group-state write must not recompute the index.
 
 Cost without the memo is one `list_entities` of groups, which parses each group
 file once and is itself memoized per file. That is already paid on every turn.
@@ -651,7 +744,8 @@ kind    = "membership_index"
 params  = {"scope": "campaign" | "world"}
 inputs  = [("world_groups",    collection_digest(<wroot>/groups, "*.md", safe_id stems)),
            ("campaign_groups", collection_digest(<croot>/groups, "*.md", safe_id stems)),  # campaign only
-           ("tombstones",      content_hash(<croot>/deleted.json) or "absent")]           # campaign only
+           ("tombstones",      content_hash(<croot>/deleted.json) or "absent"),           # campaign only
+           ("detached",        content_hash(<croot>/detached.json) or "absent")]          # campaign only
 ```
 
 - The collection digest (03 §7) covers only top-level `*.md` files whose stem
@@ -671,7 +765,9 @@ inputs  = [("world_groups",    collection_digest(<wroot>/groups, "*.md", safe_id
   05 can rebuild it eagerly after an external edit.
 
 The persistent tier changes cost, never answers: a test runs every consumer
-with and without it and requires equal output (section 17.2).
+with and without it and requires equal output (section 17.2). Its digests are
+computed by 03's reader through the same overlay helpers, never off a raw
+campaign root.
 
 ### 7.5 The API
 
@@ -714,6 +810,39 @@ With `actor=characters:mara`:
   fails today: the same reader raises. The graph and absorb wrap it fail-soft
   (sections 9 and 10).
 - The response is a plain dict; no new pydantic model.
+
+### 7.6 A campaign's own actors are not members of the world's groups
+
+The failure, in order:
+
+1. A campaign creates its own Winifred while the world has none, and
+   `_mark_campaign_owned` detaches `characters/winifred`
+   (`overlay.py:1514-1566`).
+2. The world author later creates an unrelated Winifred under the same id and
+   adds `characters:winifred` to the Salt Circle, which the campaign inherits.
+3. Read naively, the campaign's own Winifred is now a member. Her presence
+   opens the group's owner gate (C3d), absorb names her among "Members here",
+   the graph draws `member_of`, and her page lists the group.
+
+That is the stranger-by-slug harm `detached` exists to stop (#225,
+`overlay.detached`, `:286-300`), and membership would make it routine where
+`leader` made it rare. So `campaign_index` applies one rule:
+
+> For a roster the campaign **inherits** (the row's layer is `"world"`), every
+> `members` or `leader` ref whose `<kind>/<id>` is in `overlay.detached(cid)`
+> is dropped from the index. A roster the campaign holds its own copy of is
+> taken as written: the campaign's own file naming its own actor means its own
+> actor.
+
+The ref stays in the world file and in the editor, where it renders as the
+campaign's stranger-safe dangling chip only if the campaign edits the group.
+Applying the rule to `leader` too is a correctness fix for the same failure
+the field has carried since it was declared. `detached.json` is a memo input
+(section 7.3) and a persistent-tier input (section 7.4).
+
+Every consumer that reads membership in a campaign goes through
+`campaign_index`, so the rule is in one place: activation (section 11.1) no
+longer parses `members` or `leader` off the frontmatter itself.
 
 ---
 

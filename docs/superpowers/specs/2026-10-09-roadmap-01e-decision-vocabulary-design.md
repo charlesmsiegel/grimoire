@@ -1,6 +1,6 @@
 # 01e. Decision vocabulary: Rank, finer Score, multi-select and joint choice
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01e in `ROADMAP-CHECKLIST.md`. Lane: decision.
 **Baseline:** `main` at `35c1fb7`.
@@ -29,12 +29,13 @@ need it, and this spec is that change.
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01e-C1 `Rank` | 09 (S) | Reranking a bounded candidate set of scenes after structural, lexical and semantic candidate generation (09-C1) |
-| 01e-C2 finer Score: `expected`, `tiers` | 09 (S) | Pointwise relevance with ties explicit, when the Decision model is native-only |
+| 01e-C1 `Rank`, with 01e-C2 `tiers` | 09 (S) | Reranking a bounded candidate set (09 section 7.3). The caller's rule (section 4.4): on a native Decision model a `Rank` must carry `pointwise`, and it never abstains |
+| 01e-C2 `expected` | 09 (S, optional) | A finer per-candidate signal on a native-only Decision model. 09 section 7.3 does not read it today; adopting it is 09's choice |
 | 01e-C1..C3 | 02 (S) | The vocabulary 02's decide routes may ask (02-C5); 02 works without it |
-| 01e-C3b `Joint` | 13 (H for multi-target actions and legal sets over 254 options; otherwise not needed) | One Action plus a target conditioned on it, with a joint distribution 01c can sample (13-C3) |
-| 01e-C3a `MultiSelect` | 13 (with C3b) | The target set of a multi-target Action, asked after the action (section 6.2) |
-| 01e-C4 `Answer.marginals` apart from `distribution` | 01c | 01c's sampler reads C4 to refuse sampling marginals (01c-C2/C4) |
+| 01e-C3a `MultiSelect` | 13 (H for multi-target actions) | The target set of an Action with `targets.max > 1`, asked as the second step after the action is chosen (section 6.2). This is the only shape that covers multi-target |
+| (nothing from 01e) | 13 (legal sets past 254 options) | A legal set over the choice cap is decomposed: a `Choice` of action, then a `Choice` (one target) or a `MultiSelect` (01e-C3a, several) of that action's targets. Only the multi-target branch needs 01e |
+| 01e-C3b `Joint` | 13 (S) | One action plus one target in one question, for a legal set of at most 254 pairs (255 with no reserved none on the structured path): `Pair` splitting, `Pair.key`, and the head-level reading (`head_marginal`, `head_first`). A plain flat `Choice` already does the rest |
+| 01e-C4 `Answer.marginals` apart from `distribution` | 01c (S) | 01c's sampler reads C4 to refuse sampling marginals (01c-C2/C4) |
 
 ## 1. Current state (reconciled against main)
 
@@ -272,8 +273,16 @@ Prompt (`decide/user.j2`): every question class gets a `KIND` class constant
 the template branches on `q.KIND` instead of `is defined`. A rank renders as
 `- <id> (ranking, best first[, at least the top k][, or null if they cannot be
 ordered]): <instructions>` followed by the candidates as `  - <id>:
-<description>`. `decide/system.j2` gains one bullet, "a ranking is answered
-with a list of candidate ids, best first, each at most once".
+<description>`. `decide/system.j2` gains one bullet per new kind ("a ranking
+is answered with a list of candidate ids, best first, each at most once", and
+the matching sentences for a selection and a joint choice). **Each bullet is
+rendered only when the batch holds a question of that kind**, so the prompt of
+every existing call site, which asks only predicates and choices, stays
+byte-identical. `scripts/verify_templates.py` keeps its current
+`_DECIDE_ITEMS` renders unchanged and gains a second set that includes the
+new kinds. The `KIND` constants are `ClassVar[str]` (or unannotated class
+attributes), so they are neither constructor nor equality fields of the
+frozen dataclasses.
 
 Parse (`_read_rank`):
 
@@ -283,7 +292,9 @@ Parse (`_read_rank`):
 - Each entry is matched like a choice value: exact first, then `normalise`
   plus aliases.
 - An entry that names no candidate is `unreadable` with detail
-  `NOT_AN_OPTION`, and the string is kept as `stated`. It is not dropped:
+  `NOT_AN_OPTION`. As with a structured choice, no `stated` is set: the
+  `Answer` docstring keeps `stated` for native replies, whose raw text is not
+  at hand (`decisions.py:231-236`). The entry is not dropped:
   dropping it would shift every later candidate up a place. That is the
   misattribution `_foreign_index` refuses for items
   (`decisions.py:568-601`), and an answer left unread is better than one
@@ -323,9 +334,13 @@ decisions endpoint cannot order them."). It then goes to the structured
 fallback stage, or fails as `native_unrepresentable`, as any unrepresentable
 item does today.
 
-Lift (`native_lift`):
+Lift (`native_lift`). It reads each lowered predicate's `Answer`, as
+`native_answer` already produced it: its `answer`, `reason` and
+`probability`. It never re-thresholds a raw probability, so a bool `chosen`
+an adapter might pass one day (`native_answer`'s rule M11) cannot read two
+ways.
 
-- `marginals` = each candidate's reported P(true).
+- `marginals` = each candidate's reported P(true) (`Answer.probability`).
 - If every lowered predicate is `refused`, the rank is `refused`.
 - If any candidate has no usable probability (refused, unreadable or
   missing), the rank is `unreadable` with no detail. The probabilities that
@@ -425,7 +440,8 @@ class MultiSelect:
 ```
 
 `validate` adds these checks: option ids and aliases as for a choice;
-`0 <= min <= (max or n) <= n`; and an option count in
+`0 <= min <= hi <= n` with `hi = n if max is None else max` (so `max=0` is
+zero, not "all"); and an option count in
 `1..MAX_SELECT_OPTIONS`. `MAX_SELECT_OPTIONS = 32`, argued as for
 `MAX_RANK_CANDIDATES`, since a native multi-select is one predicate per option
 in one request. Tune it later.
@@ -451,9 +467,13 @@ multi-select asks. Lift:
 - `marginals` = P(true) per option.
 - Every option refused gives `refused`. Any option with no usable probability
   gives `unreadable`.
-- Any option at exactly 0.5 gives `abstained`, as a native predicate at 0.5
-  already is (`decisions.py:913-914`). The selection cannot be stated without
-  a stand-in for that option.
+- Any option at exactly 0.5 means the selection cannot be stated without a
+  stand-in for that option. With `allow_none` it is `abstained`, as a native
+  predicate at 0.5 is (`decisions.py:913-914`). Without `allow_none` it is
+  `unreadable` with no detail, and the marginals still ride. This is the rule
+  `_native_choice` keeps for a none without `allow_none`
+  (`decisions.py:928-936`), so a caller that declared the question not
+  abstainable never sees `abstained`.
 - Otherwise the selection is every option with P(true) > 0.5, in option
   order. A selection outside `[min, max]` is `unreadable`, and the marginals
   still ride. **It is never repaired** by taking the top `max` or padding to
@@ -487,7 +507,7 @@ options are the legal pairs:
 - `validate` refuses these cases:
   - a head or tail id containing `JOINT_SEP`;
   - aliases on a `Joint`'s options, since pairing aliases would multiply them;
-  - a `tails` key that names no head;
+  - a `tails` key that names no head, or a head listed twice in `tails`;
   - a flattened option count outside the choice bounds, 2 to 255, or 1 to 255
     with `allow_none`.
 
@@ -507,17 +527,36 @@ The flattened `Choice` gives the following:
 
 Parse and lift both reduce to the choice reading. `_read_choice` on the
 flattened choice, or `native_answer` on the lowered one, gives an option id,
-which is split back into `Pair`. The distribution stays keyed by the flattened
-ids. Two helpers serve the head-level reading:
+which is split back into `Pair`. **The flattened key is the one spelling of a
+pair everywhere a key is needed**: the distribution, 01c's draw and replay
+record, 01d's answer filter, the capture and the eval render. `Pair` carries
+it, so a pair and its key cannot disagree:
 
 ```python
-def joint_key(head: str, tail: str | None) -> str: ...
+def joint_key(head: str, tail: str | None) -> str: ...      # head, or head + JOINT_SEP + tail
+def split_joint(key: str) -> Pair: ...                      # the inverse; ValueError on no head
+
+@dataclass(frozen=True)
+class Pair:
+    head: str
+    tail: str | None
+    @property
+    def key(self) -> str: return joint_key(self.head, self.tail)
+
 def head_marginal(answer: Answer, q: Joint) -> dict[str, float] | None:
-    """The distribution summed per head; None without one."""
+    """The distribution summed per head, NONE_KEY excluded; None without one."""
 def head_first(answer: Answer, q: Joint) -> str | None:
-    """`regrouped` grouped by head: the head the distribution puts most mass
-    on when that is not the chosen pair's head, else None."""
+    """`regrouped`'s rule applied to `answer.answer.key`, grouped by head,
+    NONE_KEY excluded: the head the distribution puts most mass on when that is
+    not the chosen pair's head, else None."""
 ```
+
+`regrouped` itself returns None for any answer that is not a `str`
+(`decisions.py:968-970`), so `head_first` does not call it on the `Pair`. It
+applies the same summing and tie rule to the pair's key. For 01d's answer
+filter (01d section 5.1), a `Joint` answer is spelled by its key. The filter
+does not apply to a `Rank` or a `MultiSelect`: neither has one answer key, and
+neither carries a distribution.
 
 `head_first` exists for the reason `regrouped` exists (`decisions.py:952-968`).
 A native endpoint scoring pairs one by one splits a head's mass across its
@@ -545,13 +584,15 @@ action's `targets.max`. A single "joint multi-select" type is a non-goal
 | `Joint`, P legal pairs | P | One id | One choice of P (+none) options |
 | `Score` with `expected` | Unchanged | Unchanged | Unchanged |
 
-`enum_values` (`decisions.py:388-394`) counts these. `_tally` already walks
+`enum_values` (`decisions.py:388-394`) counts only `Choice` and `Score`
+today, so it gains a branch per new type (a test pins each). `_tally` already walks
 nested `items.enum`, so `schema_chars` and `schema_properties` need no
 change. `chunks` therefore splits a batch of large ranks or joints by the
 existing enum and string budgets, with no new rule. At the bounds above, 8
 items of one 32-candidate rank add 256 enum values, well inside 1000. A
-255-pair joint fills a chunk's budget by itself in four items, and `chunks`
-already closes the chunk there. 01a-C1 is how the real per-item token and
+255-pair joint takes a quarter of the budget, so a chunk holds three such
+items (765 values; a fourth would pass 1000), and `chunks` already closes the
+chunk there. 01a-C1 is how the real per-item token and
 latency cost is read before anyone tunes a bound.
 
 ## 8. Capture, rendering and evals
@@ -559,7 +600,8 @@ latency cost is read before anyone tunes a bound.
 - `decisions.outcome` (`decisions.py:991-1011`) serialises the new values as
   follows:
   - a `Ranking` becomes `{"tiers": [[...], ...], "rest": [...]}`;
-  - a `Pair` becomes `[head, tail]`;
+  - a `Pair` becomes its flattened key (`Pair.key`), never a bare
+    two-element list, which a capture could not tell from a selection;
   - a selection becomes a list;
   - `marginals` and `expected` are added beside `probability` and
     `distribution`, under `_present`'s rule that an empty value is left out.
@@ -569,7 +611,7 @@ latency cost is read before anyone tunes a bound.
   `evals/run.py --live` to hand a native result to structured graders):
   - a singleton-tier `Ranking` renders as its id list, and one with a tie
     renders as `null`;
-  - a `Pair` renders as its flattened id;
+  - a `Pair` renders as its flattened key;
   - a selection renders as its list.
 
   Graders already read the native result itself (`evals/graders.py:348-359`),
@@ -630,14 +672,19 @@ order. `()` is a real answer, and `None` + `abstained` is "cannot say" (with
 - **Structured:** an array of ids, with count and uniqueness enforced by the
   parser.
 - **Native:** one predicate per option, thresholded at 0.5, with `marginals`
-  set. Any option at exactly 0.5 abstains, and a count outside bounds is
-  `unreadable`, never repaired.
+  set. An option at exactly 0.5 is `abstained` with `allow_none` and
+  `unreadable` without it. A count outside bounds is `unreadable`, never
+  repaired.
 
 **01e-C3b `Joint`.** `Answer.answer` is a `Pair(head, tail)`. It is one
 flattened `Choice` on both paths, so a native answer carries a joint
-`distribution` over legal pairs that 01c can sample. `head_marginal` and
-`head_first` give the head-level reading. The number of legal pairs is
-bounded by the choice limit, 255.
+`distribution` over legal pairs that 01c can sample. `Pair.key`
+(`joint_key`) and `split_joint` are the one spelling of a pair in every
+distribution, filter, replay record, capture and render. `head_marginal` and
+`head_first` give the head-level reading, with `NONE_KEY` excluded. The number
+of legal pairs is bounded by the choice limit (255, or 254 natively with the
+reserved none). Joint does not cover a set of targets, and it does not cover a
+legal set past the cap: both are the two-step decomposition of section 6.2.
 
 **01e-C4 `Answer.marginals`.** Per-key probabilities a native endpoint
 reported independently (a lowered `Rank` or `MultiSelect`). It is never a
@@ -718,8 +765,9 @@ Evals: the three offline cases in section 8 pass under `pytest backend`.
 
 **Acceptance.** Every test above is green, and `make check` is green with the
 ratchet baselines updated if any finding moved. No existing decide call
-site's prompt changes, except where the system prompt gains its bullet. The
-decide gate and `test_decide_chain_golden.py` are unchanged.
+site's prompt changes: the new system-prompt bullets render only beside a
+question of their kind, and `verify_templates.py`'s existing decide renders
+are byte-identical. The decide gate and `test_decide_chain_golden.py` are unchanged.
 
 ## 12. Non-goals
 
