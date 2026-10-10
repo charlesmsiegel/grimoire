@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Mapping
 import certifi
 import httpx
 
-from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage
+from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage, tool_calls
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
@@ -333,7 +333,9 @@ class OpenAICompatibleClient:
                       strict: bool = False, usage: dict | None = None,
                       reasoning_effort: str = "",
                       sampling: dict | None = None,
-                      schema: dict | None = None) -> AsyncIterator[str]:
+                      schema: dict | None = None,
+                      tools: tuple[dict, ...] | None = None,
+                      tool_choice: str | None = None) -> AsyncIterator[str]:
         """`usage` is filled in place when the endpoint volunteers an accounting
         block — see `llm_usage`.
 
@@ -367,6 +369,12 @@ class OpenAICompatibleClient:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "reply", "strict": True, "schema": schema}}
+        # Tools (01g) only when given: a strict endpoint refuses a field it
+        # does not know, so nothing here sends one unasked.
+        if tools is not None:
+            payload["tools"] = tool_calls.openai_tools(tools)
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
         try:
             http = self._client()
             async with http.stream(
@@ -408,6 +416,8 @@ class OpenAICompatibleClient:
                     # with no choices, so reading it after would skip it.
                     llm_usage.from_openai_chunk(obj, usage)
                     llm_reasoning.from_chunk(obj, usage)
+                    # A call is not text (01g; see openrouter.stream).
+                    tool_calls.from_openai_chunk(obj, usage)
                     if llm_reasoning.pending(usage):
                         yield ""
                     try:

@@ -44,7 +44,15 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, content_parts, llm_capture, llm_reasoning, llm_sampling, llm_usage
+from . import (
+    catalog,
+    content_parts,
+    llm_capture,
+    llm_reasoning,
+    llm_sampling,
+    llm_usage,
+    tool_calls,
+)
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Where a connection with no `base_url` of its own is sent. The `anthropic`
@@ -271,7 +279,8 @@ class AnthropicClient:
         return {"x-api-key": key, "anthropic-version": API_VERSION}
 
     def _payload(self, messages: list[dict], model: str, effective: dict | None,
-                 schema: dict | None = None) -> dict:
+                 schema: dict | None = None, tools: tuple[dict, ...] | None = None,
+                 tool_choice: str | None = None) -> dict:
         """`effective` first, so the request's own fields always win over a
         preset (see `openrouter._payload`); `max_tokens` is required by the
         API, and `effective` always carries it when it came from
@@ -281,20 +290,30 @@ class AnthropicClient:
         with `json_schema`, not a forced tool, which current models answer with
         a 400. MERGED into `output_config`, because adaptive thinking's effort
         lives there too and must survive beside it. Only ever given for an
-        attempt its resolver flagged capable."""
+        attempt its resolver flagged capable.
+
+        `tools` and `tool_choice` (01g) only when given, the choice lowered
+        as handed (`tool_calls.anthropic_choice`): forced tool use beside
+        thinking is a 400 the CALLER avoids, never rewritten here."""
         system, turns = _messages(messages)
         body = {**(effective or {}), "model": model, "messages": turns, "stream": True}
         body.setdefault("max_tokens", llm_sampling.ANTHROPIC_MAX_TOKENS)
         if schema is not None:
             body["output_config"] = {**body.get("output_config", {}),
                                      "format": {"type": "json_schema", "schema": schema}}
+        if tools is not None:
+            body["tools"] = tool_calls.anthropic_tools(tools)
+            if tool_choice is not None:
+                body["tool_choice"] = tool_calls.anthropic_choice(tool_choice)
         if system:
             body["system"] = system
         return body
 
     async def stream(self, messages, model: str, key: str,
                      usage: dict | None = None, effective: dict | None = None,
-                     base_url: str = "", schema: dict | None = None) -> AsyncIterator[str]:
+                     base_url: str = "", schema: dict | None = None,
+                     tools: tuple[dict, ...] | None = None,
+                     tool_choice: str | None = None) -> AsyncIterator[str]:
         """`usage`, when given, is filled in place (see `llm_usage`):
         `prompt_tokens` is input + cache read + cache write, because the API's
         `input_tokens` counts only what was neither, and the two cache counts
@@ -303,7 +322,7 @@ class AnthropicClient:
             raise AnthropicError("missing_key", "Anthropic API key is not set")
         reader = _Reader(usage)
         try:
-            body = self._payload(messages, model, effective, schema)
+            body = self._payload(messages, model, effective, schema, tools, tool_choice)
             http = self._client()
             async with http.stream(
                 "POST", _root(base_url) + "/v1/messages",
@@ -439,8 +458,11 @@ class _Reader:
         if kind == "message_start":
             self._start(obj.get("message"))
         elif kind == "content_block_start":
+            # The whole frame, so its block `index` is in hand (01g).
+            tool_calls.feed_anthropic(self.usage, obj)
             return self._block(obj.get("content_block"))
         elif kind == "content_block_delta":
+            tool_calls.feed_anthropic(self.usage, obj)
             return self._block(obj.get("delta"))
         elif kind == "message_delta":
             self._delta(obj)
@@ -495,6 +517,7 @@ class _Reader:
         delta = frame.get("delta")
         if isinstance(delta, dict):
             self.stop_reason = delta.get("stop_reason") or self.stop_reason
+            tool_calls.anthropic_stop(self.usage, delta.get("stop_reason"))
             self.category = _category(delta, frame) or self.category
         self._usage(frame.get("usage"))
 

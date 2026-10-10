@@ -447,3 +447,24 @@ test("an empty list on a provider with no catalog asks only for an id", async ()
     .toBeInTheDocument();
   expect(screen.queryByText(/Refresh/)).toBeNull();
 });
+
+test("a pin needing tools tests tools on a row that already generates", async () => {
+  const caps = { generate: { value: "yes", source: "catalog" },
+                 tools: { value: "unknown", source: "unknown" } };
+  (api.readConnectionCapabilities as any).mockImplementation(
+    (_id: string, need: CapabilityNeed) => {
+      const got = need === "generate" ? answer("generate", ["b"], [], [])
+        : answer("tools", [], ["b"], []);
+      const group = need === "generate" ? got.groups.fits : got.groups.unverified;
+      group[0] = { ...group[0], capabilities: caps };
+      return Promise.resolve(got);
+    });
+  render(<Harness needs={["generate", "tools"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  expect(api.readConnectionCapabilities).toHaveBeenCalledWith("saltmarch", "tools");
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["tools"] });
+});

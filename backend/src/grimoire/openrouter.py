@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Mapping
 import certifi
 import httpx
 
-from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage
+from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage, tool_calls
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Everything this provider is reached at hangs off one root. Spelled once
@@ -237,7 +237,8 @@ class OpenRouterClient:
             )
         return self._http
 
-    def _payload(self, messages, model, stream, sampling=None, schema=None):
+    def _payload(self, messages, model, stream, sampling=None, schema=None,
+                 tools=None, tool_choice=None):
         # `usage.include` is what makes OpenRouter attach token counts and the
         # call's cost in credits to the final SSE chunk (#152). Free, and
         # accepted by every model on the platform -- unlike the equivalent
@@ -260,6 +261,12 @@ class OpenRouterClient:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "reply", "strict": True, "schema": schema}}
+        # Tools (01g) only when given, so a call without them is the body it
+        # always was; `tool_choice` is the neutral string, OpenAI's spelling.
+        if tools is not None:
+            payload["tools"] = tool_calls.openai_tools(tools)
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
         return payload
 
     def _headers(self, key: str) -> dict[str, str]:
@@ -280,7 +287,9 @@ class OpenRouterClient:
     async def stream(self, messages, model: str, key: str,
                      usage: dict | None = None,
                      sampling: dict | None = None,
-                     schema: dict | None = None) -> AsyncIterator[str]:
+                     schema: dict | None = None,
+                     tools: tuple[dict, ...] | None = None,
+                     tool_choice: str | None = None) -> AsyncIterator[str]:
         """`usage`, when given, is filled in place with what the provider
         reported about this call — see `llm_usage`. It arrives on the last
         chunk, long after the caller has consumed the deltas it wanted, which
@@ -291,7 +300,8 @@ class OpenRouterClient:
             http = self._client()
             async with http.stream(
                 "POST", API_URL, headers=self._headers(key),
-                json=self._payload(messages, model, True, sampling, schema),
+                json=self._payload(messages, model, True, sampling, schema,
+                                   tools, tool_choice),
                 # The facade owns the read bound (#243) — it is the configurable,
                 # provider-independent one, and a read timeout here would cap it
                 # at 120s no matter what the user set, including "0 = no bound".
@@ -326,6 +336,9 @@ class OpenRouterClient:
                     # accounting on exactly the frame that carries it.
                     llm_usage.from_openai_chunk(obj, usage)
                     llm_reasoning.from_chunk(obj, usage)
+                    # A call is not text: noted for a caller that installed a
+                    # `tool_calls.Collector`, and yields nothing (01g).
+                    tool_calls.from_openai_chunk(obj, usage)
                     if llm_reasoning.pending(usage):
                         yield ""
                     try:

@@ -244,12 +244,13 @@ def test_the_keys_stamp_keeps_are_the_pre_send_keys():
     must not count as a request sent (`PRE_SEND_KEYS`), or a holder refused
     before sending files a model-less row. A key the gateway declares without
     a value here fails first, so a new kept key cannot skip the comparison."""
-    from grimoire import llm_reasoning, llm_usage
+    from grimoire import llm_reasoning, llm_usage, tool_calls
 
     values = {
         llm_capture.RUN_KEY: "run-1",
         llm_capture.KEY: llm_capture.Capture(lambda event: None, "c", 1, "m", "p"),
         llm_reasoning.KEY: llm_reasoning.Buffer(),
+        tool_calls.KEY: tool_calls.Collector(),
         llm_usage.ESTIMATE_KEY: llm_usage.Estimate([]),
         llm_usage.ENDED_KEY: True,
         llm.ATTEMPTED: CONN,

@@ -31,13 +31,14 @@ import httpx
 import pytest
 
 import grimoire.store as store
-from grimoire import catalog, decisions, embeddings, routes, wire
+from grimoire import catalog, decisions, embeddings, routes, tool_calls, wire
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
-from grimoire.store.inference import facts, probes, resolve
+from grimoire.store.inference import capabilities, facts, probes, resolve
+from grimoire.store.inference.capabilities import Cap
 from tests import wire_kit
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
 
@@ -1444,3 +1445,233 @@ def test_the_embed_probe_sends_nothing_when_its_options_cannot_be_judged(
     assert got["ok"] is False
     assert got["kind"] == ("options_unreadable" if state == "held" else "options_invalid")
     assert seen == [] and _rows() == []
+
+
+# ---- the tools probe (01g-S1) ------------------------------------------------
+
+def test_the_tools_probe_offers_one_ping_tool_inside_the_portable_subset():
+    assert probes.messages("tools") == [{"role": "user", "content": "Call the ping tool."}]
+    offer = probes.offer("tools", "required")
+    assert offer == {"tools": (probes.PING_TOOL,), "tool_choice": "required"}
+    tool_calls.check(offer["tools"], offer["tool_choice"])
+    assert probes.offer("generate") == {}
+    assert probes.PROBES["tools"].completion_tokens == probes.MAX_TOKENS
+
+
+@pytest.mark.parametrize("preset, kind, features, sent, want", [
+    ("openrouter", "openrouter", None, None, "required"),
+    ("openrouter", "openrouter", {"adaptive_thinking": False}, None, "required"),
+    ("openai", "openai_compatible", None, None, "required"),
+    ("zai", "openai_compatible", None, None, "auto"),
+    ("zai_coding", "openai_compatible", None, None, "auto"),
+    # Anthropic: forced tool use is refused beside thinking, and an adaptive
+    # model thinks when `thinking` is unset -- which the probe leaves it.
+    ("anthropic", "anthropic", None, None, "auto"),
+    ("anthropic", "anthropic", {"adaptive_thinking": True}, None, "auto"),
+    ("anthropic", "anthropic", {"adaptive_thinking": False}, None, "required"),
+    ("anthropic", "anthropic", {"adaptive_thinking": False, "enabled_thinking": True},
+     None, "required"),
+    ("anthropic", "anthropic", None, {"type": "disabled"}, "required"),
+    ("anthropic", "anthropic", {"adaptive_thinking": False}, {"type": "enabled"}, "auto"),
+])
+def test_the_tools_probe_asks_required_only_where_it_is_taken(preset, kind, features, sent,
+                                                              want):
+    assert probes.tool_choice(preset, kind, features, sent) == want
+
+
+def test_a_claude_model_behind_openrouter_is_asked_not_forced():
+    """It may think as it would at Anthropic, and forced tool use beside
+    thinking is refused there too."""
+    assert probes.tool_choice("openrouter", "openrouter", None, None,
+                              "anthropic/claude-model-x") == "auto"
+    assert probes.tool_choice("openrouter", "openrouter", None, None,
+                              "vendor/model-a") == "required"
+
+
+def test_an_unconfirmed_tools_test_is_refused_and_nothing_is_sent(client):
+    fake = FakeLLM([["ok"]], tool_calls=["ping"])
+    _use(client, fake)
+    conn = _connection(client)
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": MODEL, "capabilities": ["tools"]})
+    assert r.status_code == 400
+    assert r.json()["detail"] == REFUSAL
+    assert fake.calls == 0
+    assert _rows() == []
+
+
+def test_the_preview_describes_and_prices_the_tools_probe(client):
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003", "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+    body = client.post(f"/api/llm-connections/{conn}/test/preview",
+                       json={"model": MODEL, "capabilities": ["tools"]}).json()
+    said = body["sends"][0]["description"]
+    assert "Call the ping tool." in said and "requiring a call" in said
+    assert "64" in said and "inconclusive" in said
+    assert body["estimated_cost_usd"] == pytest.approx(_tokens("tools", 0.000003, 0.000015))
+
+
+@pytest.mark.parametrize("path", ["test", "test/preview"])
+def test_a_claude_subscription_is_refused_a_tools_test_before_sending(client, path):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client, kind="claude", name="Mara Subscription", api_key="")
+    r = client.post(f"/api/llm-connections/{conn}/{path}",
+                    json={"model": "sonnet", "capabilities": ["tools"], "confirm": True})
+    assert r.status_code == 400
+    assert "tools" in r.json()["detail"]
+    assert fake.calls == 0
+    assert _rows() == []
+
+
+def test_a_fake_that_calls_passes_and_one_that_answers_does_not(client):
+    _use(client, FakeLLM([["ok"]], tool_calls=["ping"]))
+    conn = _connection(client)
+    run = _run(client, conn, ["tools"])
+    assert run["result"]["results"]["tools"] == {"ok": True}
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["tools"]["ok"] is True
+
+    _use(client, FakeLLM([["ok"]]))
+    run = _run(client, conn, ["tools"])
+    assert run["result"]["results"]["tools"] == {
+        "ok": False, "kind": "no_tool_call", "error": probes.NO_CALL}
+
+
+def _call_sse(finish: str = "tool_calls") -> str:
+    return _sse({"choices": [{"delta": {"tool_calls": [{
+                    "index": 0, "id": "call_1", "type": "function",
+                    "function": {"name": "ping", "arguments": ""}}]}}]},
+                {"choices": [{"delta": {"tool_calls": [{
+                    "index": 0, "function": {"arguments": "{}"}}]}}]},
+                {"choices": [{"delta": {}, "finish_reason": finish}]})
+
+
+def _streaming(body: str):
+    return lambda _request: httpx.Response(200, text=body,
+                                           headers={"content-type": "text/event-stream"})
+
+
+def test_a_tool_call_on_the_wire_passes_and_is_recorded(client):
+    conn = _endpoint(client, "Mara Endpoint", "tools.example")
+    seen = _wire_client(client, lambda r: (_streaming(_call_sse())(r)
+                                           if b'"tools"' in r.content else _answer(r)))
+
+    run = _run(client, conn, ["generate", "tools"])
+
+    results = run["result"]["results"]
+    assert results == {"generate": {"ok": True}, "tools": {"ok": True}}
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["tools"]["ok"] is True
+    generate, tools = (json.loads(r.content) for r in seen)
+    assert "tools" not in generate and "tool_choice" not in generate
+    assert tools["tools"] == tool_calls.openai_tools((probes.PING_TOOL,))
+    assert tools["tool_choice"] == "required"
+    rows = _rows()
+    assert len(rows) == 2 and all(r.get("status", "ok") == "ok" for r in rows)
+
+
+def test_a_reply_in_prose_is_a_failed_test_read_as_unknown(client):
+    conn = _endpoint(client, "Mara Endpoint", "tools.example")
+    _wire_client(client, _answer)
+
+    run = _run(client, conn, ["tools"])
+
+    assert run["result"]["results"]["tools"] == {
+        "ok": False, "kind": "no_tool_call", "error": probes.NO_CALL}
+    assert run["result"]["recorded"] is True
+    raw = store.llm_connections.read_connection_raw(conn)
+    assert capabilities.caps_for(raw, MODEL)["tools"] == Cap("unknown", "test", probes.NO_CALL)
+
+
+def test_a_reply_cut_by_the_cap_before_a_call_files_nothing(client):
+    conn = _endpoint(client, "Mara Endpoint", "tools.example")
+    _wire_client(client, _streaming(_sse({"choices": [{"delta": {"content": "Let me"},
+                                                       "finish_reason": "length"}]})))
+
+    run = _run(client, conn, ["tools"])
+
+    assert run["result"]["results"]["tools"] == {
+        "ok": False, "kind": "capped", "error": probes.CAPPED}
+    assert run["result"]["recorded"] is False
+    assert facts.read(conn) == {}
+
+
+def test_a_zai_connection_is_asked_for_a_call_not_required_to(client):
+    conn = _connection(client, kind="openai_compatible", name="Winifred GLM",
+                       base_url="https://api.z.ai/api/paas/v4", api_key="sk-fake-zai")
+    seen = _wire_client(client, _streaming(_call_sse()))
+
+    run = _run(client, conn, ["tools"])
+
+    assert run["result"]["results"]["tools"] == {"ok": True}
+    assert json.loads(seen[0].content)["tool_choice"] == "auto"
+
+
+def test_a_provider_refusing_tools_is_recorded_unverified(client):
+    conn = _endpoint(client, "Mara Endpoint", "tools.example")
+    _wire_client(client, _refusing(400, "tools are not supported by this model"))
+
+    run = _run(client, conn, ["tools"])
+
+    got = run["result"]["results"]["tools"]
+    assert got["ok"] is False and "not supported" in got["error"]
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["tools"]["ok"] is False
+
+
+def test_a_refused_tool_offer_files_no_row(client, monkeypatch):
+    """The offer is checked before the meter opens: a collector in the holder
+    would make it non-empty, and a meter files a row for any holder that is."""
+    fake = FakeLLM([["ok"]], tool_calls=["ping"])
+    _use(client, fake)
+    monkeypatch.setattr(probes, "offer", lambda cap, choice="required": {
+        "tools": (), "tool_choice": choice})
+    conn = _connection(client)
+
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": MODEL, "capabilities": ["tools"], "confirm": True})
+    assert r.status_code == 202, r.text
+    _wait(client, r.json()["run"]["id"], state="failed")
+
+    assert fake.calls == 0
+    assert _rows() == []
+
+
+def _tool_use_sse() -> str:
+    events = ({"type": "message_start", "message": {
+                  "id": "msg_1", "model": "claude-model-x", "role": "assistant", "content": [],
+                  "usage": {"input_tokens": 10, "output_tokens": 1}}},
+              {"type": "content_block_start", "index": 0,
+               "content_block": {"type": "tool_use", "id": "toolu_1", "name": "ping",
+                                 "input": {}}},
+              {"type": "content_block_delta", "index": 0,
+               "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+              {"type": "content_block_stop", "index": 0},
+              {"type": "message_delta", "delta": {"stop_reason": "tool_use"},
+               "usage": {"output_tokens": 5}},
+              {"type": "message_stop"})
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+
+
+@pytest.mark.parametrize("features, choice, words", [
+    ({"adaptive_thinking": True}, {"type": "auto"}, "asking for a call"),
+    ({"adaptive_thinking": False}, {"type": "any"}, "requiring a call"),
+])
+def test_an_anthropic_model_is_never_forced_to_call_beside_implicit_thinking(
+        client, features, choice, words):
+    """An adaptive model thinks when `thinking` is unset, and the probe sends
+    none; forced tool use beside thinking is a 400, so it is asked `auto`."""
+    conn, seen = _anthropic_wire(client, _streaming(_tool_use_sse()))
+    store.llm_connections.set_cached_models(
+        conn, [{"id": "claude-model-x", "features": features}], _rev(conn))
+
+    preview = client.post(f"/api/llm-connections/{conn}/test/preview",
+                          json={"model": "claude-model-x", "capabilities": ["tools"]}).json()
+    run = _anthropic_run(client, conn, ["tools"])
+
+    assert words in preview["sends"][0]["description"]
+    assert run["result"]["results"]["tools"] == {"ok": True}
+    body = json.loads(seen[0].content)
+    assert "thinking" not in body
+    assert body["tools"] == tool_calls.anthropic_tools((probes.PING_TOOL,))
+    assert body["tool_choice"] == choice

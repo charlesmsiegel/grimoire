@@ -7,7 +7,8 @@ import pytest
 from grimoire.store import llm_connections
 from grimoire.store.inference import providers
 
-CAPS = {"generate", "stream", "vision", "embed", "decide_native", "structured_output", "prefill"}
+CAPS = {"generate", "stream", "vision", "embed", "decide_native", "structured_output", "prefill",
+        "tools"}
 ALL_BUT_DECIDE = frozenset(CAPS - {"decide_native"})
 
 
@@ -131,12 +132,14 @@ def test_capability_sets_are_exact():
     fz = frozenset
     gs = fz({"generate", "stream"})
     p = providers.PRESETS
-    assert _sets(p["openrouter"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
-    assert _sets(p["anthropic"]) == (gs, fz({"vision", "structured_output", "prefill"}), fz({"embed", "decide_native"}))
-    assert _sets(p["claude"]) == (gs, fz(), fz({"vision", "embed", "decide_native", "structured_output", "prefill"}))
-    assert _sets(p["openai"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
+    assert _sets(p["openrouter"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill", "tools"}), fz())
+    # Every model on the Messages API takes tool definitions (01g 3.14).
+    assert _sets(p["anthropic"]) == (gs | {"tools"}, fz({"vision", "structured_output", "prefill"}), fz({"embed", "decide_native"}))
+    # The Agent SDK runs its own loop: no tools until 01g-S8.
+    assert _sets(p["claude"]) == (gs, fz(), fz({"vision", "embed", "decide_native", "structured_output", "prefill", "tools"}))
+    assert _sets(p["openai"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill", "tools"}), fz())
     for k in ("zai", "zai_coding"):
-        assert _sets(p[k]) == (gs, fz({"vision", "structured_output", "prefill"}), fz({"embed", "decide_native"}))
+        assert _sets(p[k]) == (gs, fz({"vision", "structured_output", "prefill", "tools"}), fz({"embed", "decide_native"}))
     for k in ("ollama", "lmstudio", "custom"):
         assert _sets(p[k]) == (fz(), ALL_BUT_DECIDE, fz({"decide_native"}))
 

@@ -168,6 +168,28 @@ def test_the_claude_subscription_reads_no_images_for_any_model(client):
     assert body["reason"] == "Claude subscription reads no images"
 
 
+def test_a_claude_provider_rules_tools_out_in_one_sentence(client):
+    """`need=tools` is a route's need (01g-S1), asked of a pin picker."""
+    cid = _connection(client, "claude", api_key="")
+    body = _get(client, cid, "tools").json()
+    assert body["groups"] == {"fits": [], "unverified": []}
+    assert body["hidden"] == []
+    assert body["reason"] == "Claude subscription calls no tools"
+
+
+def test_tools_groups_by_what_the_openrouter_catalog_states(client):
+    cid = _connection(client, rows=[{"id": "vendor/caller", "params": ["tools"]},
+                                    {"id": "vendor/quiet", "params": ["temperature"]},
+                                    BARE])
+    body = _get(client, cid, "tools").json()
+    assert body["reason"] is None
+    assert _ids(body["groups"]["fits"]) == ["vendor/caller"]
+    assert body["groups"]["fits"][0]["reason"] == "catalog"
+    assert _ids(body["groups"]["unverified"]) == ["vendor/bare-1"]
+    assert body["hidden"] == [{"id": "vendor/quiet",
+                               "reason": "the catalog says this model does not call tools"}]
+
+
 def test_a_provider_only_partly_ruled_out_has_no_provider_reason(client):
     # z.ai cannot decide natively, but generating answers a decision.
     cid = _connection(client, "openai_compatible", base_url=ZAI, rows=[{"id": "glm-test-1"}])
