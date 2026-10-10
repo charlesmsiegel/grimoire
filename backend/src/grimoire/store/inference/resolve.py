@@ -106,6 +106,13 @@ ROUTE_SCOPES = frozenset({"campaign", "global"})
 #: The same model there is still a second try, and still dropped with it.
 SAME_PROVIDER = "it is on the primary's own provider"
 
+#: Why a task's fallback is left out of `attempts` when its code policy sends
+#: none (`routing.TaskPolicy.fallback == "none"`, spec 01d §4.2). Outranks the
+#: other reasons: on such a task the policy is why the fallback is unsent,
+#: whatever else is true of it. Said only for a fallback the cascade chose,
+#: so the readout never reports dropping one that did not exist.
+NO_FALLBACK_POLICY = "this task's policy sends no fallback"
+
 #: The ways reading one connection can fail, every one of which reads as "no
 #: such connection" -- a dangling reference is walked past, never raised.
 _UNREADABLE = (llm_connections.ConnectionNotFound, locks.StoreBusy,
@@ -732,6 +739,9 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     `_apart`) -- either says why in
     `fallback_problem`
     (`problem`'s reason, or `SAME_PROVIDER`), which nothing refuses on; and
+    always, whatever the role says, on a task whose code policy sends none
+    (`routing.policy(task).fallback == "none"`, `NO_FALLBACK_POLICY`; "" --
+    a role card -- reads the default policy); and
     when the route has a
     preset -- campaign or global scope, a `PRESET_CLEAR` included -- the
     fallback carries that same sampling rather than its own preset
@@ -821,18 +831,26 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         attempts.append(first)
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
-        # A fallback on the primary's own provider is a retry (#144), which
-        # the retry budget already covers -- except behind a decide primary
-        # that cannot generate (`_apart`) when it names ANOTHER model: that
-        # fallback is a stage of its own, never a second try of the call that
-        # failed. The same model on the same connection is that second try
-        # whatever the stage is called, so it is dropped as C drops it. The
-        # reason is lifted exactly where the drop is (`SAME_PROVIDER`).
-        fallback_problem = (problem(fb_raw)
-                            if fb_raw is not None and fallback is not None
-                            and _apart(first, operation)
-                            and not _same_model(first.target, fb_raw, fallback.model)
-                            else _fallback_problem(first.target.provider_id, fb_raw))
+        if routing.policy(task).fallback == "none":
+            # The task's code policy sends no fallback, whatever its role
+            # says (spec 01d §4.2). The cascade already walked past a slot
+            # naming no provider, so `fb_raw` is None here only for a
+            # connection that vanished since -- which says nothing, as below.
+            fallback_problem = NO_FALLBACK_POLICY if fb_raw is not None else None
+        else:
+            # A fallback on the primary's own provider is a retry (#144),
+            # which the retry budget already covers -- except behind a decide
+            # primary that cannot generate (`_apart`) when it names ANOTHER
+            # model: that fallback is a stage of its own, never a second try
+            # of the call that failed. The same model on the same connection
+            # is that second try whatever the stage is called, so it is
+            # dropped as C drops it. The reason is lifted exactly where the
+            # drop is (`SAME_PROVIDER`).
+            fallback_problem = (problem(fb_raw)
+                                if fb_raw is not None and fallback is not None
+                                and _apart(first, operation)
+                                and not _same_model(first.target, fb_raw, fallback.model)
+                                else _fallback_problem(first.target.provider_id, fb_raw))
         if fallback is not None and fb_raw is not None and fallback_problem is None:
             # A copy, so the two attempts never share a mutable block.
             fb_sampling = ({**unforced, "params": dict(unforced["params"])}
