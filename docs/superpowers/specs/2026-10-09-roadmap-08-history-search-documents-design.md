@@ -1491,7 +1491,9 @@ Should-fix, all fixed:
 - **S9** ledger parses, `effective.records` and the name tables memoized by
   signature as part of 08-C2a; the cache-off memo bounded (sections 4.2, 6).
 
-Slices added (6 slices).
+Slices added (6 slices). While slicing: `record_embedded` writes rows on every
+input path the document read (coordinator edit, now reflected in 08-C2b and
+its test), and section 8.1 names `compiled.space_digest` as the digest.
 
 Addendum from 07's review: the `groups` slice is 07-C3c's `scene_groups` with
 `visible=None, limit=None`, uncapped (exempt from `MAX_META_REFS`), and counts
@@ -1523,10 +1525,10 @@ Minor, partly rejected:
 
 **For routing to other specs:**
 
-- **01h:** nothing new is required for 08. Two confirmations would help:
-  `queries=0` stays the default and means "all documents", and one shared
-  `<space-digest>` function over `space["space"]` (for 03-C3's vector kind) is
-  defined in one place (01h, 03 or 05; 05 section 6.4 computes it today).
+- **01h:** nothing new is required for 08. One confirmation would help:
+  `queries=0` stays the default and means "all documents". The shared
+  `<space-digest>` is now settled as `compiled.space_digest(space)` (03-C3,
+  used by 05-C3); section 8.1 cites it.
   The checklist edge "01h-C3 (H once C1 sends a type)" should become soft.
 - **05:** the hook reads its own kind's `materialized` rows by path for the
   live scene paths it lists, not only the paths in `hot`. 05 should state

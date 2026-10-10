@@ -432,9 +432,9 @@ distributions (5.6).
 The new routes (`turn_plan`, `epistemic`, `history_check`) need no page
 of their own. The Models page lists every route the server reports, in
 01s's Advanced section (`2026-10-09-inference-settings-group-design.md`,
-section 3.3). 01s has no toggle that hides a route, so from 02-B on the
+section 3.3). 01s has no toggle that hides a route, so from 02-S2 on the
 `turn_plan` row is listed while no UI can switch the feature on (the **dark
-period**, until 02-F). The route's hint says so: "Off unless Play decisions
+period**, until 02-S6). The route's hint says so: "Off unless Play decisions
 are switched on".
 
 Turning a switch on starts no call. CLAUDE.md's "settings surface never
@@ -1221,7 +1221,7 @@ A route cannot land before a call site decides its task
 rule). The call sites are 09's and 11's. So 02-C5 delivers a **kit** per
 task. Exactly what lands where:
 
-**In 02 (slice 02-G):**
+**In 02 (slice 02-S7):**
 
 - the item builder and the mapping (pure modules with tests). A pure
   builder names no task in a `decide()` call;
@@ -1578,7 +1578,7 @@ gate of section 4.
   shared structure for `routing.NO_LEGACY` carries its own test mechanism:
   a `NO_LEGACY_TASKS` set (every task on a `NO_LEGACY` route) that the
   frozen inference baselines exclude. Whichever spec lands the first such
-  route (02-B here, or 01g, 09 or 10) adds both. `turn-intent`,
+  route (02-S2 here, or 01g, 09 or 10) adds both. `turn-intent`,
   `turn-plan`, `turn-tool-decision`, `epistemic-access` and `history-rerank`
   join the set with their routes.
   `evals/run.py`'s offline cases cover the new decide prompts.
@@ -1692,21 +1692,256 @@ the fixture campaign's id.
 
 ---
 
-## 14. Slices
+## Slices
 
-| Slice | Lands | Waits on |
-|---|---|---|
-| **02-A — Record and plumbing** | Section 1 confirmed. `decide(response_id=)`. `responses.mint_id()`. `store/play_decisions.py` (settings readers, keys in `_CONFIG_KEYS` and `ConfigUpdate`, no UI). `plan_deadline()`. The `plan=` path in `compose_turn`, adding nothing for `None`. The byte-identical golden. | 01 only |
-| **02-B — Turn intent, dark** | `turn_plan.py` (intent), the `turn_plan` route with `turn-intent` (and `routing.NO_LEGACY` with its `NO_LEGACY_TASKS` baseline exclusion, if no other spec landed them), the call site, the roll-resume carry, the record, the `decide-turn-intent` case. Answers only, no draw. | 02-A, 01b-C1 |
-| **02-C — Plan, dark** | `turn-plan` task, the plan item with the `extra` slot, the `decide-turn-plan` case. | 02-B |
-| **02-D — Sampling** | C2a in `_select`. Stance sampling in B and C. The `decide-speaker` native recording with a distribution. | 01c-C1..C4 |
-| **02-E — Play gate** | `evals/play.py`, `--live --play`, fixtures, feature graders. | 01a-C1..C3 |
-| **02-F — Exposure** | The "Play decisions" ConfigView section and campaign overrides, one switch per ratified feature, and the inspector line. | 02-E reports, the user's yes |
-| **02-G — Kits** | `epistemic_access.py`, `history_rerank.py`, templates, recordings and unregistered `Case` definitions. No routes, no registered cases, no policy rows (9.1). | 01d-C2b's `Escalation` shape for `access_of` |
-| **02-H — Tool** | C4. | 01g-C1..C6, 02-E |
+Landing order within this spec: S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8.
+S7 (kits) needs nothing after S1 and can go in parallel with S2–S6. S5 (play
+gate) needs only S2 and can go in parallel with S3 and S4.
 
-B and C land dark: the backend honours the key and there is no UI. 02-E can
-run B and C before 02-D lands; argmax is a valid configuration.
+Every switch lands **dark**. The backend honours the key, no UI shows it,
+and it defaults to off, until its play-gate report is ratified (4.3). S6
+exposes the ratified ones. A route lands only together with its call site,
+so each new task's route entry is in the slice that first decides it.
+
+### 02-S1: Record and plumbing
+
+- **Delivers:** 02-C1 (full); 02-C6 (part: 3.1's off-is-byte-identical
+  rule, 3.2's soft resolution, 3.3's catch-all, 3.4's `plan_deadline()` and
+  `DeadlineRefused`, 3.5's attribution, and 3.6's settings readers with no
+  UI).
+- **Needs (this spec):** none
+- **Needs (other specs):** none (01 is landed)
+- **Scope:**
+  - Section 1 confirmed at the slice's baseline.
+  - `inference.decide`, `run_stages` and `_Call` gain `response_id=`.
+    `store.responses` gains `mint_id()` and `prepare(..., response_id=)`.
+    Both are checklist shared structures, so if another spec landed them
+    first, this slice reuses them.
+  - `store/play_decisions.py` with the three keys in `_CONFIG_KEYS` and
+    `ConfigUpdate`. No UI, no campaign route yet.
+  - `plan_deadline()` and `DeadlineRefused` in `routes/common.py`.
+  - `compose_turn` and `compose_director_turn` gain `plan=`, which adds
+    nothing for `None`.
+  - Nothing asks a new decision yet.
+- **Acceptance:**
+  - `compose_turn(plan=None)` equals the pre-change bytes, and every prompt
+    golden is untouched;
+  - a `decide(response_id=...)` call files the id on each ledger row;
+  - the settings readers follow the global/campaign rule of 3.6;
+  - `plan_deadline` refuses a call unsent once the deadline has passed, and
+    never reaches `client.note_outcome`.
+- **Size:** M
+
+### 02-S2: Turn intent, dark (answers only)
+
+- **Delivers:** 02-C2b (part: the stance question, the call site, the
+  `intent` record and the block after the history, the roll-resume carry,
+  every skip, with the answer used as given and no draw).
+- **Needs (this spec):** 02-S1 (H)
+- **Needs (other specs):**
+  - 01b-C1 (H: the one capture helper, used at a new decide site);
+  - 01b-C2 (H: capture filed after the call settles, off the decide path);
+  - `routing.NO_LEGACY` with `NO_LEGACY_TASKS` (S: a checklist shared
+    structure). If no spec has landed it, this slice adds it.
+- **Scope:**
+  - `store/turn_plan.py` (intent), its templates, and the `turn_plan` route
+    with `turn-intent`, landed together with its call site in
+    `_round_frames`. The routing guards force the route and the call site
+    into one slice.
+  - The `turn_intent.j2` block, placed after the history as an author's
+    note is.
+  - `_prepare`'s resume branch carries `record.get("intent")` into the roll
+    resume's recompose.
+  - The `decide-turn-intent` case and recordings.
+  - The switch value `intent` works with no UI.
+- **Acceptance:** section 13's "Turn intent and plan" items for the intent:
+  - off is byte-identical and files no row;
+  - one call before `response_start`, with `response_id` on the row;
+  - every skip, including `missing_key` without calling `decide`, the
+    deadline, and any exception (`error:RuntimeError`, and a retry that does
+    not loop);
+  - a roll resume and Keep writing carry the block with no second call;
+  - reroll and retry make no call, and a replay makes one;
+  - a layout that disables every catalog section still carries the block;
+  - the routing and operation guards and the frozen-equivalence exclusion
+    pass.
+- **Size:** L
+
+### 02-S3: Sampling (speaker and stance)
+
+- **Delivers:** 02-C2a (full); 02-C2b (full: the stance drawn through 01c).
+- **Needs (this spec):** 02-S2 (H)
+- **Needs (other specs):**
+  - 01c-C1 (H: `reports_distribution(resolved)`);
+  - 01c-C2 (H: `draws.draw` with `Eligibility(only, exclude, cutoff)`,
+    `new_seed()` and its `_seed_source` seam);
+  - 01c-C3 (H: the v1 replay record, and `draws.replay`);
+  - 01c-C4 (H: no draw on abstained, refused, unreadable or error, or with
+    no usable report);
+  - 01d-C1 (H: `TaskPolicy` with `samples`, `question` and
+    `reads_declines`, refusing `samples` together with `low_margin`).
+- **Scope:**
+  - The `_select` draw with `Eligibility(exclude=(NONE_KEY,),
+    only=addressed, cutoff=1/(2n))` and the re-draw of 5.2 rule 3.
+  - `pick` written with the speaker; `_first_actor` treats a present
+    `pick` as decided.
+  - `group_play.named(..., author_ref=)`, and `response_protocol.addressed`
+    and `pick_eligibility`.
+  - The stance draw in the intent path.
+  - The `response-selector` and `turn-intent` `TaskPolicy` rows, with
+    escalation off.
+  - The `decide-speaker` native recording with a distribution.
+  - `decide_speaker_sampling` works with no UI.
+- **Acceptance:** section 13's "Speaker sampling" items:
+  - off is unchanged;
+  - a seeded draw, with `draws.replay(pick) == pick["selected"]`;
+  - the issue mapping is unchanged;
+  - the none is never selected;
+  - the cutoff is honoured;
+  - the addressed narrowing, a typed note, and the re-draw;
+  - no re-draw on retry, recovery or resume.
+
+  For the stance: its `draw` record, and the answer used when there is no
+  report.
+- **Size:** M
+
+### 02-S4: Turn plan, dark
+
+- **Delivers:** 02-C3 (full).
+- **Needs (this spec):** 02-S3 (H)
+- **Needs (other specs):** none. 01e-C3b (`Joint`) is not used here; a
+  joint speaker-and-stance question is open question 7.
+- **Scope:**
+  - The `turn-plan` task on the `turn_plan` route, landed with its call
+    site.
+  - `plan_item` (stance, disclosure, tension) and `plan_items` with the
+    `extra` item slot of 7.3.
+  - The record's `disclosure` and `tension`, which are never drawn.
+  - The `decide-turn-plan` case.
+  - The switch value `plan` replaces the intent call, and works with no UI.
+- **Acceptance:**
+  - one `decide()` per contribution;
+  - three questions, plus extra items when given;
+  - disclosure and tension take the answer even when a distribution is
+    present;
+  - extra items are stored under their owner's key and rendered by nobody;
+  - no contribution pays for both an intent and a plan.
+- **Size:** M
+
+### 02-S5: Play gate harness
+
+- **Delivers:** 02-C6 (part: the play gate of section 4).
+- **Needs (this spec):** 02-S2 (H). S3 and S4 add configurations as they
+  land.
+- **Needs (other specs):**
+  - 01a-C1 (H: a play case summed across its tasks, per money column and
+    never across columns);
+  - 01a-C2 (H: metering inside a throwaway home with the tripwire, rows
+    stamped `scope: "eval"`, and the drain);
+  - 01a-C3 (H: `--repeat`, `--out`, `--compare` and the open `axes`).
+- **Scope:**
+  - `evals/play.py` with synthetic fixtures (placeholder names only).
+  - `evals/run.py --live --play <feature>`. It seeds each isolate with
+    exactly the configuration's selections and switch, drains before it
+    harvests, and declares `feature`, `scene_selection`,
+    `decision_selection`, `sampling` and `cutoff` as `axes`.
+  - The feature graders of 5.7, 6.6 and 7.5: mass on intended over the
+    drawn weights, addressed override, departure, spread, hand-back,
+    adherence, stance diversity and the leak check.
+  - The 4.3 hard criteria, including "on is really on".
+  - Nothing here runs in `make check` beyond the harness's offline tests.
+- **Acceptance:**
+  - `--play` refuses without `--live`;
+  - it writes nothing to the real store;
+  - an isolate holds exactly the selected providers;
+  - a configuration that records `skipped` fails the gate;
+  - rows carry the fixture campaign's id under the eval scope;
+  - the leak check passes offline on recordings.
+- **Size:** L
+
+### 02-S6: Exposure of ratified features
+
+- **Delivers:** 02-C6 (full: the "Play decisions" settings, the campaign
+  override, and the rule that a switch is shown only after ratification).
+- **Needs (this spec):** 02-S5 (H), plus a ratified live report for each
+  switch shown. A feature without one stays dark in this slice.
+- **Needs (other specs):** none
+- **Scope:**
+  - The ConfigView "Play decisions" section, showing only ratified
+    switches, with the cost and provider disclosure text of 3.6 and 3.7.
+  - `CampaignPlayDecisions` at `PUT /campaigns/{cid}/play-decisions`.
+  - The inspector's "Approach" line on a response.
+  - Defaults stay `off`.
+- **Acceptance:**
+  - a ratified switch round-trips through `PUT /config` and the campaign
+    route;
+  - an unratified switch has no control;
+  - frontend tests for the section and the inspector line;
+  - the ratified report is attached to the PR.
+- **Size:** M
+
+### 02-S7: Decide kits for 11 and 09
+
+- **Delivers:** 02-C5a (full); 02-C5b (full).
+- **Needs (this spec):** 02-S1 (S: only for shared helpers; it can land
+  right after S1).
+- **Needs (other specs):**
+  - 01d-C2b (H: `Decision.escalations[*].outcome`, read by `access_of`);
+  - 01e-C1 (S: `Rank`. Until it lands, `history_rerank` offers the Score
+    form only and `build_items_ranked` is absent).
+- **Scope:**
+  - `store/epistemic_access.py` and `store/history_rerank.py`, with their
+    templates, `verify_templates.py` entries, recordings, and `Case`
+    definitions held outside `CASES`.
+  - No routes, no registered cases, no `TaskPolicy` rows and no capture:
+    those land with 11's and 09's call sites (9.1). The routing guards and
+    `test_evals.py:67-74` force that split.
+- **Acceptance:** the kit items of section 13:
+  - fail-closed mapping for every reason;
+  - a low-margin `known` whose escalation `outcome` is `failed` or
+    `skipped` maps to `UNKNOWN`;
+  - ungraded is `None`;
+  - the unregistered cases' recordings replay;
+  - the routing guards stay green with no new route.
+- **Size:** M
+
+### 02-S8: Decision as a tool from play, dark
+
+- **Delivers:** 02-C4 (full).
+- **Needs (this spec):** 02-S2 (H: the `turn_plan` route); 02-S5 (H: its
+  play gate).
+- **Needs (other specs):**
+  - 01g-C1 (H: the `tools` capability, and its known-`no` refusal);
+  - 01g-C2a (H: the loop primitive over OpenRouter, OpenAI-compatible and
+    Anthropic, where the caller executes the tool);
+  - 01g-C2b (S: Claude Agent SDK. Until it lands, `claude` reads as unable
+    to call tools and is never offered the tool);
+  - 01g-C3 (H: a ledger row per loop turn with `run_id` and `loop_turn`);
+  - 01g-C4 (H: the run budget);
+  - 01g-C5 (H: the decide tool, metered under the caller-named
+    `turn-tool-decision`);
+  - 01g-C6 (H: a streamed final turn, and declining a tool call after
+    visible text);
+  - 01c-C2 (H: `draws.draw` for the selection).
+- **Scope:**
+  - The `turn-tool-decision` task on the `turn_plan` route, landed with its
+    call site.
+  - The offer rules of 8.4, the watcher-visible decline of 8.2, and the
+    caps of 8.3.
+  - The per-variant `tool` record.
+  - `decide_play_tool` works with no UI. Its switch is added to the
+    Play decisions section only after its report is ratified, in a separate
+    PR under 02-C6's rule (no new design).
+- **Acceptance:** section 13's tool items:
+  - offered under 8.4, including on a reroll and not on a retry;
+  - one honoured call;
+  - a decline after visible text, but not after a hidden perception fence;
+  - the per-variant record;
+  - `cap`;
+  - selection only, never the distribution;
+  - no tool turn in the transcript or the watcher;
+  - one meter per loop turn.
+- **Size:** L
 
 ---
 
@@ -1741,7 +1976,7 @@ run B and C before 02-D lands; argmax is a valid configuration.
 
 1. **Should the speaker pick get 3.4's deadline too?** Today a stalled
    Decision model holds the turn until the facade's idle timeout.
-   *Recommendation:* yes, but as **its own slice**, not in 02-A, because it
+   *Recommendation:* yes, but as **its own slice**, not in 02-S1, because it
    changes a landed site while every feature is off. A timeout would map to
    `INVALID_HANDOFF`, which returns control to the player (the existing
    failure mode) rather than failing the round. It needs the user's yes.
@@ -1761,7 +1996,7 @@ run B and C before 02-D lands; argmax is a valid configuration.
    responding indicator already covers the wait. Revisit if the play gate's
    added latency is noticeable.
 6. **The stance vocabulary.** *Recommendation:* ship 6.1's seven and let the
-   adherence grader and stance diversity revise it before exposure (02-F). The
+   adherence grader and stance diversity revise it before exposure (02-S6). The
    options live in templates, so revising them is a template edit plus a
    recording update.
 7. **Joint speaker and stance once 01e-C3 lands.** *Recommendation:* a
@@ -1808,7 +2043,7 @@ baseline, and against the revised 01a, 01c and 01d specs.
 | B3 | A roll resume recomposes, so the intent drops out | **Fixed.** 1.4 rule 4 corrected. The resume branch passes `record.get("intent")` into `_compose`; tests added (3.1 rule 5, 13). |
 | S1 | A per-call ceiling is several times the stated wait, and `_noting` blames healthy connections | **Fixed.** One deadline per decision, `DeadlineRefused` unsent past it, no `_noting`, worst case stated (3.4). |
 | S2 | Only `LLMError` and `DecideRequestError` are caught | **Fixed.** `except Exception` around the whole step (3.3). |
-| S3 | Kit cases and policy rows fail `make check` without a route | **Fixed.** What lands in 02-G versus the consumer's slice is spelled out (9.1). |
+| S3 | Kit cases and policy rows fail `make check` without a route | **Fixed.** What lands in 02-S7 versus the consumer's slice is spelled out (9.1). |
 | S4 | A `NO_LEGACY` route breaks the frozen equivalence baseline | **Fixed.** The shared structure's `NO_LEGACY_TASKS` set, excluded by the frozen baselines, landed with whichever spec adds the first such route (12). |
 | S5 | The play gate cannot apply a Decision selection to the turn path | **Fixed.** The isolate is seeded with the configuration's selections, and "on is really on" is a hard criterion (4.2, 4.3). |
 | S6 | C4's reroll story conflicts with variants | **Fixed.** Recorded per variant; reroll offers the tool, retry and resume do not (8.4, 8.6). |
@@ -1834,6 +2069,12 @@ baseline, and against the revised 01a, 01c and 01d specs.
 | M15 | Checklist edges: `13 ← 02-C3` missing; 01b hard for C5 | **Noted** as edge notes for the coordinator (16, question 8). |
 | M16 | The capture is on the pre-first-token path | **Fixed.** Counted in the worst case and in "added pre-generation time" (3.4). |
 | M17 | Readers must use `.get` | **Fixed** (5.3, 6.5). |
+
+**Slices added (8 slices):** section 14's table was converted to the
+slices format. The old slice letters map as A→S1, B→S2, D→S3, C→S4, E→S5,
+F→S6, G→S7 and H→S8. Sampling now lands before the plan, because 02-C3
+includes C2b's drawn stance. 02-S7 no longer waits on the policy rows:
+those land with the consumer's call site (9.1).
 
 **Also folded, from 01a and 01b:**
 

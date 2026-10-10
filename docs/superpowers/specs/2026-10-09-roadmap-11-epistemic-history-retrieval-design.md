@@ -1072,6 +1072,164 @@ evidence set, a perspective, and two sets of needles: propositions the actor
   recall**: a configuration that recalls more but leaks more is a regression
   on the leakage line, whatever its recall line says.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → (S4 and S5 in parallel) → S6.
+S1 to S5 call no model. S6 is the only slice that adds a decide call, and it
+stays off behind its switch until its gates pass.
+
+### 11-S1: The knowledge store
+
+- **Delivers:** 11-C3 (part: `store/knowledge.py`, the file format,
+  fingerprints, precedence, group expansion, lifecycle hooks and the writer
+  guard; no routes or UI)
+- **Needs (this spec):** none
+- **Needs (other specs):** 07-C1 (S: `members` and `leader` on the group
+  record, read through 07's `affiliated` — until it lands, a `groups:`
+  audience expands to the leader only, or to nobody where there is none)
+- **Scope:** Adds `store/knowledge.py` with a tolerant `read`, the shape-checked
+  mutators (`add`, `update`, `remove`, `restore`, `forget_audience`,
+  `copy_for_branch`), fingerprint matching (variant and raw-text digest for
+  posts, transcript hash for a scene), and the precedence of 7.2 as a pure
+  function. Hooks `forget_audience` beside the campaign actor delete
+  (`store/overlay.py:1618`) and the group delete, and `copy_for_branch` and
+  the discard into `store/branch.py`. Adds the `knowledge` target kind to
+  `store/undo.py`, the `DOMAIN_MODULES` entry, and
+  `test_knowledge_writer_guard.py` with its CONTRIBUTING.md row. Nothing
+  reads the file yet, so no prompt changes.
+- **Acceptance:** section 11's "Overrides" store tests: precedence (subject
+  first, `*` skips the author, the withholding tie-break), fingerprints (a
+  swipe, an edit, Keep writing and a hide each stop a `knows`, and none stops
+  an `unaware`), group expansion and its fail-closed cases, actor-delete
+  pruning, and branch copy and discard. The writer guard fails a planted call
+  in `store/absorb/`.
+- **Size:** M
+
+### 11-S2: The deterministic classifier
+
+- **Delivers:** 11-C1 (part: the deterministic stage — `Perspective` and its
+  string form, `classify`, R1–R6 and R2', the summary rule, the narrator
+  aggregate, re-matching, the failure table, `EpistemicView.visible()`; no
+  Decision stage)
+- **Needs (this spec):** 11-S1 (H)
+- **Needs (other specs):** 09-C1 (H: `EvidenceItem` carrying `SceneRef` with
+  scene identity, header fields, optional summary, and `EvidencePost`s with
+  index, key, speaker and prompt-view text); 08-C3b (S: post keys in the
+  prefixed `r-<response_id>` / `p-<post_id>` form plus `part` — until they
+  are populated, post-listed overrides cannot match and a keyless post in a
+  scene with any post-listed override is withheld)
+- **Scope:** Adds `store/context/epistemic.py` as a pure, read-only module
+  under one best-effort hold, declared in no lock list. It is a library with
+  no caller on the turn path yet, so prompts are unchanged. Pins its slice
+  renderer in `test_regex_prompt_guard.py`.
+- **Acceptance:** section 11's "Deterministic classifier" tests: each rule
+  with real presence fixtures, split excerpts, the summary rule, items with
+  no visible slice absent from `visible()`, the three narrator states,
+  re-matching after a cut, `unverifiable` scenes, and every row of 4.1's
+  failure table.
+- **Size:** L
+
+### 11-S3: Perspective-aware retrieval and prompt separation
+
+- **Delivers:** 11-C2 (full); 11-C4 (part: the offline needle-absence grader
+  and the 8.1 cases that need no model)
+- **Needs (this spec):** 11-S2 (H)
+- **Needs (other specs):**
+  - 09-C1 (H: the `perspective` seam on `Query`; this slice lifts its
+    `ValueError` for `"actor:…"`);
+  - 09-C3 (H: the `history_recall` section, its data keys, `shed` hook,
+    layout entry and turn-phase `gather`);
+  - 10-C1 (S: `history_plan` taking a perspective — until 10 lands there is
+    no planner, and the actor's evidence is 09's alone);
+  - 10-C3 (S: the sufficiency check reading the evidence it is handed —
+    until 10 lands there is no check).
+- **Scope:** Makes `gather` run per compose step with the step's perspective,
+  builds an actor's query from `observed_history` with restricted seeds, and
+  calls `classify` after every retrieval round. Replaces compose's `history=`
+  with `history_view`. Adds the three new sections and their templates, the
+  annotation lines in `history_recall.j2`, the blanking-list entries, the
+  perspective-mismatch refusal, the layout coupling, per-item shed hooks and
+  09's updated pin test, and the classify-only inspector rows. History stays
+  behind 09's `history_recall_depth` (off by default), so the golden is
+  byte-identical off. This is the slice that ends the "no history in NPC
+  prompts" rule.
+- **Acceptance:** section 11's "Prompt separation" tests, the
+  `history_view=None` golden, and the offline leakage grader over cases 1–6
+  and 8–14 of 8.1 in `pytest backend`.
+- **Size:** L
+
+### 11-S4: The Knowledge ledger: routes, UI and accept
+
+- **Delivers:** 11-C3 (full)
+- **Needs (this spec):** 11-S1 (H); 11-S3 (S: classified parts in the
+  capture view — until then there is nothing to accept from, and the ledger's
+  `+ New` form is the only writer)
+- **Needs (other specs):** none
+- **Scope:** Adds the three `routes/ledger.py` routes: `ensure_identity`
+  under the campaign lock, 409 `busy` on `UnreadableError`, server-side post
+  key validation and fingerprinting, 400 `unkeyed`, and journalling as
+  `manual`. Adds the frontend Knowledge section on the list/detail pattern,
+  with the stale-entry flag and re-stamp. Adds "Mark as known / suspected /
+  unaware" on classified parts in the capture view.
+- **Acceptance:** section 11's route tests (legacy scene, `busy`, invalid key,
+  `unkeyed`, unknown scene, journal and undo), the frontend list/detail tests,
+  and the accept posting the right subject.
+- **Size:** M
+
+### 11-S5: Live leakage evals
+
+- **Delivers:** 11-C4 (part: the live arm, reporting leakage apart from
+  recall)
+- **Needs (this spec):** 11-S3 (H)
+- **Needs (other specs):** 01a-C1 (S: per-case wall time, tokens and the
+  three money columns — until it lands, the live arm reports leakage and
+  recall only); 01a-C2 (S: live evals metered in a throwaway home — until it
+  lands, the live arm stays unmetered, as live evals are today)
+- **Scope:** Adds `evals/run.py --live` support for the epistemic cases: an
+  actor reply graded for using a forbidden proposition, with a needle check
+  and a decide-based judge, including case 3 (whisper without override),
+  which only the live arm can catch. Fixtures are synthetic stores with
+  placeholder names.
+- **Acceptance:** the live arm runs on the synthetic corpus and reports a
+  separate leakage line. Its offline graders run in `pytest backend`.
+- **Size:** S
+
+### 11-S6: The Decision stage
+
+- **Delivers:** 11-C1 (full); 11-C4 (full: the Decision gate seeded from
+  cases 7, 10 and 15, with the false-`known` rate as its leakage line)
+- **Needs (this spec):** 11-S3 (H); 11-S5 (S: the live arm the play gate's
+  leakage report uses); 11-S4 (S: accepting a Decision answer — until then
+  answers are captured but cannot be accepted)
+- **Needs (other specs):**
+  - 02-C5a (H: the `epistemic` route, the `epistemic-access` task,
+    `build_items`, `access_of`, the fail-closed mapping, the 01d-C1 policy
+    row, and the `decide-epistemic-access` case);
+  - 02-C6 (H: `_soft_resolved` use, `except Exception`, once per
+    contribution, the named total deadline helper, `response_id` with
+    `responses.mint_id()`, `store/play_decisions.py`, and the play gate);
+  - 01d-C2b (H: the `escalation=` parameter and `escalation_inference`, which
+    02-C5a's escalating policy row makes mandatory);
+  - 01b-C1 (S: the capture helper — until it lands, the pass is uncaptured
+    and the accept-from-capture of answers is absent);
+  - 01c-C4 (S: no sampled stand-in for an abstention — `decide` already
+    returns none).
+- **Scope:** Adds `routes/epistemic.refine` with the eligibility gate, both
+  caps (`RoundBudget` on the round record), `EPISTEMIC_CEILING_S`, the replay
+  skip, and the `history_view` stored on the response record for a roll
+  resume. Adds the `epistemic_decide` key (default `off`, hidden in the UI
+  until the play gate is ratified) and seeds the `--gate` corpus.
+  The `epistemic` route lands here with its call site if 02 has not already
+  landed it: `test_routing_guard` fails a route whose task nothing calls, and
+  `test_operation_guard` requires the flip to `decide` in the change whose
+  call site decides. That rule forces the route and this call site into one
+  slice. Pins `epistemic_access.build_items` in the regex guard.
+- **Acceptance:** section 11's "Decision stage" tests (a call reaches a meter,
+  the gate, the caps, each 5.3 row, deadline overrun with no `_noting`, soft
+  resolution and exception skips, no call on a replay or reroll). The
+  `decide-epistemic-access` gate case passes offline. The switch stays `off`.
+- **Size:** L
+
 ## 9. Contract
 
 **11-C1: Per-actor classes, deterministic first, with a capped Decision pass that is off by default.**
@@ -1384,4 +1542,5 @@ minor) was checked against the code and folded in as follows.
 | M6 note in prompts | Fixed: never renders (7.1) |
 | M7 dropped draft sources | Fixed: reasons in 12 |
 | M8 world-level group edits | Fixed: editor copy (7.3) |
+| Slicing | Slices added (6 slices). No contract item re-worded. One placement made explicit: the `epistemic` route lands with 11-S6's call site if 02 has not landed it |
 | Coordinator decisions | Presence never vouches for a summary (B1); group expansion counts the leader (07's `affiliated`); the capture outcome is 01b's envelope (5.5) |
