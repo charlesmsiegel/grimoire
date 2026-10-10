@@ -394,7 +394,7 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01d-S1 | The task policy and `fallback="none"` | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S1 | The task policy and `fallback="none"` | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01d-S2 | Per-item provenance and trigger evaluation | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01d-S3 | The escalation hop in `decide` | L | 2 | 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01d-S4 | The escalation seam in `routes/` | M | 3 | 01d-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
@@ -436,7 +436,7 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01h-S1 | No embedding on the event loop | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S1 | No embedding on the event loop | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01h-S2 | Options in the space identity, the `queries` split and prefix mode | L | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01h-S3 | Request-field input type and requested dimensions | M | 2 | 01h-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01h-S4 | Options in the UI | M | 3 | 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
