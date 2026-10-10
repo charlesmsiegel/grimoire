@@ -574,8 +574,14 @@ id leaves out.
 async def embed(task, texts, *, space, client: embeddings.AsyncEmbeddingsClient,
                 deadline=None, budgeted=False, campaign="", scene="",
                 cached=None, uncached=None, queries=0,
-                run_id="") -> list[list[float]]
+                run_id="", post=None) -> list[list[float]]
 ```
+
+**`post=`** (optional, on both `embed_sync` and `embed`) is the transcript
+index of the player post a turn is answering. It is filed on the ledger row
+exactly as a turn's generation rows file it, so a turn's history-recall embed
+buckets with the post it served (09 section 6.3). The default `None` files no
+post, as every embed row does today.
 
 It has the same validation, meter, `_stamp`, `record_failure`, NOT_SENT and
 aborted rules, and capture line as `embed_sync`. The shared body moves into

@@ -324,7 +324,8 @@ sub-feature. Edges come from each spec's Depends-on table.
 - `ItemResult.served`: 01d, read by 01c.
 - `routing.NO_LEGACY` sentinel for routes new at format 2: 01g
   (`tool-decision`), 09 and 10 (`history_check`, `history_plan`), 02-C5.
-  Any of these may add it.
+  Any of these may add it, together with its test mechanism: a
+  `NO_LEGACY_TASKS` set that the frozen inference baselines exclude.
 - `decide(response_id=)` and `responses.mint_id()`: 02.
 
 ## Cross-spec decisions
