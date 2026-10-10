@@ -123,7 +123,8 @@ function unnamed(row: Row): boolean {
   return !row.isDefault && row.id.trim() === "" && started(row);
 }
 
-export function PricingEditor({ addModel, onSaved }: { addModel?: string; onSaved?: () => void } = {}) {
+export function PricingEditor({ addModel, onSaved, onCancel }:
+  { addModel?: string; onSaved?: () => void; onCancel?: () => void } = {}) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,26 +154,32 @@ export function PricingEditor({ addModel, onSaved }: { addModel?: string; onSave
         // `unreadable` is a 200 carrying no rates: the file is there and could
         // not be parsed. Same refusal as a rejected request, because saving an
         // empty form would replace what is in that file with nothing.
-        const loaded = t.unreadable ? [] : toRows(t.rates);
-        // Set rate: edit the model's own entry when it has one, else add a
-        // row for it -- never a second row claiming the same model.
-        if (addModel && !t.unreadable && placed.current !== addModel) {
-          placed.current = addModel;
-          const at = loaded.find((r) => !r.isDefault && r.id === addModel);
-          if (at) {
-            setFocusKey(at.key);
-          } else {
-            const row = { key: nextKey++, id: addModel, isDefault: false, rates: emptyRates() };
-            loaded.push(row);
-            setFocusKey(row.key);
-          }
-        }
-        setRows(loaded);
+        setRows(t.unreadable ? [] : toRows(t.rates));
         setUnread(Boolean(t.unreadable));
       })
       .catch(() => { if (!live) return; setRows([]); setUnread(true); });
     return () => { live = false; };
-  }, [reload, addModel]);
+  }, [reload]);
+
+  // Set rate, apart from the read: a second Set rate while the editor is open
+  // must not re-read the table over what has been typed. Edit the model's own
+  // entry when it has one, else add a row for it -- never a second row
+  // claiming the same model.
+  const loaded = rows !== null && !unread;
+  useEffect(() => {
+    if (!addModel || !loaded || placed.current === addModel) return;
+    placed.current = addModel;
+    let target: number | null = null;
+    setRows((old) => {
+      const list = old ?? [];
+      const at = list.find((r) => !r.isDefault && r.id === addModel);
+      if (at) { target = at.key; return list; }
+      const row = { key: nextKey++, id: addModel, isDefault: false, rates: emptyRates() };
+      target = row.key;
+      return [...list, row];
+    });
+    setFocusKey(() => target);
+  }, [addModel, loaded]);
 
   useEffect(() => {
     if (focusKey === null || !focusRef.current) return;
@@ -222,6 +229,7 @@ export function PricingEditor({ addModel, onSaved }: { addModel?: string; onSave
           <button onClick={() => { setRows(null); setReload((n) => n + 1); }}>
             Try again
           </button>
+          {onCancel && <button className="subtle" onClick={onCancel}>Cancel</button>}
         </div>
       </div>
     );
@@ -315,6 +323,9 @@ export function PricingEditor({ addModel, onSaved }: { addModel?: string; onSave
                     : undefined}>
           Save rates
         </button>
+        {onCancel && (
+          <button className="subtle" disabled={busy} onClick={onCancel}>Cancel</button>
+        )}
       </div>
 
       {saved && <div className="field-hint">Rates saved.</div>}

@@ -7,8 +7,11 @@ type Read = { rates: Record<string, PricingEntry>; unreadable: boolean } | null;
 
 /** The fallback rate table on the Models page (spec 3.5): read-only, with an
  *  explicit Edit that mounts the existing editor, which saves itself.
- *  `addModel` (from Set rate) opens straight into the editor on that model. */
-export function TokenRates({ addModel, onSaved }: { addModel?: string; onSaved: () => void }) {
+ *  `addModel` (from Set rate) opens straight into the editor on that model;
+ *  Cancel goes back to reading, saves nothing, and tells the page (`onCancel`)
+ *  so it can drop the Set rate address. */
+export function TokenRates({ addModel, onSaved, onCancel }:
+  { addModel?: string; onSaved: () => void; onCancel?: () => void }) {
   const [mode, setMode] = useState<"view" | "edit">(addModel ? "edit" : "view");
   const [read, setRead] = useState<Read>(null);
   const [asked, setAsked] = useState(0);
@@ -56,7 +59,8 @@ export function TokenRates({ addModel, onSaved }: { addModel?: string; onSaved: 
       </p>
       {mode === "edit" ? (
         <PricingEditor addModel={addModel}
-                       onSaved={() => { setMode("view"); setAsked((n) => n + 1); onSaved(); }} />
+                       onSaved={() => { setMode("view"); setAsked((n) => n + 1); onSaved(); }}
+                       onCancel={() => { setMode("view"); onCancel?.(); }} />
       ) : read === null ? (
         <p className="field-hint">Reading rates…</p>
       ) : read.unreadable ? (
