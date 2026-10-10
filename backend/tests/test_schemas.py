@@ -217,7 +217,11 @@ def test_find_value(text, value):
 
 
 def test_find_value_never_raises():
-    assert schemas.find_value("[" * 100_000 + "]" * 100_000) is None
+    # Past the decoder's depth on some versions (a RecursionError, read as
+    # no value), a value on others: either way, never an exception.
+    deep = schemas.find_value("[" * 100_000 + "]" * 100_000)
+    assert deep is None or isinstance(deep, list)
+    assert schemas.find_value("[" * 100_000) is None
     assert schemas.find_value(None) is None  # type: ignore[arg-type]
 
 
