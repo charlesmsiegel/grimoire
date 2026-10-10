@@ -1886,8 +1886,9 @@ def _loop_refusal(task: str, messages: list[dict], toolset: tool_calls.Toolset,
 
 class _RunView:
     """What a tool may ask of the run it is in (`tool_calls.RunView`): a
-    decision against the run's cap, the spend left under its ceiling, and
-    a charge for what a tool's own LLM calls cost (01g-S7)."""
+    decision against the run's cap, the spend left under its ceiling, a
+    charge for what a tool's own LLM calls cost (01g-S7), and a decision's
+    outcome for the trace."""
 
     def __init__(self, loop: _Loop):
         self._loop = loop
@@ -1909,6 +1910,12 @@ class _RunView:
 
     def charge(self, usd: float) -> None:
         self._loop.charged += max(0.0, usd)
+
+    def note_decision(self, status: str, option: str | None = None) -> None:
+        """A decide-tool call's outcome, as the trace's `decide` entry (spec
+        3.12): its status in `note`, the option chosen in `name`."""
+        loop = self._loop
+        loop._trace(loop.turns, "decide", option or "", ok=status == "answered", note=status)
 
 
 @dataclass(frozen=True)
@@ -1974,6 +1981,8 @@ class _Loop:
         self.decisions_used = 0
         self.decisions_capped = False
         self.charged = 0.0
+        #: A fallback known (`no`) unable to call tools, which no turn sends.
+        self.fallback_lacks_tools = resolve.known_lacks(resolved, "tools", fallback=True)
 
     # ---- the run ----
     async def events(self) -> AsyncGenerator[tool_calls.LoopEvent, None]:
@@ -2160,7 +2169,7 @@ class _Loop:
         """One model turn, or None when the spend ceiling refused it unsent
         (`limit` says `spend`)."""
         chain, notes = self._chain(final)
-        choice = "none" if final else self._choice(chain, notes)
+        choice = self._final_choice(chain, notes) if final else self._choice(chain, notes)
         sending = self._outgoing(extra)
         projection = await self._projected(chain, sending, extra)
         if projection is not None and self._spent() + projection > (
@@ -2370,21 +2379,47 @@ class _Loop:
     def _chain(self, final: bool) -> tuple[wire.Chain, list[str]]:
         """The turn's chain (spec 3.9, 3.11): the per-turn output cap through
         `call_chain` (with the final schema on a finalize turn), the fallback
-        alone once it has served, and thinking off on a target that inherits
-        another model's tool turns."""
+        alone once it has served, a fallback known unable to call tools
+        never (the resolver drops one only on a route that requires them),
+        and thinking off on a target that inherits another model's tool
+        turns -- a fallback that would think anyway left out instead."""
         notes: list[str] = []
         full = call_chain(self.resolved, schema=self.final_schema if final else None,
                           max_tokens=self.budget.max_output_tokens)
         if self.fallen and full.fallback is not None:
             full = wire.Chain(full.fallback)
-        sent = [self._inheriting(t, notes) for t in full.attempts]
-        return wire.Chain(sent[0], sent[1] if len(sent) > 1 else None), notes
+        elif full.fallback is not None and self.fallback_lacks_tools:
+            notes.append(f"fallback {full.fallback.model} cannot call tools: not sent")
+            full = wire.Chain(full.primary)
+        sent = [self._inheriting(t, notes, droppable=n > 0)
+                for n, t in enumerate(full.attempts)]
+        kept = [t for t in sent if t is not None]
+        return wire.Chain(kept[0], kept[1] if len(kept) > 1 else None), notes
 
-    def _inheriting(self, target: wire.Target, notes: list[str]) -> wire.Target:
-        if any(w != (target.provider_id, target.model) for w in self.writers):
+    def _inheriting(self, target: wire.Target, notes: list[str], *,
+                    droppable: bool) -> wire.Target | None:
+        """`target` as sent to a turn whose history may hold tool turns
+        another `(provider_id, model)` wrote (spec 3.11 rule 4): with
+        thinking off, noted only where off is SENT (`llm_sampling`'s
+        reading of the new target). An Anthropic model that thinks when
+        nothing is sent (`adaptive_thinking`) and cannot be sent off would be
+        refused that history, so as a fallback it is left out (None); a
+        target the catalog says nothing of is sent off and noted unconfirmed."""
+        if all(w == (target.provider_id, target.model) for w in self.writers):
+            return target
+        off = target.with_thinking_off()
+        state = llm_sampling.effective(off)["controls"].get(
+            llm_sampling.REASONING_PARAM.name, {}).get("state")
+        if state in (llm_sampling.SUPPORTED, llm_sampling.TRANSLATED):
             notes.append(f"thinking off on {target.model}")
-            return target.with_thinking_off()
-        return target
+            return off
+        thinks = (target.kind == "anthropic" and isinstance(target.model_features, dict)
+                  and target.model_features.get("adaptive_thinking") is True)
+        if thinks and droppable:
+            notes.append(f"fallback {target.model} cannot be sent thinking off: not sent")
+            return None
+        notes.append(f"thinking off not confirmed on {target.model}")
+        return off
 
     def _choice(self, chain: wire.Chain, notes: list[str]) -> str:
         """`required` downgraded to `auto` for a chain holding an attempt that
@@ -2395,12 +2430,24 @@ class _Loop:
         notes.append("required sent as auto")
         return "auto"
 
+    def _final_choice(self, chain: wire.Chain, notes: list[str]) -> str:
+        """The finalize turn's `none` (spec 3.7 step 7), sent as `auto` to a
+        chain holding a provider that takes only `auto`
+        (`probes.AUTO_ONLY_PRESETS`): the finalize prompt asks for no more
+        calls, and any the turn makes are declined, as on every target."""
+        if not any(self._preset(t) in probes.AUTO_ONLY_PRESETS for t in chain.attempts):
+            return "none"
+        notes.append("none sent as auto")
+        return "auto"
+
+    def _preset(self, target: wire.Target) -> str:
+        return next((a.provider_preset for a in self.resolved.attempts
+                     if (a.provider_id, a.model) == (target.provider_id, target.model)), "")
+
     def _auto_only(self, target: wire.Target) -> bool:
-        preset = next((a.provider_preset for a in self.resolved.attempts
-                       if (a.provider_id, a.model) == (target.provider_id, target.model)), "")
         sent = llm_sampling.effective(target)["effective"].get("thinking")
-        return probes.tool_choice(preset, target.kind, target.model_features, sent,
-                                  target.model) == "auto"
+        return probes.tool_choice(self._preset(target), target.kind, target.model_features,
+                                  sent, target.model) == "auto"
 
     def _named(self, call: tool_calls.ToolCall) -> tool_calls.ToolCall:
         """A call with an id every provider takes: the provider's own while it
@@ -2541,7 +2588,10 @@ class _Loop:
                                      scene_identity=self.scene_identity, run_id=self.run_id,
                                      deadline=end, root=self.root, turn=self.turns,
                                      run=_RunView(self))
-        seconds = min(spec.timeout, end - time.monotonic())
+        seconds: float | None = min(spec.timeout, end - time.monotonic())
+        if seconds == math.inf:
+            # No bound on either side (the decide tool, in a run with no wall).
+            seconds = None
 
         async def marked() -> tool_calls.ToolOutput:
             # The wait runs the executor in a task of its own: marked as a

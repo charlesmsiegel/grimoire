@@ -1707,3 +1707,32 @@ def test_a_probe_whose_endpoint_ignores_dimensions_carries_both_widths(client, m
     caps = store.inference.capabilities.caps_for(
         store.llm_connections.read_connection_raw(conn), MODEL)
     assert caps["embed"].value == "unknown"
+
+
+def test_an_sdk_too_old_for_tools_fails_only_the_tools_probe(client, monkeypatch):
+    """Brutal review F3: on a claude-agent-sdk with the tool API's names but
+    not its options (0.1.73), the tools probe is refused as the coded failure
+    it is -- the run still answers, and the probes before it are filed."""
+    from tests.test_claude_agent import _AssistantMessage, _sdk_073, _TextBlock
+    _sdk_073(monkeypatch, replies=[_AssistantMessage([_TextBlock("ok")])])
+    _use(client, LLMClient(timeout=0, retries=0))
+    conn = _connection(client, kind="claude", name="Mara Subscription", api_key="")
+    run = _run(client, conn, ["generate", "tools"])
+    results = run["result"]["results"]
+    assert results["generate"] == {"ok": True}
+    assert results["tools"]["ok"] is False and results["tools"]["kind"] == "bad_response"
+    assert "0.1.76" in results["tools"]["error"]
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["generate"]["ok"] is True
+
+
+def test_a_claude_subscription_is_asked_for_a_call_not_required_to(client):
+    """Brutal review F7: the SDK cannot be asked to require a call (it is
+    offered as auto), so the confirmation does not say it will be."""
+    assert probes.tool_choice("claude", "claude", None, None, "sonnet") == "auto"
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client, kind="claude", name="Mara Subscription", api_key="")
+    said = client.post(f"/api/llm-connections/{conn}/test/preview",
+                       json={"model": "sonnet", "capabilities": ["tools"]}).json()
+    (send,) = said["sends"]
+    assert "asking for a call" in send["description"]
+    assert "requiring" not in send["description"]

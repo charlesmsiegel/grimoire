@@ -19,6 +19,14 @@ never returned -- the tool exists so the model does not reason the choice
 in prose. It cannot recurse: `decide` takes no tools, and `run_tools`
 refuses to start inside a loop.
 
+A decide is a model call, not a store read, so the tool does not take the
+loop's per-tool wait (`tool_calls.TOOL_TIMEOUT_S`): the run's wall clock
+bounds it (`_around`), and the decide chain its own calls. Whatever stops
+the wait after the spend check -- a failed call, the run's wall, a cancel --
+charges the call's projection, since a request that went out can still
+bill. Each call notes its outcome on the run (`RunView.note_decision`),
+which the loop's trace records as a `decide` entry (spec 3.12).
+
 No route is added here: the `tool_decision` route lands with its first
 consumer (12 or 02-C4), since a route nothing uses fails the routing guard.
 """
@@ -27,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -51,6 +60,10 @@ MAX_DECIDE_CONTEXT = 4000
 DECIDE_MAX_TOKENS = 512
 #: The one question every decide-tool item asks.
 QUESTION_ID = "choice"
+#: The tool's own wait: none past the run's. A decision can take longer than
+#: a store read's ten seconds, and the run's wall (`_around`) and the decide
+#: chain's per-call ceiling already bound it.
+DECIDE_TIMEOUT = math.inf
 
 
 @dataclass(frozen=True)
@@ -118,12 +131,19 @@ def _offer_refusal(task: str, resolved: ResolvedInference | None,
         return f"{task!r} did not resolve to a decision"
     if spend is None:
         return ""
+    return _unpriceable(resolved, max_tokens, prices or {})
+
+
+def _unpriceable(resolved: ResolvedInference, max_tokens: int, prices: dict) -> str:
+    """Why a decision on `resolved` cannot be priced under a spend ceiling
+    (spec 3.9), or "": a native stage, or one unpriceable or uncapped. Renders
+    a template: off the event loop."""
     for stage in operations.stages(resolved):
         if stage.mode != operations.STRUCTURED:
             return "a native decision cannot be priced under a spend ceiling"
     probe = decisions.Item("", (decisions.Choice(QUESTION_ID, "?", (
         decisions.Option("a", "a"), decisions.Option("b", "b"))),))
-    if operations.decide_projection(resolved, probe, max_tokens, prices or {}) is None:
+    if operations.decide_projection(resolved, probe, max_tokens, prices) is None:
         return "a stage of the decision is unpriceable or uncapped under a spend ceiling"
     return ""
 
@@ -207,7 +227,9 @@ def _around(ctx: tool_calls.ToolContext) -> operations.Around | None:
 
 @dataclass(frozen=True)
 class _Asking:
-    """One decide tool's fixed half: what every call is asked with."""
+    """One decide tool's fixed half: what every call is asked with. `prices`
+    were read at the build when it was guarded (`guarded`); an unguarded
+    tool reads them at a call the run's ceiling has to price (`_pricing`)."""
     resolved: ResolvedInference
     client: LLMClient
     cid: str
@@ -220,9 +242,26 @@ class _Asking:
     capture: operations.Capture | None
     prices: dict
     max_tokens: int
+    guarded: bool = False
 
 
-async def _projected(asking: _Asking, item: decisions.Item,
+def _late_pricing(asking: _Asking) -> tuple[dict, str]:
+    prices = operations.prices_for(asking.resolved)
+    return prices, _unpriceable(asking.resolved, asking.max_tokens, prices)
+
+
+async def _pricing(asking: _Asking, ctx: tool_calls.ToolContext) -> tuple[dict, str]:
+    """`(prices, why not)` a call is checked with: the build's, or none with
+    no ceiling on the run. A tool built without a guard and run under a
+    ceiling is priced now, as the guard would have priced it at the build
+    -- and refused, naming why, where it cannot be (F2: never "the spend
+    budget is spent" when nothing was)."""
+    if asking.guarded or ctx.run is None or ctx.run.room_usd() is None:
+        return asking.prices, ""
+    return await asyncio.to_thread(_late_pricing, asking)
+
+
+async def _projected(asking: _Asking, item: decisions.Item, prices: dict,
                      ctx: tool_calls.ToolContext) -> tuple[bool, float | None]:
     """`(fits, projection)` against the run's room under its ceiling (spec
     3.9): with no ceiling it fits and nothing is projected."""
@@ -230,26 +269,45 @@ async def _projected(asking: _Asking, item: decisions.Item,
     if room is None:
         return True, None
     projection = await asyncio.to_thread(operations.decide_projection, asking.resolved, item,
-                                         asking.max_tokens, asking.prices)
+                                         asking.max_tokens, prices)
     return projection is not None and projection <= room, projection
+
+
+def _noted(ctx: tool_calls.ToolContext, status: str, option: str | None = None) -> None:
+    if ctx.run is not None:
+        ctx.run.note_decision(status, option)
+
+
+def _charge(ctx: tool_calls.ToolContext, usd: float | None) -> None:
+    if ctx.run is not None and usd is not None:
+        ctx.run.charge(usd)
 
 
 async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
                  ) -> tool_calls.ToolOutput:
-    """One decide-tool call (spec 3.12): the run's decision cap, the one
-    `Choice` item validated, the spend check, then `decide` -- each refusal a
-    result for the model, never an exception the loop must catch."""
+    """One decide-tool call (spec 3.12): whether the run's ceiling can price
+    it at all, the run's decision cap, the one `Choice` item validated, the
+    spend check, then `decide` -- each refusal a result for the model, never
+    an exception the loop must catch, and each outcome noted on the run."""
     shape = asking.shape
+    prices, unpriced = await _pricing(asking, ctx)
+    if unpriced:
+        # Before the cap: a call no ceiling could price takes no decision.
+        _noted(ctx, "unpriceable")
+        return _refusal(shape, "unpriceable", f"not run: {unpriced}")
     if ctx.run is not None and not ctx.run.take_decision():
+        _noted(ctx, "cap")
         if shape.on_cap == "result":
             return tool_calls.ToolOutput(json.dumps({"selected": None, "reason": "cap"}))
         raise tool_calls.ToolError("not run: the run's decision budget is spent")
     try:
         item = _item(args, shape, asking.context)
     except decisions.DecideRequestError as exc:
+        _noted(ctx, "invalid_request")
         return _refusal(shape, "invalid_request", f"invalid request: {exc}")
-    fits, projection = await _projected(asking, item, ctx)
+    fits, projection = await _projected(asking, item, prices, ctx)
     if not fits:
+        _noted(ctx, "spend")
         return _refusal(shape, "cap", "not run: the run's spend budget is spent")
     using = asking.resolved
     try:
@@ -259,16 +317,25 @@ async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
             run_id=ctx.run_id, loop_turn=ctx.turn, capture=asking.capture,
             max_tokens=asking.max_tokens, around=_around(ctx))
     except decisions.DecideRequestError as exc:
+        _noted(ctx, "invalid_request")
         return _refusal(shape, "invalid_request", f"invalid request: {exc}")
     except LLMError as exc:
-        if ctx.run is not None and projection is not None:
-            # A failed call can still bill: its projection stands in.
-            ctx.run.charge(projection)
+        # A failed call can still bill: its projection stands in.
+        _charge(ctx, projection)
+        _noted(ctx, "failed")
         return _refusal(shape, "unanswered", f"the decision could not be made: {exc.kind}")
-    if ctx.run is not None and projection is not None:
-        spent = operations.rows_cost(decision.usage, asking.prices)
-        ctx.run.charge(spent if spent is not None else projection)
+    except BaseException:
+        # The wait stopped with the request out (the run's wall, a cancel, a
+        # fault): it can still bill, so its projection stands in too (F1).
+        _charge(ctx, projection)
+        _noted(ctx, "abandoned")
+        raise
+    spent = operations.rows_cost(decision.usage, prices) if projection is not None else None
+    _charge(ctx, spent if spent is not None else projection)
     (result,) = decision.items
+    answer = result.answers.get(QUESTION_ID)
+    chosen = answer.answer if answer is not None and isinstance(answer.answer, str) else None
+    _noted(ctx, _status(answer) if answer is not None else "unanswered", chosen)
     shown = asking.select(result) if asking.select is not None else _result(result, shape)
     return tool_calls.ToolOutput(json.dumps(shown))
 
@@ -286,7 +353,9 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
     when it cannot be offered: no resolution (the caller's soft refusal,
     `why`), a resolution of another task, or -- under a spend guard -- a
     stage that is native, unpriceable or uncapped. Under a guard this reads
-    the store (the stage prices): call it off the event loop.
+    the store (the stage prices): call it off the event loop. Built without
+    one and run under a ceiling, each call is priced then (`_pricing`) and,
+    where it cannot be, refused as `unpriceable` without taking a decision.
 
     `select` maps the answered `ItemResult` to what the model is sent (02's
     own sampling rule, through 01c); 01g never samples."""
@@ -296,9 +365,10 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
     if refused or resolved is None:
         return None, why or refused
     asking = _Asking(resolved, client, cid, scene, round_id, response_id, shape, context,
-                     select, capture, prices, max_tokens)
+                     select, capture, prices, max_tokens, guarded=spend is not None)
 
     async def ask(args: dict, ctx: tool_calls.ToolContext) -> tool_calls.ToolOutput:
         return await _asked(asking, args, ctx)
 
-    return tool_calls.ToolSpec(shape.name, shape.description, parameters(shape), ask), ""
+    return tool_calls.ToolSpec(shape.name, shape.description, parameters(shape), ask,
+                               timeout=DECIDE_TIMEOUT), ""
