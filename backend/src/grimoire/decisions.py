@@ -234,6 +234,15 @@ class Answer:
     and an eval grader tells an unoffered ``existing:<id>`` from an unknown
     word by it. Never an answer, and not compared: two answers that read
     alike are equal.
+
+    `marginals` (01e-C4) are per-key probabilities a native endpoint reported
+    independently -- each candidate's or option's P(true) under its lowered
+    predicate -- which do not sum to 1. They are never a `distribution`,
+    which is categorical and is what a sampler draws from, and are never
+    sampled. `expected` (01e-C2) is a native score's probability-weighted
+    level over its reported distribution (`native_answer`). Both ride on the
+    answer as the other reports do, an answer of None included, and both are
+    None on every structured answer.
     """
 
     answer: bool | str | int | None
@@ -241,6 +250,8 @@ class Answer:
     probability: float | None = None
     distribution: dict[str, float] | None = None
     detail: str = ""
+    marginals: dict[str, float] | None = None
+    expected: float | None = None
     stated: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
@@ -252,6 +263,14 @@ class Answer:
             raise ValueError("a detail qualifies an unreadable answer only")
         if self.stated and self.detail != NOT_AN_OPTION:
             raise ValueError("a stated value qualifies an answer that named no option only")
+        if self.marginals is not None and not all(
+                isinstance(key, str) and _probability(p) is not None
+                for key, p in self.marginals.items()):
+            raise ValueError("marginals are probabilities keyed by string")
+        if self.expected is not None and not (
+                isinstance(self.expected, (int, float)) and not isinstance(self.expected, bool)
+                and math.isfinite(self.expected)):
+            raise ValueError("an expected level is a finite number")
 
 
 @dataclass(frozen=True)
@@ -884,7 +903,9 @@ def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object
       `abstained` on a tie or on `NONE_KEY` -- and with no usable
       distribution, `unreadable`.
     - A score: `chosen` an `int` index (never a bool or a float); else the
-      distribution's argmax under the same tie rule; else `unreadable`.
+      distribution's argmax under the same tie rule; else `unreadable`. Its
+      `expected` level rides beside it (`_expected`), on an abstained tie
+      too, and never a provider's own weighted `score`.
     """
     if refused:
         return Answer(None, "refused")
@@ -897,8 +918,24 @@ def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object
     else:
         value, reason, detail = _native_score(q, chosen, dist)
     stated = chosen if detail == NOT_AN_OPTION and isinstance(chosen, str) else ""
+    expected = _expected(dist) if isinstance(q, Score) else None
     return Answer(value, reason, probability=p, distribution=dist, detail=detail,
-                  stated=stated)
+                  expected=expected, stated=stated)
+
+
+def _expected(dist: dict[str, float] | None) -> float | None:
+    """A score's probability-weighted level, `sum(i * p_i) / sum(p_i)` over a
+    validated distribution keyed `str(i)` (01e-C2): normalised by the mass
+    reported, because a report may omit levels and an omitted level is
+    unreported, not zero. None with no distribution or no mass. Computed from
+    the distribution rather than read off a provider's `score` field, so one
+    rule holds for both providers."""
+    if not dist:
+        return None
+    mass = sum(dist.values())
+    if mass <= 0:
+        return None
+    return sum(int(key) * weight for key, weight in dist.items()) / mass
 
 
 #: `(answer, reason, detail)`: an `Answer` before its report rides on it.
@@ -949,6 +986,44 @@ def _native_score(q: Score, chosen: object, dist: dict[str, float] | None) -> _R
 MASS_TIE = 1e-9
 
 
+def tiers(values: Mapping[str, float | int], *,
+          tolerance: float = MASS_TIE) -> tuple[tuple[str, ...], ...]:
+    """Keys grouped by value, highest first (01e-C2): the one grouping rule
+    for every ordered signal -- a native rank's P(true), a per-candidate
+    score's level or `expected`, a predicate's probability. Never breaks a
+    tie.
+
+    Greedy from the top, anchored on each tier's HIGHEST value: a key joins
+    the current tier when its value lies within `tolerance` of that tier's
+    first, so three values each just inside tolerance of the next cannot
+    chain a long run into one tier. Within a tier, keys keep the mapping's
+    order. The default tolerance is `MASS_TIE`, float error in a sum of
+    reported probabilities; it applies to integer levels alike, so two
+    candidates answered the same level are one tier. A value that is not a
+    finite number (a bool included) is a `ValueError`: it has no place in
+    an order."""
+    if not (isinstance(tolerance, (int, float)) and tolerance >= 0):
+        raise ValueError("a tie tolerance is a number of at least 0")
+    for key, value in values.items():
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)):
+            raise ValueError(f"{key!r} has no finite value to order by")
+    place = {key: n for n, key in enumerate(values)}
+    out: list[tuple[str, ...]] = []
+    tier: list[str] = []
+    anchor = 0.0
+    for key in sorted(values, key=lambda k: -values[k]):
+        if tier and anchor - values[key] <= tolerance:
+            tier.append(key)
+            continue
+        if tier:
+            out.append(tuple(sorted(tier, key=place.__getitem__)))
+        tier, anchor = [key], values[key]
+    if tier:
+        out.append(tuple(sorted(tier, key=place.__getitem__)))
+    return tuple(out)
+
+
 def regrouped(answer: Answer, group: Callable[[str], str],
               order: Sequence[str]) -> str | None:
     """The group a choice's reported distribution puts the most mass on, when
@@ -992,8 +1067,8 @@ def outcome(mode: str, provider: str, model: str,
             results: Sequence[ItemResult] | None = None, error: str = "") -> dict[str, Any]:
     """The capture's record of one call (spec §9.4): its mode and what served
     it, then each item's backend, normalised answers -- `answer`, always
-    present (None as null), with its `reason`, `detail`, `probability` and
-    `distribution` -- and rationale; or, on a failure, the `error`. A key
+    present (None as null), with its `reason`, `detail`, `probability`,
+    `distribution`, `marginals` and `expected` -- and rationale; or, on a failure, the `error`. A key
     whose value is empty or None is left out (an answer's own `answer`
     excepted)."""
     head = _present({"mode": mode, "provider": provider, "model": model})
@@ -1004,7 +1079,9 @@ def outcome(mode: str, provider: str, model: str,
         answers = {
             qid: {"answer": a.answer, **_present({
                 "reason": a.reason, "detail": a.detail, "probability": a.probability,
-                "distribution": dict(a.distribution) if a.distribution else None})}
+                "distribution": dict(a.distribution) if a.distribution else None,
+                "marginals": dict(a.marginals) if a.marginals else None,
+                "expected": a.expected})}
             for qid, a in result.answers.items()}
         items.append(_present({"backend": result.backend, "answers": answers,
                                "rationale": result.rationale}))

@@ -230,7 +230,11 @@ def test_decision_result_reads_the_canned_bodies(provider, caplog):
     distribution, weighted = TENSION[provider]
     assert answer_in(provider, canned(provider, "answered"), "tension")["score"] == weighted
     assert round(weighted) != 2
-    assert result.answers["tension"] == Answer(2, distribution=distribution)
+    tension = result.answers["tension"]
+    assert replace(tension, expected=None) == Answer(2, distribution=distribution)
+    # 01e-C2: the probability-weighted level, computed from the distribution
+    # (here it agrees with the provider's own `score`, which is never read).
+    assert tension.expected == pytest.approx(weighted)
 
     none = read(provider)(canned(provider, "none"), SPEAKER_ONLY).answers["speaker"]
     assert (none.answer, none.reason) == (None, "abstained")
@@ -364,7 +368,10 @@ def test_openai_refusal_is_per_question():
     result = openai_compatible.decision_result(openai_body("refused"), ITEM)
     assert result.answers["speaker"] == Answer(None, "refused")
     assert result.answers["over"] == Answer(False, probability=0.31)
-    assert result.answers["tension"] == Answer(0, distribution={"0": 0.65, "1": 0.3, "2": 0.05})
+    tension = result.answers["tension"]
+    assert replace(tension, expected=None) == Answer(
+        0, distribution={"0": 0.65, "1": 0.3, "2": 0.05})
+    assert tension.expected == pytest.approx(0.4)
 
 
 def test_openai_confidence_is_not_carried():
@@ -416,8 +423,10 @@ def test_openai_score_probabilities_are_keyed_by_index_else_by_label():
     levels = answer_in("openai", labelled, "tension")["probabilities"]
     del levels[0]["value"]           # no index: its label "0" names the level
     levels[2]["value"] = 7           # out of range: its label "2" does
-    assert openai_compatible.decision_result(labelled, ITEM).answers["tension"] == Answer(
+    tension = openai_compatible.decision_result(labelled, ITEM).answers["tension"]
+    assert replace(tension, expected=None) == Answer(
         2, distribution={"0": 0.35, "1": 0.2, "2": 0.45})
+    assert tension.expected == pytest.approx(1.1)
     levels[1]["label"] = "Uneasy."   # an index in range wins over any label
     assert openai_compatible.decision_result(labelled, ITEM).answers["tension"].answer == 2
     levels[1]["value"] = 0           # two entries for level 0: the report is invalid
