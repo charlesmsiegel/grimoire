@@ -1,9 +1,9 @@
 # 11. Epistemic history retrieval
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 11 in `ROADMAP-CHECKLIST.md`. Lane: retrieval (08 + 01e + 01h +
-01i → 09 → 10 → **11** → 12), fed by the decision lane (02-C5).
+01i → 09 → 10 → **11** → 12), fed by the decision lane (02-C5a).
 **Baseline:** `main` at `35c1fb7`.
 **Reconciles:** bundle draft `11-epistemic-history-retrieval.md` (2026-10-06,
 written against `7f80c42`). It extends, without superseding, the actor-scoped
@@ -14,34 +14,42 @@ control of `2026-10-05-lore-activation-controls-design.md`, and the
 hide-from-context rule of `2026-10-05-play-controls-hide-from-context-design.md`.
 
 > Implementation rule: re-read the code and every PR landed on this subsystem
-> since the baseline before planning. In particular, 07, 08, 09 and 10 are
-> being specified in parallel with this document; every interface this spec
-> assumes from them is listed in section 13 and must be re-checked against
-> their landed form.
+> since the baseline before planning. In particular, 02, 07, 08, 09 and 10
+> were specified in parallel with this document. Contract IDs follow
+> `ROADMAP-CHECKLIST.md`; section 13 lists what must still be re-checked
+> against their landed form.
 
 ## Depends on
 
+Matches the checklist edge `11 ← 09-C1, 09-C3 (H); 02-C5a (H for the
+Decision stage); 07-C1 (H for group overrides); 07-C3c, 10-C1, 08-C3b,
+01b-C1, 01d-C1/C2, 01c-C4 (S)`.
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 09-C1 bounded evidence set with signals | 09 | The units this spec classifies. 11 adds no retrieval of its own | Hard |
-| 09-C3 history prompt section with a strict token budget | 09 | 11-C2 splits that section by perspective and by class; it keeps 09's budget | Hard (missing from the checklist's edge list; see section 13) |
-| 02-C5 decide route and task for epistemic classification | 02 | The Decision stage of 11-C1 (section 5) | Hard for the Decision stage only. The deterministic stage and 11-C2 ship without it |
-| 07-C1 authoritative group members and overlay semantics | 07 | Expanding a group-audience override (section 7.3) | Hard for group overrides only |
-| 10-C1 `history-query-plan` route with a structured plan | 10 | The planner must be handed the perspective, and an actor call's planner input must be actor-visible (section 6.4) | Soft: 11 classifies whatever 09 returns, planned or not |
-| 08-C3 transcript-expansion helper | 08 | Rendering the visible sub-ranges of a split excerpt (section 4.4) | Soft: 09 may already hand over post texts |
-| 01b-C1 decision capture at every decide site | 01b | Capturing the Decision stage to the prompt log | Soft |
-| 01d-C1 / 01d-C2 task policy and escalation helper | 01d | Whether a low-margin epistemic answer escalates one hop | Soft: without it an answer stands as given |
+| 09-C1 `history.retrieve(Query) -> Evidence`, with a `perspective` seam; evidence carries scene identity, post indices, keys and texts | 09 | The units this spec classifies (section 3.2). 11 adds no retrieval of its own | Hard |
+| 09-C3 `history_recall` section, none in NPC prompts until 11 | 09 | 11-C2 splits that section by perspective and by class, inside 09's budget | Hard |
+| 02-C5a epistemic access kit (`epistemic` route, `epistemic-access` task, `build_items`, `access_of`, fail-closed mapping, 01d-C1 policy row) | 02 | The Decision stage of 11-C1 (section 5) | Hard for the Decision stage only. The deterministic stage and 11-C2 ship without it |
+| 07-C1 `members` on the group record, with overlay semantics | 07 | Expanding a group-audience override (section 7.3) | Hard for group overrides only |
+| 07-C3c retrieval projections (`scene_groups`, `co_affiliates`, `prompt_visible`) | 07 | Naming a group audience in the narrator annotation only where the group is prompt-visible | Soft |
+| 10-C1 `history_plan` route on Fast, taking a perspective | 10 | An actor call's planner input is actor-visible (section 6.4) | Soft: 11 classifies whatever 09 returns, planned or not |
+| 08-C3b `expand(...)`, the caller naming the phase | 08 | Rendering the visible sub-ranges of a split excerpt in the prompt phase (section 4.4) | Soft: 09-C1 already hands over post texts |
+| 01b-C1 one capture helper at every decide site | 01b | Capturing the Decision stage to the prompt log | Soft |
+| 01d-C1 / 01d-C2a / 01d-C2b task policy, trigger with an answer filter, one escalation hop | 01d | The one-hop escalation 02-C5a's policy row declares for `epistemic-access` | Soft: without it an answer stands as given, and a failure is `unknown` |
 | 01c-C4 no sampled stand-in for an abstention | 01c | An abstention stays `unknown` | Soft (already true of `decide` today) |
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 11-C1 perspective-aware classification | 12 | Every investigation tool that returns history in RP mode filters through it (12-C1) |
-| 11-C1 perspective-aware classification | 09 (soft, back-edge) | 09-C3 renders through 11-C2 once 11 lands; until then 09-C3 must not render history into an actor-scoped prompt at all (section 6.5) |
-| 11-C2 narrator/actor prompt separation | 12 | RP-mode investigation evidence is rendered by the same split |
-| 11-C3 knowledge overrides | 12 (maintenance mode, read only) | An investigation's `get_actor` tool reports overrides; it never writes them |
-| 11-C4 leakage eval suite | 12-C2 | 12's eval gate reuses the leakage graders |
+| Contract (provided here) | Consumer | What the consumer uses it for | Hard or soft |
+|---|---|---|---|
+| 11-C1 per-actor classes | 12 (12-C1, 12-C3) | Every investigation tool that returns history in RP actor mode filters through it, and E1's selection is re-classified at finish | Hard for RP mode |
+| 11-C2 narrator and actor prompt separation | 12 (12-C3) | What an RP investigation selects is rendered by the same split, never as model prose | Hard for RP mode |
+| 11-C4 leakage eval suite | 12 (12-C2c) | 12's eval gate reuses the leakage graders | Soft |
+| 11-C3 knowledge overrides | 12 (12-C1, read only) | `get_actor` reports overrides naming the actor; nothing in 12 writes them | Soft (informational; not a checklist edge) |
+
+09-C3 also relies on 11-C2 for its one cross-spec decision: no history in NPC
+prompts until 11-C2 lands (`ROADMAP-CHECKLIST.md`, "Cross-spec decisions";
+section 6.5 here).
 
 ## 1. Current state (reconciled against main)
 
@@ -146,8 +154,8 @@ becoming omniscience.
   rather than instructing around it (1.2). 11 keeps blanking. A narrator-only
   unit never reaches an actor's prompt, under any heading.
 - **"Decision integration is later."** The decision lane now provides an
-  epistemic route (02-C5). The Decision stage is specified here, behind its
-  own switch, and off until 02-C5's gate passes.
+  epistemic access kit (02-C5a). The Decision stage is specified here, behind
+  its own switch, and off until 02-C5a's gate passes.
 - **Presence was described as "appearances/cast".** It is post-granular
   (presence intervals) where the record has intervals, and scene-granular
   elsewhere. The classifier has to treat the two differently (4.2).
@@ -205,9 +213,9 @@ name.
 
 ### 3.2 Unit
 
-The unit is 09-C1's evidence item, seen through the fields 11 needs. 11
-requires each evidence item to say what it was built from (section 13 lists
-this as an interface requirement on 09-C1):
+The unit is 09-C1's evidence item, seen through the fields 11 needs. 09-C1
+carries the scene identity and the post indices, keys and texts of each
+item; 11 reads them as:
 
 ```python
 @dataclass(frozen=True)
@@ -223,7 +231,7 @@ class Unit:
     fact: str = ""               # fact id, kind == "fact"
 ```
 
-- An **excerpt** is a window of posts from one scene, as 08-C3's expansion
+- An **excerpt** is a window of posts from one scene, as 08-C3b's `expand`
   returns it.
 - A **scene** unit is anything that summarises a whole scene: a chronicle
   summary, a SearchDocument projection.
@@ -375,8 +383,8 @@ listed under `known_to`.
 ### 4.4 Rendering a split excerpt
 
 A slice's text is rebuilt from the `texts` of its posts, in order, using the
-same transcript renderer 09 uses for a whole excerpt (08-C3's expansion
-helper, or `chronicle.transcript_text` over the prompt-view messages, which
+same transcript renderer 09 uses for a whole excerpt (08-C3b's `expand`,
+with the phase named `prompt`, or `chronicle.transcript_text` over the prompt-view messages, which
 `test_regex_prompt_guard.py` accepts). A split never re-reads the scene. If
 `texts` is absent, the unit is treated as unsplittable: it is `witnessed`
 only if every post is, and otherwise the whole unit is withheld. Showing too
@@ -481,29 +489,28 @@ call per actor turn. On a native backend each item is its own request, under
 basis `decision_skipped`, chosen in 09's rank order. The constant is argued
 from the chunk size alone and should be tuned against real prompts later.
 
+The items are built by 02-C5a's kit, not by 11:
+
 ```python
-Item(
-    context=render("epistemic/item.j2",
-                   actor=<display name>,
-                   own_state=<the actor's state.md knows/suspects/current_state, capped>,
-                   evidence=<the slice text, prompt view, capped>,
-                   channels=<up to 2 later witnessed slices from (3c), capped>),
-    questions=(Choice(id="access",
-                      instructions=<"From what this character was present for or "
-                                    "was told in the material shown, ...">,
-                      options=(Option("known", ...), Option("suspected", ...),
-                               Option("unaware", ...)),
-                      allow_none=True),),
-)
+# store/epistemic_access.py (02-C5a)
+questions = [AccessQuestion(actor_ref=..., actor_name=...,
+                            evidence_ref=<09's evidence id + slice posts>,
+                            excerpt=<the slice text, prompt view, capped>,
+                            basis=<the slice's 11 basis codes>)
+             for each eligible slice]
+items = epistemic_access.build_items(questions)
 ```
 
-- The task and route are 02-C5's: this spec assumes task `epistemic-classify`
-  on a route with `operation="decide"` and `default_role="decision"`.
-  Resolve it with `require_inference("epistemic-classify", cid,
-  operation="decide")` and call `operations.decide("epistemic-classify",
-  items, client=…, resolved=…, campaign=cid, scene=sid, post=…, round_id=…,
-  capture=…, around=…)` (`inference.py:684-714`). The name is 02's to fix,
-  and is open question 4.
+11 adds to each question's excerpt, inside the kit's bound, the actor's own
+`state.md` knows/suspects (capped) and up to two later `witnessed` channel
+slices from 5.1 (3c), so the item can see the channel that made it eligible.
+
+- The task and route are 02-C5a's: task `epistemic-access` on the `epistemic`
+  route (`operation="decide"`, `default_role="decision"`). Resolve it with
+  `require_inference("epistemic-access", cid, operation="decide")` and call
+  `operations.decide("epistemic-access", items, client=…, resolved=…,
+  campaign=cid, scene=sid, post=…, round_id=…, capture=…, around=…)`
+  (`inference.py:684-714`). Read the answers with `epistemic_access.access_of`.
 - The item context is self-contained: one actor, one slice, the actor's own
   state, and the channel excerpts. It never carries another actor's
   `state.md`, a dossier, or a narrator-only unit, because the context is
@@ -513,25 +520,27 @@ Item(
 
 ### 5.3 Reading the answer
 
-| Answer | Result | Basis |
+| `access_of` result (02-C5a) | Result | Basis |
 |---|---|---|
 | `known` | `known` | `decision` |
+| `experienced` | `known` (never `witnessed`) | `decision` |
 | `suspected` | `suspected` | `decision` |
-| `unaware` | stays `unknown` (withheld) | `decision` |
-| `None` (abstained, refused, unreadable, item never reached) | stays `unknown` | `decision_abstained` |
+| `narrator_only` | stays `unknown` (withheld) | `decision` |
+| `unknown` (abstained, refused, unreadable, `NOT_AN_OPTION`, an error, an item never reached; 02-C5a's fail-closed mapping) | stays `unknown` | `decision_abstained` |
 | the call failed (`LLMError`, `BudgetRefused`, `DecideRequestError`, 409 `incapable` at resolution) | every eligible slice stays `unknown` | `decision_failed` |
 
 Three rules follow:
 
 - **A model never produces `witnessed` or `narrator_only`.** Presence is a
-  structural fact, and `narrator_only` is the user's word. A model's
-  "unaware" is withheld the same way as `unknown`, but it is not recorded as
-  established.
-- **An answer is taken as given.** No probability threshold is invented here.
-  If 01d-C1 enables escalation for the epistemic task, a low-margin, abstained
-  or `refused` item goes one hop through 01d-C2, and whatever comes back is
-  read by the same table. A distribution is never sampled (01c-C4): this is a
-  classification, not a choice the story should vary.
+  structural fact, and `narrator_only` is the user's word. So the kit's
+  `experienced` is read as `known`, and its `narrator_only` is withheld the
+  same way as `unknown` without being recorded as established.
+- **An answer is taken as given, apart from 02-C5a's escalation.** No
+  probability threshold is invented here. 02-C5a's 01d-C1 policy row escalates
+  a `refused` or low-margin permissive answer one hop (01d-C2a's trigger with
+  its answer filter, 01d-C2b's hop), and a failed or skipped hop is `unknown`.
+  A distribution is never sampled (01c-C4): this is a classification, not a
+  choice the story should vary.
 - **The stage is fail-soft.** A failure leaves every slice withheld and the
   turn proceeds. It never fails the turn, unlike the speaker pick, whose
   `LLMError` propagates. Here a failed classification has a safe default, and
@@ -545,7 +554,7 @@ Three rules follow:
   takes. An overrun is `decision_failed`.
 - The stage is off unless the `epistemic_decide` config key is `on`. That
   follows the shape of `perception_rider` (`store/config.py:89`, `:493`), and
-  the default stays `off` until 02-C5's `evals/run.py --gate` corpus for the
+  the default stays `off` until 02-C5a's `decide-epistemic-access` gate case
   task passes (CLAUDE.md: "A call site converts only behind `evals/run.py
   --gate`").
 - Every call is metered by `decide`'s own meter under the task. Spend counts
@@ -574,11 +583,11 @@ turn, bounded by the cap above.
 
 ### 6.1 The rule
 
-09-C3 defines a history section with a strict token budget. 11-C2 says how it
+09-C3 defines the `history_recall` section with a strict token budget. 11-C2 says how it
 renders by perspective:
 
 - **Narrator** (`actor_ref` `None` or `"grimoire"`): two sections.
-  - `history` (09-C3's section) lists every visible unit, each followed by a
+  - `history_recall` (09-C3's section) lists every visible unit, each followed by a
     one-line annotation rendered from `known_to` / `suspected_by`: `Known to:
     Mara, Seraphine` / `Suspected by: Winifred`, or nothing when nobody
     present is listed.
@@ -600,7 +609,7 @@ renders by perspective:
 
 New templates under `templates/scene/sections/`: `history_narrator.j2`,
 `history_narrator_only.j2`, `history_actor_known.j2` and
-`history_actor_suspected.j2`. 09-C3's `history` template becomes the
+`history_actor_suspected.j2`. 09-C3's `history_recall.j2` template becomes the
 narrator one, or delegates to it. The actor templates restate, in one
 sentence, the perception rule from `response_actor.j2`: being there means
 what could be seen or heard, not other people's private thoughts. That keeps
@@ -620,8 +629,7 @@ editing anything in `templates/`") cover the new templates. The leakage suite
   never classifies and never calls a model. It renders what it is handed.
   With `history_view=None`, no history section renders, which is the
   behaviour before 09.
-- **The actor blanking list grows.** 09-C3's narrator keys (`history_units`,
-  and any key 09 adds for history) and `history_narrator_only` join the tuple
+- **The actor blanking list grows.** 09-C3's `history_recall` data keys and `history_narrator_only` join the tuple
   at `assemble.py:528`. On an actor-scoped compose they are emptied even if
   something populated them. The actor keys are set only from
   `history_view.visible()`. This is the same belt-and-braces shape as the
@@ -633,7 +641,7 @@ editing anything in `templates/`") cover the new templates. The leakage suite
   to an NPC compose is precisely the leak this spec exists to prevent, so it
   must fail loudly rather than render.
 - **Packer tiers.** All four sections keep 09-C3's tier. Within it,
-  `history_narrator_only` is dropped before `history`, and
+  `history_narrator_only` is dropped before `history_recall`, and
   `history_suspected` before `history_known`. A suspicion costs less to lose
   than a memory.
 - **The inspector** (`context_breakdown`) shows, per unit, the class and basis
@@ -644,7 +652,8 @@ editing anything in `templates/`") cover the new templates. The leakage suite
 
 ### 6.4 The planner and the query
 
-10-C1's planner writes the queries that 09 runs. For an actor turn:
+10-C1's `history_plan` planner writes the queries that 09 runs, and takes a
+perspective. For an actor turn:
 
 - The planner is handed the perspective, and **its inputs must be
   actor-visible**: the actor's observed slice of the current scene
@@ -653,7 +662,7 @@ editing anything in `templates/`") cover the new templates. The leakage suite
   ("did Mara learn that Winifred is the informer?"). The retrieval results are
   filtered regardless, but a secret-shaped query skews the ranking of
   legitimately witnessed evidence toward the secret, and the query text is
-  captured. This is an interface requirement on 10-C1 (section 13).
+  captured. 10-C1 takes the perspective for this reason.
 - 09 retrieves for an actor without regard to access, and 11 filters
   afterwards. Filtering inside 09's candidate generation would be cheaper, but
   it would make 09 depend on 11. Section 14, question 5 asks whether to
@@ -661,8 +670,9 @@ editing anything in `templates/`") cover the new templates. The leakage suite
 
 ### 6.5 Before 11 lands
 
-Until 11-C2 is implemented, 09-C3 must render history **only into
-narrator-scoped prompts**: an actor-scoped compose gets no history section.
+Until 11-C2 is implemented, 09-C3 renders history **only into
+narrator-scoped prompts** (09-C3's headline, and the checklist's cross-spec
+decision "History in NPC prompts"): an actor-scoped compose gets no history section.
 That is the current contract (1.2) extended to a new key, and it is the
 required behaviour of 09 at the moment 09 lands. It is listed as a back-edge
 in "Required by".
@@ -851,7 +861,8 @@ The required cases come from the draft, plus three this spec's rules create:
   prompt (not only the history section, since a leak through any other
   section is still a leak) and every allowed needle is present. This is
   deterministic and needs no model.
-- **Decision gate** (`evals/run.py --gate`, through 02-C5): the 7 and 10
+- **Decision gate** (`evals/run.py --gate`, through 02-C5a's
+  `decide-epistemic-access` case): the 7 and 10
   classes, with gold answers, graded for correctness and for abstention on
   the no-channel controls. With 01a, it is also reported for cost and
   latency.
@@ -893,7 +904,7 @@ The required cases come from the draft, plus three this spec's rules create:
 **11-C2: Narrator and actor prompt separation for retrieved history.**
 
 - *Inputs*: an `EpistemicView` handed to compose as `history_view`.
-- *Outputs*: for the narrator, `history` (annotated) and
+- *Outputs*: for the narrator, `history_recall` (annotated) and
   `history_narrator_only`. For an actor, `history_known` and
   `history_suspected`, rendered from `visible()` only.
 - *Guarantees*:
@@ -945,10 +956,10 @@ into C1).
   `store/context/`, which the guard scans. Its item builder renders a
   template from post content, so it falls under the guard's heuristic rule
   and must reach `view(` or be pinned.
-- **Routing and operation guards**: the Decision stage uses 02-C5's task with
+- **Routing and operation guards**: the Decision stage uses 02-C5a's task with
   `operation="decide"` through `require_inference`. That route flips to
   `decide` in the change whose call site decides, which is this one (CLAUDE.md
-  safety rule), so 02-C5 and the 11 slice that adds the call land together or
+  safety rule), so 02-C5a and the 11 slice that adds the call land together or
   in that order.
 - **Revision token**: override writes are ordinary 2xx route writes. The
   activity middleware stamps them. Nothing in 11 writes from a detached run.
@@ -1019,7 +1030,7 @@ into C1).
 - `test_epistemic_basis_never_reaches_the_prompt`;
 - `history_view=None` is byte-identical to the baseline (a golden in the
   style of `test_lore_golden.py`, recorded before 09 lands);
-- the packer drops `history_narrator_only` before `history`, and
+- the packer drops `history_narrator_only` before `history_recall`, and
   `history_suspected` before `history_known`.
 
 **Frontend**: the Knowledge ledger section follows the list/detail tests
