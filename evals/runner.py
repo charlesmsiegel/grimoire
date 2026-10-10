@@ -657,8 +657,14 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     result = Result(case, BASELINE, checks, output, note=note, **metrics)
     if record:
         path = case.baseline.path(case.id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(output, encoding="utf-8")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(output, encoding="utf-8")
+        except OSError as exc:
+            # The case was paid for and graded: it keeps its metrics, and
+            # fails for the baseline it could not write.
+            return replace(result, error=f"could not record its baseline: {exc}",
+                           error_kind="record")
     return result
 
 
