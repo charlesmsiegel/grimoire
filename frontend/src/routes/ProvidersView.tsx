@@ -1065,9 +1065,12 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
       if (now !== was[key].trim()) body[key] = now === "" ? 0 : Number(now);
     }
     // The options only when they send something else: a block the store
-    // replaces whole (`{}` removes it).
+    // replaces whole (`{}` removes it). A stored block the server refused is
+    // not what its form reads back as (an unknown input type reads as none),
+    // so the form is always sent over one: saving is how it is repaired.
     const options = blockOf(form.embedding);
-    if (!sameBlock(options, blockOf(was.embedding))) body.embedding = options;
+    const repairing = embeds && facts.embedding_invalid === true;
+    if (repairing || !sameBlock(options, blockOf(was.embedding))) body.embedding = options;
     if (confirm) body.confirm_embedding = true;
     setSaving(true);
     setError(null);
