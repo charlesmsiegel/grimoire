@@ -255,8 +255,12 @@ class OpenRouterClient:
         # one sent before it existed. Strict, so the reply is held to the
         # schema rather than guided by it -- which is why `decisions` keeps the
         # schema to strict mode's subset. The name is required and says nothing.
-        payload = {**(sampling or {}), "model": model, "messages": messages, "stream": stream,
-                   "usage": {"include": True}}
+        # A neutral tool history (01g) is lowered to this wire's own shapes,
+        # signed `reasoning_details` echoed back; a prompt without one is the
+        # same list, untouched.
+        payload = {**(sampling or {}), "model": model,
+                   "messages": tool_calls.openai_messages(messages, reasoning=True),
+                   "stream": stream, "usage": {"include": True}}
         if schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",
@@ -336,9 +340,10 @@ class OpenRouterClient:
                     # accounting on exactly the frame that carries it.
                     llm_usage.from_openai_chunk(obj, usage)
                     llm_reasoning.from_chunk(obj, usage)
-                    # A call is not text: noted for a caller that installed a
-                    # `tool_calls.Collector`, and yields nothing (01g).
-                    tool_calls.from_openai_chunk(obj, usage)
+                    # A call is not text: collected for a caller that
+                    # installed a `tool_calls.Collector`, and yields nothing
+                    # (01g). Its arguments are billed completion, so noted.
+                    llm_usage.note_reply(usage, tool_calls.from_openai_chunk(obj, usage))
                     if llm_reasoning.pending(usage):
                         yield ""
                     try:

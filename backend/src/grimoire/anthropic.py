@@ -207,7 +207,13 @@ def _system_text(content: object) -> str:
 def _messages(messages: list[dict]) -> tuple[str, list[dict]]:
     """`(system, turns)` as the Messages API takes them -- see the module
     docstring for the two rules. Consecutive same-role turns merge, and a turn
-    left with no content is dropped."""
+    left with no content is dropped.
+
+    A neutral tool history (01g) is lowered here: an assistant turn carrying
+    calls becomes its own opaque thinking blocks, its text and a `tool_use`
+    block per call (`tool_calls.anthropic_assistant`); a `tool` message a
+    `tool_result` block in a user turn (`_add_result`), with any folded
+    system text after the results."""
     lead = 0
     while lead < len(messages) and messages[lead].get("role") == "system":
         lead += 1
@@ -229,6 +235,11 @@ def _messages(messages: list[dict]) -> tuple[str, list[dict]]:
         if role == "system":
             pending.extend(_blocks(content))
             continue
+        if role == "tool":
+            # Pending system text is NOT flushed here: the API wants a
+            # turn's results first, so it lands after them (01g spec 3.3).
+            _add_result(turns, tool_calls.anthropic_result(m))
+            continue
         if role not in ("user", "assistant"):
             # Folding an unknown role into either side would misattribute its
             # content -- `openai_compatible._strict_messages` refuses it too.
@@ -237,10 +248,26 @@ def _messages(messages: list[dict]) -> tuple[str, list[dict]]:
             append("user", [*pending, *_blocks(content)])
         else:
             append("user", pending)
-            append("assistant", _blocks(content))
+            append("assistant", tool_calls.anthropic_assistant(m, _blocks(content))
+                   if "tool_calls" in m or "_opaque" in m else _blocks(content))
         pending = []
     append("user", pending)
     return _opened("\n\n".join(system), turns)
+
+
+def _add_result(turns: list[dict], block: dict) -> None:
+    """A `tool_result` block into the user turn that answers the calls: after
+    the results already leading the last user turn, or as a new user turn
+    after the assistant's. Consecutive results merge into one turn, as
+    consecutive user turns do."""
+    if not turns or turns[-1]["role"] != "user":
+        turns.append({"role": "user", "content": [block]})
+        return
+    content = turns[-1]["content"]
+    lead = 0
+    while lead < len(content) and content[lead].get("type") == "tool_result":
+        lead += 1
+    content.insert(lead, block)
 
 
 def _opened(joined: str, turns: list[dict]) -> tuple[str, list[dict]]:
@@ -458,11 +485,12 @@ class _Reader:
         if kind == "message_start":
             self._start(obj.get("message"))
         elif kind == "content_block_start":
-            # The whole frame, so its block `index` is in hand (01g).
-            tool_calls.feed_anthropic(self.usage, obj)
+            # The whole frame, so its block `index` is in hand (01g); a
+            # call's name and arguments are billed completion, so noted.
+            llm_usage.note_reply(self.usage, tool_calls.feed_anthropic(self.usage, obj))
             return self._block(obj.get("content_block"))
         elif kind == "content_block_delta":
-            tool_calls.feed_anthropic(self.usage, obj)
+            llm_usage.note_reply(self.usage, tool_calls.feed_anthropic(self.usage, obj))
             return self._block(obj.get("delta"))
         elif kind == "message_delta":
             self._delta(obj)

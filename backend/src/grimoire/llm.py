@@ -11,6 +11,7 @@ import functools
 import logging
 import queue
 import random
+import re
 import threading
 import time
 import uuid
@@ -621,7 +622,9 @@ def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> No
     # reasoning buffer, emptied so a retry starts with no calls of the
     # attempt that failed. Only one the caller installed: none is added.
     if isinstance(calls, tool_calls.Collector):
-        calls.begin()
+        # Told which attempt it is, so the opaque state it keeps is echoed
+        # back only to the provider and model that wrote it.
+        calls.begin(kind=target.kind, provider_id=target.provider_id, model=target.model)
         usage[tool_calls.KEY] = calls
     usage.update({"model": target.model, "connection": _label(target),
                   "provider": target.kind, "attempts": attempts,
@@ -911,6 +914,22 @@ class SchemaRefusalError(LLMError):
         self.attempts = attempts
 
 
+class ToolsRefusalError(LLMError):
+    """A call that offered tools (01g) and was refused them: a 400 or 422
+    whose message names `tools`, `tool_choice` or `functions`, or an adapter
+    whose kind cannot send them (`_tools_refusal`). Always `bad_response`
+    with the code `tools_refused`.
+
+    Unlike a schema, tools cannot be dropped and the call re-sent -- a loop
+    without its tools is not the call that was asked for -- so nothing
+    re-sends one. Every `except LLMError` still catches it."""
+
+    def __init__(self, detail: str = "", *, status: int | None = None,
+                 words: tuple[LLMError, ...] = ()):
+        super().__init__("bad_response", detail, status=status, code=tool_calls.REFUSED,
+                         words=words)
+
+
 def routes_failed(words: Sequence[LLMError]) -> LLMError:
     """The one error a call raises when every route it ran failed: a lone
     route's own failure, or -- the primary and its fallback both failed -- the
@@ -931,6 +950,9 @@ def routes_failed(words: Sequence[LLMError]) -> LLMError:
     (`SchemaRefusalError`): that is a mode the call can drop, not the
     connection's word, so the fallback's failure -- a rate limit, and the
     window it named -- is the one that says what actually stopped the call.
+    Tools refused (`ToolsRefusalError`, 01g) read the same way: the feature
+    was refused, the connection answered. When EVERY route refused tools the
+    composed error is itself a `ToolsRefusalError`.
 
     Composed, it keeps the routes' own failures as `words`, so a fact the one
     sentence cannot carry -- a caller's clock having stopped one of them --
@@ -938,10 +960,13 @@ def routes_failed(words: Sequence[LLMError]) -> LLMError:
     if len(words) == 1:
         return words[0]
     primary, fallback = words[0], words[-1]
-    word = (fallback if isinstance(primary, SchemaRefusalError)
-            and not isinstance(fallback, SchemaRefusalError) else primary)
-    return LLMError(word.kind, f"{primary.detail} — and the fallback failed too: "
-                               f"{fallback.detail}", word.retry_after, words=tuple(words))
+    refusals = (SchemaRefusalError, ToolsRefusalError)
+    word = (fallback if isinstance(primary, refusals)
+            and not isinstance(fallback, refusals) else primary)
+    detail = f"{primary.detail} — and the fallback failed too: {fallback.detail}"
+    if all(isinstance(w, ToolsRefusalError) for w in words):
+        return ToolsRefusalError(detail, words=tuple(words))
+    return LLMError(word.kind, detail, word.retry_after, words=tuple(words))
 
 
 def _said(exc: LLMError) -> str:
@@ -980,11 +1005,38 @@ def _schema_refusal(exc: LLMError, target: wire.Target) -> bool:
     return not any(form in detail for form in others)
 
 
+#: How a refusal of the tools field is worded: the field names as whole
+#: words, OpenAI's and its prose spelling of the choice, the legacy
+#: `functions` field, and the prose "tool use" (OpenRouter's "no endpoints
+#: found that support tool use") -- never `tool_use`, a block type a 400 about
+#: the history's shape names.
+_TOOLS_NAMED = re.compile(r"\b(?:tools|tool[_ ]choice|tool use|functions)\b")
+
+
+def _tools_refusal(exc: LLMError, offered: bool) -> bool:
+    """Whether `exc` is an attempt's offer of tools (01g) being refused: an
+    error an adapter raised with the code `tool_calls.REFUSED` (a kind that
+    cannot send them), or -- for an attempt that WAS sent tools -- a refusal
+    status, not an account limit, whose message names `tools`, `tool_choice`,
+    `functions` or "tool use" as words (`tool_call_id`, `tool_calls` and
+    `tool_use` are not: a 400 about the history's shape is a malformed
+    request, not tools refused).
+
+    Modelled on `_schema_refusal`, but the decision is not the target's:
+    whether this call offered tools is not on a `wire.Target`."""
+    if exc.code == tool_calls.REFUSED:
+        return True
+    if (not offered or exc.status not in PRESET_REFUSAL_STATUSES
+            or llm_errors.account_limit(exc)):
+        return False
+    return bool(_TOOLS_NAMED.search(_said(exc).lower()))
+
+
 async def _resilient(open_stream, routes: list[_Route], timeout: float,
                      tick: float | None = None,
                      usage: dict | None = None,
                      observer=None, capture: llm_capture.Sink | None = None,
-                     counter=None) -> AsyncIterator[str]:
+                     counter=None, offered: bool = False) -> AsyncIterator[str]:
     """Run `routes` in order, retrying each for as many attempts as it carries.
 
     `routes` is a list of `_Route`s -- the active connection first, then the
@@ -1039,6 +1091,12 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
     was its structured field refused, the error is a `SchemaRefusalError`
     carrying that attempt, which `inference.decide` and `inference.generate`
     re-send without the mode.
+
+    `offered` says the call offered tools (01g). A route that refused them
+    (`_tools_refusal`) is neither observed nor retried -- the connection
+    answered, and a repeat is the same refusal -- and the next route is
+    tried; its failure is a `ToolsRefusalError`, composed by `routes_failed`
+    as a schema refusal is.
 
     `counter` (`str -> int`, or None for no estimate) counts what a provider
     did not report, for an attempt whose stream ended on its own: each prose
@@ -1153,8 +1211,14 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                     # refused was a setting. A health verdict here would mark
                     # it failing for a problem no connection change can fix.
                     raise refused from exc
-                schema = _schema_refusal(exc, target)
-                if schema:
+                tools = _tools_refusal(exc, offered)
+                schema = not tools and _schema_refusal(exc, target)
+                if tools:
+                    # Not observed, for the schema's reason: the connection
+                    # answered and refused a feature, and still serves every
+                    # call that offers none.
+                    log.warning("tools refused by %r: %s", _label(target), _said(exc))
+                elif schema:
                     # Not observed either, for the preset's reason (CODE-M5):
                     # the connection answered and refused the mode -- a
                     # catalog that over-advertised it -- and it still serves
@@ -1176,14 +1240,15 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                     schema_refused[0 if primary else 1] = route.sent()
                 else:
                     schema_refused.pop(0 if primary else 1, None)
-                last = (SchemaRefusalError(exc.kind, _said(exc), exc.retry_after,
-                                           status=exc.status, code=exc.code)
+                last = (ToolsRefusalError(_said(exc), status=exc.status) if tools
+                        else SchemaRefusalError(exc.kind, _said(exc), exc.retry_after,
+                                                status=exc.status, code=exc.code)
                         if schema else exc)
                 sent_images = usage.get("images", 0) if usage is not None else 0
                 # The primary's word is its first failure -- or, when its own
                 # degrade sibling ran, that sibling's (#377).
                 first = last if first is None or (primary and index == 1) else first
-                retryable = (exc.kind in RETRYABLE_KINDS and not schema
+                retryable = (exc.kind in RETRYABLE_KINDS and not schema and not tools
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
             finally:
                 # A no-op for the exhausted and the raised cases, and the whole
@@ -1380,8 +1445,9 @@ class LLMClient:
             messages = messages.for_target(sent)
         if usage is not None:
             usage["images"] = 0
-        # After `_stamp` cleared the holder, so each attempt counts only itself.
-        llm_usage.note_prompt(usage, messages)
+        # After `_stamp` cleared the holder, so each attempt counts only itself
+        # -- the tool definitions it is sent included (01g).
+        llm_usage.note_prompt(usage, messages, tools)
         offered = _offer(tools, tool_choice)
         if not content_parts.needs_lowering(messages):
             return self._generate(messages, target, usage, schema, **offered)
@@ -1423,7 +1489,7 @@ class LLMClient:
         if usage is not None:
             usage["images"] = sent
         # What was sent, not what was asked: text lowering drops carriers (M10).
-        llm_usage.note_prompt(usage, lowered)
+        llm_usage.note_prompt(usage, lowered, tools)
         inner = self._generate(lowered, route.target, usage, schema,
                                **_offer(tools, tool_choice))
         try:
@@ -1464,7 +1530,8 @@ class LLMClient:
             return None
 
     def stream(self, messages: list[dict], chain: wire.Chain | wire.Target,
-               usage: dict | None = None, *, schema: dict | None = None):
+               usage: dict | None = None, *, schema: dict | None = None,
+               tools: tuple[dict, ...] | None = None, tool_choice: str | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place
         the bound is provider-independent (the Claude SDK has no httpx client
         to configure at all) — and retried-then-fallen-back, which for the same
@@ -1492,13 +1559,27 @@ class LLMClient:
         `chain` is the primary and the fallback it may fail over to (a lone
         `Target` is a chain of one). A connection dict is a `TypeError`:
         the facade sends typed targets only.
+
+        `tools` and `tool_choice` (01g) offer neutral tool definitions,
+        checked (`tool_calls.check`, a `ValueError` before anything is
+        stamped) and sent in each attempt's kind's own spelling; the calls a
+        reply makes are read from a `tool_calls.Collector` the caller put in
+        `usage`, which `_stamp` empties per attempt. A call is not text: the
+        stream yields only prose. An attempt refused its tools is a
+        `ToolsRefusalError`, never observed and never re-sent without them.
+        Absent, the call is the call it always was.
         """
-        return self._streamed(messages, chain, usage, schema, None)
+        return self._streamed(messages, chain, usage, schema, None,
+                              tools=tools, tool_choice=tool_choice)
 
     def _streamed(self, messages: list[dict], chain: wire.Chain | wire.Target, usage: dict | None,
-                  schema: dict | None, retries: int | None):
+                  schema: dict | None, retries: int | None, *,
+                  tools: tuple[dict, ...] | None = None, tool_choice: str | None = None):
         """`stream`'s body, with the primary's retry count `complete` may
         name (`_routes`)."""
+        if tools is not None or tool_choice is not None:
+            tool_calls.check(tools, tool_choice)
+        offered = _offer(tools, tool_choice)
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
@@ -1506,14 +1587,16 @@ class LLMClient:
         if schema is None:
             # No envelope goes out, so no target says it did (01f 3.4).
             chain = _unflagged(chain)
-        return _resilient(lambda route, holder: self._dispatch(messages, route, holder, schema),
+        return _resilient(lambda route, holder: self._dispatch(messages, route, holder, schema,
+                                                               **offered),
                           self._usable_routes(messages, chain, retries), self._timeout_seconds(),
                           usage=usage, observer=self._observer, capture=sink,
-                          counter=self._count_tokens)
+                          counter=self._count_tokens, offered=tools is not None)
 
     async def complete(self, messages: list[dict], chain: wire.Chain | wire.Target,
                        usage: dict | None = None, *, schema: dict | None = None,
-                       retries: int | None = None) -> str:
+                       retries: int | None = None, tools: tuple[dict, ...] | None = None,
+                       tool_choice: str | None = None) -> str:
         """`stream`, joined. `schema` is `stream`'s; slice F's only caller is
         `decide` (spec 7.2's `generate(schema=)` until slice I).
 
@@ -1521,9 +1604,9 @@ class LLMClient:
         the client's, and nothing else changes: a decide chain's fallback
         STAGE is sent as a call of its own, and gets the one attempt a
         fallback gets (spec 5.4, slice H ruling 12). Absent, the call is
-        exactly `stream`'s."""
-        return "".join([chunk async for chunk in self._streamed(messages, chain, usage,
-                                                                schema, retries)])
+        exactly `stream`'s. `tools` and `tool_choice` are `stream`'s."""
+        return "".join([chunk async for chunk in self._streamed(
+            messages, chain, usage, schema, retries, tools=tools, tool_choice=tool_choice)])
 
     async def single(self, messages: list[dict], target: wire.Target,
                      usage: dict | None = None, *, tools: tuple[dict, ...] | None = None,
@@ -1570,7 +1653,8 @@ class LLMClient:
                                                                **offered),
                           [_Route(sent, 0)],
                           self._timeout_seconds(),
-                          usage=usage, capture=sink, counter=self._count_tokens)
+                          usage=usage, capture=sink, counter=self._count_tokens,
+                          offered=tools is not None)
         return "".join([chunk async for chunk in agen])
 
     async def decide_native(self, item: decisions.Item, target: wire.Target,
