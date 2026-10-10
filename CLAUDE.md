@@ -1072,6 +1072,26 @@ would answer neither question.
   role has no seam to refuse at, so the same known `no` for `embed` turns
   embedding off instead: `embed_space.resolve` names no space, no request is
   sent that could only fail, and the Embedding card says why.
+- **Sampling a decision goes through `draws.py`, and only there** (roadmap
+  01c). A caller that wants a probabilistic outcome calls `draws.draw(q,
+  result, seed=draws.new_seed(), purpose=…, eligibility=draws.Eligibility(…))`,
+  and the only reshaping is that recorded `Eligibility` (`only`, `exclude`,
+  `cutoff`, `floor`). Its `floor` is sized to the eligible set (at most
+  `1 / len(eligible)`) and refused up front otherwise, so no report can make
+  a draw raise mid-turn. `draws.draw_from` is not for callers: it takes raw
+  weights and so skips the rules below. The draw is SHA-256 and integer
+  arithmetic (`quanta`), never `random` and never a float sum, so a record
+  replays to the same key on 3.11 to 3.14, on Android and in a browser, and a
+  change of rule is a new `ALGORITHM`. Nothing that reported no distribution
+  is sampled. An answer of None is `basis: none`. A structured answer, a
+  report under `1 - MASS_SLACK` in mass, a report that contradicts its own
+  answer, and a rank's or selection's `marginals` are each `basis: answer`,
+  `sampled: false`: acted on, and never replayed. The helper stores nothing.
+  The caller files `Draw.record` in the same write, under the same lock, as
+  the outcome it chose (for the speaker pick, the round record through
+  `responses.update_round`). A present record means decided, a decided
+  outcome is never re-drawn, and a reroll mints a new seed. No task samples
+  yet.
 - **Adding an embedding call site?** There is one door,
   `store.inference.embed.embed_sync(<task>, texts, space=embed_space.endpoint(),
   client=…, campaign=…)`, and the task must be in `routing.EMBED_TASKS` (a
