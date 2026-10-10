@@ -58,6 +58,8 @@ def test_a_table_entry_is_the_tables_including_a_wildcard(client):
 def test_no_rate_anywhere_is_none_never_zero(client):
     fx.format2(client)
     assert _view(client)["roles"]["primary"]["rate"] == {"source": "none"}
+    # "none" exactly where the ledger's own precedence finds nothing.
+    assert _expected("openrouter", "vendor/active") is None
 
 
 def test_a_zero_rate_keeps_its_zeros(client):
@@ -67,6 +69,9 @@ def test_a_zero_rate_keeps_its_zeros(client):
     assert rate["source"] == "table"
     assert rate["entry"]["prompt_usd_per_1k"] == 0.0
     assert rate["entry"]["completion_usd_per_1k"] == 0.0
+    # A zero is an entry the ledger prices with, not an absence.
+    assert _expected("openrouter", "vendor/active") is not None
+    assert rate == {"source": "table", "entry": _expected("openrouter", "vendor/active")}
 
 
 def test_a_half_entry_reads_as_none(client):
@@ -78,6 +83,7 @@ def test_a_half_entry_reads_as_none(client):
     pricing.pricing_path().write_text(
         json.dumps({"vendor/active": {"prompt_usd_per_1k": 0.001}}), encoding="utf-8")
     assert _view(client)["roles"]["primary"]["rate"] == {"source": "none"}
+    assert _expected("openrouter", "vendor/active") is None
 
 
 def test_a_route_row_carries_its_resolved_rate(client):
@@ -93,6 +99,11 @@ def test_a_native_decision_has_no_figures(client):
     got = _view(client)
     assert got["roles"]["decision"]["decision_mode"] == "native"
     assert got["roles"]["decision"]["rate"] == {"source": "native"}
+    # The catch-all WOULD price it: "native" is the view declining on
+    # purpose (a native row is never modelled), not the precedence finding
+    # nothing.
+    served = got["roles"]["decision"]["resolves"]
+    assert _expected(served["provider"], served["model"]) == BOTH
     native_rows = [r for r in got["routes"] if r["decision_mode"] == "native"]
     assert native_rows and all(r["rate"] == {"source": "native"} for r in native_rows)
 
