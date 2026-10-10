@@ -1,6 +1,6 @@
 # 05. Direct-edit cache sync
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 05 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06, and 05 + 07 + 01h -> 08).
 **Baseline:** `main` at `35c1fb7`.
@@ -101,8 +101,13 @@ the only part of 08 that waits for 05-C3.
 - Detached runs write from the lifespan's task group, not from the request.
   Every one starts through `runner.start` (`runner.py:200`) or
   `runner.start_thread` (`runner.py:220`), and runs inside `runner._guarded`
-  (`:355`) or `runner._guarded_thread` (`:251`). A request-scoped boundary does
-  not see their writes. A run-scoped one does.
+  (`:355`) or `runner._guarded_thread` (`:251`). `runner.start` hands the
+  run to the lifespan through `portal.start_task_soon` (`runner.py:216`),
+  which schedules it with `loop.call_soon_threadsafe` from the route's worker
+  thread. asyncio copies the *calling thread's* context into that callback,
+  so a detached run starts holding a copy of the request's context variables.
+  Any request-scoped collector is therefore visible to the run unless the run
+  replaces it (section 5.3).
 
 ### 1.3 The command-line surface
 
@@ -235,16 +240,21 @@ For one batch:
    paths are reported and go no further.
 2. **Expand** scopes (`--campaign`, `--world`, `--all`) to the candidate files
    that may have changed (section 7.3).
-3. **Classify** each path as deleted, cold (nothing materialized from it) or
-   hot.
-4. **Rebuild, locally**: run each registered hook's local phase over the hot
-   paths, in hook order (section 6.2). No network.
-5. **Re-embed**: run each hook's network phase under the current space, in
-   batches (sections 6.5 and 6.6).
-6. **Bookkeeping**: bump the write token of every campaign a path belongs to
-   (section 10), and purge the cache if a world or campaign root was deleted
-   (section 7.6).
-7. **Report** (section 9).
+3. **Classify** each path: `missing`, `deleted` (named in `--deleted`), cold
+   (nothing materialized from it, for every hook) or hot.
+4. **Bump the write token** of every campaign a non-refused, non-missing path
+   belongs to (section 10). This happens here, before any rebuild, so that a
+   slow, cancelled or crashed batch has still told the app about the edit.
+5. **Rebuild, locally**: run each registered hook's local phase, in hook order
+   (section 6.2). No network.
+6. **Re-embed**: run each hook's network phase under the batch's space, in
+   chunks (sections 6.5 and 6.6).
+7. **Purge** the cache if a deleted world or campaign root was named
+   explicitly (section 7.6).
+8. **Report** (section 9).
+
+Between paths, between hooks and between chunks, the batch checks its stop
+signal and its root (section 4.2), and stops cleanly if either says so.
 
 ## 4. The primitive (05-C1): `store/cache_sync.py`
 
@@ -258,7 +268,8 @@ def sync_paths(relpaths: Iterable[str], *,
                verify: bool = False,
                renamed: Mapping[str, str] = {},
                deleted: Iterable[str] = (),
-               root: Path | None = None) -> SyncReport: ...
+               root: Path | None = None,
+               stop: Callable[[], bool] = lambda: False) -> SyncReport: ...
 ```
 
 - `relpaths` are store-relative and `/`-separated. The CLI and the API convert
@@ -268,7 +279,8 @@ def sync_paths(relpaths: Iterable[str], *,
   exit. The caller has declared a batch complete, so every hot kind is rebuilt
   now. `mode="write"` serves the write-through queue (section 5.4). A hook
   whose policy is `on_write="explicit"` is skipped there, and reported as
-  deferred.
+  deferred, and a path section 8 refuses is skipped silently rather than
+  reported.
 - `embed=False` runs every local phase, reports the network work it left as
   `deferred`, and sends nothing.
 - `dry_run=True` validates, classifies and plans. It computes projection texts
@@ -276,22 +288,43 @@ def sync_paths(relpaths: Iterable[str], *,
   nothing.
 - `verify=True`: see section 7.7.
 - `renamed` maps an old path to a new one (section 7.5). `deleted` names paths
-  the caller removed (section 7.4).
-- `root` defaults to `paths.home()`, resolved **once** at entry and pinned for
-  the batch. Every path is built from it, and the batch stops, reported as
-  `root_moved`, if `paths.home()` stops naming it. That is the maintenance
-  runs' rule (`run.root`, CLAUDE.md "Detached runs"), for the same reason: a
-  data-dir move during a batch must not warm one tree with another tree's
-  bytes.
+  the caller removed (sections 7.4 and 7.6).
+- `stop` is polled between paths, between hooks and between chunks. The
+  queue's lifespan shutdown and the API run's Cancel set it (section 4.2).
+- `root` defaults to `paths.home()`, read **once** at entry. Sync's own path
+  handling (validation, listing, `materialized` lookups) is built from it.
+  The functions it calls are not: `vectors.load` and `save`, `revision.bump`,
+  `embed_space.endpoint()`, the readers behind 03's `derive` and the hooks,
+  `logs` and `usage` all resolve `paths.home()` per call. So a pinned value is
+  only honest if the root cannot move while the batch runs. Section 4.2 says
+  how that is held, and the batch also re-checks `paths.home() == root`
+  between paths, hooks and chunks, stopping with `root_moved` if it differs.
 
 It returns a `SyncReport` (section 9). It never raises for one path's
 failure. It raises only for a programming error, such as an unknown mode.
 
-### 4.2 Threading and the lane
+### 4.2 Threading, stopping, the lane and holding the root still
 
 - It is synchronous, and it does file and network I/O, so it is never called
   on the event loop's thread. The write-through queue and the API run reach it
-  through `anyio.to_thread.run_sync`.
+  through `anyio.to_thread.run_sync`, awaited **shielded**, as the maintenance
+  runs await their work (CLAUDE.md, "Detached runs"): a cancelled awaiter must
+  not abandon a thread that is still writing vectors under a root.
+- **Stopping.** Cancel is the cooperative `stop` flag. The API run's Cancel
+  sets `run.cancel_requested`, which its `stop` reads. Lifespan shutdown sets
+  the queue worker's flag, and the flag of any live API sync run, before it
+  cancels the task group, beside `runner.stop_maintenance`. The batch stops at
+  its next check. A chunk already sent finishes or times out on the client's
+  own timeout, so a stop costs at most one embedding request's wait.
+- **Holding the root still.** While a batch is running in this process, it
+  holds a **sync hold** on the run registry, counted the way
+  `_maintenance_holds` is. `PUT /config/data-dir` refuses with 409 `busy`
+  while the count is non-zero. The hold is taken only for the length of a
+  batch, never while the queue is idle, so the queue still never blocks a move
+  between batches. An API sync is also a run, so `runs_in_flight` refuses the
+  move for it too. The CLI in another process cannot be held by the server.
+  It relies on the per-step `paths.home() == root` check (section 4.1), which
+  catches a pointer rewritten mid-batch at the next step.
 - In one process, at most one batch runs at a time. An in-process lock, the
   **sync lane**, wraps the rebuild and re-embed phases. Without it, an API run
   and the write-through queue could both embed the same new text in the same
@@ -301,7 +334,7 @@ failure. It raises only for a programming error, such as an unknown mode.
 - Across processes (the CLI beside a running server) there is no lane. Both
   may compute the same artifact, which is idempotent. Both may also embed the
   same text. Section 6.6 narrows that by checking the vector cache again just
-  before each request is sent, but does not close it. This is the residual
+  before each chunk is sent, but does not close it. This is the residual
   `docs/store-guarantees.md` already documents for two processes ("A second
   process on the same store").
 
@@ -363,25 +396,49 @@ The write set is a leaf module, importing nothing from `grimoire`. It records
 which record paths were published inside a collection scope:
 
 ```python
+class Scope:                                   # one collection, owned by one boundary
+    def close(self) -> frozenset[str]: ...     # stop accepting, return a frozen snapshot
+
 @contextmanager
-def collecting() -> Iterator[set[Path]]: ...   # opens a scope; yields its set
-def note(path: Path) -> None: ...              # adds to every open scope; no-op when none
+def collecting(*, isolated: bool = False) -> Iterator[Scope]: ...
+def note(path: str | os.PathLike) -> None: ...   # adds to every open scope; no-op when none
 ```
 
-- The scope is a `contextvars.ContextVar` holding a tuple of mutable sets.
-  `note` adds the absolute path to each set and does nothing else: no I/O, no
-  stat, and no import of the cache. With no scope open (a test, a script that
-  did not ask, Android's startup) it costs one context-variable read.
-- `store.atomic`'s four publishing functions call `writeset.note(path)` once
-  the replace or the append has succeeded. That is the only change to
-  `atomic`, and it is the line a new guard holds (section 12).
-- Sets are mutable and shared by reference. Both `anyio.to_thread.run_sync`
-  and Starlette's `run_in_threadpool` run the callable in a copy of the current
-  context, so a write made in a worker thread started either way lands in the
-  scope that was open when the thread started. A raw `threading.Thread` does
-  not copy the context, so its writes are not collected. Nothing in the
-  package does that on a write path today, and the plan confirms it with a
-  search.
+- The context variable holds a tuple of `Scope` objects. Each `Scope` has its
+  own small lock, a set, and a `closed` flag. `note` takes each scope's lock,
+  skips the scope if it is closed, and otherwise adds the path. It does
+  nothing else: no I/O, no stat, and no import of the cache. With no scope
+  open (a test, a script that did not ask, Android's startup) it costs one
+  context-variable read.
+- `close()` sets `closed` and copies the set to a `frozenset` under the same
+  lock, so the snapshot a boundary hands over can never change afterwards and
+  can never be iterated while another thread adds to it. A late `note` from a
+  thread still holding the context finds the scope closed and adds nothing to
+  it.
+- `collecting(isolated=True)` **replaces** the inherited tuple with one that
+  holds only the new scope, rather than extending it. A boundary whose
+  lifetime is not its parent's uses it (section 5.3). `isolated=False` extends
+  the tuple, for a nested scope that really is part of its parent (a script's
+  `collecting()` inside a test's).
+- **What a path is.** `note` records `os.fspath(path)` exactly as `atomic`
+  received it, without `abspath`, which would depend on the process's working
+  directory. Every store path is built from `paths.home()` and is absolute
+  already. The consumer (the queue, or `cache_sync.collecting()`) relativises
+  each entry against the root it recorded, and drops an entry that is relative
+  or outside that root.
+- `store.atomic`'s four publishing functions (`write_text`, `write_bytes`,
+  `append_line`, `streaming_write`) each call `writeset.note(path)` themselves,
+  once the replace or the append has succeeded, not inside a shared private
+  helper. That is the only change to `atomic`, and it is the line a new guard
+  holds (section 12).
+- Sets are reached by reference through the context. Both
+  `anyio.to_thread.run_sync` and Starlette's `run_in_threadpool` run the
+  callable in a copy of the current context, so a write made in a worker
+  thread started either way lands in the scopes that were open when the
+  thread started. A raw `threading.Thread` does not copy the context, so its
+  writes are not collected. The package's only raw threads on a write path
+  are the startup inference migration (`main.py:261`), the thumbnail sweep and
+  the maintenance heartbeat, and section 5.3 leaves those out.
 
 This is not "hooking `store.atomic`" in the sense 03 forbids. `atomic` gains no
 SQLite, no import of the cache, no extra I/O, no `sources` row, and no
@@ -395,15 +452,19 @@ than the turn's scene (04-C2a's `warm_scene`), this is the slice to take first.
 
 | Boundary | How | Why there |
 |---|---|---|
-| Every HTTP request | `_WriteSetCollector`, a raw ASGI middleware in `main.py`, installed beside `_CampaignActivityStamp` and raw for the same reason (it stays out of the exception path). It opens a scope, awaits the app, and in a `finally` hands a non-empty set to the write-through queue. | Every route, every method, success or failure. A route that wrote and then failed still wrote: the argument `_CampaignActivityStamp` makes for the token on its exception path. A streamed response has finished streaming by the time `await self.app(...)` returns. |
-| Every detached run | `runner._guarded` and `runner._guarded_thread` open a scope around the producer or the work, and hand the set over at the terminal point. | A run outlives its request, and its writes happen in the lifespan's context, which the request's scope never sees. `runner.start` and `runner.start_thread` are the only two doors. |
-| A script | `cache_sync.collecting()` (section 5.5). | Scripts have no app. |
+| Every HTTP request | `_WriteSetCollector`, a raw ASGI middleware in `main.py`, installed beside `_CampaignActivityStamp` and raw for the same reason (it stays out of the exception path). It opens a scope, awaits the app, then in a `finally` **closes** the scope and hands the frozen snapshot to the write-through queue if it is non-empty. | Every route, every method, success or failure. A route that wrote and then failed still wrote: the argument `_CampaignActivityStamp` makes for the token on its exception path. A streamed response has finished streaming by the time `await self.app(...)` returns. |
+| Every detached run | `runner._guarded` and `runner._guarded_thread` open an **isolated** scope (`collecting(isolated=True)`) around the producer or the work, then close it at the terminal point and hand the snapshot over. | A run starts with a copy of the request's context (section 1.2), so without isolation every write it makes would also land in the request's scope, after that scope was handed off and from other threads. Isolation gives the run its own collector; closing gives the request a snapshot that a run outliving it cannot change. A run started from inside another run (a turn's `_fire_follow_up`) is isolated from its parent the same way. `runner.start` and `runner.start_thread` are the only two doors. |
+| A script | `cache_sync.collecting()` (section 5.5), which opens an isolated scope. | Scripts have no app. |
+
+The middleware's handoff never raises out of its `finally`. It is wrapped,
+and it tolerates an app with no `app.state.cache_warm` (a `TestClient`
+without a lifespan, since `runner.install` runs only in the lifespan) by
+dropping the snapshot. The same holds for the runner's handoff.
 
 Not covered, by design, and rebuilt lazily instead:
 
 - the background inference migration started at startup (`main.start`), which
-  is neither a request nor a run;
-- a write in a thread that did not copy its context;
+  is neither a request nor a run, and the other raw threads above;
 - **deletes and renames**, which do not go through `atomic`. They need no
   warm-up, since nothing about a deleted path is worth rebuilding, and an
   explicit sync names them (section 7.4);
@@ -435,20 +496,25 @@ It is **not** a module global, for the reason the registry is not one: a
   and its value is tuned later.
 - **Not a run.** It holds no exclusion key, creates no run record, never
   notifies, and is invisible to `runs_in_flight`, so it never makes
-  `PUT /config/data-dir` answer 409. A queue that blocked a data-dir move for a
-  minute after every edit would be a nuisance with no benefit, since the queue
-  is safe to drop.
+  `PUT /config/data-dir` answer 409 while it is idle. A queue that blocked a
+  data-dir move for a minute after every edit would be a nuisance with no
+  benefit, since the queue is safe to drop. Only a batch actually running holds
+  the move off, through the sync hold (section 4.2).
 - **One worker.** A task in the lifespan's task group wakes on a timer, takes
-  the quiet paths, and filters out paths under `.cache/`, `backups/` and
-  `logs/`. No kind reads those, so the filter only saves lookups. It then runs
-  `sync_paths(paths, mode="write")` in a worker thread, under the sync lane.
-  That is the vehicle 08 section 9 asks for: after the response, outside every
-  lock, never on the event loop.
+  the quiet paths, and keeps only those inside section 8's closed set of
+  syncable roots. That drops the usage ledger, logs, keys, top-level files and
+  everything under `.cache/` before any lookup, so the server's own
+  bookkeeping writes never surface as refusals. It then runs
+  `sync_paths(paths, mode="write")` in a worker thread, under the sync lane
+  and the sync hold (section 4.2). That is the vehicle 08 section 9 asks for:
+  after the response, outside every lock, never on the event loop.
 - **Failures are swallowed**, with one log line per failure kind per process.
   Nobody is waiting for a write-through warm-up, so there is nobody to tell,
   and a warm-up that fails costs a lazy rebuild. `streaming._fire_follow_up`
   swallows its failures for the same reason.
-- **Shutdown** cancels the worker. Pending paths are lost and rebuilt lazily.
+- **Shutdown** sets the worker's stop flag, lets a running batch reach its
+  next check, then cancels the worker. Pending paths are lost and rebuilt
+  lazily.
 - **Off switch.** `GRIMOIRE_CACHE_WARM=0` disables the queue. The collector
   still runs, at the cost of a set. `tests/conftest.py` sets the switch, as it
   sets `GRIMOIRE_INFERENCE_AUTOMIGRATE=0`, so that no test sees a background
@@ -462,7 +528,8 @@ It is **not** a module global, for the reason the registry is not one: a
 def collecting(*, embed: bool = True, deleted: Iterable[str] = ()) -> Iterator[Collected]: ...
 ```
 
-It opens a write-set scope. On a clean exit it runs
+It opens an isolated write-set scope. On a clean exit it closes the scope and
+runs
 `sync_paths(collected, mode="explicit", embed=embed, deleted=deleted)`
 synchronously, and leaves the report on the yielded object for the script to
 print. On an exception it syncs what was written anyway, because a half-applied

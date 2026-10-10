@@ -129,7 +129,7 @@ is itself present, which opens the owner gate on lore the group owns
 the seam section 11 extends. The stale docstring is corrected in the same
 change, together with the same docstring's other stale claim, "the editor sends
 every declared field on every save", which `EntityEditor`'s `changedFields`
-contradicts (`EntityEditor.tsx:409-418`).
+contradicts (`EntityEditor.tsx:158`, `:418`, `:817`).
 
 ### 1.4 Campaign overlay and sync
 
@@ -1131,7 +1131,9 @@ capstone acceptance row for §33 keeps citing the same test.
 
 The group listing is read in phase C beside `_ROSTERS` (`graph.py:339-343`),
 because it is the same kind of read as the location listing there: a
-whole-kind entity listing through the overlay. It runs in its own `_attempt`
+whole-kind entity listing through the overlay. It is read as
+`membership.campaign_index(cid)`, so section 7.6's detached rule holds on the
+graph too. It runs in its own `_attempt`
 with part `"groups"`, so an unreadable group file costs group nodes and edges
 only. The family runs in `_assemble` after `"chronicle"` (which creates the
 actor nodes) and before `"scene_ideas"`, reading `nodes.keys()` as the ideas
@@ -1385,7 +1387,9 @@ which signals help. The seam is `groups_for` (Q10).
   `holder`, `leader`, `headquarters` and `habitat` (`:76-92`): left exactly
   where it is, refused only if a request sets it, contributing no members to
   any derived view, and shown in the editor as dangling chips the user can
-  clear.
+  clear. An approved absorb row or a membership undo on such a group keeps
+  every legacy token (section 4.3, `edited_line`); only the spacing around
+  commas is normalised.
 - A group file with no `members` key and one with an empty line read the same.
   The writers here never write an empty line; they remove the key.
 
@@ -1646,6 +1650,13 @@ never activates a group's own entry and never changes `actor.knows`.
   a 400.
 - Reclassify a group with members to lore and back: the line is untouched and
   the index answers nothing, then the same rosters again.
+- `edited_line`: a join on `Mara, characters:seraphine` gives
+  `Mara, characters:seraphine, pcs:winifred` (the legacy token kept); a leave
+  removes only tokens equal to the actor; a join of an actor already present
+  returns the tokens unchanged.
+- Hand edit: a members-only save through the campaign entity route writes one
+  journal row (field `members`), and its undo restores the line; a body-only
+  save writes no members row.
 
 ### 17.2 Inverse (C2)
 
@@ -1653,10 +1664,21 @@ never activates a group's own entry and never changes `actor.knows`.
   Seraphine) gives the `by_actor` roles of section 7.5.
 - Campaign overlay: a world group inherited, then a campaign copy with a
   different `members`, then a tombstone; `campaign_index` follows each step.
-- `digest` moves on a members edit and not on a body edit or a
-  `groups/<id>/state.md` write.
+- `digest` moves on a members, name or headquarters edit and not on a body
+  edit or a `groups/<id>/state.md` write.
 - The in-process memo recomputes after an external write to a group file
-  (written with `os.utime` moved, no app call).
+  (written with `os.utime` moved, no app call), and after the first
+  materialization creates a thin campaign's `groups/` (the root stamp).
+- Two stores holding the same cid with different `members`: switching
+  `GRIMOIRE_HOME` between them (files older than `RACY_WINDOW_NS`) gives
+  different answers (the root-keyed memo, B1).
+- Detached: a campaign-made Winifred and a world group listing a later world
+  `characters:winifred` give no affiliation for her in `campaign_index`, no
+  `member_present` reason, no "Members here" entry, and no graph edge; the
+  same ref in the campaign's own copy of the group is kept.
+- The memoized index cannot be mutated by a caller (`MappingProxyType`).
+- `test_overlay_guard.py` passes with `membership.py` present (no raw campaign
+  root).
 - When 03 lands: every consumer's output is equal with the persistent tier on
   and off (`test_membership_cache_equivalence`).
 - Routes: `GET .../membership` and `?actor=`; 400 on `actor=groups:x` and on a
@@ -1676,29 +1698,39 @@ never activates a group's own entry and never changes `actor.knows`.
 - `parse_output("{}")` gains `membership_changes`;
   `test_identity_fields_live_inside_rows_not_the_top_level`'s key set is
   updated in the same change.
-- Every absorb recording in `evals/recordings/` (`absorb.compliant`,
-  `absorb.truncated`, `absorb.no-summary`, `absorb.laundered`) gains
-  `"membership_changes": []`. Without it each counterexample trips an extra
-  check and fails its declared set equality (`evals/README.md:383-412`). A new
+- The absorb recordings that parse as JSON (`absorb.compliant`,
+  `absorb.no-summary`, `absorb.laundered`) gain `"membership_changes": []`.
+  Without it each trips an extra check and a counterexample fails its declared
+  set equality (`evals/README.md:383-412`). `absorb.truncated` needs nothing:
+  the grader stops at `absorb.json` when no object is recoverable. A new
   counterexample, `absorb.null-membership`, holds `[null]` and must trip
   exactly `absorb.membership_changes`.
+- `build_absorb` (`evals/cases.py:325`) already creates the Salt Circle; it
+  gains Mara as a member, so offline replay renders the "Members here"
+  segment, and the case adds that segment as a prompt needle.
 - The `campaign_flow` cassette's absorb reply is unchanged (an absent section
   is `[]`), and `test_llm_fakes.py` still matches the re-rendered prompt.
-- Materialize: a join for Mara stages one row with subject Mara; a join for a
-  member, a leave for a non-member, an unknown group, an unknown actor and a
-  bad `change` word stage nothing; a reply that says join and leave for one
-  pair stages the first.
+- Materialize: a join for Mara stages one row with subject Mara and field
+  `members:characters:mara`; a join for a member, a leave for a non-member, an
+  unknown group, an unknown actor, an actor whose id is not `referenceable`
+  and a bad `change` word stage nothing; a reply that says join and leave for
+  one pair stages the first.
 - `group_snapshot(cid, cast)`: unchanged when no present actor is affiliated;
-  names present affiliates only; a leader-only line says "leader"; gm-only
-  groups absent.
-- Apply: two approved rows on one group both land (deltas commute); a row
-  whose target already holds is `skipped`; a join for a deleted actor is
-  `failed`; a leave of a dangling ref lands.
-- Conflict: an outside add of Mara before save makes her join row settled, not
-  conflicted; an outside removal of Winifred makes her leave row settled; an
-  outside edit to another member conflicts nothing.
-- Undo: undoing "Mara joins" after "Winifred leaves" landed succeeds; undoing
-  it after Mara was removed by hand is refused with `CONFLICT`.
+  names present affiliates only; a present leader appears once, marked
+  "leader", whether or not also listed; gm-only groups absent.
+- Apply: two approved rows on one group both land (deltas commute); a join on
+  a group whose line is `Mara, characters:seraphine` keeps `Mara`; a row whose
+  target already holds is `skipped`; a join for a deleted actor is `failed`; a
+  leave of a dangling ref lands; forged rows (`actor: "groups:x"`, an actor id
+  with a comma, a target kind other than `groups`) are `skipped` before any
+  read.
+- Settled, never conflicted: an outside add of Mara before save makes her join
+  row settled and `skipped`; an outside removal of Winifred makes her leave
+  row settled; an outside edit to another member touches neither. No
+  membership row ever appears in `check_conflicts`.
+- Undo: undoing "Mara joins" after "Winifred leaves" landed succeeds and leaves
+  Winifred's citation in `provenance.json`; undoing it after Mara was removed
+  by hand is refused with `CONFLICT`.
 - Frontend: `SceneReview.test.tsx` shows a membership row in the "Group
   membership" drawer, with no textarea.
 
@@ -1727,14 +1759,21 @@ never activates a group's own entry and never changes `actor.knows`.
   `member_present` via `characters:mara`; it does not when no affiliate is
   present; a present leader reports `led_by`, not `member_present`; a gm-only
   group with a present member confers nothing.
+- Cascade: an item whose `holder` is `groups:salt-circle` becomes present
+  when Mara is, and its owned lore activates on its key.
+- A hand-written `members: groups:other` confers no presence through
+  `groups:other` (activation reads the index, not raw refs).
 - `knows` is unchanged for every combination above
   (`test_context_actor.py`-style table).
 - Frontend: `loreReasons.test.ts` row for `member_present`.
 
 ### 17.7 Projections (C3c)
 
-- `scene_groups` ordering, `limit`, `characters/<id>` normalization, and the
-  `prompt_visible` default dropping gm-only rosters.
+- `scene_groups` ordering, uncapped by default, `limit` when passed,
+  affiliation (a leader-only affiliate counts), and `characters/<id>`
+  normalization.
+- `prompt_visible`: public kept, gm-only dropped, secret dropped unless
+  `secret_framed=True`.
 - `co_affiliates` excludes the actor itself and unions member and leader.
 
 ### 17.8 UI pattern (C1)
@@ -1810,7 +1849,65 @@ Each with a recommendation, so it can be decided quickly.
 10. **Scene suggestions using membership?** **Recommend: after 09, using
     `groups_for`, behind the suggestion prompt's existing byte-stability
     rule.**
-11. **The checklist split of 07-C3 into C3a-C3d**, and the edges 08 <- 07-C3c,
-    09 <- 07-C3c, 11 <- 07-C3c in addition to the listed 07-C2 / 07-C1 edges.
-    **Recommend: accept, and amend `ROADMAP-CHECKLIST.md` in the PR that
-    accepts this spec.**
+11. (Settled: `ROADMAP-CHECKLIST.md` now carries the C3a-C3d split and the
+    C3c edges.)
+12. **Lock the campaign entity route?** Its `rev` check and write sit outside
+    `campaign_lock`, so a hand save can overwrite a just-landed absorb
+    membership write (section 6.4). The same race exists for every entity
+    field today. **Recommend: not in 07; a separate change that reviews
+    `store.overlay` out of `UNREVIEWED` and locks every campaign entity
+    mutation.**
+
+---
+
+## 20. Review record
+
+The spec gate was run with a substitute adversarial reviewer (2026-10-10):
+2 blocking, 8 should-fix and 14 minor findings. Each was checked against the
+code before it was folded in.
+
+**Changed.**
+
+| Finding | Resolution | Where |
+|---|---|---|
+| B1 memo keyed by id, so a data-dir move or a second store with the same cid is served the other's index | Keyed on resolved roots; a two-store test | 7.3, 15 (C2), 17.2 |
+| B2 a delta written from `parse_members` erases legacy tokens | `edited_line` edits the raw token list; apply and undo use it; test | 4.3, 9.4, 9.5, 13.1, 17.1, 17.4 |
+| S1 a campaign's detached actor reads as a member of an inherited world group | Detached refs dropped from inherited rosters in `campaign_index`; activation, absorb and the graph all read through it; `detached.json` is an input | 7.6, 7.3, 7.4, 9.2, 10.3, 11.1, 17.2 |
+| S2 apply trusts client `actor`/`group` | Shape check before any read, `referenceable` at staging too | 9.3, 9.4, 17.4 |
+| S3 memo needs raw campaign paths; absent `groups/` not vouched for | `overlay.group_listing` and `overlay.listing_stamps`; parent stamps for absent directories | 7.2, 7.3, 16 |
+| S4 digest covers less than the index hands out | Digest covers every `Roster` field; per-scene projection recommended for keys | 7.2, 15 (C2) |
+| S5 consumer contracts imprecise against 08, 09, 11 | Exact calls and membership meaning per consumer; `members` excludes an unlisted leader; 08 stores uncapped metadata | 4.4, 12.2, 12.3, 12.4, 15 (C3c) |
+| S6 secret rosters reach prompts without secret framing | `prompt_visible` drops secret unless `secret_framed=True` | 12.1, 15 (C3c), 17.7 |
+| S7 hand membership edits neither journalled nor locked | Route journals `members` with `entity_fields`; unlocked write named as a residual (Q12) | 6.4, 15 (C1), 16, 19 |
+| S8 one provenance key for every membership row on a group | `field` is `members:<actor ref>` | 9.3, 9.5, 17.4 |
+| M1 Q11 stale | Marked settled | 19 |
+| M2 recordings list wrong; replay never renders "Members here" | `truncated` excluded; `build_absorb` seeds Mara as a member and a needle | 17.4 |
+| M3 membership conflict can never fire | Stated; `_REASONS` entry kept for `target_key` and `_outside_drift` | 9.5, 17.4 |
+| M4 activation's raw `parse_refs` admits `groups:` members | Activation reads `leader`/`members` from the index | 11.1, 17.6 |
+| M5 presence cascades unstated | Item-holder and recall cascades stated; item cascade tested | 11.2, 17.6 |
+| M6 slice A leaves world-side membership changes invisible | Hint wording moved into slice A | 5.3, 14 |
+| M7 older builds 500 on a membership undo | Named as the cost of any new writer tag | 9.5 |
+| M8 journal repoint skips membership targets | Stated as correct | 4.5 |
+| M9 absent actors cannot be proposed | Listed | 9.7 |
+| M10 shared memoized index mutable; pool size unstated | Immutable index; `max_entries = 64` | 7.1, 7.3 |
+| M11 per-item roster reads in sync; world side named via campaign view | One view per `incoming()`; detached stranger marked | 5.3 |
+| M12 leader-and-member rendering unspecified | Named once, marked "leader" | 9.2 |
+| M13 draft items dropped silently | One sentence each | 1.8 |
+| M14 second stale claim in the same docstring | Corrected with the first | 1.3 |
+
+**Rejected.** None. Two findings were narrowed rather than taken whole: S7's
+lock alternative is left as a named residual with Q12, because locking one
+field's writes would leave every other campaign entity field racing the same
+way; and S1's filter is applied to inherited rosters only, because a
+campaign's own copy of a group naming its own actor means that actor.
+
+**Cross-spec items for the coordinator** (07's side is stated; the other
+specs are not edited here):
+- 08: store `scene_groups(index, cast)` uncapped and unfiltered as metadata,
+  and state that "belongs to" means affiliated (members plus leader).
+- 09: rename `groups_for_actor(ref)` to 07's `groups_for(index, actor)`, and
+  state whether the `group` relation's "two or more members" means
+  `affiliated` (07 recommends) or `members_of`.
+- 11: group-audience expansion reads `membership.campaign_index` then
+  `affiliated` (recommended) or `members_of`, stated explicitly; secret
+  rosters stay out of prompts unless secret-framed until 11-C2 rules.

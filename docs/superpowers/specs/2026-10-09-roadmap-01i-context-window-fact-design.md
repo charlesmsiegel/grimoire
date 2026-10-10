@@ -543,23 +543,32 @@ Backend (pytest):
 
 - **`test_catalog.py`**: `max_output` is read from OpenRouter's
   `top_provider.max_completion_tokens` and from Anthropic's `max_tokens`. It
-  is absent for a zero, negative, boolean or non-int value, and absent for a
+  is read from an integral float (`16000.0`) as the window is, and is absent
+  for a zero, negative, boolean or fractional value, and absent for a
   vLLM or Ollama row. `features.max_tokens` is unchanged.
 - **New `test_inference_limits.py`**:
   - `limits.of` covers the source order (user over catalog over unknown) for
     each value independently, and a malformed facts value contributes
     nothing.
-  - `reply_reserve` uses a sent `max_tokens`, `max_completion_tokens` at
-    OpenAI, and the Anthropic default. Unset, it uses the default, the
-    quarter-window cap and the `max_output` cap.
+  - `reply_reserve` uses a per-call `max_tokens` over the preset's; a sent
+    `max_tokens`, `max_completion_tokens` at OpenAI, and the Anthropic
+    default. Unset, it uses the default and the quarter-window cap. Every case
+    is capped at a known `max_output`, and `max_output` is never the reserve
+    itself (a model listing a 128k cap in a 131k window still gets a usable
+    ceiling).
   - `prompt_ceiling`:
     - takes the smaller window when a fallback rides;
     - ignores a fallback that does not ride, and a decide resolution's
       separate stage;
     - returns `complete=False` with one unknown;
     - returns `tokens=None` with none known;
-    - floors at 0;
-    - honours an explicit `reserve`.
+    - floors at 0, with a `reason`, when a preset's `max_tokens` exceeds the
+      window;
+    - passes a per-call `max_tokens` (an 8192 cap with no preset value
+      reserves 8192, not the default);
+    - honours an explicit `reserve`;
+    - returns `binding` as a `(provider_id, model)` tuple for a model id
+      holding `/`.
 - **`test_inference_resolve*.py`**: an attempt's `limits` equals `limits.of`
   over the same row and facts. A reroll override resolves its own. An
   embedding attempt judged with `catalog=False` reads only stated values. A
@@ -640,3 +649,46 @@ existing prompt's bytes change.
    able to state a different one?** Recommendation: per provider and model
    only. A campaign wanting a smaller prompt has `context_budget`, and a
    per-campaign window would be a second budget wearing a fact's name.
+
+## 12. Review record
+
+Substitute adversarial review, 2026-10-10 (Codex gate still pending). No
+blocking findings. Each finding was checked against the code at `35c1fb7`.
+
+- **S1, fixed.** Section 5 is now normative: a consumer derives a ceiling
+  through `prompt_ceiling` (or `reply_reserve` for one attempt), never
+  `window - max_output`, never its own minimum over `attempts`. 10 is
+  removed as a consumer. **Routed:**
+  - the checklist edges for 09 and 12 become `01i-C1/C2`;
+  - 09 section 9.2 replaces "min known context_window over the chain's
+    attempts" with `WINDOW_SHARE * prompt_ceiling(resolved).tokens`;
+  - 12 section 7.3 replaces `estimate + max_output > context_window -
+    CONTEXT_MARGIN` with `estimate + CONTEXT_MARGIN >
+    prompt_ceiling(resolved, max_tokens=<per-turn cap>).tokens`, keeping
+    `FALLBACK_CONTEXT_TOKENS` for `None`;
+  - 01g passes its per-turn output cap (01g-C4) as `max_tokens`.
+- **S2, fixed.** `reply_reserve` and `prompt_ceiling` take `max_tokens` for
+  a per-call cap (01f-C1, 01g-C4). Every reserve is capped at a known
+  `max_output`. A ceiling of 0 carries a `reason`, which the Models readout
+  shows.
+- **S3, fixed.** The **Set** link uses `providerPaths.modelLimitsPath`,
+  which encodes per segment, with `EDIT_LIMITS` beside `EDIT_RATES`. The test
+  expects `/providers/saltmarch/models/vendor/m?edit=limits`.
+- **S4, fixed.** The output-above-window check runs inside `change`, on the
+  merged entry, under the write's hold. A two-request test is added.
+- **S5, fixed.** `prompt_ceiling` walks attempts (`attempts[0]`, plus
+  `attempts[1]` when `rides`) and reads each one's `controls`. `limits`
+  imports `resolved` as a submodule, which is acyclic.
+- **M1, fixed.** The `store/config.py:32-34` comment is corrected alongside
+  `pack.py`'s docstring.
+- **M2, fixed.** `max_output` uses `_context`'s rule, which accepts an
+  integral float, so the window and the cap agree.
+- **M3, fixed.** The settings card carries `fallback_window` and the ceiling,
+  and the 01s fallback line shows the fallback's window.
+- **M4, fixed.** `binding` is a `(provider_id, model)` tuple.
+- **M5, fixed.** The server sends `limits: null` on a native decide card or
+  route.
+- **M6, fixed.** The panel reads stated values from the top-level fields and
+  resolved ones from `limits`. The frontend `ModelFacts` type gains them.
+- **M7, fixed.** The server function names (`_role_card`, `_route_row`,
+  `_embedding_card`) and the frontend type names are both given.
