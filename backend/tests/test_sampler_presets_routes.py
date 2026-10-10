@@ -258,6 +258,75 @@ def test_a_fallback_snapshot_reports_the_fallbacks_own_split(client):
     assert by_model["glm-5.3"]["sampling"]["applied"] == {"temperature": 0.6, "min_p": 0.05}
 
 
+# ---- 01i: the model's window rides every breakdown ----
+
+def _listed(model="m", **row):
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models("openrouter", [
+        {"id": model, "name": model, "prompt": None, "completion": None, **row}], rev)
+
+
+def test_the_live_context_names_the_models_window(client):
+    cid, sid = _scene(client)
+    url = f"/api/campaigns/{cid}/scenes/{sid}/context"
+    assert client.get(url).json()["model_window"] == {"value": None, "source": "unknown"}
+    _listed(context=131072)
+    assert client.get(url).json()["model_window"] == {"value": 131072, "source": "catalog"}
+    store.inference.facts.state("openrouter", "m", context_window=32768)
+    live = client.get(url).json()
+    assert live["model"] == "m"
+    assert live["model_window"] == {"value": 32768, "source": "user"}
+
+
+def test_a_chat_turns_capture_names_the_window_of_the_target_sent(client):
+    cid, sid = _scene(client)
+    _listed(context=65536, max_output=8192)
+    _real_facade(client, openrouter=ScriptedProvider(chunks=("Mara nods.",)))
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "Shall we go?"}).status_code == 200
+    eid = store.prompt_log.list_entries(cid, sid)[0]["id"]
+    frozen = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}").json()
+    assert frozen["model"] == "m"
+    assert frozen["model_window"] == {"value": 65536, "source": "catalog"}
+
+
+def test_a_fallback_snapshot_names_the_fallbacks_own_window(client):
+    """A fallback that answered is captured against ITS window, not the
+    primary's."""
+    cid, sid = _scene(client)
+    backup = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Backup",
+        "base_url": "https://example.test/v1"}).json()["id"]
+    put_settings(client, {"roles": {"primary": {
+        "selection": {"provider": "openrouter", "model": "glm-5.3"},
+        "fallback": {"provider": backup, "model": "vendor/unknown"}}}})
+    _listed("glm-5.3", context=200000)
+    store.inference.facts.state(backup, "vendor/unknown", context_window=8192)
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=("Mara nods.",))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
+    client.app.dependency_overrides[routes.get_llm] = lambda: facade
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "Shall we go?"}).status_code == 200
+    by_model = {e["model"]: store.prompt_log.read_entry(cid, e["id"], scene=sid)
+                for e in store.prompt_log.list_entries(cid, sid)}
+    assert by_model["glm-5.3"]["model_window"] == {"value": 200000, "source": "catalog"}
+    assert by_model["vendor/unknown"]["model_window"] == {"value": 8192, "source": "user"}
+
+
+def test_the_prompt_diffs_live_side_names_the_window(client):
+    cid, sid = _scene(client)
+    _listed(context=4096)
+    _real_facade(client, openrouter=ScriptedProvider(chunks=("Mara nods.",)))
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Go?"})
+    eid = store.prompt_log.list_entries(cid, sid)[0]["id"]
+    diff = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}/diff",
+                      params={"against": "live"})
+    assert diff.status_code == 200, diff.text
+    window = {"value": 4096, "source": "catalog"}
+    assert diff.json()["head"]["model_window"] == diff.json()["base"]["model_window"] == window
+
+
 def test_a_huge_integer_is_a_400(client):
     r = client.post("/api/sampler-presets", json={"name": "x", "params": {"top_k": 10 ** 400}})
     assert r.status_code == 400 and "top_k" in r.json()["detail"]

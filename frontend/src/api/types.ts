@@ -1945,6 +1945,10 @@ export type SceneContext = {
   /** The sampler preset this turn is (or was) sent with. Absent on a snapshot
    *  frozen before presets existed. */
   sampling?: SamplingReport | null;
+  /** The window of `model` as the backend resolved it (01i), which the bar is
+   *  drawn against. Absent on a snapshot frozen before it existed, which falls
+   *  back to the catalog lookup; `value: null` is a window nobody knows. */
+  model_window?: ModelLimit;
 };
 /** One user pin or exclude (#129) as the panel sees it: the rule, the target it
  *  names resolved to something displayable, and how many posts it has left.
@@ -2018,6 +2022,8 @@ export type PromptDiffSide = {
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
   /** Null on a capture frozen before counters were recorded. */
   token_count?: TokenCounting | null;
+  /** The model's window (01i); null or absent on a capture frozen before it. */
+  model_window?: ModelLimit | null;
 };
 /** `base` -> `head`, section by section (#130). No summary count and no token
  *  delta: both are derived from what is already here, and the server declines

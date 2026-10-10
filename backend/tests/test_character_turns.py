@@ -719,6 +719,20 @@ def test_a_native_pick_captures_no_sampler_preset(client, model, mode):
     else:
         assert captured["sampling"]["preset_id"] == pid
 
+def test_a_native_picks_capture_names_its_models_window(client):
+    """01i: a decision's capture, handed no `conn` (it was sent no preset),
+    still names the window of the attempt it was sent on."""
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    store.inference.facts.state("openrouter", "vendor/decider", context_window=16384)
+    fake = FakeLLM([[MARA_ANSWERS]], decisions=[NATIVE_MARA])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    captured = _pick_capture(client, cid, sid)
+    assert captured["model"] == "vendor/decider"
+    assert captured["model_window"] == {"value": 16384, "source": "user"}
+
+
 #: What a native endpoint answers for a model it has no decisions for.
 NO_ENDPOINT = LLMError("bad_response", "no decisions endpoint for this model", status=404)
 

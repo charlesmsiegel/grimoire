@@ -55,6 +55,7 @@ from .common import (
     computes_only,
     draft_completion,
     get_llm,
+    model_window,
     override_inference,
     require_inference,
     run_error,
@@ -5431,7 +5432,10 @@ def get_scene_context(cid: str, sid: str):
 
     `token_count` says which tokenizer produced those numbers and whether it is
     this model's own (`tokens.counting`) -- for most backends it is not, and the
-    inspector marks the counts as estimates."""
+    inspector marks the counts as estimates.
+
+    `model_window` is that model's window as the backend resolved it (01i),
+    `{value, source}`, which the inspector draws the bar against."""
     _require_scene(cid, sid)
     resolved, model = _chat_target(cid)
     # What the next turn would send, pictures included (#377): the Images row is
@@ -5443,6 +5447,7 @@ def get_scene_context(cid: str, sid: str):
     breakdown = store.context.context_breakdown(
         cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)))
     return {"model": model, **breakdown,
+            "model_window": model_window(_primary(resolved.chain)),
             "token_count": store.tokens.counting(model, _target_kind(resolved.chain),
                                                  breakdown.get("counted_with", "")),
             "sampling": llm_sampling.report(_primary(resolved.chain))}
@@ -5520,7 +5525,7 @@ def _diff_side(entry: dict) -> dict:
     different about them."""
     return {k: entry.get(k) for k in
             ("id", "task", "ts", "model", "total_tokens", "dropped_tokens", "budget_tokens",
-             "token_count")}
+             "token_count", "model_window")}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts/{eid}/diff")
@@ -5571,6 +5576,7 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
                                                images=store.post_images.images_for(
                                                    _primary(chat.chain)))
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,
+                "model_window": model_window(_primary(chat.chain)),
                 "token_count": store.tokens.counting(model, _target_kind(chat.chain),
                                                      live.get("counted_with", ""))}
     else:
