@@ -39,6 +39,7 @@ import {
   proposalLabel, RELATION_PHRASES, STALE_TEXT,
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
+import { SweepCaptures } from "./SweepCaptures";
 import type { ContinuityReview as Review } from "./useContinuityReview";
 import { api } from "../../api/client";
 
@@ -348,6 +349,8 @@ export function ContinuityReview(
         </div>
         <RefreshControl review={review} />
       </div>
+      {/* Under Refresh, which is what starts a sweep: what it asked. */}
+      <SweepCaptures key={cid} cid={cid} />
       {error && error.cid === cid
         && <p className="continuity-error" role="alert">{error.text}</p>}
       {group === "reviewed" ? (

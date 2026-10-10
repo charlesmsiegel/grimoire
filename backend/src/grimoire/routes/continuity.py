@@ -79,8 +79,8 @@ from ..store.continuity import (
     reconcile,
     review,
 )
+from . import decision_capture, runs
 from . import ledger as ledger_routes
-from . import runs
 from .common import (
     _bounded_call,
     _decide_error,
@@ -682,11 +682,18 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
         # Each chunk runs under the full ceiling, inside its own meter
         # (`around`): an overrun is that meter's `error/timeout` row, noted
         # against the connection the live holder says was answering.
-        decision = await operations.decide(
-            "continuity-reconcile", items, client=client, resolved=resolved, explain=explain,
-            campaign=cid,
-            around=lambda call, holder: _bounded_call(
-                call, on_timeout=_noting(client, resolved, holder)))
+        #
+        # One campaign-level decision scope (roadmap 01b): the pass is one
+        # prompt-log entry with no scene, fenced on `stillborn` -- a run a
+        # campaign delete forgot files nothing into a same-named replacement.
+        async with decision_capture.capturing(
+                cid, decision_capture.NO_SCENE, "continuity-reconcile",
+                fence=lambda: not stillborn()) as scope:
+            decision = await operations.decide(
+                "continuity-reconcile", items, client=client, resolved=resolved,
+                explain=explain, campaign=cid, capture=scope.hook(),
+                around=lambda call, holder: _bounded_call(
+                    call, on_timeout=_noting(client, resolved, holder)))
     except LLMError as exc:
         result["llm"] = "failed"
         return _failed(result, run_error(_llm_http_error(exc))), {}

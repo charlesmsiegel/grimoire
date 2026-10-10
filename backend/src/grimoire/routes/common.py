@@ -569,6 +569,51 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
         return   # gone, contended, or unreadable: capture nothing, cost nothing
 
 
+def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str = "",
+                            kind: str = "", conn: wire.Target | None = None,
+                            operation: str = "",
+                            still: Callable[[], bool] | None = None) -> None:
+    """`_record_prompt`'s sibling for a capture filed with no scene
+    (`prompt_log.NO_SCENE`, roadmap 01b §3.6): today the continuity reconcile
+    sweep's, a campaign-scoped background run.
+
+    `_record_prompt` cannot take that scene, because what it proves is that a
+    SCENE still exists. This proves the CAMPAIGN does (`read_campaign` raising
+    `CampaignNotFound`), asks `still` -- the site's own fence, which is what
+    tells a run forgotten by a campaign delete from one that still owns the
+    campaign -- and writes, all inside the same non-blocking hold, and bumps
+    the write token after the write, in the hold, for `_record_prompt`'s
+    reasons. Contention, a gone campaign, a failed fence or an unreadable
+    store cost the capture and nothing else, and a skipped capture stamps
+    nothing. A `still` that raises leaves this function, as it does
+    `_record_prompt`.
+
+    The residual, stated rather than hidden: between a campaign's store delete
+    and `runs.forget_subject`, `read_campaign` is all that stands, and it
+    passes once a same-named campaign has been recreated -- the one way left
+    for a campaign-level capture to land in the wrong campaign.
+    """
+    report = llm_sampling.report(conn)
+    if report is not None:
+        breakdown = {**breakdown, "sampling": report}
+    try:
+        with store.locks.campaign_lock_nowait(cid) as got:
+            if not got:
+                return
+            store.campaigns.read_campaign(cid)
+            if still is not None and not still():
+                return
+            try:
+                store.prompt_log.record(cid, store.prompt_log.NO_SCENE, task, breakdown,
+                                        model=model, kind=kind, operation=operation)
+            finally:
+                # After the record and inside the hold: `_record_prompt`'s
+                # ordering, for its reason.
+                store.revision.bump(cid)
+    except (store.campaigns.CampaignNotFound, store.locks.StoreBusy, OSError):
+        return   # gone, contended, or unreadable: capture nothing, cost nothing
+
+
 def _abandon(task: asyncio.Task) -> None:
     """Ask an overrun call to stop, then stop waiting on it.
 

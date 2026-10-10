@@ -189,6 +189,48 @@ test("the dismissed group is collapsed until selected", async () => {
     .toHaveAttribute("aria-expanded", "true");
 });
 
+// ---- What the sweep asked (roadmap 01b) -------------------------------------
+
+const SWEEP_ENTRY = {
+  id: "000007", scene: "", ts: "2026-10-01T10:05:00Z", task: "continuity-reconcile",
+  operation: "decide", model: "m", total_tokens: 60, dropped_tokens: 0, budget_tokens: 0,
+};
+
+const SWEEP_SNAPSHOT = {
+  id: "000007", ts: "2026-10-01T10:05:00Z", task: "continuity-reconcile",
+  operation: "decide", model: "m", total_tokens: 60, dropped_tokens: 0, budget_tokens: 0,
+  sections: [
+    { id: "message_0", label: "user", text: "Are Mara's map and Winifred's chart one thread?",
+      tokens: 60, tier: "lock-in", dropped: false, trimmed: 0 },
+    { id: "decision", label: "decision", text: '{"task": "continuity-reconcile", "calls": []}',
+      tokens: 0, tier: "lock-in", dropped: false, trimmed: 0 },
+  ],
+};
+
+test("what the sweep asked is collapsed, and a row opens its capture read-only", async () => {
+  (api.listCampaignPrompts as any).mockResolvedValue({ entries: [SWEEP_ENTRY] });
+  (api.getCampaignPrompt as any).mockResolvedValue(SWEEP_SNAPSHOT);
+  renderLedger("/campaigns/run/ledger/continuity/overlaps");
+  const toggle = await main().findByRole("button", { name: "What the sweep asked" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(api.listCampaignPrompts).not.toHaveBeenCalled();
+
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.listCampaignPrompts).toHaveBeenCalledWith("run"));
+  fireEvent.click(await main().findByRole("button", { name: /^Continuity sweep/ }));
+  await waitFor(() => expect(api.getCampaignPrompt).toHaveBeenCalledWith("run", "000007"));
+  expect(await main().findByText("outcome · not sent")).toBeInTheDocument();
+  expect(main().getByText("Are Mara's map and Winifred's chart one thread?"))
+    .toBeInTheDocument();
+  expect(main().queryByRole("textbox")).toBeNull();
+});
+
+test("what the sweep asked says so when nothing was captured", async () => {
+  renderLedger("/campaigns/run/ledger/continuity/overlaps");
+  fireEvent.click(await main().findByRole("button", { name: "What the sweep asked" }));
+  expect(await main().findByText("No sweep has been captured yet.")).toBeInTheDocument();
+});
+
 // ---- Refresh ---------------------------------------------------------------
 
 test("a refresh shows progress and re-reads when it lands", async () => {

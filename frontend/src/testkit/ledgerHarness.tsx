@@ -64,6 +64,8 @@ export function installLedgerMocks() {
   });
   mocked(api.awaitCampaignRun).mockResolvedValue(
     { id: "r", attempt_id: null, state: "landed", next_index: 0 });
+  mocked(api.listCampaignPrompts).mockResolvedValue({ entries: [] });
+  mocked(api.getCampaignPrompt).mockResolvedValue(null);
   for (const k of ["applyCandidate", "dismissCandidate", "restoreSuppression",
                    "removeAlias", "removeLink"] as const) {
     mocked(api[k]).mockResolvedValue({ ok: true });

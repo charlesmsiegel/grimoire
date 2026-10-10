@@ -5477,6 +5477,36 @@ def get_scene_prompt(cid: str, sid: str, eid: str):
     return entry
 
 
+@router.get("/campaigns/{cid}/prompts")
+def get_campaign_prompts(cid: str):
+    """The campaign-level captures, newest first (roadmap 01b): decisions
+    asked with no scene -- today the continuity reconcile sweep's, one entry
+    per pass. Rows only, as the scene list's. Never a scene's entry: those are
+    the scene routes', and these are not reachable through them (a path
+    segment is never empty)."""
+    _require_campaign(cid)
+    return {"entries": store.prompt_log.list_entries(cid, store.prompt_log.NO_SCENE)}
+
+
+@router.get("/campaigns/{cid}/prompts/{eid}")
+def get_campaign_prompt(cid: str, eid: str):
+    """One campaign-level capture, scoped to `NO_SCENE` so a scene's entry
+    is never served here; 404 when it never existed or has aged out. There is
+    no diff route at this level (roadmap 01b §3.6)."""
+    _require_campaign(cid)
+    entry = store.prompt_log.read_entry(cid, eid, scene=store.prompt_log.NO_SCENE)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="prompt snapshot not found")
+    return entry
+
+
+def _require_campaign(cid: str) -> None:
+    try:
+        store.campaigns.read_campaign(cid)
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+
+
 #: The `against` value that means "the composition as it stands now" rather than
 #: a second frozen turn. Not a valid entry id -- those are all digits -- so it
 #: cannot collide with one.

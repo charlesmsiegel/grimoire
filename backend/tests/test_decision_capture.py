@@ -14,6 +14,7 @@ the fixtures their own suites use.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import threading
@@ -30,12 +31,26 @@ from grimoire.routes import scenes as scenes_routes
 
 from . import inference_baseline as base
 from . import review_runs
-from .llm_fakes import FakeLLM, decision_reply
+from .guard_markers import marker_reason
+from .llm_fakes import FakeLLM, decision_reply, from_entries
 from .test_absorb_identity import _llm, _one_per_chunk, _seed_ledger, _two_rows
 from .test_absorb_identity import _row as _identity_row
 from .test_character_turns import _chat, seed
+from .test_continuity_reconcile_routes import (
+    _duplicate,
+    _entry,
+    _live,
+    _refresh,
+    _reply,
+    _settled,
+    _two_candidates,
+)
+from .test_continuity_reconcile_routes import _held as _held_sweep
+from .test_continuity_reconcile_routes import _key as _reconcile_key
+from .test_import_guard import PACKAGES, SOURCES
 from .test_inference_decide import _item, _resolved, _store
 from .test_inference_decide_native import _Endpoint, _native_resolution, _yes
+from .test_operation_guard import decide_calls
 from .test_routes import _DOSSIER, _EXTRACTION, _absorb_script, _verdict, _voice_scene
 from .test_scene_break_routes import YES, _judge, _key, _mid_flight, _post, _use
 from .test_scene_break_routes import _scene as _break_scene
@@ -642,3 +657,308 @@ def test_no_provider_text_reaches_the_payload_or_the_log(fresh):
 def test_the_outcome_section_id_is_still_pinned():
     assert decision_capture.OUTCOME_SECTION_ID == "decision"
     assert character_turns.OUTCOME_SECTION_ID == decision_capture.OUTCOME_SECTION_ID
+
+
+# ---- the campaign level: the reconcile sweep (01b-S3) ----
+
+
+NO_SCENE = decision_capture.NO_SCENE
+
+
+def _campaign_entries(cid):
+    return store.prompt_log.list_entries(cid, NO_SCENE)
+
+
+def _sweep(client, cid, *answers):
+    fake = from_entries([_entry(_reply(*answers))])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    return _settled(client, cid, _refresh(client, cid))
+
+
+def test_a_reconcile_pass_files_one_campaign_level_entry(client):
+    cid, _temporal = _two_candidates(client)
+    _reconcile_key(client)
+    run = _sweep(client, cid, _duplicate(), {"decision": "before"})
+    assert run["state"] == "landed", run
+    (row,) = _campaign_entries(cid)
+    assert (row["scene"], row["task"], row["operation"]) == (
+        NO_SCENE, "continuity-reconcile", DECIDE)
+    payload = store.prompt_log.read_entry(cid, row["id"], scene=NO_SCENE)
+    body = _envelope(payload)
+    (call,) = body["calls"]
+    assert call["at"] == [0, 1]
+    # No scene lists it.
+    for scene in store.scenes.list_scenes(cid):
+        assert all(e["task"] != "continuity-reconcile"
+                   for e in store.prompt_log.list_entries(cid, scene["id"]))
+
+
+def test_a_forgotten_reconcile_run_files_nothing(client):
+    cid, _temporal = _two_candidates(client)
+    _reconcile_key(client)
+    fake = _held_sweep(_reply(_duplicate(), {"decision": "before"}))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    assert _refresh(client, cid).status_code == 202
+    fake.await_held()
+    run = _live(client, cid)
+    run.forgotten = True          # what a campaign delete's `forget_subject` sets
+    fake.release()
+    deadline = time.monotonic() + 10
+    while run.state == "running":
+        assert time.monotonic() < deadline, "the run never settled"
+        time.sleep(0.02)
+    assert _campaign_entries(cid) == []
+
+
+def test_a_campaign_scope_must_be_fenced(fresh):
+    cid, _sid = _campaign(fresh)
+
+    async def body(_s):
+        return None
+
+    with pytest.raises(ValueError):
+        _run(cid, NO_SCENE, body)
+
+
+def _campaign_held(cid, *, fence=lambda: True):
+    """One campaign-level scope over one settled call, by hand."""
+    async def body(s):
+        await _held(s)
+    _run(cid, NO_SCENE, body, task="continuity-reconcile", fence=fence)
+
+
+def test_a_campaign_scope_stamps_once_and_a_fenced_off_one_not_at_all(fresh):
+    cid, _sid = _campaign(fresh)
+    before = store.revision.current(cid)
+    _campaign_held(cid, fence=lambda: False)
+    assert _campaign_entries(cid) == []
+    assert store.revision.current(cid) == before
+    _campaign_held(cid)
+    (row,) = _campaign_entries(cid)
+    assert row["operation"] == DECIDE
+    assert store.revision.current(cid) != before
+
+
+def test_a_campaign_gone_before_filing_files_nothing(fresh, monkeypatch):
+    cid, _sid = _campaign(fresh)
+
+    def gone(c):
+        raise store.campaigns.CampaignNotFound(c)
+
+    monkeypatch.setattr(store.campaigns, "read_campaign", gone)
+    _campaign_held(cid)
+    monkeypatch.undo()
+    assert _campaign_entries(cid) == []
+
+
+def test_a_contended_campaign_capture_files_nothing_and_does_not_wait(fresh):
+    cid, _sid = _campaign(fresh)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with store.locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    try:
+        assert held.wait(10)
+        started = time.monotonic()
+        _campaign_held(cid)
+        waited = time.monotonic() - started
+    finally:
+        release.set()
+        thread.join(10)
+    assert _campaign_entries(cid) == []
+    assert waited < 5
+
+
+def test_the_three_pools_never_evict_one_another(fresh):
+    """§6 test 7 at depth 3: four reconcile passes leave three campaign
+    decisions and every turn and scene decision; four scene-break checks
+    leave three scene decisions and every campaign decision."""
+    cid, sid = _campaign(fresh)
+    store.config.write_config(prompt_log_depth="3")
+    breakdown = {"sections": [], "total_tokens": 0, "dropped_tokens": 0, "budget_tokens": 0}
+    turns = [store.prompt_log.record(cid, sid, "chat", breakdown, model="m")
+             for _ in range(3)]
+
+    async def scene_check(s):
+        await _held(s)
+
+    for _ in range(3):
+        _run(cid, sid, scene_check)
+    scene_decisions = [e["id"] for e in _entries(cid, sid) if e.get("operation") == DECIDE]
+    for _ in range(4):
+        _campaign_held(cid)
+    campaign = [e["id"] for e in _campaign_entries(cid)]
+    assert len(campaign) == 3
+    assert sorted(e["id"] for e in _entries(cid, sid)) == sorted(turns + scene_decisions)
+
+    for _ in range(4):
+        _run(cid, sid, scene_check)
+    assert [e["id"] for e in _campaign_entries(cid)] == campaign
+    rows = _entries(cid, sid)
+    assert len([e for e in rows if e.get("operation") == DECIDE]) == 3
+    assert sorted(e["id"] for e in rows if "operation" not in e) == sorted(turns)
+
+
+# ---- §6 test 9: the two campaign routes ----
+
+
+def test_the_campaign_routes_list_and_read_only_campaign_entries(client):
+    cid, sid = _break_scene(client, posts=4)
+    _key(client)
+    _use(client, _judge(YES))
+    _post(client, cid, sid, force="true")
+    (scene_entry,) = _entries(cid, sid, "scene-break")
+    breakdown = {"sections": [], "total_tokens": 0, "dropped_tokens": 0, "budget_tokens": 0}
+    eid = store.prompt_log.record(cid, NO_SCENE, "continuity-reconcile", breakdown,
+                                  model="m", operation=DECIDE)
+
+    listed = client.get(f"/api/campaigns/{cid}/prompts")
+    assert listed.status_code == 200
+    assert [e["id"] for e in listed.json()["entries"]] == [eid]
+    assert client.get(f"/api/campaigns/{cid}/prompts/{eid}").json()["id"] == eid
+    # A scene's entry is not a campaign entry, nor the other way about.
+    assert client.get(f"/api/campaigns/{cid}/prompts/{scene_entry['id']}").status_code == 404
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}").status_code == 404
+    assert client.get("/api/campaigns/nowhere/prompts").status_code == 404
+
+
+# ---- the guard: every decide call is captured (01b C1, §6) ----
+
+
+#: The marker that clears a decide call the helper cannot reach, and how many
+#: the package may hold.
+CAPTURE_MARKER = "capture-ok:"
+MAX_CAPTURE_MARKERS = 2
+
+#: The decide sites the guard must at least see (§3.6), so a recogniser that
+#: stopped finding calls fails rather than passing vacuously.
+MIN_CAPTURED_SITES = 5
+
+
+def _enclosing_params(tree: ast.AST, call: ast.Call) -> set[str]:
+    """The parameter names of the nearest function (or lambda) enclosing
+    `call`; empty at module level."""
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    node: ast.AST | None = parents.get(call)
+    while node is not None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            a = node.args
+            named = [*a.posonlyargs, *a.args, *a.kwonlyargs,
+                     *([a.vararg] if a.vararg else []), *([a.kwarg] if a.kwarg else [])]
+            return {arg.arg for arg in named}
+        node = parents.get(node)
+    return set()
+
+
+def capture_problems(tree: ast.AST, modname: str, src: str,
+                     is_pkg: bool = False) -> tuple[list[str], int]:
+    """What is wrong with one module's decide calls' captures, and how many
+    capture-ok markers it holds. In `routes/` a call passes
+    `capture=<scope>.hook(...)`; elsewhere a `capture=` naming a parameter of
+    its enclosing function (a pass-through, whose `routes/` caller supplies
+    the hook). Anything else needs `# capture-ok: <reason>`."""
+    out: list[str] = []
+    markers = 0
+    calls = decide_calls(tree, modname, is_pkg)
+    in_routes = modname.startswith("grimoire.routes.")
+    for call in calls:
+        reason = marker_reason(CAPTURE_MARKER, src, call, [c for c in calls if c is not call])
+        if reason is not None:
+            markers += 1
+            if not reason:
+                out.append(f"{modname}:{call.lineno}: a capture-ok marker with no reason")
+            continue
+        capture = next((k.value for k in call.keywords if k.arg == "capture"), None)
+        if in_routes:
+            ok = (isinstance(capture, ast.Call) and isinstance(capture.func, ast.Attribute)
+                  and capture.func.attr == "hook" and isinstance(capture.func.value, ast.Name))
+        else:
+            ok = (isinstance(capture, ast.Name)
+                  and capture.id in _enclosing_params(tree, call))
+        if not ok:
+            out.append(f"{modname}:{call.lineno}: decide is not captured through "
+                       "decision_capture (capture=<scope>.hook(...))")
+    return out, markers
+
+
+def test_every_decide_call_is_captured_through_the_helper():
+    problems: list[str] = []
+    markers = 0
+    sites = 0
+    for modname, (_path, src, tree) in SOURCES.items():
+        found, marked = capture_problems(tree, modname, src, modname in PACKAGES)
+        problems += found
+        markers += marked
+        sites += len(decide_calls(tree, modname, modname in PACKAGES))
+    assert problems == []
+    assert markers <= MAX_CAPTURE_MARKERS
+    assert sites >= MIN_CAPTURED_SITES, f"only {sites} decide calls found; did they move?"
+
+
+_ROUTES = "grimoire.routes.scenes"
+_STORE = "grimoire.store.continuity.reconcile"
+_IMPORT_ROUTES = "from .. import inference as operations\n"
+_IMPORT_STORE = "from ... import inference as operations\n"
+
+
+def _planted(src: str, modname: str) -> list[str]:
+    return capture_problems(ast.parse(src), modname, src)[0]
+
+
+@pytest.mark.parametrize(("src", "modname"), [
+    # No capture at all.
+    (_IMPORT_ROUTES + "async def f():\n"
+     "    await operations.decide('scene-break', items, resolved=r)\n", _ROUTES),
+    # A hand-written capture in routes/.
+    (_IMPORT_ROUTES + "async def f():\n"
+     "    await operations.decide('scene-break', items, resolved=r,\n"
+     "                            capture=lambda m, o, t: None)\n", _ROUTES),
+    # A bare name in routes/ is not a scope's hook, even a parameter.
+    (_IMPORT_ROUTES + "async def f(capture):\n"
+     "    await operations.decide('scene-break', items, resolved=r, capture=capture)\n",
+     _ROUTES),
+    # Outside routes/, a name that is not a parameter of the enclosing function.
+    (_IMPORT_STORE + "async def f():\n    capture = None\n"
+     "    await operations.decide('scene-break', items, resolved=r, capture=capture)\n",
+     _STORE),
+    # Outside routes/, at module level: no enclosing function to pass through.
+    (_IMPORT_STORE + "operations.decide('scene-break', items, resolved=r, capture=capture)\n",
+     _STORE),
+    # An aliased name binding is still found.
+    (("from ..inference import decide as pick\nasync def f():\n"
+      "    await pick('scene-break', items, resolved=r)\n"), _ROUTES),
+    # A marker with no reason.
+    (_IMPORT_ROUTES + "async def f():\n"
+     "    await operations.decide('scene-break', items, resolved=r)  # capture-ok:\n",
+     _ROUTES),
+])
+def test_the_capture_guard_flags_planted_cases(src, modname):
+    assert _planted(src, modname), src
+
+
+@pytest.mark.parametrize(("src", "modname"), [
+    (_IMPORT_ROUTES + "async def f():\n"
+     "    await operations.decide('scene-break', items, resolved=r, capture=scope.hook())\n",
+     _ROUTES),
+    (_IMPORT_ROUTES + "async def f():\n"
+     "    await operations.decide('voice-drift', items, resolved=r, capture=s.hook(aid))\n",
+     _ROUTES),
+    # A pass-through outside routes/, its routes/ caller supplying the hook.
+    (_IMPORT_STORE + "async def tool(items, *, capture=None):\n"
+     "    await operations.decide('scene-break', items, resolved=r, capture=capture)\n",
+     _STORE),
+    # A reasoned marker.
+    (_IMPORT_ROUTES + "async def f():\n"
+     "    # capture-ok: an eval-only probe with no campaign to file into\n"
+     "    await operations.decide('scene-break', items, resolved=r)\n", _ROUTES),
+    # Another object's `decide` is not the operation.
+    (_IMPORT_ROUTES + "exam.decide(rows)\n", _ROUTES),
+])
+def test_the_capture_guard_passes_planted_cases(src, modname):
+    assert _planted(src, modname) == [], src
