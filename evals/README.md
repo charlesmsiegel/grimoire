@@ -517,6 +517,59 @@ the decide prompt and schema, writes the right answer. Each conversion lands
 with a permanent `decide-*` case beside its corpus, which holds that prompt's
 contract offline, and `--live` (above) is the only thing that asks a model.
 
+## Embedding evals
+
+`--embed` asks a different question from every case above: not whether a
+model follows an instruction, but how well an embedding model -- with the
+options its facts state (roadmap 01h) -- ranks the documents a query is
+about. It lives in `evals/embed/`:
+
+- **The corpus** (`corpus.json`) is invented, with the codebase's placeholder
+  names only, in three shapes, one per kind of production caller: `recall`
+  (a scene's last posts against lore), `search` (a reader's question against
+  library records) and `identity` (a reworded record against the record it
+  restates, compared symmetrically). Every query ranks the whole pool. Its
+  relevant document is a **paraphrase** that shares no content word with it
+  -- the miss semantic recall exists for -- and a **lexical decoy** shares
+  its names and words and is not relevant, so a term scorer cannot pass.
+  `corpus.problems` holds both rules, and the size is structural (at least
+  ten documents per unit of the largest k), to be tuned later.
+- **The metrics** are recall@1/3/5/10 and MRR, per shape and overall, beside
+  a lexical baseline (`store/search.py`'s term scorer over the same corpus),
+  so a model is judged against what keyword search already does. A query
+  with no relevant document in the top 10 is listed as a miss.
+- **Replay** (offline; `pytest backend` runs it in `test_embed_evals.py`)
+  grades the recorded rankings in `recordings/embed/<model>-<option digest or
+  none>.json` -- query ids to document ids, never a vector. The shipped one
+  is the offline endpoint's: a deterministic hashed bag of words, which the
+  same test also drives through the whole embedded path (`embed_sync` with
+  prefixes, the `param` split and the dimensions check) over an
+  `httpx.MockTransport`. It proves the harness and claims nothing about
+  quality.
+- **Live** costs money and is opt-in. The Embedding role's space is resolved
+  in the real store before anything else; each option set then runs in its
+  own throwaway home, its rows harvested into the report (time, tokens and
+  the money columns) and never left in your ledger. It prints the corpus's
+  size and estimated tokens before sending. `--embed-options` adds an option
+  set (repeatable), validated as a facts write is and run in memory under
+  its own recomputed space id; nothing is written. `--record` saves each
+  set's rankings. Each set prints its own rows: an embedding run writes no
+  run file yet (`--out` and `--compare` are refused with `--embed`).
+
+```sh
+# replay: grade the recorded rankings beside the lexical baseline
+backend/.venv/bin/python evals/run.py --embed
+backend\.venv\Scripts\python.exe evals\run.py --embed
+
+# live, on the Embedding role's model, under its own options and one more set
+backend/.venv/bin/python evals/run.py --live --embed --embed-options '{"input": "prefix", "query_prefix": "query: ", "document_prefix": "passage: "}'
+backend\.venv\Scripts\python.exe evals\run.py --live --embed --embed-options "{\"dimensions\": 512}"
+```
+
+What it cannot show: whether a real library retrieves well. A synthetic
+corpus is evidence for a choice of model or options; the recall thresholds
+stay "tune against the inspector".
+
 ## How a case works
 
 ```
