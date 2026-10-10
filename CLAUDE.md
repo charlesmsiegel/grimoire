@@ -934,8 +934,10 @@ would answer neither question.
   request the group owns running (an `around` that detaches its call, as
   `_bounded_call` does, abandons it to unwind on its own). It sends no
   `sampling`, so its ledger row files no `preset`. An item `decisions.native_gap` says a decisions endpoint
-  cannot carry (today a nullable choice whose options plus the reserved none
-  pass 255) is refused unsent with `bad_response` and the code
+  cannot carry (today a choice -- or a joint's flattened choice -- whose
+  options plus the reserved none pass 255, a rank that names no `pointwise`
+  question, or a lowered predicate id that collides with another question's)
+  is refused unsent with `bad_response` and the code
   `native_unrepresentable`, and its reason is a sentence: it moves on like any
   failed call, and with no stage after it the reason reaches the caller and
   the error store. A native 4xx in `llm.NATIVE_REJECTED_STATUSES` does not mark
