@@ -392,7 +392,10 @@ real store data" (01a-C3), and its test runs on synthetic run files.
 
 ## 9. Contract
 
-**01a-C1. Reporting.** For every live run, `runner.Result` gains `wall_ms:
+**01a-C1. Reporting.** Per-case and per-call wall time, tokens and the three
+money columns, never added together, aggregated per route, backend and
+`hop`. A play case can be summed across its tasks. An absent price is never
+shown as zero. For every live run, `runner.Result` gains `wall_ms:
 int`, `rows: tuple[dict, ...]` (harvested, §6), `calls: tuple[CallRecord,
 ...]` (decide only), `items: tuple[dict, ...]` (decide only) and `bucket:
 dict` (a `usage._rounded` bucket over `rows`, every task of the case folded in).
@@ -413,7 +416,10 @@ Failure behaviour: a harvest that cannot read the isolate's ledger (an
 still grades it. Metrics never turn a passing case into a failing one, or the
 reverse.
 
-**01a-C2. Metering in an eval scope.**
+**01a-C2. Metering in an eval scope.** Live evals are metered by the
+production meter inside a throwaway home. Rows are copied to the run file
+stamped `scope: "eval"` and never reach the library's ledger. A tripwire
+refuses to run against the real home.
 
 - Every call a live case sends is metered by the production door
   (`store.usage.meter`, directly or through `run_stages`/`embed_sync`).
@@ -426,7 +432,8 @@ reverse.
   case runs.
 - `evals.runner` leaves `UNMETERED_OUTSIDE`.
 
-**01a-C3. Comparison.**
+**01a-C3. Comparison.** `--decide-backend` can be repeated, and `--repeat`,
+`--out` (eval-run v1) and an offline `--compare FILE...` are added.
 
 - Repeatable `--decide-backend` and `--repeat N` (≤ `MAX_REPEAT`) in one run.
 - `--out` writes an `eval-run` v1 file.
