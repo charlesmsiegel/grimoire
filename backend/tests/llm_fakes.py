@@ -759,7 +759,9 @@ class FakeEmbeddings:
     way the real client folds a response's usage block.
 
     `threads` is the `threading.get_ident()` of each call, so a test can say
-    which thread embedded (01h-C4a: never the app's loop).
+    which thread embedded (01h-C4a: never the app's loop). `options` and
+    `queries` are what each call was handed (01h-S2): the texts it records are
+    the operation's, before any prefix the real client would add.
     """
 
     def __init__(self, vector_for=lambda t: [1.0, 0.0], error=None, fail_after=0,
@@ -771,9 +773,14 @@ class FakeEmbeddings:
         self.calls: list[list[str]] = []
         self.deadlines: list[float | None] = []
         self.threads: list[int] = []
+        self.options: list = []
+        self.queries: list[int] = []
 
-    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None, *,
+              options=None, queries=0):
         self.calls.append(list(texts))
+        self.options.append(options)
+        self.queries.append(queries)
         self.deadlines.append(deadline)
         self.threads.append(threading.get_ident())
         if self.error is not None and len(self.calls) > self.fail_after:

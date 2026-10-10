@@ -473,6 +473,14 @@ def available() -> dict | None:
     return embed_space.endpoint()
 
 
+def options_problem() -> str:
+    """Why the configured role names no space because of its model's facts
+    -- a held or mangled facts file, or invalid embedding options (01h;
+    `embed_space.options_problem`) -- or "". A sweep that sees one keeps its
+    basis rather than re-salting it with no space."""
+    return embed_space.options_problem()
+
+
 def matching() -> str:
     """``"semantic"`` or ``"basic"`` (spec §3.3) -- a delegate to
     `drivers.matching`, so the field has one definition and the identity block

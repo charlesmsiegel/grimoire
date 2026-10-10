@@ -135,8 +135,12 @@ class ResolvedInference:
     #: (`resolve.embedding`): `f"{provider_id}\0{rev}\0{model}"`, the key every
     #: vector cache is read and written under. Set only when the role embeds --
     #: a model, an endpoint, and nothing in `missing`; None otherwise, and
-    #: always None for a generative resolution.
+    #: always None for a generative resolution. Stated embedding options whose
+    #: document side is not the default add `\0embopt1:<digest>` (01h §5.1).
     space_id: str | None = None
+    #: Why the Embedding role names no space because of its model's facts
+    #: (`resolve.OPTIONS_HELD`, `OPTIONS_MANGLED`, `OPTIONS_INVALID`), or "".
+    embed_options_problem: str = ""
     #: Whether the fallback attempt rides the facade behind the primary
     #: (`chain`'s `fallback`): always on a generate resolution whose fallback
     #: is not known incapable; on a decide one only where both attempts are

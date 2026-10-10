@@ -1386,3 +1386,61 @@ def test_a_pricing_wildcard_does_not_price_the_decision_probe(client):
     assert body["estimate_basis"] is None
     assert probes.estimate_from_rates(dict(RATES), ["decide_native"]) is None
     assert probes.estimate_from_rates(dict(RATES), ["generate", "decide_native"]) is None
+
+
+# ---- embedding options (01h-S2) ----
+
+NOMIC = {"input": "prefix", "query_prefix": "search_query: ",
+         "document_prefix": "search_document: "}
+
+
+def test_the_embed_probe_sends_the_stated_options(client, monkeypatch):
+    """A confirmed test call verifies the options the Embedding role would
+    send: the probe text goes as a document, with its prefix, and a prompt
+    count the endpoint did not report counts what was sent."""
+    monkeypatch.setattr(store.tokens, "_loaded", lambda: None)
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    facts.state(conn, MODEL, embedding=NOMIC)
+    seen = _embedder(monkeypatch, _vector)
+
+    run = _run(client, conn, ["embed"])
+
+    sent = "search_document: " + probes.EMBED_TEXT
+    assert [json.loads(r.content)["input"] for r in seen] == [[sent]]
+    assert run["result"]["results"]["embed"] == {"ok": True, "dims": 3}
+    assert _rows()[0]["prompt_tokens"] == -(-len(sent) // 4)
+
+
+@pytest.mark.parametrize("state", ["held", "invalid"])
+def test_the_embed_probe_sends_nothing_when_its_options_cannot_be_judged(
+        client, monkeypatch, state):
+    """What the probe would send is not what the role sends, so it sends
+    nothing, files nothing, and is not a verdict."""
+    from pathlib import Path
+
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    path = store.llm_connections.facts_path(conn)
+    if state == "held":
+        facts.state(conn, MODEL, embedding=NOMIC)
+        real = Path.read_text
+
+        def held(self, *a, **kw):
+            if self == path:
+                raise OSError("held by a sync client")
+            return real(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", held)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({MODEL: {"embedding": {"input": "both"}}}),
+                        encoding="utf-8")
+    seen = _embedder(monkeypatch, _vector)
+
+    run = _run(client, conn, ["embed"])
+
+    got = run["result"]["results"]["embed"]
+    assert got["ok"] is False
+    assert got["kind"] == ("options_unreadable" if state == "held" else "options_invalid")
+    assert seen == [] and _rows() == []

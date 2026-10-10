@@ -253,7 +253,7 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *,
     try:
         got = embed.embed_sync("semantic-search", [query_text, *missing], space=cfg,
                                client=_CLIENT, deadline=deadline, cached=cached,
-                               uncached=uncached)
+                               uncached=uncached, queries=1)
         if len(got) == 1 + len(missing):  # defensive: the client promises this
             return got
     except LLMError as exc:
@@ -264,7 +264,7 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *,
         return None
     try:
         got = embed.embed_sync("semantic-search", [query_text], space=cfg, client=_CLIENT,
-                               deadline=deadline)
+                               deadline=deadline, queries=1)
     except (LLMError, OSError):
         # Silent here: the meter has recorded the failed request, and the
         # caller answers in keyword mode.

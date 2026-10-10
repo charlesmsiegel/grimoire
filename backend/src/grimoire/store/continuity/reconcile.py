@@ -654,6 +654,22 @@ def _subjects(cid: str, current: pending.Current) -> tuple[list[similarity.Subje
     return out, whole
 
 
+def _keep_basis_space(sweep: Sweep, basis: dict) -> None:
+    """With no space because the role's model facts cannot be judged -- held,
+    mangled, or invalid embedding options (01h, `similarity.options_problem`)
+    -- the sweep keeps the basis's own space rather than re-salting every
+    identity hash with none: the space has not moved, only the read failed.
+    The sweep is a `failure` with no vectors, so nothing is reported
+    rescored and every basis entry, its space included, is carried forward
+    (`_rescored`, `_found_basis`) until the facts can be read again. No error
+    row: the Embedding card says why."""
+    problem = _soft(similarity.options_problem, "")
+    if not problem:
+        return
+    sweep.space, sweep.model = basis["embedding_space"], basis["embedding_model"]
+    sweep.embedding, sweep.embedding_error = "failure", f"options_{problem}"
+
+
 def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
              embed: bool = True, budget: EmbedBudget | None = None) -> Sweep:
     """One discovery pass over the campaign's ledgers. Read-only on the
@@ -675,6 +691,8 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
         sweep.continuity = "malformed"
         return sweep
     basis = candidates.read(cid)["basis"]
+    if space is None:
+        _keep_basis_space(sweep, basis)
     subjects, pools_whole = _subjects(cid, current)
     sweep.hashes = {s.ref: _identity_hash(sweep.space, s.text) for s in subjects}
     sweep.text_hashes = {s.ref: _text_hash(s.text) for s in subjects}

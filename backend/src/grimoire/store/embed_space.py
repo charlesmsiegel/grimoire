@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import zlib
 
+from .. import wire
 from . import config, llm_connections
 from . import inference_keys as keys
 from .inference import resolve as inference_resolve
@@ -50,11 +51,14 @@ def endpoint_of(got: inference_resolved.ResolvedInference | None) -> dict | None
     try:
         attempt = got.attempts[0]
         target = attempt.target
+        # `options` is the object the space was computed from (01h §3.3):
+        # `embed_sync` builds the request from it and checks the two agree.
         return {"model": attempt.model, "base_url": attempt.base_url,
                 "key": target.api_key, "space": got.space_id,
                 "provider": attempt.provider_id,
                 "provider_name": target.provider_name or attempt.provider_id,
-                "provider_kind": attempt.provider_kind, "target": target}
+                "provider_kind": attempt.provider_kind, "target": target,
+                "options": target.embed_options or wire.EmbedOptions()}
     except _OFF_ERRORS:
         return None
 
@@ -65,15 +69,19 @@ def endpoint(cfg: dict | None = None) -> dict | None:
 
     `{model, base_url, key, space}` -- what a request needs and the space its
     vectors are saved under -- plus `provider` (the connection id),
-    `provider_name` (its name, else its id), `provider_kind`, and `target`,
+    `provider_name` (its name, else its id), `provider_kind`, `target`,
     the attempt's `wire.Target`, which carries what the operation's ledger
-    row is stamped from. Built from `resolve.embedding`, the role's one
+    row is stamped from, and `options`, the model's stated embedding options
+    (`wire.EmbedOptions`, the defaults when none) that the space was computed
+    from and the request is built from. Built from `resolve.embedding`, the role's one
     reader: None exactly when that names no space -- no model, no provider, a
     provider that is gone, a provider file that could not be read (a busy
     store included: the lookup reads it as no provider, so embedding is off
     for that call rather than raising), one of a kind that serves no
     ``/embeddings`` route here, one with no base URL, or a model it is known
-    not to embed with. Callers treat all of them the same way -- the layer is
+    not to embed with, or a model whose facts file cannot be read or states
+    embedding options the validator refuses (01h: never the option-less
+    space in their place). Callers treat all of them the same way -- the layer is
     off -- so distinguishing them here would buy nothing. The store this reads
     may be hand-edited or half-synced, so it must not raise for any of them
     either.
@@ -97,20 +105,23 @@ def resolve(cfg: dict | None = None) -> dict | None:
     return {k: got[k] for k in ("model", "base_url", "key", "space")}
 
 
-def _space(cfg: dict, conn: dict, model: str, *, catalog: bool = True) -> str | None:
-    """The space connection record `conn` would embed `model` in, or None when
-    it would embed nothing -- no endpoint, or a model it is known not to embed
-    with -- for `moved_by`, whose `after` is a record not (yet) on disk. The
-    rule is `resolve.embedding`'s own (`resolve.embed_attempt`); `catalog`
-    False judges it without the cached catalog row (see there).
+def _space(cfg: dict, conn: dict, model: str, *,
+           catalog: bool = True) -> tuple[str | None, str]:
+    """`(space, options problem)`: the space connection record `conn` would
+    embed `model` in, or None when it would embed nothing -- no endpoint, a
+    model it is known not to embed with, or facts it cannot read (the
+    problem says which, `resolve.OPTIONS_*`) -- for `moved_by`, whose `after`
+    is a record not (yet) on disk. The rule is `resolve.embedding`'s own
+    (`resolve.embed_attempt`); `catalog` False judges it without the cached
+    catalog row (see there).
 
     Below format 2 an OpenRouter record embeds nothing: a legacy choice of
     one has always meant "off", and the planner maps it to no role
     (`legacy_plan.legacy_embeds`), so no edit of it moves anything."""
     if not keys.is_current(cfg) and conn.get("kind") == "openrouter":
-        return None
-    return inference_resolve.embed_attempt(str(conn["id"]), model, conn,
-                                           catalog=catalog).space_id
+        return None, ""
+    got = inference_resolve.embed_attempt(str(conn["id"]), model, conn, catalog=catalog)
+    return got.space_id, got.options_problem
 
 
 #: `problem`'s answer when none of its specific reasons applies.
@@ -175,7 +186,16 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
     embedded nothing before and does now -- a key on a keyless OpenRouter
     provider, an address that leaves a provider known not to embed, or a rev
     restamp that leaves a catalog `no` behind -- is a move: the library is
-    embedded from scratch. Never raises.
+    embedded from scratch.
+
+    A side whose facts cannot be judged -- the file held or mangled, or an
+    invalid `embedding` block (01h) -- names no space, and that is NOT read
+    as "embeds nothing": once the file is readable again the role would embed
+    in the new rev's space, which nobody was asked about. So an edit that
+    moves `rev` while either side has such a problem asks. A rev-neutral edit
+    (a name, billing, the sampler fields) cannot move the space -- the id, the
+    rev, the model and the facts file are the same on both sides -- and asks
+    nothing. Never raises.
     """
     try:
         # The role as STORED, not as the mapping judges it: below format 2
@@ -184,10 +204,13 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
         conn_id, model = inference_resolve.stored_embedding_role(cfg)
         if not model or not conn_id or conn_id != after.get("id"):
             return False
-        new = _space(cfg, after, model, catalog=after.get("rev") == before.get("rev"))
+        restamped = after.get("rev") != before.get("rev")
+        new, new_problem = _space(cfg, after, model, catalog=not restamped)
+        old, old_problem = _space(cfg, before, model)
+        if restamped and (new_problem or old_problem):
+            return True
         if new is None:
             return False
-        old = _space(cfg, before, model)
         return old is None or old != new
     except (OSError, KeyError, TypeError, ValueError):
         return False
@@ -196,15 +219,19 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
 def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
                 after: dict) -> bool:
     """Whether replacing `model`'s facts on `provider_id` (`before`, as
-    `facts.of` reads them) with `after` starts the Embedding role embedding:
-    the facts write a user makes that is confirmed first (spec 7.3, rule 1).
+    `facts.of` reads them) with `after` starts the Embedding role on a new
+    vector space that embeds: the facts write a user makes that is confirmed
+    first (spec 7.3, rule 1).
 
-    Facts never move the space itself (`space_of` is the provider, its rev
-    and the model), but they decide whether the role embeds at all: the
-    user's `embed: yes` over a catalog's `no` turns it on, and the library
-    is then embedded from scratch -- off to on is a move, as it is for
-    `moved_by`. Turning it off re-embeds nothing. False when the role does
-    not name this provider and model. Never raises."""
+    Facts move the space two ways. They decide whether the role embeds at
+    all -- the user's `embed: yes` over a catalog's `no` turns it on, and the
+    library is then embedded from scratch: off to on is a move, as it is for
+    `moved_by`. And the model's document-side embedding options are part of
+    the space itself (01h §5.1, `resolve.space_of`), so changing them --
+    moving back to none included -- is a move. A query-side-only change
+    (a query prefix alone) moves nothing, since no query is cached; turning
+    the role off re-embeds nothing. False when the role does not name this
+    provider and model. Never raises."""
     try:
         conn_id, role_model = inference_resolve.stored_embedding_role(cfg)
         if not role_model or conn_id != provider_id or role_model != model:
@@ -229,12 +256,28 @@ def config_moved(before: dict, after: dict) -> bool:
     `embeddings_model` pair moved by `PUT /config` on a store not yet at
     format 2. `moved_by`'s rule, for a change of the role's own keys rather
     than of the provider it names: off to on is a move, a different space is
-    a move, and switching it off re-embeds nothing. Never raises."""
-    new = resolve(after)
+    a move, and switching it off re-embeds nothing. A side whose facts
+    cannot be judged (a held or mangled facts file, an invalid `embedding`
+    block; 01h) names no space without embedding nothing, so the write asks:
+    it may land the role on a space nobody was asked about. Never raises."""
+    new_got, old_got = resolution(after), resolution(before)
+    if any(got is not None and got.embed_options_problem for got in (new_got, old_got)):
+        return True
+    new = endpoint_of(new_got)
     if new is None:
         return False
-    old = resolve(before)
+    old = endpoint_of(old_got)
     return old is None or old["space"] != new["space"]
+
+
+def options_problem(cfg: dict | None = None) -> str:
+    """Why the Embedding role names no space because of its model's facts
+    (`resolve.OPTIONS_HELD`, `OPTIONS_MANGLED`, `OPTIONS_INVALID`), or "" --
+    when it embeds, when it is off for another reason, and when reading the
+    role raised. What the continuity sweep reads to keep its basis rather
+    than re-salt it while the options cannot be read. Never raises."""
+    got = resolution(cfg)
+    return got.embed_options_problem if got is not None else ""
 
 
 def clip(text: str, max_bytes: int, tail: bool = False) -> str:

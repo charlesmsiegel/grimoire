@@ -348,6 +348,19 @@ facts GET flags both as `unreadable`, so the panel never offers that save;
 reads elsewhere stay fail-soft, so a mangled file prices nothing and refuses
 no turn.
 
+One reader is strict on purpose: the Embedding role, because a model's
+`embedding` options are part of the vector space its cache is keyed by. A
+held or mangled facts file, or an options block the validator refuses,
+switches embedding off for that read (recall and search fall back to
+keywords, and a continuity sweep keeps the basis it already had) instead of
+quietly embedding under the option-less space. Builds disagree here in one
+known way: a build from before options ignores the block and computes the
+option-less space, so two devices on different builds that take turns
+sweeping continuity re-salt its basis each time and every record is scored
+again. Each build's requests still match its own space, so the cost is
+repeated work, never a vector filed under the wrong space; it stops once
+every device is upgraded.
+
 ### Reads notice external writes
 
 Every request re-reads from `paths.home()`, and `store/statcache.py` keys its

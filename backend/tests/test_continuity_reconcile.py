@@ -966,7 +966,8 @@ class _Refusing(FakeEmbeddings):
         super().__init__()
         self.poison = poison
 
-    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         self.calls.append(list(texts))
         if self.poison in texts:
             raise embeddings.EmbeddingsError("bad_response", "refused")
@@ -1800,3 +1801,94 @@ def test_reasked_keeps_a_settled_or_set_aside_answer():
     assert reconcile._reasked(pair)["proposal"] is None
     for kept in (None, _proposal("distinct", reason="")):
         assert reconcile._reasked({**pair, "proposal": kept})["proposal"] == kept
+
+
+# ------------------------------------------------- embedding options (01h-S2)
+
+NOMIC_BLOCK = {"input": "prefix", "query_prefix": "search_query: ",
+               "document_prefix": "search_document: "}
+
+
+def _embedding_conn():
+    return embed_space.endpoint()["provider"]
+
+
+def test_no_block_keeps_the_sweeps_basis_byte_identical(cid, s0):
+    """No options stated: the sweep's space, and every identity hash salted
+    with it, are today's strings, restated here rather than asked for."""
+    _configure()
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    conn = _embedding_conn()
+    rev = llm_connections.read_connection_raw(conn)["rev"]
+    sweep = _sweep(cid)
+    assert sweep.space == f"{conn}\0{rev}\0embed-1"
+    texts = {s.ref: s.text for s in similarity.pool(cid, "thread")}
+    for ref, text in texts.items():
+        assert sweep.hashes[ref] == hashlib.sha256(
+            f"{sweep.space}\0{text}".encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def test_stated_options_salt_the_sweep_with_the_options_space(cid, s0):
+    from grimoire.store.inference import facts
+
+    _configure()
+    _ledger(cid, s0)
+    facts.state(_embedding_conn(), "embed-1", embedding=NOMIC_BLOCK)
+    assert _sweep(cid).space.endswith("\0embopt1:b61a0b1188d1b0bd3a7cf05b26a81c2a")
+
+
+def _hold_facts(monkeypatch, conn):
+    from pathlib import Path
+
+    path = llm_connections.facts_path(conn)
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == path:
+            raise OSError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+
+
+@pytest.mark.parametrize("problem", ["held", "invalid"])
+def test_an_options_problem_carries_the_old_basis_forward(cid, s0, monkeypatch, problem):
+    """While the role's facts cannot be judged it names no space -- and the
+    sweep neither re-salts its basis with none nor persists the option-less
+    space: the stored basis, its space included, is carried forward whole."""
+    from grimoire.store.inference import facts
+
+    _configure()
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    _tithe(cid, s0)
+    conn = _embedding_conn()
+    facts.state(conn, "embed-1", embedding=NOMIC_BLOCK)
+    double = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    first = _embedded(cid, stamp="00000000000000000010-a")
+    assert first.embedding == "configured"
+    reconcile.persist_found(cid, first)
+    before = candidates.read(cid)["basis"]
+    assert before["embedding_space"].endswith("\0embopt1:b61a0b1188d1b0bd3a7cf05b26a81c2a")
+    sent = len(double.calls)
+
+    if problem == "held":
+        _hold_facts(monkeypatch, conn)
+    else:
+        path = llm_connections.facts_path(conn)
+        path.write_text(json.dumps({"embed-1": {"embedding": {"input": "both"}}}),
+                        encoding="utf-8")
+    assert similarity.available() is None
+    plot.set_movement(cid, "the-saltmarch-tithe", SALTMARCH_TITHE["title"],
+                      "open", "The tithe was paid in salt.", s0)
+    sweep = _embedded(cid, stamp="00000000000000000020-b")
+    assert (sweep.embedding, sweep.embedding_error) == ("failure", f"options_{problem}")
+    assert sweep.space == before["embedding_space"]
+    reconcile.persist_found(cid, sweep)
+    after = candidates.read(cid)["basis"]
+    assert after["embedding_space"] == before["embedding_space"]
+    assert after["embedding_model"] == before["embedding_model"]
+    assert after["identity_hashes"] == before["identity_hashes"]
+    assert len(double.calls) == sent

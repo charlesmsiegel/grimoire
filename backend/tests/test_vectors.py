@@ -172,3 +172,23 @@ def test_duplicate_texts_in_one_load_are_looked_up_once(store):
     vectors.save("m", "t", [1.0, 0.0])
     got = vectors.load("m", ["t", "t"])
     assert list(got) == ["t"]
+
+
+# ---- the key (01h-S2) ----
+
+SPACE = "saltmarch-vectors\0r1\0embed-1"
+
+
+def test_the_key_is_todays_digest():
+    """Pinned to the digest the code wrote before embedding options existed:
+    a store with no options must read every vector it already has."""
+    assert vectors._path(SPACE, "Mara crossed the Saltmarch at dusk").name == (
+        "1375582ed7a59d40cac77ce4142344db6fa3acd98385ef8961e06e9dcb82b77d.vec")
+
+
+def test_a_nul_text_keys_as_its_nul_free_form():
+    bare = "Mara crossed the Saltmarch at dusk"
+    nul = "Mara crossed the Salt\0march at dusk"
+    assert vectors._path(SPACE, nul) == vectors._path(SPACE, bare)
+    vectors.save(SPACE, nul, [1.0, 0.0])
+    assert vectors.load(SPACE, [bare]) == {bare: [1.0, 0.0]}

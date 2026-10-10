@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from grimoire import wire
 from grimoire.store import config, embed_space, llm_connections, routing
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import cascade, facts
@@ -162,7 +163,8 @@ def test_endpoint_names_the_provider_and_resolve_keeps_four_keys():
     got = embed_space.endpoint()
     assert got is not None
     assert set(got) == {"model", "base_url", "key", "space", "provider",
-                        "provider_name", "provider_kind", "target"}
+                        "provider_name", "provider_kind", "target", "options"}
+    assert got["options"] == wire.EmbedOptions()      # no block: the defaults (01h)
     assert got["target"].provider_id == conn
     assert got["target"].account.operation == "embed"
     assert (got["provider"], got["provider_name"], got["provider_kind"]) == (
