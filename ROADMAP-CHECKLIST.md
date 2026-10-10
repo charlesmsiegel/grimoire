@@ -399,7 +399,7 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01c-S1 | The sampler, the record and replay | M | 1 | 01d-S2 (S), 01e-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01c-S1 | The sampler, the record and replay | M | 1 | 01d-S2 (S), 01e-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01c-S2 | Native-first in the decide chain (mechanism, all tasks off) | M | 1 | 01d-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01c-S3 | The recorded evidence and the distribution grader | S | 4 | 01a-S3, 01a-S4, 01c-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
