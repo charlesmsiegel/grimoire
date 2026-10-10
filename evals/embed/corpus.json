@@ -1,0 +1,837 @@
+{
+ "version": 1,
+ "documents": [
+  {
+   "id": "recall-d01p",
+   "shape": "recall",
+   "text": "Each evening a dock keeper kindles every lantern so returning fishing vessels find shelter."
+  },
+  {
+   "id": "recall-d01x",
+   "shape": "recall",
+   "text": "Mara sold her lamps at the harbour market and never came back for the boats."
+  },
+  {
+   "id": "recall-d02p",
+   "shape": "recall",
+   "text": "A soft nursery song passed down from grandmothers soothes infants toward sleep."
+  },
+  {
+   "id": "recall-d02x",
+   "shape": "recall",
+   "text": "Winifred broke the cradle years ago; nobody hums near it now."
+  },
+  {
+   "id": "recall-d03p",
+   "shape": "recall",
+   "text": "A sworn guardian will shield any youngster from beasts, sword raised."
+  },
+  {
+   "id": "recall-d03x",
+   "shape": "recall",
+   "text": "Seraphine keeps the wolves' pelts above the hearth, and her blade rusts beside them."
+  },
+  {
+   "id": "recall-d04p",
+   "shape": "recall",
+   "text": "When spring tides swamp lowland causeways, wagons sink axle-deep in sludge."
+  },
+  {
+   "id": "recall-d04x",
+   "shape": "recall",
+   "text": "The Saltmarch road is dry this year; the cart was sold for mud bricks."
+  },
+  {
+   "id": "recall-d05p",
+   "shape": "recall",
+   "text": "Careful savers stash wealth beneath planks after tallying it again."
+  },
+  {
+   "id": "recall-d05x",
+   "shape": "recall",
+   "text": "Mara found a purse of coins on the road and gave it to the Realm's tax collector."
+  },
+  {
+   "id": "recall-d06p",
+   "shape": "recall",
+   "text": "Old navigators judged departure by watching constellations wheel overhead."
+  },
+  {
+   "id": "recall-d06x",
+   "shape": "recall",
+   "text": "Winifred named three ships after stars, though none ever sailed."
+  },
+  {
+   "id": "recall-d07p",
+   "shape": "recall",
+   "text": "Field healers bind injuries of fighting men through long dim nights."
+  },
+  {
+   "id": "recall-d07x",
+   "shape": "recall",
+   "text": "Seraphine was the soldier who lost an arm; the candlelight story is hers."
+  },
+  {
+   "id": "recall-d08p",
+   "shape": "recall",
+   "text": "Towers sound alarms whenever flames threaten stored grain."
+  },
+  {
+   "id": "recall-d08x",
+   "shape": "recall",
+   "text": "The Realm melted its bells for coin; the granary stands quiet."
+  },
+  {
+   "id": "recall-d09p",
+   "shape": "recall",
+   "text": "Boatmen accept haggled fares to carry travellers over dark waters after sunset."
+  },
+  {
+   "id": "recall-d09x",
+   "shape": "recall",
+   "text": "Mara is the ferryman's daughter and has never needed to cross the river."
+  },
+  {
+   "id": "recall-d10p",
+   "shape": "recall",
+   "text": "Mourners set fragrant herbs beside burial mounds of lost siblings."
+  },
+  {
+   "id": "recall-d10x",
+   "shape": "recall",
+   "text": "Winifred's brothers dug the graves; the rosemary grew there wild."
+  },
+  {
+   "id": "search-d01p",
+   "shape": "search",
+   "text": "The marsh country answers to a council of three elected wardens."
+  },
+  {
+   "id": "search-d01x",
+   "shape": "search",
+   "text": "Who rules the Saltmarch tavern is a running joke among its regulars."
+  },
+  {
+   "id": "search-d02p",
+   "shape": "search",
+   "text": "The knight keeps a narrow cot in the gatehouse loft."
+  },
+  {
+   "id": "search-d02x",
+   "shape": "search",
+   "text": "Seraphine cannot sleep where the bells ring; ask her where."
+  },
+  {
+   "id": "search-d03p",
+   "shape": "search",
+   "text": "The merchant deals mostly in dried fish, rope and lamp oil."
+  },
+  {
+   "id": "search-d03x",
+   "shape": "search",
+   "text": "Mara's trade guild expelled her; what she does now is unclear."
+  },
+  {
+   "id": "search-d04p",
+   "shape": "search",
+   "text": "The midwife has seen some seventy winters."
+  },
+  {
+   "id": "search-d04x",
+   "shape": "search",
+   "text": "Winifred is old enough to remember the Realm before its walls."
+  },
+  {
+   "id": "search-d05p",
+   "shape": "search",
+   "text": "Plague in neighbouring provinces made the crown shut every frontier."
+  },
+  {
+   "id": "search-d05x",
+   "shape": "search",
+   "text": "The Realm borders the sea, and closed ports there are common."
+  },
+  {
+   "id": "search-d06p",
+   "shape": "search",
+   "text": "Beneath the marsh hall lie deeds, seals and a reliquary of bone."
+  },
+  {
+   "id": "search-d06x",
+   "shape": "search",
+   "text": "The Saltmarch vault keeper is kept busy by visitors."
+  },
+  {
+   "id": "search-d07p",
+   "shape": "search",
+   "text": "An exiled duelist trained the knight in sabre forms during her youth."
+  },
+  {
+   "id": "search-d07x",
+   "shape": "search",
+   "text": "Seraphine taught the miller's sons to fight, badly."
+  },
+  {
+   "id": "search-d08p",
+   "shape": "search",
+   "text": "Villagers celebrate gathering crops on the first full moon of autumn."
+  },
+  {
+   "id": "search-d08x",
+   "shape": "search",
+   "text": "The harvest festival committee meets weekly to argue about the festival."
+  },
+  {
+   "id": "search-d09p",
+   "shape": "search",
+   "text": "Her vessel rides at mooring in the northern cove beyond the reef."
+  },
+  {
+   "id": "search-d09x",
+   "shape": "search",
+   "text": "Mara's ship was never anchored anywhere for long."
+  },
+  {
+   "id": "search-d10p",
+   "shape": "search",
+   "text": "The midwife once pocketed a silver christening spoon."
+  },
+  {
+   "id": "search-d10x",
+   "shape": "search",
+   "text": "Winifred did not steal; she is accused of it by everyone."
+  },
+  {
+   "id": "identity-d01p",
+   "shape": "identity",
+   "text": "Winifred owes the Saltmarch guild forty silver."
+  },
+  {
+   "id": "identity-d01x",
+   "shape": "identity",
+   "text": "The old ferrywoman paid the merchants' league every piece of coin she promised."
+  },
+  {
+   "id": "identity-d02p",
+   "shape": "identity",
+   "text": "Seraphine vowed she would not carry a sword inside the Realm's city."
+  },
+  {
+   "id": "identity-d02x",
+   "shape": "identity",
+   "text": "The knight swore to bear arms for the capital whenever it called."
+  },
+  {
+   "id": "identity-d03p",
+   "shape": "identity",
+   "text": "Mara found a secret vault beneath the shrine."
+  },
+  {
+   "id": "identity-d03x",
+   "shape": "identity",
+   "text": "A fisher's daughter was locked in the hidden cellar under the chapel."
+  },
+  {
+   "id": "identity-d04p",
+   "shape": "identity",
+   "text": "Saltmarch wardens banned turf fires once crops are gathered."
+  },
+  {
+   "id": "identity-d04x",
+   "shape": "identity",
+   "text": "The marsh council burns its peat at harvest by old custom."
+  },
+  {
+   "id": "identity-d05p",
+   "shape": "identity",
+   "text": "Winifred hides a pilfered utensil cloth-bound under where she sleeps."
+  },
+  {
+   "id": "identity-d05x",
+   "shape": "identity",
+   "text": "The midwife returned the stolen spoon wrapped in linen to the chapel."
+  },
+  {
+   "id": "identity-d06p",
+   "shape": "identity",
+   "text": "Seraphine's mount was crippled crossing the high road toward the cold country."
+  },
+  {
+   "id": "identity-d06x",
+   "shape": "identity",
+   "text": "The knight bought a horse on the northern pass that never went lame."
+  },
+  {
+   "id": "identity-d07p",
+   "shape": "identity",
+   "text": "A pair of merchants perished as the raised track gave way under water."
+  },
+  {
+   "id": "identity-d07x",
+   "shape": "identity",
+   "text": "Two traders built the causeway, and it collapsed long after they died."
+  },
+  {
+   "id": "identity-d08p",
+   "shape": "identity",
+   "text": "The Realm gave the rush isle to Mara's grandfather."
+  },
+  {
+   "id": "identity-d08x",
+   "shape": "identity",
+   "text": "The crown took the island of reeds back from the eldest ferryman."
+  },
+  {
+   "id": "identity-d09p",
+   "shape": "identity",
+   "text": "Contraband runners rely on the beacon's flashes when landing goods."
+  },
+  {
+   "id": "identity-d09x",
+   "shape": "identity",
+   "text": "Smugglers burned the lighthouse so its signal could never bring cargo ashore."
+  },
+  {
+   "id": "identity-d10p",
+   "shape": "identity",
+   "text": "Seraphine would not tend the nobleman's heir."
+  },
+  {
+   "id": "identity-d10x",
+   "shape": "identity",
+   "text": "The healer treated the duke's son and was paid in land."
+  },
+  {
+   "id": "filler-01",
+   "shape": "filler",
+   "text": "Salt is boiled from seawater in shallow iron pans along the eastern flats."
+  },
+  {
+   "id": "filler-02",
+   "shape": "filler",
+   "text": "The chapel roof leaks over the third pew whenever wind comes from the west."
+  },
+  {
+   "id": "filler-03",
+   "shape": "filler",
+   "text": "Goats graze the dunes; their milk makes a sharp crumbly cheese."
+  },
+  {
+   "id": "filler-04",
+   "shape": "filler",
+   "text": "A wooden bridge of nine spans links the two halves of the market town."
+  },
+  {
+   "id": "filler-05",
+   "shape": "filler",
+   "text": "Copper pots hang from hooks in every tavern kitchen."
+  },
+  {
+   "id": "filler-06",
+   "shape": "filler",
+   "text": "The weavers' street smells of dye vats and wet wool."
+  },
+  {
+   "id": "filler-07",
+   "shape": "filler",
+   "text": "Owls nest in the ruined mill and hunt the reed beds at dusk."
+  },
+  {
+   "id": "filler-08",
+   "shape": "filler",
+   "text": "Tolls on the king's highway are paid in grain, not money."
+  },
+  {
+   "id": "filler-09",
+   "shape": "filler",
+   "text": "A blind cartographer sells maps that are mostly guesswork."
+  },
+  {
+   "id": "filler-10",
+   "shape": "filler",
+   "text": "Children skip stones across the millpond on feast days."
+  },
+  {
+   "id": "filler-11",
+   "shape": "filler",
+   "text": "The archive's ledgers are bound in sealskin against damp."
+  },
+  {
+   "id": "filler-12",
+   "shape": "filler",
+   "text": "Pilgrims leave ribbons tied to the hawthorn at the crossroads."
+  },
+  {
+   "id": "filler-13",
+   "shape": "filler",
+   "text": "Eel traps are checked at dawn by the reed cutters."
+  },
+  {
+   "id": "filler-14",
+   "shape": "filler",
+   "text": "The apothecary grinds willow bark for fevers and aches."
+  },
+  {
+   "id": "filler-15",
+   "shape": "filler",
+   "text": "A clockmaker repairs the tower clock every second year."
+  },
+  {
+   "id": "filler-16",
+   "shape": "filler",
+   "text": "Barrels of pickled herring line the cellars through winter."
+  },
+  {
+   "id": "filler-17",
+   "shape": "filler",
+   "text": "The northern quarry yields a pale stone that darkens in rain."
+  },
+  {
+   "id": "filler-18",
+   "shape": "filler",
+   "text": "Wandering players perform on carts drawn into the square."
+  },
+  {
+   "id": "filler-19",
+   "shape": "filler",
+   "text": "Beekeepers smoke the hives before taking the summer comb."
+  },
+  {
+   "id": "filler-20",
+   "shape": "filler",
+   "text": "A ferry chain stretches across the slow brown estuary."
+  },
+  {
+   "id": "filler-21",
+   "shape": "filler",
+   "text": "Linen is bleached by laying it out on the grass in sunlight."
+  },
+  {
+   "id": "filler-22",
+   "shape": "filler",
+   "text": "The bakery's ovens are fired with driftwood gathered on the shore."
+  },
+  {
+   "id": "filler-23",
+   "shape": "filler",
+   "text": "Shepherds count their flocks with notched sticks."
+  },
+  {
+   "id": "filler-24",
+   "shape": "filler",
+   "text": "The salt road was paved in flat stones by forced labour."
+  },
+  {
+   "id": "filler-25",
+   "shape": "filler",
+   "text": "Gulls steal from the fish stalls when the vendors look away."
+  },
+  {
+   "id": "filler-26",
+   "shape": "filler",
+   "text": "A cooper bends oak staves with steam and iron hoops."
+  },
+  {
+   "id": "filler-27",
+   "shape": "filler",
+   "text": "Rain barrels stand at the corner of every thatched cottage."
+  },
+  {
+   "id": "filler-28",
+   "shape": "filler",
+   "text": "The magistrate hears petitions on the first day of each month."
+  },
+  {
+   "id": "filler-29",
+   "shape": "filler",
+   "text": "Rope walks stretch long sheds where hemp is twisted into cable."
+  },
+  {
+   "id": "filler-30",
+   "shape": "filler",
+   "text": "Candlemakers render tallow in great kettles behind the tannery."
+  },
+  {
+   "id": "filler-31",
+   "shape": "filler",
+   "text": "A hermit lives in a cave above the waterfall and speaks to no one."
+  },
+  {
+   "id": "filler-32",
+   "shape": "filler",
+   "text": "Ploughs are drawn by oxen through the heavy clay of the valley."
+  },
+  {
+   "id": "filler-33",
+   "shape": "filler",
+   "text": "The library lends books only to those who can recite a psalm."
+  },
+  {
+   "id": "filler-34",
+   "shape": "filler",
+   "text": "Storm shutters are painted blue to ward off misfortune."
+  },
+  {
+   "id": "filler-35",
+   "shape": "filler",
+   "text": "A tinker repairs kettles and sharpens knives for a copper each."
+  },
+  {
+   "id": "filler-36",
+   "shape": "filler",
+   "text": "Wild ponies roam the heath and are rounded up each autumn."
+  },
+  {
+   "id": "filler-37",
+   "shape": "filler",
+   "text": "The glassblower's furnace never cools, even on holy days."
+  },
+  {
+   "id": "filler-38",
+   "shape": "filler",
+   "text": "Fishermen mend nets on the quay while gossiping about weather."
+  },
+  {
+   "id": "filler-39",
+   "shape": "filler",
+   "text": "A stone circle on the hill is said to hum at midsummer."
+  },
+  {
+   "id": "filler-40",
+   "shape": "filler",
+   "text": "Charcoal burners tend smoking mounds deep in the beech woods."
+  }
+ ],
+ "queries": [
+  {
+   "id": "recall-q01",
+   "shape": "recall",
+   "text": "Mara lights the lamps along the harbour before the boats come in.",
+   "relevant": [
+    "recall-d01p"
+   ],
+   "decoys": [
+    "recall-d01x"
+   ]
+  },
+  {
+   "id": "recall-q02",
+   "shape": "recall",
+   "text": "Winifred hums an old lullaby while she rocks the cradle.",
+   "relevant": [
+    "recall-d02p"
+   ],
+   "decoys": [
+    "recall-d02x"
+   ]
+  },
+  {
+   "id": "recall-q03",
+   "shape": "recall",
+   "text": "Seraphine draws her blade and steps between the child and the wolves.",
+   "relevant": [
+    "recall-d03p"
+   ],
+   "decoys": [
+    "recall-d03x"
+   ]
+  },
+  {
+   "id": "recall-q04",
+   "shape": "recall",
+   "text": "The Saltmarch flood rises over the road and the cart is stuck in mud.",
+   "relevant": [
+    "recall-d04p"
+   ],
+   "decoys": [
+    "recall-d04x"
+   ]
+  },
+  {
+   "id": "recall-q05",
+   "shape": "recall",
+   "text": "Mara counts the coins twice and hides the purse under a floorboard.",
+   "relevant": [
+    "recall-d05p"
+   ],
+   "decoys": [
+    "recall-d05x"
+   ]
+  },
+  {
+   "id": "recall-q06",
+   "shape": "recall",
+   "text": "Winifred reads the stars to decide when the ships should sail.",
+   "relevant": [
+    "recall-d06p"
+   ],
+   "decoys": [
+    "recall-d06x"
+   ]
+  },
+  {
+   "id": "recall-q07",
+   "shape": "recall",
+   "text": "Seraphine bandages the wounded soldier's arm by candlelight.",
+   "relevant": [
+    "recall-d07p"
+   ],
+   "decoys": [
+    "recall-d07x"
+   ]
+  },
+  {
+   "id": "recall-q08",
+   "shape": "recall",
+   "text": "The bells of the Realm ring out to warn of fire in the granary.",
+   "relevant": [
+    "recall-d08p"
+   ],
+   "decoys": [
+    "recall-d08x"
+   ]
+  },
+  {
+   "id": "recall-q09",
+   "shape": "recall",
+   "text": "Mara bargains with the ferryman to cross the river at night.",
+   "relevant": [
+    "recall-d09p"
+   ],
+   "decoys": [
+    "recall-d09x"
+   ]
+  },
+  {
+   "id": "recall-q10",
+   "shape": "recall",
+   "text": "Winifred plants rosemary at the graves of her brothers.",
+   "relevant": [
+    "recall-d10p"
+   ],
+   "decoys": [
+    "recall-d10x"
+   ]
+  },
+  {
+   "id": "search-q01",
+   "shape": "search",
+   "text": "Who rules the Saltmarch?",
+   "relevant": [
+    "search-d01p"
+   ],
+   "decoys": [
+    "search-d01x"
+   ]
+  },
+  {
+   "id": "search-q02",
+   "shape": "search",
+   "text": "Where does Seraphine sleep?",
+   "relevant": [
+    "search-d02p"
+   ],
+   "decoys": [
+    "search-d02x"
+   ]
+  },
+  {
+   "id": "search-q03",
+   "shape": "search",
+   "text": "What does Mara trade?",
+   "relevant": [
+    "search-d03p"
+   ],
+   "decoys": [
+    "search-d03x"
+   ]
+  },
+  {
+   "id": "search-q04",
+   "shape": "search",
+   "text": "How old is Winifred?",
+   "relevant": [
+    "search-d04p"
+   ],
+   "decoys": [
+    "search-d04x"
+   ]
+  },
+  {
+   "id": "search-q05",
+   "shape": "search",
+   "text": "Why did the Realm close its borders?",
+   "relevant": [
+    "search-d05p"
+   ],
+   "decoys": [
+    "search-d05x"
+   ]
+  },
+  {
+   "id": "search-q06",
+   "shape": "search",
+   "text": "What is kept in the Saltmarch vault?",
+   "relevant": [
+    "search-d06p"
+   ],
+   "decoys": [
+    "search-d06x"
+   ]
+  },
+  {
+   "id": "search-q07",
+   "shape": "search",
+   "text": "Who taught Seraphine to fight?",
+   "relevant": [
+    "search-d07p"
+   ],
+   "decoys": [
+    "search-d07x"
+   ]
+  },
+  {
+   "id": "search-q08",
+   "shape": "search",
+   "text": "When is the harvest festival?",
+   "relevant": [
+    "search-d08p"
+   ],
+   "decoys": [
+    "search-d08x"
+   ]
+  },
+  {
+   "id": "search-q09",
+   "shape": "search",
+   "text": "Where is Mara's ship anchored?",
+   "relevant": [
+    "search-d09p"
+   ],
+   "decoys": [
+    "search-d09x"
+   ]
+  },
+  {
+   "id": "search-q10",
+   "shape": "search",
+   "text": "What did Winifred steal?",
+   "relevant": [
+    "search-d10p"
+   ],
+   "decoys": [
+    "search-d10x"
+   ]
+  },
+  {
+   "id": "identity-q01",
+   "shape": "identity",
+   "text": "The old ferrywoman is in arrears to the merchants' league by two score pieces of coin.",
+   "relevant": [
+    "identity-d01p"
+   ],
+   "decoys": [
+    "identity-d01x"
+   ]
+  },
+  {
+   "id": "identity-q02",
+   "shape": "identity",
+   "text": "The knight swore never again to bear arms in the capital.",
+   "relevant": [
+    "identity-d02p"
+   ],
+   "decoys": [
+    "identity-d02x"
+   ]
+  },
+  {
+   "id": "identity-q03",
+   "shape": "identity",
+   "text": "A fisher's daughter discovered the hidden cellar under the chapel.",
+   "relevant": [
+    "identity-d03p"
+   ],
+   "decoys": [
+    "identity-d03x"
+   ]
+  },
+  {
+   "id": "identity-q04",
+   "shape": "identity",
+   "text": "The marsh council forbade any burning of peat after harvest.",
+   "relevant": [
+    "identity-d04p"
+   ],
+   "decoys": [
+    "identity-d04x"
+   ]
+  },
+  {
+   "id": "identity-q05",
+   "shape": "identity",
+   "text": "The midwife keeps the stolen spoon wrapped in linen beneath her bed.",
+   "relevant": [
+    "identity-d05p"
+   ],
+   "decoys": [
+    "identity-d05x"
+   ]
+  },
+  {
+   "id": "identity-q06",
+   "shape": "identity",
+   "text": "The knight's horse went lame on the northern pass.",
+   "relevant": [
+    "identity-d06p"
+   ],
+   "decoys": [
+    "identity-d06x"
+   ]
+  },
+  {
+   "id": "identity-q07",
+   "shape": "identity",
+   "text": "Two traders were drowned when the causeway collapsed.",
+   "relevant": [
+    "identity-d07p"
+   ],
+   "decoys": [
+    "identity-d07x"
+   ]
+  },
+  {
+   "id": "identity-q08",
+   "shape": "identity",
+   "text": "The crown granted the island of reeds to the eldest ferryman.",
+   "relevant": [
+    "identity-d08p"
+   ],
+   "decoys": [
+    "identity-d08x"
+   ]
+  },
+  {
+   "id": "identity-q09",
+   "shape": "identity",
+   "text": "Smugglers use the lighthouse signal to bring cargo ashore.",
+   "relevant": [
+    "identity-d09p"
+   ],
+   "decoys": [
+    "identity-d09x"
+   ]
+  },
+  {
+   "id": "identity-q10",
+   "shape": "identity",
+   "text": "The healer refused to treat the duke's son.",
+   "relevant": [
+    "identity-d10p"
+   ],
+   "decoys": [
+    "identity-d10x"
+   ]
+  }
+ ]
+}
