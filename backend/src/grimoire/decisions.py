@@ -1226,7 +1226,7 @@ class Lift:
     parts: tuple[tuple[str, tuple[str, ...]], ...]
 
 
-def _lowered(q: Question) -> tuple[Question, ...]:
+def _native_questions(q: Question) -> tuple[Question, ...]:
     """The questions a decisions endpoint is asked in `q`'s place. A lowered
     predicate's id is `f"{q.id}#{index}"`. A rank with no `pointwise` is
     left as itself: `native_gap` refuses it before anything is built or
@@ -1318,7 +1318,7 @@ def native_form(item: Item) -> tuple[Item, Lift]:
     alone. An item
     of the three plain kinds comes back as itself, so its body is the one it
     always was."""
-    parts = tuple((q, _lowered(q)) for q in item.questions)
+    parts = tuple((q, _native_questions(q)) for q in item.questions)
     if all(low == (q,) for q, low in parts):
         return item, Lift(tuple((q.id, (q.id,)) for q in item.questions))
     return (Item(item.context, tuple(low for _, lows in parts for low in lows)),

@@ -134,7 +134,7 @@ Files: `decisions.py`, `openrouter.py`, `openai_compatible.py`, templates,
 
 Files: `decisions.py`, tests, evals, 01's Appendix B.
 
-1. `_lowered`: a rank with `pointwise` becomes `Predicate(f"{id}#{n}",
+1. `_native_questions`: a rank with `pointwise` becomes `Predicate(f"{id}#{n}",
    f"{pointwise}\n\nCandidate {opt.id}: {opt.description}")`. A selection
    becomes the same per option, worded by `NATIVE_SELECT_TEXT`.
 2. `_lift_rank` and `_lift_select`, under §4.3 and §6.1, reading only
