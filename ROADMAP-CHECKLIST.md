@@ -460,7 +460,7 @@ alone. This table is generated: after a spec's slices change, run
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 01h-S1 | No embedding on the event loop | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01h-S2 | Options in the space identity, the `queries` split and prefix mode | L | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S2 | Options in the space identity, the `queries` split and prefix mode | L | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01h-S3 | Request-field input type and requested dimensions | M | 2 | 01h-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01h-S4 | Options in the UI | M | 3 | 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01h-S5 | Native async embed | M | 3 | 01g-S3 (S), 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
