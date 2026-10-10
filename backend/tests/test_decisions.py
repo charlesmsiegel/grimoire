@@ -645,7 +645,10 @@ def test_constants():
 
 
 def test_decisions_is_a_leaf():
-    assert _sibling_imports("decisions") == set()
+    """Nothing from the package but `schemas`, itself a stdlib-only leaf
+    (`test_schemas.py`): the one portable-schema rule (01f-C3)."""
+    assert _sibling_imports("decisions") == {"schemas"}
+    assert _sibling_imports("schemas") == set()
 
 
 # --- native: reserved none, option limit, string budgets ---------------------

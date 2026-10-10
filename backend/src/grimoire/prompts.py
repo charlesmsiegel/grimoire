@@ -13,6 +13,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from . import schemas
+
 DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "templates"  # paths-ok: DEFAULT_TEMPLATES_DIR only; GRIMOIRE_TEMPLATES overrides it on Android
 
 
@@ -29,8 +31,13 @@ def templates_dir() -> Path:
 
 @functools.lru_cache(maxsize=1)
 def _env():
-    return Environment(loader=FileSystemLoader(str(templates_dir())),
-                       undefined=StrictUndefined)
+    env = Environment(loader=FileSystemLoader(str(templates_dir())),
+                      undefined=StrictUndefined)
+    # The one prompt spelling of a `generate` schema (01f-C3): the same
+    # function `inference.generate` checks the prompt for, so a template and
+    # the check cannot drift. `decide/system.j2` keeps `tojson`.
+    env.filters["schema_json"] = schemas.render
+    return env
 
 
 def render(_template: str, **vars) -> str:

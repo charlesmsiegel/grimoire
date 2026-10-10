@@ -15,8 +15,9 @@ provider's report becomes an `Answer` (`native_answer`) and a reply an
 the capture's record of a call (`outcome`) and the structured rendering of a
 native result (`render`).
 
-It is a gateway leaf on purpose, and imports nothing from the package (spec
-§7.4, ruling 15): the operation itself is `grimoire.inference`, and slice H's
+It is a gateway leaf on purpose, and imports nothing from the package but
+`schemas`, the portable-schema leaf (spec §7.4, ruling 15; 01f-C3): the
+operation itself is `grimoire.inference`, and slice H's
 native adapters are gateway modules that must normalise into these types
 without reaching the store.
 
@@ -33,9 +34,10 @@ Three rules the rest of the module follows:
   mode and Anthropic's `output_config.format` accept different subsets of JSON
   Schema, so a batch schema uses only `type` (object, string, boolean,
   integer, null), `enum`, `anyOf`, `required`, `properties` and
-  `additionalProperties: false`. Anthropic refuses numeric bounds, so a score
-  is an integer `enum`; a nullable choice is `anyOf` with a null branch, never
-  a type array.
+  `additionalProperties: false` -- inside `schemas.check`'s portable subset,
+  which a test holds. Anthropic refuses numeric bounds, so a score is an
+  integer `enum`; a nullable choice is `anyOf` with a null branch, never a
+  type array.
 - **The parser never raises.** It answers every item it was handed, so one
   unreadable reply costs the answers it held and nothing more.
 """
@@ -49,6 +51,8 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
+
+from . import schemas
 
 log = logging.getLogger(__name__)
 
@@ -100,37 +104,19 @@ MIN_LEVELS, MAX_LEVELS = 2, 10
 #: never against a measured library.
 MAX_ITEMS_PER_CALL = 8
 
-#: Enum values one structured call's schema may hold, summed over every enum
-#: in it (a choice's options, a score's levels). OpenAI's strict mode documents
-#: "up to 1000 enum values across all enum properties" (Structured Outputs,
-#: "Supported schemas", checked 2026-10-08), and Anthropic documents no lower
-#: one, so a batch is chunked under this as well as under
-#: `MAX_ITEMS_PER_CALL`, and an item that alone exceeds it is refused.
-MAX_ENUM_VALUES = 1000
-
-#: Strict mode's string budgets, from the same page, checked 2026-10-08: "For a
-#: single enum property with string values, the total string length of all
-#: enum values cannot exceed 15,000 characters when there are more than 250
-#: enum values", and "the total string length of all property names,
-#: definition names, enum values, and const values cannot exceed 120,000
-#: characters". The first is per choice (`validate`); the second is per schema,
-#: so `chunks` closes a chunk before it and `validate` refuses an item that
-#: alone exceeds it. A batch schema has no definitions and no consts, so its
-#: count is property names and enum strings (`schema_chars`). Enforced
-#: whatever the backend, because the chain can fall to a structured fallback
-#: (ruling 14).
-MAX_ENUM_STRING_CHARS = 15_000
-ENUM_STRING_CHARS_ABOVE = 250
-MAX_SCHEMA_STRING_CHARS = 120_000
-
-#: Strict mode's other schema limit a legal request can reach (same page,
-#: checked 2026-10-08): "A schema may have up to 5000 object properties total,
-#: with up to 10 levels of nesting." `validate` bounds no item's question
-#: count, so an item of about 5,000 predicates reaches the first; it is held
-#: like the string budget (`schema_properties`, `validate`, `chunks`). The
-#: nesting limit cannot be reached: a batch schema is four objects deep
+#: Strict mode's schema budgets -- the enum values one call's schema may
+#: hold, its string budgets and its property limit -- live in `schemas`, the
+#: one portable-schema rule (01f-C3), and are re-exported here: a batch is
+#: chunked under each of them as well as under `MAX_ITEMS_PER_CALL`, and an
+#: item that alone exceeds one is refused (`validate`). Enforced whatever the
+#: backend, because the chain can fall to a structured fallback (ruling 14).
+#: The nesting limit cannot be reached: a batch schema is four objects deep
 #: (batch, item, answers, a question's value) whatever it is asked.
-MAX_SCHEMA_PROPERTIES = 5000
+MAX_ENUM_VALUES = schemas.MAX_ENUM_VALUES
+MAX_ENUM_STRING_CHARS = schemas.MAX_ENUM_STRING_CHARS
+ENUM_STRING_CHARS_ABOVE = schemas.ENUM_STRING_CHARS_ABOVE
+MAX_SCHEMA_STRING_CHARS = schemas.MAX_SCHEMA_STRING_CHARS
+MAX_SCHEMA_PROPERTIES = schemas.MAX_SCHEMA_PROPERTIES
 
 #: Options one native `choice` may offer, OpenRouter's documented per-choice
 #: limit (Task 3 lowers it if OpenAI documents a lower one: the lower governs
@@ -425,7 +411,7 @@ def validate(items: Sequence[Item]) -> None:
             raise DecideRequestError(
                 f"item {index} offers {enum_values(item)} enum values; one call "
                 f"carries at most {MAX_ENUM_VALUES}")
-        properties, chars = _tally(schema([item], explain=True))
+        properties, chars = schemas.tally(schema([item], explain=True))
         if chars > MAX_SCHEMA_STRING_CHARS:
             raise DecideRequestError(
                 f"item {index}'s schema holds {chars} characters of names and enum "
@@ -467,90 +453,38 @@ def schema(items: Sequence[Item], *, explain: bool) -> dict[str, Any]:
     return _obj({str(i): item_schema(item) for i, item in enumerate(items)})
 
 
-def _tally(node: object) -> tuple[int, int]:
-    """(properties, characters) of a schema as strict mode counts them: every
-    entry of every `properties` mapping, and the characters of its key and of
-    every string `enum` value. A key under `properties` is a name, never a
-    keyword, so a question called `enum` is counted as a property."""
-    properties = chars = 0
-    below: list[object] = []
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "properties" and isinstance(value, dict):
-                properties += len(value)
-                chars += sum(len(name) for name in value)
-                below.extend(value.values())
-            elif key == "enum" and isinstance(value, list):
-                chars += sum(len(v) for v in value if isinstance(v, str))
-            else:
-                below.append(value)
-    elif isinstance(node, list):
-        below.extend(node)
-    for sub in below:
-        p, c = _tally(sub)
-        properties, chars = properties + p, chars + c
-    return properties, chars
-
-
 def schema_chars(items: Sequence[Item]) -> int:
     """The characters strict mode's 120,000 budget counts in `items`' batch
     schema: every property name and every string enum value. Counted with
     `explain=True`, the worst case, so `rationale` counts whether asked or
     not; integer enums (a score's levels) count nothing."""
-    return _tally(schema(items, explain=True))[1]
+    return schemas.tally(schema(items, explain=True))[1]
 
 
 def schema_properties(items: Sequence[Item]) -> int:
     """The object properties strict mode's 5,000 limit counts in `items`' batch
     schema, with `explain=True`: each item's index, its `answers` and
     `rationale`, and one per question."""
-    return _tally(schema(items, explain=True))[0]
+    return schemas.tally(schema(items, explain=True))[0]
 
 
 # --- parse ------------------------------------------------------------------
 
-_FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
-
-
-def _first_wins(pairs: list[tuple[Any, Any]]) -> dict[Any, Any]:
-    """An object that keeps a key's first occurrence, where JSON's default
-    keeps the last. Both continuity parsers always did, and a twin of the same
-    shape must not read differently."""
-    out: dict[Any, Any] = {}
-    for key, value in pairs:
-        out.setdefault(key, value)
-    return out
-
-
-def _loads(text: str) -> object:
-    try:
-        return json.loads(text, object_pairs_hook=_first_wins)
-    except (ValueError, RecursionError):
-        return None
-
-
 def find_object(text: str) -> dict[str, Any] | None:
     """The reply's object: the whole text, else a leading fence's body, else
     the span from the first `{` to the last `}`. The first that decodes to an
-    object wins, and `None` when none does. A repeated key, at any level, keeps
-    its first value.
+    object wins, and `None` when none does -- a bare `[...]` included. A
+    repeated key, at any level, keeps its first value.
+
+    `schemas.find_value` narrowed to objects: one tolerant reader, with this
+    module's dict-only contract kept on top of it.
 
     `parse`'s first step, public because `parse` answers every item whatever
     it was sent: whether a reply held an object at all -- rather than one
     whose answers were unreadable -- is a question only this answers (the
     eval graders ask it)."""
-    stripped = text.strip()
-    candidates = [stripped]
-    if stripped.startswith("```") and (fence := _FENCE.match(stripped)):
-        candidates.append(fence.group(1).strip())
-    start, end = stripped.find("{"), stripped.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(stripped[start:end + 1])
-    for candidate in candidates:
-        obj = _loads(candidate)
-        if isinstance(obj, dict):
-            return obj
-    return None
+    found = schemas.find_value(text, kinds=(dict,))
+    return found if isinstance(found, dict) else None
 
 
 def _flattened(obj: dict[str, Any], item: Item) -> tuple[object, object] | None:
@@ -738,7 +672,7 @@ def chunks(items: Sequence[Item], size: int = MAX_ITEMS_PER_CALL,
     for index, item in enumerate(items):
         count = enum_values(item)
         if held:
-            props, text = _tally(schema([*held, item], explain=True))
+            props, text = schemas.tally(schema([*held, item], explain=True))
             if (len(held) == size or values + count > budget or text > chars
                     or props > properties):
                 out.append((start, tuple(held)))
