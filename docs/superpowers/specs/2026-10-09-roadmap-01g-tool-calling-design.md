@@ -1,6 +1,6 @@
 # 01g. Tool calling: a bounded loop, Decision-as-tool, and run budgets
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01g in `ROADMAP-CHECKLIST.md`. Lane: retrieval (it waits on 01f;
 12 waits on it). Size L.
@@ -257,7 +257,10 @@ inference.run_tools  (the loop; the only door, in inference.py)
 ```
 
 - **New gateway leaf `grimoire/tool_calls.py`.** Standard library plus
-  `schemas` (01f-C3); never the store. It holds the data shapes (section
+  `schemas` (01f-C3). It imports nothing of the store, but the store may
+  import it, as it imports `wire`; 12's store-side tools build `ToolSpec`s.
+  Pricing reads the store, so `price_for` and `tool_run_refusal` live in
+  `inference.py` beside the loop. It holds the data shapes (section
   3.2), the per-kind wire lowering helpers the adapters call (section 3.3),
   the stream `Collector` (section 3.4) and the pure budget arithmetic
   (section 3.9).
@@ -393,7 +396,9 @@ works exactly like `llm_reasoning.Buffer`:
 - **Fed by the adapters.** `tool_calls.from_openai_chunk(obj, usage)` is
   called beside `llm_reasoning.from_chunk`. `_Reader._block` hands
   `tool_use` and `input_json_delta` to `tool_calls.feed_anthropic(...)`.
-  Fragments accumulate by index or block id. Each fragment is also noted for
+  Fragments accumulate by index or block id. Some OpenAI-compatible servers
+  send every parallel call at `index: 0` with distinct `id`s, so a new `id`
+  arriving at an index already in use starts a new call. Each fragment is also noted for
   the local token estimate (`llm_usage.note_reply`), because arguments are
   billed completion tokens.
 - **Opaque state.** Two kinds of provider state must be echoed back on the
@@ -438,7 +443,11 @@ before any text, it retries as today, and the collector has been reset.
   (`llm.py:851-875`). It is **not observed** as a health failure, because
   the connection answered and refused a feature. The next route is tried as
   for any failure. If every route fails, the error is
-  `LLMError("bad_response", ..., code="tools_refused")`. Unlike a schema,
+  `LLMError("bad_response", ..., code="tools_refused")`. When only one route
+  refused tools and the other failed otherwise, the error is the two
+  composed by `llm.routes_failed`, as a schema refusal beside another
+  failure is, with the refusing route's word carrying `code="tools_refused"`.
+  Unlike a schema,
   tools cannot be dropped and the call re-sent: a loop without tools is not
   the call that was asked for.
 - **`llm_usage.note_prompt`** counts tool definitions and assistant
@@ -849,7 +858,7 @@ the app's other pre-send estimate already does, the model-test preview
 (`routes/config.py:1355-1390`, `probes.estimate_usd` and
 `estimate_from_rates`).
 
-- **Per-attempt price, in this order** (`tool_calls.price_for(attempt)`,
+- **Per-attempt price, in this order** (`inference.price_for(attempt)`,
   built once per run off the event loop):
   1. **The attempt's cached catalog row** (`llm_connections.cached_row`), its
      per-token `prompt` and `completion` prices. A stated `0` is a free
@@ -922,7 +931,7 @@ the app's other pre-send estimate already does, the model-test preview
   only and only warns (`usage.budget`). Combining it with this projection
   would add columns. Whether an investigation should be refused while its
   campaign is `over` is the consumer's policy (section 9, question 4).
-- **`tool_calls.tool_run_refusal(task, resolved, budget, prices) ->
+- **`inference.tool_run_refusal(task, resolved, budget, prices) ->
   RunRefused | None`** is the same check as a pure preflight. A `def` route
   calls it **before reserving**, so 12's E2 and E3 answer 409 `unpriceable`
   before a 202, and `run_tools` repeats it at entry.
@@ -960,7 +969,10 @@ the app's other pre-send estimate already does, the model-test preview
 - **Capture** has three forms, each guarded so that a broken one costs only
   itself:
   - **Incoming responses** (`llm_capture`) are recorded per attempt, as
-    today. `Capture.meta` gains `run_id` when the holder carries one.
+    today. `Capture.meta` gains `run_id`. The loop puts it in each turn's
+    holder under `llm_capture.RUN_KEY`, and `llm._stamp` preserves that key
+    across its per-attempt `usage.clear()`, as it preserves the reasoning
+    buffer (`llm.py:578-581`).
   - **The prompt log.** `TurnCapture = Callable[[list[dict], dict,
     wire.Target], Awaitable[None]]` is handed each turn once it settles,
     outside its meter, exactly as `decide`'s `Capture` is
@@ -1343,7 +1355,9 @@ bounded loop, on OpenRouter, OpenAI-compatible and Anthropic.**
   call without tools.
 - Calls are read from the stream through the holder's `Collector`, reset
   per attempt.
-- `operations.run_tools` / `stream_tools` run the loop of section 3.7.
+- `operations.run_tools` / `stream_tools` run the loop of section 3.7, on a
+  route that `requires` tools or is in `routing.TOOLS_OPTIONAL` with a
+  primary not known to lack them (the scene route, for 02-C4).
 - **The caller executes the tools.** The loop hands each call, validated
   against its schema, to the caller's `execute(call, ctx)` (section 3.6),
   never to an adapter or an SDK. Tools are read-only or proposing, never
@@ -1354,12 +1368,17 @@ bounded loop, on OpenRouter, OpenAI-compatible and Anthropic.**
   the loop unexecuted, returned as `LoopResult.final_call` with its
   arguments validated. Without one, the final model turn's text (and, with
   `final_schema`, its conforming record) is returned.
+- The loop also takes `round_id`, `response_id` and `cancelled`, the last
+  asked before every send and tool execution.
 - Terminal status is `completed`, `budget_exhausted` (with `limit`) or
   `failed` (with `error`). The loop raises only for invalid input
   (`ValueError`), `RunRefused`, an `LLMError` on turn 1 (nothing was done,
   so the caller maps it as any failed call), and cancellation.
-- Fallback within a loop is sticky after a fallback serves. Call ids are the
-  loop's, and opaque provider state never crosses providers.
+- Fallback within a loop is sticky after a fallback serves (by provider and
+  model, ignoring a degrade sibling). Provider call ids are kept until a
+  switch, and rewritten to the loop's at one. Opaque provider state never
+  crosses providers. A target inheriting another model's tool turns has
+  thinking off.
 
 **01g-C2b — the same contract on the Claude Agent SDK** (section 3.13): one
 query per turn, built-ins off, tools declared through an in-process MCP
@@ -1378,15 +1397,29 @@ after C2a. Until then `claude` is `tools: no` (adapter).
 
 **01g-C4 — a run budget, enforced before every send.**
 
-- `RunBudget` sets max turns, tool calls and decisions, a wall clock, a
-  spend ceiling, a per-turn output cap (sent on the wire) and a
-  total-result-size cap.
-- Each is checked before the send or execution it would bound.
-- A refused model turn becomes the reserved finalize turn when one fits,
-  and otherwise stops the run with `budget_exhausted`.
-- Spend is a uniform pre-send projection, `pricing.estimate` at the user's
-  rates over counted prompt tokens and the output cap, maximised across the
-  chain.
+- `RunBudget` sets:
+  - max turns, tool calls and decisions;
+  - a wall clock, where `<= 0` is none;
+  - a spend ceiling;
+  - a per-turn output cap, sent as 01f-C1's `max_tokens` through
+    `call_chain`;
+  - a total-result-size cap.
+- Each is checked before the send or execution it would bound. Decide-tool
+  calls pass the same spend check.
+- Reaching any limit makes the next turn the reserved finalize turn when one
+  fits, and otherwise stops the run with `budget_exhausted`. The run's wall
+  expiring is a budget stop (meter `aborted`). On the streamed path it never
+  interrupts visible text.
+- Spend is a uniform pre-send projection:
+  - **the price**, in this order: the attempt's catalog price; else the
+    user's rates, only for a provider that does not report its own price;
+    else unpriceable. This is the model-test preview's rule;
+  - **applied to** the prompt tokens, counted with a margin (reported counts
+    from turn 2), and the output cap where it is sent, maximised across the
+    chain;
+  - it can be overrun by at most the billed failed attempts of one turn.
+- `inference.tool_run_refusal(...)` is the same check as a pure preflight,
+  so a route can refuse before reserving.
 - It is never accounting, never added to a reported figure, and never zero
   for an unpriced model. An unpriced chain under a ceiling is
   `RunRefused("unpriceable")` before any send. This is the recorded
@@ -1400,15 +1433,25 @@ after C2a. Until then `claude` is `tools: no` (adapter).
 - `routes/tool_decision.decision_tool(task, resolved, ...)` returns a
   `decide` tool, or None and a reason.
 - **The task name is supplied by the caller**, as a literal resolved at the
-  caller's own call site. It is on the `tool-decision` route (operation
-  `decide`, Decision role, `routing.NO_LEGACY`) or on a decide route of the
-  caller's own.
-- Each call asks one `Choice` through `operations.decide`, metered under that
-  task with the run's `run_id`, and capped per run by `max_decisions`.
-- It returns only what the backend reported (an answer, a status, and a
-  probability or distribution where the backend gave one).
+  caller's own call site. The task sits on the `tool_decision` route
+  (operation `decide`, Decision role, `routing.NO_LEGACY`; the checklist's
+  `tool-decision`), or on a decide route of the caller's own.
+- Each call asks one `Choice` through `operations.decide`:
+  - metered under that task with the run's `run_id`, `round_id` and
+    `response_id`;
+  - with the caller's `capture` passed through (01b-C1);
+  - capped per run by `max_decisions`;
+  - output-capped (`decide(max_tokens=)`);
+  - checked against the spend ceiling before it is sent. Under a ceiling the
+    tool is not offered when any stage is native, unpriceable or uncapped.
+- The consumer shapes the tool within bounds: the name, whether there is a
+  context parameter, the question length, the options range (2..16), the
+  result (`full` or `selection`), the cap behaviour, a context builder and a
+  `select` hook.
+- It returns only what the backend reported. A `selection` result never
+  carries a distribution.
 - It cannot recurse: `decide` takes no tools, and `run_tools` refuses to
-  start inside a running loop.
+  start in a task already running a loop.
 
 **01g-C6 — the final loop turn streams, and the loop can decline a tool call
 that comes after visible text** (section 3.8).
@@ -1417,7 +1460,11 @@ that comes after visible text** (section 3.8).
   call `generate(stream=True)` makes, heartbeats included.
 - `tool_calls.text_deltas` yields the plain text iterator a streaming caller
   already consumes.
-- The caller's reasoning buffer rides each turn.
+- Between turns and during tools, an empty delta is yielded every
+  `HEARTBEAT_INTERVAL`.
+- The caller's reasoning buffer rides each turn. It is reset at each turn,
+  as `_stamp` already resets it; no continuity is promised.
+- On the streamed path the run's wall clock never interrupts visible text.
 - With `decline_after_text=True`, a tool call ending a turn that already
   yielded visible text is never executed. The text is final, and the call
   is in `LoopResult.declined` and the trace as declined `"after_text"`.
@@ -1431,8 +1478,8 @@ that comes after visible text** (section 3.8).
   recogniser gains `run_tools` and `stream_tools`.
 - **`test_operation_guard.py`** gains two rules:
   - a `run_tools` / `stream_tools` call names a literal task on a route whose
-    `operation` is `generate` and whose `requires` includes `tools`, and
-    passes `resolved=`;
+    `operation` is `generate` and which either `requires` `tools` or is in
+    `routing.TOOLS_OPTIONAL`, and passes `resolved=`;
   - every route requiring `tools` is used by such a call, so the safety rule
     holds both ways, as it does for decide.
 
@@ -1444,7 +1491,10 @@ that comes after visible text** (section 3.8).
   `single(...)` for the probe passes a meter's holder, as the other probes do.
 - **New `test_tool_guard.py`** (section 3.6), with the `# tool-ok:` marker,
   capped.
-- **Lock domain.** Tools take no lock, so they need no classification. A
+- **Lock domain.** Tools take no blocking lock and write nothing but the
+  accounting of section 3.6. That accounting includes the decide tool's
+  prompt capture, which uses `campaign_lock_nowait` and drops on contention.
+  So tools need no classification. A
   consumer that applies proposals does so in its own route under its lock,
   and is classified there as today.
 - **`test_atomic_guard.py`.** Unchanged. Tools do not write.
@@ -1455,7 +1505,8 @@ that comes after visible text** (section 3.8).
   - `wire.py` gains `with_output_cap` and stays standard-library-only.
   - `adapters`, `openrouter`, `openai_compatible` and `anthropic` import
     `tool_calls` (a leaf). `inference` imports it.
-  - The store never imports it.
+  - It imports nothing of the store, and the store may import it (a leaf,
+    as `wire` is).
 - **Android / pydantic v1.** No pydantic is involved, and the shapes are
   dataclasses and dicts. C2b's SDK use stays inside the `claude` extra's
   guarded import.
@@ -1572,6 +1623,57 @@ that comes after visible text** (section 3.8).
   - `stream_tools` event order is as in section 3.8, with `interstitial`
     set on tool turns.
 
+**Spec-gate additions:**
+
+- **Spend:**
+  - an OpenRouter model with catalog prices and no typed rate is priced from
+    the catalog, not refused;
+  - with a `"": 0` default rate, a billed (`reports_price`) attempt without
+    a catalog row is unpriceable, never `$0`;
+  - an uncapped attempt (`cap_sent` is False) is unpriceable under a
+    ceiling;
+  - a decide call that would cross the ceiling is refused before sending,
+    and its `Decision.usage` rows count toward "spent so far";
+  - the decide tool is not offered under a ceiling when a stage is
+    unpriceable;
+  - `tool_run_refusal` answers before reserving.
+- **Wall:**
+  - `wall_seconds <= 0` runs with no wall;
+  - the run's wall expiring is `budget_exhausted` / `wall`, with an
+    `aborted` row, not an error;
+  - on `stream_tools`, a turn that has yielded text is not cut.
+- **Limits:**
+  - reaching `max_tool_calls` or `max_decisions` leads to finalize or a stop
+    with that `limit`;
+  - `cancelled()` returning True stops before the next send.
+- **Routes:**
+  - `run_tools` on a `TOOLS_OPTIONAL` route runs on an `unknown` primary
+    and raises on a known `no`;
+  - an unfrozen `PreparedMessages` raises at entry.
+- **Fallback:**
+  - stickiness is detected by provider and model, and a degrade sibling is
+    not a switch;
+  - ids are kept on the same provider and rewritten consistently at a
+    switch;
+  - a switched-to target with inherited tool turns is sent thinking off;
+  - `required` is downgraded beside thinking.
+- **Execution and streaming:**
+  - the tool executor is bounded, and saturation by abandoned threads gives
+    an error result;
+  - heartbeats arrive during a slow tool on `stream_tools`;
+  - parallel calls at `index: 0` with distinct ids are read as separate
+    calls.
+- **The decide tool:**
+  - the `selection` result shape and `on_cap="result"`;
+  - `capture` reaches the inner `decide`;
+  - rows carry `round_id` and `response_id`.
+- **Guard and SDK:**
+  - `test_tool_guard.py` scans `execute=` functions and allows the
+    accounting writes;
+  - C2b: `setting_sources=[]` and `strict_mcp_config=True` are in the
+    options, a non-Grimoire tool is denied by the hook, and a 50-character
+    tool name is refused for this kind.
+
 **Capability and seam:**
 
 - `resolve_caps` places `tools` from each source.
@@ -1610,9 +1712,11 @@ that comes after visible text** (section 3.8).
 - `make check` is green.
 - Every existing generate and decide suite passes unchanged.
 - No request without tools differs from the baseline.
-- A scripted three-turn investigation over the frozen campaign's store
-  (read-only tools written in the test) runs to `completed` under the fake
-  with the expected trace. It is never pointed at a real library.
+- A scripted three-turn investigation over a **copy** of the frozen
+  campaign's store (`frozen_copy.copy_home(tmp)`, as the sweep does; never
+  `home/` itself, because store reads can backfill or stamp), with read-only
+  tools written in the test, runs to `completed` under the fake with the
+  expected trace. It is never pointed at a real library.
 
 ## 7. Non-goals
 
@@ -1672,8 +1776,13 @@ that comes after visible text** (section 3.8).
    result out of a reply. *Recommendation:* fix it independently of 01g. Set
    `tools=[]` where the installed SDK supports it, guarded for older
    versions. It shortens every prompt on that path and removes a model
-   behaviour nobody wants. It is listed here because 01g's reading found it.
-   It is not a 01g contract.
+   behaviour nobody wants. The same path also loads every filesystem settings
+   source, because `setting_sources` is unset: the user's hooks and allow
+   rules, project settings and the cwd's `CLAUDE.md`, on every subscription
+   call. So the fix should set `setting_sources=[]` too, as C2b does. This
+   extends the checklist's "Found on main" entry, which the coordinator
+   owns. It is listed here because 01g's reading found it. It is not a 01g
+   contract.
 7. **Settled: embed calls inside tools.** 01h-C5 now carries an optional
    `run_id` on `embed_sync` / `embed_groups_sync`, filed in 01g-C3's
    `run_id` ledger field (section 3.10). A tool passes `ToolContext.run_id`.
@@ -1682,3 +1791,42 @@ that comes after visible text** (section 3.8).
 8. **Interstitial text in play (02-C4).** *Settled by 02:* play passes
    `decline_after_text=True` (01g-C6), so a contribution never has
    interstitial text. Other callers still see `turn_end.interstitial`.
+
+## 10. Review record
+
+**Substitute spec gate, 2026-10-09** (adversarial review: 3 blocking, 12
+should-fix, 10 minor). Each item was checked against the code. Each was then
+fixed as noted, or rejected with a reason.
+
+| Item | Verdict | Where |
+|---|---|---|
+| B1 billed providers priced at the user's rates | Fixed. Price order: catalog row, then the user's rates only for a provider that does not `reports_price`, else unpriceable. This mirrors the model-test preview, confirmed at `routes/config.py:1355-1390`. | 3.9, C4 |
+| B2 decide calls bypass the ceiling | Fixed. A pre-send decide projection, `decide(max_tokens=)`, every `Decision.usage` row counted, and no offer when a stage is native, unpriceable or uncapped. | 3.9, 3.12, C4, C5 |
+| B3 `run_tools` refuses the scene route | Fixed. `routing.TOOLS_OPTIONAL`, `resolve.known_lacks`, and the operation-guard rule loosened. | 3.7, 5, C2a |
+| S1 SDK settings, MCP, names, parallel calls | Fixed. `setting_sources=[]`, `strict_mcp_config=True`, a `"*"` hook that defers or denies, a 49-character name cap, and `not_run` in the trace. The "Found on main" extension is noted in Q6; the checklist is the coordinator's. | 3.13, 9 |
+| S2 `RunRefused` after the 202; no cancel input | Fixed. A `tool_run_refusal` preflight and a `cancelled` callable. | 3.7, 3.9 |
+| S3 02-C4 attribution and tool shape; 12's route | Fixed. `round_id` and `response_id`, the meter composition stated, and `ToolShape`, `context`, `select`, `result` and `on_cap`. Route usage corrected (12 on `tool_decision`; 02 on `turn_plan`). | 3.7, 3.12 |
+| S4 wall semantics | Fixed. `<= 0` is no wall, the streamed path never cuts text, and the run's wall is a budget stop with an `aborted` row. | 3.9 |
+| S5 `with_appended` raises on unfrozen prompts | Fixed. Refused at entry, and `on_variant` and `settings` carried. Confirmed at `model_guidance.py:188-196`. | 3.7 |
+| S6 sticky detection by identity | Fixed. By provider and model, ignoring degrade. | 3.11 |
+| S7 ids, inherited thinking, `required` with thinking | Fixed. Ids kept until a switch, thinking off on inheriting targets, `required` downgraded. | 3.11 |
+| S8 the projection is not a ceiling | Fixed. Counted in a thread with a margin, reported counts from turn 2, uncapped means unpriceable, and the overrun bound stated. | 3.9 |
+| S9 abandoned threads starve the default executor | Fixed. A dedicated bounded executor, and a capacity error once it is full. | 3.6 |
+| S10 no heartbeats; reasoning reset | Fixed. Heartbeats every `HEARTBEAT_INTERVAL`, and the reset stated (no continuity promised). | 3.8, C6 |
+| S11 tool and decision limits do not stop the run | Fixed. Finalize or stop with that limit. | 3.9 |
+| S12 the guard misses executors; the decide tool writes | Fixed. Executors are scanned, and the accounting carve-out is stated. | 3.6, 5 |
+| M1 route key spelling | Fixed. The key is `tool_decision`, and the checklist's `tool-decision` names it. | 3.12, C5 |
+| M2 the store may import `tool_calls` | Fixed. Pricing helpers moved to `inference.py`. | 3.1, 5 |
+| M3 `ContextVar` in an async generator | Fixed. A task `WeakSet`, and the claim worded as "guard plus entry check". | 3.12 |
+| M4 `CONTRIBUTING.md` and `OVERRIDABLE` | Fixed. Both named. | 3.6, 3.14 |
+| M5 frozen campaign copy | Fixed. `frozen_copy.copy_home`. | 6 |
+| M6 parallel calls at index 0 | Fixed. | 3.4 |
+| M7 `run_id` on the incoming capture | Fixed. Preserved across `_stamp`. | 3.10 |
+| M8 a mixed `tools_refused` failure | Fixed. Composed by `routes_failed`. | 3.5 |
+| M9 the `store_moved` check on the loop | Fixed. Off the loop. | 3.6 |
+| M10 subscription under a ceiling | Fixed. Projected as list-price usage, and `claude` is unpriceable. | 3.9, 3.13 |
+
+Coordinator inputs folded in:
+
+- The per-turn cap is 01f-C1's `max_tokens`, through `call_chain` (from 01i).
+- `capture` is passed through to the inner decide (from 01b).

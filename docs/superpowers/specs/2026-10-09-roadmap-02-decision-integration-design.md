@@ -588,98 +588,124 @@ nothing about *whether* a pick is asked.
 
 ### 5.2 Rules (on top of 1.4 rule 3)
 
-Sampling runs **after** `decide` returns and `selection_of` would have read
-the answer. It changes only *which offered speaker* an already-answered pick
-names. Order matters:
+**01c owns the sampler** (01c-C2, C3, C4; 01c section 5). 02 carries no
+sampler, floor or renormalisation of its own. Its whole policy is one
+`draws.Eligibility`, which 01c applies and records. With the switch on, after
+`decide` returns:
 
-1. **Not sampled at all** when any of these holds. The pick is the answer, as
-   today, and the record says why:
-   - the switch is off (no record is written at all);
-   - the answer was not read as a speaker (abstained, refused, unreadable,
-     error, `NOT_AN_OPTION`). Those go to `selection_of` unchanged, so an
-     explicit null still hands control back, and every issue string is as
-     today (01c-C4);
-   - the answer carries no distribution (structured today; see 5.6);
-   - the round carries a player-typed note (`round_record["typed_note"]`).
-     A director note may say who should act, and the selector is what reads
-     it (group-play spec, "Continue and director notes"). Sampling could
-     overrule the player's own direction.
-2. **The support** is the distribution with three things removed:
-   - **the reserved none (`decisions.NONE_KEY`)**. Whether anyone speaks is
-     the argmax's decision; sampling decides only who. Sampling "none" would
-     sometimes end a chain at random, or let NPCs talk past a pending
-     player decision ("Choose null when ... the player's decision is needed",
-     `templates/scene/response_selector_question.j2`);
-   - **any option below the floor**: half the uniform share,
-     `1 / (2 · n)`, where `n` counts the offered options without the none.
-     Argued structurally: an option the model rated below half of
-     indifference is one it argued against. To be tuned through 01a's
-     reports;
-   - **anyone not addressed, when someone is.** If the newest
-     non-synthetic post in the pick's window names one or more eligible
-     actors (other than its own author), the support is narrowed to those.
-     The rule is "Being addressed determines who starts"
-     (`templates/scene/response_steer.j2`). It uses group play's own name
-     matcher, made public as `group_play.named(text, entries, author)` (today
-     `_named`, `group_play.py:136`).
-3. **If the support is empty, or holds only the answer**, the answer stands.
-   The record says `policy: "answer"`.
-4. Otherwise the support is renormalised and handed to **01c-C2's sampler**
-   with a seed. The selected key replaces the `next` answer's value, and the
-   result goes through `selection_of` unchanged. The selected key is by
-   construction an offered option: `decisions._distribution`
-   (`decisions.py:843-856`) drops any distribution with a key outside the
-   options and the none.
+1. **The issue mapping comes first and is unchanged.** `selection_of` reads
+   the `Answer` exactly as today. Abstained hands control back; an answer
+   naming no option is `INELIGIBLE`; anything else unread is
+   `INVALID_HANDOFF` (01c section 7: "the caller's issue mapping stays the
+   caller's"). The draw never turns a non-answer into a speaker (01c-C4).
+2. **The draw.** For every pick that was asked, with a fresh seed:
+
+   ```python
+   offered = [*eligible_refs, response_protocol.GRIMOIRE_REF]   # n = len(offered)
+   eligibility = draws.Eligibility(
+       exclude=(decisions.NONE_KEY,),
+       only=tuple(addressed) or None,
+       floor=1 / (2 * len(offered)))
+   draw = draws.draw(question, result, seed=draws.new_seed(), purpose="next",
+                     eligibility=eligibility)
+   ```
+
+   - **`exclude=(NONE_KEY,)`.** Whether anyone speaks is the model's answer.
+     The draw decides only who. Drawing the none would sometimes end a chain
+     at random, or let NPCs talk past a pending player decision ("Choose null
+     when ... the player's decision is needed",
+     `templates/scene/response_selector_question.j2`). An *answered* none
+     never reaches a draw: it is `abstained`, and rule 1 hands control back.
+   - **`only=addressed`.** This is the actors the round's trigger addresses.
+     When the round carries a player-typed note, the trigger is that note;
+     otherwise it is the newest non-synthetic post in the pick's window.
+     `addressed` is the eligible actors the trigger names, minus the trigger's
+     author. The rule is the writer's handoff guidance: "Being addressed
+     determines who starts" (`templates/scene/response_actor.j2:74-75`).
+     It uses group play's name matcher, made public as
+     `group_play.named(text, entries, author_ref=None)`. Today's `_named(text,
+     entries)` (`group_play.py:136`) takes no author, and its callers filter
+     the author themselves (`:182`, `:199`). The window carries speaker
+     *names*, so the post's author is mapped to its ref through the response
+     record (`responses.actor_refs`, as `_last_contribution` does). A note
+     that names Mara confines the draw to Mara, which is how a director note
+     keeps its authority without a special case. **This narrowing is a
+     deterministic policy that can override the model's answer.** If the
+     report puts Winifred first and Seraphine addressed Mara, Mara is drawn
+     with certainty. That is recorded, not hidden: `eligibility.only` holds
+     the narrowing, and `answer != selected` shows the override. The play
+     gate grades it on its own line (5.7).
+   - **`floor=1/(2n)`.** This is 01c's floor: a minimum weight for every
+     eligible key (01c section 5.3, step 4). It gives each eligible actor at
+     least half the uniform share. Open question 9 asks whether that lift is
+     wanted.
+3. **Mapping the draw to `(next, issue)`**, when rule 1 read a speaker:
+   - `basis: "sampled"` gives `next = draw.value`. It is an offered key,
+     never the none, because the none is excluded.
+   - `basis: "answer"` (no usable report, a partial or inconsistent report,
+     01c section 5.4) gives the answer, as today.
+   - `basis: "none"` with `why: "ineligible"` means the plain answer lies
+     outside `addressed` and there was no usable report to draw from. The
+     pick then draws once more with the same seed and purpose and
+     `only=None`, and stores that record. Without a report, a narrowing must
+     not turn a plain answer into "nobody", and so hand control back.
+
+`selection_of` is unchanged. `decisions._distribution`
+(`decisions.py:843-856`) drops any distribution with a key outside the
+options and the none, and 01c's step 2 raises on an `only` key that is not
+offered. So a drawn key is an offered one by construction.
 
 ### 5.3 Seed and record
 
+Each draw's seed comes from `draws.new_seed()`, which is 53 bits. Its test
+seam is 01c's `draws._seed_source`, not `character_turns._rng`. The seed is
+minted once per asked pick, and nothing derives one from an id (01c section
+6.1, rule 3).
+
+The record is **01c-C3's record, unchanged** (01c section 6). It holds
+`offered`, `distribution` as ordered pairs, `eligibility`, `seed`, `purpose`,
+`selected`, `answer`, `basis` and `why`. It is stored under the key **`pick`**
+on the round record, in the same `_round_state` call that writes the speaker,
+under the lock that write holds (01c section 6.1, rule 1):
+
 ```python
-# routes/character_turns.py
-seed = _rng().getrandbits(63)   # the existing seam (`_rng`, line 48)
+_round_state(cid, sid, round_record, actor_ref=next_ref,
+             status="pending" if next_ref else "complete", issue=issue,
+             pick=draw.record)
 ```
 
-The seed comes from the existing `_rng` seam, so a test that patches it
-pins the draw, as it already pins a round's plan. The record is 01c-C3's,
-plus what 02's support rule needs to replay it. It is stored on the
-**round record** through `_round_state(..., selection=...)`, beside the
-`actor_ref` it explains:
+**"Decided" means the record is present** (01c section 6.1, rule 2). With
+the switch on, `_first_actor` skips `_select` when `round_record.get("pick")
+is not None`, whatever `actor_ref` says. A retry, a recovery or a roll
+resume therefore never re-draws. With the switch off, no `pick` is written,
+and `_first_actor` behaves as today. Every reader uses `.get("pick")`. Rounds
+written before this spec, and the frozen campaign's, have none (01c section
+6.1, rule 4).
 
-```json
-"selection": {
-  "task": "response-selector", "question": "next",
-  "policy": "sampled",                   // "sampled" | "answer"
-  "reason": "",                          // why "answer": "no_distribution",
-                                         // "not_read", "typed_note",
-                                         // "single_support"
-  "backend": "native", "provider": "openrouter", "model": "...",
-  "answer": "npc:mara",                  // what decide answered
-  "distribution": {"npc:mara": 0.55, "npc:winifred": 0.35, "<none>": 0.10},
-  "support": {"npc:mara": 0.611, "npc:winifred": 0.389},
-  "seed": 4127734991, "selected": "npc:winifred"
-}
-```
-
-Replay is 01c-C2 over `support` and `seed`. `support` is recomputable from
-`distribution`, the offered options, the floor and the named set. It is
-stored anyway, so a later change to the floor does not change how an old
-pick reads. A resumed round reads `actor_ref` and never resamples (1.4 rule
-3).
+Replay is `draws.replay(record)`, so a browser inspector replays the same
+draw (01c section 6.2).
 
 ### 5.4 Code shape
 
 ```python
 # store/response_protocol.py  (pure)
-def sampled(result: decisions.ItemResult, *, offered: Sequence[str],
-            named: Sequence[str], seed: int, enabled: bool,
-            typed_note: bool) -> tuple[decisions.ItemResult, dict | None]:
-    """`result` with its `next` answer replaced by a draw from its reported
-    distribution under section 5.2's rules, and the record (None when
-    `enabled` is False). Never touches an answer that is not a read speaker."""
+def addressed(conversation: list[dict], note: str, eligible: Sequence[dict],
+              author_ref: str | None) -> tuple[str, ...]:
+    """The eligible refs the round's trigger names (5.2 rule 2)."""
+
+def pick_eligibility(offered: Sequence[str],
+                     addressed: Sequence[str]) -> draws.Eligibility:
+    """exclude=(NONE_KEY,), only=addressed or None, floor=1/(2n)."""
 ```
 
-`_select` calls it after `decide` and returns the record with
-`(next, issue)`. `_first_actor` writes it in the same `_round_state` call
-that writes `actor_ref`, so the record and the speaker never come apart.
+`_select` calls `decide`, reads `selection_of` and, with the switch on, calls
+`draws.draw` (and the `only=None` re-draw of 5.2 rule 3). It returns
+`(next, issue, record)`. `_first_actor` writes the record with the speaker.
+The task's 01d-C1 row is `TaskPolicy(samples=True, question="next",
+escalate_to="primary", escalate_on=("refused",), reads_declines=True)`.
+Escalation is on `refused` only, never `low_margin`, because a sampling task
+may not escalate on margin (01c section 4.1). The row ships with escalation
+off (01d section 6.4) until C2a's gate measures it.
 
 ### 5.5 What it costs
 
@@ -702,9 +728,14 @@ Decision model the pick is always the most likely speaker".
 - **Configurations:** a native-only Decision model with sampling `off` vs
   `on`. A structured one is included to prove sampling is inert there.
 - **Feature graders:**
-  - *mass on intended*, computed exactly from the recorded distribution with
-    no seeds needed: the probability the sampled pick equals the fixture's
-    intended speaker, set beside the argmax's 0 or 1;
+  - *mass on intended*: the probability the draw selects the fixture's
+    intended speaker, computed exactly over the weights **actually drawn
+    from** (the record's distribution after its own `eligibility`, as
+    `draws.replay` computes them) and set beside the answer's 0 or 1;
+  - *addressed override*: how often `eligibility.only` was set and the
+    answer lay outside it. These are the picks the narrowing decided, not
+    the model;
+  - *departure*: how often `selected != answer`;
   - *spread*, the distinct speakers across repeats on a fixture with no
     addressee;
   - *hand-back preserved*, on fixtures whose intended answer is null:
@@ -785,12 +816,19 @@ turn.record, messages, ... = await run_in_threadpool(
 
 - the setting is `off`;
 - the actor is `grimoire` (a narrator has no stance, `response_actor.j2`);
-- the round has a pending response that `_prepare` would resume (a retry or
-  roll resume reuses its snapshot, 3.1 rule 5);
-- `appended` is non-empty (a roll continuation);
+- the round has a pending response that `_prepare` would resume. A retry
+  reuses the snapshot. A roll resume passes the stored plan back in
+  (3.1 rule 5);
+- `appended` is non-empty (a roll continuation, which carries the stored
+  plan, 3.1 rule 5);
 - the round carries a player-typed note. The note *is* the player's
   direction, and a sampled stance could contradict it. An empty send's
   `director_note.j2` is app wording, not the player's, so it does not count.
+
+A replayed turn (`post_replay_turn`) composes fresh
+(`routes/scenes.py:6031-6033`), so it asks a new intent for each turn it
+replays, and each of those is one more decide call. `replay_fork_threshold`
+counts model turns, not these calls. The switch text says so.
 
 A reroll (`regenerate_response`, `character_turns.py:1522`) and Keep writing
 (`extend_response`, `:1591`) replay snapshots and never reach this code.
@@ -808,12 +846,13 @@ decision = await operations.decide(
     "turn-intent", [item], client=client, resolved=resolved,
     campaign=cid, scene=sid, post=round_record["post"], round_id=round_record["id"],
     response_id=response_id, capture=<01b-C1 capture>,
-    around=lambda call, holder: _bounded_call(call, ceiling=plan_ceiling(),
-                                              on_timeout=_noting(client, resolved, holder)))
+    around=plan_deadline())
 ```
 
-`LLMError` and `DecideRequestError` are caught. The intent is skipped with
-the error's kind (3.3). The task goes on a new route:
+This runs only when `resolved` is not `None`. Otherwise the intent is
+recorded `skipped: kind` (3.2). The whole step is inside 3.3's
+`except Exception`, and a failure is recorded with its kind or class name.
+The task goes on a new route:
 
 ```python
 Route("turn_plan", "Turn planning",
@@ -842,46 +881,58 @@ carry it too.
 **Sampling.** It follows the same "whether by argmax, which by sample" rule
 as 5.2:
 
-- an abstained, refused or unread stance renders nothing;
-- a read stance with a distribution is sampled over the stances above the
-  floor, without the none, with a seed from `_rng`;
-- with no distribution, the answer is the stance.
+- an abstained, refused or unread stance renders nothing, and is recorded;
+- otherwise `draws.draw(stance_q, result, seed=draws.new_seed(),
+  purpose="stance", eligibility=Eligibility(exclude=(NONE_KEY,),
+  floor=1/(2n)))`, where `n` is the number of stances without the none. A
+  draw with `basis: answer` is the plain answer, which is the only case on a
+  structured backend. The record is 01c's, unchanged.
 
 **The record** is stored on the response record by `store.responses.prepare`:
 
 ```json
 "intent": {
-  "task": "turn-intent", "skipped": "",          // or "timeout", "missing_key", ...
+  "task": "turn-intent", "skipped": "",          // or "timeout", "missing_key",
+                                                 // "error:<Class>", ...
   "stance": "deflect",
-  "replay": { /* 01c-C3's record, as in 5.3, for the stance question */ },
-  "backend": "native", "provider": "...", "model": "..."
+  "draw": { /* 01c-C3's record, unchanged, for the stance question */ }
 }
 ```
 
-**The section** is a new catalog section, `turn_intent`, in
-`assemble.SECTIONS`:
+Readers use `.get("intent")`. Responses written before this spec, and the
+frozen campaign's, have none.
 
-- template `templates/scene/sections/turn_intent.j2`;
-- tier lock-in;
-- placed immediately after `active_speaker`. The layout upgrade rule inserts
-  it there in a saved layout (`store/context/layout.py`, "The upgrade
-  rule").
+**Where it goes: after the history, not in the system prompt.** It is placed
+exactly as an author's note at depth 0 is placed: its own `{"role":
+"system"}` message after the last post, through the same `inject`
+(`store/context/authors_note.py`, "Where" and "How it reaches the model").
+It inherits that module's stated provider caveats. It is **not** a catalog
+section, for two reasons:
 
-It renders:
+- **Prefix caching.** The block changes on every contribution. Anywhere in
+  the system prompt, it would invalidate the provider's cached prefix for
+  everything after it, including the whole history. The ledger records
+  that loss as `cache_read_tokens` (`openai_compatible.py:297`), and it
+  would skew 7.5's cost comparison for a reason that has nothing to do with
+  the hypothesis.
+- **Layout.** Every catalog section can be switched off by id in the prompt
+  layout (`layout.apply`, `assemble.py:1338`). A user who switched it off
+  would still pay for every decide call.
+
+Template `templates/scene/turn_intent.j2`. It renders:
 
 ```
-# This reply
-
 {{ name }}'s approach in this reply: {{ stance_description }}. Write it in
 their own voice. Never name or explain the approach.
 ```
 
 `compose_turn` and `compose_director_turn` (`assemble.py:1637`, `:1700`)
-gain `plan: dict | None = None`. `None` renders the section empty, so it
-drops out in `_render_sections` and the prompt is byte-identical (3.1 rule 6).
-Because the section is composed, it is in the snapshot and in the generation's
-own prompt capture. A reader inspecting "What the model saw" sees the intent
-the reply was written under.
+gain `plan: dict | None = None`. `None` adds no message, so the prompt is
+byte-identical (3.1 rule 6). The block is in the snapshot, in the resume
+snapshot (3.1 rule 5), and in the generation's own prompt capture, as its
+own inspector row like an author's note. A reader inspecting "What the model
+saw" sees the intent the reply was written under. The play gate reports
+cache-read tokens per configuration.
 
 **Inspector.** One line in the response's details, "Approach: deflect
 (sampled, 38%)" or "(most likely)", read from `intent`. It is a plain

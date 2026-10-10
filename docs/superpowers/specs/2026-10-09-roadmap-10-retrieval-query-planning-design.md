@@ -126,7 +126,7 @@ P1 = plan(turn, E0)                                         step 1: generate, hi
 if P1 is None:                return E0                     failed or unusable: fail soft
 if not P1.needs_history:      return E0                     planner says history is not needed
 E1 = merge(E0, retrieve(query_of(P1)), ceiling, expand)     09, rerank=None
-if not repair_enabled:        return finish(E1)             (final check below if asked)
+if not repair_enabled:        return finish(E1)             no check: `sufficiency` is not_asked
 S1 = sufficient(turn, E1)                                   step 2: decide, history-sufficiency (+01d hop)
 if S1 != "insufficient":      return finish(E1)             sufficient or unknown: stop
 P2 = plan(turn, E1, tried=P1)                               step 3: generate, the repair hop
@@ -170,7 +170,7 @@ deadline, not the row count, is what bounds the wait.
 
 ### 4.1 A route born at format 2
 
-Two new routes, both campaign-scoped:
+One new route, campaign-scoped, and one task on 02-C5b's route:
 
 ```python
 Route("history_plan", "History recall planning",
@@ -263,11 +263,27 @@ decide route with the Decision role, which inherits Fast.
 | Live threads and commitments | 10, title and handle, involving present actors first | `continuity.effective` rows 09 already read |
 | Groups of the present cast | 8, name and handle | 07-C2 via 09's seeds |
 | Evidence already found | 6 items: title, in-fiction date, one-line summary | `E0.items`, then `E1` for the repair |
-| What was tried (repair only) | the previous plan's questions and terms | `P1` |
+| What was tried (repair only) | the previous plan's subjects (as handles), questions and terms, rendered as quoted data | `P1` |
 | Coverage | the verdict word and the tiers tried | `E0.coverage` |
 
 Total input is clipped to `PLAN_INPUT_BYTES` (6000) by dropping from the
-bottom of this table upward, never the turn window. Signals, ranks and scores
+bottom of this table upward, never the turn window.
+
+**Only 09's filtered seeds** (review M6). Every record, thread, commitment and
+group offered comes from 09's seeds after 09 section 5.1's gates: a ref the
+reader excluded through pins, and a gm-only record, is never offered, so the
+planner cannot be shown it or name it. **For an actor perspective** (10-C1,
+once 11-C1 lands) the input is narrowed further to what 11-C1 classifies as
+known to that actor: offered records, evidence found and the turn window as
+that actor observed it. That is what keeps a plan's questions and terms from
+encoding a secret: the planner was never shown one.
+
+**What was tried is data, not instruction** (review M1). `P1`'s questions and
+terms are model-written text. They are rendered inside a fenced block labelled
+as the previous attempt's search, after normalisation and the same clipping
+`parse` applies, and the template says to treat them as a list of what was
+already searched, never as directions. They are bounded (3 x 200 and 8 x 60
+characters) and come only from a reply that already passed `parse`. Signals, ranks and scores
 are not shown to the planner: they are 09's reasons, and a planner that sees
 "found by shared cast" learns to ask for shared cast.
 
@@ -285,71 +301,112 @@ and `terms` with `needs_history: false` is a correct answer.
 
 ### 5.2 The schema
 
+The schema must pass 01f-C3's `schemas.check`, or 01f-C1 refuses the call
+with `ValueError` before anything is sent (review B1). The portable subset
+refuses numeric bounds, `minItems`/`maxItems` and any key it does not list
+(`maxLength` included), and requires every property in `required` with
+`additionalProperties: false` (01f section 3.1). So the schema carries
+**shapes only**, and every bound lives in `plan.parse` (5.4):
+
 ```json
 {"type": "object", "additionalProperties": false,
  "required": ["needs_history", "subjects", "questions", "terms", "scopes", "max_scenes"],
  "properties": {
    "needs_history": {"type": "boolean"},
-   "subjects":  {"type": "array", "maxItems": 6, "items": {"type": "string", "enum": ["s1", "..."]}},
-   "questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 200}},
-   "terms":     {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 60}},
+   "subjects":  {"type": "array", "items": {"type": "string", "enum": ["s1", "..."]}},
+   "questions": {"type": "array", "items": {"type": "string"}},
+   "terms":     {"type": "array", "items": {"type": "string"}},
    "scopes":    {"type": "array", "items": {"type": "string",
                  "enum": ["shared_cast", "actor", "location", "thread", "relationship", "group"]}},
-   "max_scenes": {"type": "integer", "minimum": 1, "maximum": 4}}}
+   "max_scenes": {"type": "integer"}}}
 ```
+
+- **No offered records**: `subjects.items` is `{"type": "string"}` with no
+  `enum`, since an empty `enum` is accepted by no strict mode; `parse` then
+  drops every subject as unknown.
+- **The bounds the schema cannot carry** (6 subjects, 3 questions of 200
+  characters, 8 terms of 60, `max_scenes` in `[1, history_recall_depth]`) are
+  stated in the prompt's prose and enforced by `parse`.
+- **The prompt carries `schemas.render(schema)` byte-for-byte**, as 01f-C1
+  requires; the template renders it with the shared filter rather than
+  spelling the schema itself.
 
 `scopes` are 09's structural relations by name (09 section 5.2), not the
 draft's `actor_history`/`shared_scenes`/`thread_history`: one vocabulary, so a
-plan is a `Query` without translation. `max_scenes`' maximum is the campaign's
-`history_recall_depth`, rendered per call.
+plan is a `Query` without translation.
 
 ### 5.3 The call
 
 ```python
-resolved, why, kind = _soft_resolved(
-    lambda: require_inference("history-query-plan", cid))       # task literal at the call site
+resolved, why, kind = await run_in_threadpool(
+    _soft_resolved, lambda: require_inference("history-query-plan", cid))  # literal in the thunk
+schema = plan.schema_for(offered, depth)
 with store.usage.meter("history-query-plan", campaign=cid, scene=sid, post=turn_index) as m:
     text = await _bounded_call(
         operations.generate("history-query-plan", messages, client=client,
-                            resolved=resolved, usage=m.usage, schema=plan.SCHEMA_FOR(offered),
-                            stream=False),
-        ceiling=PLAN_CEILING)
-# with 01f-C1's per-call cap: max_tokens=PLAN_MAX_TOKENS (only ever lowers the preset's)
+                            resolved=resolved, usage=m.usage, schema=schema,
+                            max_tokens=PLAN_MAX_TOKENS, stream=False),
+        ceiling=min(PLAN_CEILING, remaining()),
+        on_timeout=_noting(client, resolved, m.usage))
+got = plan.parse(text, offered, depth)                       # after the meter's block
 ```
 
-- `_soft_resolved` (`routes/common.py:1519`): a route that cannot resolve (no
-  key, `incapable`) skips planning with a reason in the trace; the turn is
-  untouched. The lambda keeps the task a literal for `test_routing_guard.py`.
-- `_bounded_call` with an explicit `PLAN_CEILING` (8 s), never the
-  `llm_call_budget` default, whose `0` means "no ceiling at all"
-  (`routes/common.py:544`-`570`): a turn-path call must not be able to hold
-  the reply for as long as a provider likes.
+- **Resolution in a worker** (review S5): `require_inference` reads
+  `config.md`, the connections and the catalog synchronously, so it runs
+  through `run_in_threadpool`, the pattern the round driver already uses
+  (`character_turns.py:748`-`749`); the task stays a literal inside the thunk
+  for `test_routing_guard.py`. `_soft_resolved` (`routes/common.py:1519`): a
+  route that cannot resolve (no key, `incapable`) skips planning with a reason
+  in the trace; the turn is untouched.
+- **The `draft_completion` pattern** (review S6): `_bounded_call` with
+  `on_timeout=_noting(...)`, so a planner that always overruns marks its
+  connection as failing like every other bounded generation
+  (`routes/common.py:249`-`252`), and `plan.parse` runs after the meter's
+  block, so a parse cannot change what the row says.
+- **The ceiling** is `min(PLAN_CEILING, remaining)`: `PLAN_CEILING` (6 s) for
+  one short structured reply, never the `llm_call_budget` default, whose `0`
+  means "no ceiling at all" (`routes/common.py:544`-`570`), and never past the
+  turn-phase deadline (09 section 10.2).
 - The meter is the call site's own (`test_usage_guard.py`), and `post=` puts
-  the planner's cost on the post it served, beside the reply's
-  (`CLAUDE.md`, attribution per player post).
-- `schema=` reaches the provider's structured mode through 01f-C1, with the
-  schema also in the prompt (01f-C1's rule), and 01f-C1's per-call
-  `max_tokens` caps the reply at `PLAN_MAX_TOKENS` (256: the schema's own
-  bounds fit well inside it; tuned later), never raising a preset's cap.
+  the planner's cost on the post it served, beside the reply's (`CLAUDE.md`,
+  attribution per player post).
+- **Structured mode and the cap** (01f-C1): `schema=` reaches the provider's
+  structured mode on each attempt that can take it, the schema also in the
+  prompt. `max_tokens=PLAN_MAX_TOKENS` caps the reply at `min(preset's cap,
+  PLAN_MAX_TOKENS, the model's known max output)`, never raising a preset's
+  cap. `PLAN_MAX_TOKENS` is **1024** (review S3): a maximal valid plan (6
+  handles, 3 questions of 200 characters, 8 terms of 60, the scopes and the
+  JSON syntax) is a few hundred tokens, and the rest is an allowance for a
+  reasoning model, whose `max_completion_tokens` counts reasoning (01f section
+  3.9) and whose adaptive thinking on Anthropic is held to half the cap. The
+  route's hint says a non-reasoning preset is the right choice for it, and the
+  eval suite carries a maximal-plan case so truncation shows up as
+  `unusable`, not silently.
+- **Unpriced** (review M3): a Fast model with no stated price files unpriced
+  rows, so the Costs view reads "incomplete" until rates are set; the settings
+  copy says so, as 09 section 14 does for embeddings.
 
 ### 5.4 Tolerant parse and validation
 
 `plan.parse(text, offered: Offered, depth: int) -> Plan | None`, pure and
 total (it never raises):
 
-1. **Object.** `json.loads` of the reply; failing that, the first balanced
-   `{...}` in it, fenced or not. No object: `None`, trace `unreadable`.
+1. **Object.** `schemas.find_object(text)` (01f-C3), the shared tolerant
+   reader: the reply's top-level JSON value, tolerant of a fence or prose
+   around it. No object, or not a JSON object: `None`, trace `unreadable`.
 2. **Fields, independently.** A field that is missing or the wrong type takes
    its empty default rather than voiding the plan, the per-section tolerance
    `continuity/doc.py` uses for a hand-edited file:
    - `subjects`: handles mapped to refs; an unknown handle is dropped and
-     counted (`dropped.subjects`).
+     counted (`dropped.subjects`); at most 6 kept.
    - `questions`: strings stripped, clipped to 200 characters at a word
      boundary, deduplicated case-insensitively, at most 3; one with no letters
      is dropped.
    - `terms`: the same, 60 characters, at most 8, and a term that is a
      stopword or a single character is dropped.
-   - `scopes`: intersected with 09's `RELATIONS`; empty means all.
+   - `scopes`: intersected with 09's `RELATIONS`; empty means all, and
+     `query_of` passes 09's `RELATIONS` explicitly, since a `Query` scope
+     outside it is a `ValueError` (review M2).
    - `max_scenes`: clamped to `[1, history_recall_depth]`; absent means the
      setting.
    - `needs_history`: absent reads as `true` if anything else survived.
@@ -371,24 +428,29 @@ class Plan:
 ```
 
 `plan.query_of(plan, turn_index) -> history.Query`: `texts = questions`,
-`terms = terms + subject names`, `subjects`, `scopes`, `max_scenes`,
-`perspective`, `turn_index`. The turn window is not repeated: `E0` already
+`terms = terms + subject names`, `subjects`, `scopes or RELATIONS`,
+`max_scenes`, `perspective`, `turn_index`. The turn window is not repeated: `E0` already
 retrieved on it, and `merge` keeps its signals.
 
 ## 6. Merging rounds without growing the prompt
 
-Each planned round goes through 09-C1 with `rerank=None` and is merged into
-the evidence so far with `history.merge(prev, round, ceiling=...)`:
+Each planned round goes through 09-C1 with `rerank=None` and
+`deadline=remaining`, and is merged into the evidence so far with
+`history.merge(prev, round, ceiling=..., expand=...)` (09-C1):
 
-- Candidates are matched by scene identity, so a scene found by both rounds
-  carries both rounds' signals, and its agreement count can rise (09's
-  coverage counts it).
+- Candidates are matched by `SceneRef.key` (09 section 7.2: the identity, or a
+  sid fallback for a legacy scene), so a scene found by both rounds carries
+  both rounds' signals under `(round, signal)` ranks, and its agreement count
+  can rise.
+- A newly selected scene that no round expanded is expanded through 09's
+  `expand` callback, at most `depth` transcript reads per merge.
 - The merged order is RRF over the union of every round's ranked lists, so a
   scene the turn window and a planned question both found ranks above one
   either found alone. No round's order is privileged; that would be a fused
   confidence by another name.
-- The selection is still `history_recall_depth` items under the same ceiling
-  (09 section 9.2). Planning can change *which* scenes the section carries,
+- The selection is at most `history_recall_depth` items under the same
+  ceiling as `E0` (09 section 9.2), not at most `E0`'s item count: planning
+  runs because `E0` was thin or empty, so it must be able to add (review B3). Planning can change *which* scenes the section carries,
   never how many or how large. `max_scenes` narrows a round's own selection
   and nothing else.
 
@@ -418,7 +480,10 @@ The call is `operations.decide("history-sufficiency", [item], client=...,
 resolved=..., campaign=cid, scene=sid, post=turn_index, around=...)`
 (`inference.py:684`), resolved with
 `require_inference("history-sufficiency", cid, operation="decide")` through
-`_soft_resolved`, its `around` bounding it by `CHECK_CEILING`.
+`_soft_resolved` **in a worker** (5.3). Its `around` bounds each facade call
+by `min(CHECK_CEILING, remaining)` (`CHECK_CEILING` 4 s), and the whole check,
+its fallback stage, its 01f-C2 re-sends and its 01d hop included, stops
+starting new calls once the turn-phase deadline has passed (review S1).
 
 ### 7.2 Mapping the answer
 
@@ -450,40 +515,68 @@ Before 01d lands, a non-answer is `unknown` and the repair hop does not run.
 ## 8. The repair hop (10-C2)
 
 The repair hop is a second planner call with `tried=P1`, gated on an
-`insufficient` verdict, and it is the last model call the phase makes.
+`insufficient` verdict. It is the last *plan* the phase makes.
 
-- **Inputs** as 5.1, with `E1`'s items as the evidence found and `P1`'s
-  questions and terms as what was tried, and the instruction to ask for what
-  is still missing rather than restate.
+- **Inputs** as 5.1, with `E1`'s items as the evidence found and `P1` as what
+  was tried (quoted data), and the instruction to ask for what is still
+  missing rather than restate.
 - **Novelty.** `P2.adds_nothing_to(P1)` is true when `P2`'s subjects, questions
   and terms are each a subset of `P1`'s after normalisation. Such a plan
   retrieves nothing new, so it is not run.
-- **No check after it.** `E2` goes to the prompt as merged. A second
-  sufficiency call would invite a third plan, and the bound is the point.
-- **Deadline.** The whole planning phase, both plans, the check and its
-  escalation, and the planned retrievals, runs under `PLAN_PHASE_DEADLINE`
-  (20 s), started when planning starts. A step that would start after it has
-  passed is not started; what is merged so far is returned. The constant is
-  justified by the planner and check ceilings plus two embed round trips, and
-  is tuned against the eval suite's latency column.
+- **No further plan, ever.** At most one check may follow it, and only when
+  the caller asks (`final_check`, 8.1); that check's verdict is recorded and
+  acted on by 12, never by another plan.
+- **Deadline.** Every step, the planned retrievals included, draws from 09's
+  turn-phase deadline (09 section 10.2), each taking `min(own ceiling,
+  remaining)`, so a step started late cannot overrun it (review S1). On
+  `post_chat` the worst wait before the first frame is therefore 09's file
+  stages plus `HISTORY_PHASE_PLANNED_SECONDS` (12 s), and lore recall's own
+  embed in compose, which 09's shared outage memo caps during an outage.
+
+### 8.1 The trace, and what 12 reads
 
 `PlanTrace` records every step: `trigger` (`thin`, `empty`, `forced`), each
 call's task, outcome and milliseconds, the parsed plans (refs shown as names),
-the validation drops, the verdict and whether it escalated, and the terminal
-state:
+the validation drops, each sufficiency verdict and whether it escalated, and
+three stable fields 12 reads (review S4; the coordinator's second addendum):
+
+```python
+@dataclass(frozen=True)
+class PlanTrace:
+    terminal: str                    # the table below
+    sufficiency: str                 # last verdict: sufficient | insufficient | unknown | not_asked
+    cheap_retrieval_failed: bool     # the repair hop ran AND a 10-C3 check after it said insufficient
+    tried: tuple[TriedPlan, ...]     # every plan that ran: subjects (refs), questions, terms, scopes,
+                                     # and the scene keys its round selected
+    steps: tuple[Step, ...]          # task, outcome, ms, rows filed
+```
+
+`cheap_retrieval_failed` is the one field that means "planning and its one
+repair could not find enough". It is true only when the repair hop ran
+(terminal `repaired`) **and** the post-repair check (`final_check`) returned
+`insufficient`. `gather` passes `final_check=True` exactly when 12's RP-mode
+investigation is enabled for the campaign, so the extra decide call is spent
+only when something will act on its answer; with it off, `sufficiency` after a
+repair is `not_asked` and `cheap_retrieval_failed` is false. With
+`history_plan_repair` off the pre-repair check does not run either, so 12's
+RP entry, if it wants a verdict, calls 10-C3 itself on the final evidence;
+10-C3 is a public function for exactly that.
 
 | Terminal state | Meaning |
 |---|---|
-| `not_run` | mode off, or coverage sufficient |
-| `skipped:<why>` | unresolvable route, deadline, call cap, budget (open question 3) |
+| `not_run:<why>` | mode off, coverage `sufficient`, `exhausted` or `error` |
+| `skipped:<why>` | unresolvable route, deadline, step cap, budget (open question 3) |
 | `declined` | the planner said no history is needed |
-| `unusable` | the planner's reply was unreadable or empty |
-| `planned` | one round, no repair (repair off, check sufficient or unknown) |
-| `repaired` | the repair hop ran |
-| `repair_redundant` | the repair plan added nothing |
+| `unusable` | the first plan was unreadable, empty, or timed out |
+| `planned` | one round; repair off, or the check said sufficient or unknown |
+| `unrepaired` | the check said insufficient, and the repair plan was unusable, timed out, or cut by the deadline or the cap |
+| `repair_redundant` | the check said insufficient, and the repair plan added nothing |
+| `repaired` | the repair hop ran; `sufficiency` says what the final check found, if asked |
 
-12 reads `planned` with an `insufficient` check that could not repair, and
-`repaired`, as "cheap retrieval failed" (10-C2's consumer row).
+12's RP trigger is `cheap_retrieval_failed`, plus, at 12's discretion,
+`unrepaired` and `repair_redundant` with `sufficiency == "insufficient"`
+(planning could not even try again, or had nothing new to try). The
+combinations are stated here so 12 does not re-derive them.
 
 ## 9. Visibility
 
@@ -506,6 +599,10 @@ turn's breakdown (open question 6).
 | `history_plan` | `off` | `off` or `auto`. `auto` plans on `thin` or `empty` coverage |
 | `history_plan_repair` | `on` | Whether `auto` may take the repair hop |
 
+With `history_plan` on, 09's turn-phase deadline is
+`HISTORY_PHASE_PLANNED_SECONDS` (12 s) rather than 4 s; planning has no
+deadline of its own.
+
 Both join `config._CONFIG_KEYS` (`store/config.py:219`) and, under 01s, the
 Context pane beside 09's keys. `history_plan` has no effect while
 `history_recall_depth` is 0. `force` is a parameter of `gather`, used by the
@@ -517,11 +614,12 @@ The controls, each with what it bounds:
 |---|---|
 | The free gate (09-C2 coverage) | How often planning runs at all |
 | `PLAN_INPUT_BYTES`, the per-part caps in 5.1 | Planner input |
-| Schema `maxItems`/`maxLength`, validation clipping, `PLAN_MAX_TOKENS` (01f-C1), `PLAN_CEILING` | Planner output and its wall time |
+| Parse-side bounds (5.4), `PLAN_MAX_TOKENS` (01f-C1), `PLAN_CEILING` | Planner output and its wall time |
 | `CHECK_CEILING`, one item, no rationale | The check |
-| `MAX_PLAN_CALLS`, the novelty rule, no check after repair | Calls per turn |
-| `PLAN_PHASE_DEADLINE` | The whole phase's wall time |
-| 09's one embed request per round, one rerank per turn | Retrieval cost added by planning |
+| `MAX_PLAN_STEPS` (3, or 4 with `final_check`), the novelty rule, no plan after repair | Steps per turn; section 3 states the worst-case rows |
+| 09's turn-phase deadline, shared | The whole phase's wall time |
+| Once per player post (09's per-round retrieval) | Group rounds |
+| 09's one embed call per round, one rerank per turn | Retrieval cost added by planning |
 | 09's ceiling and depth | Prompt tokens: planning adds none |
 | Ledger tasks `history-query-plan`, `history-sufficiency` | What it cost, per post, in the three money columns |
 
@@ -548,6 +646,11 @@ controls:
    should not run, or should decline.
 8. **Control, already found**: 09 alone succeeds. The free gate should stop
    planning.
+9. **Control, young campaign**: a first scene, and a campaign with fewer
+   earlier scenes than `depth`. Coverage is `exhausted`; planning must not run
+   (review B4).
+10. **Maximal plan**: a recorded reply at every parse-side bound, which must
+    parse whole within `PLAN_MAX_TOKENS` (review S3).
 
 Plus validation cases replayed from recorded planner replies: an invented
 handle, a bare string where an array belongs, a fenced object, prose with no
@@ -561,8 +664,12 @@ cost).
 **Metrics** per arm and aggregate, through 01a-C1, compared in 01a-C3's
 table: scene recall at 1, 3 and 5 and excerpt recall (09's); `gain` (selected
 scenes not in `E0`); trigger rate and, on the controls, false-trigger rate;
-plan validity rate and drops; model calls, tokens, wall time and cost (three
-money columns, never added) added per turn; terminal-state counts.
+plan validity rate and drops; steps and ledger rows, tokens, wall time and
+cost (three money columns, never added) added per turn; terminal-state counts
+and `cheap_retrieval_failed` rate. **Live arms add 09's downstream-consistency
+grader** (the reply names the planted fact token and does not contradict it,
+09 section 12.3), which is the draft's "retrieval/response improvement"
+(review M4).
 
 **Offline** (`evals/run.py --history --plan`): recorded planner replies and
 recorded sufficiency decisions (`evals/recordings/history-plan.<case>.json`),
@@ -603,24 +710,35 @@ user's library.
 ### 10-C2: one bounded, metered repair hop
 
 - **Entry**: `routes/history_recall.plan_and_repair(app, cid, sid, turn, E0, *,
-  client, ceiling, force=False) -> tuple[Evidence, PlanTrace]`, called from
-  09's `gather`.
-- **Guarantees**: at most `MAX_PLAN_CALLS` model calls, at most one repair
-  hop, no check after it, `PLAN_PHASE_DEADLINE` on the whole; each call
-  metered under its task with campaign, scene and post; the returned evidence
-  has no more items and no larger ceiling than `E0`'s; the worst case returns
-  `E0` unchanged.
+  client, ceiling, deadline, force=False, final_check=False) ->
+  tuple[Evidence, PlanTrace]`, called from 09's `gather` on `thin` or `empty`
+  coverage only.
+- **Guarantees**: at most `MAX_PLAN_STEPS` steps (3, or 4 with `final_check`),
+  at most one repair hop, never a plan after it; every step takes `min(own
+  ceiling, remaining)` of 09's turn-phase deadline; each call metered under
+  its task with campaign, scene and post, with the worst-case row count stated
+  in section 3; at most once per player post; the returned evidence has at
+  most `history_recall_depth` items and the same ceiling as `E0`; the worst
+  case returns `E0` unchanged.
+- **The trace 12 reads** (8.1): `PlanTrace.terminal`, `sufficiency`,
+  `cheap_retrieval_failed` (the repair hop ran and the post-repair 10-C3
+  check said insufficient) and `tried` (every plan that ran and the scenes its
+  round selected), stable fields.
 - **Escalation**: only the sufficiency check escalates, through 01d-C2, one
   hop, and only for a non-answer or a reported low margin.
 - **Failure**: never raises into the turn; the trace says where it stopped.
 
 ### 10-C3: the evidence-sufficiency predicate (new; split out of 10-C2)
 
-- **Route**: `history_check` (decide, Decision role, `NO_LEGACY`), task
-  `history-sufficiency`, landing with its call site.
+- **Route**: 02-C5b's `history_check` (decide, Decision role, `NO_LEGACY`),
+  task `history-sufficiency` appended to its tuple; the route lands with the
+  first of its call sites. 01d-C1 row: fallback `role`, escalation on,
+  samples off.
 - **Store**: `sufficiency.item(turn_window, evidence) -> decisions.Item`.
-- **Route layer**: `sufficient(...) -> Literal["sufficient", "insufficient",
-  "unknown"]`, mapping per section 7.2, escalation per 7.3.
+- **Route layer**: `sufficient(app, cid, sid, turn_window, evidence, *,
+  client, deadline) -> Literal["sufficient", "insufficient", "unknown"]`,
+  mapping per section 7.2, escalation per 7.3; public, so 12's RP entry can
+  ask it of the final evidence when the trace says `not_asked`.
 - **Guarantees**: no rationale requested or consumed; a non-answer is never
   `insufficient`.
 
@@ -632,13 +750,37 @@ user's library.
   (`test_operation_guard.py`). `NO_LEGACY` is new vocabulary in
   `store/routing.py`, which must stay a pure leaf: a sentinel constant keeps
   it one.
-- **Frozen legacy tests** stay green unmodified (section 4.1). A test pins
-  that a `NO_LEGACY` route never appears in `LEGACY_ROUTES`, `CONFIG_KEYS`,
-  `PRESET_CONFIG_KEYS` or `routes_for(...)`, and that a format-1 store
-  resolves it to its default role without reading any legacy key
-  (`tests.inference_fixtures.legacy_store()`).
+- **Frozen legacy tests** (`test_routing.py:114`-`156`) stay green
+  unmodified (section 4.1). A test pins that a `NO_LEGACY` route never appears
+  in `LEGACY_ROUTES`, `CONFIG_KEYS`, `PRESET_CONFIG_KEYS` or
+  `routes_for(...)`, and that a format-1 store resolves it to its default role
+  without reading any legacy key (`tests.inference_fixtures.legacy_store()`).
+- **Tests this change edits** (review B2), named so nobody discovers them red:
+  - `test_routing.py:159`-`172`, `test_every_route_declares_operation_and_default_role`:
+    `len(routing.ROUTES)` grows by the routes landed (`history_plan`, and
+    `history_check` if 10-C3 lands it first), `history_check` joins the
+    `decide` set.
+  - **The frozen inference baselines.** `tests/inference_baseline.py:414`-`420`
+    observes every task in `sorted(routing.TASK_ROUTE)`;
+    `test_inference_resolve.py:40`-`49` reads
+    `BASELINE[state]["tasks"][NEW_TASKS.get(task, task)]`; both JSON fixtures
+    are never regenerated, and `without_new_tasks`
+    (`test_inference_equivalence.py:53`-`74`, and its `_c` twin at `:31`-`51`)
+    requires a new task to resolve identically to a recorded sibling. A
+    `NO_LEGACY` task has none: on a format-1 state that pins `route_summary`,
+    `rolling-summary` follows the pin while `history-query-plan` resolves to
+    Fast by design. The mechanism: a `NO_LEGACY_TASKS` set, derived from
+    `routing.ROUTES` (every task of a `NO_LEGACY` route), that
+    `without_new_tasks` drops from both cells and `_recorded` skips, plus one
+    test asserting that each such task resolves, in every baseline state at
+    both scopes, exactly as its route's `default_role` resolves for an
+    unpinned route (`_role_cell(state, role)`, a helper beside `_task`). Derived
+    rather than listed, so 01g's `tool-decision` and 02's routes inherit it.
+    Whichever spec lands the first `NO_LEGACY` route lands it; it belongs to
+    the checklist's shared `NO_LEGACY` structure.
 - **Metering and costs.** Every call files a ledger row under its task.
-  Planning is never charged to an unrelated post; its rows carry `post`. A
+  Planning is never charged to an unrelated post; its rows carry `post`. An
+  unpriced Fast or Decision model files unpriced rows (5.3). A
   native decision row is never modelled (`CLAUDE.md`), which applies to the
   check if its Decision model is native-only.
 - **Faking the LLM.** Tests use `backend/tests/llm_fakes.py` with cassette
@@ -670,44 +812,59 @@ user's library.
 **Store:**
 
 - `parse`: every recorded shape in section 11 maps to its documented `Plan` or
-  `None`; an invented handle is dropped and counted; `needs_history: false`
-  with empty lists is `declined`, not `None`; it never raises on arbitrary
-  input (a property test over random strings and JSON values).
-- `schema_for` renders the offered handles and the depth bound.
-- `query_of` produces a `Query` whose subjects are refs and whose texts do not
-  repeat the turn window.
-- `build_messages` respects every cap in 5.1, drops from the bottom first, and
-  never shows a signal, rank or score.
+  `None`; an invented handle is dropped and counted; every parse-side bound is
+  enforced; `needs_history: false` with empty lists is `declined`, not `None`;
+  it never raises on arbitrary input (a property test over random strings and
+  JSON values).
+- `schemas.check(plan.schema_for(offered, depth))` passes with zero, one and
+  many offered records, and the schema has no `enum` when none is offered.
+- The built prompt contains `schemas.render(schema)` byte-for-byte.
+- `query_of` produces a `Query` whose subjects are refs, whose scopes are
+  `RELATIONS` when the plan named none, and whose texts do not repeat the turn
+  window.
+- `build_messages` respects every cap in 5.1, drops from the bottom first,
+  never shows a signal, rank or score, never offers an excluded or gm-only
+  ref, and renders `P1` as quoted data.
 - `sufficiency.item` asks no rationale.
 
 **Routes** (with `llm_fakes` cassettes):
 
 - Off: no planner request, no check, evidence is `E0`.
-- `sufficient` coverage: no request.
+- `sufficient`, `exhausted` and `error` coverage: no request (`not_run:<why>`).
 - `thin` coverage: one plan, one round, merged; the post's ledger rows include
-  `history-query-plan`.
+  `history-query-plan`; an `empty` `E0` gains items (the bound is depth, not
+  `E0`'s count).
 - Repair: check `insufficient` -> second plan -> merged; check `sufficient` or
-  `unknown` -> stop; a redundant repair plan is not run.
+  `unknown` -> stop; a redundant repair plan is not run (`repair_redundant`);
+  an unusable repair plan gives `unrepaired`.
+- `final_check`: after a repair, an `insufficient` check sets
+  `cheap_retrieval_failed`; without `final_check`, `sufficiency` is
+  `not_asked` and the flag is false.
+- Resolution runs in a worker (a spy on the loop thread sees no config read).
 - Unresolvable planner route: skipped with reason; the turn proceeds.
-- Planner timeout at `PLAN_CEILING`: `unusable`, turn proceeds, `E0` returned.
+- Planner timeout: `unusable`, the connection is noted as failing through
+  `_noting`, turn proceeds, `E0` returned.
+- Deadline: a step started with little time left is bounded by `remaining`,
+  and the phase never exceeds 09's turn-phase deadline.
 - Escalation (with 01d): an abstention is escalated once; a second abstention
   is `unknown`.
-- Call cap: a forced extra step is refused by `MAX_PLAN_CALLS`.
-- The merged evidence never exceeds `E0`'s depth or ceiling.
+- Step cap: a forced extra step is refused by `MAX_PLAN_STEPS`.
+- A group round with several narrator contributions plans once.
 - `test_reasons_never_reach_the_prompt` with a plan in play.
 
 **Routing:** the `NO_LEGACY` pins of section 13; the two routes' operations
 and default roles.
 
 **Evals:** offline planning arms pass their validation cases; the control
-cases do not trigger under the free gate.
+cases, the young campaign included, do not trigger under the free gate.
 
 **Acceptance (the draft's, restated):**
 
 1. Planner output is bounded, validated structured data naming only offered
    records.
 2. It runs only on thin or empty coverage, or when forced.
-3. At most one repair hop exists, and nothing checks after it.
+3. At most one repair hop exists, no plan follows it, and a check follows it
+   only when 12's RP mode asks.
 4. Every failure is fail-soft and returns at worst what 09 alone found.
 5. The evals report recall gain against added calls and cost, and the default
    stays off until they justify it.
@@ -752,3 +909,33 @@ cases do not trigger under the free gate.
    *Recommendation:* no; the free coverage gate first, the check only before
    the repair hop, and let the evals' false-trigger rate say whether the first
    gate needs help.
+
+## 17. Review record
+
+Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
+
+| Item | Disposition |
+|---|---|
+| B1 schema outside 01f's portable subset | Fixed: shapes only, no `enum` when nothing is offered, bounds in `parse`, `schemas.render` in the prompt, `schemas.check` test (5.2, 5.4) |
+| B2 frozen inference baselines and registry assertions | Fixed: `NO_LEGACY_TASKS` mechanism and the edited `test_routing.py` assertions named (13) |
+| B3 "no more items than E0" | Fixed: at most `history_recall_depth`, same ceiling (6, 10-C2) |
+| B4 gate fires when nothing more exists | Fixed: gate on `thin`/`empty` only; 09's `exhausted` and `error` never plan; young-campaign control (3, 11) |
+| S1 phase deadline not a bound | Fixed: one turn-phase deadline shared with 09, every step `min(own, remaining)`, worst case stated (3, 8) |
+| S2 call cap counts steps | Fixed: `MAX_PLAN_STEPS` with the escalation hop inside a step; worst-case rows stated (3) |
+| S3 `PLAN_MAX_TOKENS` too small | Fixed: 1024 with a reasoning allowance, non-reasoning preset advised, maximal-plan eval case (5.3, 11) |
+| S4 terminal states insufficient for 12 | Fixed: `sufficiency`, `cheap_retrieval_failed`, `tried`, `unrepaired`, `final_check`, combinations named (8.1) |
+| S5 resolving on the loop | Fixed: `run_in_threadpool` around `_soft_resolved` (5.3, 7.1) |
+| S6 missing `_noting` and parse placement | Fixed: `draft_completion` pattern (5.3) |
+| S7 two `history_check` definitions; policy row | Fixed: 02-C5b's entry is the definition, 10 appends its task; 01d-C1 row given (4.1) |
+| S8 planning per contribution | Fixed: once per player post via 09's per-round retrieval (3) |
+| M1 P1 text into the repair prompt | Fixed: rendered as quoted data after parse's normalisation (5.1) |
+| M2 empty scopes | Fixed: `query_of` passes `RELATIONS` (5.4) |
+| M3 unpriced rows | Fixed: stated, settings copy says so (5.3) |
+| M4 no downstream metric | Fixed: live arms add 09's consistency grader (11) |
+| M5 `NO_LEGACY` truthiness | Fixed: explicit `is NO_LEGACY`, `str | None` noted for mypy (4.1) |
+| M6 excluded refs offered to the planner | Fixed: 09's filtered seeds only (5.1) |
+
+Coordinator inputs applied in the same pass: the schema fits 01f-C3; 10 has
+no 01i edge; 12's RP trigger is the stable `cheap_retrieval_failed` field with
+`tried` (8.1); `perspective` keeps secrets out of the planner's input (5.1,
+10-C1).
