@@ -208,7 +208,7 @@ Concretely:
  |   -> [rerank]                        optional decide, 01e Rank/Score   |
  |   -> coverage + widening             tier 1 -> tier 2 (09-C2)          |
  |   -> expand.excerpts (08-C3b)        bounded windows, prompt view      |
- |   -> budget.fit                      01i-C1 ceiling, per-scene units   |
+ |   -> budget.fit                      01i-C2 ceiling, per-scene units   |
  +------------------------------------------------------------------------+
                                    | Evidence (frozen, JSON-safe detail)
                                    v
@@ -1427,9 +1427,9 @@ Settings:
 4. **Query versus document embeddings in one space (resolved).** 01h-C1
    states that a query vector is compared within its space and is never
    cached; 09 relies on that statement and needs nothing further.
-5. **The opener and the other composes.** The opener runs on the loop and
-   has no player post; mechanics continuations and replay compose
-   mid-turn. *Recommendation:* leave all three out of 09; add the opener
+5. **The opener and the other composes.** The opener has no player post
+   (and composes in a worker once 01h-C4a lands); mechanics continuations and
+   replay compose mid-turn. *Recommendation:* leave all three out of 09; add the opener
    later with the greeting text as the query, once the async path is proven
    on the round driver.
 6. **Retrieval inside the scene being played.** A scene longer than the
@@ -1437,10 +1437,60 @@ Settings:
    after 10; it needs post-level selection 08 defers, and a different
    eligibility rule.
 7. **Retrieval latency before the first frame on `post_chat`.** Retrieval
-   (and later 10's planner) runs before the detached run starts, so the
+   (and 10's planning when on) runs before the detached run starts, so the
    player waits for it before the lead frame. *Recommendation:* accept for
-   09 under `RETRIEVAL_DEADLINE`; moving `compose_turn` into the run is a
-   larger change worth its own spec once 10 adds model calls to the phase.
-8. **Share the outage memo with semantic lore recall?** *Recommendation:* yes,
-   keyed by space id in one place (`embed_space`), in a follow-up; lore recall
-   pays the same deadline per turn today.
+   09 under the turn-phase deadline of section 10.2 (4 s, 12 s with
+   planning); moving `compose_turn` into the run is a larger change worth its
+   own spec.
+8. **Share the outage memo with semantic lore recall (resolved).** Done in
+   this spec (section 6.3), keyed by space id in `embed_space`.
+9. **`post=` on the embed doors (cross-spec, routed to 01h).** Neither
+   `embed_sync` (`embed.py:143`) nor 01h-C4b's `embed` takes `post`, so 09's
+   query row and 08's warm row on a turn are charged to the scene but not to
+   the player post. *Recommendation:* 01h adds `post: int | None` to both
+   doors, filed by the meter, and CLAUDE.md's embedding paragraph names it;
+   09 then passes `turn_index`. Until then 09-C1 does not promise it.
+10. **The post key in 08-C3b's post dicts (cross-spec, routed to 08).**
+    *Recommendation:* 08 adds `key` (`post_id`, else `response_id`, else
+    `""`) to each post dict; 11's per-post classification needs a name that
+    survives a cut. Until then `EvidencePost.key` is `""`.
+11. **12's `search_history` names the same split (cross-spec, routed to
+    12).** A tool call that embeds a query files `history-recall` for the
+    query and lets 08-C2b's `vectors_for` file `history-index` for any warm;
+    12 should say so rather than "embeds through `history-index`".
+
+## 18. Review record
+
+Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
+
+| Item | Disposition |
+|---|---|
+| B1 document warm contradicts 08/01h | Fixed: 09 embeds only the query (`history-recall`, `queries=`, async door); documents only through 08-C2b `vectors_for` (6.3); 09-C1 says up to two rows; 12 routed (OQ 11) |
+| B2 nullable identity in merge and shed | Fixed: `SceneRef.key` (7.2), used by merge, dedupe and shed units; no `ensure_identity`; frozen-campaign test |
+| B3 post keys and embed `post` not supplied | Fixed as requests: post key to 08-C3b (OQ 10), `post=` to 01h (OQ 9); 09-C1 no longer promises either before they land |
+| S1 RECALLED shared with lore | Fixed: own `HISTORY_RECALL` tier, first in `DROP_ORDER`; `pack` and `layout` docstrings change (9.1) |
+| S2 lock self-check on the wrong thread | Fixed: `gather_sync` checks in the calling worker before the portal (10.1) |
+| S3 round path retrieves for NPCs, replays, continuations | Fixed: gated to narrator contributions, no `appended`, no pending replay; once per round (10.1) |
+| S4 latency not bounded | Fixed: turn-phase deadline 4 s / 12 s shared with 10, every step `min(own, remaining)`, file stages stated, outage memo shared with lore recall now (6.3, 10.2) |
+| S5 exhausted vs missed | Fixed: `eligible` and an `exhausted` verdict (11.2) |
+| S6 merge underspecified | Fixed: per-round `Signals`, `(round, signal)` ranks, admitted-only RRF lists, `expand` callback (7.1, 7.2, 09-C1) |
+| S7 layout off must stop spend | Fixed: `_section_on` gate in `gather`; archive omission only when the archive is on (9.1, 9.4) |
+| S8 header and terms bypass gates | Fixed: header location through the setting's gate; excluded and gm-only names removed from terms (4, 9.1) |
+| S9 client/thread contract vs 01h-C4b | Fixed: `embed_client` (async) and `doc_client` (08's sync) named; `Depends(get_embeddings)`; resolution in a worker (10.1) |
+| S10 BUILD_LIMIT and ref forms vs 08 | Fixed: limit dropped (08 builds all misses); `refs.norm` (5.3, 6.5) |
+| S11 frozen inference baselines | Fixed: the `NO_LEGACY_TASKS` mechanism, specified in 10 section 13 and shared (14) |
+| M1 counter and what the ceiling measures | Fixed (9.3) |
+| M2 string compare vs `parse_sid` | Fixed (5.3) |
+| M3 rerank kit, native cost, constant values | Fixed: 02-C5b kit inputs, `pointwise` per 01e, native cost, `RERANK_CEILING` 4 s, `STRUCTURAL_PLAIN_CAP` 12 (5.4, 7.3) |
+| M4 "one request" false | Fixed: up to two rows, no single-round-trip claim (6.3) |
+| M5 preview bridge; reasons test markers | Fixed: synchronous `retrieve_preview`; hand-built evidence and distinctive markers (9.5) |
+| M6 header-only archive item | Fixed: skipped at selection (8) |
+| M7 portal raise strands the post | Fixed: `gather_sync` wraps the call (10.1) |
+| M8 vectors cost figure | Fixed (5.4, 6.3) |
+| M9 draft signals dropped silently | Fixed: recorded as deferred with reasons (5.2) |
+| M10 director branch | Fixed: `compose_director_turn` gains the parameter (10.1) |
+
+Coordinator inputs applied in the same pass: 01i-C2 `prompt_ceiling` as the
+only ceiling derivation (9.2); 01e-C1 `pointwise` on any `Rank` and no reliance
+on a native abstain (7.3); 07's accessor `groups_for`, leaders counted as
+members (5.1, 5.2).

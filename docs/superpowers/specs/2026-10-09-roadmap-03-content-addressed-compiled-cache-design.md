@@ -344,6 +344,11 @@ raw space id:
 
 05, 08 and the checklist's cross-spec decisions all use this form.
 
+**03 owns the one spelling of `<space-digest>`:** `compiled.space_digest(space)`,
+the first 16 hex characters of SHA-256 over the space id's exact bytes. Every
+spec that writes or reads a vector kind (05, 08 and 09) calls it. None of them
+derives its own.
+
 05 needs this record to rebuild "what was hot" for an edited path, and 08
 needs it to keep a hot SearchDocument and its vector current (section 2a,
 item 3).

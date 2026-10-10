@@ -190,8 +190,8 @@ These are headlines. The owning spec's Contract section is authoritative.
 - [ ] **03-C1** Composite keys over collection digests and inputs that are not
   files. A collection can take a member filter.
 - [ ] **03-C2** Liveness by construction.
-- [ ] **03-C3** `materialized`, with kind form `vector:<projection>:<space-digest>`
-  and an optional `instance` column.
+- [ ] **03-C3** `materialized`, keyed by `(path, kind, instance)`, with kind form
+  `vector:<projection>:<space-digest>` (one spelling: `compiled.space_digest`).
 - [ ] **03-C4** One validate-and-hash primitive.
 - [ ] **03-C5** Artifacts can be stored at write time. The `sources` row waits
   out the racy window.
@@ -300,7 +300,7 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [ ] 06 ← 05-C2 (H); 05-C1/C4, 04-C2b (S)
 - [ ] 07 ← 03-C1/C2/C3 (S)
 - [ ] 08 ← 03-C1, 03-C2, 03-C6, 03-C7 (H); 03-C3, 05-C3 (H for C2c);
-  01h-C3 (H once C1 sends a type); 07-C2, 07-C3c, 01h-C1 (S)
+  07-C2, 07-C3c, 01h-C1, 01h-C3, 03-C9 (S)
 - [ ] 09 ← 08-C1/C2/C3, 03-C6, 03-C7 (H); 01h-C4 (H for the turn path);
   01a-C1 (H for live evals); 07-C2, 07-C3c, 01e-C1/C2, 01h-C1, 01i-C1/C2,
   02-C5b (S)

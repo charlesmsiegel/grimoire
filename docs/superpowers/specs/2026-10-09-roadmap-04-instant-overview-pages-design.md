@@ -843,9 +843,13 @@ rules restated:
 | `api.listCampaigns(fresh?)` | `memoKey("campaigns")` | `api.rememberedCampaigns()` |
 | `api.getTodo(cid)` | `memoKey("todo", cid ?? "")` | `api.rememberedTodo(cid)` |
 
-`getShell` is not added: `useShellPayload` already holds the last payload per
-`(data_dir, cid)` for the life of the app (`useShellPayload.ts:26-34`), and it
-is mounted once.
+`getShell` is not added. `useShellPayload` holds one payload, for the current
+`(data_dir, cid)` key, and drops it when the key changes
+(`useShellPayload.ts:86-91`). So the rail paints at once while the campaign
+stays the same, and waits when the reader switches campaigns. Remembering
+shell payloads per campaign would close that, and is left out of v1 because
+the rail's identity rules (`useShellPayload.ts:19-34`) would need restating
+for it.
 
 `MEMO_MAX` stays 24. These add at most one entry per page plus one per
 Todo scope visited. The constant is still justified structurally
@@ -856,49 +860,89 @@ Todo scope visited. The constant is still justified structurally
 A small hook, `frontend/src/api/useRevalidated.ts`:
 
 ```ts
-function useRevalidated<T>(recall: () => T | undefined,
-                           read: () => Promise<T>,
-                           deps: unknown[]): {
-  data: T | undefined;   // remembered on the first render, then the fresh answer
-  stale: boolean;        // true while `data` came from memory and no answer has landed
-  failed: boolean;       // the newest read failed
-  reload: () => void;
+function useRevalidated<T>(key: string,
+                           recall: () => T | undefined,
+                           read: (fresh: boolean) => Promise<T>): {
+  data: T | undefined;   // this key's remembered answer, then this key's fresh answer
+  stale: boolean;        // `data` came from memory and no answer for this key has landed
+  failed: boolean;       // the newest read for this key failed
+  reload: () => void;    // supersede any read in flight with a `fresh` one
 }
 ```
 
-- **Every mount issues the read.** Painting from memory never replaces asking.
-  This is the remembered-reads safety argument (`client.ts:248-253`): a
-  remembered value is on screen for at most one revalidation.
+**The state is keyed.** `data` belongs to `key` (for `TodoView`, the `cid`).
+On a key change, the same render re-recalls for the new key, or yields
+`undefined`. It never shows the previous key's payload, so campaign A's chores
+can never render under campaign B with Ignore enabled. This is the identity
+rule `useShellPayload.keyOf` keeps for the rail (`useShellPayload.ts:19-34`).
+
+**Only the newest read for the current key may write `data`.** Each read the
+hook issues gets a sequence number. An answer from a superseded read, or a
+read for an earlier key, is discarded.
+
+- `reload()` supersedes whatever is in flight with a `fresh` read. Every
+  post-mutation refresh on these pages goes through `reload()`, never through
+  a second `setState`. Without this, a slow mount-time revalidation (GET A)
+  that resolves after a rename's refresh (GET B) would paint the pre-rename
+  list over B's answer. `issuedIn` keeps A out of memory but not off the
+  screen.
+- **An answer issued before the current memo epoch is never painted as
+  fresh.** The client exports `issuedEpoch(promise)` (from `issuedIn`). If an
+  answer's epoch is older than `memoEpoch` when it lands, which means a write
+  or a store move happened while it was on the wire, the hook discards it and
+  issues a `fresh` read. This covers a page that mounted after a write and
+  *joined* a pre-write GET through `request`'s in-flight sharing
+  (`client.ts:418-429`). That GET could have been started by any of the other
+  non-`fresh` callers: `AppPaletteSource.tsx:28-29`, `librarySections.ts:27`,
+  `CampaignWizard.tsx:64`, `ConfigView.tsx:309`, `StatsView.tsx:257`,
+  `ReportScopeSelector.tsx:16`.
+
+**Painting rules:**
+
+- **Every mount, and every key change, issues the read.** Painting from memory
+  never replaces asking. This is the remembered-reads safety argument
+  (`client.ts:248-253`): a remembered value is on screen for at most one
+  revalidation.
 - **While `stale`,** the page's main region carries `aria-busy="true"`. There
   is no spinner and no greyed-out list. The draft's "treats it as stale
   internally" is that attribute plus the rules below.
-- **On failure,** the remembered payload is **dropped** and the page shows its
-  existing failure state. The rail is the exception: it keeps the last good
-  payload because navigation must survive (`useShellPayload.ts:6-11`).
+- **While `stale`, destructive and identity-bearing actions are disabled:**
+  delete, rename, fork, Ignore and Restore. Export, navigation and item
+  expansion stay enabled. A stale frame is root-scoped within one origin
+  (`client.ts:255-271`), but `ROOT_MOVED_KEY` reaches only same-origin tabs.
+  After a store move made from another origin (`127.0.0.1` against
+  `localhost`) or another browser, this tab's first frame can show the old
+  library's cards under ids that may name something else in the new root. The
+  revalidation is one round trip, so the cost of disabling is short.
+- **On failure,** the remembered payload is **dropped**, `failed` is set, and
+  the page shows its failure state. The rail is the exception: it keeps the
+  last good payload because navigation must survive (`useShellPayload.ts:6-11`).
   Pages follow `remembering`'s rule instead (`client.ts:350-354`): a read that
   could not confirm the rows is no reason to keep painting them.
-- **Empty states render only after a read has settled.** "No worlds yet",
-  "No campaigns yet", "Nothing outstanding" and "0 worlds" are statements, and
-  a statement made before any read is how `CampaignsView` tells a reader with
-  ten worlds to create one (1.3).
-- **Actions from a stale frame are allowed.** Rename, fork, delete, export,
-  Ignore and Restore are all addressed by id, validated by the server, and
-  followed by a `fresh` re-read. A stale frame cannot address another
-  library's ids, because recall is root-scoped and returns nothing until a
-  config read names the root (`client.ts:255-271`). The draft's warning, *"do
-  not use stale-while-revalidate to hide authoritative write conflicts"*,
-  applies to editors, and none of these pages is one.
+- **Empty states render only after a read has settled successfully.** "No
+  worlds yet", "No campaigns yet", "Nothing outstanding" and "0 worlds" are
+  statements. A statement made before any read, or after a failed one, is how
+  `CampaignsView` tells a reader with ten worlds to create one (1.3).
 
 Per page:
 
-- **WorldsView:** `worlds` comes from the hook. Create, rename and delete
-  refreshes pass `fresh` (4.5.4).
-- **CampaignsView:** two hook instances, one for campaigns and one for worlds.
-  Rename and delete refreshes pass `fresh`.
+- **WorldsView:** `worlds` comes from the hook. **New failure state:** today
+  `WorldsView.tsx:40-41` has no `catch`. 04 adds the same banner shape
+  `TodoView` uses ("The worlds could not be read." with Try again ->
+  `reload()`). The count label and the grid render only when `data` is
+  defined. Create, rename and delete refresh through `reload()`.
+- **CampaignsView:** two hook instances, one for campaigns and one for
+  worlds. **New failure state** for each (today `CampaignsView.tsx:91-94` has
+  no `catch`), in the same banner shape. "No worlds yet" requires the worlds
+  read to have succeeded with an empty list. While the worlds read has not
+  succeeded, the New campaign button (`disabled={worlds.length === 0}`,
+  `:209`) stays disabled, as it would on an empty list. Rename, delete and
+  fork-from-now refresh through `reload()`.
 - **TodoView:** `data` comes from the hook, keyed on `cid`, and `load` no
-  longer calls `setData(null)`. `ignoreAsync` keeps its explicit re-read,
-  which is a write's refresh. Item expansions (`getChoreItems`) stay `fresh`
-  and unremembered: they are on demand, and the reader is waiting on them.
+  longer calls `setData(null)`. `ignoreAsync` refreshes through `reload()`.
+  The existing failure banner stays. Item expansions (`getChoreItems`) stay
+  `fresh` and unremembered: they are on demand, and the reader is waiting on
+  them.
 
 **What does not opt in:** play-path reads, editor reads, record bodies,
 `GET /todo/{id}/items`, and the campaign hub's chronicle. That last one keeps
@@ -907,42 +951,49 @@ before an absorb is a stale record body, not a stale count.
 
 ### 6.3 Retirement: what forgets, and when
 
-1. **Every write this client sends forgets every remembered read, before it is
-   sent and again when it settles.** `writing()` (`client.ts:394-405`) drops
-   its `/api/worlds` / `/api/campaigns` condition.
+1. **Every write this client sends forgets every remembered read and retires
+   every in-flight GET, before it is sent and again when it settles.**
+   `writing()` (`client.ts:394-405`) drops its `/api/worlds` /
+   `/api/campaigns` condition and calls `retireAllInflight()` beside each
+   `forgetRemembered()`.
    - Todo and the shelves depend on writes under `/api/config`,
      `/api/llm-connections`, `/api/inference`, `/api/todo`, `/api/modules` and
      image routes. Enumerating those is the per-endpoint list the existing
      comment declines to keep (`client.ts:388-393`).
    - Over-forgetting is the safe direction: the next visit paints after its
-     read, as every visit did before 04.
+     read, as every visit did before 04. This includes every turn POST,
+     because `streamPost` goes through `writing()`. That is why Goal 1 does
+     not claim a remembered paint after play.
+   - Retiring in-flight GETs means a read started after the write cannot join
+     one issued before it. Callers already awaiting the retired promise still
+     get its answer, and 6.2's epoch check keeps that answer off the screen.
    - The second forget, on settle, drops an answer that was issued while the
      write was on the wire (`client.ts:394-397`).
    - Every write path already goes through `writing()`: `requestRaw`,
      `streamPost`, `postZip`, and the draft starters
      (`client.ts:173, 995, 1007, 1067`).
-2. **A run this client observes reaching a terminal state forgets.** A
-   detached run writes after the request that started it has settled: a turn
-   whose stream the client re-attached to, an absorb, or a review persisted to
-   `pending_reviews`.
+2. **A run this client observes reaching a terminal state forgets and
+   retires.** A detached run writes after the request that started it has
+   settled: a turn whose stream the client re-attached to, an absorb, or a
+   review persisted to `pending_reviews`.
    - `draftRun`'s completion, the stream helpers' terminal frame, and
      `runs/RunRegistryProvider.tsx` when it sees a run end each call one
-     exported `noteRunSettled()`, which forgets.
+     exported `noteRunSettled()`, which forgets and retires.
 3. **A store-root change forgets.** This is unchanged: `noteRoot`,
    `putDataDir` and the cross-tab `ROOT_MOVED_KEY` (`client.ts:303-348`).
-4. **An answer issued before a forget is never stored.** This is unchanged:
-   `issuedIn` and `memoEpoch` (`client.ts:272-281`, `:355-369`).
+4. **An answer issued before a forget is never stored, and never painted as
+   fresh.** Storing is unchanged (`issuedIn` and `memoEpoch`,
+   `client.ts:272-281`, `:355-369`). Painting is 6.2's epoch check.
 
-### 6.4 Why `fresh` on post-mutation refreshes is now required
+### 6.4 Why post-mutation refreshes go through `reload()`
 
 Every mount starts a background revalidation, so a pre-write GET is now
 usually in flight when a shelf action completes. A non-`fresh` refresh would
-join it (`request`'s in-flight share, `client.ts:418-429`) and render the
-pre-write list as the post-write answer. `writing()`'s epoch keeps that answer
-out of memory, but it does not keep it off the screen. The rule the fork and
-import paths already follow (`WorldsView.tsx:124, 157`) therefore becomes
-general for these pages. Inventory: section 4.5, item 4. A grep for
-`list(Worlds|Campaigns)\(\)` after a write finds new ones.
+join it (`request`'s in-flight share, `client.ts:418-429`). Even a `fresh` one
+issued through a second `setState` could be overtaken by the older read
+resolving later. `reload()` is both `fresh` and sequenced, which covers both
+cases. The fork and import paths already pass `fresh` (`WorldsView.tsx:124,
+157`) and move onto `reload()` too. The inventory is in 4.5, item 4.
 
 ### 6.5 The consistency bound (what 05 inherits)
 
@@ -953,17 +1004,24 @@ For these four surfaces:
 - **A detached run this tab observed end** is never followed by a painted
   answer from before its end.
 - **Anything else** may be shown for exactly one frame of the next visit, with
-  `aria-busy`, before that visit's own read replaces it wholesale. This covers
-  another tab, another process, another device through a sync client, a hand
-  edit, an agent's direct edit (with or without 05's `cache sync`), and a
-  detached run nobody watched.
+  `aria-busy` and with destructive actions disabled, before that visit's own
+  read replaces it wholesale. This covers:
+  - another tab, another process, or another device through a sync client;
+  - a store move made from another origin or browser (6.2);
+  - a hand edit, or an agent's direct edit, with or without 05's `cache sync`;
+  - a detached run nobody watched.
 - **Every server answer is current** with respect to the file bytes at the
-  moment of the read (03-C2), up to 03 section 5's stated residuals for kinds
-  that use persisted `sources`.
+  moment of the read (03-C2), up to these residuals:
+  - 03 section 5's for kinds that use persisted `sources`;
+  - the in-process `stamp` residual (a rewrite keeping size, mtime and ctime,
+    possible on Windows and FAT);
+  - the scene-head memo's `signature` residual, which `list_scenes` has today
+    (3.4).
 - **After a page reload** nothing is shown from memory at all.
 
 `docs/store-guarantees.md` gains this as a short subsection under "Reads
-notice external writes".
+notice external writes". `test_docs_guard.py` reads that file, so the plan
+runs it in the same slice.
 
 ### 6.6 The library epoch and `ETag`: not landed here, not depended on
 
