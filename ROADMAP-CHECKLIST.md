@@ -46,7 +46,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | ID | Spec | Can start when | Drafted | Spec gate | Slices | Landed |
 |----|------|----------------|:-:|:-:|:-:|:-:|
 | 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | — | [x] |
-| 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [ ] |
+| 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [x] |
 | 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [x] |
 | 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [x] |
 | 01c | Decision distributions and seeded sampling | now (01a has landed: a task is switched on with its evidence) | [x] | [~] substitute | 3 | [ ] |
@@ -71,7 +71,9 @@ all of them have landed. `check` holds both to the slice checklist.
 
 ## Parallel lanes
 
-- **Landed:** 01a, 01b, 01e, 01f, 01i.
+- **Landed:** 01s, 01a, 01b, 01e, 01f, 01i. 01s was ticked after the fact:
+  every task of its plan is in the tree and its tests pass, but the history
+  that would show its Codex review gates was not available to check.
 - **Now:** 01c, 01d, 01g, 01h, 02 (from 02-S1), 03, 07, 13 (II-A to II-D).
   01a has landed, so 01c, 01d and 01h switch a task on as soon as 01a's
   evidence supports it, rather than waiting on a spec.
@@ -318,7 +320,7 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [x] 01f ← 01a-C1 (S), 01i-C1 (S: the `max_tokens` cap respects the model's max output)
 - [ ] 01g ← 01f-C1/C2/C3 (H); 01d-C1, 01i-C1, 01c-C2/C3, 01b-C1 (S)
 - [ ] 01h ← 01a-C1/C2 (H for C6), 01a-C3 (S), 01s (S); 01g-C3 run id (S)
-- [ ] 01i ← 01s (S)
+- [x] 01i ← 01s (S)
 - [ ] 02 ← 01a-C1/C2/C3 (H for every play gate), 01b-C1/C2 (H for
   C2b/C3/C4; S for the C5 kits, which make no call themselves), 01c-C1..C4 (H
   for C2 sampling), 01d-C1..C3 (H for C5a);
