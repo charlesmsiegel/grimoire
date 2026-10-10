@@ -697,6 +697,17 @@ class PresetRefusalError(LLMError):
     Every `except LLMError` still catches it, with the same kind and status."""
 
 
+class CapRefusalError(PresetRefusalError):
+    """A `PresetRefusalError` whose refused parameter is the output cap THIS
+    CALL added (`wire.Target.with_output_cap`, `Sampling.call_cap`; 01f 3.9),
+    not one the user's preset carried: worded as the call's, because there is
+    no preset of the user's to blame or fix. Same kind, status and code, and
+    the fallback is still not tried -- it would be sent the same cap -- and
+    nothing re-sends the call without it: a caller under a ceiling cannot use
+    an uncapped call. An endpoint that refuses `max_tokens` is the user's to
+    fix with a provider setting (`sampler_support`)."""
+
+
 #: Keys that select a variant rather than carry a setting: a refusal naming one
 #: alone (a content block's `type`) is not about the control that sent it, and
 #: one that IS names its parent (`thinking.type`, `thinking`) anyway.
@@ -790,8 +801,15 @@ def _preset_refusal(exc: LLMError, target: wire.Target) -> PresetRefusalError | 
                  for name in sent}
     # llama.cpp's spelling, whichever one this endpoint was sent.
     spellings.get("repetition_penalty", set()).add("repeat_penalty")
-    if not any(form in detail for forms in spellings.values() for form in forms):
+    named = [n for n, forms in spellings.items() if any(form in detail for form in forms)]
+    if not named:
         return None
+    if named == ["max_tokens"] and _call_capped(target):
+        return CapRefusalError(
+            exc.kind,
+            f"{exc.detail} — this call's output cap (max_tokens) was refused, so the "
+            "fallback connection was not tried",
+            exc.retry_after, status=exc.status, code=exc.code)
     name = target.sampling.preset_name or target.sampling.preset_id or "?"
     return PresetRefusalError(
         exc.kind,
@@ -799,6 +817,15 @@ def _preset_refusal(exc: LLMError, target: wire.Target) -> PresetRefusalError | 
         f"({', '.join(sent)}) and the provider's refusal names one of them, so "
         "the fallback connection was not tried",
         exc.retry_after, status=exc.status, code=exc.code)
+
+
+def _call_capped(target: wire.Target) -> bool:
+    """Whether the `max_tokens` `target` carries is the cap its CALL asked
+    for (`Sampling.call_cap`) rather than its preset's own: the value sent is
+    the call's cap. A preset cap below the call's is the preset's, and keeps
+    the preset's wording."""
+    cap = target.sampling.call_cap
+    return cap is not None and target.sampling.params.get("max_tokens") == cap
 
 
 class SchemaRefusalError(LLMError):

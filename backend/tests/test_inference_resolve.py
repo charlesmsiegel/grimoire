@@ -13,7 +13,6 @@ file.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +29,7 @@ from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.cascade import Selection
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
+from tests import wire_kit
 
 from . import inference_baseline as baseline
 from . import inference_fixtures
@@ -164,7 +164,7 @@ def _fallback(resolved: ResolvedInference) -> dict | None:
     got = _second(resolved)
     if got is None:
         return None
-    return _normalised({"id": got.provider_id, "sampling": asdict(got.sampling)})
+    return _normalised({"id": got.provider_id, "sampling": wire_kit.sampling_dict(got.sampling)})
 
 
 def _facade_fallback(resolved: ResolvedInference) -> wire.Target | None:
@@ -1056,7 +1056,8 @@ def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
             assert _normalised({
                 **baseline._resolved(served.chain.primary),
                 "fallback": None if fallback is None
-                else {"id": fallback.provider_id, "sampling": asdict(fallback.sampling)},
+                else {"id": fallback.provider_id,
+                      "sampling": wire_kit.sampling_dict(fallback.sampling)},
             }) == recorded, where
 
 

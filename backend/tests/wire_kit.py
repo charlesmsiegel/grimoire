@@ -8,6 +8,8 @@ take one since every generation goes through `inference.generate`."""
 
 from __future__ import annotations
 
+import dataclasses
+
 from grimoire import wire
 from grimoire.routes.common import UsableInference
 from grimoire.store import routing
@@ -48,3 +50,14 @@ def resolution(sent: wire.Chain | wire.Target, task: str = "chat", *,
         task=task, operation=operation, route=route.key if route else "",
         role="", via="", scope="none", attempts=attempts,
         rides=chain.fallback is not None)
+
+
+def sampling_dict(sampling: wire.Sampling) -> dict:
+    """`dataclasses.asdict(sampling)` as the frozen baselines recorded it,
+    before 01f-S3 added `call_cap`: a resolution never sets it (a CALL does,
+    `wire.Target.with_output_cap`), so it is left out when None -- and kept
+    when set, so a resolution that ever carried one still differs."""
+    out = dataclasses.asdict(sampling)
+    if out.get("call_cap") is None:
+        out.pop("call_cap", None)
+    return out
