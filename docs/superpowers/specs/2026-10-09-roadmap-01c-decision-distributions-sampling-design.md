@@ -117,7 +117,7 @@ Not the goal:
 - Making any distribution calibrated, or comparable across backends. 01 §7.4
   forbids a synthetic confidence, and nothing here computes one.
 - Reshaping a distribution beyond the one recorded pre-draw `Eligibility` step
-  (mask and floor, section 5.3): no temperature, no sharpening. See section 11.
+  (mask, cutoff and floor, section 5.3): no temperature, no sharpening. See section 11.
 
 ## 3. The policy for generating Decision models (C1)
 
@@ -385,8 +385,8 @@ modules may import it, as `response_protocol` already imports `decisions`.
 decide tool) uses `draw`, `new_seed` and the section 6 record as they are.
 A caller's own reshaping of a distribution is expressed only as an
 `Eligibility` (section 5.3), which this spec defines, applies and records.
-02's draft already does such reshaping (it drops the none, floors options at
-`1/(2n)`, and narrows to the addressed actors); it conforms to this section
+02's draft already does such reshaping (it drops the none, excludes
+speakers reported under `1/(2n)`, and narrows to the addressed actors); it conforms to this section
 rather than carrying a second sampler.
 
 ### 5.1 Functions
@@ -401,6 +401,7 @@ MASS_SLACK = 0.02                 # section 5.4
 class Eligibility:
     only: tuple[str, ...] | None = None   # keys allowed; None = every offered key
     exclude: tuple[str, ...] = ()         # keys removed (e.g. decisions.NONE_KEY)
+    cutoff: float = 0.0                   # keys reported below it are excluded
     floor: float = 0.0                    # minimum probability per eligible key
 
 def new_seed() -> int
@@ -486,7 +487,7 @@ takes an optional `served=` of that same three-part shape.
 
 ### 5.3 Support, eligibility and renormalisation
 
-The draw is computed in five fixed steps. A caller cannot change these
+The draw is computed in six fixed steps. A caller cannot change these
 steps. It can only supply an `Eligibility`, and the record carries what it
 supplied.
 
@@ -505,21 +506,31 @@ supplied.
    comes from its own deterministic state, never from the answer.
 3. **Integer weights.** For each eligible key, `quanta(w)`, where `w` is its
    reported weight. A key the report left out has weight 0.
-4. **Floor.** With `F = quanta(floor)`, each eligible key's weight becomes
+4. **Cutoff.** With `C = quanta(cutoff)`, every eligible key whose step-3
+   weight is below `C` is removed (an integer comparison, so exact). This is
+   what 02 asks for: a speaker the report puts under `1/(2n)` is not drawn,
+   rather than raised. It runs after `only`/`exclude` and before the floor,
+   so the floor never lifts a key the cutoff removed. `0 <= cutoff <= 1`,
+   or `draw` raises `ValueError`. **If the cutoff leaves no key**, there is
+   no draw: `basis: none`, `why: "cutoff"`, `selected: None` (C4). The
+   caller treats it as it treats any non-answer, and no sample is made from
+   what the cutoff left out.
+5. **Floor.** With `F = quanta(floor)`, each eligible key's weight becomes
    `max(q, F)`. A floor gives every eligible key a chance the report did not
    give it. That is the caller's recorded policy, not the backend's
    report, so it is allowed only through this field. `floor * len(eligible)`
+   (counting the keys left after the cutoff)
    must not exceed 1, or `draw` raises `ValueError`, because a floor whose
    total would be more than all the probability there is is a mis-specified
    policy. 02's `1/(2n)` passes this check.
-5. **Draw.** `total = sum` of the step-4 integers. When `total == 0`, there
+6. **Draw.** `total = sum` of the step-5 integers. When `total == 0`, there
    is no draw (section 5.4). Otherwise `pick(weights, unit(seed, purpose))`:
    each key with positive weight owns the half-open integer interval
    `[c, c + q)` of `[0, total)`, and the key whose interval holds
    `(r53 * total) >> 53` is selected. The arithmetic is exact, so no key
    can be "rounded past". Equal weights are equal intervals; ties need no
    rule. Renormalisation is exactly this: the draw is proportional to the
-   step-4 weights, and nothing else.
+   step-5 weights, and nothing else.
 
 ### 5.4 When there is no draw
 
@@ -533,10 +544,13 @@ applied. The first check that holds decides:
 | no usable report (structured; dropped as invalid; a question type with no `distribution`, including `Rank` and `MultiSelect`) | `answer` | `no_report` | the answer's key, if eligible |
 | the reported mass, `sum(quanta(w))` over offered keys, is under `quanta(1 - MASS_SLACK)` | `answer` | `partial` | the answer's key, if eligible |
 | the answered key's reported weight is 0, or the answered key is absent from the report | `answer` | `inconsistent` | the answer's key, if eligible |
-| otherwise, with total 0 after steps 2-4 | `answer` | `ineligible_mass` | the answer's key, if eligible |
-| otherwise | `sampled` | `""` | the step-5 key |
+| otherwise, the cutoff (step 4) leaves no key | `none` | `cutoff` | `None` |
+| otherwise, with total 0 after steps 2-5 | `answer` | `ineligible_mass` | the answer's key, if eligible |
+| otherwise | `sampled` | `""` | the step-6 key |
 
-In the `answer` rows, an answer whose key is not eligible gives
+In the `answer` rows, "eligible" means steps 2 and 4: `only` and `exclude`,
+and, where a usable report exists, the cutoff. An answer whose key is not
+eligible gives
 `basis: none`, `why: "ineligible"`, `selected: None`. The caller narrowed the
 set, and a plain answer outside it is not returned as a selection.
 
@@ -583,7 +597,7 @@ One shape, version 1, for every caller:
   "offered": ["characters:mara", "characters:seraphine", "grimoire", "<none>"],
   "distribution": [["characters:mara", 0.55], ["characters:seraphine", 0.3],
                    ["grimoire", 0.1], ["<none>", 0.05]],
-  "eligibility": {"only": null, "exclude": ["<none>"], "floor": 0.125},
+  "eligibility": {"only": null, "exclude": ["<none>"], "cutoff": 0.0, "floor": 0.125},
   "mass_q": 4294967293,
   "drawn_q": 4187593112,
   "seed": 4503599627370495,
@@ -605,8 +619,10 @@ One shape, version 1, for every caller:
   binary64 exactly, and `quanta` is exact, so a stored record replays
   exactly.
 - `eligibility` is what the caller supplied, as given. `{"only": null,
-  "exclude": [], "floor": 0.0}` means none was supplied.
-- `mass_q` (the reported mass in quanta) and `drawn_q` (the step-5 total)
+  "exclude": [], "cutoff": 0.0, "floor": 0.0}` means none was supplied.
+  `cutoff` and `floor` are stored as the floats given, and replay re-derives
+  their quanta.
+- `mass_q` (the reported mass in quanta) and `drawn_q` (the step-6 total)
   are informational. `replay` recomputes both and ignores the stored ones.
 - `selected` and `answer` are both **keys**: an option id, `NONE_KEY`,
   `str(i)` for a score, `"true"`/`"false"` for a predicate (review M1). So
@@ -658,7 +674,7 @@ four rules:
 ### 6.2 Replay
 
 `replay(record)` checks `v` and `algorithm`. For `basis: sampled`, it
-recomputes steps 1 to 5 from `offered`, `distribution`, `eligibility`,
+recomputes steps 1 to 6 from `offered`, `distribution`, `eligibility`,
 `seed` and `purpose` alone and returns the key. For any other basis, it
 returns the stored `selected` without drawing: nothing was drawn, so there
 is nothing to replay. A record that is internally inconsistent, for example
@@ -713,7 +729,7 @@ Section 5.4 is C4's table. In short:
   inverse-CDF draw (`ALGORITHM = "sha256-q32-icdf/1"`). Integer weights
   (`quanta`) and exact integer cumulative sums make it identical on Python
   3.11 to 3.14, on Android and in a browser. The caller's pre-draw step is
-  one recorded `Eligibility` (`only`, `exclude`, `floor`), applied and
+  one recorded `Eligibility` (`only`, `exclude`, `cutoff`, `floor`), applied and
   renormalised as section 5.3 defines. Seeds come from `new_seed()` (53
   bits), and `purpose` is printable ASCII. `draw` never raises on a valid
   `ItemResult` with a valid eligibility and seed.
@@ -781,8 +797,12 @@ Section 5.4 is C4's table. In short:
   splitting at their boundary.
 - Canonical order: one distribution reported in two key orders draws the
   same key for every seed in a sweep.
-- Eligibility: `exclude=(NONE_KEY,)`, `only=` a subset, a floor that lifts
-  an unreported key, a floor too large for the eligible set
+- Eligibility: `exclude=(NONE_KEY,)`, `only=` a subset, a cutoff that drops
+  a key reported just under it (and keeps one exactly at it), a cutoff that
+  empties the set (`basis: none`, `why: cutoff`, no seed used), a cutoff
+  and a floor together (the floor never lifts a cut key, and its sum check
+  counts only the kept keys), a cutoff outside `[0, 1]` (`ValueError`), a
+  floor that lifts an unreported key, a floor too large for the eligible set
   (`ValueError`), and an `only` key that is not offered (`ValueError`). The
   record carries each as supplied.
 - Section 5.4: one case per row, including a predicate at 0.5, a refused
@@ -795,7 +815,8 @@ Section 5.4 is C4's table. In short:
 - Seeds and purposes: a 63-bit seed and a non-ASCII purpose raise
   `ValueError`.
 - `replay`: equals `selected` over a property sweep of random supports,
-  eligibilities and seeds. A non-sampled record returns its stored
+  eligibilities (cutoffs and floors included) and seeds. A record with a
+  cutoff replays to the same key on 3.11 and 3.14. A non-sampled record returns its stored
   `selected`. An unknown `algorithm`, or a sampled record with a null seed,
   raises `ReplayError`.
 - JSON round trip: `replay(json.loads(json.dumps(record)))` equals
@@ -841,7 +862,7 @@ Acceptance: all of the above pass under `make check`, including
 
 - Logprob-derived distributions on structured generation (section 3.1).
 - Any reshaping of a reported distribution other than the recorded
-  `Eligibility` (mask and floor). Temperature or sharpening would need a new
+  `Eligibility` (mask, cutoff and floor). Temperature or sharpening would need a new
   `ALGORITHM`, specified by whoever needs it.
 - Sampling a `Rank` (Plackett–Luce) or a multi-select (01e). The helper
   samples one keyed distribution. A joint choice is drawn as a flattened
@@ -867,10 +888,12 @@ Acceptance: all of the above pass under `make check`, including
    the policy is code and is switched on evidence.
 4. **Where the evidence lives.** Recommendation: `evals/README.md`, section
    "Decision distributions", with the policy line's comment pointing to it.
-5. **Does 02's floor belong in `Eligibility` or in 02?** Decided: in
+5. **Does 02's reshaping belong in `Eligibility` or in 02?** Decided: in
    `Eligibility` (the coordinator ruled that 01c owns the sampler). 02's
-   `1/(2n)` floor, its none exclusion and its addressed-actor narrowing are
-   each a field of it.
+   `1/(2n)` threshold is a `cutoff` (exclude the unlikely speaker, never
+   raise it). Its none exclusion and its addressed-actor narrowing are
+   `exclude` and `only`. `floor` remains for a caller that does want to
+   raise low keys; 02 does not use it.
 
 ## 13. Review record
 
@@ -881,7 +904,7 @@ Substitute adversarial review, 2026-10-10 (`reviews/01c.md`: 3 blocking,
 | # | Finding | Disposition |
 |---|---|---|
 | B1 | An `auth` or `rate_limit` from a native-first stage marks the provider dead and skips the same-model structured stage and its riding fallback | **Fixed.** Verified (`openrouter.py:53-58`, `llm.py:305-312`, `inference.py:640-663`). Isolated stage, a dead skip only when every route is dead, and fall-through tests (4.2.1, 10) |
-| B2 | 01c forbids the reshaping 02 performs, and 02 uses a different record and seed | **Fixed, by the coordinator's ruling:** 01c owns the sampler. A recorded `Eligibility` (mask and floor) with renormalisation defined here (5.3), one record shape (6), and one seed source (5.2). 02 conforms |
+| B2 | 01c forbids the reshaping 02 performs, and 02 uses a different record and seed | **Fixed, by the coordinator's ruling:** 01c owns the sampler. A recorded `Eligibility` (mask, cutoff and floor) with renormalisation defined here (5.3), one record shape (6), and one seed source (5.2). 02 conforms |
 | B3 | Unspecified float summation; `sum()` changed in 3.12 | **Fixed.** Integer quanta and exact integer cumulative sums (5.2, 5.3), with a golden that differs under `sum()` (10) |
 | S1 | A partial report is normalised, unlike 01d's margin | **Fixed.** Below `1 - MASS_SLACK`, `basis: answer`, `why: partial` (5.4) |
 | S2 | The native-first stage spends the retry budget first | **Fixed.** `retries=0`, and the added latency is stated (4.2.2) |
@@ -895,3 +918,4 @@ Substitute adversarial review, 2026-10-10 (`reviews/01c.md`: 3 blocking,
 | M4 | The checklist edge lacks 01e-C4 (S) | **Not changed here**, because only the two specs are edited. 01e-C4 is now in Depends on, and the checklist edge should add it |
 | M5 | Decisions-endpoint failures mark chat health failing | **Stated** (4.2.3); fixing it is a non-goal |
 | M6 | A non-ASCII `purpose` encodes differently in a browser | **Fixed.** Printable ASCII only, checked (5.2) |
+| F1 | Follow-up from 02's fold-in: `floor` raises low keys, while 02 meant to exclude speakers reported under `1/(2n)` | **Fixed.** A separate `cutoff` field, applied after `only`/`exclude` and before `floor`. A cutoff that empties the set abstains (`basis: none`, `why: cutoff`), and the cutoff is recorded and replayed (5.1, 5.3, 5.4, 6, 6.2, 10) |
