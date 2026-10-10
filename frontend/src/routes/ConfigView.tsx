@@ -14,6 +14,7 @@ import { ImageStoreCard } from "../components/ImageStoreCard";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
+import { isDecision } from "../components/turnLabels";
 import { useThemeSetting } from "../theme/useThemeSetting";
 
 /** Every config field this page edits. One list, because it is what the draft
@@ -261,8 +262,11 @@ async function lastPrompt(): Promise<Probe> {
     const scenes = await api.listScenes(newest.id);   // newest first
     if (!scenes.length) return null;
     const { entries } = await api.listScenePrompts(newest.id, scenes[0].id);   // newest first
-    if (!entries.length) return null;
-    const snapshot = await api.getScenePrompt(newest.id, scenes[0].id, entries[0].id);
+    // The last TURN: a decision's prompt (a speaker pick, a scene-break check)
+    // is not what a turn's budget is spent on.
+    const turn = entries.find((e) => !isDecision(e));
+    if (!turn) return null;
+    const snapshot = await api.getScenePrompt(newest.id, scenes[0].id, turn.id);
     return { ctx: snapshot, campaign: newest.name };
   } catch {
     return null;
@@ -743,7 +747,9 @@ export default function ConfigView() {
               Kept turn prompts is how many past turns each campaign keeps a frozen copy of
               the exact prompt for, readable from the scene inspector's Turn history. They
               hold whole prompts, so the count is per campaign rather than per scene — playing
-              one scene for long enough ages out another's. <code>0</code> records none.
+              one scene for long enough ages out another's. Decisions (speaker picks,
+              scene-break and voice checks) are kept separately, as many again, so they
+              never age out a turn. <code>0</code> records none.
             </p>
             <p className="config-copy">
               Named off-scene characters bounds the one-line directory of characters the
@@ -772,7 +778,8 @@ export default function ConfigView() {
                         value={draft.archive_depth}
                         onChange={(v) => edit("archive_depth", v)} />
               <NumField id="cfg-prompt-log-depth" label="Kept turn prompts" placeholder="50"
-                        caption="per campaign, not per scene" value={draft.prompt_log_depth}
+                        caption="per campaign; decisions are kept separately, as many again"
+                        value={draft.prompt_log_depth}
                         onChange={(v) => edit("prompt_log_depth", v)} />
               <NumField id="cfg-offscene-known-limit" label="Named off-scene characters"
                         placeholder="40" caption="0 = name every one of them"

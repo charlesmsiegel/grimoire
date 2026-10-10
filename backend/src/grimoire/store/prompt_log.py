@@ -46,8 +46,12 @@ What a snapshot is, and is not (both raised in review, both deliberate):
   do not retroactively change which model guidance was selected.
 
 Retention is `prompt_log_depth` in config.md (default 50, 0 = off), counted per
-CAMPAIGN rather than per scene. Per-scene reads better but is unbounded across
-a library -- 100 scenes at 20 entries each is 2000 payloads of tens of KB, in a
+CAMPAIGN rather than per scene, and per POOL (roadmap 01b §3.5): generations
+(rows with no `operation`), scene decisions (`operation == "decide"` with a
+scene) and campaign decisions (`operation == "decide"` filed with no scene)
+each keep that many, so a run of speaker picks or a reconcile sweep can evict
+only older decisions and never a turn a reader came to inspect. Per-scene
+reads better but is unbounded across a library -- 100 scenes at 20 entries each is 2000 payloads of tens of KB, in a
 store whose whole premise is that a human can read it. The cost of the campaign
 window, stated rather than hidden: playing one scene long enough evicts
 another's snapshots. This is a rolling debug window; #150 is where a durable
@@ -63,6 +67,11 @@ from pathlib import Path
 from . import atomic, config, locks, tokens
 from .campaigns import paths as campaigns_paths
 from .paths import safe_id
+
+#: The `operation` a decision capture is filed under (`record`); a row with
+#: no `operation` is a generation, every row written before decisions were
+#: captured included.
+DECIDE = "decide"
 
 
 def depth() -> int:
@@ -203,12 +212,29 @@ def _valid_id(eid: object) -> bool:
     return bool(safe_id(eid)) and str(eid).isdigit() and len(str(eid)) <= _MAX_ID_DIGITS
 
 
+def _optional_str(data: dict, key: str) -> bool:
+    """Whether `key` is absent from `data` or a string: `operation` is
+    optional (every row written before it existed has none), and the frontend
+    compares it, so a hand-edited object there must not reach the panel."""
+    return key not in data or isinstance(data[key], str)
+
+
 def _well_formed_row(e: object) -> bool:
     """Whether an index row can be listed without risking the panel. `scene` on
     top of the shared metadata, because the index is the field's only owner."""
     return (isinstance(e, dict) and _valid_id(e.get("id"))
             and isinstance(e.get("scene"), str)
-            and all(isinstance(e.get(k), t) for k, t in _META_TYPES.items()))
+            and all(isinstance(e.get(k), t) for k, t in _META_TYPES.items())
+            and _optional_str(e, "operation"))
+
+
+def _pool(row: dict) -> tuple[str, bool]:
+    """The retention pool a row counts in (01b §3.5): its `operation` (empty
+    for a generation), and -- for a decision -- whether it was filed with no
+    scene. A generation's pool ignores the scene: turns are counted per
+    campaign, as they always were."""
+    operation = row.get("operation", "")
+    return (operation, operation == DECIDE and row.get("scene") == "")
 
 
 def _write_index(cid: str, index: dict) -> None:
@@ -227,9 +253,14 @@ def _unlink(cid: str, eid: str) -> None:
 
 
 def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
-           kind: str = "") -> str | None:
+           kind: str = "", operation: str = "") -> str | None:
     """Freeze one turn's composition. Returns the new entry id, or None when
     nothing was recorded.
+
+    `operation` is `DECIDE` for a decision capture and empty for a generation;
+    when set it is written to the row and the payload, and retention counts
+    within the new entry's pool (`_pool`), so this entry can evict only
+    older entries of its own kind.
 
     `breakdown` is `context.compose_turn`'s second return value -- the SAME
     assemble/pack pass that produced the messages being sent, which is what
@@ -263,6 +294,8 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
            "total_tokens": breakdown.get("total_tokens", 0),
            "dropped_tokens": breakdown.get("dropped_tokens", 0),
            "budget_tokens": breakdown.get("budget_tokens", 0)}
+    if operation:
+        row["operation"] = operation
     try:
         with locks.campaign_lock_nowait(cid) as got:
             if not got:
@@ -290,8 +323,13 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
             payload["token_count"] = counted
             atomic.write_text(_entry_path(cid, eid),
                               json.dumps({"id": eid, **payload, **breakdown}, indent=2) + "\n")
-            evicted = index["entries"][:max(0, len(index["entries"]) - keep)]
-            index["entries"] = index["entries"][len(evicted):]
+            # Within the new entry's pool only (01b §3.5): a decision never
+            # evicts a turn, nor a turn a decision.
+            pool = _pool(index["entries"][-1])
+            mine = [e for e in index["entries"] if _pool(e) == pool]
+            evicted = mine[:max(0, len(mine) - keep)]
+            gone = {e["id"] for e in evicted}
+            index["entries"] = [e for e in index["entries"] if e["id"] not in gone]
             _write_index(cid, index)
             for old in evicted:
                 _unlink(cid, old["id"])
@@ -329,7 +367,8 @@ def _well_formed(data: object) -> bool:
     if not isinstance(data, dict):
         return False
     if not (isinstance(data.get("id"), str)
-            and all(isinstance(data.get(k), t) for k, t in _META_TYPES.items())):
+            and all(isinstance(data.get(k), t) for k, t in _META_TYPES.items())
+            and _optional_str(data, "operation")):
         return False
     rows = data.get("sections")
     if not isinstance(rows, list):
