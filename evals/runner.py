@@ -38,7 +38,7 @@ import json
 import time
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -48,6 +48,7 @@ from grimoire.store import paths, usage
 from grimoire.store.inference import providers
 from grimoire.store.inference import resolve as inference_resolve
 
+from . import costs
 from .cases import BASELINE, Case
 from .graders import Check
 
@@ -97,6 +98,23 @@ class Result:
     #: True when `rows` were read while the case's follow-ups were still
     #: running (`FollowUpsRunningError`): what they held then, not the whole.
     partial: bool = False
+    #: The case's model work, measured once around it (its drain included),
+    #: in ms; None when nothing ran. Never a sum of call durations.
+    wall_ms: int | None = None
+    #: A decide case's metered requests (`Decision.calls`), and one record
+    #: per item (`item_records`). Empty for a generate case, and for a
+    #: decide case no item of which answered (no `Decision`): it is then
+    #: reported from its rows alone.
+    calls: tuple[decisions.CallRecord, ...] = ()
+    items: tuple[dict, ...] = ()
+    #: Every harvested row folded into one bucket (`costs.fold`, the
+    #: production `_add`), every task of the case included, and one bucket
+    #: per task. None when the rows could not be read.
+    bucket: dict | None = None
+    by_task: dict[str, dict] = field(default_factory=dict)
+    #: The rates the buckets were folded with (read once, in the real store),
+    #: so a later fold of the same rows (the aggregate) prices them alike.
+    rates: usage.Rates | None = field(default=None, repr=False, compare=False)
 
     @property
     def passed(self) -> bool:
@@ -320,6 +338,31 @@ def chain(resolved: ResolvedInference, backend: str = CHAIN) -> tuple[inference.
     return (inference.Stage(backend, wire.Chain(primary.target), None),)
 
 
+def item_records(decision: decisions.Decision) -> tuple[dict, ...]:
+    """One record per item of `decision`: the backend and stage that answered
+    it, its answers' reasons (`refused`, `abstained`, `unreadable`, `error`),
+    whether any answer carries a distribution, whether an escalation hop's
+    call carried it, and `call` -- the index in `decision.calls` of the call
+    that answered it (the last call carrying it that did not fail; else the
+    last one carrying it; None for an item no call carried). Money is never
+    here: a structured call's figures belong to the call, never to its items
+    (spec 01a, section 6)."""
+    out = []
+    for index, result in enumerate(decision.items):
+        carried = [n for n, record in enumerate(decision.calls) if index in record.items]
+        answered = [n for n in carried if not decision.calls[n].error_kind]
+        call = (answered or carried or [None])[-1]
+        answers = result.answers.values()
+        out.append({
+            "index": index, "backend": result.backend,
+            "stage": decision.calls[call].stage if call is not None else None,
+            "reasons": sorted({a.reason for a in answers if a.reason}),
+            "distribution": any(a.distribution is not None for a in answers),
+            "escalated": any(decision.calls[n].hop == "escalation" for n in carried),
+            "call": call})
+    return tuple(out)
+
+
 def backend_note(decision: decisions.Decision) -> str:
     """What answered `decision`, for the report: `backend: <name>` when one
     backend answered every item; when stages with different backends split
@@ -393,15 +436,29 @@ def harvest(run_day: str, run_id: str, case_id: str) -> tuple[dict, ...]:
 
 
 def _settle(case: Case, ctx: dict, output: str, *, real_home: Path | None, run_day: str,
-            run_id: str) -> tuple[tuple[dict, ...], str] | None:
+            run_id: str, rates: usage.Rates | None) -> tuple[tuple[dict, ...], str, int] | None:
     """After a case's model work: drain it (`FollowUpsRunningError` past the
     ceiling), check the tripwire again (None when it trips), then harvest:
-    its rows, and why the ledger could not be read when it could not."""
+    its rows, why the ledger could not be read when it could not, and how
+    long the drain took (ms), which is part of the case's wall time."""
+    started = time.monotonic()
     if not drain(ctx):
-        raise _still_running(case, output, run_day, run_id)
+        raise _still_running(case, output, run_day, run_id, rates)
+    drained = int((time.monotonic() - started) * 1000)
     if _is_real_home(real_home):
         return None
-    return _harvested(run_day, run_id, case.id)
+    rows, ledger_error = _harvested(run_day, run_id, case.id)
+    return rows, ledger_error, drained
+
+
+def _metered(rows: tuple[dict, ...], ledger_error: str,
+             rates: usage.Rates | None) -> dict:
+    """`Result`'s money fields for harvested `rows`: nothing when the ledger
+    could not be read (its cost is not reported, never zero)."""
+    if ledger_error:
+        return {"rows": rows, "ledger_error": ledger_error, "rates": rates}
+    return {"rows": rows, "ledger_error": "", "rates": rates,
+            "bucket": costs.fold(rows, rates), "by_task": costs.by_task(rows, rates)}
 
 
 def _harvested(run_day: str, run_id: str, case_id: str) -> tuple[tuple[dict, ...], str]:
@@ -413,8 +470,8 @@ def _harvested(run_day: str, run_id: str, case_id: str) -> tuple[tuple[dict, ...
         return (), str(exc)
 
 
-def _still_running(case: Case, output: str, run_day: str,
-                   run_id: str) -> FollowUpsRunningError:
+def _still_running(case: Case, output: str, run_day: str, run_id: str,
+                   rates: usage.Rates | None) -> FollowUpsRunningError:
     """The failure of a case whose follow-ups outlived the drain. What its
     ledger holds so far is still read (reading writes nothing), so the spend
     it already made is reported, marked partial, rather than dropped."""
@@ -423,7 +480,7 @@ def _still_running(case: Case, output: str, run_day: str,
         case, BASELINE, [], output,
         f"follow-ups still running past {DRAIN_CEILING_S}s; "
         f"its isolate is kept at {paths.home()}",
-        rows=rows, ledger_error=ledger_error, partial=True))
+        partial=True, **_metered(rows, ledger_error, rates)))
 
 
 async def _ask(case: Case, ctx: dict, target: ResolvedInference,
@@ -455,25 +512,39 @@ async def _ask(case: Case, ctx: dict, target: ResolvedInference,
 
 def _model_work(case: Case, ctx: dict, target: ResolvedInference,
                 stages: tuple[inference.Stage, ...] | None,
-                client) -> tuple[str, decisions.Decision | None, Exception | None]:
+                client) -> tuple[str, decisions.Decision | None, Exception | None, int]:
     """`_ask` on `client`, or on one `LLMClient` opened and closed here:
-    the reply, the decision, and the provider's `LLMError` when it failed."""
+    the reply, the decision, the provider's `LLMError` when it failed, and
+    how long `_ask` took (ms) -- the model work alone, never the client's
+    open and close."""
     from grimoire.llm import LLMClient, LLMError
+
+    span: list[float] = []
+
+    async def timed(c) -> tuple[str, decisions.Decision | None]:
+        span.append(time.monotonic())
+        try:
+            return await _ask(case, ctx, target, stages, c)
+        finally:
+            span.append(time.monotonic())
 
     async def run() -> tuple[str, decisions.Decision | None]:
         if client is not None:
-            return await _ask(case, ctx, target, stages, client)
+            return await timed(client)
         own = LLMClient()
         try:
-            return await _ask(case, ctx, target, stages, own)
+            return await timed(own)
         finally:
             await own.aclose()
+
+    def took() -> int:
+        return int((span[-1] - span[0]) * 1000) if len(span) == 2 else 0
 
     try:
         output, decision = asyncio.run(run())
     except LLMError as exc:
-        return "", None, exc
-    return output, decision, None
+        return "", None, exc, took()
+    return output, decision, None, took()
 
 
 def live(case: Case, target: ResolvedInference, record: bool = False, *,
@@ -511,26 +582,29 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     ctx = prepare(case)
     try:
         stages = chain(target, backend) if case.schema is not None else None
-        output, decision, failure = _model_work(case, ctx, target, stages, client)
+        output, decision, failure, asked = _model_work(case, ctx, target, stages, client)
     except Exception:
         # Anything but a provider's error: still drained before it passes
         # through the isolate, which restores the environment -- a follow-up
         # left running would then file its row in the real library.
         if not drain(ctx):
-            raise _still_running(case, "", run_day, run_id) from None
+            raise _still_running(case, "", run_day, run_id, rates) from None
         raise
     note = backend_note(decision) if decision is not None else ""
     error = f"{failure.kind}: {failure.detail}" if failure is not None else ""
     settled = _settle(case, ctx, output, real_home=real_home, run_day=run_day,
-                      run_id=run_id)
+                      run_id=run_id, rates=rates)
     if settled is None:
         return Result(case, BASELINE, [], output, ISOLATE_ERROR)
-    rows, ledger_error = settled
+    rows, ledger_error, drained = settled
+    metrics = {"wall_ms": asked + drained, **_metered(rows, ledger_error, rates)}
+    if decision is not None:
+        metrics.update(calls=decision.calls, items=item_records(decision))
     if error:
-        return Result(case, BASELINE, [], "", error, rows=rows, ledger_error=ledger_error)
+        return Result(case, BASELINE, [], "", error, **metrics)
 
     result = Result(case, BASELINE, list(case.grade(ctx, output)), output, note=note,
-                    rows=rows, ledger_error=ledger_error)
+                    **metrics)
     if record:
         path = case.baseline.path(case.id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -599,6 +673,7 @@ def report(results: list[Result]) -> str:
             detail = f": {c.detail}" if c.detail else ""
             lines.append(f"           {c.name}{detail}")
         lines.extend(_not_applicable(r))
+    lines.extend(_aggregate_block(results))
     total = len(results)
     lines.append("")
     lines.append(f"{total - failed}/{total} passed" if failed
@@ -606,16 +681,68 @@ def report(results: list[Result]) -> str:
     return ascii_safe("\n".join(lines))
 
 
+#: The indent of a case's detail lines.
+_DETAIL = "           "
+
+
+def _stages(calls: tuple[decisions.CallRecord, ...]) -> str:
+    """Per stage, its backend and how many of its calls returned out of how
+    many it made: `(stage 0: native 3/3; stage 1: structured 2/2)`."""
+    seen: dict[tuple[int, str], list[int]] = {}
+    for record in calls:
+        tally = seen.setdefault((record.stage, record.mode), [0, 0])
+        tally[0] += 0 if record.error_kind else 1
+        tally[1] += 1
+    return " (" + "; ".join(f"stage {stage}: {mode} {ok}/{n}"
+                            for (stage, mode), (ok, n) in sorted(seen.items())) + ")"
+
+
 def _metrics(r: Result) -> list[str]:
-    """A live case's metrics line: how many calls its rows hold, or -- an
-    unreadable ledger -- that its cost is not reported, never `calls 0`.
+    """A live case's metrics: its wall time, its calls (per stage for a
+    decision), its tokens and its three money columns, never added together
+    -- or, an unreadable ledger, that its cost is not reported, never
+    `calls 0`. A case that ran more than one task adds a `by task` block.
     Nothing for a result with no harvest (replay)."""
-    if r.ledger_error:
-        return ["           cost: not reported (ledger unreadable)"]
     if r.rows is None:
         return []
-    partial = " (partial: follow-ups still running)" if r.partial else ""
-    return [f"           calls {len(r.rows)}{partial}"]
+    wall = f"wall {costs.seconds(r.wall_ms)}  " if r.wall_ms is not None else ""
+    if r.ledger_error or r.bucket is None:
+        return [f"{_DETAIL}{wall}cost: not reported (ledger unreadable)"]
+    line = f"{_DETAIL}{wall}{costs.bucket_line(r.bucket)}"
+    if r.calls:
+        calls = f"calls {r.bucket['calls']}"
+        line = line.replace(calls, calls + _stages(r.calls), 1)
+    if r.partial:
+        line += "  (partial: follow-ups still running)"
+    lines = [line]
+    if len(r.by_task) > 1:
+        lines.append(f"{_DETAIL}by task:")
+        lines.extend(f"{_DETAIL}  {task}: {costs.bucket_line(bucket)}"
+                     for task, bucket in r.by_task.items())
+    return lines
+
+
+def _aggregate_block(results: list[Result]) -> list[str]:
+    """Every live case's rows keyed by route, backend and hop, each folded at
+    its case's rates. Wall time is per case, so it is `-` here; a hop's own
+    time is the sum of its calls' durations, labelled `call time`, never
+    wall."""
+    costed = [r for r in results if r.rows is not None and not r.ledger_error]
+    if not costed:
+        return []
+    lines = ["", "by route / backend / hop:"]
+    for entry in costs.aggregate((r.rows or (), r.rates) for r in costed):
+        bucket = entry["bucket"]
+        line = (f"  {entry['route']} / {entry['backend']} / {entry['hop']}: wall -  "
+                f"{costs.bucket_line(bucket)}")
+        if entry["hop"] != costs.NO_HOP:
+            line += f"  call time {costs.seconds(bucket['duration_ms'])}"
+        lines.append(line)
+    short = sum(1 for r in results
+                if r.rows is not None and (r.partial or r.ledger_error))
+    if short:
+        lines.append(f"  ({short} case(s) not fully costed: partial or ledger unreadable)")
+    return lines
 
 
 def _not_applicable(r: Result) -> list[str]:
