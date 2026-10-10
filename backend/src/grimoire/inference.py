@@ -5,7 +5,11 @@ A generation is free text, streamed or joined. `generate` is the only door
 to it: it takes the resolution a call site already made (`require_inference`
 or `override_inference`), refuses one made for another task or operation, or
 one that resolved nothing, before any client call, and hands the facade
-`resolved.chain`, the resolution's typed targets. `test_routing_guard.py`
+the call's chain (`call_chain`): `resolved.chain`, the resolution's typed
+targets, with -- for a call that asks for JSON (`schema=`, 01f) -- each
+capable attempt flagged for its provider's structured mode on a new target.
+A refused field is re-sent without the mode through the helper `decide`
+shares (`_without_refused_mode`). `test_routing_guard.py`
 holds that `client.stream`/`complete` are spelled only in this module; the
 caller's meter, and the holder it hands in as `usage=`, stay at the call
 site, where `test_usage_guard.py` reads them.
@@ -65,15 +69,17 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any, Literal, NamedTuple, overload
+from typing import Any, Literal, NamedTuple, TypeVar, overload
 
-from . import decisions, llm, llm_errors, prompts, store, wire
+from . import decisions, llm, llm_errors, model_guidance, prompts, schemas, store, wire
 from .llm import LLMClient
 from .llm_errors import LLMError
 from .store.inference import resolve
 from .store.inference.resolved import ResolvedInference
 
 log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 STRUCTURED = decisions.STRUCTURED_BACKEND
 NATIVE = decisions.NATIVE_BACKEND
@@ -286,6 +292,68 @@ async def _once(call: _Call, sending: wire.Chain, messages: list[dict], schema: 
             else _Reply("", None, error, sent))
 
 
+def _refused(error: llm.SchemaRefusalError) -> list[tuple[int, wire.Chain]]:
+    """The attempts `error` names as having refused the structured field, by
+    route position, each as the chain its re-send is sent (`_without_mode`):
+    in route order, the primary first."""
+    return [(index, _without_mode(attempt)) for index, attempt in enumerate(error.attempts)
+            if isinstance(attempt, wire.Target)]
+
+
+async def _without_refused_mode(error: llm.SchemaRefusalError,
+                                send: Callable[[wire.Chain], Awaitable[T]]) -> T:
+    """Answer a call that failed on every route, one of them by refusing the
+    structured field (01f-C2, spec M-4): each refusing attempt once more,
+    alone and without the mode, in route order, through `send`; the first
+    that answers wins. The schema is in the prompt, so the reply still
+    parses. Should every re-send fail, `llm.routes_failed(words)` with each
+    re-sent route's word replaced by its re-send's failure.
+
+    `decide` (`_ask`) and `generate` share it: what a re-send IS -- its own
+    metered call, or one more call through the caller's holder -- is
+    `send`'s."""
+    words = list(error.words)
+    for index, again in _refused(error):
+        try:
+            return await send(again)
+        except LLMError as exc:
+            words[index] = exc
+    raise llm.routes_failed(words)
+
+
+async def _stream_without_refused_mode(
+        error: llm.SchemaRefusalError,
+        open_stream: Callable[[wire.Chain], AsyncIterator[str]]) -> AsyncIterator[str]:
+    """`_without_refused_mode`'s streamed twin: the same attempts in the same
+    order and the same composed error, but a re-send's failure is found while
+    iterating it. A re-send that fails before any text moves on to the next;
+    one that fails after text reached the caller raises as it is -- that text
+    cannot be taken back, as `llm._resilient` will not retry past it either."""
+    words = list(error.words)
+    for index, again in _refused(error):
+        stream = open_stream(again)
+        yielded = False
+        try:
+            async for chunk in stream:
+                yielded = yielded or bool(chunk)
+                yield chunk
+            return
+        except LLMError as exc:
+            if yielded:
+                raise
+            words[index] = exc
+        finally:
+            await _aclose(stream)
+    raise llm.routes_failed(words)
+
+
+async def _aclose(stream: object) -> None:
+    """Close `stream` when it can be closed (an async generator)."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        await aclose()
+
+
 async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dict,
                rows: list[dict]) -> _Reply:
     """One chunk's call: its text and the answering holder, or its error,
@@ -295,27 +363,31 @@ async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dic
     The attempt chain, and -- only when every route failed and a route's
     failure was its provider refusing the structured field
     (`llm.SchemaRefusalError`) -- each such attempt once more, alone and
-    without the mode (spec M-4, ruling 3): the schema is in the prompt, so the
-    reply still parses. A primary that refused is re-sent after its fallback
-    failed too; a fallback that refused, after the primary failed for any
-    reason. Each re-send is its own metered call, and none is re-sent twice.
-    Should those fail too, the error is the routes' failures composed afresh
-    (`llm.routes_failed`), each re-sent route's word now its own failure."""
+    without the mode (`_without_refused_mode`, spec M-4, ruling 3): the
+    schema is in the prompt, so the reply still parses. A primary that
+    refused is re-sent after its fallback failed too; a fallback that
+    refused, after the primary failed for any reason. Each re-send is its own
+    metered call, and none is re-sent twice. Should those fail too, the error
+    is the routes' failures composed afresh (`llm.routes_failed`), each
+    re-sent route's word now its own failure."""
     first = await _once(call, chain, messages, schema, rows)
     error = first.error
     if not isinstance(error, llm.SchemaRefusalError) or not error.attempts:
         return first
-    sent = first.sent
-    words = list(error.words)
-    for index, attempt in enumerate(error.attempts):
-        if not isinstance(attempt, wire.Target):
-            continue
-        again = await _once(call, _without_mode(attempt), messages, schema, rows)
-        sent = sent or again.sent
-        if again.error is None:
-            return again._replace(sent=sent)
-        words[index] = again.error
-    return _Reply("", None, llm.routes_failed(words), sent)
+    sent = [first.sent]
+
+    async def send(again: wire.Chain) -> _Reply:
+        reply = await _once(call, again, messages, schema, rows)
+        sent[0] = sent[0] or reply.sent
+        if reply.error is not None:
+            raise reply.error
+        return reply
+
+    try:
+        answered = await _without_refused_mode(error, send)
+    except LLMError as exc:
+        return _Reply("", None, exc, sent[0])
+    return answered._replace(sent=sent[0])
 
 
 def _outcome(mode: str, target: wire.Target, holder: dict | None,
@@ -714,7 +786,7 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
                             round_id=round_id, capture=capture, around=around)
 
 
-# ---- generate (spec 7.2) ----
+# ---- generate (spec 7.2; 01f) ----
 
 def _generating(task: str, resolved: ResolvedInference) -> wire.Chain:
     """The chain `resolved` sends for `task`'s generation (its primary's
@@ -728,6 +800,85 @@ def _generating(task: str, resolved: ResolvedInference) -> wire.Chain:
     if chain is None:
         raise ValueError(f"{task!r} resolved to no connection")
     return chain
+
+
+def call_chain(resolved: ResolvedInference, *, schema: dict | None = None) -> wire.Chain:
+    """The chain one `generate` call sends (01f, 3.2): `resolved.chain`, with
+    -- when the call asks for a `schema` -- each target whose attempt is
+    `resolve.structured_capable` replaced by a NEW target flagged for its
+    provider's structured mode. The primary is `attempts[0]`, the fallback,
+    when it rides, `attempts[1]`.
+
+    Pure, and per call: a resolution's targets are frozen and shared, and
+    the flag is a property of this call rather than of the route, so the
+    resolution is never changed. A caller that records the prompt hands the
+    same chain to `routes.common._record_prompt`, so the log says what this
+    call was sent. A resolution of nothing is a `ValueError`."""
+    chain = resolved.chain
+    if chain is None:
+        raise ValueError(f"{resolved.task!r} resolved to no connection")
+    if schema is None:
+        return chain
+    flagged = [replace(target, structured=resolve.structured_capable(attempt))
+               for target, attempt in zip(chain.attempts, resolved.attempts, strict=False)]
+    if flagged == list(chain.attempts):
+        return chain
+    return wire.Chain(*flagged)
+
+
+def _says(message: object, text: str) -> bool:
+    """Whether a system or user `message` carries `text` in its content (a
+    string, or a list of parts whose text parts are searched)."""
+    if not isinstance(message, dict) or message.get("role") not in ("system", "user"):
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return text in content
+    if isinstance(content, list):
+        return any(isinstance(part, dict) and isinstance(part.get("text"), str)
+                   and text in part["text"] for part in content)
+    return False
+
+
+def _refuse_unschemable(schema: dict, messages: list[dict], chain: wire.Chain) -> None:
+    """The `ValueError`s a `generate(schema=)` call is refused with before
+    any client call (01f, 3.3): a schema outside the portable subset
+    (`schemas.check`); a prompt no system or user message of which carries
+    `schemas.render(schema)` -- an attempt without the mode answers from the
+    prompt alone, so a schema only the wire saw would get two answers; and a
+    prompt ending in an assistant turn, or one with per-attempt tails, since
+    structured output does not continue a prefill (01, 7.2)."""
+    schemas.check(schema)
+    spelled = schemas.render(schema)
+    if not any(_says(message, spelled) for message in messages):
+        raise ValueError("a generate schema must be in the prompt, rendered with the "
+                         "`schema_json` filter (schemas.render)")
+    if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "assistant":
+        raise ValueError("a structured generation cannot continue an assistant turn "
+                         "(a prefill)")
+    if (isinstance(messages, model_guidance.PreparedMessages)
+            and messages.mode_for(chain.primary) is not None):
+        raise ValueError("a structured generation cannot carry per-attempt tails")
+
+
+def _take_attempts(usage: dict | None) -> int:
+    """The attempts the call before a re-send made, taken out of the holder
+    (its last stamp's `attempts`), so the re-send's own stamp is its own."""
+    if usage is None:
+        return 0
+    made = usage.pop("attempts", 0)
+    return made if isinstance(made, int) and not isinstance(made, bool) else 0
+
+
+def _add_attempts(usage: dict | None, before: int) -> None:
+    """Add the attempts the calls before a re-send made to the holder's own
+    count: the row the caller's meter files says how many attempts the whole
+    call took, the refused ones included."""
+    if usage is None:
+        return
+    own = usage.get("attempts", 0)
+    usage["attempts"] = before + (own if isinstance(own, int) and not isinstance(own, bool)
+                                  else 0)
 
 
 @overload
@@ -761,20 +912,103 @@ def generate(task: str, messages: list[dict], *, client: LLMClient,
 
     `usage` is the caller's meter's holder (`store.usage.Meter.usage`), which
     the facade fills; the meter stays at the call site, around this call, as
-    `test_usage_guard.py` requires. `schema` is passed through (ruling 8): the
-    facade sends structured mode only on an attempt flagged for it, which a
-    generate resolution never is.
+    `test_usage_guard.py` requires.
 
-    The facade is sent `resolved.chain` -- the primary's target, and the
-    fallback's where it rides (`ResolvedInference.rides`) -- positionally,
-    with `schema=` only when one is given, so every request, ledger row and
-    capture is what that chain describes."""
-    chain = _generating(task, resolved)
+    `schema` asks for JSON matching a JSON Schema (01f-C1). It must be inside
+    the portable subset and rendered into the prompt with `schema_json`, and
+    the prompt may not end in an assistant turn or carry per-attempt tails --
+    each a `ValueError` here, before any client call (`_refuse_unschemable`).
+    Each attempt whose model's `structured_output` is `yes` is sent its
+    provider's structured mode on a new target (`call_chain`); every other
+    attempt is sent what it would have been without the schema. The reply is
+    still text, and nothing guarantees it conforms: the caller parses it
+    (`schemas.find_value`). A call that failed on every route, one of them by
+    refusing the field, is re-sent without the mode (`_without_refused_mode`,
+    01f-C2) through the same holder, so the caller's meter files ONE row: the
+    attempt that answered, its `attempts` counting every attempt the call
+    made. On the streamed path that happens only before any text reached the
+    caller, which `llm._resilient` guarantees.
+
+    The facade is sent the call's chain positionally, with `schema=` only
+    when one is given, so a call without one is the request, ledger row and
+    capture it was before 01f."""
+    base = _generating(task, resolved)
+    if schema is None:
+        chain = call_chain(resolved)
+        if stream:
+            return client.stream(messages, chain, usage)
+        return client.complete(messages, chain, usage)
+    _refuse_unschemable(schema, messages, base)
+    chain = call_chain(resolved, schema=schema)
+    # The facade calls stay here, so `test_usage_guard.FORWARDERS` sees each
+    # one forward this function's own `usage`; the re-send around them is
+    # `_joined` / `_streamed`'s.
+
+    def complete(attempt: wire.Chain) -> Awaitable[str]:
+        return client.complete(messages, attempt, usage, schema=schema)
+
+    def open_stream(attempt: wire.Chain) -> AsyncIterator[str]:
+        return client.stream(messages, attempt, usage, schema=schema)
+
     if stream:
-        return (client.stream(messages, chain, usage) if schema is None
-                else client.stream(messages, chain, usage, schema=schema))
-    return (client.complete(messages, chain, usage) if schema is None
-            else client.complete(messages, chain, usage, schema=schema))
+        return _streamed(chain, open_stream, usage)
+    return _joined(chain, complete, usage)
+
+
+async def _joined(chain: wire.Chain, complete: Callable[[wire.Chain], Awaitable[str]],
+                  usage: dict | None) -> str:
+    """`generate(stream=False)` with a schema: the call, and -- refused on
+    every route, one of them by refusing the field -- its re-sends without the
+    mode through the same holder (`_without_refused_mode`), the row's
+    `attempts` counting every attempt made."""
+    try:
+        return await complete(chain)
+    except llm.SchemaRefusalError as error:
+        if not error.attempts:
+            raise
+        refused = error
+
+    async def send(again: wire.Chain) -> str:
+        before = _take_attempts(usage)
+        try:
+            return await complete(again)
+        finally:
+            _add_attempts(usage, before)
+
+    return await _without_refused_mode(refused, send)
+
+
+async def _streamed(chain: wire.Chain, open_stream: Callable[[wire.Chain], AsyncIterator[str]],
+                    usage: dict | None) -> AsyncIterator[str]:
+    """`_joined`, streamed: a refusal re-sends only while nothing has reached
+    the caller -- the only time `llm._resilient` raises one -- so nothing is
+    taken back (`_stream_without_refused_mode`)."""
+    first = open_stream(chain)
+    yielded = False
+    try:
+        async for chunk in first:
+            yielded = yielded or bool(chunk)
+            yield chunk
+        return
+    except llm.SchemaRefusalError as error:
+        if yielded or not error.attempts:
+            raise
+        refused = error
+    finally:
+        await _aclose(first)
+
+    async def again(attempt: wire.Chain) -> AsyncIterator[str]:
+        before = _take_attempts(usage)
+        inner = open_stream(attempt)
+        try:
+            async for chunk in inner:
+                yield chunk
+        finally:
+            await _aclose(inner)
+            _add_attempts(usage, before)
+
+    async for chunk in _stream_without_refused_mode(refused, again):
+        yield chunk
 
 
 def note_outcome(client: LLMClient, resolved: ResolvedInference,

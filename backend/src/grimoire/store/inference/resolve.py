@@ -952,18 +952,25 @@ def _apart(primary: Attempt, operation: str) -> bool:
     return operation == "decide" and not generates(primary)
 
 
+def structured_capable(attempt: Attempt) -> bool:
+    """Whether `attempt` may be sent its provider's structured mode: its
+    `structured_output` resolves `yes`. A `no` or an `unknown` is not -- a
+    strict endpoint answers a field it does not know with a 400, and a user
+    who knows their model takes it says so with the facts override (01f,
+    3.2)."""
+    found = attempt.capabilities.get("structured_output")
+    return found is not None and found.value == capabilities.YES
+
+
 def _flag_structured(attempts: list[Attempt], operation: str) -> list[Attempt]:
-    """Flag each attempt whose `structured_output` is `yes` (spec 7.2) on its
-    target (`_stamp`). A decide resolution only: a generate resolution's
-    targets are what they were before slice F (plan Minor 4)."""
+    """Flag each `structured_capable` attempt (spec 7.2) on its target
+    (`_stamp`). A decide resolution only: a generate resolution's targets are
+    what they were before slice F (plan Minor 4) -- `generate(schema=)`
+    flags per CALL, on new targets (`inference.call_chain`)."""
     if operation != "decide":
         return attempts
-    out = []
-    for attempt in attempts:
-        found = attempt.capabilities.get("structured_output")
-        structured = found is not None and found.value == capabilities.YES
-        out.append(_stamp(attempt, structured=True) if structured else attempt)
-    return out
+    return [_stamp(attempt, structured=True) if structured_capable(attempt) else attempt
+            for attempt in attempts]
 
 
 def _stamp(attempt: Attempt, *, account: dict | None = None,

@@ -347,6 +347,15 @@ def _chain_of(attempt: wire.Chain | wire.Target) -> wire.Chain:
     return wire.Chain(_target_of(attempt))
 
 
+def _unflagged(attempt: wire.Chain | wire.Target) -> wire.Chain:
+    """`attempt` as a chain whose targets are not flagged `structured`: the
+    chain itself when none is, else a new one around new targets."""
+    chain = _chain_of(attempt)
+    if not any(t.structured for t in chain.attempts):
+        return chain
+    return wire.Chain(*(dataclasses.replace(t, structured=False) for t in chain.attempts))
+
+
 def _target_of(attempt: wire.Target) -> wire.Target:
     """`attempt`, when it is one attempt's `Target`; a `TypeError` for
     anything else, a connection dict included."""
@@ -710,9 +719,10 @@ def _structured_share(target: wire.Target) -> dict:
     question id that happened to spell a sampler (`temperature`) would be
     subtracted from that sampler's spellings, so a refusal of the sampler
     would stop reading as the preset refused. Only the adapters' own envelope
-    keys are named. Read from the flag rather than from
-    whether a schema was sent, because only a decide resolution carries the
-    flag and `decide` always sends one."""
+    keys are named. Read from the flag rather than from whether a schema was
+    sent, which is the same question by construction: the facade unflags
+    every target of a call sent no schema (`LLMClient._streamed`), so a
+    flagged target is one that was sent the envelope (01f, 3.4)."""
     if not target.structured:
         return {}
     kind = target.kind
@@ -1383,7 +1393,14 @@ class LLMClient:
     def _streamed(self, messages: list[dict], chain: wire.Chain | wire.Target, usage: dict | None,
                   schema: dict | None, retries: int | None):
         """`stream`'s body, with the primary's retry count `complete` may
-        name (`_routes`)."""
+        name (`_routes`).
+
+        A call sent no schema is sent every target unflagged (new targets,
+        `_unflagged`): "flagged" means "this attempt was sent the envelope" on
+        every path, which `_structured_share` -- and so `_preset_refusal` and
+        `_schema_refusal` -- reads it as (01f, 3.4)."""
+        if schema is None:
+            chain = _unflagged(chain)
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
