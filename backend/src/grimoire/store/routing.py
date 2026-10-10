@@ -67,6 +67,13 @@ class Route(NamedTuple):
 
 
 OPERATIONS: tuple[str, ...] = ("generate", "decide")
+
+#: Generate routes whose ordinary calls must not REQUIRE tools but which may
+#: run a tool loop when their primary is not known unable to (01g spec 3.7):
+#: `requires=("tools",)` would make the seam refuse every call on a known-`no`
+#: model, the ones that offer no tool included. Empty until a consumer (02-C4's
+#: scene route) opts one in.
+TOOLS_OPTIONAL: frozenset[str] = frozenset()
 DEFAULT_ROLES: tuple[str, ...] = ("primary", "fast", "decision")
 
 

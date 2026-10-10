@@ -4,8 +4,10 @@
 is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
-    async def stream(messages, chain, usage=None, *, schema=None) -> AsyncIterator[str]
-    async def complete(messages, chain, usage=None, *, schema=None, retries=None) -> str
+    async def stream(messages, chain, usage=None, *, schema=None, tools=None,
+                     tool_choice=None) -> AsyncIterator[str]
+    async def complete(messages, chain, usage=None, *, schema=None, retries=None,
+                       tools=None, tool_choice=None) -> str
     async def single(messages, target, usage=None, *, tools=None, tool_choice=None) -> str
     async def decide_native(item, target, usage=None, *, retries=None) -> ItemResult
     async def list_models(target) -> list[dict]
@@ -33,6 +35,10 @@ overrides `stream(messages, conn, usage=None)` alone still takes it. `stream`
 accepts it for signature parity and records nothing: the facade's decide path
 only completes. `single` takes no `schema`, exactly as the facade's does not:
 a model test asks one model one question, and nothing asks it for a schema.
+
+`tools` and `tool_choice` (01g) are accepted by `FakeLLM` and answered in
+prose; `FakeToolTurns` scripts a tool loop's turns, noting each call on the
+holder's `tool_calls.Collector` as an adapter's stream reader would.
 
 `retries` is the primary's retry count a decide chain's fallback stage names
 (slice H, ruling 12). `complete` records it in `retries`, one entry per call
@@ -89,7 +95,7 @@ import json
 import threading
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import anyio
@@ -322,7 +328,8 @@ class FakeLLM:
         self.tool_calls = tuple(tool_calls)
 
     # ---- the LLMClient surface ----
-    async def stream(self, messages, conn, usage=None, *, schema=None):
+    async def stream(self, messages, conn, usage=None, *, schema=None, tools=None,
+                     tool_choice=None):
         # `schema` is accepted for the facade's signature and not recorded:
         # `complete` records it, and the decide path only completes.
         # Stamped BEFORE anything can fail, like `llm._stamp`: the route is
@@ -369,7 +376,7 @@ class FakeLLM:
         return entry if entry.backend else replace(entry, backend="native")
 
     async def complete(self, messages, conn, usage=None, *, schema=None,
-                       retries=None) -> str:
+                       retries=None, tools=None, tool_choice=None) -> str:
         # The schema and the retry count are recorded here and NOT forwarded
         # to `stream`: the subclasses that hold or rewrite a request override
         # `stream(messages, conn, usage=None)` and need not know they exist.
@@ -607,7 +614,7 @@ class StallingGateway(FakeCatalog):
         await super().check(conn)
 
     async def complete(self, messages, conn, usage=None, *, schema=None,
-                       retries=None) -> str:
+                       retries=None, tools=None, tool_choice=None) -> str:
         if self.where == "complete":
             await asyncio.sleep(self.seconds)
         return await super().complete(messages, conn, usage, schema=schema, retries=retries)
@@ -956,6 +963,67 @@ class FakeEmbeddings:
         if usage is not None and self.usage_for is not None:
             usage.update(self.usage_for(list(texts)))
         return [self.vector_for(t) for t in texts]
+
+
+@dataclass(frozen=True)
+class ToolTurn:
+    """One scripted model turn of a tool loop (`FakeToolTurns`): its text,
+    its calls as `(name, arguments)` -- a dict, or a str sent as the raw
+    argument JSON -- seconds held before answering, whether the chain's
+    FALLBACK served it, and the end reason (default: `tool_calls` with
+    calls, `stop` without)."""
+    text: str = ""
+    calls: tuple = ()
+    delay: float = 0.0
+    fallback: bool = False
+    finish: str = ""
+
+
+class FakeToolTurns(FakeLLM):
+    """A tool loop's model, scripted by call order (01g-S4): each step a
+    `ToolTurn`, a `(text, calls)` pair, or an `LLMError` to raise after the
+    attempt is stamped; the last step repeats.
+
+    `complete` answers like the facade: it checks an offer of tools as the
+    facade does, stamps the attempt (the chain's fallback when the step says
+    it served), notes each call on the holder's `tool_calls.Collector` as an
+    adapter's stream reader would -- ids `call_<request>_<n>` -- and returns
+    the text. Each request records its `tools`, `tool_choice` and `schema`."""
+
+    def __init__(self, *steps: object, usage: dict | None = None):
+        super().__init__([[""]], usage=usage)
+        self.script = [s if isinstance(s, (ToolTurn, BaseException)) else ToolTurn(s[0], tuple(s[1]))
+                       for s in steps]
+
+    async def complete(self, messages, conn, usage=None, *, schema=None, retries=None,
+                       tools=None, tool_choice=None) -> str:
+        if tools is not None or tool_choice is not None:
+            tool_calls.check(tools, tool_choice)
+        chain = _chain_of(conn)
+        index, self.calls = self.calls, self.calls + 1
+        step = self.script[min(index, len(self.script) - 1)]
+        served = (chain.fallback if isinstance(step, ToolTurn) and step.fallback
+                  and chain.fallback is not None else chain.primary)
+        self._stamp(usage, served)
+        self.schemas.append(schema)
+        self.retries.append(retries)
+        self.requests.append({"messages": deepcopy(list(messages)), "chain": chain,
+                              "target": chain.primary, "tools": tools,
+                              "tool_choice": tool_choice, "schema": schema})
+        if isinstance(step, BaseException):
+            raise step
+        if step.delay:
+            await asyncio.sleep(step.delay)
+        found = usage.get(tool_calls.KEY) if usage is not None else None
+        if isinstance(found, tool_calls.Collector):
+            found.begin(kind=served.kind, provider_id=served.provider_id, model=served.model)
+            for n, (name, args) in enumerate(step.calls):
+                found.note(f"call_{index}_{n}", name,
+                           args if isinstance(args, str) else json.dumps(args))
+            found.finish(step.finish or ("tool_calls" if step.calls else "stop"))
+        if usage is not None and self.usage is not None:
+            usage.update(self.usage)
+        return step.text
 
 
 class StallingOpenRouter(FakeLLM):

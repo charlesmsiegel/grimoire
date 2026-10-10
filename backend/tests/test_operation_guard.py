@@ -1470,3 +1470,101 @@ def test_the_generate_guard_flags_planted_cases(src):
 ])
 def test_the_generate_guard_passes_planted_cases(src):
     assert _planted_generate_problems(src) == [], src
+
+
+# ---- the tool loop half (01g-S4, spec §5) ----
+
+#: The loop's doors in `grimoire.inference` (`DECIDE_MODULE`): `run_tools`,
+#: and `stream_tools` once 01g-S6 lands it.
+LOOP_OPS = ("run_tools", "stream_tools")
+
+
+def loop_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.Call]:
+    """Every tool-loop operation call in one module."""
+    called = {id(ref) for op in LOOP_OPS
+              for ref, is_call in _inference_refs(tree, modname, is_pkg, op) if is_call}
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and id(n.func) in called]
+
+
+def _offers_tools(route: routing.Route) -> bool:
+    return "tools" in route.requires or route.key in routing.TOOLS_OPTIONAL
+
+
+def loop_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
+                  route_of: Callable[[str], routing.Route | None] = routing.route,
+                  ) -> list[str]:
+    """What is wrong with one module's use of the loop: a door handed around
+    as a value, a task that is not a literal, a task not on a generate route
+    that requires tools or lists them as optional, or no `resolved=`."""
+    out = [f"{modname}:{ref.lineno}: a tool loop handed around as a value"
+           for op in LOOP_OPS for ref, is_call in _inference_refs(tree, modname, is_pkg, op)
+           if not is_call]
+    for call in loop_calls(tree, modname, is_pkg):
+        task = _task(call)
+        if task is None:
+            out.append(f"{modname}:{call.lineno}: a loop's task is not a string literal")
+            continue
+        route = route_of(task)
+        if route is None or route.operation != "generate" or not _offers_tools(route):
+            out.append(f"{modname}:{call.lineno}: {task!r} is not on a generate route "
+                       "that requires or offers tools")
+        if not any(k.arg == "resolved" for k in call.keywords):
+            out.append(f"{modname}:{call.lineno}: a loop over {task!r} passes no resolved=")
+    return out
+
+
+def _looped_tasks() -> set[str]:
+    return {task for modname, tree, is_pkg in _all_walked()
+            for call in loop_calls(tree, modname, is_pkg) if (task := _task(call)) is not None}
+
+
+def test_every_loop_names_a_task_on_a_route_that_offers_tools():
+    found = [p for modname, tree, is_pkg in _all_walked()
+             for p in loop_problems(tree, modname, is_pkg)]
+    assert not found, "\n  ".join(found)
+
+
+def test_every_route_requiring_tools_is_looped_by_a_call_site():
+    """The safety rule both ways (spec §5): a route requires `tools` only in
+    the change whose call site runs a loop on it. Vacuous until 12 or 02-C4
+    adds one; the planted cases below prove the check."""
+    looped = _looped_tasks()
+    unused = [r.key for r in routing.ROUTES
+              if "tools" in r.requires and not set(r.tasks) & looped]
+    assert not unused, f"routes requiring tools that no loop runs on: {unused}"
+
+
+_TOOL_ROUTE = routing.Route("investigation", "Investigation", "", ("investigation",), True,
+                            requires=("tools",))
+
+
+def _planted_loop_problems(src: str) -> list[str]:
+    """`loop_problems` over planted source, against the real routes plus one
+    route that requires tools (`investigation`): `chat` offers none."""
+    def route_of(task: str) -> routing.Route | None:
+        return _TOOL_ROUTE if task == "investigation" else routing.route(task)
+    return loop_problems(ast.parse(src), "grimoire.routes.scenes", route_of=route_of)
+
+
+@pytest.mark.parametrize("src", [
+    _OPS + "operations.run_tools('chat', m, toolset=t, execute=e, client=c, resolved=r)\n",
+    _OPS + "operations.run_tools(task, m, toolset=t, execute=e, client=c, resolved=r)\n",
+    _OPS + "operations.run_tools('investigation', m, toolset=t, execute=e, client=c)\n",
+    _OPS + "operations.stream_tools('scene-break', m, client=c, resolved=r)\n",
+    _OPS + "run(operations.run_tools, 'investigation')\n",
+    ("from ..inference import run_tools as loop\n"
+     "loop('chat', m, toolset=t, execute=e, client=c, resolved=r)\n"),
+])
+def test_the_loop_guard_flags_planted_cases(src):
+    assert _planted_loop_problems(src), src
+
+
+@pytest.mark.parametrize("src", [
+    _OPS + ("operations.run_tools('investigation', m, toolset=t, execute=e, client=c, "
+            "resolved=r)\n"),
+    ("from ..inference import stream_tools\n"
+     "stream_tools('investigation', m, toolset=t, execute=e, client=c, resolved=r)\n"),
+    _OPS + "self.run_tools('chat')\n",
+])
+def test_the_loop_guard_passes_planted_cases(src):
+    assert _planted_loop_problems(src) == [], src

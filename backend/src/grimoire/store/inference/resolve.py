@@ -628,6 +628,16 @@ def _missing(attempt: Attempt, needs: tuple[frozenset[str], ...]) -> tuple[str, 
     return tuple(cap for cap in capabilities.NAMES if cap in unmet)
 
 
+def known_lacks(resolved: ResolvedInference, cap: str) -> bool:
+    """Whether `resolved`'s primary is KNOWN (`no`, never a guess) unable to
+    do `cap` -- the seam's own `_missing` test, for a caller that may offer a
+    capability its route does not require (01g's `routing.TOOLS_OPTIONAL`).
+    A resolution of nothing lacks nothing it could be asked for."""
+    if not resolved.attempts:
+        return False
+    return cap in _missing(resolved.attempts[0], (frozenset({cap}),))
+
+
 def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple[str, str]]:
     """The preset choice for a selection with no route: its own, or none."""
     return lambda known: cascade.preset_for(None, selection, campaign={}, glob={},

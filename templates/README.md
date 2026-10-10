@@ -498,6 +498,16 @@ context and its ordered questions, and the reply is the JSON object
   (`index: description`). Option aliases are the parser's and never shown
 - `explain` -- the rationale instruction, rendered last; "" renders nothing
 
+### `tools/` — the finalize turn of a tool loop (`inference.run_tools`, 01g)
+Mirrors `grimoire/inference.py:finalize_message`. One user message, appended
+after a run's last tool results when the run must answer now: a `final_schema`
+was not met, or a budget limit stopped the run with a finalize turn reserved.
+It is sent with the tool definitions still attached and `tool_choice` "none".
+`finalize.j2` vars:
+- `schema` -- the caller's final record (a dict) or None, rendered with
+  `schema_json`: it rides the prompt whatever mode the attempt is sent
+- `stopped` -- bool: whether a budget limit, not the model, ended the run
+
 ### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).

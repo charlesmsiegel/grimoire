@@ -78,6 +78,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, replace
@@ -85,6 +87,7 @@ from functools import partial
 from typing import Any, Literal, NamedTuple, TypeVar, overload
 
 from . import (
+    deadline,
     decisions,
     llm,
     llm_errors,
@@ -93,11 +96,12 @@ from . import (
     prompts,
     schemas,
     store,
+    tool_calls,
     wire,
 )
 from .llm import LLMClient
 from .llm_errors import LLMError
-from .store.inference import resolve
+from .store.inference import probes, resolve
 from .store.inference.resolved import ResolvedInference
 
 log = logging.getLogger(__name__)
@@ -1619,3 +1623,643 @@ def for_task(resolved: ResolvedInference, task: str) -> ResolvedInference:
         raise ValueError(f"{task!r} is not on the route {resolved.task!r} resolved "
                          f"({resolved.route or 'none'!r})")
     return replace(resolved, task=task)
+
+
+# ==== the tool loop (01g-S4; spec 3.6-3.11) ====
+#
+# `run_tools` is the one door to a bounded loop of model turns and tool calls.
+# The caller supplies the tools, the executor that runs them and the run id;
+# the loop sends each turn through the facade (`client.complete`, spelled only
+# in this module) under a meter of its own, checks the run's budget before
+# every send and every execution, and hands back a `tool_calls.LoopResult`.
+# A tool never runs inside an adapter: the loop hands each validated call to
+# the caller's `execute`.
+
+#: Handed each turn once it settles (spec 3.10), outside its meter and
+#: guarded: the messages as sent (the tool definitions first, as one system
+#: message), the outcome `{finish, calls: [{name, arguments}], text_chars}`,
+#: and the target that answered (`llm.ATTEMPTED`).
+TurnCapture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
+
+#: The tasks running a loop now: a loop does not start inside another (spec
+#: 3.12, no recursion). A set of tasks rather than a `ContextVar`, which an
+#: async generator does not carry across its consumer's steps.
+_LOOPING: weakref.WeakSet[asyncio.Task] = weakref.WeakSet()
+
+
+class _WallSpentError(LLMError):
+    """The run's own wall clock ran out while a turn was in flight: a budget
+    stop, not a failure, so the turn's meter files `aborted`."""
+
+    #: `store.usage.NOT_A_FAILURE`, as absorb's `BudgetRefused` declares it.
+    llm_call_failed = False
+
+
+class _ToolTimeoutError(Exception):
+    """A tool's wait ran out (`deadline.bounded`'s overrun)."""
+
+
+def finalize_message(schema: dict | None, *, stopped: bool) -> dict:
+    """The finalize turn's instruction (spec 3.7 step 7), as the user message
+    appended after the run's last results: `templates/tools/finalize.j2`,
+    carrying `schema` (rendered with `schema_json`) when there is one. Reads a
+    template, so callers run it in a worker thread."""
+    return {"role": "user",
+            "content": prompts.render("tools/finalize.j2", schema=schema, stopped=stopped)}
+
+
+def _check_loop_prompt(messages: list[dict]) -> None:
+    """A prompt a loop can extend: not ending in an assistant turn (a
+    prefill), not chosen per attempt, and -- a `PreparedMessages` -- frozen,
+    so turn 2 can append to it (`snapshot` raises for one that is not)."""
+    if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "assistant":
+        raise ValueError("a tool loop cannot start from a prompt ending in an assistant turn")
+    if isinstance(messages, model_guidance.PreparedMessages):
+        if messages.tailed:
+            raise ValueError("a tool loop cannot carry per-attempt tails")
+        messages.snapshot()
+
+
+def _check_loop_route(task: str, resolved: ResolvedInference) -> None:
+    """A route that requires tools, or lists them as optional
+    (`routing.TOOLS_OPTIONAL`), on a primary not KNOWN unable to call them."""
+    route = store.routing.route(task)
+    if route is None or not ("tools" in route.requires
+                             or route.key in store.routing.TOOLS_OPTIONAL):
+        raise ValueError(f"{task!r} is on a route that neither requires tools nor offers them")
+    if resolve.known_lacks(resolved, "tools"):
+        raise ValueError(f"{task!r} resolved to a model known unable to call tools")
+
+
+def _loop_refusal(task: str, messages: list[dict], toolset: tool_calls.Toolset,
+                  resolved: ResolvedInference, run_id: str, final_schema: dict | None,
+                  tool_choice: str) -> None:
+    """Every refusal `run_tools` makes before anything is sent (spec 3.7), each
+    a `ValueError`, so no meter opens."""
+    _generating(task, resolved)
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("a tool loop runs under the caller's run id, and none was given")
+    if not isinstance(toolset, tool_calls.Toolset) or not toolset.tools:
+        raise ValueError("a tool loop needs at least one tool")
+    if tool_choice not in ("auto", "required"):
+        raise ValueError(f"a loop's tool_choice is auto or required, not {tool_choice!r}")
+    if final_schema is not None:
+        schemas.check(final_schema)
+    _check_loop_prompt(messages)
+    _check_loop_route(task, resolved)
+    current = asyncio.current_task()
+    if current is not None and current in _LOOPING:
+        raise ValueError("a tool loop cannot start inside another")
+
+
+@dataclass(frozen=True)
+class _Turn:
+    """One settled model turn."""
+    turn: int
+    text: str
+    calls: tuple[tool_calls.ToolCall, ...]
+    finish: str
+    opaque: dict | None
+    target: wire.Target | None
+
+
+class _Loop:
+    """One run's state; `events` runs it (spec 3.7)."""
+
+    def __init__(self, task: str, messages: list[dict], *, toolset: tool_calls.Toolset,
+                 execute: tool_calls.Execute, client: LLMClient,
+                 resolved: ResolvedInference, budget: tool_calls.RunBudget, run_id: str,
+                 attribution: dict, scene_identity: str,
+                 cancelled: Callable[[], bool] | None, final_schema: dict | None,
+                 tool_choice: str, capture: TurnCapture | None):
+        self.task, self.base, self.toolset, self.execute = task, messages, toolset, execute
+        self.client, self.resolved, self.budget, self.run_id = client, resolved, budget, run_id
+        self.attribution, self.scene_identity = attribution, scene_identity
+        self.cancelled, self.final_schema, self.capture = cancelled, final_schema, capture
+        self.choice = tool_choice
+        self.defs = toolset.definitions()
+        self.appended: list[dict] = []
+        self.rows: list[dict] = []
+        self.trace: list[tool_calls.TraceEntry] = []
+        self.proposals: list[dict] = []
+        self.pending: list[tool_calls.LoopEvent] = []
+        self.turns = self.calls_used = self.result_chars = self.minted = 0
+        self.finalized = self.fallen = False
+        self.writers: set[tuple[str, str]] = set()
+        self.limit = self.text = self.root = ""
+        self.wall = self.call_budget = 0.0
+        self.t0 = time.monotonic()
+        self._hist: list[dict] | None = None
+        self._hist_len = 0
+
+    # ---- the run ----
+    async def events(self) -> AsyncGenerator[tool_calls.LoopEvent, None]:
+        """The run, as events; `done` last, after every meter has filed."""
+        self.root, self.wall, self.call_budget = await asyncio.to_thread(self._pin)
+        result: tool_calls.LoopResult | None = None
+        while result is None:
+            result = await self._step()
+            while self.pending:
+                yield self.pending.pop(0)
+        log.info("tool run %s (%s) ended %s%s: %d turns, %d tool calls, %.1fs",
+                 self.run_id, self.task, result.status,
+                 f" on {result.limit}" if result.limit else "", self.turns,
+                 self.calls_used, time.monotonic() - self.t0)
+        yield tool_calls.LoopEvent("done", turn=self.turns, result=result)
+
+    def _pin(self) -> tuple[str, float, float]:
+        """The store root, the run's wall and the per-call ceiling, read once
+        off the event loop (`store.home` can read the bootstrap pointer)."""
+        wall = self.budget.wall_seconds
+        call = store.config.llm_call_budget()
+        return str(store.home()), (call if wall is None else wall), call
+
+    def _root_held(self) -> bool:
+        return str(store.home()) == self.root
+
+    async def _step(self) -> tool_calls.LoopResult | None:
+        self._check_cancelled()
+        stop = self._turn_refusal()
+        if stop:
+            self.limit = stop
+            return await self._finalize_or_stop()
+        if not await asyncio.to_thread(self._root_held):
+            return self._result("failed", error=LLMError(
+                "bad_response", "the store moved during the run", code="store_moved"))
+        turn = await self._turn(final=False)
+        if isinstance(turn, tool_calls.LoopResult):
+            return turn
+        return await self._settle(turn)
+
+    def _check_cancelled(self) -> None:
+        if self.cancelled is not None and self.cancelled():
+            raise asyncio.CancelledError("the run was cancelled")
+
+    def _elapsed(self) -> float:
+        return time.monotonic() - self.t0
+
+    def _wall_short(self, need: float) -> bool:
+        return self.wall > 0 and self._elapsed() + need > self.wall
+
+    def _turn_refusal(self) -> str:
+        """The limit that refuses the next tool turn (spec 3.9), or ""."""
+        if self.limit:
+            return self.limit
+        reserve = 1 if self.budget.reserve_final and not self.finalized else 0
+        if self.turns + 1 + reserve > self.budget.max_turns:
+            return "turns"
+        if self._wall_short(tool_calls.MIN_TURN_SECONDS):
+            return "wall"
+        return ""
+
+    def _final_fits(self) -> bool:
+        return (self.budget.reserve_final and not self.finalized
+                and self.turns + 1 <= self.budget.max_turns
+                and not self._wall_short(tool_calls.MIN_TURN_SECONDS))
+
+    async def _finalize_or_stop(self) -> tool_calls.LoopResult:
+        if self._final_fits():
+            return await self._finalize(stopped=True)
+        return self._result("budget_exhausted")
+
+    async def _finalize(self, *, stopped: bool) -> tool_calls.LoopResult:
+        """The finalize turn (spec 3.7 step 7)."""
+        self.finalized = True
+        note = await asyncio.to_thread(partial(finalize_message, self.final_schema,
+                                               stopped=stopped))
+        turn = await self._turn(final=True, extra=note)
+        if isinstance(turn, tool_calls.LoopResult):
+            return turn
+        status: Literal["completed", "budget_exhausted", "failed"] = (
+            "budget_exhausted" if stopped else "completed")
+        if self.final_schema is None:
+            return self._result(status)
+        value = schemas.find_value(turn.text)
+        if isinstance(value, dict) and tool_calls.conforms(value, self.final_schema):
+            return self._result(status, final=value)
+        return self._result("failed", error=LLMError(
+            "bad_response", "the final answer did not match its schema",
+            code="final_unreadable"))
+
+    async def _settle(self, turn: _Turn) -> tool_calls.LoopResult | None:
+        """A turn's calls answered, or the run ended by its answer."""
+        if not turn.calls:
+            return await self._answered(turn)
+        if turn.finish != "length":
+            ended = self._terminal(turn)
+            if ended is not None:
+                return ended
+        results = [await self._one(turn, call) for call in turn.calls]
+        self._append(turn, results)
+        if self.calls_used >= self.budget.max_tool_calls:
+            self.limit = self.limit or "tool_calls"
+        self._note_switch(turn.target)
+        return None
+
+    async def _answered(self, turn: _Turn) -> tool_calls.LoopResult:
+        if self.final_schema is None:
+            return self._result("completed")
+        value = schemas.find_value(turn.text)
+        if isinstance(value, dict) and tool_calls.conforms(value, self.final_schema):
+            return self._result("completed", final=value)
+        if not self.finalized and self.turns + 1 <= self.budget.max_turns:
+            self._extend([{"role": "assistant", "content": turn.text}])
+            return await self._finalize(stopped=False)
+        return self._result("failed", error=LLMError(
+            "bad_response", "the final answer did not match its schema",
+            code="final_unreadable"))
+
+    def _terminal(self, turn: _Turn) -> tool_calls.LoopResult | None:
+        """A valid call to a terminal tool ends the run, unexecuted: handed
+        back as `final_call`, the turn's other calls recorded `not_run`."""
+        for call in turn.calls:
+            spec = self.toolset.get(call.name)
+            if spec is None or not spec.terminal or self._problem(call, spec):
+                continue
+            for other in turn.calls:
+                if other is not call:
+                    self._trace(turn.turn, "tool", other.name, other.id, ok=False,
+                                note="not_run")
+            return self._result("completed", final_call=call)
+        return None
+
+    # ---- one model turn ----
+    async def _turn(self, *, final: bool, extra: dict | None = None
+                    ) -> _Turn | tool_calls.LoopResult:
+        k = self.turns = self.turns + 1
+        chain, notes = self._chain(final)
+        choice = "none" if final else self._choice(chain, notes)
+        sending = self._outgoing(extra)
+        if extra is not None:
+            self.appended.append(extra)
+        collector = tool_calls.Collector()
+        started = time.monotonic()
+        try:
+            text, holder = await self._metered(k, chain, sending, choice, collector, final)
+        except _WallSpentError:
+            self._trace(k, "model", ok=False, note="wall", started=started)
+            self.limit = "wall"
+            return self._result("budget_exhausted")
+        except LLMError as exc:
+            self._trace(k, "model", ok=False, note=exc.kind, started=started)
+            if k == 1:
+                raise
+            return self._result("failed", error=exc)
+        target = holder.get(llm.ATTEMPTED)
+        target = target if isinstance(target, wire.Target) else None
+        calls = tuple(self._named(c) for c in collector.calls()) if not final else ()
+        turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target)
+        self.text = text
+        if target is not None and self._switched_to(target):
+            notes.append("fell back")
+        self._trace(k, "model", target.model if target else "", chars=len(text),
+                    note=", ".join(notes), started=started)
+        await self._captured(sending, turn)
+        if text:
+            self.pending.append(tool_calls.LoopEvent("text", turn=k, delta=text))
+        self.pending.append(tool_calls.LoopEvent("turn_end", turn=k, finish=turn.finish,
+                                                 interstitial=bool(calls)))
+        return turn
+
+    def _turn_seconds(self) -> tuple[float | None, bool]:
+        """This turn's wait (spec 3.9, joined): `min(llm_call_budget, wall
+        left)`, either absent at `<= 0`, and whether the run's wall is the
+        binding one."""
+        left = self.wall - self._elapsed() if self.wall > 0 else None
+        if self.call_budget > 0 and (left is None or self.call_budget <= left):
+            return self.call_budget, False
+        return left, left is not None
+
+    async def _metered(self, k: int, chain: wire.Chain, sending: list[dict], choice: str,
+                       collector: tool_calls.Collector, final: bool) -> tuple[str, dict]:
+        """One turn through the facade, under its own meter carrying the run
+        id and the turn (01g-C3), bounded by `_turn_seconds`."""
+        schema = self.final_schema if final else None
+        seconds, by_wall = self._turn_seconds()
+        meter = store.usage.meter(self.task, **self.attribution, run_id=self.run_id,
+                                  loop_turn=k)
+        try:
+            with meter as m:
+                m.usage[tool_calls.KEY] = collector
+
+                def overrun(limit: float) -> LLMError:
+                    if by_wall:
+                        return _WallSpentError("timeout", "the run's wall clock ran out")
+                    error = LLMError("timeout", f"the reply did not finish within "
+                                                f"{limit:g}s — giving up")
+                    self._note_overrun(m.usage, chain, error)
+                    return error
+
+                async def resend(again: wire.Chain) -> str:
+                    with _counting_earlier(m.usage):
+                        return await self.client.complete(sending, again, m.usage, schema=schema,
+                                                          tools=self.defs, tool_choice=choice)
+
+                work: Awaitable[str] = (
+                    self.client.complete(sending, chain, m.usage, tools=self.defs,
+                                         tool_choice=choice) if schema is None
+                    else _joined_structured(self.client.complete(
+                        sending, chain, m.usage, schema=schema, tools=self.defs,
+                        tool_choice=choice), resend))
+                try:
+                    text = await deadline.bounded(work, seconds, overrun)
+                finally:
+                    m.tool_calls = len(collector.calls())
+        finally:
+            if meter.row is not None:
+                self.rows.append(meter.row)
+        return text, m.usage
+
+    def _note_overrun(self, holder: dict, chain: wire.Chain, error: LLMError) -> None:
+        """An `llm_call_budget` overrun, filed against the attempt that was
+        running (`routes.common._noting`'s rule)."""
+        try:
+            attempted = holder.get(llm.ATTEMPTED)
+            self.client.note_outcome(attempted if isinstance(attempted, wire.Target)
+                                     else chain.primary, error)
+        except Exception as exc:  # noqa: BLE001 - bookkeeping on the failure path
+            log.warning("could not file a tool turn's timeout: %s", type(exc).__name__)
+
+    def _chain(self, final: bool) -> tuple[wire.Chain, list[str]]:
+        """The turn's chain (spec 3.9, 3.11): the per-turn output cap through
+        `call_chain` (with the final schema on a finalize turn), the fallback
+        alone once it has served, and thinking off on a target that inherits
+        another model's tool turns."""
+        notes: list[str] = []
+        full = call_chain(self.resolved, schema=self.final_schema if final else None,
+                          max_tokens=self.budget.max_output_tokens)
+        if self.fallen and full.fallback is not None:
+            full = wire.Chain(full.fallback)
+        sent = [self._inheriting(t, notes) for t in full.attempts]
+        return wire.Chain(sent[0], sent[1] if len(sent) > 1 else None), notes
+
+    def _inheriting(self, target: wire.Target, notes: list[str]) -> wire.Target:
+        if any(w != (target.provider_id, target.model) for w in self.writers):
+            notes.append(f"thinking off on {target.model}")
+            return target.with_thinking_off()
+        return target
+
+    def _choice(self, chain: wire.Chain, notes: list[str]) -> str:
+        """`required` downgraded to `auto` for a chain holding an attempt that
+        would be refused it -- forced tool use beside thinking, implicit
+        adaptive thinking included (`probes.tool_choice`'s rule)."""
+        if self.choice != "required" or not any(self._auto_only(t) for t in chain.attempts):
+            return self.choice
+        notes.append("required sent as auto")
+        return "auto"
+
+    def _auto_only(self, target: wire.Target) -> bool:
+        preset = next((a.provider_preset for a in self.resolved.attempts
+                       if (a.provider_id, a.model) == (target.provider_id, target.model)), "")
+        sent = llm_sampling.effective(target)["effective"].get("thinking")
+        return probes.tool_choice(preset, target.kind, target.model_features, sent,
+                                  target.model) == "auto"
+
+    def _named(self, call: tool_calls.ToolCall) -> tool_calls.ToolCall:
+        """A call with an id every provider takes: the provider's own while it
+        is one (spec 3.11 rule 2), else the loop's."""
+        if tool_calls.SAFE_ID.match(call.id):
+            return call
+        return replace(call, id=self._mint())
+
+    def _mint(self) -> str:
+        self.minted += 1
+        return tool_calls.loop_id(self.run_id, self.minted)
+
+    def _switched_to(self, target: wire.Target) -> bool:
+        primary = self.resolved.chain.primary if self.resolved.chain is not None else None
+        return (not self.fallen and primary is not None
+                and (target.provider_id, target.model) != (primary.provider_id, primary.model))
+
+    def _note_switch(self, target: wire.Target | None) -> None:
+        """Once the fallback has served, it serves alone (spec 3.11 rule 1),
+        and every id in the history is the loop's own from then on (rule 2)."""
+        if target is None or not self._switched_to(target):
+            return
+        self.fallen = True
+        mapping = {c["id"]: self._mint() for m in self.appended
+                   for c in m.get("tool_calls", ()) if isinstance(c, dict) and c.get("id")}
+        self.appended = tool_calls.rewrite_ids(self.appended, mapping)
+        self._hist = None
+
+    def _outgoing(self, extra: dict | None) -> list[dict]:
+        history = self._history()
+        if extra is None:
+            return history
+        if isinstance(history, model_guidance.PreparedMessages):
+            return history.with_appended_keeping(extra)
+        return [*history, extra]
+
+    def _history(self) -> list[dict]:
+        """The prompt and every turn the loop appended, as one prompt: a
+        `PreparedMessages` extended message by message so every variant gets
+        the same tail (`with_appended_keeping`), cached between turns."""
+        if self._hist is None:
+            self._hist, self._hist_len = self.base, 0
+        for message in self.appended[self._hist_len:]:
+            self._hist = (self._hist.with_appended_keeping(message)
+                          if isinstance(self._hist, model_guidance.PreparedMessages)
+                          else [*self._hist, message])
+        self._hist_len = len(self.appended)
+        return self._hist
+
+    def _extend(self, messages: list[dict]) -> None:
+        self.appended.extend(messages)
+
+    def _append(self, turn: _Turn, results: list[dict]) -> None:
+        said: dict = {"role": "assistant", "content": turn.text,
+                      "tool_calls": [{"id": c.id, "name": c.name,
+                                      "arguments": c.arguments or {}} for c in turn.calls]}
+        if turn.opaque is not None:
+            said["_opaque"] = turn.opaque
+        self._extend([said, *results])
+        if turn.target is not None:
+            self.writers.add((turn.target.provider_id, turn.target.model))
+
+    async def _captured(self, sending: list[dict], turn: _Turn) -> None:
+        """The caller's `TurnCapture`, guarded: a capture never fails a turn."""
+        if self.capture is None:
+            return
+        try:
+            shown = [{"role": "system", "content": json.dumps(list(self.defs))}, *list(sending)]
+            outcome = {"finish": turn.finish, "text_chars": len(turn.text),
+                       "calls": [{"name": c.name, "arguments": c.arguments} for c in turn.calls]}
+            target = turn.target or (self.resolved.chain.primary
+                                     if self.resolved.chain is not None else None)
+            if target is not None:
+                await self.capture(shown, outcome, target)
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            log.warning("could not capture tool turn %d of run %s: %s", turn.turn,
+                        self.run_id, type(exc).__name__)
+
+    # ---- one tool call ----
+    def _problem(self, call: tool_calls.ToolCall, spec: tool_calls.ToolSpec | None) -> str:
+        if spec is None:
+            return f"there is no tool named {call.name!r}"
+        if call.arguments is None:
+            return "your arguments were not a JSON object"
+        return tool_calls.violation(call.arguments, spec.parameters)
+
+    def _refused_call(self) -> str:
+        """The limit that refuses the next execution (spec 3.9), or ""."""
+        if self.limit:
+            return self.limit
+        if self.calls_used + 1 > self.budget.max_tool_calls:
+            return "tool_calls"
+        if self._wall_short(0):
+            return "wall"
+        return ""
+
+    async def _one(self, turn: _Turn, call: tool_calls.ToolCall) -> dict:
+        """One call answered: run, refused or failed, every call id gets a
+        result (every provider requires one)."""
+        self._check_cancelled()
+        refused = self._refused_call()
+        if refused:
+            self.limit = refused
+            self._trace(turn.turn, "tool", call.name, call.id, ok=False, note="not_run")
+            return self._result_message(call, tool_calls.NOT_RUN, error=True)
+        self.calls_used += 1
+        spec = self.toolset.get(call.name)
+        problem = (tool_calls.CUT_OFF if turn.finish == "length"
+                   else self._problem(call, spec))
+        if problem or spec is None:
+            self._trace(turn.turn, "tool", call.name, call.id, ok=False, note="refused")
+            return self._result_message(call, problem, error=True)
+        return await self._executed(turn.turn, call, spec)
+
+    async def _executed(self, k: int, call: tool_calls.ToolCall,
+                        spec: tool_calls.ToolSpec) -> dict:
+        self.pending.append(tool_calls.LoopEvent("tool_start", turn=k, call_id=call.id,
+                                                 name=call.name))
+        started = time.monotonic()
+        output, ok = await self._run_tool(call, spec)
+        text = tool_calls.truncate(output.text, spec.max_result_chars)
+        room = self.budget.max_result_chars_total - self.result_chars
+        if len(text) > room:
+            text = tool_calls.truncate(text, room)
+            self.limit = self.limit or "result_chars"
+        self.result_chars += len(text)
+        if ok and spec.effect == "propose" and isinstance(output.proposal, dict):
+            self.proposals.append(output.proposal)
+        self._trace(k, "tool", call.name, call.id, ok=ok, refs=output.refs, chars=len(text),
+                    started=started)
+        self.pending.append(tool_calls.LoopEvent("tool_end", turn=k, call_id=call.id,
+                                                 name=call.name, ok=ok, chars=len(text),
+                                                 refs=output.refs))
+        return self._result_message(call, text, error=not ok)
+
+    async def _run_tool(self, call: tool_calls.ToolCall, spec: tool_calls.ToolSpec
+                        ) -> tuple[tool_calls.ToolOutput, bool]:
+        """The caller's executor, bounded: a wait, never a kill (spec 3.6). A
+        `ToolError` reaches the model as itself; anything else as a generic
+        failure, logged by type only (a message can quote record text)."""
+        end = self.t0 + self.wall if self.wall > 0 else float("inf")
+        ctx = tool_calls.ToolContext(campaign=self.attribution["campaign"],
+                                     scene_identity=self.scene_identity, run_id=self.run_id,
+                                     deadline=end, root=self.root)
+        seconds = min(spec.timeout, end - time.monotonic())
+
+        async def marked() -> tool_calls.ToolOutput:
+            # The wait runs the executor in a task of its own: marked as a
+            # loop's, so a tool cannot start a loop inside this one.
+            me = asyncio.current_task()
+            if me is not None:
+                _LOOPING.add(me)
+            return await self.execute(call, ctx)
+
+        try:
+            output = await deadline.bounded(marked(), seconds,
+                                            lambda _s: _ToolTimeoutError())
+        except _ToolTimeoutError:
+            return tool_calls.ToolOutput(tool_calls.TIMED_OUT), False
+        except tool_calls.ToolError as exc:
+            return tool_calls.ToolOutput(str(exc) or tool_calls.TOOL_FAILED), False
+        except Exception as exc:  # noqa: BLE001 - a tool's failure is the model's to hear
+            log.error("tool %s failed in run %s: %s", call.name, self.run_id,
+                      type(exc).__name__)
+            return tool_calls.ToolOutput(tool_calls.TOOL_FAILED), False
+        if not isinstance(output, tool_calls.ToolOutput) or not isinstance(output.text, str):
+            return tool_calls.ToolOutput(tool_calls.TOOL_FAILED), False
+        return output, True
+
+    @staticmethod
+    def _result_message(call: tool_calls.ToolCall, text: str, *, error: bool) -> dict:
+        return {"role": "tool", "tool_call_id": call.id, "name": call.name,
+                "content": text, "is_error": error}
+
+    # ---- bookkeeping ----
+    def _trace(self, turn: int, kind: Literal["model", "tool", "decide", "stop"],
+               name: str = "", call_id: str = "", *, ok: bool = True,
+               refs: tuple[str, ...] = (), chars: int = 0, note: str = "",
+               started: float | None = None) -> None:
+        elapsed = int((time.monotonic() - started) * 1000) if started is not None else 0
+        self.trace.append(tool_calls.TraceEntry(turn, kind, name, call_id, ok, tuple(refs),
+                                                chars, elapsed, note))
+
+    def _result(self, status: Literal["completed", "budget_exhausted", "failed"], *,
+                final: dict | None = None, final_call: tool_calls.ToolCall | None = None,
+                error: Exception | None = None) -> tool_calls.LoopResult:
+        limit = self.limit if status == "budget_exhausted" else ""
+        self._trace(self.turns, "stop", limit, note=status)
+        return tool_calls.LoopResult(
+            status=status, limit=limit, text=self.text, final=final, final_call=final_call,
+            proposals=tuple(self.proposals), messages=tuple(self.appended),
+            trace=tuple(self.trace), rows=tuple(self.rows), error=error, run_id=self.run_id)
+
+
+async def run_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset,
+                    execute: tool_calls.Execute, client: LLMClient,
+                    resolved: ResolvedInference, budget: tool_calls.RunBudget, run_id: str,
+                    campaign: str = "", scene: str = "", scene_identity: str = "",
+                    post: int | None = None, round_id: str = "", response_id: str = "",
+                    cancelled: Callable[[], bool] | None = None,
+                    final_schema: dict | None = None,
+                    tool_choice: Literal["auto", "required"] = "auto",
+                    capture: TurnCapture | None = None) -> tool_calls.LoopResult:
+    """Run a bounded loop of model turns and tool calls for `task` (spec 3.7;
+    01g-C2a, C3, C4 less spend).
+
+    `resolved` is the call site's resolution of `task` for `generate`, on a
+    route that requires tools or lists them as optional, with a primary not
+    known unable to call them. The caller supplies the tools (`toolset`), the
+    executor that runs them (`execute`; `tool_calls.registered` is the
+    default) and the run id (`run_id`, normally the detached run's `Run.id`):
+    the loop never executes a tool itself and never mints a run id.
+
+    Each model turn is one facade call (`client.complete`) under a meter of
+    its own carrying `run_id` and `loop_turn` (and the caller's round and
+    reply ids), with the turn's output capped at `budget.max_output_tokens`.
+    Before each send the run's budget is checked (cancelled, turns, wall);
+    before each execution, the tool-call budget and the wall. A limit makes
+    the next turn the reserved finalize turn when one fits, and otherwise
+    stops the run `budget_exhausted` with the limit named. A call to a
+    `terminal` tool ends the run unexecuted (`final_call`). With
+    `final_schema`, the answer is read and checked against it, with one
+    finalize turn for one that does not conform.
+
+    Raises only for invalid input (`ValueError`, before any meter opens), an
+    `LLMError` on turn 1, and cancellation -- `cancelled()` returning True
+    included, as `asyncio.CancelledError`. Every later failure is a `failed`
+    result with the rows filed so far."""
+    _loop_refusal(task, messages, toolset, resolved, run_id, final_schema, tool_choice)
+    loop = _Loop(task, messages, toolset=toolset, execute=execute, client=client,
+                 resolved=resolved, budget=budget, run_id=run_id,
+                 attribution={"campaign": campaign, "scene": scene, "post": post,
+                              "round_id": round_id, "response_id": response_id},
+                 scene_identity=scene_identity, cancelled=cancelled,
+                 final_schema=final_schema, tool_choice=tool_choice, capture=capture)
+    current = asyncio.current_task()
+    if current is not None:
+        _LOOPING.add(current)
+    result: tool_calls.LoopResult | None = None
+    try:
+        async with aclosing(loop.events()) as events:
+            async for event in events:
+                if event.kind == "done":
+                    result = event.result
+    finally:
+        if current is not None:
+            _LOOPING.discard(current)
+    assert result is not None
+    return result
