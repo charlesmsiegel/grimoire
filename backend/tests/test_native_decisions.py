@@ -1149,3 +1149,89 @@ def test_a_value_naming_no_option_keeps_what_it_named(provider):
     assert named.answers["speaker"].stated == ""
     with pytest.raises(ValueError, match="stated value"):
         Answer("characters:mara", stated="characters:rowan")
+
+
+# ---- 01e: the native lowering ----------------------------------------------
+
+STRIKE = Option("strike", "Strike.")
+HEAL = Option("heal", "Heal.")
+SENTINEL = Option("creatures:sentinel", "The sentinel.")
+SMUGGLER = Option("creatures:smuggler", "The smuggler.")
+ACT = decisions.Joint("act", "What does Winifred do?", (STRIKE, HEAL),
+                      (("strike", (SENTINEL, SMUGGLER)), ("heal", (MARA,))), allow_none=True)
+JOINT_ITEM = Item(CONTEXT, (OVER, ACT))
+
+
+def joint_reply(provider: str, chosen: str | None, weights: dict[str, float]) -> dict:
+    """A decisions reply answering `JOINT_ITEM`: the predicate, and the
+    flattened choice, keyed by the wire's own keys (the reserved none as
+    `none`)."""
+    if provider == "openrouter":
+        act: dict = {"type": "choice", "probabilities": dict(weights)}
+        if chosen is not None:
+            act["choice"] = chosen
+        return {"answers": {"over": {"type": "noul", "noul": 0.2}, "act": act}}
+    act = {"type": "choice", "name": "act",
+           "probabilities": choice_probabilities("openai", weights)}
+    if chosen is not None:
+        act["choice"] = chosen
+    return {"answers": [{"type": "predicate", "name": "over", "probability": 0.2}, act]}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_joint_is_sent_as_one_flattened_choice(provider):
+    body_of = decision_body if provider == "openrouter" else openai_compatible.decision_body
+    sent = body_of(JOINT_ITEM, MODEL)
+    assert sent == body_of(Item(CONTEXT, (OVER, ACT.choice)), MODEL)
+    if provider == "openrouter":
+        assert list(sent["questions"]) == ["over", "act"]
+        assert sent["questions"]["act"] == {
+            "type": "choice", "instructions": "What does Winifred do?",
+            "criteria": {"strike=>creatures:sentinel": "Strike. -> The sentinel.",
+                         "strike=>creatures:smuggler": "Strike. -> The smuggler.",
+                         "heal=>characters:mara": "Heal. -> Mara, the cartographer.",
+                         "none": decisions.NATIVE_NONE_TEXT}}
+    else:
+        (_, act) = sent["questions"]
+        assert [c["value"] for c in act["choices"]] == [
+            "strike=>creatures:sentinel", "strike=>creatures:smuggler",
+            "heal=>characters:mara", "none"]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_existing_native_bodies_are_unchanged_by_the_lowering(provider):
+    body_of = decision_body if provider == "openrouter" else openai_compatible.decision_body
+    lowered, _ = decisions.native_form(ITEM)
+    assert lowered is ITEM
+    assert body_of(ITEM, MODEL) == body_of(lowered, MODEL)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_joint_keeps_its_distribution_by_flattened_key(provider):
+    weights = {"strike=>creatures:sentinel": 0.3, "strike=>creatures:smuggler": 0.3,
+               "heal=>characters:mara": 0.35, "none": 0.05}
+    result = read(provider)(joint_reply(provider, "heal=>characters:mara", weights),
+                            JOINT_ITEM)
+    act = result.answers["act"]
+    assert act.answer == decisions.Pair("heal", "characters:mara")
+    assert act.distribution == {"strike=>creatures:sentinel": 0.3,
+                                "strike=>creatures:smuggler": 0.3,
+                                "heal=>characters:mara": 0.35, decisions.NONE_KEY: 0.05}
+    assert result.answers["over"].answer is False
+    assert result.backend == "native"
+    # The head most mass favours is a strike, split across two targets.
+    assert decisions.head_first(act, ACT) == "strike"
+    assert decisions.head_marginal(act, ACT) == pytest.approx({"strike": 0.6, "heal": 0.35})
+    # Unchosen: the argmax pair, still a Pair.
+    argmax = read(provider)(joint_reply(provider, None, weights), JOINT_ITEM).answers["act"]
+    assert argmax.answer == decisions.Pair("heal", "characters:mara")
+    # The reserved none is an abstention, never a head.
+    abstained = read(provider)(joint_reply(provider, "none", weights), JOINT_ITEM)
+    assert (abstained.answers["act"].answer, abstained.answers["act"].reason) == (
+        None, "abstained")
+    assert decisions.head_first(abstained.answers["act"], ACT) is None
+    # A pair nobody offered is not an option, stated as it was named.
+    stray = read(provider)(joint_reply(provider, "heal=>creatures:sentinel", weights),
+                           JOINT_ITEM).answers["act"]
+    assert (stray.reason, stray.detail, stray.stated) == (
+        "unreadable", decisions.NOT_AN_OPTION, "heal=>creatures:sentinel")

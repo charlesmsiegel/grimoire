@@ -158,11 +158,11 @@ def _question(q: decisions.Question) -> dict:
 
 
 def decision_body(item: decisions.Item, model: str) -> dict:
-    """The request body asking `item` of `model`: `questions` an array, each
-    named by its question id. Aliases are the structured parser's and are not
+    """The request body asking `item` of `model`, as `decisions.native_form`
+    lowers it: `questions` an array, each named by its question id. Aliases are the structured parser's and are not
     sent; nothing asks for a rationale, which this endpoint does not return."""
     return {"model": model, "input": item.context,
-            "questions": [_question(q) for q in item.questions]}
+            "questions": [_question(q) for q in decisions.native_form(item)[0].questions]}
 
 
 def _choice_distribution(keys: dict[str, str], reported: object) -> dict | None:
@@ -244,7 +244,8 @@ def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
 
 def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
     """`body`, a decisions response, read as `item`'s answers, each matched to
-    its question by `name`.
+    its question by `name` -- against the item `decisions.native_form`
+    lowered, then lifted back (`decisions.native_lift`).
 
     Raises `bad_response` when `body` is not the documented envelope, and when
     it is but answers none of `item`'s questions: that is not an answer, and the
@@ -264,15 +265,16 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
         if name in by_name:
             twice.add(name)
         by_name[name] = raw
+    lowered, lift = decisions.native_form(item)
     result = decisions.native_result(
-        item, {q.id: (decisions.Answer(None, "unreadable") if q.id in twice
-                      else _answer(q, by_name[q.id]))
-               for q in item.questions if q.id in by_name},
+        lowered, {q.id: (decisions.Answer(None, "unreadable") if q.id in twice
+                         else _answer(q, by_name[q.id]))
+                  for q in lowered.questions if q.id in by_name},
         "OpenAI")
     if result is None:
         raise OpenAICompatibleError("bad_response",
                                     "the decisions reply answered none of the questions")
-    return result
+    return decisions.native_lift(item, result, lift)
 
 
 def _decision_usage(body: object, usage: dict | None) -> None:

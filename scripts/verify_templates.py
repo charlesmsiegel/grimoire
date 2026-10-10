@@ -1222,6 +1222,7 @@ _DECIDE_ITEMS = [
 _DECIDE_NEW_KINDS = {
     "rank": ("- a ranking is answered with", "(ranking, best first"),
     "select": ("- a selection is answered with", "(selection"),
+    "joint": ("- a joint choice is answered with", "(joint choice"),
 }
 _DECIDE_NEW_ITEMS = {
     "rank": dec.Rank("order", "Which scene matters most to Mara's question?",
@@ -1233,6 +1234,13 @@ _DECIDE_NEW_ITEMS = {
                               (dec.Option("characters:winifred", "Winifred, on the crates"),
                                dec.Option("characters:seraphine", "Seraphine, at the rail")),
                               min=1, max=2, allow_none=True),
+    "joint": dec.Joint("act", "What does Winifred do?",
+                       (dec.Option("strike", "Strike"), dec.Option("heal", "Heal"),
+                        dec.Option("wait", "Wait")),
+                       (("strike", (dec.Option("creatures:sentinel", "the sentinel"),)),
+                        ("heal", (dec.Option("characters:mara", "Mara"),
+                                  dec.Option("characters:winifred", "herself")))),
+                       allow_none=True),
 }
 for _explain in ("", "Say in one sentence what settled it."):
     for _n in (1, 2):

@@ -10,8 +10,9 @@ reads a reply back, and the chunking of a long batch -- and, for slice H's
 native backends, the one mapping both adapters share: the reserved none an
 `allow_none` choice adds (`native_choice_keys`) and how a wire key is read
 back (`native_key`), what an endpoint cannot carry (`native_gap`), how a
-provider's report becomes an `Answer` (`native_answer`) and a reply an
-`ItemResult` (`native_result`),
+kind no endpoint has is lowered to kinds they do (`native_form`) and read
+back (`native_lift`), how a provider's report becomes an `Answer`
+(`native_answer`) and a reply an `ItemResult` (`native_result`),
 the capture's record of a call (`outcome`) and the structured rendering of a
 native result (`render`).
 
@@ -50,7 +51,7 @@ import logging
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar, Final
 
 log = logging.getLogger(__name__)
@@ -284,7 +285,81 @@ class MultiSelect:
         return len(self.options) if self.max is None else self.max
 
 
-Question = Predicate | Choice | Score | Rank | MultiSelect
+#: What joins an action to its target in a `Joint`'s flattened key. ASCII,
+#: and holds no space or hyphen that `normalise` would rewrite, so a key
+#: survives normalisation as itself.
+JOINT_SEP = "=>"
+
+
+def joint_key(head: str, tail: str | None) -> str:
+    """A legal pair's one spelling: `head` for a head that takes no tail,
+    else `head + JOINT_SEP + tail`. The key a pair has everywhere a key is
+    needed -- a distribution, a draw and its replay record, an answer filter,
+    a capture, an eval render."""
+    return head if tail is None else f"{head}{JOINT_SEP}{tail}"
+
+
+@dataclass(frozen=True)
+class Pair:
+    """A `Joint`'s answer: the head (an action) and its tail (the target),
+    None for a head that takes none. `key` is its one spelling, so a pair
+    and its key cannot disagree."""
+
+    head: str
+    tail: str | None
+
+    @property
+    def key(self) -> str:
+        return joint_key(self.head, self.tail)
+
+
+def split_joint(key: str) -> Pair:
+    """`joint_key`'s inverse; `ValueError` on a key with no head, an empty
+    tail, or more than one separator (no legal pair is spelled so: `validate`
+    refuses `JOINT_SEP` in any id)."""
+    head, sep, tail = key.partition(JOINT_SEP)
+    if not head or (sep and (not tail or JOINT_SEP in tail)):
+        raise ValueError(f"{key!r} spells no pair")
+    return Pair(head, tail if sep else None)
+
+
+@dataclass(frozen=True)
+class Joint:
+    """One action and one target conditioned on it (01e-C3b); answered with
+    a `Pair`.
+
+    `tails` maps a head id to its legal targets; a head missing from it, or
+    mapped to `()`, takes no tail. The conditioning IS the legal-pair set: the
+    caller lists only pairs that are legal, and the model never sees another.
+    On both paths it is one flattened `Choice` (`choice`) whose options are
+    those pairs, keyed by `joint_key` -- never two questions, since a native
+    endpoint answers each question of an item without seeing the others, so
+    a second "target" question would be answered blind of the first. The
+    native answer's distribution is therefore a joint distribution over
+    legal pairs. A set of targets, or more legal pairs than a choice offers,
+    is two `decide` calls: the action, then its targets."""
+
+    KIND: ClassVar[str] = "joint"
+
+    id: str
+    instructions: str
+    heads: tuple[Option, ...]
+    tails: tuple[tuple[str, tuple[Option, ...]], ...] = ()
+    allow_none: bool = False
+
+    @property
+    def choice(self) -> Choice:
+        """The flattened choice: every legal pair in head order, then tail
+        order, described `head -> tail`."""
+        targets = dict(self.tails)
+        options = tuple(
+            Option(head.id, head.description) if tail is None
+            else Option(joint_key(head.id, tail.id), f"{head.description} -> {tail.description}")
+            for head in self.heads for tail in targets.get(head.id, ()) or (None,))
+        return Choice(self.id, self.instructions, options, self.allow_none)
+
+
+Question = Predicate | Choice | Score | Rank | MultiSelect | Joint
 
 
 @dataclass(frozen=True)
@@ -373,7 +448,7 @@ class Answer:
     None on every structured answer.
     """
 
-    answer: bool | str | int | Ranking | tuple[str, ...] | None
+    answer: bool | str | int | Ranking | Pair | tuple[str, ...] | None
     reason: str = ""
     probability: float | None = None
     distribution: dict[str, float] | None = None
@@ -538,6 +613,45 @@ def _check_select(q: MultiSelect) -> None:
             f"options; it needs 0 <= min <= max <= {len(q.options)}")
 
 
+def _check_joint(q: Joint) -> None:
+    """A joint's own rules -- every `tails` key a head and no head twice, no
+    `JOINT_SEP` in any id, no aliases (pairing them would multiply them) --
+    then the flattened choice's, under the choice's bounds."""
+    _check_tails(q)
+    for opt in (*q.heads, *(t for _, targets in q.tails for t in targets)):
+        if not isinstance(opt, Option):
+            raise DecideRequestError(f"joint {q.id!r} has a head that is not an Option")
+        if JOINT_SEP in opt.id:
+            raise DecideRequestError(f"joint {q.id!r} cannot offer {opt.id!r}: it holds "
+                                     f"{JOINT_SEP!r}, which joins a pair's key")
+        if opt.aliases:
+            raise DecideRequestError(f"joint {q.id!r}: {opt.id!r} has aliases, which a "
+                                     f"joint does not take")
+        if not offerable(opt.id):
+            raise DecideRequestError(f"joint {q.id!r} cannot offer {opt.id!r}: it is "
+                                     f"empty once normalised, or reserved")
+    low = MIN_OPTIONS_WITH_NONE if q.allow_none else MIN_OPTIONS
+    _check_options("joint", q.id, q.choice.options, low, MAX_OPTIONS, "legal pairs")
+
+
+def _check_tails(q: Joint) -> None:
+    heads = {opt.id for opt in q.heads if isinstance(opt, Option)}
+    named: set[str] = set()
+    for entry in q.tails:
+        if not (isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[1], tuple)):
+            raise DecideRequestError(f"joint {q.id!r} has a tails entry that is not "
+                                     f"(head id, targets)")
+        head, targets = entry
+        if head not in heads:
+            raise DecideRequestError(f"joint {q.id!r} lists targets for {head!r}, "
+                                     f"which is not one of its heads")
+        if head in named:
+            raise DecideRequestError(f"joint {q.id!r} lists targets for {head!r} twice")
+        named.add(head)
+        if any(not isinstance(tail, Option) for tail in targets):
+            raise DecideRequestError(f"joint {q.id!r} has a target that is not an Option")
+
+
 def _check_rank(q: Rank) -> None:
     _check_options("rank", q.id, q.candidates, MIN_RANK_CANDIDATES, MAX_RANK_CANDIDATES,
                    "candidates")
@@ -549,7 +663,7 @@ def _check_rank(q: Rank) -> None:
 
 
 def _check_question(q: object, index: int) -> None:
-    if not isinstance(q, (Predicate, Choice, Score, Rank, MultiSelect)):
+    if not isinstance(q, (Predicate, Choice, Score, Rank, MultiSelect, Joint)):
         raise DecideRequestError(f"item {index} has a question of unknown type")
     if not q.id.strip():
         raise DecideRequestError(f"item {index} has a question with an empty id")
@@ -561,6 +675,8 @@ def _check_question(q: object, index: int) -> None:
         _check_rank(q)
     elif isinstance(q, MultiSelect):
         _check_select(q)
+    elif isinstance(q, Joint):
+        _check_joint(q)
     elif isinstance(q, Score) and not MIN_LEVELS <= len(q.levels) <= MAX_LEVELS:
         raise DecideRequestError(
             f"score {q.id!r} has {len(q.levels)} levels; "
@@ -576,13 +692,15 @@ def _enum_count(q: Question) -> int:
         return len(q.candidates)
     if isinstance(q, MultiSelect):
         return len(q.options)
+    if isinstance(q, Joint):
+        return len(q.choice.options)
     return 0
 
 
 def enum_values(item: Item) -> int:
     """How many enum values `item` adds to a batch schema: each choice's
-    options, each score's levels, each rank's candidates and each
-    selection's options (a predicate is a
+    options, each score's levels, each rank's candidates, each selection's
+    options and each joint's legal pairs (a predicate is a
     plain boolean, and a nullable question's null branch is a type, not a
     value)."""
     return sum(_enum_count(q) for q in item.questions)
@@ -646,6 +764,11 @@ def _obj(properties: dict[str, Any]) -> dict[str, Any]:
 
 
 def _question_schema(q: Question) -> dict[str, Any]:
+    if isinstance(q, Joint):
+        # A flat string enum of the legal pairs' keys: nested anyOf-of-objects
+        # per head would need single-value enums standing in for `const` and
+        # multiply the properties, and buy nothing the flat enum does not.
+        return _question_schema(q.choice)
     if isinstance(q, Predicate):
         return {"type": "boolean"}
     if isinstance(q, Choice):
@@ -922,6 +1045,15 @@ def _read_rank(q: Rank, value: object) -> Answer:
                           rest=tuple(opt.id for opt in q.candidates if opt.id not in listed)))
 
 
+def _joint_answer(answer: Answer) -> Answer:
+    """The flattened choice's answer as a joint's: its option id split back
+    into the `Pair` it keys, every report riding as it was (a distribution
+    stays keyed by the flattened key, the one spelling of a pair)."""
+    if not isinstance(answer.answer, str):
+        return answer
+    return replace(answer, answer=split_joint(answer.answer))
+
+
 def _read_select(q: MultiSelect, value: object) -> Answer:
     """A structured selection: the ids named, in OPTION order. `[]` is the
     empty selection, a real answer; null is `abstained` only with
@@ -950,6 +1082,8 @@ def _read(q: Question, answers: dict[str, Any]) -> Answer:
         return _read_rank(q, value)
     if isinstance(q, MultiSelect):
         return _read_select(q, value)
+    if isinstance(q, Joint):
+        return _joint_answer(_read_choice(q.choice, value))
     if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(q.levels):
         return Answer(value)
     return _UNREADABLE
@@ -1080,6 +1214,50 @@ def native_result(item: Item, answers: Mapping[str, Answer], provider: str) -> I
                       rationale="", backend=NATIVE_BACKEND)
 
 
+@dataclass(frozen=True)
+class Lift:
+    """How `native_form` lowered an item: per question id of the original,
+    in order, the ids of the lowered questions that answer it."""
+
+    parts: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+def _lowered(q: Question) -> tuple[Question, ...]:
+    """The questions a decisions endpoint is asked in `q`'s place."""
+    if isinstance(q, Joint):
+        return (q.choice,)
+    return (q,)
+
+
+def native_form(item: Item) -> tuple[Item, Lift]:
+    """`item` as a decisions endpoint can be asked it, and how to read the
+    reply back (`native_lift`). Neither endpoint has a rank, a selection or a
+    joint question, so both adapters send what this lowers them to: a
+    predicate, a choice and a score pass through unchanged under their own
+    ids, and a joint becomes its one flattened choice under its id. An item
+    of the three plain kinds comes back as itself, so its body is the one it
+    always was."""
+    parts = tuple((q, _lowered(q)) for q in item.questions)
+    if all(low == (q,) for q, low in parts):
+        return item, Lift(tuple((q.id, (q.id,)) for q in item.questions))
+    return (Item(item.context, tuple(low for _, lows in parts for low in lows)),
+            Lift(tuple((q.id, tuple(low.id for low in lows)) for q, lows in parts)))
+
+
+def native_lift(item: Item, lowered: ItemResult, lift: Lift) -> ItemResult:
+    """`lowered`, the reply to `native_form(item)`'s item as the adapter read
+    it, as `item`'s own result: each question's answer from the lowered
+    questions `lift` names for it -- a joint's flattened choice split back
+    into its `Pair`, the distribution kept by the flattened key -- with the
+    backend and rationale as they were."""
+    parts = dict(lift.parts)
+    answers: dict[str, Answer] = {}
+    for q in item.questions:
+        got = [lowered.answers.get(qid, _UNREADABLE) for qid in parts.get(q.id, (q.id,))]
+        answers[q.id] = _joint_answer(got[0]) if isinstance(q, Joint) else got[0]
+    return ItemResult(answers, rationale=lowered.rationale, backend=lowered.backend)
+
+
 def native_gap(item: Item) -> str:
     """`""` when a decisions endpoint can carry `item`; otherwise one sentence
     naming what it cannot (ruling 25), which the native call refuses unsent.
@@ -1094,9 +1272,21 @@ def native_gap(item: Item) -> str:
         if isinstance(q, MultiSelect):
             return (f"Question {q.id} selects any of its options; a decisions endpoint "
                     f"cannot carry a selection until the native lowering lands.")
-        if isinstance(q, Choice) and (n := len(native_choice_keys(q))) > NATIVE_MAX_OPTIONS:
-            return (f"Question {q.id} offers {n} options including none; "
+        choice = q.choice if isinstance(q, Joint) else q
+        if isinstance(choice, Choice) and (
+                n := len(native_choice_keys(choice))) > NATIVE_MAX_OPTIONS:
+            noun = "legal pairs" if isinstance(q, Joint) else "options"
+            return (f"Question {q.id} offers {n} {noun} including none; "
                     f"a decisions endpoint takes at most {NATIVE_MAX_OPTIONS}.")
+    # A lowered question's id must be unique in the lowered item: a collision
+    # is a native-only problem (a structured stage can still answer the item),
+    # so it is refused unsent here rather than by `validate`.
+    seen: set[str] = set()
+    for q in native_form(item)[0].questions:
+        if q.id in seen:
+            return (f"Question id {q.id} is asked twice once the item is lowered for a "
+                    f"decisions endpoint.")
+        seen.add(q.id)
     return ""
 
 
@@ -1319,6 +1509,39 @@ def regrouped(answer: Answer, group: Callable[[str], str],
     return min(winners, key=lambda g: rank.get(g, len(rank)))
 
 
+def head_marginal(answer: Answer, q: Joint) -> dict[str, float] | None:
+    """A joint answer's distribution summed per head, in `q`'s head order,
+    `NONE_KEY` excluded; None without a distribution (every structured
+    answer)."""
+    if not answer.distribution:
+        return None
+    mass: dict[str, float] = {}
+    for key, weight in answer.distribution.items():
+        if key != NONE_KEY:
+            head = split_joint(key).head
+            mass[head] = mass.get(head, 0.0) + weight
+    order = [h.id for h in q.heads]
+    return {head: mass[head] for head in sorted(mass, key=lambda h: (
+        order.index(h) if h in order else len(order)))}
+
+
+def head_first(answer: Answer, q: Joint) -> str | None:
+    """`regrouped`'s rule applied to a joint answer's key, grouped by head,
+    `NONE_KEY` excluded: the head the distribution puts most mass on when
+    that is not the chosen pair's head, else None (and None with no chosen
+    pair or no distribution).
+
+    For the reason `regrouped` exists: an endpoint scoring pairs one by one
+    splits a head's mass across its targets, so 0.3 on each of two strikes
+    and 0.4 on one heal makes the argmax pair a heal while the action most
+    mass favours is a strike. Which reading to trust is the caller's
+    policy."""
+    if not isinstance(answer.answer, Pair):
+        return None
+    keyed = Answer(answer.answer.key, distribution=answer.distribution)
+    return regrouped(keyed, lambda key: split_joint(key).head, [h.id for h in q.heads])
+
+
 def _present(record: dict[str, Any]) -> dict[str, Any]:
     """`record` without its keys whose value is empty or None."""
     return {key: value for key, value in record.items()
@@ -1327,7 +1550,11 @@ def _present(record: dict[str, Any]) -> dict[str, Any]:
 
 def _spelled(value: object) -> object:
     """An answer value as JSON: a `Ranking` as `{"tiers": [[...]], "rest":
-    [...]}`, a selection as its list, anything else as itself."""
+    [...]}`, a `Pair` as its flattened key (never a two-element list, which a
+    capture could not tell from a selection), a selection as its list,
+    anything else as itself."""
+    if isinstance(value, Pair):
+        return value.key
     if isinstance(value, Ranking):
         return {"tiers": [list(tier) for tier in value.tiers], "rest": list(value.rest)}
     if isinstance(value, tuple):
@@ -1337,10 +1564,12 @@ def _spelled(value: object) -> object:
 
 def _rendered(value: object) -> object:
     """An answer value as the structured reply would have written it: a
-    selection as its list, a ranking of singleton tiers as its id list, and
-    a ranking with a tie as
+    selection as its list, a `Pair` as its flattened key, a ranking of
+    singleton tiers as its id list, and a ranking with a tie as
     null, since no structured reply can state one (a grader reads the native
     result itself, so the null is never scored as a model's answer)."""
+    if isinstance(value, Pair):
+        return value.key
     if isinstance(value, Ranking):
         if any(len(tier) > 1 for tier in value.tiers):
             return None
@@ -1356,7 +1585,7 @@ def outcome(mode: str, provider: str, model: str,
     it, then each item's backend, normalised answers -- `answer`, always
     present (None as null), with its `reason`, `detail`, `probability`,
     `distribution`, `marginals` and `expected`, a `Ranking` as its tiers and
-    rest and a selection as a list -- and rationale; or, on a failure, the `error`. A key
+    rest, a `Pair` as its key and a selection as a list -- and rationale; or, on a failure, the `error`. A key
     whose value is empty or None is left out (an answer's own `answer`
     excepted)."""
     head = _present({"mode": mode, "provider": provider, "model": model})

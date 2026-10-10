@@ -1804,6 +1804,34 @@ def build_decide_select() -> dict:
     return {"items": (item,), "judge": judge}
 
 
+def build_decide_joint() -> dict:
+    """Winifred's next action at the pier: three actions and their legal
+    targets, one flattened choice. Mara is bleeding and the threats have
+    backed off, so the right pair is to heal Mara."""
+    joint = decisions.Joint(
+        "action",
+        "What does Winifred do next?",
+        (decisions.Option("strike", "Strike with her boat hook"),
+         decisions.Option("heal", "Bind a wound"),
+         decisions.Option("parley", "Call out to the smugglers to talk")),
+        (("strike", (decisions.Option("creatures:the-sentinel", "the stone sentinel"),
+                     decisions.Option("characters:the-smuggler", "the smuggler"))),
+         ("heal", (decisions.Option("characters:mara", "Mara"),
+                   decisions.Option("characters:winifred", "herself")))))
+    item = decisions.Item(
+        "On the Saltmarch pier, the stone sentinel has lowered its spear and backed "
+        "into the fog, and the smuggler has fled up the sea stairs. Mara lies at "
+        "Winifred's feet, bleeding badly from her arm. Winifred is unhurt and has "
+        "bandages in her satchel.", (joint,))
+    expected = decisions.Pair("heal", "characters:mara")
+
+    def judge(answer: decisions.Answer) -> tuple[bool, str]:
+        return (answer.answer == expected,
+                f"chose {answer.answer!r}; expected {expected.key}")
+
+    return {"items": (item,), "judge": judge}
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -2109,6 +2137,28 @@ CASES: tuple[Case, ...] = (
              # A null, which this selection does not allow.
              Recording("null", ("decide.answered", "decide.answer"), "json"),
              # Well formed, and the lamplighter who had his back turned.
+             Recording("wrong", ("decide.answer",), "json"))),
+    Case(id="decide-joint",
+         task="scene-break",
+         hypothesis="asked through decide() for Winifred's next action and its target "
+                    "while Mara bleeds and the threats have fled, the reply names one "
+                    "offered pair, exactly as listed, and it is to heal Mara",
+         build=build_decide_joint,
+         prompt=_vocabulary_prompt,
+         grade=grade_decide_vocabulary,
+         schema=_vocabulary_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # A pair nobody offered: heal is never aimed at the sentinel, so
+             # the model never sees that pair and its answer names nothing.
+             Recording("unknown-id", ("decide.known_ids", "decide.answered",
+                                      "decide.answer"), "json"),
+             # The action alone, where the action takes a target: not a pair.
+             Recording("bare-head", ("decide.known_ids", "decide.answered",
+                                     "decide.answer"), "json"),
+             # A null, which this joint does not allow.
+             Recording("null", ("decide.answered", "decide.answer"), "json"),
+             # Well formed, and a strike at the retreating sentinel.
              Recording("wrong", ("decide.answer",), "json"))),
     Case(id="decide-speaker",
          task="response-selector",
