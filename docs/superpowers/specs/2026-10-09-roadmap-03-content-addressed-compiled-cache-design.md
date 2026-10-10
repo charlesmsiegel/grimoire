@@ -773,6 +773,12 @@ returns each one's content hash:
 It is still a lookup by paths the caller already holds, so it never answers
 which paths exist.
 
+**It also has a "hash if known" form**, `known_hashes(paths)`. It stats the
+paths and returns each one's hash only when a `sources` row vouches for the
+current stamp under section 5's rules. For any other path it returns `None`,
+and it never reads a file. 04 uses it on paths it does not want to open on a
+miss (04 open question 11). A `None` means "compute live", never "absent".
+
 An index may *rank* within a live set. 09's lexical candidates might come from
 SQLite FTS5, if the Android build has it, but every such query is restricted
 to keys the caller computed from the filesystem before anything is returned.

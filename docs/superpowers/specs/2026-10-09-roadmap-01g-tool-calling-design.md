@@ -734,9 +734,18 @@ replies, so:
   turns the event stream back into the plain `AsyncIterator[str]` that
   `generate(stream=True)` yields, heartbeats included, so a caller such as
   `_stream_contribution` keeps its display and its watcher as they are.
+- **Heartbeats between turns and during tools.** Between turns, and while a
+  tool (the decide tool included) runs, `stream_tools` yields
+  `text(turn, "")` every `llm.HEARTBEAT_INTERVAL` (15 seconds), so an SSE
+  stream is never silent past the interval `_guard` exists to protect.
+  `text_deltas` passes those through as `""`.
 - **A display reasoning buffer rides each turn.** The caller passes its
   `llm_reasoning.Buffer` as `reasoning=`, and the loop installs it in each
-  turn's holder, so thinking still reaches the display across turns.
+  turn's holder. **This promises no continuity across turns.** `llm._stamp`
+  calls `Buffer.begin()` at each turn's first attempt, which emits
+  `thinking_reset` and clears what was shown. Whether a reader sees thinking
+  reset at a tool turn is 02-C4's UX call, and it can drop the reset frame
+  between turns if it wants continuity.
 - **`decline_after_text=True`** makes visible text final. Once any turn has
   yielded a non-empty delta, a tool call that turn ends with is **not
   executed**. The loop ends with that text as the answer, status
