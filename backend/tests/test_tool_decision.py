@@ -12,7 +12,11 @@ only what the backend reported.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import math
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -50,7 +54,7 @@ class _View:
     """A run's view as the loop hands it to a tool."""
 
     def __init__(self, decisions_left=2, room=None):
-        self.left, self.room, self.charged = decisions_left, room, []
+        self.left, self.room, self.charged, self.noted = decisions_left, room, [], []
 
     def take_decision(self):
         if self.left <= 0:
@@ -63,6 +67,9 @@ class _View:
 
     def charge(self, usd):
         self.charged.append(usd)
+
+    def note_decision(self, status, option=None):
+        self.noted.append((status, option))
 
 
 def _ctx(view=None):
@@ -249,3 +256,165 @@ def test_in_a_loop_each_decision_counts_and_the_cap_stops_the_run(monkeypatch):
     rows = [r for r in store.usage.calls(days=1) if r.get("run_id") == "run-9"]
     assert {r["task"] for r in rows} == {"chat", TASK}
     assert tool_decision.QUESTION_ID == "choice"
+
+
+# ---- brutal review round 1 (F1, F2, F6) ----
+class _SlowJudge(FakeLLM):
+    """A structured Decision model that takes `seconds` to answer."""
+
+    def __init__(self, seconds, *args, **kw):
+        super().__init__(*args, **kw)
+        self.seconds, self.started = seconds, None
+        self.asked = threading.Event()
+
+    async def complete(self, messages, conn, usage=None, **kw):
+        self.started = time.monotonic()
+        self.asked.set()
+        await asyncio.sleep(self.seconds)
+        return await super().complete(messages, conn, usage, **kw)
+
+
+def test_the_decide_tool_is_bounded_by_the_run_not_the_store_read_timeout():
+    """F1: a decide is a model call, not a store read -- the ten-second tool
+    bound would abandon an ordinary structured decision. The run's wall
+    (`_around`) and the decide chain's own per-call ceiling bound it."""
+    spec, _ = decision_tool(TASK, _resolved(), FakeLLM([["x"]]), cid="c")
+    assert spec.timeout == math.inf
+
+
+def test_a_decide_cut_off_mid_call_is_still_charged(monkeypatch):
+    """F1: a decide the run stops waiting on -- its request already out --
+    charges its projection, as a failed call does: it can still bill."""
+    monkeypatch.setattr(store.routing, "TOOLS_OPTIONAL",
+                        frozenset({store.routing.route("chat").key}))
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: CATALOG.get((conn, model)))
+    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.0)
+    judge = _SlowJudge(3.0, [[decision_reply({"choice": "truth"})]],
+                       usage={"prompt_tokens": 100, "completion_tokens": 10})
+    spec, why = decision_tool(TASK, _resolved(), judge, cid="saltmarch", spend=SpendGuard(5.0))
+    assert spec is not None, why
+    charges: list[float] = []
+    real = inference._RunView.charge
+
+    def spy(self, usd):
+        charges.append(usd)
+        return real(self, usd)
+
+    monkeypatch.setattr(inference._RunView, "charge", spy)
+    toolset = tool_calls.Toolset((spec,))
+    model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
+    asyncio.run(inference.run_tools(
+        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
+        execute=tool_calls.registered(toolset), client=model,
+        resolved=wire_kit.resolution(TARGET),
+        budget=RunBudget(wall_seconds=1.0, spend_ceiling_usd=5.0),
+        run_id="run-9", campaign="saltmarch"))
+    assert judge.started is not None
+    assert len(charges) == 1 and charges[0] > 0
+
+
+def test_a_cancelled_decide_charges_its_projection(monkeypatch):
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: CATALOG.get((conn, model)))
+    judge = _SlowJudge(30.0, [[decision_reply({"choice": "truth"})]])
+    spec, _ = decision_tool(TASK, _resolved(), judge, cid="c", spend=SpendGuard(10.0))
+    view = _View(room=10.0)
+
+    async def cut():
+        task = asyncio.ensure_future(spec.fn(ARGS, _ctx(view)))
+        await asyncio.to_thread(judge.asked.wait, 10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cut())
+    assert len(view.charged) == 1 and view.charged[0] > 0
+
+
+def test_a_tool_built_without_a_guard_is_priced_when_the_run_has_a_ceiling(monkeypatch):
+    """F2: no `spend=` at the build, a ceiling on the run -- the call is
+    priced then, never refused as a spent budget nobody spent."""
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: CATALOG.get((conn, model)))
+    judge = FakeLLM([[decision_reply({"choice": "truth"})]],
+                    usage={"prompt_tokens": 100, "completion_tokens": 10})
+    spec, _ = decision_tool(TASK, _resolved(), judge, cid="c")
+    view = _View(room=100.0)
+    assert json.loads(_call(spec, view=view).text) == {"answer": "truth", "status": "answered"}
+    assert judge.calls == 1 and view.charged == [pytest.approx(0.11)]
+
+
+def test_an_unpriceable_tool_under_a_ceiling_says_so_and_takes_no_decision(monkeypatch):
+    """F2: a stage no guard could price (here a native one, which the
+    unguarded build offers on purpose) is refused as unpriceable, sends
+    nothing, and leaves the run's decisions alone -- so the run never stops
+    on a decision limit no decision reached."""
+    monkeypatch.setattr(store.routing, "TOOLS_OPTIONAL",
+                        frozenset({store.routing.route("chat").key}))
+    monkeypatch.setattr(store.llm_connections, "cached_row",
+                        lambda conn, model: CATALOG.get((conn, model)))
+    judge = FakeLLM([["unused"]], decisions=[decisions.ItemResult(
+        {"choice": decisions.Answer("truth")}, backend="native")])
+    spec, why = decision_tool(TASK, _resolved(mode="native"), judge, cid="saltmarch")
+    assert spec is not None, why
+    view = _View(decisions_left=1, room=100.0)
+    with pytest.raises(ToolError, match="cannot be priced"):
+        _call(spec, view=view)
+    assert view.left == 1 and view.noted == [("unpriceable", None)]
+    selection, _ = decision_tool(TASK, _resolved(mode="native"), judge, cid="saltmarch",
+                                 shape=ToolShape(result="selection"))
+    assert json.loads(_call(selection, view=_View(room=100.0)).text) == {
+        "selected": None, "reason": "unpriceable"}
+    toolset = tool_calls.Toolset((spec,))
+    model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
+    result = asyncio.run(inference.run_tools(
+        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
+        execute=tool_calls.registered(toolset), client=model,
+        resolved=wire_kit.resolution(TARGET),
+        budget=RunBudget(spend_ceiling_usd=100.0, max_decisions=1),
+        run_id="run-9", campaign="saltmarch"))
+    assert judge.calls == 0
+    assert result.status == "completed" and result.limit == ""
+    tool_msgs = [m for m in result.messages if m.get("role") == "tool"]
+    assert "spend budget" not in tool_msgs[0]["content"]
+
+
+@pytest.mark.parametrize("args, view, want", [
+    (ARGS, _View(), ("answered", "truth")),
+    ({**ARGS, "question": ""}, _View(), ("invalid_request", None)),
+    (ARGS, _View(decisions_left=0), ("cap", None)),
+])
+def test_every_decide_call_notes_its_outcome_on_the_run(args, view, want):
+    """F6 (spec 3.12, "The trace"): a decide records its status and option."""
+    spec, _ = decision_tool(TASK, _resolved(), FakeLLM([[decision_reply({"choice": "truth"})]]),
+                            cid="c")
+    with contextlib.suppress(ToolError):
+        _call(spec, args, view=view)
+    assert view.noted == [want]
+
+
+def test_a_failed_decision_is_noted_as_failed():
+    from grimoire.llm_errors import LLMError
+    spec, _ = decision_tool(TASK, _resolved(), FakeLLM(
+        [["x"]], error=LLMError("rate_limit", "slow down")), cid="c")
+    view = _View()
+    with pytest.raises(ToolError):
+        _call(spec, view=view)
+    assert view.noted == [("failed", None)]
+
+
+def test_the_loops_trace_holds_a_decide_entry(monkeypatch):
+    monkeypatch.setattr(store.routing, "TOOLS_OPTIONAL",
+                        frozenset({store.routing.route("chat").key}))
+    judge = FakeLLM([[decision_reply({"choice": "truth"})]])
+    spec, _ = decision_tool(TASK, _resolved(), judge, cid="saltmarch")
+    toolset = tool_calls.Toolset((spec,))
+    model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
+    result = asyncio.run(inference.run_tools(
+        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
+        execute=tool_calls.registered(toolset), client=model,
+        resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
+        run_id="run-9", campaign="saltmarch"))
+    (entry,) = [e for e in result.trace if e.kind == "decide"]
+    assert (entry.turn, entry.name, entry.note, entry.ok) == (1, "truth", "answered", True)

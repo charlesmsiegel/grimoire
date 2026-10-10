@@ -164,6 +164,9 @@ def tool_choice(preset_id: str, kind: str, features: dict | None,
     the provider takes it beside what the call sends, else `auto`.
 
     - a preset whose provider takes only `auto` (`AUTO_ONLY_PRESETS`);
+    - a Claude subscription: the Agent SDK cannot be asked to require a
+      call, and offers every tool as `auto` (`claude_agent._tool_options`),
+      so the probe -- and its confirmation -- asks for one;
     - the Anthropic API refuses forced tool use while the model thinks, and
       an adaptive model thinks when `thinking` is left unset -- which the
       probe leaves it, since it sends no reasoning control. So `required`
@@ -173,7 +176,7 @@ def tool_choice(preset_id: str, kind: str, features: dict | None,
     - a Claude model behind OpenRouter (an `anthropic/` id) may think as it
       would at Anthropic, and no feature row says otherwise there, so `auto`;
     - everywhere else `required`."""
-    if preset_id in AUTO_ONLY_PRESETS:
+    if preset_id in AUTO_ONLY_PRESETS or kind == "claude":
         return "auto"
     if kind == "openrouter" and model.startswith("anthropic/"):
         return "auto"

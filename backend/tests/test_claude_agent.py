@@ -1,3 +1,4 @@
+import dataclasses
 import types
 
 import pytest
@@ -356,8 +357,13 @@ def install_tool_sdk(monkeypatch, replies=()):
     monkeypatch.setattr(claude_agent, "create_sdk_mcp_server",
                         lambda name, tools: {"name": name, "tools": tools})
     monkeypatch.setattr(claude_agent, "HookMatcher", _HookMatcher)
+    monkeypatch.setattr(claude_agent, "DeferredToolUse", _DeferredToolUse)
     captured["declared"] = declared
     return captured
+
+
+class _DeferredToolUse:
+    pass
 
 
 def _result(deferred=None):
@@ -458,3 +464,70 @@ async def test_without_tools_the_options_are_what_they_were(monkeypatch):
     [c async for c in ClaudeAgentClient().stream([{"role": "user", "content": "hi"}], "opus")]
     assert vars(captured["options"]) == {"system_prompt": None, "model": "opus",
                                          "allowed_tools": [], "max_turns": 1}
+
+
+
+# ---- brutal review round 1 (F3): gate on the features, not the names ----
+@dataclasses.dataclass
+class _Options073:
+    """`ClaudeAgentOptions` as 0.1.73 has it, in the fields this uses: no
+    `strict_mcp_config` (nor, elsewhere, a `"defer"` decision)."""
+    system_prompt: str | None = None
+    model: str | None = None
+    tools: list | None = None
+    allowed_tools: list = dataclasses.field(default_factory=list)
+    mcp_servers: dict = dataclasses.field(default_factory=dict)
+    setting_sources: list | None = None
+    hooks: dict | None = None
+    max_turns: int | None = None
+
+
+@dataclasses.dataclass
+class _Options076(_Options073):
+    strict_mcp_config: bool = False
+
+
+def _sdk_073(monkeypatch, replies=()):
+    """The tool API's three names present, as on 0.1.73, and nothing else."""
+    captured = install_tool_sdk(monkeypatch, replies=replies)
+    monkeypatch.setattr(claude_agent, "ClaudeAgentOptions", _Options073)
+    monkeypatch.setattr(claude_agent, "DeferredToolUse", None)
+    return captured
+
+
+async def test_an_sdk_with_the_tool_api_but_not_the_rest_refuses_tools(monkeypatch):
+    """0.1.73 exports `tool`, `create_sdk_mcp_server` and `HookMatcher`, so
+    the old guard passed and the options raised `TypeError` inside the call."""
+    captured = _sdk_073(monkeypatch)
+    assert claude_agent._declares_tools() is False
+    with pytest.raises(ClaudeAgentError) as exc:
+        [c async for c in ClaudeAgentClient().stream(
+            [{"role": "user", "content": "go"}], "sonnet", tools=(READ,), tool_choice="auto")]
+    assert exc.value.code == tool_calls.REFUSED and "0.1.76" in exc.value.detail
+    assert "prompt" not in captured
+    # The deferred call alone is not enough either: the options must take
+    # `strict_mcp_config`.
+    monkeypatch.setattr(claude_agent, "DeferredToolUse", _DeferredToolUse)
+    assert claude_agent._declares_tools() is False
+    monkeypatch.setattr(claude_agent, "ClaudeAgentOptions", _Options076)
+    assert claude_agent._declares_tools() is True
+
+
+async def test_a_call_without_tools_still_runs_on_an_older_sdk(monkeypatch):
+    captured = _sdk_073(monkeypatch, replies=[_AssistantMessage([_TextBlock("ok")])])
+    chunks = [c async for c in ClaudeAgentClient().stream(
+        [{"role": "user", "content": "hi"}], "sonnet")]
+    assert "".join(chunks) == "ok" and captured["options"].max_turns == 1
+
+
+async def test_options_the_sdk_cannot_take_are_a_coded_refusal_not_a_crash(monkeypatch):
+    install_tool_sdk(monkeypatch)
+
+    def options(**kw):
+        raise TypeError("__init__() got an unexpected keyword argument 'strict_mcp_config'")
+
+    monkeypatch.setattr(claude_agent, "ClaudeAgentOptions", options)
+    with pytest.raises(ClaudeAgentError) as exc:
+        [c async for c in ClaudeAgentClient().stream(
+            [{"role": "user", "content": "go"}], "sonnet", tools=(READ,), tool_choice="auto")]
+    assert exc.value.code == tool_calls.REFUSED

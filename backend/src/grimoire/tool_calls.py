@@ -86,7 +86,9 @@ MAX_RESULT_CHARS = 8000
 
 #: How long one tool execution is waited for, in seconds. A tool is a store
 #: read; one that has not answered in this long has hit a cold library or a
-#: sync stall, and the run is better told so than held.
+#: sync stall, and the run is better told so than held. A tool that is not a
+#: read sets its own (`ToolSpec.timeout`): the decide tool asks a model, and
+#: waits as long as the run's wall allows (`routes.tool_decision`).
 TOOL_TIMEOUT_S = 10.0
 
 #: The `LLMError.code` of tools refused -- by a provider's 400 naming them, or
@@ -123,14 +125,18 @@ class ToolOutput:
 class RunView(Protocol):
     """What a tool may ask of the run it is in (01g-S7): the decide tool
     takes a decision against the run's `max_decisions`, asks the spend left
-    under its ceiling (None: no ceiling), and charges what its own calls
-    cost as the guard prices them. Nothing it could write the store with."""
+    under its ceiling (None: no ceiling), charges what its own calls cost as
+    the guard prices them, and notes each call's outcome -- its status and
+    the option chosen, if any -- for the run's trace (spec 3.12). Nothing it
+    could write the store with."""
 
     def take_decision(self) -> bool: ...
 
     def room_usd(self) -> float | None: ...
 
     def charge(self, usd: float) -> None: ...
+
+    def note_decision(self, status: str, option: str | None = None) -> None: ...
 
 
 @dataclass(frozen=True)

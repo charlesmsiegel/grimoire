@@ -7,6 +7,7 @@ docs/superpowers/specs/2026-07-10-claude-provider-design.md for the policy notes
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import AsyncGenerator
 
@@ -41,15 +42,22 @@ except Exception as exc:  # noqa: BLE001 - installed but broken; stream() re-rai
 
 
 # What declaring tools needs (01g-S8): the `@tool` decorator, the in-process
-# MCP server and the hook matcher -- imported apart, so an SDK too old to have
-# them still serves every call that offers none, and only an offer of tools
-# is refused (`_tool_options`). The floor in the `claude` extra is the first
-# version with all three and the `"defer"` decision (0.1.74).
+# MCP server, the hook matcher and the deferred call the `"defer"` decision
+# reports -- imported apart, so an SDK too old to have them still serves every
+# call that offers none, and only an offer of tools is refused
+# (`_tool_options`, gated on `_declares_tools`). The floor in the `claude`
+# extra is the first published version with all of them and the options'
+# `strict_mcp_config` field (0.1.76; 0.1.73 has the first three and neither
+# of the others, and nothing between was published).
 try:
-    from claude_agent_sdk import HookMatcher, create_sdk_mcp_server
+    from claude_agent_sdk import DeferredToolUse, HookMatcher, create_sdk_mcp_server
     from claude_agent_sdk import tool as sdk_tool
 except Exception:  # noqa: BLE001 - absent or too old: only an offer of tools is refused
-    HookMatcher = create_sdk_mcp_server = sdk_tool = None
+    DeferredToolUse = HookMatcher = create_sdk_mcp_server = sdk_tool = None
+
+#: The `ClaudeAgentOptions` fields an offer of tools sets beyond a plain call.
+_TOOL_OPTION_FIELDS = ("tools", "mcp_servers", "strict_mcp_config", "setting_sources",
+                       "hooks")
 
 #: How the SDK names an in-process MCP server's tool to the model.
 TOOL_PREFIX = "mcp__grimoire__"
@@ -181,6 +189,25 @@ async def _never_run(args: dict) -> dict:
     raise RuntimeError("a grimoire tool is executed by the loop, never by the SDK")
 
 
+def _declares_tools() -> bool:
+    """Whether the installed SDK has every feature an offer of tools uses:
+    the four names above, and options that take each of `_TOOL_OPTION_FIELDS`
+    (read off the constructor's signature, so a feature is tested rather than
+    a version). An SDK that has the tool API but not the rest -- 0.1.73 has
+    no `strict_mcp_config` and no `"defer"` -- would otherwise fail inside the
+    call with a `TypeError` no caller reads as an LLM failure."""
+    if None in (DeferredToolUse, HookMatcher, create_sdk_mcp_server, sdk_tool,
+                ClaudeAgentOptions):
+        return False
+    try:
+        params = inspect.signature(ClaudeAgentOptions).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return all(name in params for name in _TOOL_OPTION_FIELDS)
+
+
 def _tool_options(system: str, model: str, tools: tuple[dict, ...],
                   tool_choice: str | None) -> object:
     """The options of one turn that offers tools (spec 3.13): isolated from
@@ -190,9 +217,9 @@ def _tool_options(system: str, model: str, tools: tuple[dict, ...],
     every tool that DEFERS a Grimoire tool's call (the run stops and reports
     it) and denies anything else. `tool_choice` "none" denies every call,
     and "required" cannot be asked of the SDK, so it is offered as "auto"."""
-    if create_sdk_mcp_server is None or sdk_tool is None or HookMatcher is None:
+    if not _declares_tools():
         raise ClaudeAgentError("bad_response", "the installed claude-agent-sdk cannot declare "
-                               "tools (0.1.74 or later is needed)", code=tool_calls.REFUSED)
+                               "tools (0.1.76 or later is needed)", code=tool_calls.REFUSED)
     long = [t["name"] for t in tools if len(t["name"]) > MAX_TOOL_NAME]
     if long:
         raise ClaudeAgentError("bad_response", f"claude connections take tool names of at most "
@@ -208,17 +235,23 @@ def _tool_options(system: str, model: str, tools: tuple[dict, ...],
             "hookEventName": "PreToolUse", "permissionDecision": decision,
             "permissionDecisionReason": "grimoire runs its own tools"}}
 
-    declared = [sdk_tool(t["name"], t["description"], t["parameters"])(_never_run)
-                for t in tools]
-    return ClaudeAgentOptions(
-        system_prompt=system or None, model=model, tools=[],
-        allowed_tools=sorted(names) if offered else [],
-        mcp_servers={"grimoire": create_sdk_mcp_server(name="grimoire", tools=declared)},
-        strict_mcp_config=True, setting_sources=[],
-        hooks={"PreToolUse": [HookMatcher(matcher="*", hooks=[gate])]},
-        # One model turn and its deferred call; a second turn could only
-        # follow a result, and the loop sends results itself.
-        max_turns=2)
+    try:
+        declared = [sdk_tool(t["name"], t["description"], t["parameters"])(_never_run)
+                    for t in tools]
+        return ClaudeAgentOptions(
+            system_prompt=system or None, model=model, tools=[],
+            allowed_tools=sorted(names) if offered else [],
+            mcp_servers={"grimoire": create_sdk_mcp_server(name="grimoire", tools=declared)},
+            strict_mcp_config=True, setting_sources=[],
+            hooks={"PreToolUse": [HookMatcher(matcher="*", hooks=[gate])]},
+            # One model turn and its deferred call; a second turn could only
+            # follow a result, and the loop sends results itself.
+            max_turns=2)
+    except TypeError as exc:
+        # An SDK whose tool API takes something other than what this sends:
+        # the offer is refused, coded, and never escapes as a crash.
+        raise ClaudeAgentError("bad_response", f"the installed claude-agent-sdk cannot "
+                               f"declare these tools: {exc}", code=tool_calls.REFUSED) from exc
 
 
 def _note_deferred(message: object, usage: dict | None) -> bool:

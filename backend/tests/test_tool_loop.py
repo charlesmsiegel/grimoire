@@ -617,3 +617,79 @@ def test_a_claude_chain_refuses_a_name_too_long_for_its_prefix():
     with pytest.raises(ValueError, match="at most 49"):
         _run(fake, toolset=toolset, resolved=_resolved(claude))
     assert fake.calls == 0
+
+
+# ---- brutal review round 1 (F4, F5, F9) ----
+def test_the_finalize_turn_asks_an_auto_only_provider_for_auto():
+    """F4: z.ai takes `tool_choice: auto` only (`probes.AUTO_ONLY_PRESETS`),
+    and the finalize turn's `none` is no exception: it is sent `auto`, the
+    tools still offered and any call it makes declined, as on every target."""
+    zai = wire_kit.target(provider_id="zai", model="glm-5", api_key="k")
+    resolved = wire_kit.resolution(zai)
+    resolved = replace(resolved, attempts=tuple(replace(a, provider_preset="zai")
+                                                for a in resolved.attempts))
+    fake = FakeToolTurns(("", [("read", {}), ("read", {})]), ("Mara.", [("read", {})]))
+    result = _run(fake, resolved=resolved, budget=RunBudget(max_tool_calls=1),
+                  tool_choice="required")
+    assert [r["tool_choice"] for r in fake.requests] == ["auto", "auto"]
+    assert fake.requests[-1]["tools"] is not None
+    assert (result.status, result.limit, result.text) == ("budget_exhausted", "tool_calls",
+                                                          "Mara.")
+    final = [e for e in result.trace if e.kind == "model"][-1]
+    assert "none sent as auto" in final.note
+    # Everywhere else the finalize turn is still `none`.
+    plain = FakeToolTurns(("", [("read", {}), ("read", {})]), ("Mara.", []))
+    _run(plain, budget=RunBudget(max_tool_calls=1))
+    assert plain.requests[-1]["tool_choice"] == "none"
+
+
+def _anthropic_spare(**features):
+    return replace(SPARE, model_features=features)
+
+
+def test_a_fallback_that_would_think_anyway_does_not_inherit_tool_turns():
+    """F5: thinking off cannot be SENT to an adaptive model whose catalog
+    does not say it takes `disabled` -- left unset, it thinks -- so it is not
+    the fallback of a turn that inherits another model's tool turns (the
+    Anthropic API refuses that history beside thinking, spec 3.11 rule 4),
+    and the trace never claims thinking was turned off."""
+    spare = _anthropic_spare(adaptive_thinking=True)
+    fake = FakeToolTurns(("", [("read", {})]), ("Mara.", []))
+    result = _run(fake, resolved=_resolved(wire.Chain(PRIMARY, spare)))
+    assert fake.requests[0]["chain"].fallback is not None
+    assert fake.requests[1]["chain"].fallback is None
+    notes = " ".join(e.note for e in result.trace)
+    assert "thinking off on" not in notes
+    assert "claude-spare" in notes and "cannot be sent thinking off" in notes
+
+
+def test_thinking_off_is_noted_only_where_it_is_sent():
+    taken = _anthropic_spare(adaptive_thinking=True, disabled_thinking=True)
+    fake = FakeToolTurns(("", [("read", {})]), ("Mara.", []))
+    result = _run(fake, resolved=_resolved(wire.Chain(PRIMARY, taken)))
+    sent = fake.requests[1]["chain"].fallback
+    assert sent is not None and sent.sampling.params["reasoning_effort"] == "off"
+    second = [e for e in result.trace if e.kind == "model"][1]
+    assert "thinking off on claude-spare" in second.note
+    # A model whose catalog says nothing either way keeps riding, sent off,
+    # and the trace says the off is not confirmed rather than that it held.
+    unknown = FakeToolTurns(("", [("read", {})]), ("Mara.", []))
+    result = _run(unknown, resolved=_resolved(wire.Chain(PRIMARY, SPARE)))
+    assert unknown.requests[1]["chain"].fallback is not None
+    second = [e for e in result.trace if e.kind == "model"][1]
+    assert "thinking off on" not in second.note
+    assert "not confirmed on claude-spare" in second.note
+
+
+def test_a_fallback_known_unable_to_call_tools_never_rides_a_loop():
+    """F9: on a `TOOLS_OPTIONAL` route the resolver does not drop it (tools
+    are not `requires`), so the loop does, and says so."""
+    resolved = _resolved(wire.Chain(PRIMARY, SPARE))
+    primary, spare = resolved.attempts
+    resolved = replace(resolved, attempts=(
+        primary, replace(spare, capabilities={"tools": Cap("no", "catalog")})))
+    fake = FakeToolTurns(("", [("read", {})]), ("Mara.", []))
+    result = _run(fake, resolved=resolved)
+    assert result.status == "completed"
+    assert all(r["chain"].fallback is None for r in fake.requests)
+    assert "claude-spare cannot call tools" in result.trace[0].note
