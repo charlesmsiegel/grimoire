@@ -450,3 +450,43 @@ async def test_fakes_record_the_schema():
     # `stream` takes the keyword for parity and records nothing.
     assert await _drain(fake.stream(MESSAGES, conn, schema=SCHEMA)) == ["{}"]
     assert fake.schemas == [SCHEMA, None]
+
+
+# ---- 01f-S2, spec 3.4: a flagged target was sent a schema ----
+async def test_a_flagged_target_sent_no_schema_goes_out_unflagged():
+    """With no schema, every target is sent unflagged, so `_structured_share`
+    -- and with it `_schema_refusal` and `_preset_refusal`'s subtraction --
+    reads only an attempt that was sent the envelope."""
+    refused = LLMError("bad_response", "response_format is not supported", status=400)
+    provider = ScriptedProvider(chunks=(), error=refused)
+    observed: list = []
+    client = LLMClient(openrouter=provider, timeout=0, retries=0,
+                       observer=lambda conn, error: observed.append(error))
+    holder: dict = {}
+    flagged = _or_conn("a", "vendor/a", structured=True)
+    with pytest.raises(LLMError) as exc:
+        await client.complete(MESSAGES, flagged, holder)
+    # The attempt's own failure: observed, and no re-send is asked for.
+    assert not isinstance(exc.value, llm.SchemaRefusalError)
+    assert observed == [exc.value]
+    sent = holder[llm.ATTEMPTED]
+    assert sent.structured is False and llm._structured_share(sent) == {}
+    assert dataclasses.replace(sent, structured=True) == flagged
+    # The same through `single`, which never sends a schema.
+    holder.clear()
+    with pytest.raises(LLMError):
+        await client.single(MESSAGES, flagged, holder)
+    assert holder[llm.ATTEMPTED].structured is False
+
+
+async def test_an_unflagged_target_is_sent_as_the_same_object():
+    provider = ScriptedProvider(chunks=("{}",))
+    client = LLMClient(openrouter=provider, timeout=0, retries=0)
+    holder: dict = {}
+    target = _or_conn("a", "vendor/a")
+    await client.complete(MESSAGES, wire.Chain(target, _or_conn("b", "vendor/b")), holder)
+    assert holder[llm.ATTEMPTED] is target
+    # And a flagged target WITH a schema keeps its flag: decide is unchanged.
+    flagged = _or_conn("a", "vendor/a", structured=True)
+    await client.complete(MESSAGES, flagged, holder, schema=SCHEMA)
+    assert holder[llm.ATTEMPTED] is flagged

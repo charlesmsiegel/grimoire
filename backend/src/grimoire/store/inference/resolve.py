@@ -952,18 +952,26 @@ def _apart(primary: Attempt, operation: str) -> bool:
     return operation == "decide" and not generates(primary)
 
 
+def structured_capable(attempt: Attempt) -> bool:
+    """Whether `attempt` is asked for its provider's structured mode when a
+    call sends a schema: its `structured_output` is `yes`. A `no` or an
+    `unknown` is not -- a strict endpoint answers the envelope it does not
+    know with a 400, and the user's lever is the facts override (spec 01f
+    3.2). The one rule a decide resolution's flags (`_flag_structured`) and a
+    generate call's per-call chain (`inference._structured_chain`) both ask."""
+    found = attempt.capabilities.get("structured_output")
+    return found is not None and found.value == capabilities.YES
+
+
 def _flag_structured(attempts: list[Attempt], operation: str) -> list[Attempt]:
-    """Flag each attempt whose `structured_output` is `yes` (spec 7.2) on its
+    """Flag each attempt that is `structured_capable` (spec 7.2) on its
     target (`_stamp`). A decide resolution only: a generate resolution's
-    targets are what they were before slice F (plan Minor 4)."""
+    targets are what they were before slice F (plan Minor 4) -- a generation
+    that sends a schema flags its own per-call targets instead (01f 3.2)."""
     if operation != "decide":
         return attempts
-    out = []
-    for attempt in attempts:
-        found = attempt.capabilities.get("structured_output")
-        structured = found is not None and found.value == capabilities.YES
-        out.append(_stamp(attempt, structured=True) if structured else attempt)
-    return out
+    return [_stamp(attempt, structured=True) if structured_capable(attempt) else attempt
+            for attempt in attempts]
 
 
 def _stamp(attempt: Attempt, *, account: dict | None = None,
