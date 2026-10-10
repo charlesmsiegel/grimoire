@@ -55,6 +55,14 @@ def entry(raw: dict) -> dict:
     outputs = arch.get("output_modalities") if isinstance(arch, dict) else None
     if isinstance(outputs, list):
         out["outputs"] = [o for o in outputs if isinstance(o, str)]
+    # The most a reply may be asked for (01i), when the provider says:
+    # OpenRouter's `top_provider.max_completion_tokens`. Kept only when stated,
+    # like `image`, so an absent key is "did not say" -- never a cap of 0. Not
+    # `per_request_limits`, which is a limit on the key, not the model.
+    top = raw.get("top_provider")
+    max_output = _whole(top.get("max_completion_tokens")) if isinstance(top, dict) else None
+    if max_output is not None:
+        out["max_output"] = max_output
     if _is_anthropic(raw):
         _anthropic(raw, out)
     return out
@@ -130,6 +138,12 @@ def _anthropic(raw: dict, out: dict) -> None:
     max_tokens = _positive_int(raw.get("max_tokens"))
     if max_tokens is not None:
         features["max_tokens"] = max_tokens
+    # The same field as the model's output cap (01i), read by `_whole` as the
+    # window and every other cap is; `features.max_tokens` above keeps its own
+    # rule, since it is what `llm_sampling` caps the request with.
+    max_output = _whole(raw.get("max_tokens"))
+    if max_output is not None:
+        out["max_output"] = max_output
     if features:
         out["features"] = features
 
@@ -159,15 +173,24 @@ def _context(raw: dict) -> int | None:
     have the inspector drawing a bar against a window it does not have. Ollama
     names none here, so its models stay unknown -- `None`, never `0`.
 
-    Only a positive whole number counts (`128000.0` included, since JSON does
-    not distinguish it); anything else is a field that does not say.
+    Only a positive whole number counts (`_whole`); anything else is a field
+    that does not say.
     """
     for key in ("context_length", "max_model_len"):
-        value = raw.get(key)
-        if isinstance(value, float) and value.is_integer():
-            value = int(value)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        value = _whole(raw.get(key))
+        if value is not None:
             return value
+    return None
+
+
+def _whole(value: object) -> int | None:
+    """`value` as a token count: a positive whole number (`128000.0` included,
+    since JSON does not distinguish it), else None -- a field that does not
+    say. The rule the window and the output cap share."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
     return None
 
 

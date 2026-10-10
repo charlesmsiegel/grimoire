@@ -14,12 +14,47 @@ deleted the lowering these replaced (Task 10).
 
 Every class is frozen. A change is a new value (`with_account`,
 `without_sampling`, `Chain.alone`), never a write into a shared one.
+
+A target also carries what is known of its model's size (`Limits`, 01i): the
+window and the most a reply may be asked for, each with where it came from.
+They live here, beside `Target`, so an adapter or a capture holding a target
+reads them without importing the store.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
+from typing import NamedTuple
+
+#: Where a `Limit` came from: the user's word about the model on this provider
+#: (its facts), the provider's own catalog row, or nowhere.
+LIMIT_SOURCES: tuple[str, ...] = ("user", "catalog", "unknown")
+
+
+class Limit(NamedTuple):
+    """One size fact about a model: a positive token count, or None exactly
+    when nothing says (`source` "unknown"). Never 0, and never guessed."""
+
+    value: int | None
+    #: One of `LIMIT_SOURCES`.
+    source: str
+
+
+#: A limit nothing has stated.
+UNKNOWN_LIMIT = Limit(None, "unknown")
+
+
+@dataclass(frozen=True)
+class Limits:
+    """What is known of a model's size on its provider
+    (`store.inference.limits.of` resolves it)."""
+
+    #: The context window, always read as shared by the prompt and the reply.
+    window: Limit = UNKNOWN_LIMIT
+    #: The most `max_tokens` a request may ask for. A cap on what is asked,
+    #: never itself a reply reservation (`limits.reply_reserve`).
+    max_output: Limit = UNKNOWN_LIMIT
 
 
 @dataclass(frozen=True)
@@ -80,6 +115,9 @@ class Target:
     model_params: tuple[str, ...] | None = None
     #: The catalog's feature flags for the model; None when it states none.
     model_features: dict | None = None
+    #: The model's window and output cap, with their sources (01i): unknown on
+    #: a target built by hand.
+    limits: Limits = field(default_factory=Limits)
     #: Whether a reply cut short may be continued as the model's own turn.
     prefill: bool = False
     #: The strict post-processing the reply is put through ("none", "strict").

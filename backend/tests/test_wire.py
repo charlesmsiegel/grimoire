@@ -106,3 +106,22 @@ def test_wire_imports_nothing_from_the_package():
             imported.add((node.module or "").split(".")[0])
     assert imported, "the walk found no imports at all"
     assert imported <= set(sys.stdlib_module_names) | {"__future__"}, imported
+
+
+# ---- 01i: the model's size ----
+def test_a_target_built_by_hand_has_unknown_limits():
+    from grimoire.store.inference import resolved
+    unknown = wire.Limits(wire.Limit(None, "unknown"), wire.Limit(None, "unknown"))
+    assert wire_kit.target().limits == unknown == wire.Limits()
+    assert resolved.UNBUILT.limits == unknown
+    assert resolved.Attempt("openrouter", "vendor/m", "").limits == unknown
+    stated = wire.Limits(window=wire.Limit(8192, "user"))
+    assert resolved.Attempt("p", "m", "", target=wire_kit.target(limits=stated)).limits is stated
+
+
+def test_limits_are_frozen_and_name_a_known_source():
+    limits = wire.Limits()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        limits.window = wire.Limit(1, "user")  # type: ignore[misc]
+    assert limits.window.source in wire.LIMIT_SOURCES
+    assert wire.LIMIT_SOURCES == ("user", "catalog", "unknown")

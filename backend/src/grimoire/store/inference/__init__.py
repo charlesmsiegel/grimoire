@@ -10,6 +10,7 @@ from . import (
     facts,
     in_use,
     legacy_plan,
+    limits,
     probes,
     providers,
     resolve,
@@ -17,4 +18,4 @@ from . import (
 )
 
 __all__ = ["capabilities", "cascade", "controls", "embed", "facts", "in_use", "legacy_plan",
-           "probes", "providers", "resolve", "resolved"]
+           "limits", "probes", "providers", "resolve", "resolved"]

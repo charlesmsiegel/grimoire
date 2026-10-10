@@ -71,6 +71,49 @@ def test_llama_cpps_training_length_is_not_the_window():
     assert catalog.entry({"id": "m", "meta": {"n_ctx_train": 131072}})["context"] is None
 
 
+# ---- the output cap (01i) ----
+def test_max_output_is_read_from_openrouters_top_provider():
+    row = catalog.entry({"id": "vendor/m", "context_length": 131072,
+                         "top_provider": {"context_length": 131072,
+                                          "max_completion_tokens": 16000}})
+    assert (row["context"], row["max_output"]) == (131072, 16000)
+
+
+def test_max_output_is_read_from_an_anthropic_rows_max_tokens():
+    """Kept in `features.max_tokens` too, which `llm_sampling` caps the
+    request with -- unchanged."""
+    got = catalog.entry(_anthropic_row())
+    assert got["max_output"] == 64000
+    assert got["features"]["max_tokens"] == 64000
+
+
+def test_a_whole_float_max_output_is_still_a_cap():
+    """`_context`'s rule, so the window and the cap read the same JSON alike;
+    `features.max_tokens` keeps its stricter rule."""
+    assert catalog.entry({"id": "m", "top_provider": {
+        "max_completion_tokens": 16000.0}})["max_output"] == 16000
+    got = catalog.entry(_anthropic_row(max_tokens=64000.0))
+    assert got["max_output"] == 64000
+    assert "max_tokens" not in got.get("features", {})
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, "8192", True, 1.5])
+def test_a_max_output_that_is_not_a_positive_integer_is_absent(value):
+    assert "max_output" not in catalog.entry({"id": "m", "top_provider": {
+        "max_completion_tokens": value}})
+    assert "max_output" not in catalog.entry(_anthropic_row(max_tokens=value))
+
+
+@pytest.mark.parametrize("raw", [
+    {"id": "m", "max_model_len": 32768},                     # vLLM
+    {"id": "m", "object": "model", "owned_by": "library"},   # Ollama
+    {"id": "m", "top_provider": "fast"},                      # not a mapping
+    {"id": "m", "per_request_limits": {"completion_tokens": 100}},  # a key's limit
+])
+def test_a_row_that_names_no_cap_has_no_max_output(raw):
+    assert "max_output" not in catalog.entry(raw)
+
+
 def test_a_null_pricing_block_does_not_raise():
     """An endpoint sending `"pricing": null` is not hypothetical, and one bad
     field must not empty a catalog of three hundred."""

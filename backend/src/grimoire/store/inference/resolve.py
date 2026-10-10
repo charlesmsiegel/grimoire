@@ -84,7 +84,7 @@ from .. import (
 )
 from .. import inference_keys as keys
 from .. import inference_retired as retired
-from . import capabilities, cascade, facts, legacy_plan, providers
+from . import capabilities, cascade, facts, legacy_plan, limits, providers
 from .cascade import Selection
 from .resolved import Attempt, ResolvedInference
 
@@ -420,7 +420,8 @@ def _sent_model(raw: dict, model: str) -> str:
 
 
 def _target(raw: dict, model: str, sampling: dict, row: dict | None,
-            caps: dict[str, capabilities.Cap], model_facts: dict) -> wire.Target:
+            caps: dict[str, capabilities.Cap], model_facts: dict,
+            sizes: wire.Limits) -> wire.Target:
     """The `wire.Target` an adapter sends for record `raw` serving `model`
     with `sampling` (`_sampling`'s shape): built from the record, the
     catalog row read for this model (`row`, or None), the attempt's resolved
@@ -438,8 +439,10 @@ def _target(raw: dict, model: str, sampling: dict, row: dict | None,
     (`_stated`); `reads_images` is `post_images.capability`'s rule
     (`capabilities.post_image_reach`, a kind left off is OpenRouter's) over
     that preference and the attempt's own `vision` capability, so the store
-    is not read again. The account is the billing alone, and the target is
-    never flagged structured: those are a resolution's stamps (`_stamp`)."""
+    is not read again. `sizes` is the model's window and output cap
+    (`limits.of` over the same row and facts, 01i). The account is the
+    billing alone, and the target is never flagged structured: those are a
+    resolution's stamps (`_stamp`)."""
     sent = _sent_model(raw, model)
     params = _params_of(raw, row)
     features = row.get("features") if row is not None else None
@@ -454,7 +457,7 @@ def _target(raw: dict, model: str, sampling: dict, row: dict | None,
         sampler_support=_text(raw, "sampler_support"),
         model_params=tuple(params) if params is not None else None,
         model_features=dict(features) if isinstance(features, dict) else None,
-        prefill=prefill, post_process=post_process,
+        limits=sizes, prefill=prefill, post_process=post_process,
         reads_images=capabilities.post_image_reach(
             str(raw.get("kind", "openrouter")), vision,
             caps.get("vision", _UNKNOWN_CAP)),
@@ -510,10 +513,12 @@ def _typed(raw: dict, model: str, sampling: dict, row: dict | None,
            ) -> tuple[dict[str, capabilities.Cap], wire.Target]:
     """`raw` at `model` made an attempt's: its capabilities resolved from the
     catalog row and its model's facts -- never by `capabilities.caps_for`,
-    which would read the same sidecar again -- and its target built from
-    both. The one builder `_attempt` and `target_for` share."""
+    which would read the same sidecar again -- its size from the same two
+    (`limits.of`, 01i: no read of its own), and its target built from all of
+    it. The one builder `_attempt` and `target_for` share."""
     caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
-    return caps, _target(raw, model, sampling, row, caps, model_facts)
+    sizes = limits.of(row, model_facts)
+    return caps, _target(raw, model, sampling, row, caps, model_facts, sizes)
 
 
 def target_for(raw: dict, model: str, sampling: dict, *, model_facts: dict) -> wire.Target:

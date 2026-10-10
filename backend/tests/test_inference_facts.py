@@ -32,7 +32,7 @@ def test_an_unknown_model_has_the_empty_shape(conn):
     cid, rev = conn
     assert facts.of(cid, "mara-7b", rev) == {
         "vision": "", "prefill": None, "post_process": "", "rates": None,
-        "verified": {}, "overrides": {},
+        "verified": {}, "overrides": {}, "context_window": None, "max_output": None,
     }
     assert facts.read(cid) == {}
 
@@ -159,7 +159,7 @@ def test_a_mangled_file_reads_as_empty_and_never_raises(conn, raw):
     assert facts.read(cid).get("m", {}) == {}
     assert facts.of(cid, "m", rev) == {
         "vision": "", "prefill": None, "post_process": "", "rates": None,
-        "verified": {}, "overrides": {},
+        "verified": {}, "overrides": {}, "context_window": None, "max_output": None,
     }
 
 
@@ -174,7 +174,26 @@ def test_mangled_fields_inside_a_model_read_as_empty(conn):
     }}), encoding="utf-8")
     got = facts.of(cid, "m", rev)
     assert got == {"vision": "", "prefill": None, "post_process": "", "rates": None,
-                   "verified": {"embed": _ok()}, "overrides": {"embed": "no"}}
+                   "verified": {"embed": _ok()}, "overrides": {"embed": "no"},
+                   "context_window": None, "max_output": None}
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 8192.0, "8192", 2**31, None, [1]])
+def test_the_stated_limits_are_read_and_a_malformed_one_is_none(conn, bad):
+    """01i: the model's size, as the user states it -- read before anything
+    can write it, and only as the write keeps it (a positive int below
+    `2**31`); anything a hand left there reads as not stated."""
+    cid, rev = conn
+    p = llm_connections.facts_path(cid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"m": {"context_window": 8192, "max_output": 2000},
+                             "n": {"context_window": bad, "max_output": bad}}), encoding="utf-8")
+    got = facts.of(cid, "m", rev)
+    assert (got["context_window"], got["max_output"]) == (8192, 2000)
+    # Stated, so a rev that moved does not hide them.
+    assert facts.of(cid, "m", "another-rev")["context_window"] == 8192
+    bad_view = facts.of(cid, "n", rev)
+    assert (bad_view["context_window"], bad_view["max_output"]) == (None, None)
 
 
 @pytest.mark.parametrize("raw", [
