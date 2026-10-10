@@ -55,7 +55,7 @@ import re
 import threading
 from collections.abc import Callable, Mapping
 
-from ... import wire
+from ... import embeddings, wire
 from .. import atomic, config, llm_connections, pricing
 from ..paths import now_iso, safe_id
 from .providers import CAPABILITIES
@@ -525,8 +525,10 @@ EMBED_RESERVED = ("an embedding request field cannot be model, input, encoding_f
 EMBED_SAME_FIELD = "the input-type field and the dimensions field must differ"
 EMBED_WRONG_MODE = "a prefix needs input 'prefix', and a request field needs input 'param'"
 EMBED_NO_PREFIX = "the prefix input type needs a query prefix or a document prefix"
-PARAM_NOT_YET = "the request-field input type is not supported by this build"
-DIMENSIONS_NOT_YET = "requested dimensions are not supported by this build"
+EMBED_NO_PARAM = ("the request-field input type needs a field name, a query value and a "
+                  "document value")
+EMBED_BAD_DIMENSIONS = ("requested dimensions must be a whole number from 1 to "
+                        f"{embeddings.MAX_DIMS}")
 
 
 def _embed_text(value: str) -> None:
@@ -560,7 +562,12 @@ def _embed_fields(raw: Mapping) -> dict[str, object]:
         if value is None:
             continue
         if f == "dimensions":
-            got[f] = value          # judged by the caller (refused in this build)
+            # A JSON integer only: a `bool` is an int to Python, and `512.0`
+            # would be a second spelling of one space (01h §3.2).
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or not 1 <= value <= embeddings.MAX_DIMS):
+                raise ValueError(EMBED_BAD_DIMENSIONS)
+            got[f] = value
             continue
         if not isinstance(value, str):
             raise ValueError(EMBED_NOT_TEXT)
@@ -590,10 +597,11 @@ def _check_embedding(raw: object) -> dict:
     block on disk is judged by the rule a write is.
 
     Only the fields the mode uses are kept, and a field that belongs to
-    another mode is refused rather than dropped; mode `none` stores nothing
-    (`{}`). A lone `dimensions_field` is checked and dropped: with no
-    `dimensions` it says nothing (§5.1). This build sends neither the `param`
-    mode nor `dimensions`, so both are refused (the 01h-S2 interim rule)."""
+    another mode is refused rather than dropped; mode `none` keeps no mode
+    field. `dimensions` (an integer from 1 to `embeddings.MAX_DIMS`, in any
+    mode) is kept with its `dimensions_field` when one is stated. A lone
+    `dimensions_field` is checked and dropped: with no `dimensions` it says
+    nothing (§5.1)."""
     if not isinstance(raw, Mapping):
         raise ValueError(EMBED_NOT_OBJECT)
     got = _embed_fields(raw)
@@ -601,16 +609,21 @@ def _check_embedding(raw: object) -> dict:
     if mode not in wire.EMBED_INPUT_MODES:
         raise ValueError(EMBED_BAD_INPUT)
     _embed_shape(got, mode)
-    if mode == "param":
-        raise ValueError(PARAM_NOT_YET)
-    if got.get("dimensions") is not None:
-        raise ValueError(DIMENSIONS_NOT_YET)
     if mode == "prefix" and not (got.get("query_prefix") or got.get("document_prefix")):
         raise ValueError(EMBED_NO_PREFIX)
-    if mode == "none":
-        return {}
-    return {"input": mode, **{name: got[name] for name in ("query_prefix", "document_prefix")
-                              if got.get(name)}}
+    if mode == "param" and not all(got.get(name) for name in
+                                   ("param_field", "query_value", "document_value")):
+        raise ValueError(EMBED_NO_PARAM)
+    out: dict[str, object] = {}
+    if mode != "none":
+        out["input"] = mode
+        out.update({name: got[name] for name, of in _EMBED_MODE_OF.items()
+                    if of == mode and got.get(name)})
+    if got.get("dimensions") is not None:
+        out["dimensions"] = got["dimensions"]
+        if got.get("dimensions_field"):
+            out["dimensions_field"] = got["dimensions_field"]
+    return out
 
 
 def embed_options(model_facts: Mapping) -> wire.EmbedOptions | None:
@@ -622,10 +635,16 @@ def embed_options(model_facts: Mapping) -> wire.EmbedOptions | None:
     if block is None:
         return None
     checked = _check_embedding(block)
+    dimensions = checked.get("dimensions")
     return wire.EmbedOptions(
         input=str(checked.get("input", "none")),
         query_prefix=str(checked.get("query_prefix", "")),
-        document_prefix=str(checked.get("document_prefix", "")))
+        document_prefix=str(checked.get("document_prefix", "")),
+        param_field=str(checked.get("param_field", "")),
+        query_value=str(checked.get("query_value", "")),
+        document_value=str(checked.get("document_value", "")),
+        dimensions=dimensions if isinstance(dimensions, int) else None,
+        dimensions_field=str(checked.get("dimensions_field", "dimensions")))
 
 
 def _apply_embedding(entry: dict, block: dict | None) -> None:

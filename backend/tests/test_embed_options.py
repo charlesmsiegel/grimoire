@@ -184,8 +184,8 @@ def test_a_query_side_only_block_keeps_the_base_space():
 
 
 @pytest.mark.parametrize("block", [
-    {"input": "param", "param_field": "input_type", "query_value": "query",
-     "document_value": "document"},
+    {"input": "param", "param_field": "input_type", "query_value": "query"},
+    {"dimensions": 512.0},
     7,
     {"input": "prefix"},
 ])
@@ -243,3 +243,20 @@ def test_strict_options_for_the_probe(monkeypatch):
     _hold(monkeypatch, conn)
     assert inference_resolve.strict_embed_options(raw, "embed-1")[1:] == (
         None, inference_resolve.OPTIONS_HELD)
+
+
+def test_a_request_field_and_dimensions_block_names_its_space():
+    """01h-S3 moves no id: the block's space is the one S2's canonical form
+    already pinned (`test_the_canonical_text_is_pinned`)."""
+    conn = _provider()
+    _role(conn)
+    facts.state(conn, "embed-1", embedding={
+        "input": "param", "param_field": "task", "query_value": "retrieval.query",
+        "document_value": "retrieval.passage", "dimensions": 1024})
+    got = embed_space.endpoint()
+    assert got is not None
+    want = EmbedOptions(input="param", param_field="task", query_value="retrieval.query",
+                        document_value="retrieval.passage", dimensions=1024)
+    assert got["options"] == want
+    assert got["space"] == (f"{conn}\0{_rev(conn)}\0embed-1"
+                            "\0embopt1:9a09c1a1eecdb603e79ed3cd1f3f947b")
