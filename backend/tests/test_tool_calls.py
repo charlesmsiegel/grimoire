@@ -499,3 +499,16 @@ def test_anthropic_lowering_round_trips_a_collected_call():
          "tool_calls": [{"id": call.id, "name": call.name, "arguments": call.arguments}]}])
     assert turns[1]["content"] == [{"type": "tool_use", "id": "toolu_7", "name": "search",
                                     "input": {"query": "Realm"}}]
+
+
+def test_truncation_keeps_its_marker_inside_the_limit():
+    text = "z" * 12345
+    for limit in (40, 100, 12344):
+        cut = tool_calls.truncate(text, limit)
+        assert len(cut) <= limit
+        kept, _, tail = cut.partition("\n[truncated: ")
+        assert tail == f"{len(text) - len(kept)} more characters]"
+    assert tool_calls.truncate(text, len(text)) == text
+    # A limit too small for the marker keeps what fits, and no marker.
+    assert tool_calls.truncate(text, 10) == "z" * 10
+    assert tool_calls.truncate(text, 0) == "" == tool_calls.truncate(text, -3)

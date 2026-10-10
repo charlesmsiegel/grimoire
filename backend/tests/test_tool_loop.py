@@ -18,7 +18,7 @@ from dataclasses import replace
 import pytest
 
 import grimoire.store as store
-from grimoire import inference, model_guidance, schemas, tool_calls, wire
+from grimoire import deadline, inference, model_guidance, schemas, tool_calls, wire
 from grimoire.llm_errors import LLMError
 from grimoire.store.inference.capabilities import Cap
 from grimoire.tool_calls import RunBudget, ToolOutput, Toolset, ToolSpec
@@ -355,7 +355,23 @@ def test_the_result_size_limit():
     result = _run(fake, toolset=Toolset((ToolSpec("big", "b", NONE, big),)),
                   budget=RunBudget(max_result_chars_total=100))
     assert result.limit == "result_chars"
-    assert "[truncated: 400 more characters]" in fake.requests[1]["messages"][-2]["content"]
+    sent = fake.requests[1]["messages"][-2]["content"]
+    # The marker fits inside the allowance: the run's total is never passed.
+    assert len(sent) == 100 and sent.endswith("\n[truncated: 433 more characters]")
+    assert sent == "x" * 67 + "\n[truncated: 433 more characters]"
+
+
+def test_a_tool_result_is_held_to_its_own_cap_marker_included():
+    def big(args, ctx):
+        return ToolOutput(text="y" * 500)
+
+    fake = FakeToolTurns(("", [("big", {}), ("big", {})]), ("Mara.", []))
+    toolset = Toolset((ToolSpec("big", "b", NONE, big, max_result_chars=60),))
+    result = _run(fake, toolset=toolset, budget=RunBudget(max_result_chars_total=150))
+    first, second = fake.requests[1]["messages"][-2:]
+    assert len(first["content"]) == 60 and first["content"].endswith("more characters]")
+    assert len(second["content"]) == 60
+    assert sum(e.chars for e in result.trace if e.kind == "tool") <= 150
 
 
 def test_the_runs_wall_is_a_budget_stop_with_an_aborted_row(monkeypatch):
@@ -389,6 +405,102 @@ def test_a_slow_tool_times_out_and_the_executor_is_bounded():
     assert second["content"] == tool_calls.CAPACITY
 
 
+def test_a_wall_spent_before_a_tool_starts_never_awaits_it():
+    """A wall that runs out between the call budget check and the tool's own
+    bound is a timeout at once, never an unbounded wait (`deadline.bounded`
+    reads a spent remainder as spent)."""
+    started = []
+
+    async def wedged(call, ctx):
+        started.append(call.name)
+        await asyncio.Event().wait()
+
+    loop = _bare_loop(execute=wedged)
+    loop.wall, loop.t0 = 1.0, loop.t0 - 2         # the wall ran out a second ago
+    spec = loop.toolset.get("read")
+    call = tool_calls.ToolCall("call_1", "read", {}, "{}")
+
+    async def go():
+        return await asyncio.wait_for(loop._run_tool(call, spec), 2)
+    output, ok = asyncio.run(go())
+    assert (output.text, ok, started) == (tool_calls.TIMED_OUT, False, [])
+
+
+def test_a_spent_wait_is_an_overrun_and_none_is_no_bound():
+    async def answer():
+        return "ok"
+
+    async def go(seconds):
+        return await deadline.bounded(answer(), seconds, TimeoutError)
+    assert asyncio.run(go(None)) == "ok"
+    for spent in (0, -0.5):
+        with pytest.raises(TimeoutError):
+            asyncio.run(go(spent))
+
+
+def test_an_unreadable_answer_after_the_wall_gets_no_repair_turn(monkeypatch):
+    """The repair turn is a send like any other: admitted on the wall too,
+    not on `max_turns` alone."""
+    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
+    fake = FakeToolTurns(ToolTurn(deltas=("Mara, ", "I think."), pause=0.4),
+                         ('{"keeper": "Mara"}', []))
+
+    async def go():
+        return [e async for e in inference.stream_tools(
+            "chat", PROMPT, toolset=_toolset(), execute=tool_calls.registered(_toolset()),
+            client=fake, resolved=_resolved(), budget=RunBudget(wall_seconds=0.2),
+            run_id=RUN, final_schema=ANSWER)]
+    result = asyncio.run(go())[-1].result
+    assert fake.calls == 1
+    assert result.status == "failed" and result.error.code == "final_unreadable"
+
+
+def test_a_joined_turn_with_text_declines_its_calls():
+    """`run_tools` shows a joined turn's text whole as it settles, so with
+    `decline_after_text` its calls are declined exactly as a streamed turn's
+    are."""
+    ran = []
+
+    async def execute(call, ctx):
+        ran.append(call.name)
+        return ToolOutput(text="done")
+
+    fake = FakeToolTurns(("Let me check the ledger.", [("read", {})]), ("never", []))
+    result = _run(fake, execute=execute, decline_after_text=True)
+    assert result.status == "completed" and result.text == "Let me check the ledger."
+    assert [c.name for c in result.declined] == ["read"]
+    assert fake.calls == 1 and ran == []
+    # A joined turn with no text still runs its calls.
+    fake = FakeToolTurns(("", [("read", {})]), ("Mara.", []))
+    assert _run(fake, execute=execute, decline_after_text=True).status == "completed"
+    assert ran == ["read"]
+
+
+def test_a_zero_decision_cap_stops_the_run_on_decisions():
+    """`max_decisions=0` refuses every decide call; reaching the cap -- at
+    zero too -- stops the run on `decisions` after that turn (spec 3.9)."""
+    def decide(args, ctx):
+        if not ctx.run.take_decision():
+            raise tool_calls.ToolError("not run: the run's decision budget is spent")
+        return ToolOutput(text="truth")
+
+    toolset = _toolset(ToolSpec("decide", "Decides.", NONE, decide))
+    fake = FakeToolTurns(("", [("decide", {})]), ("", [("decide", {})]), ("Mara.", []))
+    result = _run(fake, toolset=toolset, budget=RunBudget(max_decisions=0))
+    assert (result.status, result.limit) == ("budget_exhausted", "decisions")
+    assert fake.calls == 2 and fake.requests[1]["tool_choice"] == "none"
+
+
+def _bare_loop(*, budget=None, execute=None, resolved=None):
+    return inference._Loop("chat", PROMPT, toolset=_toolset(), execute=execute, client=None,
+                           resolved=resolved or _resolved(), budget=budget or RunBudget(),
+                           run_id=RUN,
+                           attribution={"campaign": "saltmarch", "scene": "", "post": None,
+                                        "round_id": "", "response_id": ""},
+                           scene_identity="", cancelled=None, final_schema=None,
+                           tool_choice="auto", capture=None)
+
+
 # ---- fallback across a loop (spec 3.11) ----
 def test_once_the_fallback_serves_it_serves_alone_and_ids_are_the_loops():
     fake = FakeToolTurns(("", [("read", {})]),
@@ -404,6 +516,24 @@ def test_once_the_fallback_serves_it_serves_alone_and_ids_are_the_loops():
     # It inherits tool turns the primary wrote: thinking off.
     assert third["chain"].primary.sampling.params["reasoning_effort"] == "off"
     assert any("fell back" in e.note for e in result.trace)
+
+
+def test_a_reused_provider_id_is_renamed_per_occurrence_on_the_switch():
+    """A provider that reuses one id across turns still hands the fallback a
+    history whose ids are distinct, each result paired with its own call."""
+    loop = _bare_loop(resolved=_resolved(wire.Chain(PRIMARY, SPARE)))
+    for n in (1, 2):
+        loop.appended += [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_0", "name": "read", "arguments": {}}]},
+            {"role": "tool", "tool_call_id": "call_0", "name": "read",
+             "content": f"page {n}", "is_error": False}]
+    loop._note_switch(SPARE)
+    ids = [c["id"] for m in loop.appended for c in m.get("tool_calls", ())]
+    results = [(m["tool_call_id"], m["content"]) for m in loop.appended
+               if m["role"] == "tool"]
+    assert len(set(ids)) == 2 and all(i.startswith("gc_run01234_") for i in ids)
+    assert results == [(ids[0], "page 1"), (ids[1], "page 2")]
 
 
 def test_a_degrade_sibling_is_not_a_switch():

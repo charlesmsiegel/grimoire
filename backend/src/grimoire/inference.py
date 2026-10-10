@@ -1895,8 +1895,12 @@ class _RunView:
     def take_decision(self) -> bool:
         loop = self._loop
         if loop.decisions_used >= loop.budget.max_decisions:
+            # Reached, a zero cap included: the run stops after this turn.
+            loop.decisions_capped = True
             return False
         loop.decisions_used += 1
+        if loop.decisions_used >= loop.budget.max_decisions:
+            loop.decisions_capped = True
         return True
 
     def room_usd(self) -> float | None:
@@ -1968,6 +1972,7 @@ class _Loop:
         #: The decide tool's share (01g-S7): decisions taken, and what its
         #: calls cost as the guard prices them.
         self.decisions_used = 0
+        self.decisions_capped = False
         self.charged = 0.0
 
     # ---- the run ----
@@ -2116,7 +2121,7 @@ class _Loop:
         self._append(turn, results)
         if self.calls_used >= self.budget.max_tool_calls:
             self.limit = self.limit or "tool_calls"
-        if self.decisions_used and self.decisions_used >= self.budget.max_decisions:
+        if self.decisions_capped:
             self.limit = self.limit or "decisions"
         self._note_switch(turn.target)
         return None
@@ -2127,7 +2132,8 @@ class _Loop:
         value = schemas.find_value(turn.text)
         if isinstance(value, dict) and tool_calls.conforms(value, self.final_schema):
             return self._result("completed", final=value)
-        if not self.finalized and self.turns + 1 <= self.budget.max_turns:
+        if (not self.finalized and self.turns + 1 <= self.budget.max_turns
+                and not self._wall_short(tool_calls.MIN_TURN_SECONDS)):
             self._extend([{"role": "assistant", "content": turn.text}])
             return await self._finalize(stopped=False)
         return self._result("failed", error=LLMError(
@@ -2189,6 +2195,8 @@ class _Loop:
         target = holder.get(llm.ATTEMPTED)
         target = target if isinstance(target, wire.Target) else None
         calls = tuple(self._named(c) for c in collector.calls()) if not final else ()
+        # A joined turn's text is shown whole below, so it is visible text too.
+        self.shown = self.shown or (bool(text) and not self.streaming)
         turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target,
                      self.shown)
         self.text = text
@@ -2416,9 +2424,7 @@ class _Loop:
         if target is None or not self._switched_to(target):
             return
         self.fallen = True
-        mapping = {c["id"]: self._mint() for m in self.appended
-                   for c in m.get("tool_calls", ()) if isinstance(c, dict) and c.get("id")}
-        self.appended = tool_calls.rewrite_ids(self.appended, mapping)
+        self.appended = tool_calls.rewrite_ids(self.appended, self._mint)
         self._hist = None
 
     def _outgoing(self, extra: dict | None) -> list[dict]:
@@ -2512,10 +2518,9 @@ class _Loop:
         self.emit(tool_calls.LoopEvent("tool_start", turn=k, call_id=call.id, name=call.name))
         started = time.monotonic()
         output, ok = await self._run_tool(call, spec)
-        text = tool_calls.truncate(output.text, spec.max_result_chars)
         room = self.budget.max_result_chars_total - self.result_chars
-        if len(text) > room:
-            text = tool_calls.truncate(text, room)
+        text = tool_calls.truncate(output.text, min(spec.max_result_chars, room))
+        if room < spec.max_result_chars and len(output.text) > room:
             self.limit = self.limit or "result_chars"
         self.result_chars += len(text)
         if ok and spec.effect == "propose" and isinstance(output.proposal, dict):
