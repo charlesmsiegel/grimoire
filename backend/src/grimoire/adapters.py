@@ -21,8 +21,8 @@ gateway reads instead of keeping kind lists of its own:
   because the store may not import the gateway;
 - `decides_natively`: its kind has a native decisions endpoint;
 - `calls_tools`: its kind can be sent tool definitions (01g) -- held equal
-  to the presets' `never` (`store.inference.providers`), so the Claude
-  subscription's False is the `tools: no` its preset states until 01g-S8.
+  to the presets' `never` (`store.inference.providers`); every kind can since
+  01g-S8 fitted the Claude Agent SDK's own tool model to the loop.
 
 A gateway module: it imports the provider clients and the gateway leaves,
 and never the store (#239).
@@ -124,13 +124,6 @@ def _own_state(messages: list[dict], target: wire.Target) -> list[dict]:
     thinking and reasoning details go back only to the attempt's own
     `(kind, provider_id, model)`. The same list when none rides on it."""
     return tool_calls.provenanced(messages, target.kind, target.provider_id, target.model)
-
-
-async def _refused(error: LLMError) -> AsyncIterator[str]:
-    """A stream that fails on its first step, so the facade reads the refusal
-    as that attempt's failure, as it would a provider's."""
-    raise error
-    yield ""  # pragma: no cover - makes this an async generator
 
 
 def _controls(target: wire.Target) -> tuple[dict, dict, dict]:
@@ -295,8 +288,9 @@ class ClaudeAgentAdapter:
     lists_models = False
     embeds = False
     decides_natively = False
-    #: Until 01g-S8: the SDK runs its own loop and executes tools itself.
-    calls_tools = False
+    #: 01g-S8: tools are declared through an in-process MCP server and every
+    #: call is deferred back to the loop (`claude_agent`), never executed.
+    calls_tools = True
 
     def __init__(self, client: ClaudeAgentClient) -> None:
         self._client = client
@@ -304,15 +298,11 @@ class ClaudeAgentAdapter:
     def generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
                  *, schema: dict | None = None, tools: tuple[dict, ...] | None = None,
                  tool_choice: str | None = None) -> AsyncIterator[str]:
-        if tools is not None:
-            # Never silently sent without them: a call that offered tools
-            # and got none is not the call that was asked for. Coded as the
-            # refusal it is, so the facade neither observes it as the
-            # connection failing nor retries it (`llm._tools_refusal`).
-            return _refused(LLMError("bad_response", "claude connections cannot call tools",
-                                     code=tool_calls.REFUSED))
         # Never structured: the SDK path has no structured mode to ask for.
         _controls(target)
+        if tools is not None:
+            return self._client.stream(messages, target.model, usage=usage, tools=tools,
+                                       tool_choice=tool_choice)
         return self._client.stream(messages, target.model, usage=usage)
 
     async def models(self, target: wire.Target) -> list[dict]:

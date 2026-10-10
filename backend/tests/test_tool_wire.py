@@ -287,7 +287,13 @@ def test_what_reads_as_tools_refused(said, refused):
     assert llm._tools_refusal(llm.LLMError("bad_response", said, status=500), True) is False
 
 
-async def test_the_claude_adapters_refusal_is_coded_and_not_observed():
+async def test_an_sdk_too_old_for_tools_is_coded_and_not_observed(monkeypatch):
+    """An installed claude-agent-sdk without the tool API refuses an offer of
+    tools (`claude_agent._tool_options`), coded as the refusal it is."""
+    from grimoire import claude_agent
+    monkeypatch.setattr(claude_agent, "query", lambda **kw: None)
+    monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR", None)
+    monkeypatch.setattr(claude_agent, "create_sdk_mcp_server", None)
     observed: list = []
     client = LLMClient(timeout=0, retries=2,
                        observer=lambda conn, error: observed.append(error))

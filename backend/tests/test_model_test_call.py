@@ -1513,17 +1513,17 @@ def test_the_preview_describes_and_prices_the_tools_probe(client):
     assert body["estimated_cost_usd"] == pytest.approx(_tokens("tools", 0.000003, 0.000015))
 
 
-@pytest.mark.parametrize("path", ["test", "test/preview"])
-def test_a_claude_subscription_is_refused_a_tools_test_before_sending(client, path):
+def test_a_claude_subscription_may_preview_a_tools_test(client):
+    """01g-S8: the SDK path calls tools (declared, every call deferred), so
+    the preset no longer rules the probe out."""
     fake = FakeOpenRouter(["ok"])
     _use(client, fake)
     conn = _connection(client, kind="claude", name="Mara Subscription", api_key="")
-    r = client.post(f"/api/llm-connections/{conn}/{path}",
-                    json={"model": "sonnet", "capabilities": ["tools"], "confirm": True})
-    assert r.status_code == 400
-    assert "tools" in r.json()["detail"]
+    r = client.post(f"/api/llm-connections/{conn}/test/preview",
+                    json={"model": "sonnet", "capabilities": ["tools"]})
+    assert r.status_code == 200
+    assert [s["capability"] for s in r.json()["sends"]] == ["tools"]
     assert fake.calls == 0
-    assert _rows() == []
 
 
 def test_a_fake_that_calls_passes_and_one_that_answers_does_not(client):

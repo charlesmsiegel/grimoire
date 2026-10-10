@@ -1462,15 +1462,12 @@ def test_a_tools_route_refuses_a_users_no(at_state, planted):
     assert "which cannot call tools" in exc.detail["detail"]
 
 
-def test_a_tools_route_refuses_a_claude_subscription(at_state, planted):
+def test_a_tools_route_runs_on_a_claude_subscription(at_state, planted):
+    """01g-S8: the SDK path calls tools, so the seam lets it serve one."""
     at_state("claude_active")
     resolved = inf.resolve("planted-tools")
-    assert resolved.attempts[0].capabilities["tools"] == Cap("no", "adapter")
-    exc = _refused(lambda: routes.common.require_inference("planted-tools"))
-    assert exc.detail["kind"] == "incapable"
-    assert "which cannot call tools" in exc.detail["detail"]
-    # Everything else on the same connection still runs.
-    assert routes.common.require_inference("chat").chain.primary.provider_id == "claude"
+    assert resolved.attempts[0].capabilities["tools"] == Cap("yes", "preset")
+    assert routes.common.require_inference("planted-tools").chain.primary.provider_id == "claude"
 
 
 def test_a_tools_fallback_known_unable_is_dropped(at_state, planted):
