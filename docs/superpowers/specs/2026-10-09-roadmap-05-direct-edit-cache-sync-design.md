@@ -550,9 +550,19 @@ A path is hot for a kind when 03's `materialized` record has a row
 `(path, kind)`. Nothing else counts. The existence of an artifact keyed by the
 path's old bytes does not count, because that table is never enumerated (03
 section 9), and neither does a guess from the file's directory. A path with no
-rows is **cold**: sync does nothing for it and says so. That is what stops
-sync from pre-building the whole library, or embedding content nobody
-embedded.
+rows for any hook is **cold**: sync does nothing for it and says so. That is
+what stops sync from pre-building the whole library, or embedding content
+nobody embedded.
+
+Two things make that rule work for composite kinds:
+
+- **A row for every input.** 03 defines a `materialized` row's `path` as "a
+  source the artifact read". A composite kind (04's cards, 08's scene document,
+  which reads ledgers and inherited records) therefore records a row on
+  **every** path it read, not only on its "main" file. An edit to a campaign
+  ledger is then hot for 08's kind directly, and is never classified cold.
+- **Hot is decided per hook.** Each hook sees only its own kinds' rows
+  (section 6.2), so a path can be cold for one hook and hot for another.
 
 `materialized` is read only for paths sync already holds, from its arguments
 or from a live listing. That is 03 section 4's rule: "it never answers which
@@ -565,7 +575,7 @@ kinds, 04's overview kinds (`overview.warm_paths`, 04-C2a) and 08's
 SearchDocuments (`affected`, `rebuild_documents` and `reembed`, 08-C2c). 05
 also adds a fourth, for the three existing vector producers (section 6.4).
 Each owner knows what its kinds mean, and 05 must not grow a second copy of
-that knowledge. So 05 defines a protocol, and each owner registers one hook:
+that knowledge. So 05 defines a protocol, and each owner supplies one hook:
 
 ```python
 class WarmHook(Protocol):
@@ -576,8 +586,8 @@ class WarmHook(Protocol):
     def network(self, ctx: WarmContext, plan: EmbedPlan) -> NetworkResult: ...
 ```
 
-- `hot` maps each hot path to the kinds of this hook that were materialized
-  from it. A hook never sees another hook's rows.
+- `hot` maps each path that has rows of this hook's kinds to those kinds. A
+  hook never sees another hook's rows.
 - `local` rebuilds and stores artifacts and **touches no network**. It returns
   per-path outcomes and an `EmbedPlan`: the projection texts that would need a
   vector, which hits the vector cache already has, and how each text is
@@ -585,15 +595,42 @@ class WarmHook(Protocol):
 - `network` sends the plan's misses and saves the vectors. It is never called
   in a dry run or with `embed=False`, and never on a request path or under a
   lock, which is 08 section 9's requirement on 05.
-- Hooks run in registration order, which is fixed: `files` (03's single-file
-  kinds), then `overview` (04's composites, which hit the file artifacts just
-  rebuilt), then `searchdocs` (08), then `vectors` (the existing producers).
-  All the local phases run before any network phase.
+- `WarmContext` is built by exactly one constructor, `cache_sync._context()`.
+  It carries the root, the stop and root checks, the batch's space (read
+  from `embed_space.endpoint()` once) and the space's digest. Section 6.6 and
+  section 12 say how the operation guard traces that space.
+- Hooks run in a fixed order: `files` (03's single-file kinds), then
+  `overview` (04's composites, which hit the file artifacts just rebuilt), then
+  `searchdocs` (08), then `vectors` (the existing producers). All the local
+  phases run before any network phase.
 - Within a hook, instances are coalesced across the batch. Forty entity edits
   in one world warm that world's card once, because `warm_paths` receives the
   forty paths in one call.
 - A materialized kind that no hook claims is never rebuilt, and is reported as
   `lazy`.
+
+**The registry is a tuple, not import side effects.** `cache_sync.HOOKS`
+names the four hook objects by module (`cache_sync` itself for `files` and
+`vectors`, `store.overview.warm` for `overview`, and 08's rebuild module for
+`searchdocs`), and `cache_sync` imports those modules. A hook that registered
+itself on import would be missing from any process that never imported its
+package, and the CLI (`grimoire.cache` imports only `store.cache_sync`) is
+exactly that process: it would report every overview and searchdocs kind as
+`lazy` and exit 0. Before 04 or 08 lands, its entry is absent from the tuple,
+not stubbed. The hook modules must not import `cache_sync`, which keeps the
+graph acyclic.
+
+**Adapters.** The two foreign owners keep their own signatures, and 05 wraps
+them:
+
+- `overview`: `local` calls `overview.warm_paths(sorted(hot))` once, and maps
+  its result to outcomes. It has no network phase.
+- `searchdocs`: `local` calls 08's `affected(sorted(hot))`, then
+  `rebuild_documents(cid, sids)` per campaign, and turns 08's "has a vector in
+  the current document space" answers into the plan. `network` calls
+  `reembed(cid, docs, space=ctx.space, client=..., limit=...)` per campaign,
+  with 08's own per-campaign `limit` (08-C2c). 08 owns that constant; 05 only
+  passes it.
 
 The `files` hook is 05's own. For each materialized kind that 03's registry
 marks as single-file, its local phase calls 03's `derive(kind, path)`, which is
@@ -621,33 +658,35 @@ Sync never repairs a file, and never writes one to make a hook pass.
 
 ### 6.4 The existing vector producers, and what 05 asks of 03-C3
 
-03 section 4 names a vector row `vector:<space>`, and 08 writes
-`(scenes/<sid>.md, vector:<space key>)` for its scene documents (08 section
-8.2). That is not enough to rebuild a vector once more than one projection of a
-file is embedded, and in this repository more than one usually is:
+More than one projection of a file is often embedded:
 
 - A world lore entry is embedded by recall (`entry_text`) and by library search
   (its passages).
 - A scene transcript is embedded by library search (its passages) and, once 08
   lands, by 08 (its SearchDocument).
 
-Under a bare `vector:<space>`, 08's hook would read a search-passage row as
-proof that the scene's document was embedded, and the reverse. So this spec
-relies on the vector kind form that 03-C3 now carries, a recorded cross-spec
-decision that 03, 05 and 08 all use:
+A bare `vector:<space>` row would let one producer's row stand as proof that
+another's projection was embedded. So 05 relies on the vector kind form that
+03-C3 carries, a recorded cross-spec decision that 03, 05 and 08 all use:
 
 1. **The kind names the projection**: `vector:<projection>:<space-digest>`.
    `<projection>` is a registry kind whose compute produces the embedded text
    from the path's bytes. `<space-digest>` is a short hash of
    `embed_space.endpoint()["space"]`. The raw space id joins provider, rev and
-   model with NUL bytes, which do not belong in a kind name. 08 adopts the same
-   form for its scene documents.
+   model with NUL bytes, which do not belong in a kind name.
 2. **An optional `instance` column**: small, opaque JSON recorded beside the
-   row, for example `{"campaign": "saltmarch", "entity": ["lore", "pact"]}`.
-   It lets a hook rebuild an overlaid entry for the campaign that read it, and
-   claim the embedding for that campaign (section 6.6). Without it, hooks
-   derive the instance from the path alone: a world path is warmed as the
-   world's entry and left unattributed, and a campaign path as that campaign's.
+   row. 05 uses it for two things:
+   - **Which instance**: for example `{"campaign": "saltmarch", "entity":
+     ["lore", "pact"]}`. It lets a hook rebuild an overlaid entry for the
+     campaign that read it, and claim the embedding for that campaign
+     (section 6.6). Without it, hooks derive the instance from the path alone.
+   - **Which unit was embedded**, for a producer that embeds a file in units
+     and may embed only some of them. Library search splits a document into
+     passages and warms at most `WARM_LIMIT = BATCH * 4 - 1` per query over a
+     rotating window (`semsearch.py:104`), so a long transcript may have only
+     a few passages embedded. For such a producer there is one row per
+     embedded unit, with `{"unit": <position>}` in `instance`. Section 6.5
+     uses it to re-embed only units that were embedded.
 
 Both are read only by path, so neither changes 03 section 9's query-safety
 rule.
@@ -661,12 +700,33 @@ one, 05 adds:
   (`semantic.entry_text`, the art catalog's candidate text, and `semsearch`'s
   `passages` over the document text `search.walk` yields). The hook and the
   producer then cannot disagree about what was embedded;
-- a `materialized` row written beside each `vectors.save`, in 03's write batch
-  (off the event loop, and outside any campaign lock), naming the source path
-  and, where the producer knows it, the instance;
+- a `materialized` row written beside each `vectors.save` (one per unit for
+  library search), in 03's write batch (off the event loop, and outside any
+  campaign lock), naming the source path and, where the producer knows it,
+  the instance;
 - for recall and art, the source path carried on the candidate dict from the
   place the candidate is built. The plan finds those places; each candidate is
   already built from a record the producer read.
+
+A producer records **no** row for a source outside the store root. Recall can
+draw entries from the built-in module packs shipped inside the package
+(`store/builtin_modules`), and those are neither syncable (section 8) nor
+editable by an agent.
+
+**Write-through policy per producer.** The queue (section 5.4) embeds only
+where the next ordinary read would embed the same text anyway:
+
+- **recall and art: `on_write="quiet"`.** Both run on every turn of a
+  campaign that has them on, and embed any candidate whose text is missing.
+  An edited entry that is still a candidate is embedded at the next turn
+  regardless, so warming it after a quiet period moves that spend earlier and
+  adds none.
+- **library search: `on_write="explicit"`.** Its spend is driven by a reader
+  running a semantic search. Under write-through, every scene whose
+  transcript was ever search-warmed would re-embed at every play pause, for a
+  feature the user may never use again. Only an explicit sync rebuilds it.
+- **08's documents** choose their own (Open question 5); a query-driven
+  default is `explicit` for the same reason.
 
 `continuity-similarity` is left out. It embeds rows of continuity ledgers
 inside absorb and the reconcile sweep, both of which recompute what they need
@@ -676,8 +736,9 @@ under their own budgets, and its rows are not files an agent edits directly.
 
 For each `vector:` row on a hot path, the owning hook's local phase:
 
-1. **Checks the space.** It compares the row's space digest with the digest of
-   `embed_space.endpoint()`, read once per batch.
+1. **Checks the space.** It compares the row's space digest with the batch's
+   (`ctx`'s digest of `embed_space.endpoint()`, read once at the start of the
+   batch).
    - If they differ, the row belongs to a space the Embedding role has moved
      away from. Re-embedding under the new space would be embedding content
      never embedded there, which is exactly the spend `confirm_embedding`
@@ -687,15 +748,25 @@ For each `vector:` row on a hot path, the owning hook's local phase:
      off), this is reported `embedding_off`, and nothing is sent.
 2. **Computes the projection text** from the current bytes, through the
    projection kind.
-3. **Looks the text up** with `vectors.load(space, texts)`. Text already held
+3. **Keeps only replacements of embedded units.** For a single-unit
+   projection (recall's `entry_text`, an art description), the one text
+   replaces the one embedded unit. For a multi-unit projection (search
+   passages), a current unit is planned only if a unit **at the same
+   position** has a row. Units that were never embedded stay lazy, so one edit
+   to a long transcript never embeds its never-indexed tail. The plan is also
+   capped at the producer's own lazy limit (`WARM_LIMIT` for search, recall's
+   `WARM_LIMIT` for recall), so a rebuild never sends more for one path than
+   one ordinary read could.
+4. **Looks the texts up** with `vectors.load(space, texts)`. Text already held
    costs nothing. Because vectors are keyed by text, a transcript whose last
    passage changed re-embeds that passage and no other, and a rename whose
    text is unchanged re-embeds nothing.
-4. **Puts only the misses** in the `EmbedPlan`, each with its claim.
+5. **Puts only the misses** in the `EmbedPlan`, each with its claim.
 
-So the spend is bounded by the projection-text diff of paths whose
-projections were already embedded in the current space. It is never bounded
-by the size of whatever surrounds the edit.
+So the spend is bounded by the projection-text diff of units that were
+already embedded in the current space, and capped per path by the producer's
+own lazy limit. It is never bounded by the size of whatever surrounds the
+edit.
 
 ### 6.6 How it is sent
 
@@ -706,35 +777,58 @@ by the size of whatever surrounds the edit.
   paid on a turn or ahead of one. 08 already embeds its rebuilds under its own
   task. What sync itself spent is in its report (section 9). Open question 1
   records the alternative.
-- **Door.** With 01h-C5, the `vectors` hook calls
-  `embed_groups_sync(task, attribute(claims), space=..., client=...)`. A text
-  claimed by one campaign is charged to that campaign. A text claimed by
+- **The space is re-checked before sending.** Each network phase calls
+  `embed_space.endpoint()` again immediately before its first chunk, and stops
+  with `stale_space` for its whole plan if the digest differs from the
+  batch's. The local phase compared rows against the batch's space, and if the
+  Embedding role moved in between, sending would put texts into a space where
+  nothing was ever embedded: the `confirm_embedding` bypass that step 1 of
+  section 6.5 exists to prevent. The texts are then sent with the batch's
+  space (`ctx.space`), never with the re-read one.
+- **Chunks, each its own call, saved as it lands.** The hook splits each
+  campaign group into chunks of at most `embeddings.BATCH` texts and makes one
+  door call per chunk: one ledger row each. It saves each chunk's vectors
+  before the next chunk is sent. The `WARM_LIMIT` comment in `semantic.py`
+  records why: in one large call, a rate limit late in the run otherwise
+  "raises before a single vector is saved", and the retry repeats all of it.
+  01h-C5's `embed_groups_sync` returns all its groups' results at the end, so
+  the hook calls it with one chunk's groups at a time (or 01h adds a per-group
+  callback; see the review record).
+- **Door and attribution.** With 01h-C5, the chunk call is
+  `embed_groups_sync(task, attribute(claims), space=ctx.space, client=...)`. A
+  text claimed by one campaign is charged to that campaign. A text claimed by
   several campaigns, or by none (a world, the library, an image object), goes
   to the unattributed group and is embedded once (01h section 7). No request
   spans campaigns. Without 01h-C5, the hook groups claims the same way and
-  makes one `inference.embed.embed_sync(task, texts, space=..., client=...,
-  campaign=...)` call per group. Either way, `space` is the one read at the
-  start of the batch, and is never re-resolved per call (CLAUDE.md, "Adding an
-  embedding call site?").
+  makes one `inference.embed.embed_sync(task, texts, space=ctx.space,
+  client=..., campaign=...)` call per chunk.
 - **No scene.** A warm-up is not part of playing a scene. A scene's own totals
   stay "the number that is always right" (CLAUDE.md, Costs).
-- **Chunks, saved as they land.** The client splits a call into
-  `embeddings.BATCH` requests. The hook saves each group's vectors before the
-  next group is sent. The `WARM_LIMIT` comment in `semantic.py` records why:
-  in one large call, a rate limit late in the run otherwise "raises before a
-  single vector is saved", and the retry repeats all of it.
-- **Checked again just before sending.** Immediately before each group is
+- **Documents only.** Every text sync sends is a document. Under 01h-C1 a
+  document is marked by passing no `queries` (it defaults to 0), and
+  `embed_groups_sync` embeds documents only. Sync therefore passes nothing
+  extra, before or after 01h-C1 lands.
+- **Checked again just before sending.** Immediately before each chunk is
   sent, its texts are looked up again, and any that have arrived meanwhile
   (from another process, or from a turn) are dropped from it.
-- **Stop on a connection-wide failure.** 01h-C5 stops the run after `auth`,
-  `missing_key`, `rate_limit`, `network` or a deadline, and returns the later
-  groups as `not_sent`, filing nothing. The fallback path does the same. The
-  unsent texts are reported with the failure's kind.
+- **Stop on a connection-wide failure.** After `auth`, `missing_key`,
+  `rate_limit`, `network` or a deadline, no further chunk is sent (01h-C5
+  returns later groups as `not_sent`, filing nothing; the fallback stops the
+  same way). The unsent texts are reported with the failure's kind.
 - **Deadline.** The client's own per-request timeout, not a caller budget. A
   slow provider cutting a request is therefore a provider failure, recorded at
   `Meter.done` with its kind and status only.
-- **Input type.** Once 01h-C1 lands, sync passes the document type. It never
-  embeds a query.
+- **The operation guard.** `test_operation_guard.py` traces each embed call's
+  `space=` back to `embed_space.endpoint` and refuses an attribute or a
+  method parameter. `space=ctx.space` inside `WarmHook.network` is both. So
+  05 extends the guard, as a deliverable of its own: `ctx.space` is accepted
+  only where `ctx` is the result of `cache_sync._context()`, whose `space`
+  field the guard traces to `embed_space.endpoint` like any other value, and
+  where the call sits in a `network` method of a hook named in
+  `cache_sync.HOOKS`. The guard gains planted-fail cases: a hook that builds a
+  `WarmContext` by hand, and one whose `space` field is a literal dict. 08's
+  `reembed(..., space=...)` parameter is traced through the same exception,
+  since its only caller is the `searchdocs` adapter.
 
 ### 6.7 Does re-embedding need confirmation? No, and why
 
@@ -744,25 +838,29 @@ and any change that moves the Embedding role's vector space. The third looks
 most like sync, and the argument has to address that resemblance.
 Re-embedding after an edit does not need the question, for four reasons:
 
-1. **It never moves the space.** Sync embeds only under the current space, and
-   only for rows already in it (section 6.5, step 1). The confirmation exists
-   because moving the space re-embeds a library, and sync can never do that.
-2. **The content was already opted in.** A `vector:` row exists only because a
-   producer embedded that projection in this space. The user turned on recall,
-   art ranking, semantic search or history retrieval, and set the Embedding
-   role. Sync embeds the *next version* of text the user already chose to
-   embed.
-3. **Lazy would spend the same.** The next read that needs the vector embeds
-   the same text at the same price, on the turn path. Sync moves that spend
-   earlier. It spends *more* than lazy only when a version is synced and then
-   superseded before any read needed it, or when nothing ever reads it again.
-   Both are bounded by the paths the caller named, and the write-through
-   queue's quiet period removes the common case (a scene re-embedded every
-   turn).
-4. **The request is explicit.** The CLI and the API are run by the user, or by
-   an agent acting for them, the way sending a turn is (CLAUDE.md: "Play is not
-   gated -- sending a turn *is* the request"). The write-through queue acts on
-   the user's own edit in the app.
+1. **It never moves the space.** Sync embeds only under the batch's space,
+   only for rows already in it, and stops if the role moves before sending
+   (sections 6.5 and 6.6). The confirmation exists because moving the space
+   re-embeds a library, and sync can never do that.
+2. **The content was already opted in, unit by unit.** A `vector:` row exists
+   only because a producer embedded that unit of that projection in this
+   space. Sync embeds the *next version* of a unit the user already chose to
+   embed, and never a unit that was not embedded (section 6.5, step 3). The
+   one exception is a stated rename (`--renamed`, section 7.5), which carries
+   the old path's rows to the new path; the dry run shows what that would
+   send.
+3. **Write-through spends only what the next read would.** The queue embeds
+   only for recall and art (section 6.4), which embed any missing candidate
+   text on the next turn of a campaign that uses them. It moves that spend
+   earlier and adds none, except for a version superseded before any turn
+   needed it, which the quiet period makes rare. Producers whose spend is
+   query-driven (library search, and 08 unless 08 argues otherwise) are
+   rebuilt only by an explicit sync.
+4. **An explicit sync is an explicit request.** The CLI and the API are run by
+   the user, or by an agent acting for them, the way sending a turn is
+   (CLAUDE.md: "Play is not gated -- sending a turn *is* the request"). What
+   it can spend is bounded by the paths named, by the units already embedded,
+   and by each producer's lazy limit per path.
 
 What replaces a confirmation is visibility and an opt-out. `--dry-run` reports
 how many texts would be sent before anything is sent. `--no-embed` (or

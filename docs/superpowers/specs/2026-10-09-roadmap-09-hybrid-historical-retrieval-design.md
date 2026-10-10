@@ -1,6 +1,6 @@
 # 09. Hybrid historical retrieval
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 09 in `ROADMAP-CHECKLIST.md`. Lane: retrieval.
 **Baseline:** `main` at `35c1fb7`.
@@ -29,13 +29,13 @@ Edges as `ROADMAP-CHECKLIST.md` lists them for 09.
 | 08-C3a `history-index` embed task; 08-C3b `expand(...)`, where the caller names the phase | 08 | The document-side embed task, and turning a selected scene into bounded excerpts, with 09 naming `phase="prompt"` (section 8) | Hard |
 | 03-C6 batch lookup over a live key set, index ranking only within it | 03 | Looking up documents and any lexical index only for keys computed from the filesystem this turn (section 6.4) | Hard |
 | 03-C7 vectors keyed by text, never `BUILD` | 03 | An upgrade costs embeddings only where document text moved | Hard |
-| 01h-C4a no embedding on the event loop (a guard degrades); 01h-C4b native async `embed()` with a total deadline | 01h | The query embedding on the turn path never blocks the loop (section 10) | Hard for the turn path |
+| 01h-C4a no embedding on the event loop (a guard degrades); 01h-C4b native async `embed()` with `AsyncEmbeddingsClient` from `routes.get_embeddings` | 01h | The query embedding on the turn path is async and cancellable; the document warm (08's sync `vectors_for`) runs in a worker (section 6.3, 10) | Hard for the turn path |
 | 01a-C1 eval cost, latency and token reporting | 01a | The long-history suite reports wall time, tokens and the three money columns per arm (section 12) | Hard for live evals; offline needs nothing |
 | 07-C2 inverse membership | 07 | The `group` structural relation (section 5.2) | Soft: the relation is absent until it lands |
 | 07-C3c retrieval projections (`scene_groups`, `co_affiliates`, `prompt_visible`) | 07 | Group seeds and the group relation read through 07's projections rather than re-deriving them | Soft |
-| 01e-C1 `Rank`; 01e-C2 `Answer.expected`, `tiers()` | 01e | The optional rerank stage (section 7.3) | Soft: rerank is off by default and its slice waits for 01e |
-| 01h-C1 input type; a query vector is compared within its space and never cached | 01h | Query embedded as a query, documents as documents, compared in one space (section 6.3) | Soft: without it both sides embed as today |
-| 01i-C1 `wire.Limits(window, max_output)` on every target | 01i | Deriving the section's ceiling from the smallest window in the chain (section 9.2) | Soft: without it the configured absolute budget alone bounds the section |
+| 01e-C1 `Rank` (with `pointwise` set); 01e-C2 `Answer.expected`, `tiers()` | 01e | The optional rerank stage (section 7.3) | Soft: rerank is off by default and its slice waits for 01e |
+| 01h-C1 input type (`queries=` split); a query vector is compared within its space and never cached | 01h | The query is embedded as a query in its own request, compared against 08's document vectors read under the same space (section 6.3) | Soft: without it both sides embed as today |
+| 01i-C1 `wire.Limits` on every target; 01i-C2 `prompt_ceiling(resolved)` | 01i | The section's ceiling is a share of `prompt_ceiling(resolved).tokens`, the required way to derive one (section 9.2) | Soft: with `tokens is None`, or before it lands, the configured absolute budget alone bounds the section |
 | 02-C5b history relevance kit, the shared `history_check` route | 02 | The task and route the rerank resolves and meters under (section 7.3) | Soft |
 
 ## Required by
@@ -202,7 +202,8 @@ Concretely:
  |   -> live set (08-C1 keys, 03-C6)    SearchDocuments for scenes that   |
  |                                      precede this one                  |
  |   -> lexical.score(pool | live set)  pure python, per-doc term stats   |
- |   -> semantic.score(pool | live set) one embed request (query + warm)  |
+ |   -> semantic.score(pool | live set) query: 01h-C4b, `history-recall`  |
+ |                                      docs: 08-C2b `vectors_for`        |
  |   -> merge.order(...)                admission per signal, RRF order   |
  |   -> [rerank]                        optional decide, 01e Rank/Score   |
  |   -> coverage + widening             tier 1 -> tier 2 (09-C2)          |
@@ -211,8 +212,9 @@ Concretely:
  +------------------------------------------------------------------------+
                                    | Evidence (frozen, JSON-safe detail)
                                    v
- compose_turn(..., history=Evidence) -> "Recalled history" section (RECALLED,
-                                        shed per scene) -> pack -> send
+ compose_turn(..., history=Evidence) -> "Recalled history" section
+                                        (HISTORY_RECALL tier, shed per scene)
+                                        -> pack -> send
 ```
 
 Store side: a new package `backend/src/grimoire/store/history/`, pure of
@@ -228,14 +230,14 @@ place a turn calls into the package.
 | `store/history/query.py` | Builds the turn query: window text, seeds, terms |
 | `store/history/structural.py` | Structural candidates and their relations |
 | `store/history/lexical.py` | Term extraction and BM25-style scoring over a live set |
-| `store/history/semantic.py` | Query embedding, warm run, cosine over a live set; the outage memo |
+| `store/history/semantic.py` | Query embedding (01h-C4b), the document warm through 08-C2b, cosine over a live set |
 | `store/history/merge.py` | Admission, ordering, `merge(Evidence, Evidence)` for 10 |
 | `store/history/coverage.py` | The deterministic sufficiency verdict and widening decision |
 | `store/history/expand.py` | Excerpts through 08-C3b, through the regex prompt view |
-| `store/history/budget.py` | The ceiling (01i-C1) and the fit |
+| `store/history/budget.py` | The ceiling (01i-C2) and the fit |
 | `store/history/retrieve.py` | `retrieve()`, the one async entry, composing the above |
 | `store/context/history.py` | The section's data, render and `shed` hook (context side) |
-| `routes/history_recall.py` | `gather()` on the turn path: deadline, rerank resolution, portal bridge |
+| `routes/history_recall.py` | `gather()` on the turn path (deadline, resolution in a worker, rerank) and `gather_sync()`, the bridge for `def` handlers |
 
 Imports follow `test_import_guard.py`: module scope, acyclic, submodules
 bound as module objects (`from ..continuity import involvement`, then
@@ -258,12 +260,17 @@ It produces:
   reply answers). 10 appends its rewritten questions here.
 - **`terms`**: distinctive tokens and phrases for the lexical signal (section
   6.2): proper names found in the window that resolve to a known actor,
-  location, item, group or thread title, quoted phrases, and the remaining
-  non-stopword tokens.
+  location, item, group or thread title (weighted), quoted phrases, and the
+  remaining non-stopword tokens. **A name that resolves to an excluded or
+  gm-only ref is removed from the terms entirely**, weighted or plain, so the
+  reader's exclude cannot be walked around lexically (section 5.1's rule, one
+  signal over).
 - **`subjects`**: the structural seeds, as refs (section 5.1).
 - **`turn_index`**: the transcript index of the post being answered, carried
-  to every ledger row (`usage.meter(post=...)`, `store/usage.py:629`), so a
-  post's cost includes its retrieval.
+  to the rerank's ledger rows (`decide(post=...)`, `inference.py:684`). The
+  embed doors take no `post=` today (`embed.py:143`, 01h-C4b's signature), so
+  the embed rows carry campaign and scene only until 01h adds `post`
+  (open question 9, routed to 01h).
 
 A `Query` is also constructible directly (10, 12, the evals): `texts`,
 `subjects`, `terms`, `scopes`, `max_scenes`, `perspective` and `tier_limit`
@@ -318,17 +325,23 @@ matching in-fiction dates, which is 11's or a later spec's question.
 A scene is a candidate for *any* signal only if all of these hold, checked
 once in `retrieve` against the live listing (`scenes.read.list_scenes`):
 
-1. It orders strictly before the scene being played, by scene id, the
-   archive's `before` rule (`archive.py:67`). The same ordinal prefix that rule
-   relies on (`store/scene_ids.py:15`, `parse_sid`) makes it cheap.
+1. It orders strictly before the scene being played, by the archive's exact
+   rule: a plain string comparison of scene ids (`archive.py:67`), not
+   `parse_sid` ordinals, which return `None` for legacy date-form ids
+   (`store/scene_ids.py:15`-`27`). Using the same comparison keeps the two
+   layers agreeing on what "earlier" means in a store that mixes id forms.
 2. It is not in the current scene's branch group (`scenes/read.py:87`-`112`): a
    sibling is an alternative to the present, not its past.
 3. It is not closed by an absorbed sibling (`closed_by`, `scenes/read.py:115`):
    an abandoned branch did not happen.
-4. It has a SearchDocument key this turn (08-C1), or, for the structural
-   signal alone, at least a readable scene head. A scene 08 has not built yet
-   is still reachable structurally; it is built lazily if selected (section
-   6.5).
+4. 08-C2a returned a `LiveDocument` for it. `scene_documents` builds every
+   miss on each call (08 section 6, step 5), so every live scene has a
+   document; what may be missing is its *vector* (section 6.5).
+
+**Ref forms.** 08 stores locations as `locations/<id>` (08 section 7) while
+seeds and relations here use `locations:<id>`. `store/history/refs.norm`
+converts every ref to the `<kind>:<id>` form once, at the boundary with 08,
+and every join in this package compares normalised refs only.
 
 ### 5.4 Structural rank
 
@@ -342,16 +355,17 @@ kind and the refs that produced it. The structural ranked list orders by:
 3. newest scene first.
 
 **Admission.** `shared_cast` alone, with only present actors, admits a scene
-only when fewer than `STRUCTURAL_PLAIN_CAP` scenes qualify that way. Two
+only when fewer than `STRUCTURAL_PLAIN_CAP` (12) scenes qualify that way. Two
 companions who travel together share every scene, so co-presence alone is a
 recency list in disguise; above the cap it ranks but does not admit (section
 7.1). Every other relation admits on its own.
 
 **Pool.** Tier 1's pool is the top `POOL_MAX` structural candidates plus every
 lexical hit (section 6.2). `POOL_MAX` (64) bounds the semantic work of tier 1
-to one `vectors.load` of 64 small records, which `store/vectors.py`'s own
-docstring prices at a few milliseconds per 100 vectors. Both constants are
-tuned later against the eval suite.
+to one `vectors.load` of 64 records: 64 file opens, and by
+`store/vectors.py`'s own measurement (about 97 ms per 500 vectors of
+dimension 1536, load plus score) roughly 12 ms on a desktop. Both constants
+are tuned later against the eval suite.
 
 ## 6. Lexical and semantic signals
 
@@ -401,56 +415,76 @@ inspector).
 
 ### 6.3 Semantic
 
-`semantic.score(query_text, docs, *, space, client, deadline, campaign, scene,
-post) -> SemanticResult`:
+09 embeds **only the query**. Document vectors are 08's: built and warmed only
+through 08-C2b's `embedded.vectors_for` under 08-C3a's `history-index` task,
+read and saved under the document space key, with 03's `materialized` rows
+(08 section 8.2). A document vector 09 saved itself would bypass that key
+and those rows: with a provider in `prefix` or `param` mode it would file a
+document-typed vector where lore recall reads untyped ones, and 05's
+"re-embeds only text already embedded" could not see it (review B1).
+
+`semantic.score(texts, docs, *, space, embed_client, doc_client, deadline,
+campaign, scene, rotate) -> SemanticResult`:
 
 - **The space is resolved once per retrieval**, from `embed_space.endpoint()`
-  (`store/embed_space.py:62`), and handed to every load, save and embed, the
-  rule `embed.py`'s docstring states ("embedding with one model and saving
-  under another space's key is how vectors from two models end up in one
-  cache").
-- **One request per retrieval**: every text in `Query.texts` (input type
-  `query`, 01h-C1; one for an ordinary turn, up to four once 10 adds
-  questions) plus a bounded warm run of uncached documents (input type
-  `document`). A document's semantic signal is its best cosine over the
-  texts, and records which text it was. The warm window is
-  rotated by `embed_space.warm_window` exactly as semantic recall does
-  (`semantic.py:142`). Pool documents are warmed before the wider live set,
-  so tier 1 converges first. The warm run is `embeddings.BATCH - len(texts)`
-  documents, which keeps the request one round trip (`semantic.py:126`-`128`'s
-  reasoning for `WARM_LIMIT`).
-- **The embed task** is a new `EMBED_TASKS` entry, `history-recall`, for the
-  query and this turn's warm run. 08-C3a's `history-index` task covers builds outside
-  a turn (05's eager rebuild). Two tasks because they answer different cost
-  questions: what a turn spent recalling, and what keeping the index warm
-  cost.
-- **Deadline**: one monotonic deadline for the request and its possible
-  retry, the `semantic._embed` rule (`semantic.py:335`-`338`); a retry only on
-  `bad_response`, never on `auth`, `rate_limit` or `network`.
-- **Checks**, all inherited: a non-unit or wrong-width vector is evicted
-  (`vectors.forget`) and scores nothing; a score outside `[-1 - SCORE_SLACK,
+  (`store/embed_space.py:62`), in a worker (it reads `config.md`), and handed
+  to both calls below, the rule `embed.py`'s docstring states ("embedding with
+  one model and saving under another space's key is how vectors from two
+  models end up in one cache").
+- **The document warm**: one `vectors_for(cid, docs, space=space,
+  client=doc_client, warm_limit=..., rotate=texts[0], deadline=deadline,
+  scene=sid)` call (08-C2b), in a worker thread, because it takes 08's
+  synchronous `EmbeddingsClient` and does disk I/O. Pool documents are passed
+  first so tier 1 converges first; `warm_limit` is 08's `WARM_LIMIT` unless the
+  eval suite says otherwise. It returns the cached vectors plus whatever it
+  warmed, and never raises (08-C2b).
+- **The query**: one `await embed.embed("history-recall", texts,
+  queries=len(texts), space=space, client=embed_client, deadline=deadline,
+  campaign=cid, scene=sid)` call through 01h-C4b's native async door, with the
+  app's `AsyncEmbeddingsClient` from `routes.get_embeddings`. `texts` is one
+  string on an ordinary turn and up to four once 10 adds questions. The query
+  vectors are never cached and are compared only with document vectors read
+  under the same `space` (01h-C1).
+- **Two requests, two rows.** The query and the warm are separate calls under
+  separate tasks (08 section 8.4: "a query and a set of documents are two
+  requests once input types differ"), so a turn files up to **two** embed
+  rows: `history-recall` for the query, `history-index` for the warm when it
+  sent anything. They run concurrently under the one deadline, the query on
+  the loop and the warm in its worker. In 01h's `param` mode the query call is
+  itself one request per type, which here is one; nothing in this design
+  depends on a single round trip. There is no query-only retry: the query is
+  already alone, and a `bad_response` on it is that turn's semantic failure.
+- **Scoring**: a document's semantic signal is its best cosine over the query
+  texts, recording which text it was.
+- **Checks**, all inherited: a wrong-width document vector is evicted with
+  `vectors.forget(document space key, text)` (08 section 8.2 leaves this to
+  the scorer) and scores nothing; a score outside `[-1 - SCORE_SLACK,
   1 + SCORE_SLACK]` is evicted; CRC integrity is `vectors.load`'s
   (`store/vectors.py:150`).
 - **Admission**: cosine at or above `history_recall_threshold`.
 - **Tier 2 bound**: at most `WIDEN_LIMIT` (1000) documents are scored per
-  retrieval, newest first. `store/vectors.py`'s docstring measures the
-  pure-Python load and dot at roughly 100 ms per 500 vectors of dimension
-  1536 on a desktop; 1000 keeps tier 2 within a few hundred milliseconds there.
-  Android is slower, and the eval suite's latency columns are where this is
-  tuned. A campaign past the limit is the case for an ANN index, which is out
-  of scope (section 15).
+  retrieval, newest first: 1000 file opens and, by `store/vectors.py`'s own
+  measurement (about 97 ms per 500 vectors at dimension 1536), roughly 200 ms
+  on a desktop. Android is slower, and the eval suite's latency column is where
+  this is tuned. A campaign past the limit is the case for an ANN index or
+  batch-loaded vectors, which 08 section 8.3 leaves to 09 and which is out of
+  scope here (section 16).
 
-`SemanticSignal(cosine: float)`, and a `SemanticResult.status` for the
-coverage: `ok`, `off` (no Embedding role, or `embed_space.problem` names a
+`SemanticSignal(cosine: float, text: int)`, and a `SemanticResult.status` for
+the coverage: `ok`, `off` (no Embedding role, or `embed_space.problem` names a
 known `no`), `failed:<kind>`, `backoff`, `skipped:<why>` (preview, locked,
 deadline spent).
 
-**The outage memo.** A connection-wide failure (`auth`, `network`,
-`rate_limit`, `timeout`) sets a per-process memo keyed by the space id; for
+**The outage memo, shared with lore recall.** A connection-wide failure of the
+query call (`auth`, `network`, `rate_limit`, `timeout`) sets a per-process memo
+keyed by the space id, held in `embed_space` (`embed_space.outage(space_id)`,
+`embed_space.note_outage(...)`, `embed_space.clear_outage(...)`); for
 `OUTAGE_BACKOFF` (60 s) retrieval skips the semantic stage and says
-`backoff`. Without it every turn of an outage pays the full embed deadline
-before the reply can start, which is the cost semantic recall pays today. The
-memo is process memory, never stored, and is cleared by a successful request.
+`backoff`. Lore recall (`context/semantic.py`) consults and sets the same memo
+in this spec, rather than in a follow-up (review S4): otherwise a slow endpoint
+costs one recall deadline in compose on every turn of an outage on top of the
+history phase. The memo is process memory, never stored, cleared by a
+successful request, and with nothing failing it changes no prompt.
 
 ### 6.4 Query safety restated
 
@@ -460,13 +494,15 @@ the texts of documents in the live set (`vectors.load(space, texts)` needs the
 text, so it cannot be asked about anything else). A guard in the style of 03's
 fails a `store/history/` read API that does not take the caller's keys.
 
-### 6.5 Building what is missing
+### 6.5 Documents and vectors that are missing
 
-A scene selected by any signal whose SearchDocument is not yet built is built
-through 08-C2, at most `BUILD_LIMIT` (16) per retrieval; the rest sit out this
-turn, are reachable structurally, and are built on a later turn. This is the
-same incremental-warm argument as `WARM_LIMIT`: switching retrieval on over a
-long campaign costs a little per turn for a while rather than one stall.
+08-C2a builds every missing document on each call, so there is no document
+build limit (an earlier draft's `BUILD_LIMIT` described a state 08 never
+produces; review S10). What can be missing is a document's **vector**: 08-C2b
+warms at most `warm_limit` per call on a rotating window, so switching
+retrieval on over a long campaign makes semantic coverage grow a little per
+turn rather than in one stall. A document with no vector yet is still reachable
+structurally and lexically.
 
 ## 7. Merging without a fused confidence
 
@@ -477,9 +513,12 @@ under that signal's own rule (sections 5.4, 6.2, 6.3). Signals never vote a
 candidate out. Admission is the only threshold anywhere in the merge, and
 each threshold belongs to one signal and is stated in that signal's own units.
 
-The admitted pool is then ordered by **reciprocal-rank fusion over the three
-ranked lists** (`order_key = sum(1 / (RRF_K + rank_s))` over the signals that
-ranked it, `RRF_K = 60`), ties broken newest scene first. RRF is chosen
+The admitted pool is then ordered by **reciprocal-rank fusion over the
+ranked lists** (`order_key = sum(1 / (RRF_K + rank))` over every list that
+ranked it, `RRF_K = 60`), ties broken by the archive's scene-id comparison,
+newest first. **A list ranks only what its own signal admitted**: a
+sub-threshold cosine or a single plain-word lexical match contributes no rank,
+so admission and order cannot disagree about what a signal said. RRF is chosen
 because it consumes only ranks, so BM25 values, cosines and relation counts
 are never put on one scale. The `order_key` is an internal sort key: it is not
 stored on the evidence, not shown, not thresholded, and not passed to 10 or 11
@@ -493,59 +532,91 @@ there is no number in the output a caller could mistake for a probability.
 
 ```python
 @dataclass(frozen=True)
+class SceneRef:
+    sid: str                   # at retrieval
+    identity: str | None       # scenes.identity.scene_identity; None for a legacy scene
+    @property
+    def key(self) -> str:      # identity if any, else "sid:" + sid
+        ...
+
+@dataclass(frozen=True)
 class Signals:
     structural: StructuralSignal | None   # relations, never a number
     lexical: LexicalSignal | None         # raw score + matched terms
-    semantic: SemanticSignal | None       # raw cosine
-    rerank: RerankSignal | None           # position, or level, from decide
+    semantic: SemanticSignal | None       # raw cosine + which query text
+    rerank: RerankSignal | None           # grade or position, from decide
 
 @dataclass(frozen=True)
 class Candidate:
-    scene: SceneRef            # (sid at retrieval, identity) -- identity is stable
-    signals: Signals
-    ranks: dict[str, int]      # per-signal rank; absent where the signal did not rank it
-    tier: int                  # 1 or 2: where it was first found
+    scene: SceneRef
+    rounds: tuple[Signals, ...]           # one per retrieval round (10 adds rounds)
+    ranks: Mapping[tuple[int, str], int]  # (round, signal) -> rank
+    tier: int                             # 1 or 2: where it was first found
     admitted_by: frozenset[str]
 ```
 
-`SceneRef` carries the scene identity (`scenes.identity.scene_identity`)
-beside the sid, because 10 merges retrieval rounds and a rename between them
-must not split one scene into two candidates.
+**`SceneRef.key`, never the identity, is what every merge, dedupe and shed unit
+compares** (review B2). `scene_identity` returns `None` for a scene that
+predates the field (`store/scenes/identity.py:200`-`212`), and two `None`s
+compare equal, so keying on the identity would collapse two legacy scenes into
+one candidate and give every legacy shed unit the same ref, which empties
+`pack.shed`'s `kept` set on the first step (`pack.py:310`-`324`) and drops the
+section whole. The `"sid:" + sid` fallback is stable for one retrieval and for
+10's rounds within one turn, because the scene being played is reserved and a
+rename of an earlier scene during the phase is a race 09 accepts (the worst
+case is one scene appearing twice in the inspector). `retrieve` never calls
+`ensure_identity`: minting one is a write under the campaign lock.
 
-### 7.3 Optional rerank (01e)
+### 7.3 Optional rerank (02-C5b, 01e)
 
 With `history_recall_rerank: on` and a resolvable decide route, the top
 `RERANK_TOP` (8, one structured decide chunk, `decisions.MAX_ITEMS_PER_CALL`)
-admitted candidates are asked one question:
+admitted candidates are graded through **02-C5b's history relevance kit**
+(`store/history_rerank.py`: `build_items`, `grades_of`, its templates and
+its `decide-history-rerank` replay case), which this spec does not redefine:
 
-- **`Rank`** (01e-C1) when the resolved backend supports it: one item whose
-  context is the query window and each candidate's header plus SearchDocument
-  summary, answered as an order with abstention allowed.
-- **`Score`** (01e-C2, fine levels with explicit ties) otherwise: one item per
-  candidate, the same context.
-
-The rerank replaces the RRF order *among the candidates it answered*, in place;
-a candidate it did not answer keeps its RRF position relative to the others.
-An abstention, a refusal, an unreadable reply or a failed call leaves the RRF
-order untouched: per `CLAUDE.md`, "what moves an item on is a failed call,
-never an answer", and here a non-answer simply means no rerank. The rerank's
-answer is recorded as `RerankSignal(position | level, backend)` and never as a
-probability; a native distribution, where one exists, is not consulted (01c's
-question, not this one).
+- Each kit `Candidate` is `ref = SceneRef.key`, `excerpt` = the candidate's
+  header plus its first excerpt (or its summary when it has none), **already
+  through the prompt view**, as the kit requires, and `when` = its in-fiction
+  date label.
+- **Score form first** (the kit's default, one item per candidate on its four
+  levels). When 01e-C1 lands, the `Rank` form (`build_items_ranked`, one item
+  ranking up to eight) **must set `pointwise`** (01e-C1, section 4.3 of 01e),
+  so a native-only Decision model is asked one predicate per candidate rather
+  than being refused unsent by `native_gap`, and it **must not rely on a
+  native abstain**: a native rank never abstains (01e's caller rule), so a
+  candidate the reply did not place is simply unranked.
+- **Ungraded is not irrelevant** (the kit's rule): an item not read keeps its
+  RRF position; it is never demoted as a low grade.
+- **The order rule.** Graded candidates are reordered among themselves by
+  grade, highest first, RRF order breaking ties; ungraded candidates keep their
+  RRF positions. An abstention, a refusal, an unreadable reply or a failed call
+  leaves the order untouched: per `CLAUDE.md`, "what moves an item on is a
+  failed call, never an answer". The grade is recorded as
+  `RerankSignal(level | position, backend)`, never as a probability; a native
+  distribution is not consulted (01c's question).
+- **Cost.** One structured chunk is one request; on a native-only Decision
+  model it is eight requests at `NATIVE_CONCURRENCY` (four) in flight
+  (`inference.py:86`, 02 section 9.3). No escalation and no sampling (02's
+  01d-C1 row for `history-rerank`: fallback `role`, escalation off).
 
 It runs in the route layer (`routes/history_recall.py`), which resolves with
 `require_inference("history-rerank", cid, operation="decide")` through
-`_soft_resolved` (`routes/common.py:1519`), so an unresolvable route skips the
-rerank with a reason instead of failing the turn, and the call goes through
+`_soft_resolved` (`routes/common.py:1519`), **in a worker**
+(`run_in_threadpool`, the pattern at `character_turns.py:748`-`749`, because
+resolution reads `config.md` and the connections), so an unresolvable route
+skips the rerank with a reason instead of failing the turn. The call is
 `operations.decide("history-rerank", items, client=..., resolved=...,
-campaign=cid, scene=sid, post=turn_index, around=...)` (`inference.py:684`)
-under the retrieval deadline (`around`, `_bounded_call` at
-`routes/common.py:544` with an explicit ceiling, `RERANK_CEILING`, because a
-turn-path caller must not inherit `llm_call_budget`'s "no ceiling" escape).
+campaign=cid, scene=sid, post=turn_index, around=...)` (`inference.py:684`),
+whose `around` bounds each facade call by `min(RERANK_CEILING, remaining)`
+(`RERANK_CEILING` 4 s: one decide chunk on a healthy Decision model; tuned
+later), because a turn-path caller must not inherit `llm_call_budget`'s "no
+ceiling" escape.
 
-The task and its route are 02-C5b's shared `history_check` route (open question 3). The routing
-guard holds that the route lands in the change whose call site decides, so the
-rerank is its own slice, after 01e and after the core.
+The route is 02-C5b's `history_check` (Decision role, `routing.NO_LEGACY`).
+The routing guard holds that it lands in the change whose call site decides,
+so the rerank is its own slice, after the core, and whichever of it and 10-C3
+lands first brings the route.
 
 ## 8. Expansion: from a selected scene to excerpts
 

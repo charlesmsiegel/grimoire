@@ -1,6 +1,6 @@
 # 01c. Decision distributions and seeded sampling
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01c in `ROADMAP-CHECKLIST.md`. Lane: decision.
 **Baseline:** `main` at `35c1fb7`.
@@ -25,7 +25,8 @@ first for a model that also generates.
 | 01a-C3 repeatable `--decide-backend`, `--out`, `--compare` | 01a | The recorded comparison table for that evidence | Hard to switch a task on |
 | 01b-C1 capture at every decide site | 01b | Lets a reader see, in the prompt log, the distribution a draw was made from | Soft. The replay record (C3) is persisted by the caller, not by capture |
 | `routing.TaskPolicy` (shared structure) | 01d-C1 or this spec, whichever lands first | Holds `samples` and `native_first` | Shared structure (section 4.1) |
-| `ItemResult.served` (shared structure) | 01d | The record's `provider` and `model` per item (section 6) | Shared structure. Until it lands, the caller passes `served=` |
+| `ItemResult.served` (shared structure) | 01d | The record's `kind`, `provider` and `model` per item (section 6) | Shared structure. Until it lands, the caller passes `served=` of the same shape |
+| 01e-C4 `Answer.marginals` | 01e | Named so that C4 can say marginals are never sampled (section 5.4) | Soft |
 | 01e-C4 `Answer.marginals`, kept apart from `distribution` | 01e | C4's rule that marginals from `Rank` and `MultiSelect` are never sampled (section 5) | Soft: until 01e lands there are no marginals to refuse |
 
 ## Required by
@@ -115,7 +116,8 @@ Not the goal:
   record, with no caller switched to sampling.
 - Making any distribution calibrated, or comparable across backends. 01 §7.4
   forbids a synthetic confidence, and nothing here computes one.
-- Reshaping a distribution (temperature, sharpening, flooring). See section 11.
+- Reshaping a distribution beyond the one recorded pre-draw `Eligibility` step
+  (mask and floor, section 5.3): no temperature, no sharpening. See section 11.
 
 ## 3. The policy for generating Decision models (C1)
 
@@ -163,7 +165,7 @@ provider's decisions endpoint first. That gives a real reported
 distribution. The structured stage on the same model remains the next stage
 for any item the native stage *failed*. Section 4 specifies the chain.
 
-It is opt-in per task (`TaskPolicy.native_first`, section 4.1). It is allowed
+It is opt-in per task and per adapter kind (`TaskPolicy.native_first`, section 4.1). It is allowed
 only on a task that consumes a distribution: one that samples (`samples`), or
 one whose 01d escalation triggers on `low_margin`, which needs a margin. It is
 switched on for a task only by a change that carries the section 4.3
@@ -185,7 +187,7 @@ evidence. Each condition prevents a specific failure:
 
 ### 3.3 Neither: the default
 
-At landing, every task has `native_first = False`. A generating Decision
+At landing, every task has `native_first = ()`. A generating Decision
 model answers through the structured backend, as today, and its `Answer`s
 carry no distribution. A sampling caller handed such an answer takes the
 answer as given, and the record says so (`basis: "answer"`, section 6). It
@@ -206,12 +208,13 @@ today's behaviour.
 
 ```python
 class TaskPolicy(NamedTuple):
-    # ... 01d's fields (fallback, escalation) ...
+    # ... 01d's fields (fallback, escalation, question) ...
     #: The task's caller draws from the decision's distribution (01c-C2).
     samples: bool = False
-    #: Ask a primary that also generates through its decisions endpoint first
-    #: (01c-C1, section 4.2). Only where a distribution is consumed.
-    native_first: bool = False
+    #: The adapter kinds whose decisions endpoint is asked first for this task
+    #: (01c-C1, section 4.2): ("openai_compatible",), ("openrouter",), both,
+    #: or () for none. Per kind, because the evidence is per kind (4.3).
+    native_first: tuple[str, ...] = ()
 ```
 
 `routing` stays a pure leaf (`store/routing.py:15-16`). The fields are
@@ -223,7 +226,10 @@ rules:
 - every policy key is a task some route claims (`TASK_ROUTE`);
 - `samples` and `native_first` appear only on a task whose route's
   `operation` is `decide`;
-- `native_first` implies `samples` or a `low_margin` trigger (01d);
+- each `native_first` kind is an adapter kind whose `decides_natively` is
+  true (`adapters.decides_natively`, `adapters.py:305`);
+- a non-empty `native_first` implies `samples` or a `low_margin` trigger
+  (01d);
 - `samples=True` is refused together with `low_margin` in `escalate_on`
   (02 asked for this). A low-margin answer is exactly the case sampling
   exists for: it is where the distribution has two live options. Escalating
@@ -242,26 +248,28 @@ rules:
 (`store.routing.policy(resolved.task)`):
 
 ```text
-policy.native_first and primary.decision_mode == "structured"
-                    and native_capable(primary)
-  -> Stage(NATIVE, whole.alone(), None)          # same model, decisions endpoint
-     Stage(STRUCTURED, whole or whole.alone(), None)  # as today
+primary.target.kind in policy.native_first
+    and primary.decision_mode == "structured" and native_capable(primary)
+  -> Stage(NATIVE, whole.alone(), retries=0, isolated=True)   # same model, decisions endpoint
+     Stage(STRUCTURED, whole or whole.alone(), None)          # as today
      [fallback stage, as today, when apart]
 otherwise -> today's stages, unchanged
 ```
 
-- `native_capable(attempt)` is a new function in `resolve`. It holds when the
-  attempt's adapter kind has a decisions endpoint
-  (`adapters.decides_natively(kind)`) and `decide_native` is a known `yes`
-  (`capabilities.YES`). A preset's `never` already arrives as an
-  adapter-source `no` (`capabilities.py:206-209`). `evals/runner.chain`
-  (`evals/runner.py:233-280`) makes the same checks for `--decide-backend
-  native`, and the two share this function.
-- `inference.reports_distribution(resolved) -> bool` is the one predicate
-  a caller asks before it plans to sample (02-C2 asks it to decide whether
-  the sampled path is available at all). It is True when the first stage
+- `native_capable(attempt)` is a new function in `resolve`, used only by
+  the production chain. It holds when the attempt's adapter kind has a
+  decisions endpoint (`adapters.decides_natively(kind)`) and
+  `decide_native` is a known `yes` (`capabilities.YES`). A preset's `never`
+  already arrives as an adapter-source `no` (`capabilities.py:206-209`).
+  `evals/runner.chain` (`evals/runner.py:233-280`) is **not** changed: it
+  keeps `resolve.decides_natively` (anything but a known `no`), as CLAUDE.md
+  documents, so the section 4.3 evidence can be gathered on a model whose
+  `decide_native` is still `unknown`. Only production requires `yes`.
+- `inference.reports_distribution(resolved) -> bool` is the one predicate a
+  caller asks before it plans to sample (02-C2 asks it to decide whether the
+  sampled path is available at all). It is True when the first stage
   `stages(resolved)` builds is native: a native-only primary, or a
-  `native_first` task on a `native_capable` primary. It is pure, reads only
+  native-first kind on a `native_capable` primary. It is pure, reads only
   the resolution and the task policy, and sends nothing. It is a forecast,
   not a guarantee: an item the native stage fails is answered by a later
   structured stage with no distribution, so the caller still goes through
@@ -271,30 +279,65 @@ otherwise -> today's stages, unchanged
   the items the native stage *failed* (`run_stages`, `inference.py:595-681`).
   A native `refused`, an `abstained` or an `unreadable` from a well-formed
   body is final, exactly as on a native-only model.
-- `run_stages`'s existing rules apply as they are. A connection-wide failure
-  on the native stage (auth, `missing_key`, money) skips the structured stage
-  on the same provider (`dead`, :645). A run of native timeouts
-  (`NATIVE_TIMEOUT_STOP`, :97) stops the native stage only, and the
-  structured stage still runs. 01 wrote this rule for "a hung decisions
-  endpoint", which "says nothing about the chat endpoint".
-- The native stage is metered and captured as any native stage is: one meter
-  per item, `decision_mode: native` stamped, no sampler preset sent
-  (`_native`, :452-540). Its ledger rows are native rows, so
-  `modelled_usd` is never computed for them (CLAUDE.md, "`modelled_usd` is
-  never computed for a native decision row").
-- **The chain's worst case grows by one stage** for a native-first task.
-  01's time bounds for the continuity sweep assume two stages. A task that
-  turns native-first on restates its own bound in the change that turns it on.
-- `ResolvedInference.decision_mode` stays the primary's per-attempt mode
-  (`structured`). The settings view's decide note (01s, "the decide note")
-  gains "native first" for a task whose policy has it. Section 12 has this
-  as an open question.
 
-### 4.3 The evidence that switches a task on
+#### 4.2.1 A native-first stage never kills the stages after it
 
-A change that sets `native_first = True` for a task carries all of the
-following, run on at least one model that both generates and has a known
-native endpoint:
+`Stage` gains `isolated: bool = False`. A native-first stage is built with
+`isolated=True`, and `run_stages` changes in two places, both inert for
+every chain that exists today:
+
+1. **An isolated stage never adds its provider to `dead`.** Whatever
+   stopped it (`auth`, `rate_limit`, money, a timeout run) is a statement
+   about the decisions endpoint. The failure this prevents is real:
+   OpenRouter maps 403 to `auth` (`openrouter.py:53-58`), and `llm.py:305-312`
+   says a 403 "is what a key without access to an alpha endpoint gets while
+   it serves every chat call". Today's `dead` rule (`inference.py:640-663`)
+   would then skip the structured stage on the same provider, and the riding
+   fallback with it, and the speaker pick would fail a turn that answers
+   through the chat endpoint today. Inside the native stage, `_native`'s own
+   stop still applies (no further item is started), and the unsent items
+   carry that failure to the structured stage, which takes them as it takes
+   any failed item.
+2. **A stage is skipped as dead only when every route it sends is dead**:
+   its primary's provider and, when a fallback rides it, the fallback's.
+   Today no later stage carries a riding fallback (only a first stage can),
+   so this changes nothing that runs now. It closes the same hole for any
+   later chain shape.
+
+A connection-wide failure on the *structured* stage after it is unchanged:
+it still skips later stages on that provider, as 01 §5.5 says.
+
+#### 4.2.2 Retries and the added latency
+
+The native-first stage gets `retries=0`, as a fallback stage does
+(`Stage.retries`, `inference.py:135-144`). A rate limit or a network
+failure on the decisions endpoint is not retried before the structured
+stage, which can answer, gets its turn. For the speaker pick, which has no
+`around` ceiling, the added worst case is therefore **one** decisions
+request, bounded by the facade's own read timeout, before the structured
+call is sent. A task that turns native-first on restates its bound in that
+change. 01's continuity bounds assume two stages, and a continuity task that
+adds a native-first stage adds one wave per `NATIVE_CONCURRENCY` items.
+
+#### 4.2.3 Health
+
+A decisions endpoint that answers 5xx or times out under native-first is
+observed against the connection like any native call (`llm.py:1497`, which
+already exempts `NATIVE_REJECTED_STATUSES`). The health dot is display
+only, so a chat endpoint that still works can show "failing" while a
+decisions endpoint is down. This is accepted and stated, not fixed here.
+
+`ResolvedInference.decision_mode` stays the primary's per-attempt mode
+(`structured`). The settings view's decide note (01s) may say "native
+first" for a task whose policy names the primary's kind (section 12).
+
+### 4.3 The evidence that switches a task on, per adapter kind
+
+A change that adds an adapter kind to a task's `native_first` carries all
+of the following, run on at least one model **of that kind** that both
+generates and has a native endpoint. The evidence is per kind because
+`native_first` moves every user whose Decision model is a known-`yes` model
+of that kind, and the two decisions endpoints are different services:
 
 1. `evals/run.py --live --provider ID --model NAME --decide-backend native`
    and then `--decide-backend structured`, over the task's decide cases
@@ -304,22 +347,25 @@ native endpoint:
 2. **The bar:**
    - every case the structured backend passes, the native backend passes on
      the same model;
-   - every native answer in the run carries a usable distribution. A new
-     check, `decide.distribution`, records this. It is graded n/a on a
-     structured answer, the way `NATIVE_RATIONALE` is graded n/a in the other
-     direction (`evals/graders.py:707-746`).
+   - every native answer in the run carries a usable distribution (a
+     `decide.distribution` check, graded n/a on a structured answer, as
+     `NATIVE_RATIONALE` is graded in the other direction,
+     `evals/graders.py:707-746`), and none is `partial` or `inconsistent`
+     (section 5.4);
+   - the fall-through tests of section 10 (403, rate limit, auth with a
+     riding fallback) pass on that kind's fake.
 
    Latency and cost are reported but are not gated. They are the user's
    call, made from the table.
 3. **A cost note.** A native row whose provider reported no cost is unpriced
-   (`unpriced_native_calls`), and no rate can model it. If the provider's
+   (`unpriced_native_calls`), and no rate can model it. If the kind's
    decisions endpoint reports no cost, the change says that the task's rows
    will read "not reported" on the Costs card, and the user accepts that
    explicitly.
 4. **A record.** The table lands in `evals/README.md` under a new section,
    "Decision distributions". It is allowed there because the corpus is the
    synthetic eval corpus, and no store data is involved. The policy line
-   carries a comment naming that section and the run's date.
+   carries a comment naming that section, the kind and the run's date.
 
 01c's own plan includes running items 1 and 2 for `response-selector`. Live
 runs are opt-in, cost money and need the user's key, so the user runs them.
@@ -331,148 +377,255 @@ that until 02-C2 sets `samples`. The flip belongs to 02-C2's change.
 
 A new gateway leaf, `backend/src/grimoire/draws.py`. It imports only
 `decisions` (itself a leaf, `decisions.py:18-21`) and the standard library
-(`hashlib`, `secrets`, `math`). Nothing in it reads the store, the clock or
-the filesystem, so it needs no entry in `store/locks.py`. `store/` modules
-may import it, as `response_protocol` already imports `decisions`.
+(`hashlib`, `secrets`, `math`, `re`). Nothing in it reads the store, the
+clock or the filesystem, so it needs no entry in `store/locks.py`. `store/`
+modules may import it, as `response_protocol` already imports `decisions`.
+
+**01c owns the sampler contract.** Every caller that draws (02, 13, 01g's
+decide tool) uses `draw`, `new_seed` and the section 6 record as they are.
+A caller's own reshaping of a distribution is expressed only as an
+`Eligibility` (section 5.3), which this spec defines, applies and records.
+02's draft already does such reshaping (it drops the none, floors options at
+`1/(2n)`, and narrows to the addressed actors); it conforms to this section
+rather than carrying a second sampler.
 
 ### 5.1 Functions
 
 ```python
-ALGORITHM = "sha256-icdf/1"     # recorded; a change of algorithm is a new name
-SEED_BITS = 53                  # dice.py's reason: a JS-safe integer
+ALGORITHM = "sha256-q32-icdf/1"   # recorded; any change of rule is a new name
+SEED_BITS = 53                    # dice.py's reason: a JS-safe integer
+QUANTUM = 2**32                   # weights are drawn as integers of 1/QUANTUM
+MASS_SLACK = 0.02                 # section 5.4
+
+@dataclass(frozen=True)
+class Eligibility:
+    only: tuple[str, ...] | None = None   # keys allowed; None = every offered key
+    exclude: tuple[str, ...] = ()         # keys removed (e.g. decisions.NONE_KEY)
+    floor: float = 0.0                    # minimum probability per eligible key
 
 def new_seed() -> int
     """secrets.randbits(SEED_BITS). Test seam: module-level `_seed_source`,
     patched like `character_turns._rng`."""
 
-def uniform(seed: int, purpose: str) -> float
-    """A float in [0, 1): the top 53 bits of
-    sha256(b"grimoire/draw/1\\0" + str(seed).encode() + b"\\0" + purpose.encode())
-    divided by 2**53. Exact in binary64."""
+def unit(seed: int, purpose: str) -> int
+    """A 53-bit integer, uniform on [0, 2**53): the top 53 bits of
+    sha256(b"grimoire/draw/1\\0" + str(seed).encode("ascii") + b"\\0"
+    + purpose.encode("ascii"))."""
 
-def support(q: decisions.Question, answer: decisions.Answer
-            ) -> tuple[tuple[str, float], ...] | None
-    """The reported weights in canonical order, or None when there is
-    nothing usable (section 5.3)."""
+def quanta(w: float) -> int
+    """math.floor(w * QUANTUM): exact, since w is in [0, 1] and QUANTUM is a
+    power of two."""
 
-def pick(weights: Sequence[tuple[str, float]], u: float) -> str
-    """Inverse CDF: the key whose half-open interval holds u * mass."""
+def pick(weights: Sequence[tuple[str, int]], r53: int) -> str
+    """Integer inverse CDF over positive integer weights in the given order:
+    the first key whose cumulative bound exceeds (r53 * total) >> 53."""
 
-def draw_from(weights: Sequence[tuple[str, float]], seed: int, purpose: str) -> str
-    """(distribution, seed) -> selected: pick(weights, uniform(seed, purpose))."""
+def draw_from(weights: Sequence[tuple[str, float]], seed: int, purpose: str,
+              eligibility: Eligibility = Eligibility()) -> str | None
+    """(distribution, seed) -> selected: the reported weights, in canonical
+    order, through `eligibility` (5.3), drawn with unit(seed, purpose).
+    None when nothing eligible has weight."""
 
 def draw(q: decisions.Question, result: decisions.ItemResult, *, seed: int,
-         purpose: str = "", served: tuple[str, str] = ()) -> Draw
-    """C4 applied, then draw_from; returns the selection and its record."""
+         purpose: str = "", eligibility: Eligibility = Eligibility()) -> Draw
+    """Section 5.4's preconditions (C4), then draw_from; returns the
+    selection and its record (section 6)."""
 
 def replay(record: Mapping) -> str | None
-    """Recompute a record's selection from its own fields. Raises
-    ReplayError on a record of another ALGORITHM or a malformed one."""
+    """Recompute a record's selection from its own fields (section 6.2).
+    Raises ReplayError on a record of another ALGORITHM or a malformed one."""
 ```
 
 `Draw` is a frozen dataclass: `basis` (`"sampled" | "answer" | "none"`),
+`key` (the selection as a support key, `NONE_KEY` included, or `None`),
 `value` (the selection in the answer's own type: `bool` for a predicate,
-`int` for a score, `str` or `None` for a choice), `key` (the selection as its
-support key, `NONE_KEY` included), and `record` (the C3 dict).
+`int` for a score, `str` or `None` for a choice), and `record` (the C3 dict).
+`draw` reads the item's server from `result.served`, which is
+`(kind, provider_id, model)` (01d section 5.6). Until 01d lands, `draw`
+takes an optional `served=` of that same three-part shape.
 
-### 5.2 Why this RNG
+### 5.2 Why this RNG, and why integers
 
-- **It is reproducible by definition.** SHA-256 and IEEE-754 binary64 are
-  fixed standards. CPython on desktop (`requires-python = ">=3.11"`), Chaquopy's
-  CPython 3.12 (`android/app/build.gradle.kts:64`) and a browser's
-  SubtleCrypto all compute the same `u`. The record can therefore be replayed
-  by a frontend inspector, or by a test on any interpreter.
-- **`random.Random` is guaranteed only for `random()`.** Python's
-  reproducibility promise covers `random()` given a compatible seeder. It
-  does not cover `choice`, `choices`, `randrange` or `randint`, whose
-  algorithms may change between versions. `store/dice.py:84,92` uses
-  `randint`, which is the trap. `Random(seed).random()` alone would be stable,
-  but it gives one stream per seed.
-- **`purpose` decouples draws from each other.** A batched turn plan (02-C3)
-  may draw a speaker and an intent from one decision. With one RNG stream,
-  the second draw would depend on how many draws came before it, the coupling
+- **SHA-256 for the uniform.** SHA-256 is a fixed standard. CPython on
+  desktop (`requires-python = ">=3.11"`), Chaquopy's CPython 3.12
+  (`android/app/build.gradle.kts:64`) and a browser's SubtleCrypto all give
+  the same 53-bit integer. `random.Random` is guaranteed stable only for
+  `random()`, not for `choice`, `choices`, `randrange` or `randint`
+  (`store/dice.py:84,92` uses `randint`, which is the trap), and it gives
+  one coupled stream per seed.
+- **Integer weights for the cumulative sums.** Floating-point summation is
+  not stable across the supported interpreters. CPython 3.12 switched
+  `sum()` over floats to compensated summation, so `sum([0.1] * 10)` is
+  `0.9999999999999999` on 3.11 and `1.0` on 3.12. A JavaScript `reduce`
+  agrees with 3.11. With a mass that large, a draw near an interval
+  boundary can select a different key on different interpreters. CI runs
+  3.11 and 3.14. So the draw never adds floats. Each weight becomes
+  `quanta(w)`, an exact integer in `[0, 2**32]`. Totals and cumulative bounds
+  are Python integers: at most 255 keys of 2**32 each is under 2**40, and
+  the product with a 53-bit `r53` is under 2**93. Python's integers are
+  exact, and JavaScript reproduces this with `BigInt`. `math.fsum` was
+  considered and rejected. It is correctly rounded and therefore stable,
+  but a browser has no equivalent, and an integer rule needs none.
+  Quantisation loses weight below 2**-32, which is far under any reported
+  precision.
+- **`purpose` decouples draws.** A batched turn plan (02-C3) may draw a
+  speaker and an intent from one decision. With one RNG stream, the second
+  draw would depend on how many came before it: the coupling
   `group_play.py:200-204` works around by making its draw count depend "on
-  the cast alone". With `uniform(seed, purpose)`, each draw is a pure
-  function of its own label. 13's joint choice can then draw
-  `purpose="action"` and then `purpose=f"target:{action}"` from one seed,
-  and replay either draw alone.
+  the cast alone". With `unit(seed, purpose)`, each draw is a pure function
+  of its own label. 13's joint choice can draw `purpose="action"` and then
+  `purpose=f"target:{action}"` from one seed, and replay either alone.
+- **`purpose` is printable ASCII**, at most 200 characters (ids and fixed
+  labels). `draw` raises `ValueError` otherwise. Python's `encode()` raises on
+  a lone surrogate, while a browser's `TextEncoder` substitutes U+FFFD, so
+  the two would disagree on any other text.
 - **The seed is 53 bits**, for `dice.py`'s reason (:117-119): it stays exact
-  as a JSON number in JavaScript.
+  as a JSON number in JavaScript. Every caller mints it with `new_seed()`.
+  A 63-bit seed (02's draft uses `getrandbits(63)`) is not accepted:
+  `draw` raises `ValueError` for a seed outside `[0, 2**53)`.
 
-### 5.3 Support, normalisation and ties
+### 5.3 Support, eligibility and renormalisation
 
-- **Canonical order is the question's, never the report's.** For a choice,
-  the order is the options in order and then `NONE_KEY` (when `allow_none`).
-  For a score, it is level indices ascending, as `str(i)`. For a predicate,
-  it is `("true", "false")` with weights `(p, 1 - p)` from `probability`. Two
-  providers can report the same distribution with keys in different orders,
-  and the same draw must result from both.
-- **What is reported is what is used.** A legal key the report left out has
-  no weight and cannot be selected. Nothing is added for it.
-- **Normalisation is implicit.** `pick` scales `u` by the reported mass (the
-  sum of weights), so values that sum to 0.98 or 1.02 because of rounding
-  draw as their proportions. The mass is recorded (section 6), so an endpoint
-  that reports independent per-option scores rather than a distribution shows
-  up in 01a's reports instead of being hidden. A mass that is zero or not
-  finite is no support (`None`).
-- **Ties are not a special case.** Each key with positive weight owns a
-  half-open interval `[c, c + w)` of `[0, mass)`, laid out in canonical order.
-  `pick` returns the first key whose cumulative bound exceeds `u * mass`.
-  Two equal weights are two equal-width intervals. Floating-point rounding
-  can leave `u * mass` at or past the last bound; then the last
-  positive-weight key is returned, so `pick` is total. This differs from the
-  answer's own tie rule, where a tie at the top is `abstained`. That rule
-  decides whether the backend *answered*; the draw happens only after it did
-  (C4).
-- **Zero-weight keys stay in the record** but own no interval.
+The draw is computed in five fixed steps. A caller cannot change these
+steps. It can only supply an `Eligibility`, and the record carries what it
+supplied.
+
+1. **Offered keys, in canonical order.** This is the question's order,
+   never the order of the report. For a choice, the options in order, then
+   `NONE_KEY` (when `allow_none`). For a score, the level indices
+   ascending, as `str(i)`. For a predicate, `("true", "false")`, with
+   weights `(p, 1 - p)` from `probability`. Two providers can report the
+   same distribution with keys in different orders, and both must give the
+   same draw.
+2. **Eligible keys.** The offered keys that are in `only` (when it is
+   given) and not in `exclude`, still in canonical order. Examples:
+   `exclude=(NONE_KEY,)` drops the reserved none; `only=addressed_refs`
+   narrows the draw to the actors a post addressed. A key in `only` or
+   `exclude` that is not offered raises `ValueError`. A caller's eligibility
+   comes from its own deterministic state, never from the answer.
+3. **Integer weights.** For each eligible key, `quanta(w)`, where `w` is its
+   reported weight. A key the report left out has weight 0.
+4. **Floor.** With `F = quanta(floor)`, each eligible key's weight becomes
+   `max(q, F)`. A floor gives every eligible key a chance the report did not
+   give it. That is the caller's recorded policy, not the backend's
+   report, so it is allowed only through this field. `floor * len(eligible)`
+   must not exceed 1, or `draw` raises `ValueError`, because a floor whose
+   total would be more than all the probability there is is a mis-specified
+   policy. 02's `1/(2n)` passes this check.
+5. **Draw.** `total = sum` of the step-4 integers. When `total == 0`, there
+   is no draw (section 5.4). Otherwise `pick(weights, unit(seed, purpose))`:
+   each key with positive weight owns the half-open integer interval
+   `[c, c + q)` of `[0, total)`, and the key whose interval holds
+   `(r53 * total) >> 53` is selected. The arithmetic is exact, so no key
+   can be "rounded past". Equal weights are equal intervals; ties need no
+   rule. Renormalisation is exactly this: the draw is proportional to the
+   step-4 weights, and nothing else.
+
+### 5.4 When there is no draw
+
+`draw` checks these preconditions, in order, on the question's `Answer`
+and the *reported* weights. These are checked before any eligibility is
+applied. The first check that holds decides:
+
+| Condition | `basis` | `why` | `selected` |
+|---|---|---|---|
+| `answer is None` (abstained, refused, unreadable, error) | `none` | the answer's reason | `None` |
+| no usable report (structured; dropped as invalid; a question type with no `distribution`, including `Rank` and `MultiSelect`) | `answer` | `no_report` | the answer's key, if eligible |
+| the reported mass, `sum(quanta(w))` over offered keys, is under `quanta(1 - MASS_SLACK)` | `answer` | `partial` | the answer's key, if eligible |
+| the answered key's reported weight is 0, or the answered key is absent from the report | `answer` | `inconsistent` | the answer's key, if eligible |
+| otherwise, with total 0 after steps 2-4 | `answer` | `ineligible_mass` | the answer's key, if eligible |
+| otherwise | `sampled` | `""` | the step-5 key |
+
+In the `answer` rows, an answer whose key is not eligible gives
+`basis: none`, `why: "ineligible"`, `selected: None`. The caller narrowed the
+set, and a plain answer outside it is not returned as a selection.
+
+- **Partial reports are not normalised** (review S1). Mass the report left
+  out could belong to any option, so drawing in proportion to what was
+  reported would invent the missing mass's shape. 01d §6.1 refuses the same
+  move for the margin. `MASS_SLACK = 0.02` absorbs rounding in reported
+  values. With two-decimal reports it covers up to four rounded weights, and
+  more at finer precision. It will be tuned against the per-kind mass
+  figures 01a's report shows. A mass *over* 1 is drawn in proportion and
+  recorded (`mass_q`). This is the over-reporting case, where every option
+  was priced.
+- **An answer the report contradicts is not sampled** (review S6).
+  `native_answer` keeps an explicit `chosen` "whatever the probability beside
+  it says" (`decisions.py:866-901`). When that key has no reported weight, a
+  draw could never return the backend's own answer, so the report and the
+  answer disagree about what was meant. The answer stands, recorded
+  `inconsistent`.
+- **Rank and MultiSelect marginals are never sampled.** 01e-C4 adds
+  `Answer.marginals`, per-candidate probabilities kept apart from
+  `distribution`. Each marginal is its own event, and marginals do not sum
+  to 1 over mutually exclusive outcomes, so a draw over them would be a draw
+  from a distribution nobody reported. `draw` reads only `distribution` and
+  `probability`. A `Joint` (01e-C3b) is a flattened Choice, so its
+  `distribution` is drawn like any Choice's.
+- **A predicate at exactly P(true) = 0.5 is `abstained`**
+  (`_native_predicate`, :908-915), so it is never sampled. The backend's
+  report is "no answer", and turning that into a coin flip is what C4
+  forbids.
 
 ## 6. The replay record (C3)
+
+One shape, version 1, for every caller:
 
 ```json
 {
   "v": 1,
-  "algorithm": "sha256-icdf/1",
+  "algorithm": "sha256-q32-icdf/1",
   "question": "next",
   "purpose": "next",
   "basis": "sampled",
   "sampled": true,
+  "why": "",
+  "offered": ["characters:mara", "characters:seraphine", "grimoire", "<none>"],
   "distribution": [["characters:mara", 0.55], ["characters:seraphine", 0.3],
                    ["grimoire", 0.1], ["<none>", 0.05]],
-  "mass": 1.0,
+  "eligibility": {"only": null, "exclude": ["<none>"], "floor": 0.125},
+  "mass_q": 4294967293,
+  "drawn_q": 4187593112,
   "seed": 4503599627370495,
   "selected": "characters:mara",
   "answer": "characters:mara",
   "backend": "native",
+  "kind": "openai_compatible",
   "provider": "realm-openai",
   "model": "decision-model-x"
 }
 ```
 
-- `distribution` is an **ordered list of pairs** in canonical order, holding
-  the *reported* weights. A JSON object's key order is not a contract, and
-  the draw depends on order. Python's `json` and JavaScript's `JSON.parse`
-  both round-trip binary64 exactly, so a persisted record replays exactly.
-- `sampled` is `basis == "sampled"`, kept as its own boolean because a
-  consumer that only acts (13) reads it rather than the basis vocabulary.
-- `basis` is `sampled` (a draw was made; `seed` is set), `answer` (the
-  backend answered with no usable distribution; `selected` is that answer,
-  `seed` is null), or `none` (no answer; `selected` is null and `reason`
-  carries the answer's reason). The checklist headline names
-  `{distribution, seed, selected, backend}`. The other fields make the record
-  self-contained: the question can be rebuilt differently later (a roster
-  changes), and the record must still replay.
-- `answer` is the backend's own answer (explicit choice or argmax), kept
-  beside the draw. Comparing `answer` with `selected` over many records shows
-  how often sampling departed from the argmax. 02's eval gate wants that
-  comparison, and it can be made without re-asking anything.
-- `provider` and `model` are the item's server, when the caller has it.
-  `Decision.provider` and `.model` are empty when several routes answered
-  (`decisions.py:292-297`); 01d adds a per-item `served`.
+- `offered` is every legal key in canonical order, including keys the
+  report left out (review M2: 13's draft wants the eligible choices in the
+  record).
+- `distribution` is the **reported** weights as an ordered list of pairs in
+  canonical order. A JSON object's key order is not a contract, and the draw
+  depends on order. Python's `json` and JavaScript's `JSON.parse` round-trip
+  binary64 exactly, and `quanta` is exact, so a stored record replays
+  exactly.
+- `eligibility` is what the caller supplied, as given. `{"only": null,
+  "exclude": [], "floor": 0.0}` means none was supplied.
+- `mass_q` (the reported mass in quanta) and `drawn_q` (the step-5 total)
+  are informational. `replay` recomputes both and ignores the stored ones.
+- `selected` and `answer` are both **keys**: an option id, `NONE_KEY`,
+  `str(i)` for a score, `"true"`/`"false"` for a predicate (review M1). So
+  `answer == selected` is a meaningful comparison. It tells 02's eval gate
+  how often sampling departed from the backend's own answer, without
+  re-asking anything.
+- `sampled` is `basis == "sampled"`. It is kept as its own boolean because a
+  consumer that only acts on the result (13) reads it rather than the basis
+  vocabulary.
+- `kind`, `provider` and `model` come from `ItemResult.served`. `kind` is
+  kept because 01a and 01d tune per kind.
 - **The record holds no prose.** It holds keys (option ids, which may be
   refs such as `characters:mara`, the same refs the round record's
   `eligible` already stores), floats, ints and the server's names. No
-  context, instructions or rationale goes into it. It is never written to
-  `logs/`.
+  context, instructions or rationale. It is never written to `logs/`.
+- 02's draft names its fields `selection`, `policy` and `support`, and
+  stores `distribution` and `support` as objects. Under this spec it stores
+  this record unchanged, under the key it chooses on its own record (for
+  the round record, `pick`).
 
 ### 6.1 Persistence is the caller's, with the outcome
 
@@ -483,13 +636,16 @@ four rules:
    the outcome it chose, under the lock that write holds. For the speaker
    pick, that is `_round_state(..., actor_ref=draw.value, pick=draw.record)`,
    one `responses.update_round` under `campaign_lock`. For 13, it is the
-   transaction-ledger entry that commits the Action. It is never kept in a
-   side store, and never only in the prompt log. Capture can be switched
+   transaction-ledger entry that commits the Action. It never goes into a
+   side store, and never only into the prompt log. Capture can be switched
    off, and is not persistence.
-2. **Never re-draw a persisted outcome.** A retry, a recovery or a roll
-   resume reads the stored selection, as `group_play`'s caller does today.
-   A reroll is a new decision with a new seed, and the superseded round
-   keeps its record.
+2. **Never re-draw a persisted outcome.** "Already decided" means **the
+   record is present** (`round.get("pick") is not None`), not that the
+   outcome field is set (review M3). `_first_actor` today tests
+   `actor_ref is None`, which cannot tell "not asked yet" from "picked:
+   none". A retry, a recovery or a roll resume reads the stored record, as
+   `group_play`'s caller does today. A reroll is a new decision with a new
+   seed, and the superseded round keeps its record.
 3. **Mint the seed once per decision occasion**, with `new_seed()`, at the
    point the caller asks. Nothing derives a seed from an id, which would make
    two rerolls of one round identical.
@@ -497,81 +653,81 @@ four rules:
    `pick`, and the frozen campaign's rounds have none. Readers use
    `.get("pick")`.
 
+### 6.2 Replay
+
+`replay(record)` checks `v` and `algorithm`. For `basis: sampled`, it
+recomputes steps 1 to 5 from `offered`, `distribution`, `eligibility`,
+`seed` and `purpose` alone and returns the key. For any other basis, it
+returns the stored `selected` without drawing: nothing was drawn, so there
+is nothing to replay. A record that is internally inconsistent, for example
+`sampled` with a null seed or a key in `distribution` that is not in
+`offered`, raises `ReplayError`.
+
 ## 7. C4: nothing becomes a sampled answer
 
-`draw` applies these rules, in this order, to the question's `Answer`:
+Section 5.4 is C4's table. In short:
 
-| The answer | `basis` | `selected` | Why |
-|---|---|---|---|
-| `answer is None`, any reason: `abstained`, `refused`, `unreadable`, `error` | `none` | `None` | The backend did not answer. A draw would overrule an abstention or a refusal, or guess an answer nobody gave |
-| answered, and `support` is `None` (structured, an invalid report dropped, zero mass, no probability) | `answer` | the answer | Nothing was reported to sample. A one-hot draw would only relabel the answer as sampled |
-| answered, with a usable support | `sampled` | `draw_from(...)` | A real reported distribution |
-
-Consequences:
-
-- A predicate at exactly P(true) = 0.5 is `abstained` (`_native_predicate`,
-  :908-915), so it is never sampled, even though that is where a coin flip
-  looks most natural. The backend's report is "no answer". Turning that into
-  a random answer is what C4 forbids.
-- A sampled `NONE_KEY` is a *selection*, not an abstention. When a nullable
-  choice's distribution puts mass on the reserved none, a draw may land
-  there. `Draw.value` is then `None` with `basis: sampled`, and the caller
-  maps it as it maps an explicit none (for the speaker pick: hand control
-  back). The caller cannot exclude it. Doing so would reshape the reported
-  distribution (section 11).
-- The caller's issue mapping stays the caller's. `selection_of`'s
-  `INELIGIBLE` and `INVALID_HANDOFF` are decided from the `Answer` before any
-  draw, exactly as today.
-- **A plain answer can be acted on, and is not a draw** (cross-spec
-  decision, 13's open question 4). When an NPC action decision comes back
-  with no usable distribution, 13 may act on the plain Choice answer. The
-  record says `sampled: false` (`basis: answer`, `seed: null`), it is never
-  presented as a sample, and nothing is replayed from it: `replay` returns
-  the stored `selected` for such a record without drawing.
-- **Rank and MultiSelect marginals are never sampled.** 01e-C4 adds
-  `Answer.marginals`, per-candidate probabilities kept apart from
-  `distribution`. Marginals do not sum to one over a set of mutually
-  exclusive outcomes (each candidate's is its own event), so an inverse-CDF
-  draw over them would be a draw from a distribution nobody reported.
-  `support` reads `distribution` and `probability` only, and a `Rank`,
-  `MultiSelect` or other question with no `distribution` gives
-  `basis: answer` (or `none`). A `Joint` (01e-C3b) is a flattened Choice, so
-  its `distribution` is sampled like any Choice's.
-- Only a task whose policy has `samples = True` calls `draw` (an assertion
-  in `draw`'s callers' tests, not at runtime). Factual classifications
-  (continuity, scene-break, voice drift) never sample. A verdict about what
-  happened in the fiction must not change between two runs of the same
-  input.
+- **A non-answer is never drawn.** Abstained, refused, unreadable and error
+  give `basis: none`. A draw would overrule the abstention or the refusal,
+  or guess an answer nobody gave.
+- **No usable report is never drawn**, whether it is structured, dropped,
+  partial, inconsistent or marginals only. The answer stands as `basis:
+  answer`. A one-hot draw would only relabel it as sampled.
+- **A plain answer can be acted on, and is not a draw.** This is a
+  cross-spec decision (13's open question 4). When an NPC action decision
+  comes back with no usable distribution, 13 may act on the plain Choice
+  answer. The record says `sampled: false` (`basis: answer`, `seed: null`).
+  It is never presented as a sample, and `replay` does not draw from it.
+- **A sampled `NONE_KEY` is a selection, not an abstention**, unless the
+  caller excluded it through `Eligibility`. When the draw lands there,
+  `Draw.value` is `None` with `basis: sampled`. The caller maps that as it
+  maps an explicit none (for the speaker pick, control goes back to the
+  player).
+- **The caller's issue mapping stays the caller's.** `selection_of`'s
+  `INELIGIBLE` and `INVALID_HANDOFF` are decided from the `Answer` before
+  any draw, as today.
+- **Only a task whose policy has `samples = True` calls `draw`.** Callers'
+  tests assert this; `draw` does not check it at runtime. Factual
+  classifications (continuity, scene-break, voice drift, 02-C5's kits, 11's
+  epistemic classes) never sample. A verdict about what happened in the
+  fiction must not change between two runs of the same input.
 
 ## 8. Contract
 
 - **01c-C1. Recorded policy.** Structured verbalised probabilities are
   rejected: never requested, never read. Native-first is opt-in per task
-  (`TaskPolicy.native_first`): `inference.stages` then puts a native stage on
-  the same model before the structured stage, for a primary that generates
-  and is `native_capable` (a known `yes`), with the failure-driven chain
-  unchanged. A task sets the flag only with the section 4.3 evidence from
-  01a, recorded in `evals/README.md`. Every task is off at landing.
-  `inference.reports_distribution(resolved)` says whether the first stage is
-  native. Failure behaviour: a native stage that fails an item hands it to
-  the structured stage, as any failed stage does; a model that is not
-  `native_capable` gets today's chain.
-- **01c-C2. `draws.py`.** A SHA-256 inverse-CDF draw:
-  `draws.draw_from(weights, seed, purpose) -> key` and
-  `draws.draw(question, result, *, seed, purpose, served) -> Draw`. The draw
-  is a pure function of (canonical weights, seed, purpose) under `ALGORITHM`,
-  stable across Python versions, Android and a browser, and never raises on a
-  valid `ItemResult`. `replay(record)` recomputes it.
-- **01c-C3. Replay record.** The section 6 dict, JSON-safe, holding no
-  prose. The caller stores it with the outcome it chose, in the same write
-  and under the same lock, and never re-draws a stored outcome. Guarantee:
-  `replay(record) == record["selected"]` for every record `draw` produced.
+  and per adapter kind (`TaskPolicy.native_first`). For a primary of a
+  listed kind that generates and is `native_capable` (a known `yes`),
+  `inference.stages` puts an isolated native stage on the same model, with
+  `retries=0`, before the structured stage. That stage never adds its
+  provider to `dead`. The failure-driven chain is otherwise unchanged. A
+  kind is added only with the section 4.3 evidence from 01a, recorded in
+  `evals/README.md`. Every task is off at landing.
+  `inference.reports_distribution(resolved)` says whether the first stage
+  is native. Failure behaviour: anything that stops the native stage hands
+  its items to the structured stage and to the riding fallback; a model that
+  is not `native_capable` gets today's chain.
+- **01c-C2. `draws.py`, which owns sampling.** A SHA-256 integer
+  inverse-CDF draw (`ALGORITHM = "sha256-q32-icdf/1"`). Integer weights
+  (`quanta`) and exact integer cumulative sums make it identical on Python
+  3.11 to 3.14, on Android and in a browser. The caller's pre-draw step is
+  one recorded `Eligibility` (`only`, `exclude`, `floor`), applied and
+  renormalised as section 5.3 defines. Seeds come from `new_seed()` (53
+  bits), and `purpose` is printable ASCII. `draw` never raises on a valid
+  `ItemResult` with a valid eligibility and seed.
+- **01c-C3. Replay record.** The section 6 shape, version 1, JSON-safe,
+  holding no prose. It is the one record shape for every caller. The caller
+  stores it with the outcome it chose, in the same write and under the same
+  lock. The presence of the record means "decided", and a decided outcome is
+  never re-drawn. Guarantee: `replay(record) == record["selected"]` for
+  every record `draw` produced, on any supported interpreter.
 - **01c-C4. Never sampled.** `basis: sampled` occurs only for an answered
-  question with a usable reported `distribution` or `probability`.
-  Abstained, refused, unreadable, error, or no usable distribution never
-  produce a draw. Rank or MultiSelect marginals (01e-C4) are never sampled.
-  A plain answer may be acted on, recorded `sampled: false`; it is not a
-  draw and is never replayed.
+  question whose report is usable, at least `1 - MASS_SLACK` in mass, and
+  gives the answered key positive weight. Abstained, refused, unreadable,
+  error, no report, a partial or inconsistent report, and Rank or
+  MultiSelect marginals (01e-C4) never produce a draw. A plain answer may be
+  acted on, recorded `sampled: false`; it is not a draw and is never
+  replayed.
 
 ## 9. Interaction with repo rules
 
@@ -596,45 +752,75 @@ Consequences:
   file.
 - **Android / pydantic v1:** pure stdlib. No model classes, no new
   dependency.
+- **Health:** under native-first, a decisions endpoint's 5xx or timeout is
+  observed against the connection, as any native call is (section 4.2.3).
 - **Locks and detached runs:** the helper takes no lock. Persistence rides
   the caller's existing write (section 6.1). No new run class.
 - **Docs:** CLAUDE.md's decide paragraph ("A model that can generate stays on
   structured generation whatever its `decide_native` says ... the chain does
   not do it today") is rewritten in the change that adds the branch, to say
-  "unless its task's policy is `native_first`". `test_docs_guard.py` is run.
+  "unless its task's policy lists its kind in `native_first`", and states the
+  isolated-stage rule (section 4.2.1). `test_docs_guard.py` is run.
 
 ## 10. Tests and acceptance
 
 `backend/tests/test_draws.py`:
 
-- `uniform` golden vectors: fixed `(seed, purpose)` pairs give pinned floats.
-  These are checked in, and a browser-side check can reproduce them.
-- `pick`: half-open intervals, zero-weight keys skipped, `u` near 1 with a
-  mass whose float sum overshoots returns the last positive key, and two
-  equal weights split at their boundary.
+- `unit` golden vectors: fixed `(seed, purpose)` pairs give pinned 53-bit
+  integers. They are checked in, so that a browser-side check can
+  reproduce them.
+- **Interpreter-independence golden.** Ten weights of 0.1 (where `sum()`
+  differs between 3.11 and 3.12), and the weights `[0.6, 0.26, 0.76, 0.7]`
+  with an `r53` at the boundary where a float draw flips between naive and
+  compensated summation (the review's case), pin the expected `mass_q`,
+  `drawn_q` and selection. CI's 3.11 and 3.14 legs both run this test.
+- `pick`: half-open integer intervals, zero-weight keys skipped, the largest
+  `r53` (2**53 - 1) selecting the last positive key, and two equal weights
+  splitting at their boundary.
 - Canonical order: one distribution reported in two key orders draws the
   same key for every seed in a sweep.
-- Mass: weights summing to 0.98 and 1.02 draw proportionally, and `mass` is
-  recorded. Zero mass gives `basis: answer`.
-- C4 table: one case per row of section 7, including a predicate at 0.5, a
-  refused answer (built with `native_answer(refused=True)`), a structured
-  answer (`basis: answer`, `seed: null`), and a sampled `NONE_KEY`.
-- `replay`: equals `selected` over a property sweep of random supports and
-  seeds. A record whose `algorithm` is unknown raises `ReplayError`.
+- Eligibility: `exclude=(NONE_KEY,)`, `only=` a subset, a floor that lifts
+  an unreported key, a floor too large for the eligible set
+  (`ValueError`), and an `only` key that is not offered (`ValueError`). The
+  record carries each as supplied.
+- Section 5.4: one case per row, including a predicate at 0.5, a refused
+  answer (`native_answer(refused=True)`), a structured answer (`basis:
+  answer`, `seed: null`, `why: no_report`), a partial report (`{mara: 0.4,
+  seraphine: 0.1}`), an inconsistent one (an explicit choice with no
+  weight), an answer outside the eligible set (`basis: none`, `why:
+  ineligible`), an `Answer` that carries only marginals, and a sampled
+  `NONE_KEY`.
+- Seeds and purposes: a 63-bit seed and a non-ASCII purpose raise
+  `ValueError`.
+- `replay`: equals `selected` over a property sweep of random supports,
+  eligibilities and seeds. A non-sampled record returns its stored
+  `selected`. An unknown `algorithm`, or a sampled record with a null seed,
+  raises `ReplayError`.
 - JSON round trip: `replay(json.loads(json.dumps(record)))` equals
   `selected`.
 
-`backend/tests/test_inference_decide.py` and `test_inference_decide_native.py` (extended):
+`backend/tests/test_inference_decide.py` and `test_inference_decide_native.py`
+(extended):
 
-- A `native_first` policy on a primary that generates and is `native_capable`
-  gives `[native, structured]` stages, plus the fallback stage when it is
-  apart.
-- The same policy with `decide_native` unknown, a kind with no endpoint, or a
-  preset `never` gives today's stages.
+- A policy listing the primary's kind, on a primary that generates and is
+  `native_capable`, gives `[native (isolated, retries=0), structured]`, plus
+  the fallback stage when it is apart. A kind that is not listed, an
+  `unknown` for `decide_native`, a kind with no endpoint, or a preset
+  `never` gives today's stages.
+- **Fall-through (review B1).**
+  - A 403 (`auth`) from the native-first stage: the structured stage on the
+    same provider answers.
+  - A `rate_limit` from it: the structured stage answers, and the native
+    stage made exactly one request.
+  - An `auth` from it, with a structured fallback on another provider riding
+    the structured stage: the fallback answers when the structured primary
+    also fails.
+  - A connection-wide failure on the *structured* stage still skips a later
+    stage on that provider, as today.
 - An item the native stage fails is answered by the structured stage. A
-  native `refused` is not re-asked. An auth failure on the native stage skips
-  the structured stage on the same provider. A run of timeouts stops only the
-  native stage.
+  native `refused` is not re-asked.
+- `reports_distribution` is True for a native-only primary and for a listed
+  kind on a `native_capable` primary, and False otherwise.
 - With no task setting `native_first`, `stages` is identical to the baseline
   for every resolution in the existing equivalence fixtures, and
   `test_decide_chain_golden.py` stays green without regenerating its golden.
@@ -644,6 +830,7 @@ planted violation.
 
 Evals: the `decide.distribution` grader (n/a on structured), and the
 `evals/README.md` section with the section 4.3 table for `decide-speaker`.
+`evals/runner.chain` is unchanged and still allows `unknown`.
 
 Acceptance: all of the above pass under `make check`, including
 `check-pydantic1`. No task's behaviour changes at landing.
@@ -651,34 +838,58 @@ Acceptance: all of the above pass under `make check`, including
 ## 11. Non-goals
 
 - Logprob-derived distributions on structured generation (section 3.1).
-- Temperature, sharpening, flooring or excluding options. Any reshaping of a
-  reported distribution is a transform of what the backend said. If 02 or 13
-  needs one, it is a recorded parameter of a new `ALGORITHM`, specified
-  there.
+- Any reshaping of a reported distribution other than the recorded
+  `Eligibility` (mask and floor). Temperature or sharpening would need a new
+  `ALGORITHM`, specified by whoever needs it.
 - Sampling a `Rank` (Plackett–Luce) or a multi-select (01e). The helper
-  samples one keyed distribution. A joint choice is drawn as successive draws
-  with distinct `purpose`s.
+  samples one keyed distribution. A joint choice is drawn as a flattened
+  `Joint`, or as successive draws with distinct `purpose`s.
 - Any calibration of, or comparison between, backends' probabilities.
-- Fixing `store/dice.py`'s use of `randint` (section 5.2). It is noted here
-  only as a reason to avoid that API.
+- Fixing `store/dice.py`'s use of `randint` (section 5.2). It is recorded in
+  the checklist's "Found on main" list.
+- Keeping the health dot green while a decisions endpoint fails under
+  native-first (section 4.2.3).
 
 ## 12. Open questions
 
-1. **Should a distribution whose mass is far from 1 be refused rather than
-   drawn proportionally?** Recommendation: no, not now. Draw proportionally,
-   record `mass`, and have 01a's report show each endpoint's mass. Revisit
-   if an endpoint turns out to report independent scores.
-2. **Native-first on `decide_native: unknown`?** Recommendation: no, require
-   a known `yes` (section 3.2). The user can make it `yes` with a passing
-   test call or a model-facts override.
+1. **Is `MASS_SLACK = 0.02` right?** Recommendation: start there, show
+   each kind's reported mass in 01a's table, and widen it only if a kind
+   rounds coarsely. A mass over 1 stays drawn in proportion and recorded.
+2. **Native-first on `decide_native: unknown`?** Recommendation: no.
+   Production requires a known `yes` (section 3.2). The user can make it
+   `yes` with a passing test call or a model-facts override. The eval runner
+   still allows `unknown`, so the evidence can be gathered.
 3. **Settings visibility.** Should 01s's decide note say "native first" on a
-   route row whose task has it? Recommendation: yes, as a read-only phrase
-   from the settings view (`decides_first: "native"`). No toggle, because the
-   policy is code, switched on evidence.
-4. **Hash RNG versus `random.Random(seed).random()`.** Recommendation: the
-   hash. It is stable by standard, can be replayed in a browser, and gives
-   per-purpose independence. `Random(...).random()` would also be stable, but
-   gives one coupled stream.
-5. **Where the evidence lives.** Recommendation: `evals/README.md`, section
+   route row whose task lists the primary's kind? Recommendation: yes, as a
+   read-only phrase driven by `reports_distribution`. No toggle, because
+   the policy is code and is switched on evidence.
+4. **Where the evidence lives.** Recommendation: `evals/README.md`, section
    "Decision distributions", with the policy line's comment pointing to it.
-   The alternative is an appendix to this spec, which would then go stale.
+5. **Does 02's floor belong in `Eligibility` or in 02?** Decided: in
+   `Eligibility` (the coordinator ruled that 01c owns the sampler). 02's
+   `1/(2n)` floor, its none exclusion and its addressed-actor narrowing are
+   each a field of it.
+
+## 13. Review record
+
+Substitute adversarial review, 2026-10-10 (`reviews/01c.md`: 3 blocking,
+6 should-fix, 6 minor). Each finding was checked against the code at
+`35c1fb7`.
+
+| # | Finding | Disposition |
+|---|---|---|
+| B1 | An `auth` or `rate_limit` from a native-first stage marks the provider dead and skips the same-model structured stage and its riding fallback | **Fixed.** Verified (`openrouter.py:53-58`, `llm.py:305-312`, `inference.py:640-663`). Isolated stage, a dead skip only when every route is dead, and fall-through tests (4.2.1, 10) |
+| B2 | 01c forbids the reshaping 02 performs, and 02 uses a different record and seed | **Fixed, by the coordinator's ruling:** 01c owns the sampler. A recorded `Eligibility` (mask and floor) with renormalisation defined here (5.3), one record shape (6), and one seed source (5.2). 02 conforms |
+| B3 | Unspecified float summation; `sum()` changed in 3.12 | **Fixed.** Integer quanta and exact integer cumulative sums (5.2, 5.3), with a golden that differs under `sum()` (10) |
+| S1 | A partial report is normalised, unlike 01d's margin | **Fixed.** Below `1 - MASS_SLACK`, `basis: answer`, `why: partial` (5.4) |
+| S2 | The native-first stage spends the retry budget first | **Fixed.** `retries=0`, and the added latency is stated (4.2.2) |
+| S3 | The eval runner does not make the same check and must not | **Fixed.** `native_capable` is production-only, and the runner keeps `decides_natively` (4.2) |
+| S4 | `served` has two shapes | **Fixed.** One three-part `(kind, provider_id, model)`; the record keeps `kind` (5.1, 6) |
+| S5 | Evidence from one model switches every user | **Fixed.** `native_first` lists adapter kinds, and evidence is per kind (4.1, 4.3) |
+| S6 | An explicit choice the distribution contradicts | **Fixed.** `basis: answer`, `why: inconsistent` (5.4) |
+| M1 | `selected` and `answer` are typed differently | **Fixed.** Both are keys (6) |
+| M2 | The record drops options the report omitted | **Fixed.** `offered` (6) |
+| M3 | "Already picked" is ambiguous | **Fixed.** The presence of the record (6.1) |
+| M4 | The checklist edge lacks 01e-C4 (S) | **Not changed here**, because only the two specs are edited. 01e-C4 is now in Depends on, and the checklist edge should add it |
+| M5 | Decisions-endpoint failures mark chat health failing | **Stated** (4.2.3); fixing it is a non-goal |
+| M6 | A non-ASCII `purpose` encodes differently in a browser | **Fixed.** Printable ASCII only, checked (5.2) |

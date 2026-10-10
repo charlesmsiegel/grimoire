@@ -1,6 +1,6 @@
 # 13. Mechanics II: Actions and Effects
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 13 in `ROADMAP-CHECKLIST.md`. Lane: mechanics.
 **Baseline:** `main` at `35c1fb7`.
@@ -18,9 +18,10 @@ the record of the direction; where the two disagree, this spec wins.
 
 ## Depends on
 
-The checklist's 13 edge: **nothing for II-A to II-D; 01c-C2/C3/C4 (H for C3);
-01e-C3b (H for multi-target actions and legal sets over 254 options); 01c-C1,
-01b-C1, 01a-C1, 02-C2 (S).**
+The 13 edge, as settled with 01e: **nothing for II-A to II-D; 01c-C2/C3/C4
+(H for C3); 01e-C3a (H for multi-target Actions only); 01e-C3b, 01c-C1,
+01b-C1, 01a-C1, 02-C2, 02-C3 (S).** A legal set past 254 options needs nothing
+from 01e: it is asked in two steps, the action and then its target (24.3).
 
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
@@ -28,11 +29,13 @@ The checklist's 13 edge: **nothing for II-A to II-D; 01c-C2/C3/C4 (H for C3);
 | 01c-C2: the `draws.py` draw `(distribution, seed) -> selected` | 01c | Drawing an NPC's Action from the Decision model's distribution (24.4) | Hard, for 13-C3 only |
 | 01c-C3: the replay record, stored with the outcome and never re-drawn | 01c | Persisted on the action proposal, the round and the transaction (24.5) | Hard, for 13-C3 only |
 | 01c-C4: abstain, refuse, unreadable, error or no usable distribution is never sampled | 01c | What an NPC turn does when the Decision model gives no usable distribution (24.4) | Hard, for 13-C3 only |
-| 01e-C3b: `Joint`, a flattened choice over the legal (action, target) pairs | 01e | Choosing an Action and its targets in one question for multi-target Actions and legal sets over 254 options (24.3) | Hard for those two cases only; a single-target legal set of at most 254 pairs is one flat `Choice` that exists today (`decisions.py:189-196`) |
+| 01e-C3a: `MultiSelect`, where an empty selection is a real answer | 01e | The target set of an Action with `targets.max > 1`, asked as the second step after the action is drawn (24.3) | Hard, for multi-target Actions only |
+| 01e-C3b: `Joint`, one action plus one target in one flattened choice, keyed by `Pair.key` (`head=>tail`) | 01e | The single-step form for a single-target legal set of at most 254 pairs, with head-level readings (24.3) | Soft: a plain flat `Choice` over the same pairs exists today (`decisions.py:189-196`) |
 | 01c-C1: the distribution policy (`TaskPolicy`, `reports_distribution`) | 01c | Whether a structured Decision model can drive sampling at all | Soft: without it, everything takes the unsampled path of 24.4 |
 | 01b-C1: decision capture at every decide site | 01b | Capturing the `npc-action` decision to the prompt log | Soft |
 | 01a-C1: eval cost, latency and token reporting | 01a | Reporting on the `npc-action` eval gate (24.7) | Soft |
 | 02-C2: a sampled next speaker and a turn intent (02-C2b) | 02 | The intent that conditions an NPC's Action distribution (24.6) | **Soft seam**: an intent never changes legality |
+| 02-C3: the per-contribution turn plan's `extra` slot | 02 | Carrying the NPC Action question in the plan's batched decide (24.6) | Soft: without it the question is its own `npc-action` call |
 
 **II-A through II-D (13-C1, 13-C2) start now**; only 13-C3 waits for 01c
 (section 4).
@@ -60,7 +63,7 @@ stands on, and several facts here contradict MII (1.9).
   reads the same files.
 - `load_pack` never raises; problems accumulate in `pack["errors"]`, and
   `binding.resolve` treats a pack with errors as no module at all
-  (`store/modules/binding.py:402-423`). So "the module is invalid" already
+  (`store/modules/binding.py:52-73`). So "the module is invalid" already
   degrades to "no mechanics", never to a half-working pack.
 - Field types are `number`, `dots`, `track`, `resource`, `text`, `list`, `ref`
   (`store/modules/validate.py:14`). `dots`/`track`/`resource` require an
@@ -74,7 +77,7 @@ stands on, and several facts here contradict MII (1.9).
   (`validate.py:192-217`).
 - Module edits are staged, validated and published under the global
   module-edit lock **and every campaign's lock** (`module_edit/migrate.py:418-432`,
-  `454-470`). A check rename is refused while a non-terminal roll proposal names
+  the `with _campaign_locks()` hold at `494`). A check rename is refused while a non-terminal roll proposal names
   the check (`module_edit/renaming.py:75-98`).
 
 ### 1.2 Sheets, and what `gen` does and does not mean
@@ -83,12 +86,14 @@ stands on, and several facts here contradict MII (1.9).
   `{"sheet_type", "fields", "gen", "creation"?}` (`store/sheets/paths.py:66-73`,
   `92-93`). Derived values are computed on read, never stored.
 - **`gen` is an identity nonce, not a version.** It is preserved across every
-  same-type value write and re-minted only on creation or a type change
-  (`sheets/paths.py:27-39`; `writer.py:187-191`, `325-327`). A value edit
-  leaves `gen` exactly as it was.
+  same-type value write (`sheets/paths.py:27-39`; `writer.py:64-68`,
+  `202-204`) and re-minted on creation, on a type change, and by a module
+  edit's sheet migration for every sheet a field, sheet-type or content rename
+  rewrites (`module_edit/migrate.py:234`). A value edit leaves `gen` exactly as
+  it was.
 - `MUTABLE_TYPES = ("resource", "track", "list")` (`sheets/schema.py:187`).
   `set_field_locked` is the per-field strict-CAS writer and refuses any other
-  type (`writer.py:292-327`); the audit writes through it and draws the same
+  type (`writer.py:169-204`); the audit writes through it and draws the same
   line (`audit/apply.py:110`). `number` and `dots` change only through a
   whole-sheet write, creation or advancement.
 - `canonical_field_value` keeps a resource's **live** `max` (`schema.py:190-202`).
@@ -113,7 +118,7 @@ stands on, and several facts here contradict MII (1.9).
   whether it has `vs`, is a property of the notation's grammar, so it is known
   from the check's template before any roll (`dice.py:36-70`).
 - `rolls.json` is append-only; `find_or_append_by_proposal` makes projection
-  idempotent by proposal tag (`store/rolls.py:253-270`). Branching re-finds a
+  idempotent by proposal tag (`store/rolls.py:94-112`). Branching re-finds a
   roll by "label in the line, and dice segment in the line"
   (`store/branch.py:67-105`).
 - `available_checks(cid, sid)` enumerates the sheeted scene cast plus the
@@ -441,12 +446,24 @@ damage that depends on the attacker. `values` is the bounded alternative:
   actor's numeric fields and derived values, `sheets.schema.expression_scope`),
   plus the roll scope when there is a roll, plus `difficulty`, `modifier` and
   `targets` (the selected target count).
-- Values are evaluated in file order; a value may name an earlier value.
+- Values are evaluated in file order; a value may name an earlier value, to a
+  chain depth of at most `MAX_VALUE_DEPTH = 4`. At most `MAX_VALUES = 16`
+  values, each expression (here and in every template) at most
+  `MAX_EXPRESSION_CHARS = 256`. Every value and every amount result must lie
+  within `MAX_EFFECT_MAGNITUDE = 10**9`, or the evaluation fails with
+  `amount_out_of_range` (7.3). The language has no power operator, so one
+  bounded-length expression over bounded inputs is bounded; only chaining
+  could grow a number without limit, and that is what the depth and magnitude
+  caps stop. Without them a shared pack could run unbounded big-integer
+  arithmetic inside the campaign lock, or produce a roll whose record
+  `json.dumps` refuses (an integer past 4300 digits). The constants are
+  structural ceilings, far above any game's arithmetic, to be tuned later.
 - The resulting integers join the scope of **every** effect expression, actor
   or target.
 - A value name may not be a reserved name, an expression function, a
-  `ROLL_SCOPE_NAMES` entry, `targets`, or **any field or derived name of any
-  sheet type in the pack**. The last rule is what keeps a name from meaning one
+  `ROLL_SCOPE_NAMES` entry, `targets`, or **any name any sheet type in the pack
+  puts in scope**: a field, a derived value, or a resource's implicit
+  `<key>_max` (`modules/fields.py`, `numeric_names`). The last rule is what keeps a name from meaning one
   thing on the actor and another on a target, and it is static, so the pack
   validator enforces it.
 
@@ -475,7 +492,14 @@ Load-time errors, which make the pack invalid and so unbound (1.1):
   scope: roll names the check's `roll_shape` cannot produce (or any roll name on
   a no-roll Action or in a cost), `difficulty`/`modifier` on a no-roll Action,
   a value not defined above it;
-- a value name collision (5.3);
+- a value name collision (5.3); more than `MAX_VALUES` values; a value chain
+  deeper than `MAX_VALUE_DEPTH`; an expression longer than
+  `MAX_EXPRESSION_CHARS`;
+- a cost amount that names `targets`, `difficulty`, `modifier`, a roll name, or
+  a value that depends on any of them, directly or through other values. A
+  cost is evaluated before the roll and before availability knows the targets
+  or parameters (6.1, 7.4), so it may name only the actor's sheet and
+  *static* values (values free of all of those);
 - an effect `field` that is statically known not to be a mutable numeric field:
   for an `actor` op when `sheet_types` is given, and for a `target` op when
   `targets.sheet_types` is given, every listed type must carry the field as
