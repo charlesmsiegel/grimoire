@@ -1166,8 +1166,9 @@ def _dual_capable(how: str) -> None:
 @pytest.mark.parametrize("how", ["catalog", "probe"])
 def test_a_dual_capable_primary_stays_structured(client, how):
     """C1: a model that can generate stays on structured generation whatever
-    its `decide_native` says, until native wins on evals (spec 16). Its
-    resolution is F's, field for field -- the chain, its riding fallback and
+    its `decide_native` says, unless its task's policy lists its kind in
+    `native_first` (01c; no task does, and that stage is `inference.stages`',
+    not a mode). Its resolution is F's, field for field -- the chain, its riding fallback and
     the structured flag -- and deciding on it sends no native request."""
     _store(client)
     _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"],
@@ -1206,6 +1207,122 @@ def test_a_structured_primary_is_unchanged(client):
                                       as_decided(generate.chain.fallback, False))
     assert [a.decision_mode for a in decide.attempts] == ["structured", "structured"]
     assert inference.stages(decide) == (inference.Stage("structured", decide.chain, None),)
+
+
+# ---- native first (spec 01c §3.2, §4.2): the rule, all tasks off ----
+def _native_first(monkeypatch, *kinds: str, task: str = "scene-break") -> None:
+    """Plant `task`'s policy at runtime, listing `kinds` in `native_first`.
+    The static rules (`test_task_policy.py`) hold the code table, which lists
+    no task; this is the chain's behaviour under a policy, not a policy."""
+    monkeypatch.setitem(store.routing.TASK_POLICY, task,
+                        store.routing.TaskPolicy(native_first=kinds))
+
+
+def _facts(client, provider: str, model: str, overrides: dict) -> None:
+    got = client.put(f"/api/llm-connections/{provider}/facts",
+                     json={"model": model, "overrides": overrides})
+    assert got.status_code == 200, got.text
+
+
+@pytest.mark.parametrize("planted,task,expected", [
+    (("openrouter",), "scene-break", True),
+    ((), "scene-break", False),
+    (("openai_compatible",), "scene-break", False),
+    (("openrouter",), "", False),
+], ids=["listed", "no-policy", "other-kind", "role-card"])
+def test_native_first_needs_the_policy_the_kind_and_a_known_yes(
+        client, monkeypatch, planted, task, expected):
+    fx.generates_and_decides(client, fallback=True)
+    if planted:
+        _native_first(monkeypatch, *planted)
+    resolved = (_resolved() if task else
+                inf.resolve("", operation="decide", role="decision"))
+    assert inf.native_capable(resolved.attempts[0])
+    assert inf.native_first(resolved) is expected
+
+
+@pytest.mark.parametrize("how", ["catalog", "probe"])
+def test_native_capable_is_yes_only(client, monkeypatch, how):
+    """`unknown` is not enough (spec 01c §12 Q2): a native-first model has a
+    structured way to answer, so an endpoint nobody has confirmed is not tried
+    first. A catalog `yes` or a passed probe is."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"]}])
+    _native_first(monkeypatch, "openrouter")
+    resolved = _resolved()
+    cap = resolved.attempts[0].capabilities["decide_native"]
+    assert cap.value == "unknown" and cap.source != "name"
+    assert not inf.native_capable(resolved.attempts[0])
+    assert not inf.native_first(resolved)
+    _dual_capable(how)
+    resolved = _resolved()
+    assert inf.native_capable(resolved.attempts[0])
+    assert inf.native_first(resolved)
+
+
+def test_every_preset_without_a_decisions_endpoint_never_decides_natively():
+    """What lets `native_capable` read capabilities alone (01c plan gate S1):
+    a kind with no decisions endpoint never reads a `decide_native` `yes`,
+    because every preset of such a kind rules it out (`never`), and an
+    adapter-source `no` outranks every other source
+    (`capabilities.resolve_caps`). A preset added without it would let a
+    user's `decide_native: yes` put a stage in front that is refused unsent
+    on every call."""
+    from grimoire import adapters
+    from grimoire.store.inference import providers
+
+    for preset in providers.PRESETS.values():
+        if not adapters.decides_natively(preset.kind):
+            assert "decide_native" in preset.never, preset.id
+    caps = capabilities.resolve_caps(providers.PRESETS["anthropic"], "claude-test-1",
+                                     catalog_row=None,
+                                     facts={"overrides": {"decide_native": "yes"}})
+    assert (caps["decide_native"].value, caps["decide_native"].source) == ("no", "adapter")
+
+
+def test_a_never_preset_is_never_native_first(client, monkeypatch):
+    """A custom OpenAI-compatible endpoint: its kind has a decisions endpoint,
+    but its preset says it never decides natively, and the user's `yes`
+    cannot lift that."""
+    fx.format2(client)
+    conn_id = fx.endpoint(client, "Saltmarch Local")
+    fx.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": conn_id, "model": "local-both"},
+        "fallback": {"provider": ""}}}})
+    _facts(client, conn_id, "local-both", {"decide_native": "yes"})
+    _native_first(monkeypatch, "openai_compatible")
+    resolved = _resolved()
+    cap = resolved.attempts[0].capabilities["decide_native"]
+    assert (cap.value, cap.source) == ("no", "adapter")
+    assert not inf.native_first(resolved)
+    assert inference.stages(resolved) == (inference.Stage("structured", resolved.chain, None),)
+
+
+def test_an_openai_preset_model_can_be_native_first(client, monkeypatch):
+    conn_id = fx.openai_decides_only(client)
+    _facts(client, conn_id, fx.OPENAI_DECIDER, {"decide_native": "yes"})
+    resolved = _resolved()
+    assert resolved.decision_mode == "structured"
+    _native_first(monkeypatch, "openrouter")
+    assert not inf.native_first(_resolved())
+    _native_first(monkeypatch, "openai_compatible")
+    assert inf.native_first(_resolved())
+
+
+def test_native_first_leaves_the_resolution_structured(client, monkeypatch):
+    """The resolution says what it said: a structured primary, its controls,
+    no refusal. The native stage is the chain's (`inference.stages`), not a
+    mode."""
+    fx.generates_and_decides(client, fallback=True)
+    before = _resolved()
+    _native_first(monkeypatch, "openrouter")
+    after = _resolved()
+    assert inf.native_first(after) and not inf.native_first(
+        dataclasses.replace(after, task="voice-drift"))
+    assert after.decision_mode == "structured"
+    assert [a.controls for a in after.attempts] == [a.controls for a in before.attempts]
+    assert after.chain == before.chain
+    assert inf.refusal(after) is None
 
 
 def test_a_model_that_neither_generates_nor_decides_is_refused(client):
