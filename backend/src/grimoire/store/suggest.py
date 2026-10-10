@@ -751,13 +751,14 @@ def intent_schema(cid: str, offscreen: bool = False) -> dict:
 
     An empty enum is not portable (`schemas.check` refuses it), so a field
     with nothing to offer -- no locations, no cast -- is a plain string. So is
-    one past strict mode's budgets: the cast first, then the locations too.
+    one past strict mode's budgets: the cast first, else the locations, else
+    both.
     `parse_intent` drops an unknown id either way."""
     char_ids, player_tokens, loc_ids = valid_ids(cid)
     tokens = sorted({f"characters:{c}" for c in char_ids} | set(player_tokens))
     cast = [t for t in tokens if token_ok(t, char_ids, player_tokens, offscreen)] or None
     locations = sorted(i for i in loc_ids if i) or None
-    for shape in ((locations, cast), (locations, None), (None, None)):
+    for shape in ((locations, cast), (locations, None), (None, cast), (None, None)):
         schema = _intent_shape(*shape)
         try:
             schemas.check(schema)

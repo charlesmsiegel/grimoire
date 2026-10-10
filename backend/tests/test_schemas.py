@@ -36,8 +36,18 @@ GOOD = _obj(
 
 def test_check_accepts_the_subset():
     schemas.check(GOOD)
-    schemas.check({"type": "array", "items": {"type": "number"}})
+    schemas.check(_obj(rows={"type": "array", "items": {"type": "number"}}))
     schemas.check(_obj())
+
+
+@pytest.mark.parametrize("root", [
+    {"type": "array", "items": {"type": "string"}}, {"type": "string"},
+    {"anyOf": [_obj(), {"type": "null"}]}, [], "object"])
+def test_the_root_is_an_object(root):
+    """Strict mode answers any other root with a 400 naming `response_format`,
+    which would read as the mode refused."""
+    with pytest.raises(schemas.SchemaError, match="root"):
+        schemas.check(root)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("key", sorted(schemas.BOUNDS))
@@ -98,9 +108,9 @@ def test_check_refuses_nesting_past_max_depth():
     with pytest.raises(schemas.SchemaError, match="nested"):
         schemas.check(_obj(a=node))
     # An anyOf branch sits at its parent's level, an array's items one below.
-    schemas.check({"anyOf": [node, {"type": "null"}]})
+    schemas.check(_obj(a={"anyOf": [node["properties"]["a"], {"type": "null"}]}))
     with pytest.raises(schemas.SchemaError, match="nested"):
-        schemas.check({"type": "array", "items": node})
+        schemas.check(_obj(a={"type": "array", "items": node["properties"]["a"]}))
 
 
 def test_check_holds_each_budget():

@@ -1049,8 +1049,14 @@ async def _streamed(chain: wire.Chain, open_stream: Callable[[wire.Chain], Async
             await _aclose(inner)
             _add_attempts(usage, before)
 
-    async for chunk in _stream_without_refused_mode(refused, again):
-        yield chunk
+    resend = _stream_without_refused_mode(refused, again)
+    try:
+        async for chunk in resend:
+            yield chunk
+    finally:
+        # A caller that closes this generator closes the re-send with it, so
+        # its provider stream and its `attempts` settle before the meter files.
+        await _aclose(resend)
 
 
 def note_outcome(client: LLMClient, resolved: ResolvedInference,

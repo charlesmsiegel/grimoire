@@ -58,7 +58,7 @@ def sampling_block(sampling: wire.Sampling) -> dict:
     (`call_cap`, `preset_cap`: `wire.Target.with_output_cap`, 01f) are never
     set by a resolution -- this asserts so -- and are left out, so a baseline
     recorded before they existed still reads the same."""
-    assert sampling.call_cap is None and sampling.preset_cap is False, sampling
+    assert sampling.call_cap is None and sampling.preset_cap is None, sampling
     block = dataclasses.asdict(sampling)
     del block["call_cap"], block["preset_cap"]
     return block

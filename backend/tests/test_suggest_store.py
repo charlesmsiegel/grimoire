@@ -1308,3 +1308,8 @@ def test_intent_schema_past_the_enum_budget_drops_the_cast_enum_first(monkeypatc
     _ids(monkeypatch, chars=many, locs=many)
     props = suggest.intent_schema("realm")["properties"]
     assert props["location"] == {"type": "string"}
+    # Only the field past the budget is plain: many locations, a few cast.
+    _ids(monkeypatch, chars={"mara"}, locs=many)
+    props = suggest.intent_schema("realm")["properties"]
+    assert props["location"] == {"type": "string"}
+    assert props["cast"]["items"]["enum"] == ["characters:mara"]

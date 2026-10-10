@@ -38,9 +38,11 @@ class Sampling:
     #: what lets a refusal of `max_tokens` be worded as the call's rather than
     #: the user's preset's (`llm.CapRefusalError`). Never set by a resolution.
     call_cap: int | None = None
-    #: Whether the preset carried a `max_tokens` of its own under that cap:
-    #: then a refusal of it is the preset's too.
-    preset_cap: bool = False
+    #: The preset's own `max_tokens` beneath that cap (a positive int), or
+    #: None when it set none: a refusal of a value the preset itself would
+    #: have sent is the preset's too, and with none an adapter's own default
+    #: is what the call's cap may not raise (`llm_sampling.effective`).
+    preset_cap: int | None = None
 
 
 @dataclass(frozen=True)
@@ -116,11 +118,12 @@ class Target:
         preset the call was sent with; `call_cap` records `n`. Whether the cap
         reaches the wire is the adapter's (`inference.cap_sent`)."""
         own = self.sampling.params.get("max_tokens")
-        valid = isinstance(own, int) and not isinstance(own, bool) and own > 0
-        capped = own if isinstance(own, int) and valid and own < n else n
+        preset = (own if isinstance(own, int) and not isinstance(own, bool) and own > 0
+                  else None)
+        capped = preset if preset is not None and preset < n else n
         sampling = dataclasses.replace(
             self.sampling, params={**self.sampling.params, "max_tokens": capped},
-            call_cap=n, preset_cap=valid)
+            call_cap=n, preset_cap=preset)
         return dataclasses.replace(self, sampling=sampling)
 
     def without_sampling(self) -> Target:

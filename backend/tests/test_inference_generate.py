@@ -435,7 +435,7 @@ def test_with_output_cap_is_a_new_target_capped_at_the_smaller():
     assert capped.sampling.params == {"temperature": 0.7, "max_tokens": 300}
     assert (capped.sampling.preset_id, capped.sampling.preset_name, capped.sampling.scope) == (
         "warm", "Warm", "global")
-    assert (capped.sampling.call_cap, capped.sampling.preset_cap) == (300, True)
+    assert (capped.sampling.call_cap, capped.sampling.preset_cap) == (300, 4000)
     assert warm.sampling.params == {"temperature": 0.7, "max_tokens": 4000}
     assert warm.sampling.call_cap is None
     # The preset's own cap, when smaller, is the one sent.
@@ -444,7 +444,7 @@ def test_with_output_cap_is_a_new_target_capped_at_the_smaller():
     for target in (CONN, _preset(CONN, max_tokens="lots"), _preset(CONN, max_tokens=0)):
         capped = target.with_output_cap(300)
         assert capped.sampling.params["max_tokens"] == 300
-        assert capped.sampling.preset_cap is False
+        assert capped.sampling.preset_cap is None
 
 
 @pytest.mark.parametrize("bad", [0, -5, True, "300", 2.5])
@@ -487,6 +487,13 @@ def test_the_cap_reaches_the_wire_where_cap_sent_says_so():
     assert not inference.cap_sent(omitted.with_output_cap(200))
     assert not inference.cap_sent(claude.with_output_cap(200))
     assert llm_sampling.effective(anthropic.with_output_cap(200))["effective"]["max_tokens"] == 200
+    # A cap never raises the limit: with no preset value, the API's default
+    # is what it may lower.
+    big = anthropic.with_output_cap(llm_sampling.ANTHROPIC_MAX_TOKENS * 2)
+    assert (llm_sampling.effective(big)["effective"]["max_tokens"]
+            == llm_sampling.ANTHROPIC_MAX_TOKENS)
+    preset = _preset(anthropic, max_tokens=64000).with_output_cap(30000)
+    assert llm_sampling.effective(preset)["effective"]["max_tokens"] == 30000
 
     for target, wanted in ((listed, {"max_tokens": 200}), (omitted, None)):
         provider = SequencedProvider([["{}"]])
@@ -513,10 +520,20 @@ def test_a_refused_call_cap_is_worded_as_the_calls():
     assert len(provider.requests) == 1 and seen == []
 
 
+def test_a_refused_cap_the_call_cut_down_is_the_calls():
+    """The preset's own cap was larger: the value refused is the call's."""
+    refused = LLMError("bad_response", "max_tokens must be at least 1024", status=400)
+    provider = SequencedProvider([refused])
+    resolved = wire_kit.resolution(_preset(CONN, max_tokens=4000))
+    with pytest.raises(llm.CapRefusalError):
+        asyncio.run(inference.generate("chat", _prompt(), client=_real(provider),
+                                       resolved=resolved, max_tokens=200, stream=False))
+
+
 def test_a_refused_cap_the_preset_carried_too_is_the_presets():
     refused = LLMError("bad_response", "max_tokens is not supported", status=400)
     provider = SequencedProvider([refused])
-    resolved = wire_kit.resolution(_preset(CONN, max_tokens=4000))
+    resolved = wire_kit.resolution(_preset(CONN, max_tokens=100))
     with pytest.raises(llm.PresetRefusalError) as exc:
         asyncio.run(inference.generate("chat", _prompt(), client=_real(provider),
                                        resolved=resolved, max_tokens=200, stream=False))
@@ -529,3 +546,23 @@ def test_the_capture_report_names_the_calls_cap():
     report = llm_sampling.report(capped)
     assert report["call_cap"] == 200 and report["applied"]["max_tokens"] == 200
     assert "call_cap" not in llm_sampling.report(CONN)
+
+
+
+def test_closing_the_stream_closes_the_resend_and_settles_its_attempts():
+    """A caller that stops reading a re-sent stream closes it: its provider
+    stream ends and the holder's `attempts` counts the refused call too,
+    before the caller's meter files."""
+    provider = SequencedProvider([_refused_schema(), ["a", "b", "c"]])
+    holder: dict = {}
+    resolved = _capable(wire_kit.resolution(CONN), YES)
+
+    async def go():
+        stream = inference.generate("chat", _prompt(), client=_real(provider),
+                                    resolved=resolved, usage=holder, schema=SCHEMA)
+        first = await stream.__anext__()
+        await stream.aclose()
+        # Settled on the close itself, not by the loop's finalizer later.
+        return first, holder.get("attempts"), provider.closed
+
+    assert asyncio.run(go()) == ("a", 2, 2)

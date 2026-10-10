@@ -377,6 +377,17 @@ def _anthropic_sampler(c: _Conn, name: str, thinking: bool, temperature: bool) -
     return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_NONE, "adapter")
 
 
+def _never_raised(target: wire.Target, values: dict) -> object:
+    """The `max_tokens` the Anthropic API is asked for: the checked value --
+    except that a call's own cap (01f, 3.9) with no preset value under it is
+    held to the API's default, which a cap may lower and never raise."""
+    asked = values.get("max_tokens")
+    if (target.sampling.call_cap is not None and target.sampling.preset_cap is None
+            and isinstance(asked, int)):
+        return min(asked, ANTHROPIC_MAX_TOKENS)
+    return asked
+
+
 def _anthropic_max_tokens(c: _Conn, value: object) -> tuple[int, str]:
     """`(max_tokens, why)`: the preset's value or the default, capped at the
     model's own limit when its catalog row names one (`why` says so)."""
@@ -553,7 +564,7 @@ def effective(target: wire.Target) -> dict:
             values[name] = _check(_BY_NAME[name], value)
         except ValueError:
             invalid.add(name)
-    max_tokens, capped = (_anthropic_max_tokens(c, values.get("max_tokens"))
+    max_tokens, capped = (_anthropic_max_tokens(c, _never_raised(target, values))
                           if c.kind == "anthropic" else (0, ""))
     reasoning = (_Control(UNSUPPORTED, None, WHY_INVALID, "user")
                  if "reasoning_effort" in invalid

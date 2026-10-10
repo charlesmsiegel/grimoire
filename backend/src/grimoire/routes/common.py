@@ -435,7 +435,9 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     attempt's target -- and what the snapshot records about its sampler
     preset is its first attempt's (`llm_sampling.report`, the same split the
     facade sends), so a past turn says what it was sent WITH, and what its
-    backend could not take.
+    backend could not take. Handed the chain `inference.call_chain` built for
+    a call, that includes the call's own output cap and -- `structured` --
+    whether its first attempt was sent the provider's structured mode (01f).
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -457,6 +459,11 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     chain = conn if isinstance(conn, wire.Chain) else None
     report = llm_sampling.report(conn.primary if isinstance(conn, wire.Chain) else conn)
     if report is not None:
+        if chain is not None and chain.primary.structured:
+            # A generation's chain as `inference.call_chain` built it (01f,
+            # 3.7): its first attempt was sent its provider's structured mode.
+            # A decision's capture hands one target, and says nothing new.
+            report = {**report, "structured": True}
         breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):
         def on_variant(selected: str, variant: dict | None) -> None:

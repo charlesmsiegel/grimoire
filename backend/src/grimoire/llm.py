@@ -794,9 +794,11 @@ def _preset_refusal(exc: LLMError, target: wire.Target) -> PresetRefusalError | 
     if not named:
         return None
     sampling = target.sampling
-    if named == ["max_tokens"] and sampling.call_cap is not None and not sampling.preset_cap:
-        # The cap is the call's alone (01f, 3.9): no preset of the user's
-        # carried it, so none is named as the thing to fix.
+    if (named == ["max_tokens"] and sampling.call_cap is not None
+            and (sampling.preset_cap is None or sampling.preset_cap > sampling.call_cap)):
+        # The value sent is the call's alone (01f, 3.9): the preset set none,
+        # or a larger one the call cut down, so the preset is not named as
+        # the thing to fix.
         return CapRefusalError(
             exc.kind,
             f"{exc.detail} — this call's output cap (max_tokens) was refused, so the "
@@ -1084,10 +1086,12 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
                     # catalog that over-advertised it -- and it still serves
                     # every generate call. The next route, sent the same
                     # prompt, is tried as for any failure; should every route
-                    # fail, the error carries this attempt, for `decide` to
-                    # re-send once without the mode.
-                    log.warning("structured output refused by %r: %s", _label(target),
-                                _said(exc))
+                    # fail, the error carries this attempt, for `decide` or
+                    # `generate` to re-send once without the mode
+                    # (`inference._without_refused_mode`).
+                    log.warning("structured output refused by %r: %s (if this model "
+                                "never takes it, set its model fact structured_output "
+                                "to no)", _label(target), _said(exc))
                 else:
                     _observe(observer, target, exc)
                 if sent:

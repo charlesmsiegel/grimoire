@@ -92,7 +92,12 @@ class SchemaError(ValueError):
 
 def check(schema: dict) -> None:
     """Raise `SchemaError` unless `schema` is inside the portable subset (the
-    module docstring) and within strict mode's budgets."""
+    module docstring) and within strict mode's budgets. The root is an
+    object -- never an array, a scalar or an `anyOf`: strict mode answers
+    any other root with a 400 naming `response_format`, which would read as
+    the mode refused."""
+    if not isinstance(schema, dict) or schema.get("type") != "object" or "anyOf" in schema:
+        raise SchemaError("$: the root of a schema is an object (wrap a list in one)")
     _node(schema, "$", 1)
     properties, chars = tally(schema)
     if properties > MAX_SCHEMA_PROPERTIES:

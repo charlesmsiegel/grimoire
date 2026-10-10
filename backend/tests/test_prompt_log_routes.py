@@ -419,3 +419,33 @@ def test_a_contended_capture_records_nothing_stamps_nothing_and_never_waits(clie
     assert len(client.get(prompts).json()["entries"]) == rows
     # Far under LOCK_TIMEOUT (30s), the wait a blocking acquisition would cost.
     assert waited < store.locks.LOCK_TIMEOUT / 2
+
+
+def test_a_capture_of_a_call_chain_names_its_cap_and_structured_mode(client, monkeypatch):
+    """01f, 3.7: handed the chain `inference.call_chain` built, the snapshot
+    says what that call was sent -- its own output cap, and that its first
+    attempt was sent the provider's structured mode."""
+    import dataclasses
+
+    from grimoire import inference
+    from grimoire.store.inference.capabilities import YES, Cap
+
+    from . import wire_kit
+
+    cid, sid = _scene(client)
+    recorded: list[dict] = []
+    monkeypatch.setattr(store.prompt_log, "record",
+                        lambda *args, **kwargs: recorded.append(args[3]))
+    resolved = wire_kit.resolution(wire_kit.target())
+    resolved = dataclasses.replace(resolved, attempts=tuple(
+        dataclasses.replace(a, capabilities={"structured_output": Cap(YES, "catalog")})
+        for a in resolved.attempts))
+    schema = {"type": "object", "additionalProperties": False, "required": [],
+              "properties": {}}
+    for chain in (inference.call_chain(resolved, schema=schema, max_tokens=300),
+                  inference.call_chain(resolved)):
+        routes.common._record_prompt(cid, sid, "chat", {}, model="m", conn=chain)
+    capped, plain = (b["sampling"] for b in recorded)
+    assert capped["structured"] is True and capped["call_cap"] == 300
+    assert capped["applied"]["max_tokens"] == 300
+    assert "structured" not in plain and "call_cap" not in plain
