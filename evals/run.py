@@ -10,6 +10,9 @@
     backend/.venv/Scripts/python.exe evals/run.py --compare evals/out/a.json evals/out/b.json
     backend/.venv/Scripts/python.exe evals/run.py --case roll-fence
     backend/.venv/Scripts/python.exe evals/run.py --gate          # the decide gate, offline
+    backend/.venv/Scripts/python.exe evals/run.py --escalation-sweep --case decide-continuity-identity
+    backend/.venv/Scripts/python.exe evals/run.py --live --case decide-continuity-identity \
+        --escalation '{"escalate_to": "primary", ...}' --out evals/out/esc.json
 
 Bootstraps sys.path the same way scripts/verify_templates.py does, so it runs
 from a checkout without the package being installed.
@@ -20,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import json
 import os
 import shutil
 import sys
@@ -33,7 +37,7 @@ sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
 from evals import cases as case_mod  # noqa: E402
-from evals import gate, runfile, runner  # noqa: E402
+from evals import escalation, gate, runfile, runner  # noqa: E402
 from grimoire.store import paths, usage  # noqa: E402
 
 
@@ -76,7 +80,9 @@ def run_gate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                                    ("--decide-backend", args.decide_backend is not None),
                                    ("--repeat", args.repeat is not None),
                                    ("--out", bool(args.out)),
-                                   ("--compare", bool(args.compare)))
+                                   ("--compare", bool(args.compare)),
+                                   ("--escalation", bool(args.escalation)),
+                                   ("--escalation-sweep", args.escalation_sweep))
              if on]
     if clash:
         ap.error(f"--gate is offline and judges every conversion; "
@@ -101,7 +107,9 @@ def run_compare(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                                    ("--model", bool(args.model)),
                                    ("--decide-backend", args.decide_backend is not None),
                                    ("--repeat", args.repeat is not None),
-                                   ("--out", bool(args.out)))
+                                   ("--out", bool(args.out)),
+                                   ("--escalation", bool(args.escalation)),
+                                   ("--escalation-sweep", args.escalation_sweep))
              if on]
     if clash:
         ap.error(f"--compare is offline and reads only its files; "
@@ -121,6 +129,64 @@ def run_compare(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0
 
 
+def _decide_cases(ap: argparse.ArgumentParser, args: argparse.Namespace,
+                  flag: str) -> tuple:
+    """The `--case`s `flag` runs over, each a decide case on a decide route
+    (`escalation.decide_task`), or argparse's exit 2."""
+    if not args.case:
+        ap.error(f"{flag} names its decide cases with --case")
+    selected = tuple(case_mod.BY_ID[c] for c in args.case if c in case_mod.BY_ID)
+    refused = [why for case in selected if (why := escalation.decide_task(case))]
+    if refused:
+        ap.error(f"{flag}: " + "; ".join(refused))
+    return selected
+
+
+def _policy(ap: argparse.ArgumentParser, args: argparse.Namespace, selected: tuple, *,
+            sweep: bool):
+    """`--escalation` parsed against every selected case's task (the same
+    policy for each; argparse's exit 2 on a refusal), or None without it."""
+    if not args.escalation:
+        return None
+    policy = None
+    for case in selected:
+        try:
+            policy = escalation.parse(args.escalation, case.task, sweep=sweep)
+        except escalation.PolicyError as exc:
+            ap.error(f"{case.id}: {exc}")
+    return policy
+
+
+def run_sweep(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--escalation-sweep`: each named decide case's native recordings, and
+    which items each threshold of the grid escalates (`escalation.sweep`).
+    Offline: no call, and each case builds its fixture in a throwaway home."""
+    clash = [flag for flag, on in (("--live", args.live), ("--record", args.record),
+                                   ("--provider", bool(args.provider)),
+                                   ("--model", bool(args.model)),
+                                   ("--decide-backend", args.decide_backend is not None),
+                                   ("--repeat", args.repeat is not None),
+                                   ("--out", bool(args.out)))
+             if on]
+    if clash:
+        ap.error(f"--escalation-sweep is offline and prints its table; "
+                 f"it takes no {', '.join(clash)}")
+    _unknown_cases(ap, args)
+    selected = _decide_cases(ap, args, "--escalation-sweep")
+    policy = _policy(ap, args, selected, sweep=True)
+    for case in selected:
+        with temp_home():
+            print(runner.ascii_safe(escalation.sweep(case, policy)))
+    return 0
+
+
+def _unknown_cases(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    unknown = [c for c in args.case or () if c not in case_mod.BY_ID]
+    if unknown:
+        ap.error(f"unknown case(s): {', '.join(unknown)}; "
+                 f"known: {', '.join(case_mod.BY_ID)}")
+
+
 def _label(conns: dict, backend: str) -> str:
     """A config's label: `<connection kind> / <model> [<backend>]` when every
     case resolved to one model, else `routed [<backend>]`."""
@@ -134,6 +200,11 @@ def _label(conns: dict, backend: str) -> str:
 
 def _axes(args: argparse.Namespace, backend: str) -> dict:
     axes = {"backend": backend}
+    if args.escalation:
+        # The policy as given, compacted: what tells this run's config from
+        # the escalation-off run it is compared with.
+        axes["escalation"] = json.dumps(json.loads(args.escalation), sort_keys=True,
+                                        separators=(",", ":"))
     override = "+".join(name for name, on in (("provider", bool(args.provider)),
                                               ("model", bool(args.model))) if on)
     if override:
@@ -141,8 +212,21 @@ def _axes(args: argparse.Namespace, backend: str) -> dict:
     return axes
 
 
-def run_live(args: argparse.Namespace,
-             selected: tuple) -> tuple[list[runner.Result], list[dict]] | int:
+def _escalating(selected: tuple, policy) -> runner.Escalating | int | None:
+    """`--escalation`'s override for the run, its escalation role resolved in
+    the real store before any isolate (`runner.escalation_roles`); None
+    without one, and exit 1 when the role cannot serve the hop."""
+    if policy is None:
+        return None
+    try:
+        return runner.Escalating(policy, runner.escalation_roles(selected, policy))
+    except RuntimeError as exc:
+        print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+        return 1
+
+
+def run_live(args: argparse.Namespace, selected: tuple,
+             policy=None) -> tuple[list[runner.Result], list[dict]] | int:
     """`--live`: resolve every case in the REAL store, build every decide
     case's chain for every `--decide-backend`, then run each case in a
     throwaway one. The results and the run's configs, or an exit code when
@@ -155,6 +239,9 @@ def run_live(args: argparse.Namespace,
     except RuntimeError as exc:
         print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
         return 1
+    escalating = _escalating(selected, policy)
+    if isinstance(escalating, int):
+        return escalating
     # Every decide case's chain is built, for every backend, before anything
     # is sent, so one backend the model cannot take refuses the whole run.
     modes: dict[str, str] = {}
@@ -194,7 +281,7 @@ def run_live(args: argparse.Namespace,
     results = runner.live_all(selected, conns, temp_home, record=args.record,
                               backends=backends, repeat=args.repeat or 1,
                               real_home=real_home, run_id=args.run_id,
-                              run_day=usage._today(), rates=rates)
+                              run_day=usage._today(), rates=rates, escalating=escalating)
     return results, configs
 
 
@@ -213,6 +300,13 @@ def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> 
         ap.error(f"{', '.join(live_only)} only means anything with --live")
     if args.repeat is not None and not 1 <= args.repeat <= runner.MAX_REPEAT:
         ap.error(f"--repeat takes 1 to {runner.MAX_REPEAT}")
+    if args.escalation and not args.live:
+        ap.error("--escalation only means anything with --live or --escalation-sweep")
+    if args.escalation and set(args.decide_backend or (runner.CHAIN,)) != {runner.CHAIN}:
+        ap.error("--escalation runs the chain decide() sends; it takes no forced "
+                 "--decide-backend")
+    if args.escalation and args.record:
+        ap.error("--escalation is a comparison run; it records no baseline")
     if args.record and ((args.repeat or 1) > 1 or len(set(args.decide_backend or ())) > 1):
         ap.error("--record keeps one reply as the baseline; with --repeat over 1 or "
                  "several --decide-backend it is ambiguous which")
@@ -249,6 +343,14 @@ def main(argv: list[str] | None = None) -> int:
                          "evals/out/, which git ignores); nothing is written without it")
     ap.add_argument("--compare", nargs="+", metavar="FILE",
                     help="print one table from saved run files; offline, never a call")
+    ap.add_argument("--escalation", metavar="POLICY_JSON", default="",
+                    help="with --live, answer each --case's decide items under this "
+                         "escalation policy (a routing.TaskPolicy's escalation fields, "
+                         "as JSON) for this run only; with --escalation-sweep, the "
+                         "question, triggers and answer filter the sweep reads")
+    ap.add_argument("--escalation-sweep", action="store_true",
+                    help="for each --case, which items of its native recordings each "
+                         "margin threshold would escalate; offline, never a call")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
 
@@ -256,20 +358,23 @@ def main(argv: list[str] | None = None) -> int:
         return run_gate(ap, args)
     if args.compare:
         return run_compare(ap, args)
+    if args.escalation_sweep:
+        return run_sweep(ap, args)
 
     _check_live_flags(ap, args)
+    _unknown_cases(ap, args)
 
     selected = case_mod.CASES
     if args.case:
-        unknown = [c for c in args.case if c not in case_mod.BY_ID]
-        if unknown:
-            ap.error(f"unknown case(s): {', '.join(unknown)}; "
-                     f"known: {', '.join(case_mod.BY_ID)}")
         selected = tuple(case_mod.BY_ID[c] for c in args.case)
+    policy = None
+    if args.escalation:
+        selected = _decide_cases(ap, args, "--escalation")
+        policy = _policy(ap, args, selected, sweep=False)
 
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if args.live:
-        ran = run_live(args, selected)
+        ran = run_live(args, selected, policy)
         if isinstance(ran, int):
             return ran
         results, configs = ran

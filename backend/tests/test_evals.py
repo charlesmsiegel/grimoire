@@ -844,9 +844,10 @@ def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch
         "unknown-id": ("identity.known_ids", "identity.same_obligation"),
         "native": (),
         "native-unknown-id": ("identity.known_ids", "identity.same_obligation"),
-        "native-refused": ("identity.covers_rows",)}
+        "native-refused": ("identity.covers_rows",), "native-margins": ()}
     assert {r.variant: r.native for r in case.recordings if r.native} == {
-        "native": "openai", "native-unknown-id": "openai", "native-refused": "openai"}
+        "native": "openai", "native-unknown-id": "openai", "native-refused": "openai",
+        "native-margins": "openai"}
     ctx = runner.prepare(case)
     exam = ctx["exam"]
     items = ctx["items"]

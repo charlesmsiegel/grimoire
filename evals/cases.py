@@ -2102,7 +2102,12 @@ CASES: tuple[Case, ...] = (
              # The first row refused: the app leaves that row unchecked, so it
              # is not covered, and its verdict is left out rather than failed.
              Recording("native-refused", ("identity.covers_rows",), "json",
-                       native="openai"))),
+                       native="openai"),
+             # The compliant verdicts again, each with the distribution the
+             # endpoint reported beside it: a narrow lead, a partial report
+             # of exactly 0.6, and a narrower lead still.
+             # What `--escalation-sweep` reads margins from (spec 01d §6.3).
+             Recording("native-margins", (), "json", native="openai"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "

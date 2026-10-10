@@ -69,6 +69,11 @@ backend\.venv\Scripts\python.exe evals\run.py --compare evals\out\a.json evals\o
 # the decide gate: today's parse against the structured one. Offline.
 backend/.venv/bin/python evals/run.py --gate
 backend\.venv\Scripts\python.exe evals\run.py --gate
+
+# decision escalation (below): which items each margin threshold would
+# escalate, from a decide case's native recordings. Offline.
+backend/.venv/bin/python evals/run.py --escalation-sweep --case decide-continuity-identity
+backend\.venv\Scripts\python.exe evals\run.py --escalation-sweep --case decide-continuity-identity
 ```
 
 ### What each mode can and cannot show
@@ -372,6 +377,69 @@ No kind has evidence yet, and no task lists one. The first change to list
 a kind for `response-selector` is the one that also makes it sample
 (roadmap 02-C2a), since a `native_first` entry needs `samples` or a
 `low_margin` trigger; that change, or a run before it, fills its row here.
+
+## Decision escalation
+
+A task's code policy (`routing.TaskPolicy`, spec 01d) may hand an answered
+decision item once to a stronger role when the backend itself said it was
+unsure: a native `refused`, an abstention, or a low margin between the
+answered key and its best rival (`decisions.margin`). Every task ships with
+escalation off (`routing.TASK_POLICY` is empty), and a task is switched on
+only by the change that carries its evidence, in this section. Margins exist
+only where a native decisions endpoint reported a distribution; a structured
+reply reports none, so on a structured Decision model only an abstention can
+escalate.
+
+The procedure, per task:
+
+1. **Offline sweep.** `--escalation-sweep --case <decide case>` reads the
+   case's native recordings (`recordings/decide-*.native*.json`) through
+   their adapter, prints each item's deciding answer and margin, and, for
+   each threshold from 0.05 to 0.5, which items would escalate. It counts
+   through `decisions.triggers` itself, so it agrees with the hop at the
+   boundary: a margin a float hair under the threshold (a report of exactly
+   0.6) does not escalate there. `--escalation POLICY_JSON` beside it sets
+   the deciding question, the triggers and the answer filter the sweep
+   reads; without it, the task's own question (else the case's first) and
+   every trigger. The recordings are synthetic, and a task's switching
+   change adds the cases its threshold needs: items the base answers wrongly
+   at a low margin.
+2. **Live comparison.** Two runs of the same decide cases, each saved:
+   one as the app runs today, and one with `--escalation POLICY_JSON` -- a
+   `TaskPolicy`'s escalation fields as a JSON object (`escalate_to`,
+   `escalate_on`, `question`, `margins` keyed by native kind,
+   `escalate_max`, `escalate_answers`, `reads_declines`), applied to the
+   named cases' tasks for that run only. It is refused for a task off a
+   decide route, for a role the route already runs on, for a forced
+   `--decide-backend` (the hop follows the chain `decide()` sends), and for
+   anything `backend/tests/test_task_policy.py` would refuse in the table.
+   The escalation role is resolved from the real store's settings before
+   any case runs, like each case's own resolution, and its hop is metered
+   into the case's throwaway home; the tripwire refuses the hop if that home
+   is the real one. Then `--compare` the two run files: correctness per
+   item, which items escalated, and, from the aggregate keyed by route,
+   backend and hop, the hop's own wall time, tokens and three money columns
+   apart from the base call's.
+
+   ```sh
+   backend/.venv/bin/python evals/run.py --live --case decide-continuity-identity --out evals/out/off.json
+   backend/.venv/bin/python evals/run.py --live --case decide-continuity-identity --escalation '{"escalate_to": "primary", "escalate_on": ["refused", "abstained", "low_margin"], "question": "decision", "margins": {"openrouter": 0.2}}' --out evals/out/on.json
+   backend/.venv/bin/python evals/run.py --compare evals/out/off.json evals/out/on.json
+   backend\.venv\Scripts\python.exe evals\run.py --live --case decide-continuity-identity --out evals\out\off.json
+   backend\.venv\Scripts\python.exe evals\run.py --live --case decide-continuity-identity --escalation '{"escalate_to": "primary", "escalate_on": ["refused", "abstained", "low_margin"], "question": "decision", "margins": {"openrouter": 0.2}}' --out evals\out\on.json
+   backend\.venv\Scripts\python.exe evals\run.py --compare evals\out\off.json evals\out\on.json
+   ```
+3. **The bar.** On the task's cases, escalation corrects at least one item
+   the base answered wrongly, and turns no correctly answered item wrong
+   (damage is zero). The escalation rate and the added cost and latency are
+   reported; they are the user's call, not a gate.
+4. **The record.** The comparison table goes here, under a heading naming
+   the task and the run's date, and the task's `TASK_POLICY` entry carries a
+   comment naming this section and that date. The corpus is synthetic, so no
+   library's content enters it. A continuity task's switching change also
+   adds the hop's time to CLAUDE.md's stated bound on a sweep.
+
+No task has been switched on yet.
 
 ## The decide gate
 
