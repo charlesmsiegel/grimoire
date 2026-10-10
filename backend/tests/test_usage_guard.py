@@ -42,9 +42,10 @@ Honest about its reach, the house standard:
   door instead -- every `generate` operation call (the operation guard's
   recogniser, through a binding of `grimoire.inference`) passes
   `usage=<meter>.usage`, in the package and outside it (`evals/`,
-  `backend/scripts/`). The two outside callers file no ledger row today and
-  are named, with why, in `UNMETERED_OUTSIDE`: an entry is an exemption, so
-  the list is capped, and a stale one fails.
+  `backend/scripts/`). The one outside caller that files no ledger row today
+  is named, with why, in `UNMETERED_OUTSIDE`: an entry is an exemption, so
+  the list is capped, and a stale one fails. (A live eval is metered into
+  its throwaway home, spec 01a.)
 """
 
 from __future__ import annotations
@@ -328,11 +329,11 @@ def _unmetered_generates(tree: ast.AST, modname: str, is_pkg: bool = False) -> l
 
 
 #: Outside the package, the modules whose generations file no ledger row, and
-#: why. Not a marker family: two modules, named here, each held to having
-#: such a call (`test_the_unmetered_outside_list_is_not_stale`).
+#: why. Not a marker family: one module, named here, held to having such a
+#: call (`test_the_unmetered_outside_list_is_not_stale`). A live eval is
+#: metered into its throwaway home (spec 01a, C2), so `evals.runner` is not
+#: one.
 UNMETERED_OUTSIDE: dict[str, str] = {
-    "evals.runner": "a live eval runs against a throwaway store, never the "
-                    "library whose ledger it would describe",
     "scripts.ingest_scene": "the ingest script has never filed a ledger row; "
                             "starting to changes what an ingest records",
 }
@@ -353,7 +354,7 @@ def test_the_unmetered_outside_list_is_not_stale():
     unmetered = {modname for modname, tree, is_pkg in outside_walk()
                  if _unmetered_generates(tree, modname, is_pkg)}
     assert unmetered == set(UNMETERED_OUTSIDE)
-    assert len(UNMETERED_OUTSIDE) <= 2
+    assert len(UNMETERED_OUTSIDE) <= 1
 
 
 def test_the_generate_holder_check_flags_planted_calls():

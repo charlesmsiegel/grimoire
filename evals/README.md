@@ -193,8 +193,21 @@ rather than repointing your real store's Decision role.
 every case still builds its campaign in a throwaway `GRIMOIRE_HOME`. Each case
 names the task the app meters it under (`Case.task`), and a live run sends it
 wherever the app's own seam would — the role or route chosen on the Models
-page, with its fallback, the model's facts and the route's preset. No campaign, world or character content is read or
-written. The one real-store write it can make is the same one-off
+page, with its fallback, the model's facts and the route's preset -- and the
+per-token rates (`pricing.json` and each provider's stated model rates), read
+once before the first case, so every modelled figure in the run is priced
+against one table. In the recommended setup (a throwaway `GRIMOIRE_HOME`
+holding only the chosen provider), the rates come from that store, so the run
+reports modelled figures only if a rate was set there. No campaign, world or
+character content is read or written.
+
+Every call a live case sends is metered by the app's own meter, into the
+case's throwaway home, and harvested from there into the run's report before
+that home is deleted: no eval row ever reaches your library's ledger, its
+Costs page, a campaign budget or a rollup. The money was still spent on your
+key, so your provider's invoice shows it; the eval report is where it is
+shown. A tripwire refuses any case whose home turns out to be the real one,
+before its fixture is built and again before its rows are read. The one real-store write it can make is the same one-off
 `llm_connections/` migration the app itself runs at startup, on a library old
 enough to predate that feature. Live runs cost API credits, so they are opt-in
 and the result is a report, never a gate.

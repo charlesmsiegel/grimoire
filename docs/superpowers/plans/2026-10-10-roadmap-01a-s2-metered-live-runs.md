@@ -41,14 +41,14 @@ real store and threaded through for S3.
 ### Task 1: Meter, tripwire, drain, harvest
 
 **Files:**
-- Modify: `evals/runner.py` (`Result`, `live`, `live_all`, new `harvest`, `drain`, `FollowUpsRunning`, `ISOLATE_ERROR`, `DRAIN_CEILING_S`, `report`)
-- Modify: `evals/run.py` (`temp_home` keeps the isolate on `FollowUpsRunning`; `run_live` records `real_home`, reads rates, mints the run id and day)
+- Modify: `evals/runner.py` (`Result`, `live`, `live_all`, new `harvest`, `drain`, `FollowUpsRunningError`, `ISOLATE_ERROR`, `DRAIN_CEILING_S`, `report`)
+- Modify: `evals/run.py` (`temp_home` keeps the isolate on `FollowUpsRunningError`; `run_live` records `real_home`, reads rates, mints the run id and day)
 - Modify: `backend/tests/test_usage_guard.py` (`UNMETERED_OUTSIDE`, cap 1)
 - Modify: `evals/README.md` ("What a live run reads": rates)
 - Test: `backend/tests/test_evals.py`
 
 **Interfaces:**
-- Produces: `Result.rows: tuple[dict, ...] | None = None` (None: nothing harvested — replay), `Result.ledger_error: str = ""`; `live(case, target, record=False, *, client=None, backend=CHAIN, real_home: Path | None = None, run_id: str = "", run_day: str = "", rates: usage.Rates | None = None) -> Result`; `live_all(..., real_home=None, run_id="", run_day="", rates=None)`; `harvest(run_day: str, run_id: str, case_id: str) -> tuple[dict, ...]` (raises `OSError`); `drain(ctx: dict, ceiling: float = DRAIN_CEILING_S) -> None` (raises `FollowUpsRunning`); `class FollowUpsRunning(RuntimeError)` with `.result: Result`.
+- Produces: `Result.rows: tuple[dict, ...] | None = None` (None: nothing harvested — replay), `Result.ledger_error: str = ""`; `live(case, target, record=False, *, client=None, backend=CHAIN, real_home: Path | None = None, run_id: str = "", run_day: str = "", rates: usage.Rates | None = None) -> Result`; `live_all(..., real_home=None, run_id="", run_day="", rates=None)`; `harvest(run_day: str, run_id: str, case_id: str) -> tuple[dict, ...]` (raises `OSError`); `drain(ctx: dict, ceiling: float = DRAIN_CEILING_S) -> None` (raises `FollowUpsRunningError`); `class FollowUpsRunningError(RuntimeError)` with `.result: Result`.
 
 - [ ] **Step 1: Failing tests** in `test_evals.py`:
   - `test_a_live_generate_case_files_one_eval_row`: `FakeLLM(usage={"prompt_tokens": 12, "completion_tokens": 3, "cost_usd": 0.0042})` → one row, `task == case.task`, no `campaign`, `scope == "eval"`, `eval_run` and `case` stamped; the isolate's own ledger row has no `scope`.
@@ -59,7 +59,33 @@ real store and threaded through for S3.
   - `test_the_drain_waits_for_a_follow_up` and `test_a_follow_up_past_the_ceiling_keeps_the_isolate` (fake app whose `state.runs.any_live()` is truthy while a thread is pending; `DRAIN_CEILING_S` patched to 0.1; the second through `run.temp_home`).
   - `test_rates_are_read_in_the_real_store`: `usage.Rates.current` patched to note `paths.home()` → called once, with the real home.
 - [ ] **Step 2: Run** `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_evals.py -q` → new tests fail.
-- [ ] **Step 3: Implement.** In `live`: tripwire before `prepare`; generate inside `with store.usage.meter(case.task) as m:` passing `usage=m.usage`; after the model work, `drain(ctx)`, the tripwire again, then `harvest`. `live_all` catches `FollowUpsRunning` *outside* `with isolate()`, appends its result, and reports every remaining case `not run: an earlier case's follow-ups are still running`. `temp_home` neither restores the environment nor deletes the directory when `FollowUpsRunning` passes through it. The report prints `           calls N` for a harvested result, or the ledger sentence.
+- [ ] **Step 3: Implement.** In `live`: tripwire before `prepare`; generate inside `with store.usage.meter(case.task) as m:` passing `usage=m.usage`; after the model work, `drain(ctx)`, the tripwire again, then `harvest`. `live_all` catches `FollowUpsRunningError` *outside* `with isolate()`, appends its result, and reports every remaining case `not run: an earlier case's follow-ups are still running`. `temp_home` neither restores the environment nor deletes the directory when `FollowUpsRunningError` passes through it. The report prints `           calls N` for a harvested result, or the ledger sentence.
 - [ ] **Step 4: Guard.** Remove `evals.runner` from `UNMETERED_OUTSIDE` and set the cap to 1.
 - [ ] **Step 5: README** — add "and the per-token rates" and the throwaway-store note (§10).
 - [ ] **Step 6: Run** `tests/test_evals.py tests/test_usage_guard.py` → PASS. Commit `01a-S2: meter live evals in the isolate and harvest their rows`.
+
+## Plan gate (substitute review, 2026-10-10)
+
+The Codex CLI is not installed; a hostile subagent review stood in. Folded:
+
+- **B1** A non-`LLMError` from the model work skipped the drain and let
+  `temp_home` restore the real home under a running follow-up. `live` now
+  drains on any exception and turns a timeout into `FollowUpsRunningError`
+  (test: `test_an_unexpected_exception_is_drained_before_the_isolate_restores`).
+- **S1** A drain timeout dropped the case's spend. The kept isolate is read
+  (reading writes nothing) and the rows are kept, marked `partial`.
+- **S2** `live_all` with no `real_home` checked nothing. It now takes the home
+  active before the first isolate (test:
+  `test_live_all_trips_on_the_home_active_when_it_starts`).
+- **S5** The lint ratchet runs before each commit; `live` is split
+  (`_ask`, `_model_work`, `_settle`) to stay under C901.
+- **S6** The drain's case contract is `ctx["app"]` (polled through
+  `app.state.runs.any_live()`) and `ctx["shutdown"]` (ends the lifespan,
+  which stops the threads a run registry does not see), stated on `drain`.
+- **M7** `test_usage_guard.py`'s docstring updated for one outside caller.
+
+Not folded: **M3** (the no-real-home test passes before S2: it is a
+regression guard, not a red-first test); **M4** (a row `record` failed to
+append is undetectable from the holder without changing `Meter`, which this
+spec does not touch); **M8** (a strict read still skips a torn line, as every
+reader does; "strict" is about the file).
