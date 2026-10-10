@@ -1,6 +1,6 @@
 # 01h. Embedding options, async embed, embedding evals
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01h in `ROADMAP-CHECKLIST.md`. Lane: retrieval (feeds 03, 05, 08, 09).
 **Baseline:** `main` at `35c1fb7`.
@@ -21,21 +21,24 @@ It must hold 03's section 2a item 7
 |---|---|---|---|
 | (landed) `embed_sync`, `embed_space.endpoint`, `resolve.embedding`, model facts, the `confirm_embedding` gates | 01 | Everything here extends them in place | Hard |
 | 01a-C1 | 01a | Per-run wall time, tokens and the three money columns in the embedding eval's report (C6) | Hard for C6 only |
-| 01a-C2 | 01a | A live embedding eval files its ledger rows under the marked eval scope, kept out of campaign spend | Hard for C6 only |
+| 01a-C2 | 01a | A live embedding eval's rows are filed in the case's isolate (01a's eval scope) and harvested into the report, never reaching the library's ledger; a case resolves its embed space from the real store before entering the isolate | Hard for C6 only |
 | 01a-C3 | 01a | One comparison table across embedding configurations (C1/C2 on vs off) | Soft |
 | 01s (planned) | 01s | The Embedding row of the Models summary, where the options readout sits (section 4.4) | Soft |
+| 01g-C3 | 01g | The `run_id` field a ledger row carries, which C5's optional `run_id` is stamped into | Soft |
 
-C1 to C5 depend on nothing unlanded. Only C6 waits for 01a.
+C1 to C5 depend on nothing unlanded, except that C5's `run_id` has no row
+field to land in until 01g-C3 does. Only C6 waits for 01a (hard).
 
 ## Required by
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01h-C1 | 08, 09 | Embed SearchDocuments as documents and the retrieval query as a query |
-| 01h-C2 | 08, 09 (indirectly) | Smaller vectors for a larger corpus, at the user's choice |
-| 01h-C3 | 03, 08 | The vector key covers the options, so 03's "vectors are keyed by space and text" (2a item 7) and 08-C2's key stay true |
-| 01h-C4 | 09 | Retrieval on the turn path without blocking the event loop |
-| 01h-C5 | 05 | `cache sync --all` embeds across campaigns in shared batches and still charges each campaign its own rows |
+| 01h-C3 | 03 (soft) | The vector key covers the options, so 03's "vectors are keyed by space and text" (2a item 7) holds; 03's `materialized` kind is `vector:<projection>:<space-digest>` |
+| 01h-C1, 01h-C3, 01h-C5 | 05 (soft) | Re-embedding hot documents as documents in the right space; `cache sync --all` embeds across campaigns in shared batches and still charges each campaign its own rows |
+| 01h-C3 | 08 (hard once C1 sends a type) | 08-C2's key, `embedding_space + hash(text)`, stays the vector key with options in the space |
+| 01h-C1 | 08 (soft), 09 (soft) | Embed SearchDocuments as documents and the retrieval query as a query, compared only within one space |
+| 01h-C4a, 01h-C4b | 09 (hard for the turn path) | Retrieval on the turn path without blocking the event loop |
+| 01h-C2 | (no named consumer) | Smaller vectors for a larger corpus, at the user's choice |
 | 01h-C6 | 09 (09-C4), and every change of C1/C2 defaults | Evidence that an option, a model or a retrieval change helps |
 
 ## 1. Current state (reconciled against main)
@@ -131,8 +134,8 @@ retrieval quality, and live runs are unmetered (01a closes that).
    **byte-identical** to today. No `.vec` file, continuity basis or 03 key is
    invalidated by upgrading (C3).
 4. Give async callers a **native async embed** that never blocks the loop and
-   closes the header-drip hole. Make blocking on the loop impossible to ship
-   unnoticed (C4).
+   closes the header-drip hole (C4b). Make blocking on the loop impossible
+   to ship unnoticed (C4a).
 5. Let one batched job embed **across campaigns** and still file each
    campaign's spend under that campaign, exactly (C5).
 6. Measure **retrieval recall@k** on a synthetic corpus, comparable across
@@ -237,6 +240,11 @@ them.
   (`DOC_BYTES`, `QUERY_BYTES`, `PASSAGE_BYTES`) happens before the prefix is
   added. A prefix is at most 200 characters, which those bounds already leave
   room for under an 8k-token window (`semantic.py:94-102`).
+- **A query vector is compared only within its own space** -- the space
+  the document vectors it scores against were read under, which is the
+  `space` the call was handed -- and it is **never cached**: no call site
+  saves one (`semantic.py:322-324`), and C1 adds no path that does. 09 relies
+  on both halves.
 - **`param`**: a request carries one input type. So the client splits at the
   query/document boundary as well as every `BATCH`. The body is
   `{"model", "input", <param_field>: <value>}`. A recall turn on a `param`
@@ -394,13 +402,17 @@ follows what is sent and nothing else.
   (`vectors.py:61-66`), and it is confirmed first (section 4.1).
 - **03, section 2a item 7 holds.** Vectors stay keyed by space and exact text,
   never by `BUILD`. The options are inputs to the space, carried by the space
-  id string 03 already treats as opaque.
+  id string 03 already treats as opaque. 03's `materialized` record names a
+  vector `vector:<projection>:<space-digest>` (a cross-spec decision in
+  `ROADMAP-CHECKLIST.md`), so the NUL bytes a space id carries never reach its
+  SQLite column, and an options change is a new digest there too.
 
 ### 5.3 Document vectors only, and a rule for query vectors
 
 `vectors.py` caches **document-side** vectors under the space id. No path
-caches a query vector today, and none is added here. For a future caller (09
-may want cached expansions), the rule is fixed now so it cannot collide:
+caches a query vector today, and none is added here: under 01h-C1 a query
+vector is never cached. Should a later spec ever change that by its own
+contract, the key it must use is fixed now so it cannot collide:
 
 ```python
 def cache_space(space: str, options: EmbedOptions, side: Literal["query", "document"]) -> str
@@ -411,9 +423,9 @@ It returns `space` for a document, or for any side when `options.input ==
 text, so sharing the key is correct. Otherwise it returns `space + "\0query"`
 for a query.
 
-## 6. Async embed (C4)
+## 6. Async embed (C4a, C4b)
 
-### 6.1 Nothing embeds on the event loop
+### 6.1 Nothing embeds on the event loop (C4a)
 
 1. **Fix the opener.** In `routes/greetings.py:98-110`, `frames()` awaits
    `run_in_threadpool` around `compose_opener` and `_record_prompt`. That
@@ -431,7 +443,7 @@ for a query.
    `TIMEOUT + READ_SLICE`. A static guard cannot catch this: the opener
    reaches `embed_sync` six frames down, through sync code.
 
-### 6.2 A native async door
+### 6.2 A native async door (C4b)
 
 `embed()` stops being `to_thread`. It becomes:
 
@@ -465,7 +477,7 @@ helpers both doors call, so the two cannot drift.
   planning hop, when they are written. Code in a worker keeps `embed_sync`. The
   context builder is synchronous to its roots (`semantic.py:72-82`), and
   making it async is not this spec. A worker thread does not block the loop,
-  which is the property C4 promises. `vectors.load`/`save` stay synchronous
+  which is the property C4a promises. `vectors.load`/`save` stay synchronous
   disk I/O, so an async caller reaches them through `run_in_threadpool`.
 
 ## 7. Cross-campaign attribution (C5)
@@ -484,7 +496,8 @@ class EmbedGroup:
 
 def attribute(claims: Iterable[tuple[str, str]]) -> list[EmbedGroup]
 def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
-                      deadline=None, budgeted=False) -> list[GroupResult]
+                      deadline=None, budgeted=False,
+                      run_id: str = "") -> list[GroupResult]
 # GroupResult: vectors (in the group's text order) or None, and error kind or ""
 ```
 
@@ -505,6 +518,13 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   This is the same split `semantic._embed` makes (`semantic.py:363-370`). The
   caller saves what landed, as `similarity.embed_missing` does per chunk
   (`similarity.py:546-566`).
+- **`run_id`** (optional, default `""`). 01g asked for it: embeds made
+  inside a tool loop are attributed to that loop's run. `embed_sync` and
+  `embed` take the same keyword. When it is set, each row the call files
+  carries it in 01g-C3's `run_id` ledger field, beside the campaign and scene;
+  when it is empty the row is today's. It attributes and never resolves
+  anything: the space and the client are still handed in. Until 01g-C3 adds
+  the field to `usage.meter`, the keyword is accepted and not filed.
 - `cached`/`uncached` go to the first group's call only (the `Counts` rule,
   `similarity.py:510-525`).
 - `test_operation_guard.py` learns the new door: a task literal in
@@ -542,15 +562,21 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   proves the harness, the prefixes, the `param` split and the dimensions
   check end to end, and makes no claim about quality.
 - **Live (`--live --embed`)** costs money and is opt-in like every live run.
-  - It resolves the Embedding role from the real store, as `run_live` does
-    (`evals/run.py:72-112`), then embeds inside `temp_home()`. The synthetic
-    corpus's vectors therefore never land in the user's cache.
+  - Each embed case **resolves its space before entering the isolate**
+    (01a section 4): the Embedding role is read from the real store, as
+    `run_live` does for a chat model (`evals/run.py:72-112`), and the
+    resulting endpoint dict -- options included -- is handed into the
+    case. Inside `temp_home()` nothing re-resolves; the throwaway store has
+    no providers to resolve from. The synthetic corpus's vectors therefore
+    never land in the user's cache.
   - Before sending, it prints the corpus size in bytes and the estimated
     tokens.
   - `--embed-options <json>` (repeatable) runs the same corpus under each
     option set in memory, without writing facts. That is the C1/C2 A/B.
-  - Rows go under 01a-C2's eval scope with the real embed task of each shape,
-    so 01a-C1's per-task report reads naturally.
+  - Rows are filed in the case's isolate, which is 01a-C2's eval scope, and
+    harvested into the report before it is deleted; they never reach the
+    library's ledger. Each carries the real embed task of its shape, so
+    01a-C1's per-task report reads naturally.
   - The output is 01a-C1's per-run wall time, prompt tokens and three money
     columns, and 01a-C3's comparison table across option sets.
   - `--record` saves rankings.
@@ -567,6 +593,8 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
     prefix (any batch) or as `param_field` (one type per request, under one
     meter).
   - `none` sends today's exact body.
+  - A query vector is compared only within the same space as the document
+    vectors it is scored against, and is never cached.
   - No guarantee is made about vector quality.
 - **01h-C2, dimensions.**
   - A stated `dimensions` is sent as `dimensions_field`.
@@ -581,9 +609,11 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   - Vectors are keyed `sha256(space\0text)`, independent of `BUILD`.
   - Query vectors, if ever cached, use `cache_space` (5.3).
   - A change of the role's options is a confirmed move.
-- **01h-C4, async.**
+- **01h-C4a, no embedding on the event loop.**
+  - The opener's compose runs in `run_in_threadpool`.
   - Nothing calls `embed_sync` on a loop thread. The runtime guard refuses it
-    as `network`/`on_loop` and logs one error row.
+    as `network`/`on_loop`, so the caller degrades, and logs one error row.
+- **01h-C4b, native async embed.**
   - `await embed(...)` is native async: one total deadline, cancellable (a
     cancel files `aborted`), metered and captured as `embed_sync` is.
   - Async callers get the client from `routes.get_embeddings`.
@@ -593,11 +623,15 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   - A text shared by several campaigns is unattributed.
   - An endpoint-wide failure stops the run, and the rest is `not_sent` and
     files nothing.
+  - An optional `run_id` (also on `embed_sync`/`embed`) is filed on every
+    row in 01g-C3's field, so embeds inside a tool loop belong to its run.
   - Synchronous, so 05's CLI can call it outside a loop.
 - **01h-C6, evals.**
   - `evals/run.py --embed`: recall@k (1/3/5/10) and MRR per shape, against a
     lexical baseline.
   - Replay of recorded rankings runs offline in `make check`.
+  - A live case resolves its embed space from the real store before entering
+    the isolate, and its rows stay in the isolate (01a-C2).
   - Live runs cost money, are opt-in, run in a throwaway store, are metered
     under 01a-C2, are reported through 01a-C1, and compare option sets
     through 01a-C3.
@@ -738,7 +772,7 @@ embedding request it would not have issued before.
    generic*, with suggestions. Provider field names are unverified for half
    the table (3.5), and a preset that guessed wrong would need a release to
    fix.
-7. **03 note, not a change to 03.** Space ids already contain NUL bytes, and
-   03's `materialized.kind` is `vector:<space>`. 03 may prefer
-   `vector:<sha256(space)>` so its SQLite column holds no NUL. Recommend 03
-   decide this in its plan. Nothing here depends on it.
+7. **03's vector kind (resolved).** The cross-spec decision in
+   `ROADMAP-CHECKLIST.md` makes 03's `materialized` vector kind
+   `vector:<projection>:<space-digest>`, so the NUL bytes in a space id never
+   reach 03's column. Nothing is left to decide here.

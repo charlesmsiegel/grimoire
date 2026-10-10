@@ -1,6 +1,6 @@
 # 04. Instant Worlds, Campaigns, Todo and shell
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 04 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06).
 **Baseline:** `main` at `35c1fb7`.
@@ -23,13 +23,17 @@ records why it does not land layer 3 (section 6.6).
 
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 03-C1 | 03 | Composite keys: the card rows over one file, `scene_summary` over a collection digest, `scene_turns` over a file plus a non-file input (player names), `continuity_summary` over five absent-ok files (section 3). Also needs a collection **member filter** (section 3.4); see Open question 8. | Hard |
+| 03-C1 | 03 | Composite keys: the card rows over one file, `scene_summary` over a collection digest with a **member filter** (section 3.4), `scene_turns` over a file plus a non-file input (player names), `continuity_summary` over five absent-ok files (section 3). | Hard |
 | 03-C2 | 03 | Liveness by construction. It is why Grimoire's own writes need no server-side retirement step (section 5.1) and why an external edit is seen on the next read (section 6.5). | Hard |
 | 03-C4 | 03 | The validate-and-hash primitive behind every key, and its rule 5 registry flag: every kind here is registered "may use persisted `sources`", and 03's guard keeps them away from decision sites (section 3.7). | Hard |
-| 03-C5 | 03 | Storing artifacts at write time: the turn path warms `scene_head` and `scene_turns` for the scene it just wrote (04-C2a). | Hard for 04-C2a only; the rest of 04 works without it |
-| 03-C6 | 03 | Batch lookup of `scene_head` artifacts for a campaign's live scene set on a `scene_summary` miss (section 3.4). | Soft: without it the miss path does one lookup per scene |
-| 03-C3 | 03 | Nothing directly. Every artifact 04 stores leaves `materialized` rows because 03 writes them; 05 reads them. | Soft (05's) |
-| 03 kill switch, section 13 | 03 | `GRIMOIRE_COMPILED_CACHE=0` for the cached-versus-uncached equivalence tests (section 12). | Soft |
+| 03-C5 | 03 | Storing artifacts at write time: the turn path warms `scene_head` and `scene_turns` for the scene it just wrote. | Hard for 04-C2a only; the rest of 04 works without it |
+| 03-C6 | 03 | Batch lookup of `scene_head` artifacts for a campaign's live scene set on a `scene_summary` miss (section 3.4), and the hit and miss counts 04-C3a surfaces (section 8). | Soft: without it the miss path does one lookup per scene, and the compiled counters read zero |
+| 03-C9 | 03 | The synthetic-library generator, owned by 03's plan. 04-C3b extends it with the overview scenarios and the harness (section 9). | Soft: without it 04-C3b builds the generator core to section 9.1 itself |
+
+03-C3 (`materialized`) is not used directly: every artifact 04 stores leaves
+`materialized` rows because 03 writes them, and 05 reads them. 03's kill
+switch (`GRIMOIRE_COMPILED_CACHE=0`, 03 section 13) is used by the
+cached-versus-uncached equivalence tests (section 12).
 
 No 01x contract is used. Nothing here makes an LLM call.
 
@@ -37,12 +41,13 @@ No 01x contract is used. Nothing here makes an LLM call.
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 04-C1a, 04-C1b | 05 (05-C3) | The overview kinds are registry entries with byte-fed computes, so 05's eager rebuild can rebuild them from the `materialized` record without calling route code. |
-| 04-C1c | 05 | The per-scope composition is what 05's sync summary can say it refreshed ("campaign X's scene and continuity projections"), without naming content. |
-| 04-C2a | 05 (05-C1) | The warm hook 05's in-process sync primitive calls from every writer. 04 wires it at one site; 05 generalises it. |
-| 04-C2b | 05 | The client's consistency bound. 05 promises "the same guarantee after `cache sync`"; this is the guarantee. |
-| 04-C3a | 05, 08 | The counters 05 and 08 report their own hit/miss and rebuild costs through. |
-| 04-C3b | 05, 08, and 03's own plan acceptance | The synthetic library and its harness. 03 section 14 already requires a committed generator; see Open question 7. |
+| 04-C2a | 05 (soft) | The post-turn warm hook. 05-C1's write-through queue generalises it to every writer; 04 wires it at one site only. |
+| 04-C2b | 05 (hard, as a property relied on) | The client's consistency bound (section 6.5). 05 promises the same guarantee after `cache sync`, and this is that guarantee. 05 changes nothing on the client. |
+| 04-C2b | 06 (soft) | The store-editing skill states the same bound to an agent: after a direct edit, an open overview page may show one stale, revalidated frame. |
+
+The other items (04-C1a/b/c, 04-C3a/b) have no cross-spec consumer in the
+checklist. 05 may still rebuild 04's kinds through 03-C3 and report through
+04-C3a's counters, but neither is an edge it depends on.
 
 ## 1. Current state (reconciled against main)
 
@@ -335,10 +340,10 @@ directory.
 exactly `list_scenes`' enumeration (`scenes/read.py:77-79`). The same
 directory also holds `<sid>.review.json` sidecars and other per-scene files. A
 digest over the whole directory would move whenever a review was written,
-and would miss for a reason the summary does not depend on. 03 section 7 says
-"list the directory" and names no filter. **This spec needs 03-C1's
-collection to be `(directory, member filter)`, with the filter part of the
-kind's declaration and covered by its `version`** (Open question 8).
+and would miss for a reason the summary does not depend on. 03-C1's collections take a member
+filter. This kind declares `(scenes/, *.md with a safe_id stem)` as its
+collection, and the filter is part of the kind's declaration and covered by
+its `version`.
 
 Output:
 
@@ -890,7 +895,7 @@ set costs a `ContextVar.get` and a `None` test.
 | `statcache.hit.<kind>`, `statcache.miss.<kind>` | `memo`, `memo_stamped` |
 | `frontmatter.parse`, `frontmatter.parse_head` | `parse_frontmatter`, `parse_frontmatter_head`, and the new text form |
 | `transcript.parse` | `serialize._parse_messages` |
-| `compiled.hit.<kind>`, `.miss.<kind>`, `.store.<kind>`, `.bypass` | 03's `derive` (Open question 9) |
+| `compiled.hit.<kind>`, `.miss.<kind>`, `.store.<kind>`, `.bypass` | 03's lookups (03-C6 reports hit and miss counts) |
 | `compiled.sources_hit`, `.sources_miss`, `.bytes_hashed`, `.collection_digest` | 03's validate-and-hash and collection paths |
 | `overview.computed.<kind>` | the overview computes |
 | `todo.scope.library`, `todo.scope.campaign` | `live()` |
@@ -965,10 +970,11 @@ from a real library** (`CLAUDE.md`, Privacy). For `large`:
 - at least one campaign far larger than the rest, for the "one campaign
   changed in a large library" scenario.
 
-**Coordination with 03.** 03 section 14 already requires "a generated
-synthetic library ... The generator is committed", for 03's own acceptance.
-Whichever plan lands first builds the generator to this section, and the other
-extends it (Open question 7).
+**Coordination with 03.** The generator is 03-C9, owned by 03's plan for
+03's own acceptance (03 section 14). 04-C3b extends it: this section is what
+the overview scenarios need from it, and the harness in 9.2 is 04's. If 03-C9
+has not landed when 04's plan starts, 04 builds the core to this section and
+03 adopts it.
 
 ### 9.2 Harness
 
@@ -1036,7 +1042,10 @@ extends it (Open question 7).
     never stored;
   - only the four overview read routes reach these kinds (3.7).
 
-**04-C1c. Per-scope Todo and shell composition.**
+**04-C1c. A Todo scope assembled from projections plus live chores, and
+the shell composed from the same projections.** Three campaign chores
+(`sheets`, `avatars`, the `anchors`/`taglines` pair) cannot be projected,
+because their inputs cannot be named in advance (4.4).
 
 - `live(cid)`'s payload shape is unchanged.
 - A campaign scope is `CAMPAIGN_BUILDERS` over a `_Ctx` whose
@@ -1053,7 +1062,7 @@ extends it (Open question 7).
   - the chore classification table (4.4) is the registry of what is projected
     and what is live, and a new chore must take a row in it.
 
-**04-C2a. Server-side write handling.**
+**04-C2a. A post-turn warm hook, and no server-side retirement step.**
 
 - No server-side retirement step exists or is needed (03-C2).
 - `overview.warm_scene(cid, sid)` stores `scene_head` and `scene_turns` for a
@@ -1065,7 +1074,7 @@ extends it (Open question 7).
 - **Guarantee:** a warmed artifact is keyed on bytes read back from disk.
 - **Failure:** a failed warm is a later miss, and nothing else.
 
-**04-C2b. Client first paint and retirement.**
+**04-C2b. First paint from client memory, then revalidate; a consistency bound.**
 
 - `listWorlds`, `listCampaigns` and `getTodo` answers are remembered, root-
   and key-scoped, in memory only.
@@ -1078,7 +1087,7 @@ extends it (Open question 7).
   remembered answer.
 - **Guarantee:** the bound in section 6.5.
 
-**04-C3a. Instrumentation.**
+**04-C3a. Counters and a debug line.**
 
 - `store/readstats.py` is a leaf, contextvar-scoped counter set with the
   counter names in section 8.
@@ -1086,22 +1095,20 @@ extends it (Open question 7).
   counts and milliseconds only.
 - **Failure:** instrumentation never raises and never changes an answer.
 
-**04-C3b. Synthetic library and harness.**
+**04-C3b. A benchmark harness that runs on synthetic libraries only**, extending 03-C9's generator.
 
-- `synth_library.py` uses store writers only, placeholder names, generated
+- The generator (03-C9, extended here) uses store writers only, placeholder names, generated
   prose and images, a seeded clock, and the `.synthetic-library` marker.
 - `bench_overview.py` refuses anything but a marked synthetic library away from
   the default store, runs the scenarios in 9.2, and prints counters and timings
   only.
 - Counter assertions on the `small` profile run inside `make check-py`.
 
-**Changes from the checklist:**
-
-- **04-C1** is split into C1a, C1b and C1c. The draft's single per-scope Todo
-  artifact becomes a composition, for the reason in 4.4.
-- **04-C2** is split into C2a and C2b. On the server, "synchronous
-  retirement" is inherited from 03-C2. The mechanism lives in the client.
-- **04-C3** is split into C3a and C3b.
+**Relation to the checklist:** these IDs and headlines match
+`ROADMAP-CHECKLIST.md`. Two readings are recorded here: the draft's single
+per-scope Todo artifact is a composition (4.4), and on the server
+"synchronous retirement" is inherited from 03-C2, so the mechanism lives in
+the client (04-C2b).
 
 ## 11. Interaction with repo rules
 
@@ -1332,7 +1339,9 @@ compiled cache never writes into it (03 section 14).
    pack fails to load is reported on the campaign's own pages. `world_row`
    gains a `module` field for this (raw), and `GET /worlds` gains the field as
    well. `WorldMeta.module` is already typed for it (`api/types.ts:746-760`).
-5. **Mark the read-path spec's layer 3 as superseded?** *Recommendation:* yes,
+5. **Mark the read-path spec's section 3 (library epoch, `ETag`/`304`) as
+   superseded? This needs the user's call.** `ROADMAP-CHECKLIST.md` lists it
+   under "Existing decisions these specs supersede". *Recommendation:* yes,
    for these four routes, with a pointer to 6.6. Leave the idea of a
    projection-key validator for a later spec, if 04's measurements show that
    revalidation transfer matters.
@@ -1340,22 +1349,11 @@ compiled cache never writes into it (03 section 14).
    descending, then `sid` ascending. That is deterministic across devices.
    Leave `list_scenes` untouched, since the scenes list and decision sites
    use it.
-7. **Who builds the synthetic generator: 03's plan or 04's?** 03 section 14
-   needs one for its own acceptance and names no contract for it.
-   *Recommendation:* 03's plan builds the generator core to section 9.1 here,
-   because it lands first. 04 adds the overview scenarios and the harness. A
-   checklist note (or a new 03 contract item) records the hand-off. **Missing
-   edge.**
-8. **Collection member filters in 03-C1.** `scene_summary` needs a collection
-   defined as `(directory, filter)`, so that review sidecars in `scenes/` do
-   not move its key. *Recommendation:* 03's plan adds it to the collection API,
-   with the filter declared on the kind and covered by its `version`. Without
-   it, 04 keys over the whole directory and accepts a miss per review write.
-   That is correct but colder. **Missing edge.**
-9. **Hit and miss reporting from 03's `derive`.** 04-C3a needs 03's module to
-   report hit, miss, store and bypass per kind, plus hashed bytes and digests,
-   through `readstats.bump`. *Recommendation:* 03's plan adds the `bump` calls,
-   since `readstats` is a leaf with no dependencies. **Missing edge.**
+7. **Resolved: the synthetic generator is 03-C9**, owned by 03's plan and
+   extended by 04-C3b (section 9.1).
+8. **Resolved: collection member filters are part of 03-C1** (section 3.4).
+9. **Resolved: lookup hit and miss counts are part of 03-C6** (section 8).
+   04's plan routes them into `readstats.bump`.
 10. **A CI timing budget for the overview harness**, like `perf_budget.json`?
     *Recommendation:* not in 04. The counter assertions are deterministic and
     are the gate. Revisit once the harness has run on CI enough times to give

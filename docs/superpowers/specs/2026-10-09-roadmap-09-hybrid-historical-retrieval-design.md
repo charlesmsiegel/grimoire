@@ -1,6 +1,6 @@
 # 09. Hybrid historical retrieval
 
-**Status:** Draft -- spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 09 in `ROADMAP-CHECKLIST.md`. Lane: retrieval.
 **Baseline:** `main` at `35c1fb7`.
@@ -20,32 +20,35 @@ anchor (`store/context/archive.py`, `store/context/semantic.py`,
 
 ## Depends on
 
+Edges as `ROADMAP-CHECKLIST.md` lists them for 09.
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 07-C2 derived inverse membership (actor -> groups) | 07 | The `group` structural relation: scenes where several members of a present actor's group stood (section 5.3) | Soft: the relation is absent until it lands; every other signal works |
-| 08-C1 scene SearchDocument with metadata, keyed by input digest + `search_document_version` | 08 | The unit every lexical and semantic signal scores, and its metadata (scene identity, date, location, cast) | Hard |
-| 08-C2 lazy build, hot rebuild via 05, embeddings keyed by space and text | 08 | Building the live set on demand, bounded per turn; loading document vectors by `vectors.load(space, texts)` | Hard |
-| 08-C3 history embed task and transcript-expansion helper | 08 | The document-side embed task, and turning a selected scene into bounded excerpts (section 8) | Hard |
-| 03-C6 batch lookups over a live key set, index ranking restricted to it | 03 | Looking up SearchDocuments and any lexical index only for keys computed from the filesystem this turn (section 6.4) | Hard |
-| 03-C7 vectors keyed by text, never `BUILD` | 03 | An upgrade costs embeddings only where SearchDocument text moved | Hard (inherited through 08) |
-| 01e-C1 `Rank` question; 01e-C2 finer `Score` with explicit ties | 01e | The optional rerank stage (section 7) | Soft: rerank is off by default and its slice waits for 01e |
-| 01h-C1 query vs document input type | 01h | The query is embedded as a query, documents as documents (section 6.3) | Soft: without it both sides embed as today, and the eval suite measures the difference |
-| 01h-C4 async embed path for turn-path callers | 01h | The query embedding on the turn path never blocks the event loop (section 10) | Hard for the opener and character-turn paths; the `def` handlers already run on a worker |
-| 01i-C1 `context_window` (and max output) as a resolved fact on each attempt | 01i | Deriving the history section's ceiling from the window of the model that will read it (section 9.2) | Soft: without it the configured absolute budget alone bounds the section |
-| 01a-C1 eval cost, latency and token reporting | 01a | The long-history suite reports wall time, tokens and the three money columns per arm (section 12) | Hard for 09-C4's live mode; offline mode needs nothing |
-| 02-C5 decide routes and tasks for retrieval relevance | 02 | The task and route the rerank stage meters and resolves under (section 7.3) | Soft, and see open question 3: the route must land with its first call site |
+| 08-C1 bounded `SceneDocument` (no transcript text), keyed by per-scene slices | 08 | The unit every lexical and semantic signal scores, and its metadata (scene identity, date, location, cast) | Hard |
+| 08-C2a lazy build plus batch lookup; 08-C2b document vectors; 08-C2c hot rebuild for 05 | 08 | Building the live set on demand, bounded per turn; loading document vectors by `vectors.load(space, texts)` | Hard |
+| 08-C3a `history-index` embed task; 08-C3b `expand(...)`, where the caller names the phase | 08 | The document-side embed task, and turning a selected scene into bounded excerpts, with 09 naming `phase="prompt"` (section 8) | Hard |
+| 03-C6 batch lookup over a live key set, index ranking only within it | 03 | Looking up documents and any lexical index only for keys computed from the filesystem this turn (section 6.4) | Hard |
+| 03-C7 vectors keyed by text, never `BUILD` | 03 | An upgrade costs embeddings only where document text moved | Hard |
+| 01h-C4a no embedding on the event loop (a guard degrades); 01h-C4b native async `embed()` with a total deadline | 01h | The query embedding on the turn path never blocks the loop (section 10) | Hard for the turn path |
+| 01a-C1 eval cost, latency and token reporting | 01a | The long-history suite reports wall time, tokens and the three money columns per arm (section 12) | Hard for live evals; offline needs nothing |
+| 07-C2 inverse membership | 07 | The `group` structural relation (section 5.2) | Soft: the relation is absent until it lands |
+| 07-C3c retrieval projections (`scene_groups`, `co_affiliates`, `prompt_visible`) | 07 | Group seeds and the group relation read through 07's projections rather than re-deriving them | Soft |
+| 01e-C1 `Rank`; 01e-C2 `Answer.expected`, `tiers()` | 01e | The optional rerank stage (section 7.3) | Soft: rerank is off by default and its slice waits for 01e |
+| 01h-C1 input type; a query vector is compared within its space and never cached | 01h | Query embedded as a query, documents as documents, compared in one space (section 6.3) | Soft: without it both sides embed as today |
+| 01i-C1 `wire.Limits(window, max_output)` on every target | 01i | Deriving the section's ceiling from the smallest window in the chain (section 9.2) | Soft: without it the configured absolute budget alone bounds the section |
+| 02-C5b history relevance kit, the shared `history_check` route | 02 | The task and route the rerank resolves and meters under (section 7.3) | Soft |
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 09-C1 `history.retrieve` over a `Query`, returning an `Evidence` with per-signal signals and a `Coverage` | 10 | Running a planner's rewritten questions through the same retrieval, and merging rounds (`history.merge`) |
-| 09-C1 | 11 | The `perspective` seam on `Query`, and per-item scene metadata (cast, date) to classify actor knowledge against |
-| 09-C1 | 12 | The `search_history(query, scope)` investigation tool is a thin wrapper over `retrieve` with an explicit tier-3 scope |
-| 09-C2 deterministic coverage verdict and tiered widening | 10 | The free first gate that decides whether the planner runs at all |
-| 09-C2 | 12 | One of the "cheap retrieval failed" signals that may escalate to an investigation |
-| 09-C3 the history prompt section, its budget and its shed units | 10, 11 | 10 feeds merged evidence into the same section; 11-C2 splits it into actor-usable and narrator-only halves |
-| 09-C4 the long-history eval suite and synthetic campaign generator | 10, 11, 12 | Their evals extend the same corpora and arms rather than building their own |
+| Contract (provided here) | Consumer | Hard or soft | What the consumer uses it for |
+|---|---|---|---|
+| 09-C1 `history.retrieve(Query) -> Evidence`, `history.merge` | 10 | Hard | Running a planner's questions through the same retrieval, and merging rounds by scene identity |
+| 09-C2 `Coverage` verdict and tiered widening | 10 | Hard | The free first gate that decides whether the planner runs at all |
+| 09-C3 the `history_recall` section | 10 | Hard | Planned evidence renders through the same section; the plan's trace rides its row |
+| 09-C1 (scene identity, post indices, post keys and post texts on each item; the `perspective` seam) | 11 | Hard | Classifying what an actor may know, per post, against the evidence 09 selected |
+| 09-C3 | 11 | Hard | 11-C2 splits the section by perspective and lifts the NPC blanking |
+| 09-C1 | 12 | Hard | `search_history(query, scope)` is a thin wrapper over `retrieve`, tier 3 explicit |
+| 09-C4 the long-history suite and generator | 10, 11, 12 | Soft | Their evals extend the same corpora and arms |
 
 ## 1. Current state (reconciled against main)
 
@@ -417,7 +420,7 @@ post) -> SemanticResult`:
   documents, which keeps the request one round trip (`semantic.py:126`-`128`'s
   reasoning for `WARM_LIMIT`).
 - **The embed task** is a new `EMBED_TASKS` entry, `history-recall`, for the
-  query and this turn's warm run. 08-C3's document task covers builds outside
+  query and this turn's warm run. 08-C3a's `history-index` task covers builds outside
   a turn (05's eager rebuild). Two tasks because they answer different cost
   questions: what a turn spent recalling, and what keeping the index warm
   cost.
@@ -540,16 +543,16 @@ under the retrieval deadline (`around`, `_bounded_call` at
 `routes/common.py:544` with an explicit ceiling, `RERANK_CEILING`, because a
 turn-path caller must not inherit `llm_call_budget`'s "no ceiling" escape).
 
-The task and its route are 02-C5's to name (open question 3). The routing
+The task and its route are 02-C5b's shared `history_check` route (open question 3). The routing
 guard holds that the route lands in the change whose call site decides, so the
 rerank is its own slice, after 01e and after the core.
 
 ## 8. Expansion: from a selected scene to excerpts
 
 Selection is a scene; evidence is lines. `expand.excerpts(cid, scene, query,
-budget_tokens) -> tuple[Excerpt, ...]` uses 08-C3's transcript-expansion
-helper, which this spec requires to behave as follows (stated as requirements
-on 08-C3, not designed here):
+budget_tokens) -> tuple[Excerpt, ...]` uses 08-C3b's transcript-expansion
+helper (08-C3b), called with `phase="prompt"`, which this spec relies on to
+behave as follows:
 
 1. **Prompt view.** The scene's messages are read through
    `store.regex.view.view(messages, cid=cid, phase="prompt")`, with director
@@ -570,8 +573,29 @@ on 08-C3, not designed here):
    the turn path. The draft's step 4 is 12's `get_scene_transcript`, behind
    that spec's budgets.
 
-Each `Excerpt` carries the transcript index range it covers, for the
-inspector, and the text, which is what renders.
+Each `Excerpt` carries, per post it includes, the transcript index, the
+post key (the stored `post_id`, or the response id for a reply, so a post can
+be named across a cut that renumbers indices) and the post's prompt-view text,
+plus the joined text that renders. 11 classifies actor knowledge per post, so
+the post is the unit 09-C1 promises, not only the window:
+
+```python
+@dataclass(frozen=True)
+class EvidencePost:
+    index: int          # transcript index at retrieval time
+    key: str            # post_id / response id; "" for a legacy post with none
+    speaker: str        # the stored speaker label
+    text: str           # prompt-view text, as rendered
+
+@dataclass(frozen=True)
+class Excerpt:
+    posts: tuple[EvidencePost, ...]
+    text: str           # what renders: the posts joined as history lines
+```
+
+Section 8's requirements on 08-C3b: the caller names the phase (`prompt`
+here), and the helper returns posts with their indices and keys rather than a
+flattened string.
 
 ## 9. The history prompt section (09-C3)
 
@@ -932,8 +956,10 @@ class Query:
 
 **Outputs.** `Evidence(items: tuple[EvidenceItem, ...], candidates:
 tuple[Candidate, ...], coverage: Coverage, ceiling: int, query_digest: str)`:
-`items` are the selected scenes, fitted to `ceiling`, each with header fields,
-an optional summary, excerpts and its token cost; `candidates` are every
+`items` are the selected scenes, fitted to `ceiling`, each carrying its
+**scene identity** (and the sid at retrieval), header fields, an optional
+summary, its excerpts with **every included post's transcript index, post
+key and text** (`EvidencePost`, section 8), and its token cost; `candidates` are every
 admitted candidate in merged order (bounded by `POOL_MAX + WIDEN_LIMIT`), so a
 caller can see what was found and not selected. `Evidence.detail()` is the
 JSON-safe projection of section 9.5. `history.merge(a, b, *, ceiling,
@@ -1125,21 +1151,14 @@ Settings:
 2. **Default on?** *Recommendation:* off, like every retrieval layer before
    it, until 12.5's ordering holds on the long suite; then on with structural
    plus lexical only, since that arm costs no provider calls.
-3. **Who owns the rerank task and route (02-C5 vs 09)?** 02-C5 promises
-   "decide routes and tasks for ... retrieval relevance, for 11 and 09", and
-   the routing guard forbids a route whose tasks nothing uses.
-   *Recommendation:* 02-C5 names the task (`history-rerank`) and the route
-   (`history_check`, Decision role, born at format 2 with no legacy layout:
-   10 section 4.1), and the route lands
-   in 09's rerank slice with its call site; 10 then adds its
-   `history-sufficiency` task to the same route. This is a **missing edge**
-   (09 <- 02-C5, soft) that the checklist does not list.
-4. **Query versus document embeddings in one space (01h-C1/C3).** A query
-   embedded with `input_type=query` is compared with documents keyed under
-   `input_type=document`. *Recommendation:* 01h states that the document's
-   options are part of the vector key and that a query vector is never cached,
-   so the two are one comparable space by definition; 09 relies on that
-   statement and asks 01h to make it explicit.
+3. **The rerank route (resolved).** 02-C5b provides the shared
+   `history_check` decide route (Decision role, `routing.NO_LEGACY`, the shared
+   structure the checklist records); 09's rerank adds `history-rerank` to it,
+   and the route lands with whichever call site lands first (09's rerank or
+   10-C3), as `test_routing_guard.py` requires. No open edge remains.
+4. **Query versus document embeddings in one space (resolved).** 01h-C1
+   states that a query vector is compared within its space and is never
+   cached; 09 relies on that statement and needs nothing further.
 5. **The opener and the other composes.** The opener runs on the loop and
    has no player post; mechanics continuations and replay compose
    mid-turn. *Recommendation:* leave all three out of 09; add the opener

@@ -1012,7 +1012,8 @@ cold or deleted.
 
 ## 11. Contract
 
-**05-C1. The in-process sync primitive, reached by Grimoire's writers.**
+**05-C1. `cache_sync.sync_paths`, reached by Grimoire's writers through a
+write-through queue.**
 
 - *Inputs:* store-relative paths; `mode` (`explicit` or `write`); `embed`,
   `dry_run` and `verify`; optional rename and delete lists; a root, which
@@ -1036,7 +1037,7 @@ cold or deleted.
   write-through queue swallows failures and logs once per failure kind. The
   cache being off is a successful no-op.
 
-**05-C2. `cache sync`: the CLI and the API.**
+**05-C2. `python -m grimoire.cache sync` and `POST /api/cache/sync`.**
 
 - *CLI:* `python -m grimoire.cache sync`, with `PATH...`, `--campaign`,
   `--world`, `--all`, `--renamed OLD=NEW`, `--deleted`, `--no-embed`,
@@ -1053,8 +1054,8 @@ cold or deleted.
 - *Summary:* holds no record content (section 9). The log line holds counts
   only.
 
-**05-C3. Eager rebuild of materialized kinds, embedding only what was already
-embedded.**
+**05-C3. `WarmHook` order: files -> overview -> searchdocs -> vectors.
+Re-embeds only text not already cached. No confirmation step.**
 
 - A kind is rebuilt for a path only if `materialized` has `(path, kind)` and a
   registered hook owns that kind. A path with no rows is cold, and costs
@@ -1074,7 +1075,8 @@ embedded.**
 - The three existing vector producers (recall, art and library search) record
   `materialized` rows with their projection named.
 
-**05-C4 (new). The write set.**
+**05-C4. `store/writeset.py`: a context-variable collector that
+`store.atomic` notes into, with a guard.**
 
 - `store/writeset.py`, a leaf module, provides `collecting()` and
   `note(path)`.

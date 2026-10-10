@@ -316,7 +316,8 @@ Each new call passes `campaign`, `scene`, `post` and `round_id`. Per-response
 calls (intent, plan, tool) also pass `response_id`. Today `decide()` takes
 no `response_id`, and the response id is minted inside
 `store.responses.prepare`, which runs *after* the decision. 02 makes two
-small changes:
+small changes. Both are listed in the checklist's shared structures as 02's,
+so whichever spec lands first adds them:
 
 - `inference.decide`, `run_stages` and `_Call` gain `response_id: str = ""`,
   handed to every meter they open, as `post` and `round_id` already are.
@@ -429,12 +430,10 @@ It reports, through 01a-C3's comparison table, per configuration:
 
 Rows are filed under 01a-C2's eval scope, never against a campaign.
 
-**Requirement on 01a (flagged as an edge):** one play fixture is several
-calls under several tasks (`turn-plan`, then `chat`). 01a-C1's per-case
-reporting must aggregate across a case's tasks, and 01a-C2's eval scope must
-accept rows from more than one task in one case. If 01a reports per task
-only, 02 builds the per-post sum (one row per task, never a sum across the
-money columns) on top of 01a's rows.
+One play fixture is several calls under several tasks (`turn-plan`, then
+`chat`). 01a-C1 sums a play case across its tasks, per money column and never
+across columns, and 01a-C2's eval scope carries every task's rows from one
+case.
 
 ### 4.3 What passing means
 
@@ -581,14 +580,10 @@ speaker runs, so the play gate measures its *effect*, not its price.
 A distribution exists today only on a native stage, which serves only a model
 that cannot generate (1.2). 01c-C1 decides whether a generating Decision
 model ever reports one (native-first, model-stated probabilities, or
-neither). 02 reads a predicate rather than re-deriving the rule:
-
-**Requirement on 01c (flagged as an edge):** a function
-`reports_distribution(resolved) -> bool` (or the same fact on each stage).
-02's settings text asks it, so the switch can say "with this Decision
-model the pick is always the most likely speaker". If 01c does not provide
-it, 02 uses `resolved.attempts[0].decision_mode == "native"`, which is
-right for `main` and wrong the day 01c adds another source.
+neither; 01c-C1 records that verbalised probabilities are rejected). 02 reads
+01c-C1's predicate `reports_distribution(resolved)` rather than re-deriving
+the rule. The settings text asks it, so the switch can say "with this
+Decision model the pick is always the most likely speaker".
 
 ### 5.7 Play gate for C2a
 
@@ -712,7 +707,8 @@ the error's kind (3.3). The task goes on a new route:
 Route("turn_plan", "Turn planning",
       "How each character approaches their reply in play, decided before it is "
       "written. Off unless Play decisions are switched on.",
-      ("turn-intent",), True, operation="decide", default_role="decision")
+      ("turn-intent",), True, operation="decide", default_role="decision",
+      legacy=routing.NO_LEGACY)
 ```
 
 C3 adds `"turn-plan"` and C4 adds `"turn-tool-decision"` to its tasks, each
@@ -985,15 +981,14 @@ final visible text (3.1 rule 2). Tool turns are never shown.
 handoff and the roll fence are parsed from the visible text only. A stream
 cancelled during the tool turn aborts its meter like any cancel.
 
-**Requirement on 01g (flagged as an edge):**
+**What 01g-C6 provides for this:**
 
-- 01g-C2's loop must stream its final turn through `inference.generate`'s
-  streaming path, so `_stream_contribution`'s display and watcher stay as
-  they are;
-- it must expose a per-loop hook that can decline a tool call after visible
-  text (8.2).
+- the loop's final turn streams through `inference.generate`'s streaming
+  path, so `_stream_contribution`'s display and watcher stay as they are;
+- the loop can decline a tool call that arrives after visible text (8.2).
 
-A loop that only joins replies cannot carry a scene turn.
+A loop that only joins replies could not carry a scene turn, which is why C4
+is hard on 01g-C6.
 
 **Gate.** The configurations are `off` vs `on` on a tools-capable Primary.
 The feature graders are:
@@ -1032,7 +1027,8 @@ The kit modules can land in 02 because a pure builder names no task in a
 Route("epistemic", "Character knowledge",
       "Whether a character could know a recalled piece of history, where the "
       "record alone cannot say.",
-      ("epistemic-access",), True, operation="decide", default_role="decision")
+      ("epistemic-access",), True, operation="decide", default_role="decision",
+      legacy=routing.NO_LEGACY)
 ```
 
 ```python
@@ -1071,10 +1067,8 @@ def access_of(questions, results: Sequence[decisions.ItemResult]) -> dict[tuple[
   first answer and never `known`.
   - **Only permissive answers need the hop.** A low-margin `narrator_only` is
     already safe, so escalating it only spends. 01d's triggers do not read
-    which option was chosen. **Requirement on 01d (flagged as an edge):** an
-    optional per-task filter, for example `escalate_answers=("known",
-    "suspected", "experienced")`. Without it, 02-C5a escalates every
-    low-margin answer, which costs more but is no less safe.
+    which option was chosen without a filter, so 02-C5a uses 01d-C2a's
+    optional answer filter, set to `("known", "suspected", "experienced")`.
 - **Never sampled.** What a character knows is not behaviour.
 - **Derived, never persisted as truth.** The result is per turn (section 9 of the 11 draft). The
   kit writes nothing.
@@ -1095,7 +1089,8 @@ names its own ceiling (`RERANK_CEILING`) rather than 3.4's, and passes
 Route("history_check", "History checks",
       "Whether a recalled scene bears on the current turn, after retrieval has "
       "found it.",
-      ("history-rerank",), True, operation="decide", default_role="decision")
+      ("history-rerank",), True, operation="decide", default_role="decision",
+      legacy=routing.NO_LEGACY)
 ```
 
 ```python
@@ -1176,10 +1171,10 @@ would send exactly the items sampling exists for to a second resolver.
 `refused` escalation is compatible with sampling, because a refusal is never
 sampled (01c-C4).
 
-**Requirements on 01c and 01d (flagged as edges):**
+**What 01c and 01d provide for this:**
 
-- `test_task_policy.py` fails a row with `samples=True` and `"low_margin" in
-  escalate_on`;
+- 01d-C1's `TaskPolicy` refuses a row with `samples=True` and `"low_margin"
+  in escalate_on`;
 - a failed or skipped hop leaves the item for the call site to map. For
   epistemic access, 02-C5a maps it to `UNKNOWN` itself (9.2), so this needs
   nothing new from 01d beyond a per-item "escalation did not answer" signal,
@@ -1469,18 +1464,13 @@ run B and C before 02-D lands; argmax is a valid configuration.
 7. **Joint speaker and stance once 01e-C3 lands.** *Recommendation:* a
    follow-up slice behind its own play gate, measured against the two-call
    path on added latency.
-8. **Missing edges, for the owners to accept or refuse:**
-   - 01a: per-case aggregation across tasks (4.2);
-   - 01c: `reports_distribution(resolved)` (5.6);
-   - 01c/01d: `test_task_policy.py` refuses `samples=True` together with
-     `low_margin` escalation (10);
-   - 01d: an optional per-task answer filter on escalation
-     (`escalate_answers`), so epistemic access escalates only permissive
-     answers (9.2);
-   - 09 and 10: the `history_check` route and the `history-rerank` task follow
-     09's naming. 09 lists 02-C5 as a soft edge the checklist lacks (09 <-
-     02-C5), and that is right: 09 needs only the kit;
-   - 01g: a streamed final loop turn and a decline-after-text hook (8.6).
+8. **Missing edges.** None remain. Each upstream item 02 asked for now has a
+   contract in the checklist, cited where it is used:
+   - 01a-C1 (a play case summed across its tasks, 4.2);
+   - 01c-C1 (`reports_distribution(resolved)`, 5.6);
+   - 01d-C1 (`TaskPolicy` refuses sampling with `low_margin`, 10);
+   - 01d-C2a (the answer filter, 9.2);
+   - 01g-C6 (a streamed final turn and declining a tool call after text,
+     8.6).
 
-   *Recommendation:* each owner states the item in its own contract. 02's
-   fallbacks are written beside each requirement so 02 is not blocked.
+   The edges 09 ← 02-C5b and 10 ← 02-C5b are both in the checklist.

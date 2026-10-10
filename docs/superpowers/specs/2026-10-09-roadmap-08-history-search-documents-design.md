@@ -805,7 +805,10 @@ class Expansion:
    `"display"`; anything else (`"store"` included) raises `ValueError`.
    `"prompt"` is for anything sent to a model (09's history section, 12's
    tool results); `"display"` is for a surface that shows a reader what
-   retrieval found.
+   retrieval found. As 09 asks, every caller whose excerpts reach a prompt
+   names `phase="prompt"`; there is no default, so no caller gets a phase by
+   omission, and the extended regex guard (section 12) fails a prompt built
+   from `display` excerpts.
 2. **The right scene.** If `identity` is given and the `sid` no longer carries
    it, the scene is found by `scenes.find_by_identity`
    (`scenes/identity.py:305`), which follows a rename; if no scene carries it,
@@ -945,7 +948,8 @@ class Expansion:
 - **Input:** `expand(cid, sid, phase=, terms=, identity=, radius=,
   max_excerpts=, max_bytes=, fallback=, allow_whole=)`.
 - **Output:** `Expansion` or `None`.
-- **Guarantees:** `phase` is required and only `prompt` or `display`; the
+- **Guarantees:** `phase` is required and only `prompt` or `display`, and a
+  caller whose excerpts reach a prompt names `prompt` (09's requirement); the
   whole transcript is viewed in that phase before matching; hidden posts and
   director notes are never returned; prompt-phase images are alt text; at most
   `max_excerpts` excerpts and `max_bytes` of content; indices are absolute;
@@ -994,17 +998,20 @@ class Expansion:
   per process through `store/logs.py`, naming the input and never its text.
 - **Privacy.**
   - Document text is derived private text in 03's per-device file. It is
-    covered by 03's whole-cache purge when a world or campaign is deleted
-    (03 section 12); 08 adds no storage location of its own.
+    covered by 03-C8's purge when a world or campaign is deleted (03 section
+    12); 08 adds no storage location of its own.
   - **A deleted scene's document is not purged**; it becomes unreachable at
     once (no live scene hashes to it) and is evicted by LRU, 03's stated
     residual for every derived row. Its content is also what the store itself
     keeps: `delete_scene` leaves the chronicle record and ledger rows in place
     (section 1.2). Open question 6.
-  - Vectors are not text, but an embedding is partly invertible. Document
-    vectors follow lore's and search's: under `.cache/embeddings/`, excluded
-    from backups, not purged on delete (open question 7). 03's Settings text
-    on sharing boundaries already names `.cache/embeddings/`.
+  - **Vectors on a world or campaign delete are a stated residual** (the
+    checklist's cross-spec decision). 03-C8 purges the compiled cache, which
+    holds the document text. `vectors.py` files are keyed by space and text,
+    never by campaign, so they cannot be purged selectively, and 08 adds no
+    vector purge. A vector is not text, but an embedding is partly
+    invertible; the Settings page says so, and a full purge of
+    `.cache/embeddings/` is a manual action (open question 7).
   - The embedding provider receives document text only when a caller warms,
     and only through the Embedding role the user chose and confirmed
     (CLAUDE.md: a settings move that re-embeds asks first). 09 decides whether
@@ -1176,10 +1183,12 @@ embeddings client is injected at `vectors_for`'s `client` parameter.
    the store keeps the same records anyway. A targeted purge would need the
    key computed before the delete. *Recommendation: no; LRU, as 03 accepts
    for every derived row.*
-7. **Purge document vectors on campaign delete?** Lore and search vectors are
-   not purged today; the texts that name the files live in the cache 03 has
-   just purged. *Recommendation: no, consistent with today; the Settings text
-   says so.*
+7. **Purge document vectors on a world or campaign delete?** Settled by the
+   checklist's cross-spec decision: 03-C8 purges the compiled cache;
+   `vectors.py` files are keyed by space and text, never by campaign, so they
+   cannot be purged selectively and are a residual that 03 and 08 both state;
+   the Settings page says so; no vector purge is added. Recorded here as
+   decided, not open.
 8. **Where does the hot re-embed run?** It must not run on the write path or
    under a lock. *Recommendation: 05 runs it as an after-response follow-up
    (the `_fire_follow_up` shape); if 05 has no such vehicle, leave it to 09's

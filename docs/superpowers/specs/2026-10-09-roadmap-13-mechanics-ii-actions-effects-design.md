@@ -1,6 +1,6 @@
 # 13. Mechanics II: Actions and Effects
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 13 in `ROADMAP-CHECKLIST.md`. Lane: mechanics.
 **Baseline:** `main` at `35c1fb7`.
@@ -18,33 +18,29 @@ the record of the direction; where the two disagree, this spec wins.
 
 ## Depends on
 
+The checklist's 13 edge: **nothing for II-A to II-D; 01c-C2/C3/C4 (H for C3);
+01e-C3b (H for multi-target actions and legal sets over 254 options); 01c-C1,
+01b-C1, 01a-C1, 02-C2 (S).**
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | `inference.decide`, `routing.ROUTES` with `operation="decide"`, `require_inference(..., operation="decide")` | 01 (landed) | The `npc-action` decide route of 13-C3 (section 24) | Hard, and met |
-| 01c-C2: one sampling helper `(distribution, seed) -> selected` | 01c | Drawing an NPC's Action from the Decision model's distribution (24.4) | Hard, for 13-C3 only |
-| 01c-C3: the replay record `{distribution, seed, selected, backend}` | 01c | Persisted on the action proposal and copied into the transaction (24.5) | Hard, for 13-C3 only |
-| 01c-C4: an abstention, refusal or missing distribution is never a sampled answer | 01c | What an NPC turn does when the Decision model gives no usable distribution (24.4) | Hard, for 13-C3 only |
-| 01c-C1: the policy for when a generating Decision model yields a distribution | 01c | Whether a structured (non-native) Decision model can drive sampling at all | Soft: without it, only native distributions are sampled and everything else takes the unsampled path of 24.4 |
-| 01e-C3: multi-select and joint choice (an action plus targets conditioned on it) | 01e | Choosing an Action *and* its targets in one question, for multi-target Actions and for legal sets too large to flatten (24.3) | Hard for those two cases; soft otherwise, because a single-target legal set of at most 254 pairs is one flat `Choice` that exists today (`decisions.py:189-196`) |
-| 01b-C1/C2: decision capture at every decide site | 01b | Capturing the `npc-action` decision to the prompt log | Soft: without it the seam runs uncaptured, as every non-speaker decide site does today |
+| 01c-C2: the `draws.py` draw `(distribution, seed) -> selected` | 01c | Drawing an NPC's Action from the Decision model's distribution (24.4) | Hard, for 13-C3 only |
+| 01c-C3: the replay record, stored with the outcome and never re-drawn | 01c | Persisted on the action proposal, the round and the transaction (24.5) | Hard, for 13-C3 only |
+| 01c-C4: abstain, refuse, unreadable, error or no usable distribution is never sampled | 01c | What an NPC turn does when the Decision model gives no usable distribution (24.4) | Hard, for 13-C3 only |
+| 01e-C3b: `Joint`, a flattened choice over the legal (action, target) pairs | 01e | Choosing an Action and its targets in one question for multi-target Actions and legal sets over 254 options (24.3) | Hard for those two cases only; a single-target legal set of at most 254 pairs is one flat `Choice` that exists today (`decisions.py:189-196`) |
+| 01c-C1: the distribution policy (`TaskPolicy`, `reports_distribution`) | 01c | Whether a structured Decision model can drive sampling at all | Soft: without it, everything takes the unsampled path of 24.4 |
+| 01b-C1: decision capture at every decide site | 01b | Capturing the `npc-action` decision to the prompt log | Soft |
 | 01a-C1: eval cost, latency and token reporting | 01a | Reporting on the `npc-action` eval gate (24.7) | Soft |
-| 02-C2: a sampled next speaker and a turn intent through 01c | 02 | The intent that conditions an NPC's Action distribution (24.6) | **Soft seam**: the NPC seam runs without an intent, and an intent never changes legality |
+| 02-C2: a sampled next speaker and a turn intent (02-C2b) | 02 | The intent that conditions an NPC's Action distribution (24.6) | **Soft seam**: an intent never changes legality |
 
-**II-A through II-D (13-C1, 13-C2) depend on nothing beyond landed code.**
-`ROADMAP-CHECKLIST.md` says 13 "can start after 01, 01c and 01e"; that is true
-only of 13-C3. The plan can start II-A now (section 4).
+**II-A through II-D (13-C1, 13-C2) start now**; only 13-C3 waits for 01c
+(section 4).
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 13-C1a: Actions, availability and the legal set | 13-C3 (this spec) | The only source of legal options an NPC may be offered |
-| 13-C1b: the Effect DSL and the transaction ledger | 13-C2a/b/c (this spec) | Conditions, clocks and contests are new units and new ops inside the same transaction |
-| 13-C1c: proposal integration, narration, audit | 13-C3 (this spec) | An NPC's chosen Action becomes an ordinary action proposal |
-| 13-C2a: conditions | none in the roadmap | (A later 02 revision may read an incapacitating condition for speaker eligibility. Not a contract here; see Open question 9.) |
-| 13-C3: the NPC action seam | none in the roadmap | |
-
-No other roadmap spec consumes 13.
+None. No other roadmap spec consumes 13. (Inside this spec, 13-C3 builds on
+13-C1a and 13-C1c, and 13-C2a/b/c on 13-C1b.)
 
 ---
 
@@ -232,7 +228,8 @@ means accept or decline**, which section 8.4 has to work around.
    and a one-fence-per-reply rule already exist (1.5); an Action rides the same
    ` ```roll ` fence (8.2), which also settles MII's "do not let both action and
    raw roll proposals describe the same interrupted generation".
-5. **The checklist's start condition is too strict** (Depends on).
+5. **The start condition**: II-A to II-D need nothing beyond landed code;
+   only 13-C3 waits for 01c (Depends on; the checklist now agrees).
 6. **`ProposalAction.action` is taken** (1.4).
 7. **MII's single `mechanics_transactions.json`** would rewrite the whole
    history on every status change and collide across synced devices; and a
@@ -584,7 +581,7 @@ tuple the count allows, in target-pool order: for `max == 0` the single empty
 tuple; for `max == 1`, one option per eligible target (plus the empty tuple when
 `min == 0`); for `max > 1`, **not enumerated** (the combinations explode) but
 represented by one option with `targets == ()` and a flag `multi: true`, which
-13-C3 answers with 01e-C3's multi-select (24.3). The pack stamp is a digest of
+13-C3 answers with 01e-C3b's `Joint` (24.3). The pack stamp is a digest of
 the pack's `actions`, `checks` and `sheets` objects, the shape
 `audit.baselines.schema_stamp` already uses for `sheets`.
 
@@ -1599,10 +1596,10 @@ LLM reader of transcript text), and the 02-C2 intent when there is one (24.6).
   `none`, `allow_none=True`, meaning "no formal action this turn"). Each
   option's description is the Action's label and description and the target's
   name. This needs nothing from 01e.
-- **Joint form, 01e-C3**: an Action choice plus a target choice conditioned on
-  it, and a multi-select for an Action with `targets.max > 1`, used when any
-  option is `multi` (6.4) or the flat form would pass 254 options.
-- A legal set the available forms cannot carry (multi-target before 01e-C3
+- **Joint form, 01e-C3b**: `Joint`, a flattened choice over the legal (action,
+  target) pairs, used when any option is `multi` (6.4) or the flat form would
+  pass 254 options.
+- A legal set the available forms cannot carry (multi-target before 01e-C3b
   lands) drops the offending options from the question and records that it did;
   it never fakes a selection for them.
 
@@ -1615,8 +1612,9 @@ LLM reader of transcript text), and the 02-C2 intent when there is one (24.6).
   replay record is 01c-C3's `{distribution, seed, selected, backend}`.
 - **No distribution, but an answer**: use the answer as the selection and
   record `{distribution: null, seed: null, selected, backend, sampled: false}`.
-  This is not a sampled answer; 01c-C4 is about never *manufacturing* one, and
-  this record says plainly that none was drawn (Open question 4).
+  This is not a draw and nothing is replayed from it: a recorded cross-spec
+  decision in `ROADMAP-CHECKLIST.md` ("NPC answer with no distribution"), which
+  01c-C4 states.
 - **Abstention, refusal, `none`, or no usable answer**: no Action. The NPC's
   turn proceeds as prose (01c-C4).
 - **`DecideRequestError` or an `LLMError`**: logged, no Action, the turn
@@ -1643,6 +1641,12 @@ option descriptions carry them, so a model can connect "threaten" to an
 `intimidate`-tagged Action. An intent **never filters** the legal set and never
 names an Action. Without 02-C2 the item simply has no intent line.
 
+02-C3's per-contribution turn plan carries an `extra` slot for 13-C3: when
+that plan runs, the NPC Action question rides in it as one more item of the
+same batched decide, rather than as a call of its own, and its answer is
+handled exactly as 24.4 and 24.5 say. Without 02-C3 the question is its own
+`npc-action` call (24.7).
+
 ### 24.7 Route, metering, capture, eval gate
 
 - A new route, `Route("npc_action", "NPC actions", ..., ("npc-action",), True,
@@ -1665,7 +1669,7 @@ names an Action. Without 02-C2 the item simply has no intent line.
 
 ## 25. Contract
 
-### 13-C1a: Actions, availability, the legal set
+### 13-C1a: Actions and the legal set
 
 - **Inputs**: a campaign whose bound pack is valid and may carry
   `actions.json` (5); a scene; optionally an actor ref.
@@ -1680,7 +1684,7 @@ names an Action. Without 02-C2 the item simply has no intent line.
 - **Failure**: no module or an invalid pack -> empty results. Store problems
   are reason codes, not exceptions.
 
-### 13-C1b: the Effect DSL and the transaction ledger
+### 13-C1b: The Effect DSL and transaction ledger
 
 - **Inputs**: a pack's effect templates (7); a claim snapshot; a check
   resolution or none.
@@ -1699,7 +1703,7 @@ names an Action. Without 02-C2 the item simply has no intent line.
   recovery (`stalled`, settled by the player); `StoreBusy` propagates as the
   409 every lock holder already answers.
 
-### 13-C1c: proposals, narration, audit
+### 13-C1c: Action proposals, narration and audit
 
 - **Inputs**: an action fence, a player Action, or (13-C3) an NPC selection.
 - **Outputs**: a `kind: "action"` proposal payload (8.1); the resolution (9);
@@ -1713,7 +1717,7 @@ names an Action. Without 02-C2 the item simply has no intent line.
 - **Failure**: a malformed or illegal proposal opens in Modify with problems; it
   is never dropped and never resolved as written.
 
-### 13-C2a: conditions (II-B)
+### 13-C2a: Conditions (II-B)
 
 `conditions.json`, `<campaign>/mechanics/conditions.json`, ops
 `condition_add`/`condition_remove` as a unit kind of 13-C1b, `manual`
@@ -1721,22 +1725,22 @@ transactions, modifier reporting from `resolve_check`, and availability gates
 (20). Guarantee: a condition changes only through a transaction; no modifier is
 applied twice through a retry; a dangling condition applies nothing, visibly.
 
-### 13-C2b: clocks (II-C)
+### 13-C2b: Clocks (II-C)
 
 `<campaign>/mechanics/clocks.json`, optional templates, ops
 `clock_advance`/`clock_set`, completion events (21). Guarantee: a clock moves only
 through a transaction; completion is reported, never acted on by the engine.
 
-### 13-C2c: contests (II-D)
+### 13-C2c: Contests (II-D)
 
 `contest` Actions, both rolls recorded before any effect, two tagged roll
 entries, one target (22). Guarantee: no retry re-rolls either side.
 
-### 13-C3: the NPC action seam
+### 13-C3: The NPC action seam, sampled through 01c
 
 - **Inputs**: a sheeted NPC about to take a turn in a round; the campaign's
-  `npc_actions` setting; 13-C1a's legal set; 01c-C2/C3; 01e-C3 where 24.3 needs
-  it; 02-C2's intent when present.
+  `npc_actions` setting; 13-C1a's legal set; 01c-C2/C3/C4; 01e-C3b where 24.3
+  needs it; 02-C2's intent and 02-C3's `extra` slot when present.
 - **Outputs**: either nothing (the turn proceeds as prose) or an action proposal
   with `source: "npc"` and a replay record (24.5).
 - **Guarantees**: the selection is a member of the legal set re-checked under
@@ -1922,11 +1926,11 @@ refusal, an illegal option, and an error.
 3. **Effects on `number`/`dots`.** Some systems drain attributes.
    **Recommendation:** no; II-B conditions express a temporary drain as a
    modifier, and a permanent one is advancement or a hand edit.
-4. **Using an unsampled answer for an NPC.** 01c-C4 forbids turning a missing
-   distribution into a *sampled* answer; this spec uses the model's plain answer,
-   recorded with `sampled: false`. **Recommendation:** keep, and ask the 01c
-   author to confirm the reading in 01c-C4's wording. If the answer is no, the
-   NPC seam requires a distribution and otherwise proceeds as prose.
+4. **Using an unsampled answer for an NPC.** *Closed.* Recorded as a
+   cross-spec decision in `ROADMAP-CHECKLIST.md` ("NPC answer with no
+   distribution"): 13 may act on a plain Choice answer recorded
+   `sampled: false`; it is not a draw and nothing is replayed from it, which
+   01c-C4 states (24.4).
 5. **Should a cut that removes an Action's line offer to undo it?**
    **Recommendation:** not automatically; the cut dialog warns and links the
    History (16). Automatic reversal would make a transcript edit a mechanics
