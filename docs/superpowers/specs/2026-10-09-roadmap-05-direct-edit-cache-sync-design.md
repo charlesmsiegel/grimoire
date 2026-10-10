@@ -594,10 +594,12 @@ class WarmHook(Protocol):
 
 - `hot` maps each path that has rows of this hook's kinds to those kinds. A
   hook never sees another hook's rows. A hook **may read its own kinds'
-  `materialized` rows** for the paths it was handed (for their `instance`,
-  or to fan out from an input path to the paths that feed the same artifact,
-  as 08's `affected` does), always by those listed paths and never by
-  enumeration.
+  `materialized` rows** for the paths it was handed (for their `instance`),
+  and for paths it derives from them by reading the store rather than the
+  table: the other inputs of the same artifact, as 08's `affected` does, or
+  the live scenes of a campaign whose ledger path it was handed, which 08's
+  `searchdocs` hook lists through the scene store (08 section 9). Every read
+  is by a listed path, never by enumeration.
 - `local` rebuilds and stores artifacts and **touches no network**. It returns
   per-path outcomes and an `EmbedPlan`: the projection texts that would need a
   vector, which hits the vector cache already has, and how each text is
@@ -1254,6 +1256,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
 - **Delivers:** 05-C4 (full).
 - **Needs (this spec):** none.
 - **Needs (other specs):** none.
+- **Needs (slices):** none
 - **Scope:** Adds `store/writeset.py` (`Scope`, `collecting(isolated=...)`,
   `note`), the one `writeset.note` call in each of `atomic`'s four publishing
   functions, and `test_writeset_guard.py` with its CONTRIBUTING.md row. Adds
@@ -1282,6 +1285,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
   `materialized` keyed by `(path, kind, instance)`, read by listed paths);
   03-C4 (H: the validate-and-hash primitive); 03-C5 (H: artifacts stored at
   write time, the `sources` row waiting out the racy window).
+- **Needs (slices):** 03-S2 (H), 03-S4 (H)
 - **Scope:** Adds `store/cache_sync.py` with sections 4, 6.1 to 6.3, 8, 9 and
   10 implemented for single-file kinds: path validation, the per-hook
   hot/cold classification, `missing` versus `deleted`, the write-token bump
@@ -1308,6 +1312,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
   03-C4 (H: the batch form over listed paths that returns their
   `materialized` rows); 03-C8 (S: `compiled.purge_for_delete()`; until it
   lands, a `--deleted` root is reported deleted with the purge not run).
+- **Needs (slices):** 03-S2 (H), 03-S4 (H), 03-S5 (S), 05-S2 (H)
 - **Scope:** Adds `backend/src/grimoire/cache.py` (section 7.1) with
   `logs.install()` and the stdout reconfigure, the scoped candidate rule of
   section 7.3, renames (7.5), the explicit-root purge (7.6), and
@@ -1328,6 +1333,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
   the bound, shutdown through `stop`, and `GRIMOIRE_CACHE_WARM`).
 - **Needs (this spec):** 05-S1 (H); 05-S2 (H).
 - **Needs (other specs):** none.
+- **Needs (slices):** 05-S1 (H), 05-S2 (H)
 - **Scope:** Installs `app.state.cache_warm` from `runner.install` and its
   worker in the lifespan's task group, replacing S1's dropping sink. Adds the
   sync hold to the run registry and the refusal to `put_data_dir`, and the
@@ -1349,6 +1355,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
 - **Needs (this spec):** 05-S2 (H).
 - **Needs (other specs):** 04-C2a (H: `overview.warm_paths(paths)` with the
   path-to-kind mapping in 04 section 5.3).
+- **Needs (slices):** 04-S9 (H), 05-S2 (H)
 - **Scope:** Wraps `warm_paths` as the `overview` `WarmHook` (section 6.2),
   mapping its per-path outcomes to the report. `store.overview.warm` is added
   to `HOOKS`, and its module does not import `cache_sync`. The `searchdocs`
@@ -1374,6 +1381,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
   `embed_sync` call per chunk per campaign group); 01h-C1 (S: documents pass
   no `queries`; nothing to change when it lands); 01h-C3 (S: options in the
   space id, inherited through `embed_space.endpoint()`).
+- **Needs (slices):** 01h-S2 (S), 01h-S6 (S), 03-S4 (H), 05-S2 (H), 05-S5 (S)
 - **Scope:** Adds the projection kinds and `materialized` writes beside each
   `vectors.save` in `context/semantic.py`, `context/art.py` and
   `semsearch.py`, the source path on recall's and art's candidates, and the
@@ -1401,6 +1409,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
 - **Needs (other specs):** 04-C2b (S: the client forgets remembered reads when
   it observes a run end; without it, an open tab revalidates on its next
   visit as it would anyway).
+- **Needs (slices):** 04-S2 (S), 05-S3 (H), 05-S6 (S)
 - **Scope:** Adds `routes/cache.py` with `post_cache_sync` and its plain
   request model. CLAUDE.md's "Detached runs" handler count and `background`
   bullet change in the same slice, since the docs guard and the count must
@@ -1474,7 +1483,8 @@ Re-embeds only text not already cached. No confirmation step.**
 - Hooks run in the fixed order `files`, `overview` (04-C2a), `searchdocs`
   (08-C2c, `on_write="explicit"`), then `vectors`. Every local phase, which
   touches no network, runs before any network phase. A hook may read its own
-  kinds' `materialized` rows for the paths it was handed, and never
+  kinds' `materialized` rows by path, for the paths it was handed or for
+  paths it derives from them by reading the store (section 6.2), and never
   enumerates them.
 - `materialized` is keyed by `(path, kind, instance)` (03-C3), and every
   `<space-digest>` is `compiled.space_digest(space)`.

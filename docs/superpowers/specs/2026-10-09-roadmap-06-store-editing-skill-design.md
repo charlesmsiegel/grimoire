@@ -437,6 +437,7 @@ Landing order within this spec: S1 -> S2.
   item 9 names no API path, and check 5 has none to resolve); 04-C2b (S: the
   consistency bound the skill states in item 9; until it lands, that sentence
   is left out).
+- **Needs (slices):** 04-S2 (S), 05-S3 (H), 05-S7 (S)
 - **Scope:** Writes `.claude/skills/grimoire-store-editing/SKILL.md` per
   section 4 and `.agents/skills/grimoire-store-editing/SKILL.md` per section
   3.1, and adds `backend/tests/test_skills_guard.py` per section 6. The plan's
@@ -454,6 +455,7 @@ Landing order within this spec: S1 -> S2.
   store-writing skills end by pointing to it).
 - **Needs (this spec):** 06-S1 (H).
 - **Needs (other specs):** none.
+- **Needs (slices):** 06-S1 (H)
 - **Scope:** One sentence in `AGENTS.md`'s "Skills" section and one closing
   line in each of `world-card-integration`, `create-world`,
   `populate-world-content` and `ingest-campaign-log` (section 5). It is

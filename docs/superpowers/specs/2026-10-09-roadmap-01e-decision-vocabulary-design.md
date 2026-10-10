@@ -667,6 +667,7 @@ with.
 - **Delivers:** 01e-C2 (part: `Answer.expected` on native `Score` answers, and `decisions.tiers`); 01e-C4 (part: the `marginals` field, its validation, and its absence on every structured answer)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** `decisions.py` only. `Answer` gains `marginals` and `expected`, both checked in `__post_init__`. `native_answer` sets `expected` from a valid score distribution, normalised by the reported mass and riding on an abstained answer. `tiers(values, tolerance=MASS_TIE)` is added, with the greedy top anchor. `outcome` writes the two new fields under `_present`'s rule. No adapter, template or call site changes, and no existing answer changes.
 - **Acceptance:** section 11's `tiers` tests, its `expected` tests, and `outcome` with the new fields. `test_native_decisions.py` and the decide gate are unchanged.
 - **Size:** S
@@ -676,6 +677,7 @@ with.
 - **Delivers:** 01e-C1 (part: `Rank` and `Ranking` on the structured path, `validate`, the schema, the parse, and the native refusal stub); 01e-C2 (full: `Ranking.flat(tiebreak)`)
 - **Needs (this spec):** 01e-S1 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01e-S1 (H)
 - **Scope:**
   - `decisions.py` gains `Rank`, `Ranking`, and `KIND` `ClassVar`s on every question class. It also gets `MAX_RANK_CANDIDATES` and the array-of-enum schema, `_read_rank`, the `enum_values` branch, and the `outcome`/`render` spellings.
   - `native_gap` refuses every `Rank` (the stub above).
@@ -694,6 +696,7 @@ with.
 - **Delivers:** 01e-C3a (part: `MultiSelect` on the structured path, `validate`, the schema and the parse, with the empty selection as an answer and the native refusal stub)
 - **Needs (this spec):** 01e-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01e-S2 (H)
 - **Scope:** `decisions.py` gains `MultiSelect`, `MAX_SELECT_OPTIONS`, the min/max checks (`max=0` means zero), its parse in option order, its `enum_values` branch and its `outcome`/`render` spelling. `native_gap` refuses it. The selection bullet renders only beside a multi-select, and the offline select eval case is added.
 - **Acceptance:**
   - section 11's `validate`/`parse` tests for selects (`max=0`, empty is `()`, out of bounds is `unreadable`);
@@ -706,6 +709,7 @@ with.
 - **Delivers:** 01e-C3b (full)
 - **Needs (this spec):** 01e-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01e-S2 (H)
 - **Scope:**
   - `decisions.py` gains `Joint`, `Pair` with `.key`, `JOINT_SEP`, `joint_key`, `split_joint`, `head_marginal` and `head_first`.
   - Validation: the separator, aliases, duplicate `tails` keys and the flattened bound.
@@ -723,6 +727,7 @@ with.
 - **Delivers:** 01e-C1 (full); 01e-C3a (full); 01e-C4 (full)
 - **Needs (this spec):** 01e-S3 (H), 01e-S4 (H: `native_form`/`native_lift`)
 - **Needs (other specs):** 01a-C1 (S: per-item token and latency reporting on live runs — until it lands, `MAX_RANK_CANDIDATES` and `MAX_SELECT_OPTIONS` stay at 32, untuned)
+- **Needs (slices):** 01a-S3 (S), 01e-S3 (H), 01e-S4 (H)
 - **Scope:**
   - `native_form` lowers a `Rank` with `pointwise` to one predicate per candidate, and a `MultiSelect` to one predicate per option (`NATIVE_SELECT_TEXT`).
   - `native_lift` reads each lowered predicate's `Answer`, fills `marginals`, and builds tiers or the thresholded selection under sections 4.3 and 6.1. A select at 0.5 is `abstained` only with `allow_none`.

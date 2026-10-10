@@ -331,6 +331,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1a (part: the Action definition, `reachable_tiers`, `roll_shape`, and `pack["actions"]`)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** `modules/validate.py::_validate_actions` with every load-time error of 5.4, including the value caps and the cost-dependency rule; `modules/pack.py` loads `actions.json` into `pack["actions"]`; `checks.roll_shape` and `reachable_tiers` (5.2). Nothing reads the Actions yet, so no prompt, route or behaviour changes; a pack with a bad `actions.json` becomes invalid and unbound, as any invalid pack does today.
 - **Acceptance:** 27.1's pack-validation cases (one per error in 5.4, including the `<key>_max` collision, cost dependencies and the caps); `reachable_tiers` and `roll_shape` against both shipped packs' checks; existing pack and module-edit suites unchanged.
 - **Size:** M
@@ -340,6 +341,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1b (part: `effects.plan`, the II-A ops with direction-preserving bounds, evaluation and the magnitude cap)
 - **Needs (this spec):** 13-S1 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S1 (H)
 - **Scope:** `store/mechanics/effects.py`: `SheetView`, `plan(...) -> Plan` (7.6), the four ops of 7.2, evaluation through `expressions.evaluate` against the claim snapshot (7.3), `values` (5.3), costs (7.4), fan-out (7.5) and folding ops into units. Pure: no I/O, no lock, no writes.
 - **Acceptance:** 27.1's Effects cases, including a `before` already outside the bounds, `amount_out_of_range` on a deep value chain, a rejected outcome that keeps its cost units, fan-out order, one failing expansion rejecting all, and a no-op unit dropped.
 - **Size:** M
@@ -349,6 +351,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1a (full)
 - **Needs (this spec):** 13-S1 (H), 13-S2 (H: cost payability)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S1 (H), 13-S2 (H)
 - **Scope:** `store/mechanics/availability.py`: `available_actions`, `legal_set` with its digest, and `check_proposal` (6), reading under the campaign lock. Routes `GET .../actions` and `POST .../actions/preview` (`@computes_only`, 18). Read-only; nothing resolves an Action yet.
 - **Acceptance:** 27.1's Availability cases (each reason code, pool order, `self`, a target lacking a touched field, a stable legal-set order and digest that changes when payability does); route tests for both endpoints.
 - **Size:** M
@@ -358,6 +361,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1b (part: the ledger, `apply_unit_locked`, `txn.complete`/`close`/`open_for_proposal`, undo, settle, the History reads)
 - **Needs (this spec):** 13-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S2 (H)
 - **Scope:** `store/mechanics/txn.py` (the `open/`/`done/` layout, `head.json`, the derived `index.jsonl`, records with device stamps, statuses; 10), `sheets.writer.apply_unit_locked` (11.2), undo with its dry check (12) and settle (11.5), the History and undo/settle routes (18), `revision.bump` in the writers, and the scene-rename and reclassify fan-outs for transactions (16). `txn` never imports `proposals`. Store tests create transactions directly; no route can create one yet. `store.mechanics.txn` joins `locks.DOMAIN_MODULES`.
 - **Acceptance:** 27.1's Sheet unit writer and Undo cases; ledger round-trips; index rebuilt from `done/`; transactions follow a scene rename and a reclassify; `test_lock_domain_guard.py`, `test_atomic_guard.py`, `test_paths_guard.py` and `test_import_guard.py` pass.
 - **Size:** L
@@ -367,6 +371,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1c (part: the `kind: "action"` payload, adjudication, the resolution object, projection, the continuation templates, player-initiated Actions)
 - **Needs (this spec):** 13-S3 (H), 13-S4 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S3 (H), 13-S4 (H)
 - **Scope:** `store/mechanics/resolve.py` (`finish`, `recover`), the sequence of 11.1 inside `_roll_proposal_run`, the `proposals.py` changes of 11.4 (revert guard, `heal` order complete → fence → hand off → close → project, `projectable`, `project` through `mechanics.lines.format_line`), the recovery fence and `orphaned` close (11.3), `proposals` in the scene-rename fan-out (16), the payload of 8.1 with `action_check`, the body of 8.4 (`targets`, `action_id`, `narrate`), `POST .../action-proposal` with `round_open` and the scene-freeze door (8.3), the resolution of 9, the line of 13.1, and `action_result.j2` / `action_rejected.j2` (13.2) with `verify_templates.py`. Recovery runs in adjudication and `heal` only; the other doors are 13-S7. No prompt change: the play model cannot propose an Action until 13-S6.
 - **Acceptance:** 27.1's Transactions and recovery cases (each crash point, the revert guard, `heal`, the scene fence and `orphaned`, the rejected outcome with costs applied, a rebound module stalling rather than failing a send); 27.2's player-Action, double-accept, retry-finishes-not-409, `narrate: false`, `round_open`, older-build-view and superseded-before-accept cases; the three demonstration Actions resolve end to end.
 - **Size:** L
@@ -376,6 +381,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1c (part: the fence parsing and the Actions block of the prompt)
 - **Needs (this spec):** 13-S5 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S5 (H)
 - **Scope:** `fence.parse_roll_body`'s `action`/`targets` patterns and the regex-path fix, `_make_proposal`'s action branch with `actor_ambiguous`/`target_ambiguous` and `check_and_action` (8.2), the Actions block in `mechanics_response_format.j2` with both caps (14), and the offline eval suite's `action-fence` case. A pack without available Actions renders byte-identical prompts.
 - **Acceptance:** 27.2's fence cases and the byte-identity test (each shipped pack, and a fixture pack whose Actions are all unavailable); `verify_templates.py` and the offline evals pass; the frozen campaign's snapshot does not move.
 - **Size:** M
@@ -385,6 +391,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1b (full)
 - **Needs (this spec):** 13-S5 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S5 (H)
 - **Scope:** recovery at every other door of 11.3: the `main._lifespan` startup step and the data-dir move, sheet writes, the absorb save, the campaign and world module rebinds, module delete and import, the scene-delete route, and projection only into a free scene; the foreign-device grace period. Module authoring: `upsert_action`/`delete_action`, the rename fan-out, `action_proposal_guard`, `open_transactions_guard`, the 409 `mechanics_open` refusals and the impact-report additions (17).
 - **Acceptance:** 27.1's foreign-device and module-rebind cases; 27.2's rename-guard and stalled-transaction module-edit refusals; a startup pass finishes an open record; a sheet write finishes an interrupted Action before writing; a recovery into a scene held by a turn applies units but does not project.
 - **Size:** M
@@ -394,6 +401,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C1c (full)
 - **Needs (this spec):** 13-S5 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S5 (H)
 - **Scope:** `audit/prompt.py::transaction_lines` read from the index by time and in-scope sheet, the transaction block in `audit/user.j2` and the instruction in `audit/system.j2`, and the flagged, unselected reversal delta in `audit.apply.materialize` (15). A campaign with no transactions renders the audit prompt unchanged.
 - **Acceptance:** 27.2's audit cases (every transaction since the scene began that touched an in-scope sheet is listed, from any scene, undo included; a reversing delta is staged unselected with its flag); `verify_templates.py` passes.
 - **Size:** S
@@ -403,6 +411,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** none of the contract items (the II-A surfaces of 19)
 - **Needs (this spec):** 13-S5 (H), 13-S4 (H: History reads), 13-S7 (S: authoring routes; until then the Actions editor section is absent)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S4 (H), 13-S5 (H), 13-S7 (S)
 - **Scope:** `RollProposal.tsx` for action payloads (targets, adjustable parameters, `action_id` in Modify), the Action palette with its preview and Resolve / Resolve & narrate, the resolution card, the History `ColumnSection` in `SheetsView` with Undo and Settle, and the module editor's Actions section. Key bindings through `useHotkeys`.
 - **Acceptance:** 27.3's frontend tests, including the list/detail triple for the History.
 - **Size:** L
@@ -412,6 +421,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** none of the contract items (an extension of 13-C1b's op set, 7.7)
 - **Needs (this spec):** 13-S4 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S4 (H)
 - **Scope:** `list_add` and `list_remove` on `list` fields: the validator admits them, `effects.plan` expands them into the sheet unit, and the line and History render them. Units, recovery and undo are unchanged.
 - **Acceptance:** effects cases for both ops (adding a present entry, removing an absent one as a recorded no-op); a recovery and an undo of a transaction that touched a list.
 - **Size:** S
@@ -421,6 +431,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C2a (part: `conditions.json`, the conditions store and unit, `condition_add`/`condition_remove`, manual transactions)
 - **Needs (this spec):** 13-S5 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S5 (H)
 - **Scope:** pack validation of `conditions.json` (20.1), `<campaign>/mechanics/conditions.json` as a new unit kind under 11.2's compare-and-swap (20.2), the two ops including the actor-side cost (20.3), `kind: "manual"` transactions and the conditions routes (20.4), the rename and delete handling of 20.6. No modifier applies yet.
 - **Acceptance:** crash-injection cases over the condition unit in the style of 27.1; retries never double-apply; a dangling condition reads as unknown; a condition rename rewrites every bound campaign.
 - **Size:** M
@@ -430,6 +441,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C2a (full)
 - **Needs (this spec):** 13-S11 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S11 (H)
 - **Scope:** `resolve_check` reads active conditions and reports `base_modifier`, `condition_modifiers` and the final `modifier`, rendered by both continuation templates (20.5); checks' optional `tags`; `requires_conditions`/`forbids_conditions` and the `condition` availability reason; conditions in the play view's sheet panel (19).
 - **Acceptance:** same inputs give the same modifier; a modifier is applied once through a retry; every existing reader of `modifier` is unchanged; the gating reason appears in availability.
 - **Size:** M
@@ -439,6 +451,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C2b (full)
 - **Needs (this spec):** 13-S11 (H: the second unit kind's pattern)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S11 (H)
 - **Scope:** `<campaign>/mechanics/clocks.json` and optional templates (21.1), the `clock` parameter and `no_clock` reason (21.2), `clock_advance`/`clock_set` with `overflow`, the completion event in the transaction and the continuation (21.3), manual clock creation, and active clocks in the sheet panel.
 - **Acceptance:** crash-injection cases over the clock unit; an advance retried is idempotent; completion is reported and nothing else is done by the engine; repeating an Action advances a clock with no second state machine.
 - **Size:** M
@@ -448,6 +461,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C2c (full)
 - **Needs (this spec):** 13-S12 (H: each side's condition modifiers)
 - **Needs (other specs):** none
+- **Needs (slices):** 13-S12 (H)
 - **Scope:** the `contest` definition and its validation (22.1), two `resolve_check` calls recorded before any effect, the `pid` and `pid#target` roll tags, the combined line, and the contest names in the effect scope (22.2). One target only.
 - **Acceptance:** both rolls logged; a retry never re-rolls either side; ties follow `tie`; a multi-target contest is refused at load; each side's conditions apply to its own roll only.
 - **Size:** M
@@ -456,7 +470,8 @@ a failure branch; and a no-roll Action that moves a resource.
 
 - **Delivers:** 13-C3 (part: single-target Actions, one- and two-step questions)
 - **Needs (this spec):** 13-S5 (H), 13-S6 (S: shared action-payload parsing; until then the seam builds its payload directly)
-- **Needs (other specs):** 01c-C2 (H: `draws.draw` and `draws.new_seed`); 01c-C3 (H: the replay record, stored with the outcome); 01c-C4 (H: abstain, refuse, unreadable, error or no usable distribution never sampled, and a plain answer recorded `sampled: false`); 01c-C1 (S: `reports_distribution` — until it lands, every answer takes `basis: answer`); 01e-C3b (S: `Joint` with `Pair.key` — until it lands, the one-step form is a flat `Choice` keyed `head=>tail`); 01b-C1 (S: decision capture — until it lands, no capture); 01a-C1 (S: eval cost and latency reporting — until it lands, the gate grades correctness only); 02-C2 (S: 02-C2b turn intent — until it lands, the item has no intent line); 02-C3 (S: the turn plan's `extra` slot — until it lands, the question is its own `npc-action` call)
+- **Needs (other specs):** 01c-C2 (H: `draws.draw` and `draws.new_seed`); 01c-C3 (H: the replay record, stored with the outcome); 01c-C4 (H: abstain, refuse, unreadable, error or no usable distribution never sampled, and a plain answer recorded `sampled: false`); 01c-C1 (S: `reports_distribution` — until it lands, every answer takes `basis: answer`); 01e-C3b (S: `Joint` with `Pair.key` — until it lands, the one-step form is a flat `Choice` keyed `head=>tail`); 01b-C1 (S: decision capture — until it lands, no capture); 01a-C1 (S: eval cost and latency reporting — until it lands, the gate grades correctness only); 02-C2b (S: turn intent — until it lands, the item has no intent line); 02-C3 (S: the turn plan's `extra` slot — until it lands, the question is its own `npc-action` call)
+- **Needs (slices):** 01a-S3 (S), 01b-S2 (S), 01c-S1 (H), 01c-S2 (S), 01e-S4 (S), 02-S2 (S), 02-S4 (S), 13-S5 (H), 13-S6 (S)
 - **Scope:** the `npc_action` route (`legacy=routing.NO_LEGACY`) lands with its call site in `character_turns` and its `evals/run.py --gate` corpus, by the routing and operation guards' rule (24.7). The question of 24.3 for single-target Actions, the draw of 24.4, the re-check and record of 24.5, the pre-generation pause and `resume_roll` with `action_result.j2`, and the campaign setting `npc_actions` (default `off`, hidden until the gate passes). Multi-target Actions are left out of the question and recorded as left out.
 - **Acceptance:** 27.4's 13-C3 cases with a fake Decision client (a distribution, an answer with no distribution, an abstention, a refusal, an illegal option, an error, and `incapable`); a legal set past 254 options goes through two steps; the eval gate passes before the setting is shown.
 - **Size:** L
@@ -466,6 +481,7 @@ a failure branch; and a no-roll Action that moves a resource.
 - **Delivers:** 13-C3 (full)
 - **Needs (this spec):** 13-S15 (H)
 - **Needs (other specs):** 01e-C3a (H: `MultiSelect`, where an empty selection is a real answer)
+- **Needs (slices):** 01e-S3 (H), 13-S15 (H)
 - **Scope:** the second step for an Action with `targets.max > 1` as a `MultiSelect` of eligible targets, taken from the answer (`basis: answer`), with a size outside `targets.min..max` treated as no usable answer (24.3). The eval corpus gains multi-target cases.
 - **Acceptance:** a multi-target Action reaches a proposal with a legal target set; an out-of-range set degrades to prose; the gate passes with the new cases.
 - **Size:** S

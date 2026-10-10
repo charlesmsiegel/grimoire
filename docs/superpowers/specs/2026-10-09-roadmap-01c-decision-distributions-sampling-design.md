@@ -720,6 +720,7 @@ S3 needs S2.
 - **Delivers:** 01c-C2 (full); 01c-C3 (full); 01c-C4 (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** 01d-C2a (S: `ItemResult.served` per-item provenance, `(kind, provider_id, model)`. Until it lands, `draw` takes `served=` of the same shape from the caller); 01e-C4 (S: `Answer.marginals`. Until it lands there are no marginals to refuse. `draw` reads only `distribution` and `probability`, so C4 holds either way)
+- **Needs (slices):** 01d-S2 (S), 01e-S1 (S)
 - **Scope:** Adds the gateway leaf `backend/src/grimoire/draws.py`: `ALGORITHM`, `new_seed`, `unit`, `quanta`, `pick`, `draw_from`, `draw`, `Eligibility` (`only`, `exclude`, `cutoff`, `floor`), `Draw`, `replay` and `ReplayError`. It implements the six steps of section 5.3, the no-draw table of section 5.4 and the version-1 record of section 6. It is pure: no store, no lock, no caller wired, no task samples. The persistence rules of section 6.1 are stated for callers (02, 13), which apply them in their own slices.
 - **Acceptance:** `backend/tests/test_draws.py` as in section 10: `unit` golden vectors, the interpreter-independence golden (ten weights of 0.1, and the review's boundary case) passing on CI's 3.11 and 3.14 legs, `pick`, canonical order, every eligibility case including the cutoff, one case per row of the section 5.4 table, the seed and purpose checks, the `replay` sweep, and the JSON round trip. `make check` is green, including `check-pydantic1`.
 - **Size:** M
@@ -729,6 +730,7 @@ S3 needs S2.
 - **Delivers:** 01c-C1 (part: `TaskPolicy.samples` and `native_first`, `resolve.native_capable`, the isolated `retries=0` native-first stage in `inference.stages`, the two `run_stages` dead-skip changes, `inference.reports_distribution`, with every task off)
 - **Needs (this spec):** none
 - **Needs (other specs):** 01d-C1 (S: `routing.TaskPolicy`, `routing.policy` and `backend/tests/test_task_policy.py`. If 01d-S1 has not landed, this slice creates the structure and the test with today's defaults, and 01d-S1 adds its fields)
+- **Needs (slices):** 01d-S1 (S)
 - **Scope:** Adds `samples` and `native_first` to `routing.TaskPolicy`, with the section 4.1 rules in `test_task_policy.py`. The rule that refuses `samples` with `low_margin` lands with whichever of this slice and 01d-S1 is second. Adds `resolve.native_capable` (production only; `evals/runner.chain` is unchanged), `Stage.isolated`, the native-first branch in `inference.stages`, and `run_stages`' two changes from section 4.2.1. Both are inert for every chain that exists today. Adds `inference.reports_distribution`, and rewrites CLAUDE.md's decide paragraph (section 9). `TASK_POLICY` sets no `native_first`, so behaviour at landing is unchanged.
 - **Acceptance:** `test_inference_decide.py` and `test_inference_decide_native.py` as extended in section 10. That covers: the stage shapes; the fall-through cases (403, rate limit, auth with a riding fallback, and a structured-stage connection-wide failure still skipping); a native `refused` that is not re-asked; and `reports_distribution`. `test_decide_chain_golden.py` stays green without being regenerated. `test_task_policy.py` plants a violation of each rule. `test_docs_guard.py` passes.
 - **Size:** M
@@ -738,6 +740,7 @@ S3 needs S2.
 - **Delivers:** 01c-C1 (full: the recorded policy, with the section 4.3 procedure, the `decide.distribution` grader and the `evals/README.md` "Decision distributions" record)
 - **Needs (this spec):** 01c-S2 (H)
 - **Needs (other specs):** 01a-C1 (H: per-case and per-call wall time, tokens and the three money columns, aggregated per route and backend); 01a-C3 (H: repeatable `--decide-backend`, `--out` and `--compare FILE...`)
+- **Needs (slices):** 01a-S3 (H), 01a-S4 (H), 01c-S2 (H)
 - **Scope:** Adds the `decide.distribution` check to `evals/graders.py`, graded n/a on a structured answer. Adds the "Decision distributions" section to `evals/README.md`, with the comparison table from the user's live run of `decide-speaker` (`--decide-backend native`, then `structured`, on one model per adapter kind that the user can reach), recorded whether or not it meets the bar. It switches no task on. Adding `response-selector` to a `native_first` kind belongs to 02-C2a's change, because the section 4.1 rule needs `samples` first.
 - **Acceptance:** the grader's offline tests: n/a on a structured answer; a pass on a native answer with a usable distribution; a fail on a partial or inconsistent one. The README section exists, states the bar of section 4.3, and holds only synthetic-corpus figures. `make check` is green.
 - **Size:** S

@@ -540,6 +540,7 @@ either order or in parallel. S3 needs both.
 - **Needs (other specs):** none. `_Call.stage`/`positions` is a shared
   structure with 01b. If 01b-S1 lands first, this slice reuses its fields and
   adds only `CallRecord`, `_Answered.calls` and `Decision.calls`.
+- **Needs (slices):** none
 - **Scope:** §5's production change.
   - `_Call` gains `stage` and `positions`, set in `run_stages`.
   - `_structured` and `_native` build one `CallRecord` per metered request.
@@ -561,6 +562,7 @@ either order or in parallel. S3 needs both.
 - **Delivers:** 01a-C2 (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - `runner.live` meters a generate case with the production meter.
   - `run_live` records `real_home`. `live_all` checks the tripwire inside
@@ -584,6 +586,7 @@ either order or in parallel. S3 needs both.
 - **Needs (other specs):** 01d-C2b (S: rows and call records carry
   `hop: escalation`). Until it lands, every row aggregates under `hop = -`
   and no item is `escalated`.
+- **Needs (slices):** 01a-S1 (H), 01a-S2 (H), 01d-S3 (S)
 - **Scope:**
   - `evals/costs.py` mirrors `cost.tsx`'s rules, including the derived
     billed-call count.
@@ -603,6 +606,7 @@ either order or in parallel. S3 needs both.
 - **Delivers:** 01a-C3 (full)
 - **Needs (this spec):** 01a-S3 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01a-S3 (H)
 - **Scope:**
   - `--decide-backend` becomes repeatable, and `--repeat N` is added (capped,
     and refused with `--record`).

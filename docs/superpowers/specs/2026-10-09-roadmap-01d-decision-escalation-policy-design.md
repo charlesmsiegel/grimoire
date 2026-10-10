@@ -691,7 +691,8 @@ parallel. S5 needs S4.
 
 - **Delivers:** 01d-C1 (part: `routing.TaskPolicy`, `routing.policy`, `TASK_POLICY` empty, `fallback="none"` in `resolve` with `NO_FALLBACK_POLICY`, and every section 4.3 rule in `test_task_policy.py`); 01d-C3 (part: `MAX_MARGIN`, `DEFAULT_MARGIN` and the `margins` and `escalate_max` validation)
 - **Needs (this spec):** none
-- **Needs (other specs):** 01c-C1 (S: the `TaskPolicy.samples` field. Until it lands, the rule refusing `samples` with `low_margin` is added by whichever of 01c-S2 and this slice lands second)
+- **Needs (other specs):** none. 01c-S2 lists this slice as a soft need, so the slice graph orders this one first. The two may still land in either order: the rule refusing `samples` with `low_margin` lands with whichever is second, and if 01c-S2 is first it creates the structure that this slice extends.
+- **Needs (slices):** none
 - **Scope:** Adds the shared structure to `store/routing.py` (pure leaf, literals only) with all of section 4.1's fields, including `escalate_answers` and `reads_declines`. If 01c-S2 has already landed, this slice extends the structure rather than creating it. `resolve.resolve` reads `policy(task).fallback`: `"none"` attaches no fallback, and sets `NO_FALLBACK_POLICY` only when the role had one configured. The settings view's dropped-fallback line gets its sentence (01s's `droppedFallbackWords`). No task gets a policy, so behaviour is unchanged.
 - **Acceptance:** `test_task_policy.py`: every section 4.3 rule, each with a planted violation, plus "empty at landing". `test_inference_resolve.py` (extended): `fallback="none"` on a generate task and a decide task; on a role with no fallback, no `fallback_problem`; the role card unchanged; `for_task` between siblings stays correct. `make check` is green.
 - **Size:** S
@@ -701,6 +702,7 @@ parallel. S5 needs S4.
 - **Delivers:** 01d-C2a (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** Adds `ItemResult.served` (`compare=False`), stamped by `_structured` from the answering holder's `llm.ATTEMPTED` and by `_native` from `named`. Adds `decisions.margin` (measured from the answered key, with `math.fsum`), `Trigger` and `decisions.triggers`, with the exact and `:`-prefix answer filter and the priority order. These are pure, and nothing calls `triggers` in production yet.
 - **Acceptance:** the trigger and margin cases of section 9: each trigger; at the threshold and just under it; no entry for a kind; `unreadable` and `error` never escalated; the margin formula for `M >= 1`, `M < 1` and a predicate both ways; the answer-disagrees cases from review B1; the prefix filter; priority order. Existing `ItemResult` equality tests stay green, and `test_decide_chain_golden.py` is unchanged.
 - **Size:** S
@@ -710,6 +712,7 @@ parallel. S5 needs S4.
 - **Delivers:** 01d-C2b (part: `decide(escalation=)` with the role hop and the caller `Resolver` / `ResolverReply`, the per-chunk cap, the same-model skip, the per-question merge with `reads_declines`, `Decision.escalations`, the `hop` account field on ledger rows and the hop-marked capture); 01d-C1 (part: `decide`'s `ValueError` when the call site and the policy disagree)
 - **Needs (this spec):** 01d-S1 (H); 01d-S2 (H)
 - **Needs (other specs):** 01a-C1 (S: `decisions.CallRecord` / `Decision.calls`. Until it lands, `Decision.usage` and `Decision.escalations` carry the hop, and this slice adds the `calls` records when 01a lands, or 01a adds them if it lands second); 01b-C1 (S: the capture helper at every decide site. Until it lands, hop calls are captured only where the site passes `capture`, which today is the speaker pick)
+- **Needs (slices):** 01a-S1 (S), 01b-S3 (S), 01d-S1 (H), 01d-S2 (H)
 - **Scope:** `inference.decide` gains `escalation=`, and runs the section 5.3 flow after the unchanged `run_stages`. `wire.Account` and `llm_usage.ACCOUNT_FIELDS` gain `hop`. `decisions` gains `Escalation`, `Decision.escalations` and `ResolverReply`. No call site passes `escalation=`, and `TASK_POLICY` is empty, so nothing escalates in production. The tests drive it with a patched synthetic policy and `llm_fakes`.
 - **Acceptance:** `backend/tests/test_decide_escalation.py` as in section 9, apart from the seam and evals items: no policy means an identical `Decision`; cap and chunk; `same_model`; replacement; the declines and per-question merge cases, including the review's `_decide_error` counterexample; `rate_limit` and `BudgetRefused` on the hop; no second hop; the caller-`Resolver` cases; the policy/call-site `ValueError`; ledger `hop` rows; capture; cancellation. `test_usage_guard.py` and `test_decide_chain_golden.py` stay green.
 - **Size:** L
@@ -719,6 +722,7 @@ parallel. S5 needs S4.
 - **Delivers:** 01d-C2b (full: `routes.common.escalation_inference` over `_soft_resolved`, the role's own preset, the route's `requires` check and the route-named sentence); 01d-C1 (full)
 - **Needs (this spec):** 01d-S3 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01d-S3 (H)
 - **Scope:** Adds `escalation_inference(task, cid)` with its `# routing-ok:` marker. `test_routing_guard.py` treats it as a seam (only called, with a literal task whose policy escalates), and `RESOLVER_CALL_CAP` goes from 5 to 6. `test_operation_guard.py` checks that `operations.decide` passes `escalation=` exactly when the task's policy escalates. CLAUDE.md gains the sentence that an escalation is not a stage. No call site uses the seam yet: each task's switching change (02, 10, 11, 12) adds its own.
 - **Acceptance:** the seam cases of section 9: a soft refusal skips every candidate with the sentence; a hop primary lacking the route's `requires` is skipped as `incapable`, with the route named; the role's own preset is sent. The routing guard and the operation guard each fail a planted violation. `test_docs_guard.py` passes.
 - **Size:** M
@@ -728,6 +732,7 @@ parallel. S5 needs S4.
 - **Delivers:** 01d-C3 (full: `--escalation-sweep`, `--escalation POLICY_JSON`, `evals/runner.escalator` and the `evals/README.md` "Decision escalation" section with the bar of section 6.3)
 - **Needs (this spec):** 01d-S4 (H)
 - **Needs (other specs):** 01a-C1 (H: aggregation per route, backend and `hop`); 01a-C2 (H: live evals metered inside a throwaway home, with the tripwire against the real home); 01a-C3 (H: `--out` and `--compare FILE...`)
+- **Needs (slices):** 01a-S2 (H), 01a-S3 (H), 01a-S4 (H), 01d-S4 (H)
 - **Scope:** Adds the offline margin sweep over `evals/recordings/decide-*.native*.json`, the per-run policy override, and the eval-side escalator that resolves inside the throwaway home. Adds the README section that states the procedure and the bar. It enables no task. Each task's thresholds and its eval cases land with that task's switching change.
 - **Acceptance:** `--escalation-sweep` output is golden over a fixed recording. `--escalation` is refused for a task that is not on a decide route. `evals/runner.escalator` resolves inside the throwaway home and is refused by 01a-C2's tripwire against the real one. `make check` is green.
 - **Size:** M

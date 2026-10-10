@@ -974,6 +974,7 @@ per-scene input "slices" of section 4.2 are a different thing.)
   relies on, section 4.2)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** Moves the test that decides `prior`/`stale` out of
   `routes/scenes.py` (`:3628-3640`, `_rolling_digest` at `:3648`) into one store
   function, in a module that may import `scenes` and `regex` (not
@@ -995,6 +996,7 @@ per-scene input "slices" of section 4.2 are a different thing.)
   the registry kind's `version` and `BUILD`); 03-C9 (S: synthetic-library
   generator; until it lands, the cost check in section 6 runs on a hand-built
   fixture)
+- **Needs (slices):** 03-S2 (H), 03-S6 (S), 08-S1 (H)
 - **Scope:** Adds `store/searchdocs/` with `slices.py`, `rolling.py` and
   `scene.py`: `CampaignInputs.load` with the signature-memoized ledger parses,
   `effective.records` and name tables; `scene_slices` with the absorbed gate,
@@ -1020,6 +1022,7 @@ per-scene input "slices" of section 4.2 are a different thing.)
   and `compiled.space_digest`); 03-C7 (H: vectors keyed by space and text,
   never `BUILD`); 03-C8 (S: the purge on a world or campaign delete; until it
   lands, the delete test is skipped)
+- **Needs (slices):** 03-S1 (H), 03-S2 (H), 03-S3 (H), 03-S4 (H), 03-S5 (S), 08-S2 (H)
 - **Scope:** Adds `live.py` (`scene_documents`, `LiveSet`, the tolerant
   fallback walk with `skipped`, one batch lookup, lazy build with
   store-relative `materialized` rows carrying `{campaign, identity}`, the
@@ -1040,6 +1043,7 @@ per-scene input "slices" of section 4.2 are a different thing.)
 - **Delivers:** 08-C3b (full)
 - **Needs (this spec):** none (can land in parallel with S1 to S3)
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** Adds `expand.py`: required phase, identity checks, whole-transcript
   view, `in_context` filtering, post keys and parts, alt-text images in the
   prompt phase, term matching, windows, the byte and post budgets with
@@ -1063,6 +1067,7 @@ per-scene input "slices" of section 4.2 are a different thing.)
   `network` and `EmbedPlan` campaign claims, and a hook reading its own kinds'
   rows by path); 03-C3 (H: as S3); 01h-C1 (S: `embed_sync(..., queries=)`;
   until it lands, the call omits `queries` and is today's)
+- **Needs (slices):** 01h-S2 (S), 03-S4 (H), 05-S6 (H), 08-S3 (H)
 - **Scope:** Adds `hook.py` (`SearchDocsHook` delegating to module-level
   `_kinds`, `_local`, `_network`; the identity check on vector rows;
   `REINDEX_LIMIT`) and `vectors_for` with its one `embed_sync` call. Adds
@@ -1087,6 +1092,7 @@ per-scene input "slices" of section 4.2 are a different thing.)
 - **Needs (other specs):** 07-C3c (H: `scene_groups(index, cast, visible=None,
   limit=None)`, affiliation including leaders, uncapped); 07-C2 (H: the
   inverse membership index `scene_groups` reads)
+- **Needs (slices):** 07-S2 (H), 07-S7 (H), 08-S2 (H)
 - **Scope:** Fills the `groups` slice from `scene_groups` over the full cast,
   exempt from `MAX_META_REFS`, gm-only rows marked, digested as canonical
   JSON. Moves every key once (a metadata change, no embedding, since the text

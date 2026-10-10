@@ -1253,6 +1253,7 @@ S10.
 - **Needs (this spec):** none
 - **Needs (other specs):** 03-C6 (S: per-kind hit and miss counts returned by
   batch lookups. Until 03 lands, the `compiled.*` counters read zero.)
+- **Needs (slices):** 03-S3 (S)
 - **Scope:** adds `store/readstats.py`, a leaf module with `collect`, `bump`
   and `snapshot`. Bumps `statcache.hit/miss.<kind>`, `frontmatter.parse`,
   `frontmatter.parse_head` and `transcript.parse` in `statcache`, `frontmatter`
@@ -1272,6 +1273,7 @@ S10.
 - **Delivers:** 04-C2b (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** delivers all of section 6 except 6.6, which is a decision and not
   code.
   - `listWorlds`, `listCampaigns` and `getTodo` become remembered reads, with
@@ -1300,6 +1302,7 @@ S10.
 - **Needs (this spec):** S1 (S: the counter assertions. Without it, the
   assertions use the audit hook alone.)
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - `modules.binding.resolve` reads the world's `module` key without
     `read_world`'s counts, and still raises `WorldNotFound` on a missing
@@ -1324,6 +1327,7 @@ S10.
 - **Needs (this spec):** S1 (H: the `frontmatter.parse_head` counter and
   `readstats` in the acceptance tests)
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - Adds the `store/overview/` package with `overview.scene_summary(cid)`: the
     fold over head-only `_scene_row` reads, `memo_stamped` in `_OVERVIEW_POOL`,
@@ -1352,6 +1356,7 @@ S10.
   `ledger_open`)
 - **Needs (this spec):** S1 (H: the `overview.computed.<kind>` counter)
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - Adds `*_from_text` twins to the five continuity readers (`plot`,
     `commitments`, `events`, `continuity/doc`, `continuity/candidates`). The
@@ -1377,6 +1382,7 @@ S10.
 - **Delivers:** 04-C1b (part: `overview.scene_turns`, in-process)
 - **Needs (this spec):** S1 (H: the `transcript.parse` counter)
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - `overview.scene_turns(cid, sid)` is `memo_stamped` on `(scene path,
     players)`, with `players` from `cast.player_names`. The appearances record
@@ -1408,6 +1414,7 @@ S10.
     path.);
   - 03-C6 (S: batch lookup over a live key set. Until it lands, one lookup per
     key.)
+- **Needs (slices):** 03-S2 (H), 03-S3 (S)
 - **Scope:**
   - Registers `overview.world_row` and `overview.campaign_row` as byte-fed 03
     kinds, with their live paths (`_world_row`, `_campaign_row` plus `module`),
@@ -1441,6 +1448,7 @@ S10.
   - 03-C4 (H: `InputUnavailable` with fallback to the caller's path reader);
   - 03-C6 (S: batch lookup over a live key set, plus per-kind counts. Until it
     lands, one lookup per key.)
+- **Needs (slices):** 03-S2 (H), 03-S3 (S)
 - **Scope:**
   - Registers `overview.scene_turns` (scene bytes plus sorted `players`) and
     `overview.continuity_summary` (five absent-ok files) as byte-fed 03 kinds
@@ -1469,6 +1477,7 @@ S10.
   persisted `scene_turns` and `continuity_summary`)
 - **Needs (other specs):** 03-C5 (H: storing artifacts at write time while the
   `sources` row waits out the racy window)
+- **Needs (slices):** 03-S4 (H)
 - **Scope:**
   - `overview.warm_scene(cid, sid)` is called from
     `routes/streaming._fire_follow_up` on a worker thread. It holds no lock or
@@ -1497,6 +1506,7 @@ S10.
     builds the generator core to 9.1 and 03 adopts it.);
   - 03-C4 (H: the injectable clock behind the `PERSIST_WINDOW` age test, the
     `migrations._clock` precedent).
+- **Needs (slices):** 03-S2 (H), 03-S6 (S)
 - **Scope:**
   - Extends the generator with what 9.1 asks for: backdated file and
     directory mtimes, a seeded clock, the `.synthetic-library` marker, and

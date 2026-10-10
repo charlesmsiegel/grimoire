@@ -1087,6 +1087,7 @@ stays off behind its switch until its gates pass.
 - **Needs (other specs):** 07-C1 (S: `members` and `leader` on the group
   record, read through 07's `affiliated` — until it lands, a `groups:`
   audience expands to the leader only, or to nobody where there is none)
+- **Needs (slices):** 07-S2 (S)
 - **Scope:** Adds `store/knowledge.py` with a tolerant `read`, the shape-checked
   mutators (`add`, `update`, `remove`, `restore`, `forget_audience`,
   `copy_for_branch`), fingerprint matching (variant and raw-text digest for
@@ -1118,6 +1119,7 @@ stays off behind its switch until its gates pass.
   prefixed `r-<response_id>` / `p-<post_id>` form plus `part` — until they
   are populated, post-listed overrides cannot match and a keyless post in a
   scene with any post-listed override is withheld)
+- **Needs (slices):** 08-S4 (S), 09-S1 (H), 11-S1 (H)
 - **Scope:** Adds `store/context/epistemic.py` as a pure, read-only module
   under one best-effort hold, declared in no lock list. It is a library with
   no caller on the turn path yet, so prompts are unchanged. Pins its slice
@@ -1143,6 +1145,7 @@ stays off behind its switch until its gates pass.
     no planner, and the actor's evidence is 09's alone);
   - 10-C3 (S: the sufficiency check reading the evidence it is handed —
     until 10 lands there is no check).
+- **Needs (slices):** 09-S1 (H), 09-S2 (H), 10-S1 (S), 10-S2 (S), 11-S2 (H)
 - **Scope:** Makes `gather` run per compose step with the step's perspective,
   builds an actor's query from `observed_history` with restricted seeds, and
   calls `classify` after every retrieval round. Replaces compose's `history=`
@@ -1165,6 +1168,7 @@ stays off behind its switch until its gates pass.
   capture view — until then there is nothing to accept from, and the ledger's
   `+ New` form is the only writer)
 - **Needs (other specs):** none
+- **Needs (slices):** 11-S1 (H), 11-S3 (S)
 - **Scope:** Adds the three `routes/ledger.py` routes: `ensure_identity`
   under the campaign lock, 409 `busy` on `UnreadableError`, server-side post
   key validation and fingerprinting, 400 `unkeyed`, and journalling as
@@ -1185,6 +1189,7 @@ stays off behind its switch until its gates pass.
   three money columns — until it lands, the live arm reports leakage and
   recall only); 01a-C2 (S: live evals metered in a throwaway home — until it
   lands, the live arm stays unmetered, as live evals are today)
+- **Needs (slices):** 01a-S2 (S), 01a-S3 (S), 11-S3 (H)
 - **Scope:** Adds `evals/run.py --live` support for the epistemic cases: an
   actor reply graded for using a forbidden proposition, with a needle check
   and a decide-based judge, including case 3 (whisper without override),
@@ -1214,6 +1219,7 @@ stays off behind its switch until its gates pass.
     and the accept-from-capture of answers is absent);
   - 01c-C4 (S: no sampled stand-in for an abstention — `decide` already
     returns none).
+- **Needs (slices):** 01b-S2 (S), 01c-S1 (S), 01d-S4 (H), 02-S5 (H), 02-S7 (H), 11-S3 (H), 11-S4 (S), 11-S5 (S)
 - **Scope:** Adds `routes/epistemic.refine` with the eligibility gate, both
   caps (`RoundBudget` on the round record), `EPISTEMIC_CEILING_S`, the replay
   skip, and the `history_view` stored on the response record for a roll

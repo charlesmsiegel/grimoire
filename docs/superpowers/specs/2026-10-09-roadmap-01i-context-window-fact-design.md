@@ -480,6 +480,7 @@ only S1, so they can go in parallel. S4 waits softly on 01s.
 - **Delivers:** 01i-C1 (full); 01i-C2 (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - `catalog.entry` gains `max_output` (OpenRouter's `top_provider.max_completion_tokens`, Anthropic's `max_tokens`, under `_context`'s rule).
   - `wire.py` gains `Limit` and `Limits` and `Target.limits`.
@@ -498,6 +499,7 @@ only S1, so they can go in parallel. S4 waits softly on 01s.
 - **Delivers:** 01i-C3 (part: the stated facts write — `facts.state`, `FactsUpdate`, the facts route, `limits` in the facts body — and the model facts panel with `modelLimitsPath`)
 - **Needs (this spec):** 01i-S1 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01i-S1 (H)
 - **Scope:**
   - `facts.state` accepts `context_window` and `max_output` (leave, remove with 0, set), with the output-above-window check inside `change`.
   - `_view` exposes both values.
@@ -514,6 +516,7 @@ only S1, so they can go in parallel. S4 waits softly on 01s.
 - **Delivers:** 01i-C3 (part: `model_window` in every context breakdown, preferred by `ContextBreakdown`)
 - **Needs (this spec):** 01i-S1 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01i-S1 (H)
 - **Scope:**
   - The live context read, `character_turns`' breakdown and the prompt-log capture (`_record_prompt`) add `model_window` from the target they name.
   - `ContextBreakdown.contextLimit` prefers it and falls back to the catalog lookup for older snapshots.
@@ -530,6 +533,7 @@ only S1, so they can go in parallel. S4 waits softly on 01s.
 - **Delivers:** 01i-C3 (full)
 - **Needs (this spec):** 01i-S1 (H), 01i-S2 (S: `modelLimitsPath` for the **Set** link — until it lands, the readout shows `window unknown` with no link)
 - **Needs (other specs):** 01s (S: the Models summary row and its fallback line, section 3.1 — until it lands, the readout goes on today's `ModelsView` role cards)
+- **Needs (slices):** 01i-S1 (H), 01i-S2 (S)
 - **Scope:**
   - `_role_card`, `_route_row` and `_embedding_card` gain `limits` (window, max output, the riding fallback's window, and the ceiling with its `reason`). It is `null` when nothing resolves and on a native decide card or route.
   - The summary row and the fallback line render the window, `window unknown [Set]` and a ceiling `reason`.

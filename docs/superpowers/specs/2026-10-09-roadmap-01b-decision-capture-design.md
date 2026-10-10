@@ -452,6 +452,7 @@ before it.
 - **Needs (other specs):** none. `_Call.stage`/`positions` is a shared
   structure with 01a. If 01a-S1 lands first, this slice reuses its fields and
   only stamps them in `_outcome`.
+- **Needs (slices):** none
 - **Scope:**
   - `_Call` gains `stage` and `positions`, set in `run_stages` (shared with
     01a).
@@ -477,6 +478,7 @@ before it.
 - **Needs (this spec):** 01b-S1 (H)
 - **Needs (other specs):** none. 01d-C2b's `hop` and 01c's notes are
   pass-throughs that need nothing from those specs.
+- **Needs (slices):** 01b-S1 (H)
 - **Scope:**
   - `prompt_log.record` gains `operation`, eviction moves to per-pool
     counting, and `_well_formed*` accepts an optional `operation`.
@@ -507,6 +509,7 @@ before it.
 - **Delivers:** 01b-C1 (full)
 - **Needs (this spec):** 01b-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01b-S2 (H)
 - **Scope:**
   - `prompt_log.NO_SCENE` and the campaign-decision pool.
   - `common._record_campaign_prompt`, which proves the campaign exists,

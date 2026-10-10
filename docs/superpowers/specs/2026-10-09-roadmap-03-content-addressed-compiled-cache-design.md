@@ -1015,6 +1015,7 @@ both need only S2 and can land in either order.
 - **Needs (this spec):** none
 - **Needs (other specs):** none. 01h-C3 is soft: until it lands, the space id
   is 01's, unchanged.
+- **Needs (slices):** none
 - **Scope:**
   - **Module.** A new `store/compiled.py`, the only importer of `sqlite3`.
   - **Location and schema.** The per-device file
@@ -1052,6 +1053,7 @@ both need only S2 and can land in either order.
   collections yet)
 - **Needs (this spec):** 03-S1 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 03-S1 (H)
 - **Scope:**
   - **The `sources` table.** It follows section 5's rules: stamp before the
     read; the age test at `t0` against the filesystem clock, measured from a
@@ -1077,6 +1079,7 @@ both need only S2 and can land in either order.
   counts, and the rule that an index ranks only within that set)
 - **Needs (this spec):** 03-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 03-S2 (H)
 - **Scope:** section 7's collection digest: list the directory, filter
   members, hash each, sort, digest. Also section 9's batch lookup with
   per-kind counts. The "index ranks within the live set" rule is stated and
@@ -1097,6 +1100,7 @@ both need only S2 and can land in either order.
   and `compiled.space_digest`)
 - **Needs (this spec):** 03-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 03-S2 (H)
 - **Scope:** storing artifacts straight after a write while the `sources` row
   waits; the `materialized` table and its write and touch paths; and the one
   spelling of `<space-digest>`.
@@ -1114,6 +1118,7 @@ both need only S2 and can land in either order.
 - **Needs (this spec):** 03-S4 (H: eviction covers `materialized`)
 - **Needs (other specs):** none. 01s is soft: until it lands, the sharing text
   goes in today's Settings page.
+- **Needs (slices):** 03-S4 (H)
 - **Scope:**
   - **Eviction.** Least-recently-used, measured on live pages under
     `auto_vacuum=INCREMENTAL`, with an explicit `incremental_vacuum`.
@@ -1135,6 +1140,7 @@ both need only S2 and can land in either order.
 - **Delivers:** 03-C9 (full)
 - **Needs (this spec):** 03-S3 (H), 03-S4 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 03-S3 (H), 03-S4 (H)
 - **Scope:**
   - **The generator.** `backend/scripts/synth_library.py`, which refuses a
     non-empty target and writes placeholder names only.

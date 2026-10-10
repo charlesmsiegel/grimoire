@@ -927,6 +927,7 @@ E1 (S6) the last entry point a player can reach.
     `tier_limit=2`);
   - 08-C3b (H: `expand(..., phase="prompt")` over a scene, with posts keyed
     `r-<response_id>` / `p-<post_id>` plus `part`).
+- **Needs (slices):** 01g-S2 (H), 08-S4 (H), 09-S4 (H)
 - **Scope:** Adds `store/investigation/tools.py` and the scene-free,
   best-effort readers behind `get_actor` and `get_timeline`. The package is
   read-only and declared in no lock list. Extends
@@ -953,6 +954,7 @@ E1 (S6) the last entry point a player can reach.
     it lands, `investigation.priceable` applies the same rule);
   - 01i-C2 (H: `prompt_ceiling(resolved, max_tokens=…)` returning `None` when
     unknown).
+- **Needs (slices):** 01g-S4 (H), 01g-S5 (H), 01i-S1 (H), 12-S1 (H)
 - **Scope:** Adds `routes/investigation.investigate`, `Outcome`, the executor
   (threadpool), the per-entry-point `RunBudget`s in
   `store/investigation/budget.py` (including `E1_WALL_S`), the pre-reservation
@@ -974,6 +976,7 @@ E1 (S6) the last entry point a player can reach.
 - **Needs (this spec):** 12-S2 (H)
 - **Needs (other specs):** 01g-C1 (H: the `tools` capability and the seam's
   `incapable` refusal for a route that `requires=("tools",)`)
+- **Needs (slices):** 01g-S1 (H), 12-S2 (H)
 - **Scope:**
   - Adds the `investigation` route with `legacy=routing.NO_LEGACY` and only
     its `investigation-continuity` task. A route lands with its call site,
@@ -1000,6 +1003,7 @@ E1 (S6) the last entry point a player can reach.
 - **Needs (other specs):** 01g-C5 (H: the decide tool with the task name
   supplied by the caller, a consumer's own decide route accepted, the
   per-run cap, and no recursion)
+- **Needs (slices):** 01g-S7 (H), 12-S3 (H)
 - **Scope:** Adds the `investigation_decide` route
   (`legacy=routing.NO_LEGACY`, task `investigation-decide`) with its call
   site, and offers the tool in the continuity toolset with
@@ -1018,6 +1022,7 @@ E1 (S6) the last entry point a player can reach.
 - **Needs (this spec):** 12-S2 (H); 12-S4 (S: the `decide` tool, with
   `max_decisions = 1` — until it lands, E3 runs without it)
 - **Needs (other specs):** 01g-C1 (H: the seam's `incapable` refusal)
+- **Needs (slices):** 01g-S1 (H), 12-S2 (H), 12-S4 (S)
 - **Scope:** Adds the `investigation-question` task to the route,
   `post_history_question` through `runs.run_draft`, the `answer` validation
   against the inspected set, the `investigation_question` switch (default
@@ -1048,6 +1053,7 @@ E1 (S6) the last entry point a player can reach.
     rp_actor does not offer `get_scene_excerpt`);
   - 02-C6 (H: the turn-path play-decision rules E1 keeps — soft resolution,
     `except Exception` recorded as `skipped`, and off byte-identical).
+- **Needs (slices):** 02-S1 (H), 08-S4 (S), 10-S2 (H), 11-S2 (H), 11-S3 (H), 12-S2 (H)
 - **Scope:**
   - Adds the `investigation-turn` task, the trigger read in the step's
     `gather`, and `investigated` on the round record.
@@ -1078,6 +1084,7 @@ E1 (S6) the last entry point a player can reach.
   metered in a throwaway home under the eval scope); 11-C4 (S: the leakage
   graders and corpus — until they land, the E1 arm reports no leakage line
   and cannot pass)
+- **Needs (slices):** 01a-S2 (H), 01a-S3 (H), 11-S5 (S), 12-S3 (H), 12-S5 (S), 12-S6 (S)
 - **Scope:** Adds `evals/run.py --investigate <mode>` with arms A, B and C, the
   10.2 corpus including the hidden-route case, the selection-leakage metric
   replayed from traces, and the `evals/README.md` recording format for 10.4's

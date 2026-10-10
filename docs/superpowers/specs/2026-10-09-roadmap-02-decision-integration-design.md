@@ -1711,6 +1711,7 @@ so each new task's route entry is in the slice that first decides it.
   UI).
 - **Needs (this spec):** none
 - **Needs (other specs):** none (01 is landed)
+- **Needs (slices):** none
 - **Scope:**
   - Section 1 confirmed at the slice's baseline.
   - `inference.decide`, `run_stages` and `_Call` gain `response_id=`.
@@ -1743,6 +1744,7 @@ so each new task's route entry is in the slice that first decides it.
   - 01b-C2 (H: capture filed after the call settles, off the decide path);
   - `routing.NO_LEGACY` with `NO_LEGACY_TASKS` (S: a checklist shared
     structure). If no spec has landed it, this slice adds it.
+- **Needs (slices):** 01b-S2 (H), 02-S1 (H)
 - **Scope:**
   - `store/turn_plan.py` (intent), its templates, and the `turn_plan` route
     with `turn-intent`, landed together with its call site in
@@ -1780,6 +1782,7 @@ so each new task's route entry is in the slice that first decides it.
     no usable report);
   - 01d-C1 (H: `TaskPolicy` with `samples`, `question` and
     `reads_declines`, refusing `samples` together with `low_margin`).
+- **Needs (slices):** 01c-S1 (H), 01c-S2 (H), 01d-S1 (H), 02-S2 (H)
 - **Scope:**
   - The `_select` draw with `Eligibility(exclude=(NONE_KEY,),
     only=addressed, cutoff=1/(2n))` and the re-draw of 5.2 rule 3.
@@ -1811,6 +1814,7 @@ so each new task's route entry is in the slice that first decides it.
 - **Needs (this spec):** 02-S3 (H)
 - **Needs (other specs):** none. 01e-C3b (`Joint`) is not used here; a
   joint speaker-and-stance question is open question 7.
+- **Needs (slices):** 01e-S4 (S), 02-S3 (H)
 - **Scope:**
   - The `turn-plan` task on the `turn_plan` route, landed with its call
     site.
@@ -1839,6 +1843,7 @@ so each new task's route entry is in the slice that first decides it.
   - 01a-C2 (H: metering inside a throwaway home with the tripwire, rows
     stamped `scope: "eval"`, and the drain);
   - 01a-C3 (H: `--repeat`, `--out`, `--compare` and the open `axes`).
+- **Needs (slices):** 01a-S2 (H), 01a-S3 (H), 01a-S4 (H), 02-S2 (H)
 - **Scope:**
   - `evals/play.py` with synthetic fixtures (placeholder names only).
   - `evals/run.py --live --play <feature>`. It seeds each isolate with
@@ -1866,6 +1871,7 @@ so each new task's route entry is in the slice that first decides it.
 - **Needs (this spec):** 02-S5 (H), plus a ratified live report for each
   switch shown. A feature without one stays dark in this slice.
 - **Needs (other specs):** none
+- **Needs (slices):** 02-S5 (H)
 - **Scope:**
   - The ConfigView "Play decisions" section, showing only ratified
     switches, with the cost and provider disclosure text of 3.6 and 3.7.
@@ -1889,6 +1895,7 @@ so each new task's route entry is in the slice that first decides it.
   - 01d-C2b (H: `Decision.escalations[*].outcome`, read by `access_of`);
   - 01e-C1 (S: `Rank`. Until it lands, `history_rerank` offers the Score
     form only and `build_items_ranked` is absent).
+- **Needs (slices):** 01d-S3 (H), 01e-S5 (S), 02-S1 (S)
 - **Scope:**
   - `store/epistemic_access.py` and `store/history_rerank.py`, with their
     templates, `verify_templates.py` entries, recordings, and `Case`
@@ -1923,6 +1930,7 @@ so each new task's route entry is in the slice that first decides it.
   - 01g-C6 (H: a streamed final turn, and declining a tool call after
     visible text);
   - 01c-C2 (H: `draws.draw` for the selection).
+- **Needs (slices):** 01c-S1 (H), 01g-S1 (H), 01g-S4 (H), 01g-S5 (H), 01g-S6 (H), 01g-S7 (H), 01g-S8 (S), 02-S2 (H), 02-S5 (H)
 - **Scope:**
   - The `turn-tool-decision` task on the `turn_plan` route, landed with its
     call site.

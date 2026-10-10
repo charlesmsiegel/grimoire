@@ -10,7 +10,9 @@ Specs live in `docs/superpowers/specs/2026-10-09-roadmap-<id>-<slug>-design.md`.
 Each spec has two tables: **Depends on** and **Required by**. Both cite
 contract IDs from this file. For example, `01g-C2a` is contract item 2a of
 spec 01g. When a spec gains, drops, splits or renumbers a contract item,
-update this file in the same PR.
+update this file in the same PR. Each spec also breaks into slices
+(`01g-S4`), and the [slice graph](#slice-graph) says which slices each one
+needs, across specs.
 
 ## Lifecycle of a spec
 
@@ -321,6 +323,223 @@ sub-feature. Edges come from each spec's Depends-on table.
   (S). Legal sets past 254 options need nothing from 01e: they take two steps,
   the action and then the target.
 
+## Slice graph
+
+Each spec's **Slices** section breaks it into landable units, each roughly
+one PR. A slice names the contract items it delivers and, on its
+**Needs (slices)** line, the exact slices it needs, marked **H** or **S** as
+for edges. A slice can land as soon as its **H** needs have landed, whatever
+spec they sit in, so a path can cut across specs without landing any of them
+whole. A slice lands with its **S** needs missing by doing what its own
+**Needs (other specs)** line says (degrading, staying off, or taking a stub
+path).
+
+`scripts/roadmap_slices.py` reads those lines and nothing else:
+
+- `python3 scripts/roadmap_slices.py check`: every contract item is
+  delivered in full by exactly one slice. Every contract-level need is
+  resolved by a listed slice that delivers it, with a hard need kept hard.
+  The graph has no cycle.
+- `python3 scripts/roadmap_slices.py trace 07-S5`: the slices `07-S5` needs,
+  directly or not, in an order they can land. `--soft` adds the soft needs.
+- `python3 scripts/roadmap_slices.py ready`: the slices whose hard needs are
+  all ticked below and which are not ticked themselves.
+
+Tick a slice in the PR that lands it. If a slice changes its needs, change
+its **Needs (slices)** line in that PR, and run `check`. The arrow lists the
+slice's direct needs; `trace` gives the rest.
+
+### 01a
+
+- [ ] **01a-S1** [S] Decide call records ← none
+- [ ] **01a-S2** [M] Metered live runs in an eval scope ← none
+- [ ] **01a-S3** [M] Cost, latency and token reporting ← 01a-S1, 01a-S2, 01d-S3 (S)
+- [ ] **01a-S4** [M] Run file and comparison ← 01a-S3
+
+### 01b
+
+- [ ] **01b-S1** [S] Stage and batch positions on the decide outcome ← none
+- [ ] **01b-S2** [L] The capture helper, the decision pool and the four scene-level sites ← 01b-S1
+- [ ] **01b-S3** [M] Campaign-level capture for the reconcile sweep, and the guard ← 01b-S2
+
+### 01c
+
+- [ ] **01c-S1** [M] The sampler, the record and replay ← 01d-S2 (S), 01e-S1 (S)
+- [ ] **01c-S2** [M] Native-first in the decide chain (mechanism, all tasks off) ← 01d-S1 (S)
+- [ ] **01c-S3** [S] The recorded evidence and the distribution grader ← 01a-S3, 01a-S4, 01c-S2
+
+### 01d
+
+- [ ] **01d-S1** [S] The task policy and `fallback="none"` ← none
+- [ ] **01d-S2** [S] Per-item provenance and trigger evaluation ← none
+- [ ] **01d-S3** [L] The escalation hop in `decide` ← 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2
+- [ ] **01d-S4** [M] The escalation seam in `routes/` ← 01d-S3
+- [ ] **01d-S5** [M] Threshold tooling in evals ← 01a-S2, 01a-S3, 01a-S4, 01d-S4
+
+### 01e
+
+- [ ] **01e-S1** [S] Answer fields, `expected` and `tiers` ← none
+- [ ] **01e-S2** [M] `Rank` on the structured path, and the template switch to `KIND` ← 01e-S1
+- [ ] **01e-S3** [S] `MultiSelect` on the structured path ← 01e-S2
+- [ ] **01e-S4** [M] `Joint` on both paths, and the native lowering framework ← 01e-S2
+- [ ] **01e-S5** [M] Native `Rank` and `MultiSelect` through pointwise predicates ← 01a-S3 (S), 01e-S3, 01e-S4
+
+### 01f
+
+- [ ] **01f-S1** [S] The portable-schema leaf ← none
+- [ ] **01f-S2** [M] Structured mode on `generate`, and the shared refusal re-send ← 01f-S1
+- [ ] **01f-S3** [S] The per-call output cap ← 01f-S2, 01i-S1 (S)
+- [ ] **01f-S4** [S] The `intent` pilot ← 01f-S2, 01f-S3
+
+### 01g
+
+- [ ] **01g-S1** [M] The `tools` capability and its seam refusal ← none
+- [ ] **01g-S2** [L] Neutral tool shapes, wire lowering and stream parsing on the HTTP adapters ← 01f-S1
+- [ ] **01g-S3** [S] Run attribution on the ledger and the capture ← none
+- [ ] **01g-S4** [L] The loop primitive (joined) ← 01d-S1 (S), 01f-S1, 01f-S2, 01f-S3, 01g-S2, 01g-S3, 01i-S1 (S)
+- [ ] **01g-S5** [M] The spend ceiling ← 01f-S3, 01g-S4
+- [ ] **01g-S6** [M] Streaming the loop ← 01g-S4
+- [ ] **01g-S7** [M] The decide tool ← 01b-S2 (S), 01c-S1 (S), 01g-S4, 01g-S5
+- [ ] **01g-S8** [M] The Claude Agent SDK adapter ← 01g-S1, 01g-S4
+
+### 01h
+
+- [ ] **01h-S1** [S] No embedding on the event loop ← none
+- [ ] **01h-S2** [L] Options in the space identity, the `queries` split and prefix mode ← none
+- [ ] **01h-S3** [M] Request-field input type and requested dimensions ← 01h-S2
+- [ ] **01h-S4** [M] Options in the UI ← 01h-S3
+- [ ] **01h-S5** [M] Native async embed ← 01g-S3 (S), 01h-S3
+- [ ] **01h-S6** [M] Cross-campaign attribution ← 01g-S3 (S), 01h-S3 (S)
+- [ ] **01h-S7** [M] Embedding evals ← 01a-S2, 01a-S3, 01a-S4 (S), 01h-S3
+
+### 01i
+
+- [ ] **01i-S1** [M] The resolved fact and the ceiling ← none
+- [ ] **01i-S2** [M] Stating the limits ← 01i-S1
+- [ ] **01i-S3** [S] `model_window` in context breakdowns ← 01i-S1
+- [ ] **01i-S4** [S] The Models page readout ← 01i-S1, 01i-S2 (S)
+
+### 02
+
+- [ ] **02-S1** [M] Record and plumbing ← none
+- [ ] **02-S2** [L] Turn intent, dark (answers only) ← 01b-S2, 02-S1
+- [ ] **02-S3** [M] Sampling (speaker and stance) ← 01c-S1, 01c-S2, 01d-S1, 02-S2
+- [ ] **02-S4** [M] Turn plan, dark ← 01e-S4 (S), 02-S3
+- [ ] **02-S5** [L] Play gate harness ← 01a-S2, 01a-S3, 01a-S4, 02-S2
+- [ ] **02-S6** [M] Exposure of ratified features ← 02-S5
+- [ ] **02-S7** [M] Decide kits for 11 and 09 ← 01d-S3, 01e-S5 (S), 02-S1 (S)
+- [ ] **02-S8** [L] Decision as a tool from play, dark ← 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5
+
+### 03
+
+- [ ] **03-S1** [L] The cache file, its guards, and failing safe ← none
+- [ ] **03-S2** [L] The trust point and the validate-and-hash primitive ← 03-S1
+- [ ] **03-S3** [M] Collections and live-set lookups ← 03-S2
+- [ ] **03-S4** [M] Write-time artifacts and the `materialized` record ← 03-S2
+- [ ] **03-S5** [M] Bounding, retention and the purge ← 03-S4
+- [ ] **03-S6** [L] Synthetic library and the first consumers ← 03-S3, 03-S4
+
+### 04
+
+- [ ] **04-S1** [S] Request counters and the debug line ← 03-S3 (S)
+- [ ] **04-S2** [M] Client first paint, then revalidate ← none
+- [ ] **04-S3** [S] Live-path fixes ← none
+- [ ] **04-S4** [M] `scene_summary`, in-process, and its consumers ← none
+- [ ] **04-S5** [M] `continuity_summary`, in-process, with the text seam ← none
+- [ ] **04-S6** [S] `scene_turns`, in-process, on the shell ← none
+- [ ] **04-S7** [M] Persisted card rows, and the `module` chip ← 03-S2, 03-S3 (S)
+- [ ] **04-S8** [M] Persisted `scene_turns` and `continuity_summary` ← 03-S2, 03-S3 (S)
+- [ ] **04-S9** [S] Post-turn warm and `warm_paths` ← 03-S4
+- [ ] **04-S10** [M] Overview benchmark on synthetic libraries ← 03-S2, 03-S6 (S)
+
+### 05
+
+- [ ] **05-S1** [M] The write set ← none
+- [ ] **05-S2** [L] The sync primitive and the `files` hook ← 03-S2, 03-S4
+- [ ] **05-S3** [M] The CLI, scoped modes and scripts ← 03-S2, 03-S4, 03-S5 (S), 05-S2
+- [ ] **05-S4** [M] The write-through queue ← 05-S1, 05-S2
+- [ ] **05-S5** [S] The `overview` hook adapter ← 04-S9, 05-S2
+- [ ] **05-S6** [L] The `vectors` hook and the three producers ← 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S)
+- [ ] **05-S7** [M] The API ← 04-S2 (S), 05-S3, 05-S6 (S)
+
+### 06
+
+- [ ] **06-S1** [M] The skill, its adapter and the drift test ← 04-S2 (S), 05-S3, 05-S7 (S)
+- [ ] **06-S2** [S] Routing to the skill ← 06-S1
+
+### 07
+
+- [ ] **07-S1** [M] The members field, its reader and writer, and the editor ← none
+- [ ] **07-S2** [L] The inverse index, its routes and the actor pages ← 07-S1
+- [ ] **07-S3** [M] Sync shows fields; push and promote refuse strangers ← 07-S1
+- [ ] **07-S4** [S] Structural presence through members ← 07-S2
+- [ ] **07-S5** [L] Absorb membership proposals ← 07-S1, 07-S2
+- [ ] **07-S6** [M] Story Graph group nodes and edges ← 07-S2
+- [ ] **07-S7** [S] Retrieval projections ← 07-S2
+- [ ] **07-S8** [S] Persistent tier of the inverse index ← 03-S2, 03-S3, 03-S4 (S), 07-S2
+
+### 08
+
+- [ ] **08-S1** [S] Extract the rolling-summary intactness test ← none
+- [ ] **08-S2** [L] The scene SearchDocument, in process ← 03-S2, 03-S6 (S), 08-S1
+- [ ] **08-S3** [M] The live set, the compiled cache, and recording embedded vectors ← 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2
+- [ ] **08-S4** [M] Transcript expansion and its guard rule ← none
+- [ ] **08-S5** [M] The `searchdocs` hook, `vectors_for`, and the `history-index` task ← 01h-S2 (S), 03-S4, 05-S6, 08-S3
+- [ ] **08-S6** [S] Group metadata from 07 ← 07-S2, 07-S7, 08-S2
+
+### 09
+
+- [ ] **09-S1** [L] Retrieval core, structural and lexical, no network ← 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4
+- [ ] **09-S2** [M] The history section and its packer tier ← 01i-S1 (S), 09-S1
+- [ ] **09-S3** [M] The turn phase, structural and lexical ← 01i-S1 (S), 09-S2
+- [ ] **09-S4** [M] The semantic signal and tier 2 ← 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3
+- [ ] **09-S5** [M] The rerank ← 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3
+- [ ] **09-S6** [M] The long-history eval suite ← 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S)
+
+### 10
+
+- [ ] **10-S1** [L] The planner and one planned round ← 01f-S1, 01f-S2 (S), 01f-S3, 09-S2, 09-S3
+- [ ] **10-S2** [M] The sufficiency check and the repair hop ← 01b-S2 (S), 01d-S1 (S), 01d-S2 (S), 01d-S4 (S), 02-S7 (S), 10-S1
+- [ ] **10-S3** [M] Planning evals ← 01a-S2, 01a-S3, 01a-S4 (S), 09-S6, 10-S2
+
+### 11
+
+- [ ] **11-S1** [M] The knowledge store ← 07-S2 (S)
+- [ ] **11-S2** [L] The deterministic classifier ← 08-S4 (S), 09-S1, 11-S1
+- [ ] **11-S3** [L] Perspective-aware retrieval and prompt separation ← 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2
+- [ ] **11-S4** [M] The Knowledge ledger: routes, UI and accept ← 11-S1, 11-S3 (S)
+- [ ] **11-S5** [S] Live leakage evals ← 01a-S2 (S), 01a-S3 (S), 11-S3
+- [ ] **11-S6** [L] The Decision stage ← 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S)
+
+### 12
+
+- [ ] **12-S1** [L] The narrator-side toolset ← 01g-S2, 08-S4, 09-S4
+- [ ] **12-S2** [M] The loop driver, budgets and trace recorder ← 01g-S4, 01g-S5, 01i-S1, 12-S1
+- [ ] **12-S3** [L] E2, continuity investigation (the pilot) ← 01g-S1, 12-S2
+- [ ] **12-S4** [S] Decision as a tool for maintenance modes ← 01g-S7, 12-S3
+- [ ] **12-S5** [M] E3, history question ← 01g-S1, 12-S2, 12-S4 (S)
+- [ ] **12-S6** [L] E1, RP escalation ← 02-S1, 08-S4 (S), 10-S2, 11-S2, 11-S3, 12-S2
+- [ ] **12-S7** [M] The adoption gate ← 01a-S2, 01a-S3, 11-S5 (S), 12-S3, 12-S5 (S), 12-S6 (S)
+
+### 13
+
+- [ ] **13-S1** [M] The `actions.json` format and pack validation ← none
+- [ ] **13-S2** [M] The Effect engine (pure) ← 13-S1
+- [ ] **13-S3** [M] Availability, pools and the legal set ← 13-S1, 13-S2
+- [ ] **13-S4** [L] The transaction ledger, the unit writer, undo and settle ← 13-S2
+- [ ] **13-S5** [L] Resolving an Action through the proposal path ← 13-S3, 13-S4
+- [ ] **13-S6** [M] Model-proposed Actions: the fence and the prompt section ← 13-S5
+- [ ] **13-S7** [M] Recovery doors and module authoring (backend) ← 13-S5
+- [ ] **13-S8** [S] Audit integration ← 13-S5
+- [ ] **13-S9** [L] II-A frontend ← 13-S4, 13-S5, 13-S7 (S)
+- [ ] **13-S10** [S] List operations (II-A2) ← 13-S4
+- [ ] **13-S11** [M] Conditions: definitions, store and ops ← 13-S5
+- [ ] **13-S12** [M] Conditions: modifiers, gating and display ← 13-S11
+- [ ] **13-S13** [M] Clocks (II-C) ← 13-S11
+- [ ] **13-S14** [M] Contests (II-D) ← 13-S12
+- [ ] **13-S15** [L] The NPC action seam, single-target ← 01a-S3 (S), 01b-S2 (S), 01c-S1, 01c-S2 (S), 01e-S4 (S), 02-S2 (S), 02-S4 (S), 13-S5, 13-S6 (S)
+- [ ] **13-S16** [S] The NPC action seam, multi-target ← 01e-S3, 13-S15
+
 ## Shared structures: whichever spec lands first adds them
 
 - `routing.TaskPolicy`: 01c and 01d.
@@ -337,6 +556,17 @@ sub-feature. Edges come from each spec's Depends-on table.
 
 Recorded here so that every spec says the same thing. A spec that disagrees
 should change this section rather than drift from it.
+
+- [x] **A warm hook reads its own rows by path, never by enumeration.** 05-C3
+  allows a hook to read its own kinds' `materialized` rows for the paths it
+  was handed, and for paths it derives from them by reading the store. 08's
+  `searchdocs` hook, handed a campaign ledger path, lists that campaign's live
+  scenes through the scene store and reads its own rows for those scene
+  paths. It never scans the table.
+- [x] **01c-S2 and 01d-S1 land in either order.** Both touch
+  `routing.TaskPolicy`. The slice graph puts 01d-S1 first, as a soft need of
+  01c-S2. Whichever lands first creates the structure, and the rule refusing
+  `samples` with `low_margin` lands with whichever is second.
 
 - [x] **Unpriced model under a spend ceiling.** 01g-C4 refuses it before
   sending. A ceiling cannot hold against a price nobody reported, and
@@ -408,7 +638,8 @@ also does three things:
   line kept here.
 - [ ] Remove the specs' references to this file. Each "Roadmap:" header line
   points here. Change it to name the spec IDs it depends on, or drop it.
-- [ ] **Delete `ROADMAP-CHECKLIST.md`**, in that same PR.
+- [ ] **Delete `ROADMAP-CHECKLIST.md` and `scripts/roadmap_slices.py`**, in
+  that same PR. The script reads this file, so neither outlives the other.
 
 The specs stay. Only this ledger goes. Its job ends when there is nothing left
 to coordinate.

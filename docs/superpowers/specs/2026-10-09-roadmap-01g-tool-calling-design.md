@@ -1358,6 +1358,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
 - **Delivers:** 01g-C1 (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - `tools` joins `capabilities.NAMES`, `providers.CAPABILITIES`, `CANNOT`
     and `_GERUND`.
@@ -1388,6 +1389,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
 - **Needs (this spec):** none
 - **Needs (other specs):** 01f-C3 (H: `schemas.check` for tool parameter
   schemas, and `conforms` over the same subset)
+- **Needs (slices):** 01f-S1 (H)
 - **Scope:**
   - New stdlib leaf `tool_calls.py`: shapes, `Toolset`, `conforms` and the
     `Collector`.
@@ -1417,6 +1419,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
   response_id=)`; `llm_capture.RUN_KEY` preserved by `_stamp`)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - Optional ledger fields, written only when set; `usage_rollup.VERSION`
     is unchanged.
@@ -1450,6 +1453,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
     fallback is honoured);
   - 01i-C1 (S: `wire.Limits.max_output`. Until it lands, the cap is the
     budget's alone).
+- **Needs (slices):** 01d-S1 (S), 01f-S1 (H), 01f-S2 (H), 01f-S3 (H), 01g-S2 (H), 01g-S3 (H), 01i-S1 (S)
 - **Scope:**
   - `inference.run_tools` over an internal event generator.
   - The caller's `execute`, with terminal calls returned as `final_call`.
@@ -1484,6 +1488,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
 - **Delivers:** 01g-C4 (full: spend projection, preflight)
 - **Needs (this spec):** 01g-S4 (H)
 - **Needs (other specs):** 01f-C1 (H: `cap_sent(target)`)
+- **Needs (slices):** 01f-S3 (H), 01g-S4 (H)
 - **Scope:**
   - `inference.price_for`: catalog price, then the user's rates for a
     provider that does not report its own, else unpriceable.
@@ -1507,6 +1512,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
 - **Delivers:** 01g-C6 (full)
 - **Needs (this spec):** 01g-S4 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01g-S4 (H)
 - **Scope:**
   - Public `stream_tools`, with each turn on `client.stream` (the
     `generate(stream=True)` path), and `tool_calls.text_deltas`.
@@ -1533,6 +1539,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
     `decide(capture=)` is passed through as given);
   - 01c-C3 (S: the replay record a consumer's `select` hook would persist.
     01g itself never samples, so nothing here waits).
+- **Needs (slices):** 01b-S2 (S), 01c-S1 (S), 01g-S4 (H), 01g-S5 (H)
 - **Scope:**
   - `routes/tool_decision.decision_tool`, with `ToolShape`, `context`,
     `select`, `result` and `on_cap`.
@@ -1557,6 +1564,7 @@ route). The S4 guard rules are therefore vacuous until a consumer calls
 - **Needs (this spec):** 01g-S4 (H); 01g-S1 (H, its `claude` `never` entry
   is lifted here)
 - **Needs (other specs):** none
+- **Needs (slices):** 01g-S1 (H), 01g-S4 (H)
 - **Scope:**
   - The `claude` adapter's tool path: one `query()` per turn, with
     `setting_sources=[]`, `strict_mcp_config=True` and `tools=[]`; an

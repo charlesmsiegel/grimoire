@@ -471,6 +471,7 @@ as written it takes both keywords, so it waits for S3.
 - **Delivers:** 01f-C3 (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - New stdlib-only `grimoire/schemas.py`: `check` (the strict subset,
     including the bound and empty-`enum` refusals), `render`, `find_value`,
@@ -494,6 +495,7 @@ as written it takes both keywords, so it waits for S3.
   refusals); 01f-C2 (full)
 - **Needs (this spec):** 01f-S1 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01f-S1 (H)
 - **Scope:**
   - `resolve.structured_capable`, and `generate`'s per-call structured
     chain (3.2).
@@ -524,6 +526,7 @@ as written it takes both keywords, so it waits for S3.
 - **Needs (this spec):** 01f-S2 (H)
 - **Needs (other specs):** 01i-C1 (S: `wire.Limits.max_output` on the
   target. Until it lands, the cap is `min(preset's, max_tokens)`.)
+- **Needs (slices):** 01f-S2 (H), 01i-S1 (S)
 - **Scope:**
   - `wire.with_output_cap` and `Sampling.call_cap`.
   - `generate(max_tokens=)` built through `inference.call_chain`, together
@@ -547,6 +550,7 @@ as written it takes both keywords, so it waits for S3.
 - **Needs (this spec):** 01f-S2 (H); 01f-S3 (H, for `draft_completion`'s
   `max_tokens=` keyword)
 - **Needs (other specs):** none
+- **Needs (slices):** 01f-S2 (H), 01f-S3 (H)
 - **Scope:**
   - `templates/scene_intent/system.j2` renders the intent schema with
     `schema_json`.

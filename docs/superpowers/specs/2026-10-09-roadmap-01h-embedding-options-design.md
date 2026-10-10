@@ -763,6 +763,7 @@ body or vector key moves until a user states options.
 - **Delivers:** 01h-C4a (full)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:** The opener's `frames()` (`routes/greetings.py:98-110`) awaits
   `run_in_threadpool` around `compose_opener` and `_record_prompt`.
   `runner.install` registers the lifespan loop thread with
@@ -787,6 +788,7 @@ body or vector key moves until a user states options.
   is never cached)
 - **Needs (this spec):** none
 - **Needs (other specs):** none
+- **Needs (slices):** none
 - **Scope:**
   - `wire.EmbedOptions` with the whole document-side `canonical()` of
     section 5.1, every key including `dim`, `field` and `doc_value`, so no
@@ -825,6 +827,7 @@ body or vector key moves until a user states options.
 - **Delivers:** 01h-C1 (full: adds `param`); 01h-C2 (full)
 - **Needs (this spec):** 01h-S2 (H)
 - **Needs (other specs):** none
+- **Needs (slices):** 01h-S2 (H)
 - **Scope:**
   - `_check_embedding` accepts `param` and `dimensions` (the integer-only
     rule).
@@ -853,6 +856,7 @@ body or vector key moves until a user states options.
 - **Needs (other specs):** 01s (S: the Models summary's Embedding row,
   3.1). Until 01s lands, the options line is added to today's
   `EmbeddingSummary` in `ModelsView.tsx`.
+- **Needs (slices):** 01h-S3 (H)
 - **Scope:**
   - `ModelFactsPanel` gains the "Embedding options" section (input mode,
     fields, dimensions) for a model whose `embed` capability is not a known
@@ -877,6 +881,7 @@ body or vector key moves until a user states options.
   mode)
 - **Needs (other specs):** 01g-C3 (S: the `run_id` field on a ledger row.
   Until it lands, `run_id` is accepted and not filed)
+- **Needs (slices):** 01g-S3 (S), 01h-S3 (H)
 - **Scope:**
   - `embeddings.AsyncEmbeddingsClient` on `httpx.AsyncClient`, sharing
     `_Spend`, `_vectors`, `_status_kind`, the redirect refusal, the bounds
@@ -906,6 +911,7 @@ body or vector key moves until a user states options.
   kind never arises)
 - **Needs (other specs):** 01g-C3 (S: the `run_id` field on a ledger row.
   Until it lands, `run_id` is accepted and not filed)
+- **Needs (slices):** 01g-S3 (S), 01h-S3 (S)
 - **Scope:**
   - `EmbedGroup`, `attribute(claims)` (shared texts go unattributed, the
     `""` group first) and `embed_groups_sync`.
@@ -941,6 +947,7 @@ body or vector key moves until a user states options.
     space resolved before the isolate);
   - 01a-C3 (S: `--out` and offline `--compare` across runs. Until it lands,
     each option set prints its own table).
+- **Needs (slices):** 01a-S2 (H), 01a-S3 (H), 01a-S4 (S), 01h-S3 (H)
 - **Scope:**
   - `evals/embed/` corpus with the three shapes, placeholder names,
     paraphrase positives and lexical decoys.
