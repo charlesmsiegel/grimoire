@@ -39,7 +39,7 @@ Edges as `ROADMAP-CHECKLIST.md` lists them for 10.
 | Contract (provided here) | Consumer | Hard or soft | What the consumer uses it for |
 |---|---|---|---|
 | 10-C1 `history_plan` route, `Plan`, `plan.build_messages`, `plan.parse`, taking a `perspective` | 11 | Soft | Planning an actor's history questions once 11 lifts 09's NPC blanking, with the planner shown only what that actor may know |
-| 10-C2 the bounded repair hop and its `PlanTrace` | 12 | Hard for RP mode | `PlanTrace.cheap_retrieval_failed` and `PlanTrace.tried`: the repair hop ran and 10-C3 still judged the evidence insufficient, and what was tried (section 8.1) |
+| 10-C2 the bounded repair hop and its `PlanTrace` | 12 | Hard for RP mode | `PlanTrace`'s stable fields: terminal state, trigger, last 10-C3 verdict and its source, `cheap_retrieval_failed`, and per round (and `E0`) the questions and terms tried, scene keys and evidence ids (section 8.1) |
 | 10-C3 the evidence-sufficiency predicate (`history-sufficiency` on `history_check`) | 12 | Hard for RP mode | The same question gates escalation from retrieval to investigation |
 
 ## 1. Current state (reconciled against main)
@@ -968,5 +968,5 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 
 Coordinator inputs applied in the same pass: the schema fits 01f-C3; 10 has
 no 01i edge; 12's RP trigger is the stable `cheap_retrieval_failed` field with
-`tried` (8.1); `perspective` keeps secrets out of the planner's input (5.1,
+`e0` and `rounds` (8.1); `perspective` keeps secrets out of the planner's input (5.1,
 10-C1).
