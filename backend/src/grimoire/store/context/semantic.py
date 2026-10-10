@@ -319,7 +319,9 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     could not be reached at all. A `[]` in place of a document's vector means
     "not this turn" — `recall` stores nothing for it and does not score it.
 
-    One request for both. The query is never cached — the scan window differs
+    One request for both, the query first and marked as one (`queries=1`:
+    under the space's stated options it is sent as a query, the warm run as
+    documents). The query is never cached — the scan window differs
     every turn, so storing it would grow the cache without ever being read —
     which leaves this a single small request once the entries have settled.
 
@@ -351,7 +353,7 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     try:
         got = embed.embed_sync("semantic-recall", [query_text, *missing], space=cfg,
                                client=_CLIENT, deadline=deadline, campaign=campaign,
-                               scene=scene, cached=cached, uncached=uncached)
+                               scene=scene, cached=cached, uncached=uncached, queries=1)
         if len(got) == 1 + len(missing):  # defensive: the client promises this
             return got
     except LLMError as exc:
@@ -371,7 +373,7 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     try:
         # The same run: its hits and misses were on the first call's line.
         got = embed.embed_sync("semantic-recall", [query_text], space=cfg, client=_CLIENT,
-                               deadline=deadline, campaign=campaign, scene=scene)
+                               deadline=deadline, campaign=campaign, scene=scene, queries=1)
     except (LLMError, OSError):
         # The turn proceeds on keyword activation. Deliberately silent: this
         # runs on every turn, and a provider that is down would otherwise fill

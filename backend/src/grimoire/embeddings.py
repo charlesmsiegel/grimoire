@@ -52,7 +52,7 @@ import time
 import certifi
 import httpx
 
-from . import llm_usage
+from . import llm_usage, wire
 from .llm_errors import LLMError
 
 #: Inputs per request. The endpoints cap request size rather than list length,
@@ -129,6 +129,53 @@ MAX_TOTAL_DIMS = BATCH * 8192
 
 class EmbeddingsError(LLMError):
     pass
+
+
+# ---- the request (01h §3.4) ----
+
+#: Why a set of options cannot be sent by this build: the request-field input
+#: type and requested dimensions arrive with roadmap 01h-S3. Refused before
+#: anything is sent, so a hand-built `EmbedOptions` can never produce a body
+#: that disagrees with the space its vectors are saved under.
+UNSENDABLE = "embedding options this build cannot send (a request field or dimensions)"
+
+
+def check_sendable(options: wire.EmbedOptions | None) -> None:
+    """`ValueError` unless `options` is None or an `EmbedOptions` this build
+    sends: no options, or the `prefix` input type."""
+    if options is None:
+        return
+    if not isinstance(options, wire.EmbedOptions):
+        raise ValueError("embedding options must be a wire.EmbedOptions")
+    if options.input not in ("none", "prefix") or options.dimensions is not None:
+        raise ValueError(UNSENDABLE)
+
+
+def check_queries(queries: object, count: int) -> None:
+    """`ValueError` unless `queries` -- how many of the `count` texts, from the
+    first, are queries -- is a whole number from 0 to `count`."""
+    if isinstance(queries, bool) or not isinstance(queries, int) or not 0 <= queries <= count:
+        raise ValueError("queries must be a whole number from 0 to the number of texts")
+
+
+def prepare_inputs(texts: list[str], options: wire.EmbedOptions | None,
+                   queries: int) -> list[str]:
+    """The inputs as sent: in the `prefix` input type each text gets the query
+    prefix (the first `queries` texts) or the document prefix (the rest);
+    otherwise the texts unchanged. A mixed batch is still one request,
+    because the type rides each text. The callers clip before this, so a
+    prefix is never cut off."""
+    if options is None or options.input != "prefix":
+        return list(texts)
+    return [(options.query_prefix if i < queries else options.document_prefix) + text
+            for i, text in enumerate(texts)]
+
+
+def request_body(model: str, chunk: list[str], options: wire.EmbedOptions | None) -> dict:
+    """One request's JSON body: `{"model", "input"}` -- byte for byte what was
+    sent before options existed, for every option this build sends. `options`
+    is where the request-field type and dimensions will add to it (01h-S3)."""
+    return {"model": model, "input": chunk}
 
 
 #: The `code` of the "deadline passed before the request" error when it fires
@@ -385,7 +432,8 @@ class EmbeddingsClient:
 
     def embed(self, texts: list[str], model: str, key: str, base_url: str,
               deadline: float | None = None,
-              usage: dict | None = None) -> list[list[float]]:
+              usage: dict | None = None, *, options: wire.EmbedOptions | None = None,
+              queries: int = 0) -> list[list[float]]:
         """Embed `texts`, returning one vector per input, in input order.
 
         An empty `texts` returns ``[]`` without touching the network — the
@@ -402,7 +450,15 @@ class EmbeddingsClient:
         `prompt_tokens` and `cost_usd` (with `cost_basis`) summed over the
         batches, `model` as the provider named it. A key stays out unless every
         batch read reported it; see `_Spend.fold`. Without a holder nothing is read.
+
+        `options` are the model's stated embedding options (01h), the object
+        the caller's vector space was computed from, and `queries` how many of
+        `texts`, from the first, are queries; the rest are documents
+        (`prepare_inputs`). Options this build cannot send, or a `queries`
+        out of range, are a `ValueError` before anything is sent.
         """
+        check_sendable(options)
+        check_queries(queries, len(texts))
         if not texts:
             return []
         # `missing_key` for both, matching openai_compatible.stream: neither is
@@ -419,17 +475,19 @@ class EmbeddingsClient:
             deadline = time.monotonic() + TIMEOUT
         out: list[list[float]] = []
         spend = None if usage is None else _Spend(usage)
-        for start in range(0, len(texts), BATCH):
-            chunk = texts[start:start + BATCH]
+        sent = prepare_inputs(texts, options, queries)
+        for start in range(0, len(sent), BATCH):
+            chunk = sent[start:start + BATCH]
             out.extend(self._post(url, chunk, model, key, deadline,
-                                  spend=spend, first=start == 0))
+                                  spend=spend, first=start == 0, options=options))
         return out
 
     def _post(self, url: str, chunk: list[str], model: str, key: str,
               deadline: float, *, spend: _Spend | None,
-              first: bool) -> list[list[float]]:
+              first: bool, options: wire.EmbedOptions | None = None) -> list[list[float]]:
         try:
-            body = self._fetch(url, chunk, model, key, deadline, first=first, spend=spend)
+            body = self._fetch(url, chunk, model, key, deadline, first=first, spend=spend,
+                               options=options)
         except EmbeddingsError:
             _lost_unread(spend)
             raise
@@ -454,7 +512,8 @@ class EmbeddingsClient:
         return _vectors(body, len(chunk))
 
     def _fetch(self, url: str, chunk: list[str], model: str, key: str,
-               deadline: float, *, first: bool, spend: _Spend | None = None) -> object:
+               deadline: float, *, first: bool, spend: _Spend | None = None,
+               options: wire.EmbedOptions | None = None) -> object:
         """The response body, parsed, within what is left of the deadline.
 
         Streamed rather than read whole so the deadline can be enforced
@@ -480,7 +539,7 @@ class EmbeddingsClient:
         slice_ = min(remaining, READ_SLICE)
         with self._client().stream(
             "POST", url, headers=self._headers(key),
-            json={"model": model, "input": chunk},
+            json=request_body(model, chunk, options),
             timeout=httpx.Timeout(slice_, connect=min(remaining, 10.0)),
         ) as resp:
             raw = bytearray()

@@ -16,6 +16,7 @@ Invented connection ids and the codebase's placeholder names only.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1084,3 +1085,153 @@ def test_switching_the_legacy_embedding_off_or_leaving_it_asks_nothing(client):
     assert client.put("/api/config", json={"embeddings_model": ""}).status_code == 200
     assert store.embed_space.resolve() is None
 
+
+
+# ---- embedding options (01h-S2) ----
+
+NOMIC = {"input": "prefix", "query_prefix": "search_query: ",
+         "document_prefix": "search_document: "}
+NOMIC_SUFFIX = "\0embopt1:b61a0b1188d1b0bd3a7cf05b26a81c2a"
+BGE = {"input": "prefix",
+       "query_prefix": "Represent this sentence for searching relevant passages: "}
+
+
+def _facts_url(pid: str) -> str:
+    return f"/api/llm-connections/{pid}/facts"
+
+
+def test_an_options_write_on_the_roles_model_needs_confirm(client):
+    pid = _embedding_on(client)
+    space = store.embed_space.resolve()["space"]
+    body = {"model": "vendor/embed-small", "embedding": NOMIC}
+    for extra in ({}, {"confirm_embedding": False}, {"confirm_embedding": "true"}):
+        got = client.put(_facts_url(pid), json={**body, **extra})
+        assert got.status_code == 400, (extra, got.text)
+        assert got.json()["kind"] == "confirm_embedding"
+    assert facts.read(pid) == {}
+    assert store.embed_space.resolve()["space"] == space
+
+    got = client.put(_facts_url(pid), json={**body, "confirm_embedding": True})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve()["space"] == space + NOMIC_SUFFIX
+    read = client.get(_facts_url(pid), params={"model": "vendor/embed-small"}).json()
+    assert read["embedding"] == NOMIC and read["embedding_invalid"] is False
+    assert "embedding_invalid_reason" not in read
+
+
+def test_moving_back_to_no_options_still_asks(client):
+    pid = _embedding_on(client)
+    space = store.embed_space.resolve()["space"]
+    assert client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": NOMIC,
+                                             "confirm_embedding": True}).status_code == 200
+    got = client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": {}})
+    assert got.status_code == 400 and got.json()["kind"] == "confirm_embedding"
+    got = client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": {},
+                                            "confirm_embedding": True})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve()["space"] == space
+
+
+def test_a_query_side_only_options_write_asks_nothing(client):
+    pid = _embedding_on(client)
+    space = store.embed_space.resolve()["space"]
+    got = client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": BGE})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve()["space"] == space
+    client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": NOMIC,
+                                      "confirm_embedding": True})
+    got = client.put(_facts_url(pid), json={
+        "model": "vendor/embed-small", "embedding": {**NOMIC, "query_prefix": "query: "}})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve()["space"] == space + NOMIC_SUFFIX
+
+
+def test_an_options_write_on_another_model_asks_nothing(client):
+    pid = _embedding_on(client)
+    got = client.put(_facts_url(pid), json={"model": "vendor/other", "embedding": NOMIC})
+    assert got.status_code == 200, got.text
+
+
+@pytest.mark.parametrize(("block", "message"), [
+    ({"input": "param", "param_field": "input_type", "query_value": "query",
+      "document_value": "document"}, facts.PARAM_NOT_YET),
+    ({"dimensions": 512}, facts.DIMENSIONS_NOT_YET),
+    ({"input": "prefix", "document_prefix": "a\u0000b"}, facts.EMBED_CONTROL),
+    ({"dimensions_field": "model"}, facts.EMBED_RESERVED),
+    ({"document_prefix": "passage: "}, facts.EMBED_WRONG_MODE),
+])
+def test_invalid_options_are_400_and_write_nothing(client, block, message):
+    pid = _embedding_on(client)
+    got = client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": block,
+                                            "confirm_embedding": True})
+    assert got.status_code == 400, got.text
+    assert got.json()["detail"] == message
+    assert facts.read(pid) == {}
+
+
+def test_a_qwen_style_prefix_with_a_newline_saves(client):
+    pid = _embedding_on(client)
+    block = {"input": "prefix",
+             "query_prefix": "Instruct: Given a passage of a story, retrieve the lore, "
+                             "records or images it concerns\nQuery: "}
+    got = client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": block})
+    assert got.status_code == 200, got.text
+    assert facts.read(pid)["vendor/embed-small"]["embedding"] == block
+
+
+def test_an_invalid_block_on_disk_is_flagged(client):
+    pid = _embedding_on(client)
+    path = store.llm_connections.facts_path(pid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"vendor/embed-small": {"embedding": {
+        "input": "param", "param_field": "input_type", "query_value": "query",
+        "document_value": "document"}}}), encoding="utf-8")
+    read = client.get(_facts_url(pid), params={"model": "vendor/embed-small"}).json()
+    assert read["embedding_invalid"] is True
+    assert read["embedding_invalid_reason"] == facts.PARAM_NOT_YET
+    assert store.embed_space.resolve() is None
+
+
+def test_an_options_write_before_the_switch_is_409_not_migrated(client):
+    pid = _spare(client)
+    r = client.put(_facts_url(pid), json={"model": "m", "embedding": NOMIC})
+    assert r.status_code == 409 and r.json()["kind"] == "not_migrated"
+    assert not store.llm_connections.facts_path(pid).exists()
+
+
+@pytest.mark.parametrize("state", ["held", "mangled"])
+def test_a_key_edit_with_unreadable_facts_still_asks(client, monkeypatch, state):
+    """Gate finding 1: while the role's facts cannot be read it names no
+    space -- which is not "embeds nothing". A key edit then would land the
+    role on the new rev's space, unasked, once the file is readable again,
+    so it asks; a rename moves no space and still asks nothing."""
+    pid = _embedding_on(client)
+    client.put(_facts_url(pid), json={"model": "vendor/embed-small", "embedding": NOMIC,
+                                      "confirm_embedding": True})
+    if state == "held":
+        _facts_held(monkeypatch, pid)
+    else:
+        store.llm_connections.facts_path(pid).write_text("{", encoding="utf-8")
+    assert store.embed_space.resolve() is None
+    got = client.put(f"/api/llm-connections/{pid}", json={"api_key": "sk-new"})
+    assert got.status_code == 400, got.text
+    assert got.json()["kind"] == "confirm_embedding"
+    assert _raw(pid)["api_key"] == "sk-spare"
+    got = client.put(f"/api/llm-connections/{pid}", json={"name": "Spare vectors"})
+    assert got.status_code == 200, got.text
+
+
+def test_moving_the_legacy_embedding_keys_onto_unreadable_facts_still_asks(client, monkeypatch):
+    """Gate finding 1, the format-1 door: a legacy key change onto a provider
+    whose facts file is held names no space -- which is not "embeds nothing",
+    so `PUT /config` asks rather than letting the role land there unasked."""
+    _legacy_embedding(client)
+    spare = _create(client, kind="openai_compatible", name="spare",
+                    base_url="http://localhost:4321/v1").json()["id"]
+    path = store.llm_connections.facts_path(spare)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+    _facts_held(monkeypatch, spare)
+    got = client.put("/api/config", json={"embeddings_connection_id": spare})
+    assert got.status_code == 400, got.text
+    assert got.json()["kind"] == "confirm_embedding"

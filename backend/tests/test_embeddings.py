@@ -749,3 +749,80 @@ def test_an_overlong_model_is_not_kept():
     handler, _ = _usage_handler([{"model": "m" * embeddings.MAX_MODEL_CHARS}])
     make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
     assert len(holder["model"]) == embeddings.MAX_MODEL_CHARS
+
+
+# ---- embedding options (01h-S2) ----
+
+NOMIC = embeddings.wire.EmbedOptions(input="prefix", query_prefix="search_query: ",
+                                     document_prefix="search_document: ")
+
+
+def _recording(seen):
+    def handler(request):
+        seen.append(request)
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": [1.0, 0.0]}
+                                                  for i in range(len(inputs))]})
+    return handler
+
+
+@pytest.mark.parametrize("extra", [{}, {"options": embeddings.wire.EmbedOptions(), "queries": 1},
+                                   {"options": None, "queries": 2}])
+def test_no_options_sends_todays_exact_bytes(extra):
+    seen = []
+    make_client(_recording(seen)).embed(["a", "b"], "embed-1", "sk-x", BASE, **extra)
+    assert len(seen) == 1
+    assert seen[0].content == httpx.Request(
+        "POST", BASE, json={"model": "embed-1", "input": ["a", "b"]}).content
+
+
+def test_prefix_mode_prefixes_each_input_in_one_request():
+    seen = []
+    texts = ["Where is Mara?", "Mara crossed the Saltmarch.", "Seraphine waits."]
+    out = make_client(_recording(seen)).embed(texts, "embed-1", "sk-x", BASE,
+                                              options=NOMIC, queries=1)
+    assert len(out) == 3 and len(seen) == 1
+    body = json.loads(seen[0].content)
+    assert set(body) == {"model", "input"}
+    assert body["input"] == ["search_query: Where is Mara?",
+                             "search_document: Mara crossed the Saltmarch.",
+                             "search_document: Seraphine waits."]
+
+
+def test_a_query_only_prefix_leaves_documents_bare():
+    seen = []
+    bge = embeddings.wire.EmbedOptions(input="prefix", query_prefix="Represent: ")
+    make_client(_recording(seen)).embed(["q", "d"], "m", "", BASE, options=bge, queries=1)
+    assert json.loads(seen[0].content)["input"] == ["Represent: q", "d"]
+
+
+def test_prefixes_survive_batching():
+    seen = []
+    texts = [f"t{i}" for i in range(BATCH + 2)]
+    make_client(_recording(seen)).embed(texts, "m", "", BASE, options=NOMIC, queries=1)
+    first, second = (json.loads(r.content)["input"] for r in seen)
+    assert first[0] == "search_query: t0"
+    assert all(t.startswith("search_document: ") for t in first[1:] + second)
+    assert len(first) == BATCH and len(second) == 2
+
+
+@pytest.mark.parametrize("queries", [3, -1, True])
+def test_queries_out_of_range_is_a_value_error_before_sending(queries):
+    seen = []
+    with pytest.raises(ValueError):
+        make_client(_recording(seen)).embed(["a", "b"], "m", "", BASE, options=NOMIC,
+                                            queries=queries)
+    assert seen == []
+
+
+@pytest.mark.parametrize("options", [
+    embeddings.wire.EmbedOptions(input="param", param_field="input_type",
+                                 query_value="query", document_value="document"),
+    embeddings.wire.EmbedOptions(dimensions=512),
+    "prefix",
+])
+def test_options_this_build_cannot_send_are_refused_before_sending(options):
+    seen = []
+    with pytest.raises(ValueError):
+        make_client(_recording(seen)).embed(["a"], "m", "", BASE, options=options)
+    assert seen == []
