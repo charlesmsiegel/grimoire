@@ -526,6 +526,98 @@ case-level row, by §6's rule. **The table needs nothing but the files.** It
 reads no store and no settings, which is what makes it "readable without
 real store data" (01a-C3), and its test runs on synthetic run files.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4. S1 and S2 touch different
+modules (`inference.py`/`decisions.py` against `evals/`) and can land in
+either order or in parallel. S3 needs both.
+
+### 01a-S1: Decide call records
+
+- **Delivers:** 01a-C1 (part: per-call attribution of a decide case,
+  `decisions.CallRecord` and `Decision.calls`).
+- **Needs (this spec):** none
+- **Needs (other specs):** none. `_Call.stage`/`positions` is a shared
+  structure with 01b. If 01b-S1 lands first, this slice reuses its fields and
+  adds only `CallRecord`, `_Answered.calls` and `Decision.calls`.
+- **Scope:** §5's production change.
+  - `_Call` gains `stage` and `positions`, set in `run_stages`.
+  - `_structured` and `_native` build one `CallRecord` per metered request.
+    The record holds kind and status only, and reserves `hop = ""`.
+  - `Decision.calls` carries them in settle order.
+  - `Decision.usage` and every caller are unchanged, and nothing in
+    production reads the new field. The decide-chain golden does not move,
+    because it records neither field.
+- **Acceptance:** §11's `test_inference_decide*.py` cases:
+  - `Decision.calls` for structured, native, schema-refusal re-send and
+    mixed chains;
+  - no record for a call held back after a connection-wide stop;
+  - `row=None` for a call refused unsent;
+  - a failed call carries `error_kind` and `error_status` but no detail.
+- **Size:** S
+
+### 01a-S2: Metered live runs in an eval scope
+
+- **Delivers:** 01a-C2 (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:**
+  - `runner.live` meters a generate case with the production meter.
+  - `run_live` records `real_home`. `live_all` checks the tripwire inside
+    each isolate before `prepare`, and again before the harvest.
+  - The §6 drain runs before the harvest. The harvest is a strict
+    `_read_rows` read, and its rows are kept on `Result.rows`, stamped
+    `scope`, `eval_run` and `case` on the copy.
+  - `Rates.current()` is read once in the real store.
+  - `evals.runner` leaves `UNMETERED_OUTSIDE`, and the cap drops to 1.
+  - The report gains only a `calls N` count per case. Money and tokens wait
+    for S3, so nothing is shown as zero in between.
+  - README: the "What a live run reads" sentence about rates.
+- **Acceptance:** §11 tests 1 (rows only), 7, 8, 10, 17 and 18, and
+  `test_usage_guard.py`'s `UNMETERED_OUTSIDE` with its cap of 1.
+- **Size:** M
+
+### 01a-S3: Cost, latency and token reporting
+
+- **Delivers:** 01a-C1 (full)
+- **Needs (this spec):** 01a-S1 (H), 01a-S2 (H)
+- **Needs (other specs):** 01d-C2b (S: rows and call records carry
+  `hop: escalation`). Until it lands, every row aggregates under `hop = -`
+  and no item is `escalated`.
+- **Scope:**
+  - `evals/costs.py` mirrors `cost.tsx`'s rules, including the derived
+    billed-call count.
+  - Buckets are folded with `usage._add`, and the eval-only token coverage
+    tallies sit beside it (§6, B1).
+  - `Result` gains `wall_ms`, `calls`, `items` (with `escalated`), `bucket`
+    and `by_task`.
+  - The per-case metrics line, the `by task` sub-block, and the aggregate
+    keyed by route, backend and `hop`, with per-hop `call time` and the
+    unrouted-task fallback.
+  - The report falls back to rows alone when no `Decision` exists.
+- **Acceptance:** §11 tests 1 (bucket), 2-6, 9, 13-16, 20 and 21.
+- **Size:** M
+
+### 01a-S4: Run file and comparison
+
+- **Delivers:** 01a-C3 (full)
+- **Needs (this spec):** 01a-S3 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `--decide-backend` becomes repeatable, and `--repeat N` is added (capped,
+    and refused with `--record`).
+  - `--out` writes the `eval-run` v1 file: open `axes`, a `configs` list per
+    case, errors as kind and status, truncated check details, and the
+    aggregate as a list.
+  - `--compare FILE...` is offline. It refuses other mode flags and unknown
+    versions, and leaves missing cells blank.
+  - `--gate`'s clash list gains the new flags.
+  - `.gitignore` gains `evals/out/`. README commands are spelled in both
+    forms.
+- **Acceptance:** §11 tests 11, 12, 19 and 22, and the end-to-end check:
+  `--live --out` with fakes, then `--compare` of that file against itself.
+- **Size:** M
+
 ## 9. Contract
 
 **01a-C1. Reporting.** Per-case and per-call wall time, tokens and the three
@@ -785,6 +877,7 @@ Each finding was verified against the code before it was folded in.
   - M8: `configs` list per case;
   - M9: the README note on where rates come from.
 - **Rejected:** none.
+- Slices added (4 slices).
 
 **Cross-spec items, for the coordinator (no other spec was edited):**
 

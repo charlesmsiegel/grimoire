@@ -1417,25 +1417,83 @@ under test.
 
 ---
 
-## 14. Slicing (for the plan)
+## Slices
 
-Each slice ships alone and leaves the tree green.
+Landing order within this spec: S1 -> S2 -> S3 -> S4 -> S5 -> S6 -> S7 -> S8.
+S3 needs only S1. S4, S5, S6 and S7 each need S2 and can go in parallel after
+it. S8 waits on 03 and can land at any point after S2.
 
-1. **A. Field, reader, inverse, routes, editor, actor sections, hand-edit
-   journalling** (C1 minus sync, C2 in-process tier, section 6.4), plus the
-   `invisibleChangeHint` wording that names typed fields (section 5.3), so a
-   world-side membership change is never shown as a change with nothing in it
-   while B is pending. The smallest slice with user value: record members, see
-   them on both sides.
-2. **B. Sync visibility and push/promote check** (rest of C1).
-3. **C. Structural presence** (C3d). Small, prompt-affecting, isolated.
-4. **D. Absorb** (C3a). The largest; touches templates, evals and the review
-   UI.
-5. **E. Graph** (C3b).
-6. **F. Projections** (C3c), landing before 08's plan starts.
-7. **G. Persistent tier** (C2 with 03), once 03-C1 has landed.
+### 07-S1: The members field, its reader and writer, and the editor
 
----
+- **Delivers:** 07-C1 (part: the `members` declaration and validation, `parse_members`, `parse_leader`, `edited_line`, the editor and hand-edit journalling)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:** `entity_schema.FIELDS["groups"]` gains `members` (section 4.1), with the `types.ts` mirror and the new field-table drift test (6.3). The new read-only module `store/membership.py` lands with `parse_members`, `parse_leader` and `edited_line` (4.3). `EntityEditor` shows Members chips and the picker with no code beyond the mirror (6.1). The campaign entity route journals a members change with the `entity_fields` descriptor (6.4). `invisibleChangeHint` names typed fields, so a world-side membership change is never shown as an empty change before S3 (5.3). The `entities.py` docstring corrections (1.3) land here. Nothing reads membership yet, so no prompt moves.
+- **Acceptance:** 17.1 (field, validation, leniency, legacy value survives, reclassify round trip, `edited_line`, hand-edit journal row); 17.8's group-editor cases; `test_lore_golden.py` and `test_frozen_campaign.py` unchanged.
+- **Size:** M
+
+### 07-S2: The inverse index, its routes and the actor pages
+
+- **Delivers:** 07-C2 (full); 07-C1 (part: campaign effective membership with section 7.6's detached rule)
+- **Needs (this spec):** 07-S1 (H)
+- **Needs (other specs):** none
+- **Scope:** `membership.Index`, `index_from_rows`, `world_index`, `campaign_index`, `groups_for`, `members_of`, `affiliated`, `co_affiliates` and the digest (7.1, 7.2). The root-keyed in-process memo (7.3). Two new overlay readers, `overlay.group_listing` and `overlay.listing_stamps` (7.3). The detached rule on inherited rosters (7.6). The two `GET .../membership` routes, registered before the entity router (7.5). The Groups `ColumnSection` on `CharacterPage` and `PCPage` (6.2). No prompt reads the index yet.
+- **Acceptance:** 17.2 (roles, overlay steps, digest movement, memo recompute and root stamp, two-store test, detached cases for the index, immutability, overlay guard, routes and route order); 17.8's actor-page cases.
+- **Size:** L
+
+### 07-S3: Sync shows fields; push and promote refuse strangers
+
+- **Delivers:** 07-C1 (full)
+- **Needs (this spec):** 07-S1 (H)
+- **Needs (other specs):** none
+- **Scope:** `sync._entity_blob` carries `fields` with `shown` names, resolved through one `overlay.View` per `incoming()` call, with the detached stranger marked (5.3). `IncomingReview` renders the field rows and drops "typed fields" from the hint again. `promote` and `push` of a group run `_require_world_members` (5.5). If Q4 is accepted, the same check covers `leader`, named in the PR as a behaviour change.
+- **Acceptance:** 17.3.
+- **Size:** M
+
+### 07-S4: Structural presence through members
+
+- **Delivers:** 07-C3d (full)
+- **Needs (this spec):** 07-S2 (H)
+- **Needs (other specs):** none
+- **Scope:** The `("members", "member_present", True)` row in `activation._STRUCTURAL`. `world_state` takes `leader` and `members` for groups from `membership.campaign_index` rather than raw `parse_refs` (11.1). The `member_present` reason lands in `loreReasons.ts` and the `types.ts` union (11.3). The feature has no switch: it is inert on a store that records no members, so composition there is byte-identical.
+- **Acceptance:** 17.6 (golden and frozen snapshot unchanged, activation cases, item cascade, no presence through `groups:` members, `knows` unchanged, detached Winifred confers nothing, `loreReasons.test.ts`).
+- **Size:** S
+
+### 07-S5: Absorb membership proposals
+
+- **Delivers:** 07-C3a (full)
+- **Needs (this spec):** 07-S1 (H: `edited_line`); 07-S2 (H: `campaign_index` for the snapshot and the detached rule)
+- **Needs (other specs):** none
+- **Scope:** The `membership_changes` section in `parse_output` and `templates/absorb/system.j2` (9.1). `group_snapshot(cid, cast)` with the "Members here" segment (9.2). Staging, apply, conflict reading, journal, per-actor provenance, the `membership` undo descriptor and the review drawer (9.3 to 9.6). The repo's prompt rules force the eval recordings, `build_absorb`'s member seed and needle, the new `absorb.null-membership` counterexample, and the top-level contract key-set test into this same PR. Without them the offline eval and `test_absorb_store.py` go red. The absorb system prompt changes for every store. No turn prompt changes.
+- **Acceptance:** 17.4 in full.
+- **Size:** L
+
+### 07-S6: Story Graph group nodes and edges
+
+- **Delivers:** 07-C3b (full)
+- **Needs (this spec):** 07-S2 (H)
+- **Needs (other specs):** none
+- **Scope:** `NODE_KINDS` gains `group`, `EDGE_KINDS` gains `member_of` and `leads`, and `PARTS` gains `groups`. The family reads `campaign_index` in phase C (10.2, 10.3). The TS unions, the Groups Show toggle, the Cast preset and the layout band land in the same PR, because the `ts_union` pin fails if the unions and the tuples land apart (10.4). The capstone §33 lift for groups lands here, and only here.
+- **Acceptance:** 17.5; the frozen campaign's graph entry unchanged.
+- **Size:** M
+
+### 07-S7: Retrieval projections
+
+- **Delivers:** 07-C3c (full)
+- **Needs (this spec):** 07-S2 (H)
+- **Needs (other specs):** none
+- **Scope:** `prompt_visible` with `secret_framed`, `SceneGroup`, `scene_groups` and `SCENE_GROUP_LIMIT` in `store/membership.py` (12.1, 12.2), with the rules of 12.3 and 12.4 in its docstrings. Nothing in the app calls them yet; 08, 09 and 11 are the first callers. Land it before 08's plan starts.
+- **Acceptance:** 17.7.
+- **Size:** S
+
+### 07-S8: Persistent tier of the inverse index
+
+- **Delivers:** none. 07-C2 is full at S2; this slice adds the optional cost-only tier the C2 contract allows.
+- **Needs (this spec):** 07-S2 (H)
+- **Needs (other specs):** 03-C1 (H: composite keys over collection digests, with a member filter for top-level `*.md` with `safe_id` stems); 03-C2 (H: liveness by construction); 03-C3 (S: the `materialized` record; until it lands, 05 cannot rebuild the index eagerly and it is rebuilt lazily on the next read)
+- **Scope:** Registers `membership_index` as a 03 artifact kind, keyed as section 7.4 says, with digests computed through the overlay helpers from S2. The edge is soft at spec level because the slice is optional: every consumer works from S2's in-process tier, and this slice only changes cost.
+- **Acceptance:** `test_membership_cache_equivalence` (17.2): every consumer's output is equal with the tier on and off.
+- **Size:** S
 
 ## 15. Contract
 
@@ -1502,7 +1560,9 @@ and the world the campaign names, all reached through overlay helpers.
 - Never stale: the in-process tier re-stats its inputs on every call, and the
   persistent tier (03) is keyed on content digests, so an edit by any writer
   (the app, an editor, a sync client) is seen on the next read.
-- The persistent tier changes cost, never output.
+- The persistent tier changes cost, never output. It is an optional addition
+  once 03 lands (07-S8), not part of what C2 delivers: C2 is complete with the
+  in-process tier.
 
 **Failure behaviour.** An unreadable group file raises from the listing, as
 `GET /{scope}/groups` does; callers wrap it per their own fail-soft policy.
@@ -1885,7 +1945,7 @@ code before it was folded in.
 | M3 membership conflict can never fire | Stated; `_REASONS` entry kept for `target_key` and `_outside_drift` | 9.5, 17.4 |
 | M4 activation's raw `parse_refs` admits `groups:` members | Activation reads `leader`/`members` from the index | 11.1, 17.6 |
 | M5 presence cascades unstated | Item-holder and recall cascades stated; item cascade tested | 11.2, 17.6 |
-| M6 slice A leaves world-side membership changes invisible | Hint wording moved into slice A | 5.3, 14 |
+| M6 slice A leaves world-side membership changes invisible | Hint wording moved into slice A (07-S1) | 5.3, Slices |
 | M7 older builds 500 on a membership undo | Named as the cost of any new writer tag | 9.5 |
 | M8 journal repoint skips membership targets | Stated as correct | 4.5 |
 | M9 absent actors cannot be proposed | Listed | 9.7 |
@@ -1894,6 +1954,10 @@ code before it was folded in.
 | M12 leader-and-member rendering unspecified | Named once, marked "leader" | 9.2 |
 | M13 draft items dropped silently | One sentence each | 1.8 |
 | M14 second stale claim in the same docstring | Corrected with the first | 1.3 |
+
+Slices added (8 slices). 07-C2 was re-worded so that the 03-backed
+persistent tier is an optional addition (07-S8) and not part of what C2
+delivers; C2 is full at 07-S2.
 
 **Rejected.** None. Two findings were narrowed rather than taken whole: S7's
 lock alternative is left as a named residual with Q12, because locking one

@@ -677,9 +677,9 @@ the same `(space["space"], text)` key: 09 loads what 08's hook embedded, and
 The `materialized` kind for such a vector is
 **`vector:searchdocs.scene:<space-digest>`** (03-C3's form, the checklist's
 cross-spec decision), written by `embedded.vector_kind(space)`, where
-`<space-digest>` is the shared short digest of `space["space"]` that 05
-computes for its own rows (05 section 6.4). One function defines it for 03, 05,
-08 and 09 (section 16, item for routing). The projection name keeps a scene's
+`<space-digest>` is `compiled.space_digest(space)`, the one function 03-C3
+defines and 05 uses for its own rows (05-C3), so 03, 05, 08 and 09 compute the
+same digest. The projection name keeps a scene's
 document vector apart from library search's passage vectors over the same
 file.
 
@@ -962,6 +962,140 @@ class Expansion:
 - **Read-only, no lock, no log of content.** A failure to read is `None`.
 - **Deterministic** for a given transcript, rule set and terms.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S5, with S4 in parallel to any
+of them and S6 after S2. Each slice is one PR. (These are landing slices; the
+per-scene input "slices" of section 4.2 are a different thing.)
+
+### 08-S1: Extract the rolling-summary intactness test
+
+- **Delivers:** 08-C1 (part: the shared intactness test `intact_rolling`
+  relies on, section 4.2)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:** Moves the test that decides `prior`/`stale` out of
+  `routes/scenes.py` (`:3628-3640`, `_rolling_digest` at `:3648`) into one store
+  function, in a module that may import `scenes` and `regex` (not
+  `rolling_summary.py`). The route calls it; its behaviour, responses and
+  prompts are unchanged. Adds the rule-file signature helper to
+  `regex/layers.py` that section 4.2's memo needs. No new feature.
+- **Acceptance:** the existing rolling-summary route tests pass unchanged; a
+  unit test runs the extracted function over hidden, cut, edited and
+  rule-changed prefixes and agrees with the route's `stale`; the layers
+  signature moves when a rule file changes.
+- **Size:** S
+
+### 08-S2: The scene SearchDocument, in process
+
+- **Delivers:** 08-C1 (part: every slice except `groups`, rendering, bounds,
+  metadata, key)
+- **Needs (this spec):** 08-S1 (H)
+- **Needs (other specs):** 03-C1 (H: composite key over non-file inputs, with
+  the registry kind's `version` and `BUILD`); 03-C9 (S: synthetic-library
+  generator; until it lands, the cost check in section 6 runs on a hand-built
+  fixture)
+- **Scope:** Adds `store/searchdocs/` with `slices.py`, `rolling.py` and
+  `scene.py`: `CampaignInputs.load` with the signature-memoized ledger parses,
+  `effective.records` and name tables; `scene_slices` with the absorbed gate,
+  timed links, absorb-only relationship rows and intact-only running summary;
+  `render`, the caps and backstop, `meta`, `key_of`. Pure and read-only:
+  nothing calls it yet, and no cache, embedding or route is touched. The
+  `groups` slice is empty (S6 fills it).
+- **Acceptance:** section 13's 08-C1 tests except "Groups": determinism,
+  bounds, lone surrogate, key moves and holds, shared records, hidden and cut
+  posts (the word is absent from the text and the artifact; the embed-call
+  half is S5's), relationships after a retcon, recycled id, timed-row gate, no
+  transcript text, degraded, identity.
+- **Size:** L
+
+### 08-S3: The live set, the compiled cache, and recording embedded vectors
+
+- **Delivers:** 08-C2a (full); 08-C2b (part: `vector_kind` and
+  `record_embedded`, no network)
+- **Needs (this spec):** 08-S2 (H)
+- **Needs (other specs):** 03-C6 (H: batch lookup over the caller's live key
+  set); 03-C2 (H: liveness by construction); 03-C3 (H: `materialized` rows
+  keyed by `(path, kind, instance)`, written beside an artifact, read by path,
+  and `compiled.space_digest`); 03-C7 (H: vectors keyed by space and text,
+  never `BUILD`); 03-C8 (S: the purge on a world or campaign delete; until it
+  lands, the delete test is skipped)
+- **Scope:** Adds `live.py` (`scene_documents`, `LiveSet`, the tolerant
+  fallback walk with `skipped`, one batch lookup, lazy build with
+  store-relative `materialized` rows carrying `{campaign, identity}`, the
+  bounded cache-off memo) and the no-network half of `embedded.py`
+  (`vector_kind`, `record_embedded` writing rows on every input path the
+  document read). Extends the frozen-campaign sweep with scene documents,
+  minus `identity`, `slices` and the key, and regenerates `snapshot.json`
+  deliberately. Nothing embeds; no route calls it until 09.
+- **Acceptance:** section 13's 08-C2a tests (equivalence cache on, warm, off
+  and after restart; no superseded document; one batch lookup; unreadable head
+  skipped; `materialized` rows and dropping the table; memoized parses; memo
+  bound; campaign-delete purge); the `record_embedded` test; the reviewed
+  frozen-campaign snapshot.
+- **Size:** M
+
+### 08-S4: Transcript expansion and its guard rule
+
+- **Delivers:** 08-C3b (full)
+- **Needs (this spec):** none (can land in parallel with S1 to S3)
+- **Needs (other specs):** none
+- **Scope:** Adds `expand.py`: required phase, identity checks, whole-transcript
+  view, `in_context` filtering, post keys and parts, alt-text images in the
+  prompt phase, term matching, windows, the byte and post budgets with
+  word-boundary cuts and `budget_exhausted`, `fallback`, `allow_whole`, and
+  each excerpt's `text` rendered with `transcript_text` beside its `view`.
+  Extends `test_regex_prompt_guard.py`: scans `store/searchdocs/` and
+  `store/history/` (absent until 09, scanned harmlessly), and adds the rule
+  that an `expand(...)` call in a rendering or pinned function passes the
+  constant `phase="prompt"`, with planted cases. No caller in the app until
+  09 and 12.
+- **Acceptance:** section 13's 08-C3b tests, including the key-stable-across-a-cut
+  test and the guard's planted display and variable-phase readers.
+- **Size:** M
+
+### 08-S5: The `searchdocs` hook, `vectors_for`, and the `history-index` task
+
+- **Delivers:** 08-C2b (full); 08-C2c (full); 08-C3a (full)
+- **Needs (this spec):** 08-S3 (H)
+- **Needs (other specs):** 05-C3 (H: the `WarmHook` protocol registered in
+  `cache_sync.HOOKS`, with `on_write="explicit"`, `kinds()`, `local`,
+  `network` and `EmbedPlan` campaign claims, and a hook reading its own kinds'
+  rows by path); 03-C3 (H: as S3); 01h-C1 (S: `embed_sync(..., queries=)`;
+  until it lands, the call omits `queries` and is today's)
+- **Scope:** Adds `hook.py` (`SearchDocsHook` delegating to module-level
+  `_kinds`, `_local`, `_network`; the identity check on vector rows;
+  `REINDEX_LIMIT`) and `vectors_for` with its one `embed_sync` call. Adds
+  `"history-index"` to `routing.EMBED_TASKS`, updates
+  `test_inference_embedding.py:269` and `MIN_EMBED_CALLS = 7`, and names the
+  caller in CLAUDE.md. These land together because
+  `test_operation_guard.py` fails a task with no call site (`:308`) and a
+  `space` parameter with no module-level package caller (`:597-628`). The
+  hook runs only under 05's explicit sync.
+- **Acceptance:** section 13's 08-C2b vector tests (shared key with 09's,
+  rotating limit, one ledger row, failure, no scene), the 08-C2c hook tests
+  (re-embed only what was embedded and changed, world and unreadable-world
+  campaigns, recycled-`sid` rows ignored, moved space and embedding off send
+  nothing, write-through skipped, `local` makes no network call), the
+  hidden-post test's embed-call half, and the operation guard.
+- **Size:** M
+
+### 08-S6: Group metadata from 07
+
+- **Delivers:** 08-C1 (full: the `groups` slice)
+- **Needs (this spec):** 08-S2 (H)
+- **Needs (other specs):** 07-C3c (H: `scene_groups(index, cast, visible=None,
+  limit=None)`, affiliation including leaders, uncapped); 07-C2 (H: the
+  inverse membership index `scene_groups` reads)
+- **Scope:** Fills the `groups` slice from `scene_groups` over the full cast,
+  exempt from `MAX_META_REFS`, gm-only rows marked, digested as canonical
+  JSON. Moves every key once (a metadata change, no embedding, since the text
+  does not change). Until this slice, `meta.groups` is empty.
+- **Acceptance:** section 13's "Groups" test (membership edit moves key and
+  `meta`, not text; a leader-only group listed; more than 64 groups all
+  listed; gm-only marked), and no embed call across the key change.
+- **Size:** S
+
 ## 11. Contract
 
 ### 08-C1: A bounded `SceneDocument` with no transcript text, keyed by per-scene slices
@@ -1007,8 +1141,8 @@ class Expansion:
   C2c, its only caller).
 - **Guarantees:** document vectors are read and saved under `space["space"]`
   and the exact text, the key 09 loads with, never under `BUILD` (03-C7); the
-  `materialized` kind is `vector:searchdocs.scene:<space-digest>` with
-  `instance {campaign, identity}`; `vectors_for` embeds at most `limit`
+  `materialized` kind is `vector:searchdocs.scene:<space-digest>`, written on
+  every input path the document read, with `instance {campaign, identity}`; `vectors_for` embeds at most `limit`
   documents per call with `queries=0`, one ledger row under `history-index`,
   campaign-attributed, no scene.
 - **Failure:** never raises; returns what was saved and the error kind.
@@ -1198,7 +1332,9 @@ embeddings client is injected where a client is a parameter.
   failure returns what was saved and the kind; a deadline spent before sending
   files nothing.
 - `record_embedded` writes `vector:searchdocs.scene:<space-digest>` with the
-  scene's identity, and the digest equals 05's for the same space.
+  scene's identity on every input path the document read (the scene file and
+  each ledger file its slices came from), and the digest is
+  `compiled.space_digest(space)`.
 - `test_operation_guard.py` passes with `MIN_EMBED_CALLS = 7`, the provenance
   walk reaching `vectors_for` through the hook's module-level function;
   `test_inference_embedding.py:269` carries the new tuple.
@@ -1354,6 +1490,8 @@ Should-fix, all fixed:
   8.4).
 - **S9** ledger parses, `effective.records` and the name tables memoized by
   signature as part of 08-C2a; the cache-off memo bounded (sections 4.2, 6).
+
+Slices added (6 slices).
 
 Addendum from 07's review: the `groups` slice is 07-C3c's `scene_groups` with
 `visible=None, limit=None`, uncapped (exempt from `MAX_META_REFS`), and counts

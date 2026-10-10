@@ -748,6 +748,217 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   synthetic corpus is evidence for a choice, and the default thresholds stay
   "tune against the inspector" (`semantic.py:66-68`).
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4 → S5 → S6 → S7. S1 and S6
+can go in parallel with anything; S4, S5 and S7 can go in parallel once S3 has
+landed.
+
+Every slice leaves today's behaviour byte-identical for a store with no
+`embedding` facts block: options default to none, so no space id, request
+body or vector key moves until a user states options.
+
+### 01h-S1: No embedding on the event loop
+
+- **Delivers:** 01h-C4a (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:** The opener's `frames()` (`routes/greetings.py:98-110`) awaits
+  `run_in_threadpool` around `compose_opener` and `_record_prompt`.
+  `runner.install` registers the lifespan loop thread with
+  `store.inference.embed.mark_app_loop`, and the lifespan exit unregisters
+  it. `embed_sync` refuses on a registered loop thread as `network`/`on_loop`,
+  after the empty-input return and before any meter, and writes one ERROR log
+  row. CLAUDE.md's embedding paragraph names the error row as an exception
+  to "a call that sends nothing files nothing". The fix and the guard land
+  together, because the guard alone would degrade every opener's recall.
+- **Acceptance:** section 11, Loop guard:
+  - `on_loop` on a registered thread, with no usage row and one error row;
+  - fine from a worker, a CLI and a private `asyncio.run` loop;
+  - `[]` for empty input on the loop;
+  - an opener with recall and art on completes with recall applied and no
+    `on_loop` row.
+- **Size:** S
+
+### 01h-S2: Options in the space identity, the `queries` split and prefix mode
+
+- **Delivers:** 01h-C3 (full); 01h-C1 (part: the `queries` keyword on
+  `embed_sync`, modes `none` and `prefix`, and the rule that a query vector
+  is never cached)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:**
+  - `wire.EmbedOptions` with the whole document-side `canonical()` of
+    section 5.1, every key including `dim`, `field` and `doc_value`, so no
+    later slice moves an id.
+  - The `embedding` facts block: `facts.state(..., embedding=)`,
+    `_check_embedding`, and `FactsUpdate.embedding`.
+  - The strict read in `embed_attempt`. An unreadable file or an invalid
+    block names no space, and the Embedding card's `problem` says why.
+  - `wire.Target.embed_options`, `space_of(conn, model, options)` and
+    `endpoint_of`'s `options`.
+  - NUL removed from embedded text in `embed_sync` and `vectors._path`.
+  - The `queries` keyword and its `ValueError`, with recall, search and art
+    passing `queries=1`.
+  - The client's `none` and `prefix` request building, and the probe sending
+    the stated options.
+  - `facts_moved` and `EMBEDDING_FACTS_CONFIRM` reworded for a move, so an
+    options write on the role's model is confirmed.
+  - **Interim rule (a slicing gap, noted in the review record):** in this
+    slice `_check_embedding` refuses `input: "param"` and `dimensions` with a
+    400 ("not supported by this build"), and a block on disk that uses them
+    is invalid, so it names no space. S3 widens the check.
+- **Acceptance:** section 11:
+  - Golden identity: today's string for default options, today's
+    `vectors._path` digest, pinned canonical JSON and `embopt1` ids, and
+    canonically empty sets.
+  - No re-embed on upgrade, and a byte-identical continuity basis.
+  - Request bodies for `none` and `prefix`.
+  - Facts: validation refusals, an invalid block and an unreadable file
+    naming no space, `\n` in a prefix, confirm on the role's model, and no
+    question for another model or a query-side-only change.
+  - A NUL text keys as its NUL-free form.
+- **Size:** L
+
+### 01h-S3: Request-field input type and requested dimensions
+
+- **Delivers:** 01h-C1 (full: adds `param`); 01h-C2 (full)
+- **Needs (this spec):** 01h-S2 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `_check_embedding` accepts `param` and `dimensions` (the integer-only
+    rule).
+  - The client splits requests at the query/document boundary for `param`,
+    under one meter.
+  - The client adds `dimensions_field`, checks every returned width, and
+    raises `missing_key`/`dimensions_mismatch` with `returned_dims`.
+  - `record_failure` files the error `code`.
+  - The probe reports a mismatch as a failed `embed` probe with both widths.
+  - No space id moves: S2 already canonicalises these keys.
+- **Acceptance:** section 11:
+  - Request bodies for `param` (two requests, one row, input order) and
+    `dimensions`.
+  - A wrong width is `dimensions_mismatch`, and the row carries only kind,
+    status and code.
+  - Recall against a width-ignoring endpoint sends one request per turn.
+  - `512.0` and `true` are refused.
+  - The probe carries both widths.
+- **Size:** M
+
+### 01h-S4: Options in the UI
+
+- **Delivers:** none in full. It is the UI half of 01h-C1 and 01h-C2, both
+  already delivered server-side, and section 4.4 in full.
+- **Needs (this spec):** 01h-S3 (H)
+- **Needs (other specs):** 01s (S: the Models summary's Embedding row,
+  3.1). Until 01s lands, the options line is added to today's
+  `EmbeddingSummary` in `ModelsView.tsx`.
+- **Scope:**
+  - `ModelFactsPanel` gains the "Embedding options" section (input mode,
+    fields, dimensions) for a model whose `embed` capability is not a known
+    `no`.
+  - **Suggest** fills from section 3.5's prefix table, with a concrete task
+    sentence for Qwen-style prefixes. It fills the form only.
+  - Save, the 400 `confirm_embedding`, and "Re-embed and save".
+  - `EmbeddingCard.options` on the server, and the Models Embedding row's
+    options line, with "two requests per recall" for `param`.
+  - The panel's "requested N, test returned M" line.
+- **Acceptance:** section 11, Frontend:
+  - the options section only for an embedding-capable model;
+  - Suggest fills and does not save;
+  - save, the 400, the confirm and the resend;
+  - the Models row's options line.
+- **Size:** M
+
+### 01h-S5: Native async embed
+
+- **Delivers:** 01h-C4b (full)
+- **Needs (this spec):** 01h-S3 (H: the shared request builder with every
+  mode)
+- **Needs (other specs):** 01g-C3 (S: the `run_id` field on a ledger row.
+  Until it lands, `run_id` is accepted and not filed)
+- **Scope:**
+  - `embeddings.AsyncEmbeddingsClient` on `httpx.AsyncClient`, sharing
+    `_Spend`, `_vectors`, `_status_kind`, the redirect refusal, the bounds
+    and the request builder.
+  - One `asyncio.timeout` covers the whole call.
+  - `embed()` is rewritten natively, with `queries`, `run_id` and `post=`,
+    on shared helpers with `embed_sync`. `embed_sync` gains `post=` too.
+  - A cancel files `aborted`.
+  - One client per app, built in the lifespan and closed at shutdown, and
+    reached through `routes.get_embeddings`.
+  - `test_usage_guard.py` requires `usage=` on the async client.
+  - The test-operation guard covers `embed`.
+  - There are no production callers yet (09 and 10 are the consumers).
+- **Acceptance:** section 11, Async door:
+  - the parity suite (same rows and lines from both doors);
+  - a cancel files `aborted`;
+  - a drip-fed header is cut at the deadline;
+  - the client is closed at lifespan exit;
+  - `post=` is filed on the row.
+- **Size:** M
+
+### 01h-S6: Cross-campaign attribution
+
+- **Delivers:** 01h-C5 (full)
+- **Needs (this spec):** 01h-S3 (S: `dimensions_mismatch` as `missing_key`
+  among the kinds that stop a run. Before S3 no options can be sent, so the
+  kind never arises)
+- **Needs (other specs):** 01g-C3 (S: the `run_id` field on a ledger row.
+  Until it lands, `run_id` is accepted and not filed)
+- **Scope:**
+  - `EmbedGroup`, `attribute(claims)` (shared texts go unattributed, the
+    `""` group first) and `embed_groups_sync`.
+  - One `embed_sync` per group under one deadline taken at entry.
+  - A `bad_response` group continues, and any other kind stops the run with
+    the rest `not_sent`.
+  - `on_group` is called per group, and a raise stops the run.
+  - `cached`/`uncached` go to the first call only.
+  - The `run_id` keyword on `embed_sync` (and on `embed`, if S5 has not
+    landed it already).
+  - The test-operation guard learns the door.
+  - There are no production callers yet (05 is the consumer), so
+    `MIN_EMBED_CALLS` is unchanged.
+- **Acceptance:** section 11, Attribution:
+  - grouping and order;
+  - one row per group with the right campaign;
+  - `bad_response` continues and `rate_limit` stops with no row after;
+  - one deadline for all groups;
+  - the `""` group first;
+  - no mixed request body;
+  - `on_group` order, and a raise in it stopping the run.
+- **Size:** M
+
+### 01h-S7: Embedding evals
+
+- **Delivers:** 01h-C6 (full)
+- **Needs (this spec):** 01h-S3 (H: option sets for `--embed-options`)
+- **Needs (other specs):**
+  - 01a-C1 (H: per-case and per-call wall time, tokens and the three money
+    columns);
+  - 01a-C2 (H: live evals metered by the production meter inside a throwaway
+    home, rows copied to the run file stamped `scope: "eval"`, with the
+    space resolved before the isolate);
+  - 01a-C3 (S: `--out` and offline `--compare` across runs. Until it lands,
+    each option set prints its own table).
+- **Scope:**
+  - `evals/embed/` corpus with the three shapes, placeholder names,
+    paraphrase positives and lexical decoys.
+  - Recall@k (1, 3, 5, 10) and MRR, against the lexical baseline.
+  - Offline replay of recorded rankings, and the offline MockTransport case,
+    both under `pytest backend`.
+  - `--live --embed`: the space resolved before the isolate, `embed_sync`
+    called outside any coroutine, and a byte and token estimate printed
+    before sending.
+  - `--embed-options`, which recomputes the space.
+  - `--record`, with files named by model and option digest.
+- **Acceptance:** section 11, Evals:
+  - replay grades recorded rankings;
+  - the MockTransport case passes under `pytest backend`;
+  - a planted miss is flagged.
+  - Under a live run, no row reaches the real ledger (01a's tripwire).
+- **Size:** M
+
 ## 9. Contract
 
 - **01h-C1, input type.**
@@ -1021,3 +1232,8 @@ Changed:
 - **M10.** Art has no query-only retry.
 
 Rejected: none.
+
+Slices added (7 slices). Slicing revealed one gap, now fixed in 01h-S2: until
+01h-S3 lands, the facts validator refuses `param` and `dimensions`, and a
+block on disk that uses them is invalid and names no space. The canonical
+encoding is complete from S2, so no space id moves when S3 lands.

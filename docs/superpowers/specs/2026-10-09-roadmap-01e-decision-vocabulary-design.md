@@ -651,6 +651,89 @@ latency cost is read before anyone tunes a bound.
   call site. These types convert no call site, and each consumer that adopts
   one owns its own gate.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4 → S5. S3 and S4 depend only
+on S2, so they can go in parallel.
+
+Until S5 lands, a `Rank` or `MultiSelect` that reaches a native stage is
+refused unsent by `native_gap` ("lands with native lowering"), as
+`native_unrepresentable`. It then falls to a structured stage or fails, like
+any unrepresentable item today. This is the stub path the earlier slices ship
+with.
+
+### 01e-S1: Answer fields, `expected` and `tiers`
+
+- **Delivers:** 01e-C2 (part: `Answer.expected` on native `Score` answers, and `decisions.tiers`); 01e-C4 (part: the `marginals` field, its validation, and its absence on every structured answer)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:** `decisions.py` only. `Answer` gains `marginals` and `expected`, both checked in `__post_init__`. `native_answer` sets `expected` from a valid score distribution, normalised by the reported mass and riding on an abstained answer. `tiers(values, tolerance=MASS_TIE)` is added, with the greedy top anchor. `outcome` writes the two new fields under `_present`'s rule. No adapter, template or call site changes, and no existing answer changes.
+- **Acceptance:** section 11's `tiers` tests, its `expected` tests, and `outcome` with the new fields. `test_native_decisions.py` and the decide gate are unchanged.
+- **Size:** S
+
+### 01e-S2: `Rank` on the structured path, and the template switch to `KIND`
+
+- **Delivers:** 01e-C1 (part: `Rank` and `Ranking` on the structured path, `validate`, the schema, the parse, and the native refusal stub); 01e-C2 (full: `Ranking.flat(tiebreak)`)
+- **Needs (this spec):** 01e-S1 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `decisions.py` gains `Rank`, `Ranking`, and `KIND` `ClassVar`s on every question class. It also gets `MAX_RANK_CANDIDATES` and the array-of-enum schema, `_read_rank`, the `enum_values` branch, and the `outcome`/`render` spellings.
+  - `native_gap` refuses every `Rank` (the stub above).
+  - `decide/user.j2` branches on `q.KIND`. `decide/system.j2` gains the ranking bullet, rendered only when the batch holds a rank.
+  - The docstring's schema-subset and nesting notes are updated.
+  - The offline `Rank` eval case is added.
+- **Acceptance:**
+  - section 11's `validate`, `schema` and `parse` tests for `Rank`, and `Ranking.flat`;
+  - `verify_templates.py`'s existing `_DECIDE_ITEMS` renders are byte-identical, and a new render with a rank shows its bullet;
+  - the rank eval case passes under `pytest backend`;
+  - `native_gap` names a rank.
+- **Size:** M
+
+### 01e-S3: `MultiSelect` on the structured path
+
+- **Delivers:** 01e-C3a (part: `MultiSelect` on the structured path, `validate`, the schema and the parse, with the empty selection as an answer and the native refusal stub)
+- **Needs (this spec):** 01e-S2 (H)
+- **Needs (other specs):** none
+- **Scope:** `decisions.py` gains `MultiSelect`, `MAX_SELECT_OPTIONS`, the min/max checks (`max=0` means zero), its parse in option order, its `enum_values` branch and its `outcome`/`render` spelling. `native_gap` refuses it. The selection bullet renders only beside a multi-select, and the offline select eval case is added.
+- **Acceptance:**
+  - section 11's `validate`/`parse` tests for selects (`max=0`, empty is `()`, out of bounds is `unreadable`);
+  - existing decide renders stay byte-identical;
+  - the select eval case passes.
+- **Size:** S
+
+### 01e-S4: `Joint` on both paths, and the native lowering framework
+
+- **Delivers:** 01e-C3b (full)
+- **Needs (this spec):** 01e-S2 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `decisions.py` gains `Joint`, `Pair` with `.key`, `JOINT_SEP`, `joint_key`, `split_joint`, `head_marginal` and `head_first`.
+  - Validation: the separator, aliases, duplicate `tails` keys and the flattened bound.
+  - It also gains the structured schema and parse, through the flattened choice.
+  - `native_form` and `native_lift` arrive with `Joint` as their first lowering (to one `Choice`). Both adapters' `decision_body` and `decision_result` switch to them. Every other type passes through unchanged, so existing native bodies are byte-identical.
+  - The joint bullet renders only beside a joint, and the offline joint eval case is added.
+- **Acceptance:**
+  - section 11's joint tests (`split_joint(pair.key) == pair`, the refused cases), and `chunks` holding three 255-pair joints;
+  - `test_native_decisions.py`: a joint body is one flattened choice, and its distribution is kept by key; `head_first` regroups it with `NONE_KEY` excluded;
+  - the existing canned native bodies are unchanged.
+- **Size:** M
+
+### 01e-S5: Native `Rank` and `MultiSelect` through pointwise predicates
+
+- **Delivers:** 01e-C1 (full); 01e-C3a (full); 01e-C4 (full)
+- **Needs (this spec):** 01e-S3 (H), 01e-S4 (H: `native_form`/`native_lift`)
+- **Needs (other specs):** 01a-C1 (S: per-item token and latency reporting on live runs — until it lands, `MAX_RANK_CANDIDATES` and `MAX_SELECT_OPTIONS` stay at 32, untuned)
+- **Scope:**
+  - `native_form` lowers a `Rank` with `pointwise` to one predicate per candidate, and a `MultiSelect` to one predicate per option (`NATIVE_SELECT_TEXT`).
+  - `native_lift` reads each lowered predicate's `Answer`, fills `marginals`, and builds tiers or the thresholded selection under sections 4.3 and 6.1. A select at 0.5 is `abstained` only with `allow_none`.
+  - `native_gap` now refuses only a rank without `pointwise`, or a lowered-id collision.
+  - The live eval runs for all three types under both `--decide-backend` values are enabled.
+- **Acceptance:**
+  - section 11's `test_native_decisions.py` lift cases (missing candidate, all refused, equal P(true) giving one tier, 0.5 with and without `allow_none`, out-of-bounds select not repaired);
+  - `native_gap` naming a rank without `pointwise` and a collision;
+  - `test_inference_decide_native.py`'s refused-unsent-then-structured-fallback case and its no-fallback `native_unrepresentable` case.
+- **Size:** M
+
 ## 9. Contract
 
 **01e-C1 `Rank`.** Inputs: `Rank(id, instructions, candidates, top, allow_none,
@@ -873,3 +956,8 @@ finding was checked against the code at `35c1fb7`.
 - **M7, fixed.** `KIND` is a `ClassVar`.
 - **M8, fixed.** The native lift reads each lowered predicate's `Answer`, and
   never re-thresholds a raw probability.
+- **Slices added (5 slices).** Slicing needed one stub that the design did
+  not name: until 01e-S5 lands, `native_gap` refuses every `Rank` and
+  `MultiSelect` unsent. A native stage then falls through exactly as for any
+  unrepresentable item. The native lowering framework lands with `Joint`
+  (01e-S4), its simplest user.

@@ -470,6 +470,73 @@ not default to it (Open question 1). So is the same claim in the comment
 beside `DEFAULT_CONTEXT_BUDGET` (`store/config.py:32-34`, "the backend cannot
 see the model's window size, only the frontend can").
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4. S2, S3 and S4 each need
+only S1, so they can go in parallel. S4 waits softly on 01s.
+
+### 01i-S1: The resolved fact and the ceiling
+
+- **Delivers:** 01i-C1 (full); 01i-C2 (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:**
+  - `catalog.entry` gains `max_output` (OpenRouter's `top_provider.max_completion_tokens`, Anthropic's `max_tokens`, under `_context`'s rule).
+  - `wire.py` gains `Limit` and `Limits` and `Target.limits`.
+  - A new `store/inference/limits.py` holds `of`, `reply_reserve`, `prompt_ceiling` and `Ceiling`.
+  - `_attempt`/`_target` build the limits from the row and facts they already read, and `Attempt.limits` returns them.
+  - The facts reader treats the two stated fields as optional, so they are read before anything can write them.
+  - No prompt, request body or surface changes. This is the slice 09 and 12 need.
+- **Acceptance:**
+  - section 9's `test_catalog.py` cases and all of `test_inference_limits.py` (source order, the reserve rules with per-call `max_tokens` and the `max_output` cap, the riding-fallback walk, `None` versus 0, `reason`, the tuple `binding`);
+  - the `test_inference_resolve*.py` limits cases;
+  - the byte-identity check with `context_budget` at 0.
+- **Size:** M
+
+### 01i-S2: Stating the limits
+
+- **Delivers:** 01i-C3 (part: the stated facts write — `facts.state`, `FactsUpdate`, the facts route, `limits` in the facts body — and the model facts panel with `modelLimitsPath`)
+- **Needs (this spec):** 01i-S1 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `facts.state` accepts `context_window` and `max_output` (leave, remove with 0, set), with the output-above-window check inside `change`.
+  - `_view` exposes both values.
+  - `FactsUpdate` gains the two `Any` fields, and `_facts_body` adds the resolved `limits`.
+  - Frontend: the `ModelFacts` types; `ModelFactsPanel`'s Size section and form; `providerPaths.ts`'s `EDIT_LIMITS`/`modelLimitsPath`; and the generalised `?edit=` effect.
+- **Acceptance:**
+  - section 9's facts route tests, including the two-request refusal and "no `confirm_embedding`";
+  - the `ModelFactsPanel` vitest cases (view, edit, clearing sends 0, `?edit=limits` once);
+  - `modelLimitsPath` encodes per segment.
+- **Size:** M
+
+### 01i-S3: `model_window` in context breakdowns
+
+- **Delivers:** 01i-C3 (part: `model_window` in every context breakdown, preferred by `ContextBreakdown`)
+- **Needs (this spec):** 01i-S1 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - The live context read, `character_turns`' breakdown and the prompt-log capture (`_record_prompt`) add `model_window` from the target they name.
+  - `ContextBreakdown.contextLimit` prefers it and falls back to the catalog lookup for older snapshots.
+  - The stale "backend cannot infer" sentences in `pack.py` and `store/config.py:32-34` are corrected.
+  - Packing is unchanged.
+- **Acceptance:**
+  - section 9's breakdown test (a chat turn's breakdown and capture carry `model_window`);
+  - the `ContextBreakdown` vitest cases;
+  - the frozen-campaign `snapshot.json` and `test_lore_golden.py` unchanged.
+- **Size:** S
+
+### 01i-S4: The Models page readout
+
+- **Delivers:** 01i-C3 (full)
+- **Needs (this spec):** 01i-S1 (H), 01i-S2 (S: `modelLimitsPath` for the **Set** link — until it lands, the readout shows `window unknown` with no link)
+- **Needs (other specs):** 01s (S: the Models summary row and its fallback line, section 3.1 — until it lands, the readout goes on today's `ModelsView` role cards)
+- **Scope:**
+  - `_role_card`, `_route_row` and `_embedding_card` gain `limits` (window, max output, the riding fallback's window, and the ceiling with its `reason`). It is `null` when nothing resolves and on a native decide card or route.
+  - The summary row and the fallback line render the window, `window unknown [Set]` and a ceiling `reason`.
+  - The readout is display-only.
+- **Acceptance:** section 9's settings-view test and the Models summary vitest cases (known window, the **Set** link for `vendor/m`, the fallback window, a ceiling `reason`, no window where `limits` is `null`).
+- **Size:** S
+
 ## 7. Contract
 
 **01i-C1 `limits` on the resolved attempt.** Every `wire.Target` the resolver
@@ -693,3 +760,7 @@ blocking findings. Each finding was checked against the code at `35c1fb7`.
   resolved ones from `limits`. The frontend `ModelFacts` type gains them.
 - **M7, fixed.** The server function names (`_role_card`, `_route_row`,
   `_embedding_card`) and the frontend type names are both given.
+- **Slices added (4 slices).** No contract item was re-worded. 01i-C1 and
+  C2 land together in 01i-S1 because every consumer needs both, and C2 is a
+  pure helper over C1. 01i-C3 is delivered in three parts: S2 writes the
+  limits, S3 adds them to breakdowns, and S4 shows them on the Models page.

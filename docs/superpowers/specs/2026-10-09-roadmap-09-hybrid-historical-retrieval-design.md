@@ -1134,6 +1134,68 @@ within the ceiling. Thresholds are orderings, not committed figures; the
 margins are tuned in conversation and recorded nowhere that describes a
 user's library.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4, then S5 and S6 in
+parallel (S5 needs only S3; S6 needs S4 for its semantic arms and S5 for its
+rerank arm, so its rerank arm lands with S5 if S6 goes first). `history_recall_depth`
+defaults to `0` in every slice, so `main` composes byte-identical prompts until
+a reader turns it on.
+
+### 09-S1: Retrieval core, structural and lexical, no network
+
+- **Delivers:** 09-C1 (part: `Query`, `SceneRef.key`, `Evidence`/`EvidenceItem`/`EvidencePost` with evidence ids, eligibility, structural and lexical signals, admitted-only RRF merge and `merge(..., expand)`, expansion through 08-C3b, `budget.fit`, `retrieve_preview`); 09-C2 (part: the `Coverage` verdict with `eligible` and `exhausted`, tier 1, the no-embeddings fallback)
+- **Needs (this spec):** none
+- **Needs (other specs):** 08-C1 (H: bounded `SceneDocument` with metadata, keyed by per-scene slices); 08-C2a (H: `scene_documents` live set with one batch lookup); 08-C3b (H: `expand(..., phase="prompt")` with `r-`/`p-` post keys and `part`); 03-C6 (H: batch lookup over a live key set, index ranking only within it, for the per-document term-statistics kind); 03-C7 (H: text-keyed artifacts, never `BUILD`); 07-C2 (S: `groups_for` — until it lands, the `group` relation is absent); 07-C3c (S: `scene_groups`/`co_affiliates`/`prompt_visible` projections — until then, the group relation reads `scene_actors` with 07-C2 only, or is absent)
+- **Scope:** The `store/history/` package (`model`, `settings`, `query`, `refs`, `structural`, `lexical`, `merge`, `coverage`, `expand`, `budget`) and the synchronous `retrieve_preview`. The four config keys join `config._CONFIG_KEYS`, default off. No caller in `routes/` or `context/` yet, no embed task, no network. `test_regex_prompt_guard.py` scans `store/history/` and pins `expand.excerpts`.
+- **Acceptance:** section 15's store tests for `query.build`, structural, eligibility, lexical, merge (keyed by `SceneRef.key`, legacy identity case), coverage (`exhausted` for a first and a young campaign), expansion and budget (absolute cap); the live-set liveness test.
+- **Size:** L
+
+### 09-S2: The history section and its packer tier
+
+- **Delivers:** 09-C3 (full)
+- **Needs (this spec):** 09-S1 (H)
+- **Needs (other specs):** 01i-C2 (S: `prompt_ceiling(resolved)` — until it lands, the absolute `history_recall_budget` alone bounds the section)
+- **Scope:** `pack.HISTORY_RECALL`, first in `DROP_ORDER`, with `pack.py`'s and `layout.py`'s docstrings; the `history_recall` catalog entry, its template, the per-scene `shed` hook keyed on `SceneRef.key`, the no-repeat rule, the header location gate, actor-scoped blanking, the `_history_row` inspector row and `context_breakdown`'s preview path. `compose_turn` and `compose_director_turn` gain `history=`. Nothing calls retrieval on a turn yet, so every real prompt stays byte-identical; `verify_templates.py` and `templates/README.md` gain the section; `fixtures/history_golden.json` is recorded from a fixed synthetic evidence.
+- **Acceptance:** section 15's Context tests: the lore golden unchanged with the key unset and with the section off in the layout; render, pack and shed order with Recalled lore present; no repeated summary (archive on and off); no gm-only or excluded location in a header; actor-scoped empty; `test_reasons_never_reach_the_prompt` from a hand-built `Evidence`.
+- **Size:** M
+
+### 09-S3: The turn phase, structural and lexical
+
+- **Delivers:** 09-C1 (part: async `retrieve` without the semantic stage, `gather`, `gather_sync`); 09-C2 (part: the turn-phase deadline, the error verdict, the fallback table's non-network rows)
+- **Needs (this spec):** 09-S2 (H)
+- **Needs (other specs):** 01i-C2 (S: as S2)
+- **Scope:** `routes/history_recall.py` (`gather`, `gather_sync` with the in-worker lock check and the wrapped portal call), wired into `post_chat`, `post_retry`, `post_regenerate`, the director branch and the group round's narrator contributions (once per round, not for NPCs, replays or continuations). `HISTORY_PHASE_SECONDS` bounds the phase; the lexical guard fails a retrieval inside a `campaign_lock` block. With the key on, a turn carries structural and lexical evidence and spends nothing.
+- **Acceptance:** section 15's Routes tests except the semantic and rerank ones: evidence reaches compose and the prompt-log capture; `skipped:locked`; a raising portal does not strand the post; the round gate; the live inspector sends nothing.
+- **Size:** M
+
+### 09-S4: The semantic signal and tier 2
+
+- **Delivers:** 09-C1 (part: the semantic signal, `history-recall` embed rows, `record_embedded`); 09-C2 (full)
+- **Needs (this spec):** 09-S3 (H)
+- **Needs (other specs):** 01h-C4b (H: native async `embed()` with a total deadline, `AsyncEmbeddingsClient` via `routes.get_embeddings`); 01h-C4a (H: no embedding on the event loop, a guard degrades); 08-C2b (H: document vectors under `space["space"]` and `record_embedded`); 01h-C1 (S: the `queries` split — until it lands, the call is untyped and the query and documents embed alike)
+- **Scope:** `store/history/semantic.py`: one `history-recall` call carrying the query texts and a bounded warm, saving under `space["space"]`, `record_embedded`, the query-only retry, the width and range checks; tier 2 under `WIDEN_LIMIT`. `history-recall` joins `routing.EMBED_TASKS` with this call site (one rule forces task and call site into one slice); `test_inference_embedding.py`'s tuple and `MIN_EMBED_CALLS` move. The outage memo moves into `embed_space` and lore recall consults it in the same slice. The turn routes gain `Depends(get_embeddings)`.
+- **Acceptance:** section 15's semantic tests (one call, `queries=len(texts)`, `materialized` rows read back, no query vector saved, no `history-index` on a turn, retry, evictions, shared memo); the phase-deadline test with a stalled endpoint.
+- **Size:** M
+
+### 09-S5: The rerank
+
+- **Delivers:** 09-C1 (full)
+- **Needs (this spec):** 09-S3 (H)
+- **Needs (other specs):** 02-C5b (H: the `history_check` route entry, the `history-rerank` task, `build_items`/`grades_of`, its templates and the `decide-history-rerank` replay case); 01d-C1 (S: the `TaskPolicy` row for `history-rerank` — until it lands, no row and the chain's default); 01e-C1 (S: `Rank` with `pointwise` — until it lands, the kit's Score form); 01e-C2 (S: `tiers()` — until then, the four-level Score)
+- **Scope:** `history_recall_rerank` gains its effect: the reranker built in `routes/history_recall.py`, resolved in a worker, bounded by `min(RERANK_CEILING, remaining)`, applied once per turn. If this lands before 10-S2, it lands 02-C5b's `history_check` route with its call site, plus `routing.NO_LEGACY` and the `NO_LEGACY_TASKS` baseline mechanism (10 section 13), because the routing guard and the frozen baselines force route, call site and test mechanism into one slice. Default off.
+- **Acceptance:** section 15's rerank tests (ungraded keeps RRF order, unresolvable route skipped, ceiling honoured, `pointwise` on a native `Rank`); the `decide-history-rerank` replay case; the routing and baseline tests of 10 section 13 when this slice brings the route.
+- **Size:** M
+
+### 09-S6: The long-history eval suite
+
+- **Delivers:** 09-C4 (full)
+- **Needs (this spec):** 09-S4 (H); 09-S5 (S: until it lands, no `hybrid+rerank` arm)
+- **Needs (other specs):** 01a-C1 (H: per-case and per-call wall time, tokens and the three money columns, for the live arms); 01a-C2 (H: live evals metered by the production meter, for the live arms); 01a-C3 (S: the comparison table — until then, one report per arm)
+- **Scope:** `evals/history/` (synthetic generator on placeholder names, cases 1 to 10, the arms, graders), `evals/run.py --history`, `--long` and `--live`, recorded synthetic vectors. The offline arms run inside `pytest backend`. The gate of section 12.5 is what a later change to the default reads.
+- **Acceptance:** rule cases 6 to 10 pass in every offline arm; `hybrid` meets section 12.5's ordering on the recorded vectors; live arms report through 01a.
+- **Size:** M
+
 ## 13. Contract
 
 ### 09-C1: retrieval over a query, returning bounded evidence with signals
@@ -1499,6 +1561,8 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 | M8 vectors cost figure | Fixed (5.4, 6.3) |
 | M9 draft signals dropped silently | Fixed: recorded as deferred with reasons (5.2) |
 | M10 director branch | Fixed: `compose_director_turn` gains the parameter (10.1) |
+
+Slices added (6 slices), before the Contract section.
 
 Coordinator inputs applied in the same pass: 01i-C2 `prompt_ceiling` as the
 only ceiling derivation (9.2); 01e-C1 `pointwise` on any `Rank` and no reliance

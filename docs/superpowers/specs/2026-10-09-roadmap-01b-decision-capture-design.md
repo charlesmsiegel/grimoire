@@ -440,6 +440,92 @@ against another frozen entry of the same task is allowed.
   list/detail rule: a row opens a read-only view, and there is no edit step,
   because a capture is never editable.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3. Each slice depends on the one
+before it.
+
+### 01b-S1: Stage and batch positions on the decide outcome
+
+- **Delivers:** 01b-C1 (part: each outcome records `stage` and `at`).
+- **Needs (this spec):** none
+- **Needs (other specs):** none. `_Call.stage`/`positions` is a shared
+  structure with 01a. If 01a-S1 lands first, this slice reuses its fields and
+  only stamps them in `_outcome`.
+- **Scope:**
+  - `_Call` gains `stage` and `positions`, set in `run_stages` (shared with
+    01a).
+  - `inference._outcome` adds `stage` and `at` to the per-call
+    `decisions.outcome` record (§3.2). Every existing capture (today only the
+    speaker) gains the two keys and nothing else.
+  - The decide-chain golden is re-recorded in this PR and argued by §3.2,
+    which is why the change is its own slice.
+- **Acceptance:**
+  - §6 test 11's golden clause: the golden's diff shows only `stage` and
+    `at`.
+  - `test_character_turns.py`'s selector capture expectations gain the two
+    keys.
+  - The two continuity sites capture nothing yet.
+- **Size:** S
+
+### 01b-S2: The capture helper, the decision pool and the four scene-level sites
+
+- **Delivers:** 01b-C2 (full); 01b-C1 (part: the helper with `hook`, `note`,
+  `fence` and `abandoned`; the envelope; the scene and generation retention
+  pools; the strict scene-identity fence; the speaker, scene-break,
+  voice-drift and continuity-identity sites; the scene-level UI).
+- **Needs (this spec):** 01b-S1 (H)
+- **Needs (other specs):** none. 01d-C2b's `hop` and 01c's notes are
+  pass-throughs that need nothing from those specs.
+- **Scope:**
+  - `prompt_log.record` gains `operation`, eviction moves to per-pool
+    counting, and `_well_formed*` accepts an optional `operation`.
+  - New `routes/decision_capture.py` (§3.3 and §3.4), with
+    `OUTCOME_SECTION_ID` moved there and re-exported.
+  - Kind/status error sanitising, size caps and the warning-only failure
+    path.
+  - The speaker moves to the helper. The envelope changes its outcome shape,
+    and `test_the_selector_capture_records_the_decision` is rewritten.
+    Scene-break, voice drift and continuity identity gain a scope each.
+  - The diff route answers 409 for a decision entry.
+  - Frontend, in the same PR: decision entries reach the prompt log here, so
+    leaving these to a later PR would put decisions in Turn history and on
+    Settings' context bar in between. That covers the labels, `isDecision`,
+    Turn history filtering, the Decisions section, the restricted compare
+    picker, `ConfigView.lastPrompt` and the Settings caption.
+  - The §6 package-wide guard does **not** land here, because reconcile is
+    still uncaptured.
+- **Acceptance:**
+  - backend §6 tests 1-5 for the four sites, test 6 (except the reconcile
+    clause), test 7 (scene pools), tests 8 and 10, test 9's diff clause, and
+    tests 11 and 12;
+  - frontend tests 1-3.
+- **Size:** L
+
+### 01b-S3: Campaign-level capture for the reconcile sweep, and the guard
+
+- **Delivers:** 01b-C1 (full)
+- **Needs (this spec):** 01b-S2 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `prompt_log.NO_SCENE` and the campaign-decision pool.
+  - `common._record_campaign_prompt`, which proves the campaign exists,
+    writes under the non-blocking hold and bumps the revision.
+  - Two campaign routes: `GET /campaigns/{cid}/prompts` and `.../{eid}`.
+  - `continuity._adjudicate` opens a campaign-level scope fenced on
+    `stillborn`.
+  - The ledger's "What the sweep asked" list.
+  - The package-wide capture guard, with pass-through parameters and the
+    capped `# capture-ok:` marker, lands here, once all five sites comply.
+  - CLAUDE.md's "capture nothing" sentence is rewritten here.
+- **Acceptance:**
+  - §6 test 6's reconcile clause, test 7's campaign-pool clauses, and test
+    9's two campaign-route clauses;
+  - frontend test 4;
+  - the guard fails on a planted uncaptured `decide` call and passes on the
+    tree.
+- **Size:** M
+
 ## 4. Contract
 
 **01b-C1. One capture helper, used at all five decide sites and every new
@@ -700,6 +786,7 @@ Each finding was verified against the code.
     stated;
   - M9: embed capture is noted as already met.
 - **Rejected:** none.
+- Slices added (3 slices).
 
 **Cross-spec items, for the coordinator (no other spec was edited):**
 

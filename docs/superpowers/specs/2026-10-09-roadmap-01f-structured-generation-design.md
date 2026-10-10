@@ -460,6 +460,110 @@ def cap_sent(target: wire.Target) -> bool:
   the caller's "no JSON" outcome (section 3.6), so a caller sizes the cap to
   its schema.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → S3 → S4. S4 (the pilot) can
+land in parallel with S3 if `draft_completion` gains only `schema=` there;
+as written it takes both keywords, so it waits for S3.
+
+### 01f-S1: The portable-schema leaf
+
+- **Delivers:** 01f-C3 (full)
+- **Needs (this spec):** none
+- **Needs (other specs):** none
+- **Scope:**
+  - New stdlib-only `grimoire/schemas.py`: `check` (the strict subset,
+    including the bound and empty-`enum` refusals), `render`, `find_value`,
+    and the strict-mode budgets moved there from `decisions.py`, which
+    re-exports them.
+  - `decisions.find_object` becomes a dict-only wrapper over `find_value`.
+  - `prompts._env` registers `schema_json`.
+  - No call site changes behaviour; `decide/system.j2` is untouched.
+- **Acceptance:**
+  - `test_schemas.py`: subset refusals, the `schema_json` filter equal to
+    `render`, `decide/system.j2` bytes unchanged, `find_value` cases, and
+    the AST stdlib-only check;
+  - every `decisions.schema(...)` passes `check`;
+  - `test_decide_chain_golden.py` is unchanged.
+- **Size:** S
+
+### 01f-S2: Structured mode on `generate`, and the shared refusal re-send
+
+- **Delivers:** 01f-C1 (part: per-attempt structured mode on
+  `generate(schema=)`, with the in-prompt check and the prefill/tails
+  refusals); 01f-C2 (full)
+- **Needs (this spec):** 01f-S1 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - `resolve.structured_capable`, and `generate`'s per-call structured
+    chain (3.2).
+  - The in-prompt check and the other pre-send refusals (3.3).
+  - The facade invariant that a target is unflagged when no schema is sent
+    (3.4).
+  - `_without_refused_mode` and its streamed twin, extracted from `_ask` and
+    used by both `decide` and `generate`, with the closures nested in
+    `generate` (3.5).
+  - No call site passes a schema yet, so every request is byte-for-byte
+    unchanged.
+- **Acceptance:**
+  - `test_inference_generate.py`: flagging per capability; the resolution
+    unchanged; no envelope without a schema; each refusal raises with no
+    request sent.
+  - The re-send tests with `RefusingProvider`: primary, fallback, both, one
+    row with summed `attempts`, no health observation, and the streamed
+    path.
+  - `decide`'s re-send tests pass unchanged.
+  - The `_structured_share` invariant test.
+- **Size:** M
+
+### 01f-S3: The per-call output cap
+
+- **Delivers:** 01f-C1 (full: adds `generate(max_tokens=)`,
+  `wire.Target.with_output_cap`, `Sampling.call_cap`, `cap_sent`,
+  `call_chain` and `CapRefusalError`)
+- **Needs (this spec):** 01f-S2 (H)
+- **Needs (other specs):** 01i-C1 (S: `wire.Limits.max_output` on the
+  target. Until it lands, the cap is `min(preset's, max_tokens)`.)
+- **Scope:**
+  - `wire.with_output_cap` and `Sampling.call_cap`.
+  - `generate(max_tokens=)` built through `inference.call_chain`, together
+    with the schema flags.
+  - `inference.cap_sent`.
+  - `llm._preset_refusal` raises `CapRefusalError`, worded as the call's,
+    when only a call cap carried `max_tokens`.
+  - Nothing passes `max_tokens` yet.
+- **Acceptance:**
+  - the cap is sent where `cap_sent` is True, and absent on the Claude SDK
+    and on an OpenRouter model whose catalog omits `max_tokens`;
+  - the resolution is unchanged;
+  - a 400 naming `max_tokens` on a call cap raises `CapRefusalError`;
+  - `call_chain` equals the chain the facade was sent.
+- **Size:** S
+
+### 01f-S4: The `intent` pilot
+
+- **Delivers:** none (the pilot adopter of section 3.8; every contract item
+  is already delivered)
+- **Needs (this spec):** 01f-S2 (H); 01f-S3 (H, for `draft_completion`'s
+  `max_tokens=` keyword)
+- **Needs (other specs):** none
+- **Scope:**
+  - `templates/scene_intent/system.j2` renders the intent schema with
+    `schema_json`.
+  - `routes/scenes.post_scene_intent` builds the schema: enums of location
+    ids and cast tokens, or plain strings where there is nothing to offer or
+    the enum budget is exceeded.
+  - `common.draft_completion` gains `schema=` and `max_tokens=`, passed only
+    when given, so the other fourteen draft routes are unchanged.
+  - The `campaign_flow` cassette and `verify_templates.py` are updated in the
+    same PR.
+- **Acceptance:**
+  - the prompt carries the rendered schema;
+  - a conforming reply parses as before;
+  - an out-of-enum id is dropped by `parse_intent`;
+  - `verify_templates.py` and `test_llm_fakes.py` are green.
+- **Size:** S
+
 ## 4. Contract
 
 **01f-C1 — `generate(schema=...)` requests a provider's structured mode per
@@ -674,3 +778,5 @@ fixed as noted, or rejected with a reason.
 | M2 the stdlib-only check needs its own test | Fixed (`test_schemas.py`). | 3.1, 7 |
 | M3 the SDK has `output_format` | Noted under non-goals. | 8 |
 | M4 refusal warnings can echo enum ids | Stated in the privacy bullet. | 5 |
+
+Slices added (4 slices).
