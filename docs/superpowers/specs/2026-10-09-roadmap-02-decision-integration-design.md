@@ -512,7 +512,7 @@ store**:
 The configuration's identity is declared as 01a-C3's open `axes`
 (01a section 8): `{"feature": "off|intent|plan|on", "scene_selection":
 "<provider>/<model>/<preset>", "decision_selection": "<provider>/<model>"}`,
-plus `"sampling": "on|off"` for C2a and `"floor": "0|1/(2n)"` where open
+plus `"sampling": "on|off"` for C2a and `"cutoff": "0|1/(2n)"` where open
 question 9 is measured.
 
 **Repeats and drain.** With `--repeat N` (this mode's own default is 5)
@@ -589,7 +589,7 @@ nothing about *whether* a pick is asked.
 ### 5.2 Rules (on top of 1.4 rule 3)
 
 **01c owns the sampler** (01c-C2, C3, C4; 01c section 5). 02 carries no
-sampler, floor or renormalisation of its own. Its whole policy is one
+sampler, cutoff or renormalisation of its own. Its whole policy is one
 `draws.Eligibility`, which 01c applies and records. With the switch on, after
 `decide` returns:
 
@@ -605,7 +605,7 @@ sampler, floor or renormalisation of its own. Its whole policy is one
    eligibility = draws.Eligibility(
        exclude=(decisions.NONE_KEY,),
        only=tuple(addressed) or None,
-       floor=1 / (2 * len(offered)))
+       cutoff=1 / (2 * len(offered)))
    draw = draws.draw(question, result, seed=draws.new_seed(), purpose="next",
                      eligibility=eligibility)
    ```
@@ -635,20 +635,26 @@ sampler, floor or renormalisation of its own. Its whole policy is one
      with certainty. That is recorded, not hidden: `eligibility.only` holds
      the narrowing, and `answer != selected` shows the override. The play
      gate grades it on its own line (5.7).
-   - **`floor=1/(2n)`.** This is 01c's floor: a minimum weight for every
-     eligible key (01c section 5.3, step 4). It gives each eligible actor at
-     least half the uniform share. Open question 9 asks whether that lift is
-     wanted.
+   - **`cutoff=1/(2n)`.** This is 01c's `Eligibility.cutoff`. It removes
+     every key whose *reported* probability is below it. 01c applies it after
+     `only` and `exclude` and before any floor; 02 sets no floor. The
+     argument is structural: an actor the model rated below half of
+     indifference is one it argued against, and a draw should not revive
+     them. It is to be tuned through 01a's reports (the gate's `cutoff`
+     axis, 5.7). A cutoff that empties the set gives no draw (`basis:
+     none`, `why: cutoff`), which rule 3 handles.
 3. **Mapping the draw to `(next, issue)`**, when rule 1 read a speaker:
    - `basis: "sampled"` gives `next = draw.value`. It is an offered key,
      never the none, because the none is excluded.
    - `basis: "answer"` (no usable report, a partial or inconsistent report,
      01c section 5.4) gives the answer, as today.
-   - `basis: "none"` with `why: "ineligible"` means the plain answer lies
-     outside `addressed` and there was no usable report to draw from. The
-     pick then draws once more with the same seed and purpose and
-     `only=None`, and stores that record. Without a report, a narrowing must
-     not turn a plain answer into "nobody", and so hand control back.
+   - `basis: "none"` with `why: "ineligible"` or `why: "cutoff"` comes from
+     one of two cases. Either the plain answer lies outside `addressed`
+     with no usable report, or the cutoff removed every addressed actor.
+     The pick then draws once more with the same seed and purpose,
+     `Eligibility(exclude=(NONE_KEY,))` and no `only` or `cutoff`, and
+     stores that record. A narrowing must not turn an answered speaker into
+     "nobody" and so hand control back.
 
 `selection_of` is unchanged. `decisions._distribution`
 (`decisions.py:843-856`) drops any distribution with a key outside the
@@ -695,7 +701,7 @@ def addressed(conversation: list[dict], note: str, eligible: Sequence[dict],
 
 def pick_eligibility(offered: Sequence[str],
                      addressed: Sequence[str]) -> draws.Eligibility:
-    """exclude=(NONE_KEY,), only=addressed or None, floor=1/(2n)."""
+    """exclude=(NONE_KEY,), only=addressed or None, cutoff=1/(2n)."""
 ```
 
 `_select` calls `decide`, reads `selection_of` and, with the switch on, calls
@@ -884,7 +890,8 @@ as 5.2:
 - an abstained, refused or unread stance renders nothing, and is recorded;
 - otherwise `draws.draw(stance_q, result, seed=draws.new_seed(),
   purpose="stance", eligibility=Eligibility(exclude=(NONE_KEY,),
-  floor=1/(2n)))`, where `n` is the number of stances without the none. A
+  cutoff=1/(2n)))`, where `n` is the number of stances without the none. A
+  cutoff that empties the set leaves the plain answer as the stance. A
   draw with `basis: answer` is the plain answer, which is the only case on a
   structured backend. The record is 01c's, unchanged.
 
@@ -1432,7 +1439,7 @@ sampled (01c-C4).
   set (from the round's typed note or its newest post) and the switch.
 - **Outputs:** `(next, issue)`. The issue comes from `selection_of`, exactly
   as today; the speaker comes from 01c's `draws.draw` with
-  `Eligibility(exclude=(NONE_KEY,), only=addressed, floor=1/(2n))`, a seed
+  `Eligibility(exclude=(NONE_KEY,), only=addressed, cutoff=1/(2n))`, a seed
   from `draws.new_seed()`, and `purpose="next"`. 01c's record is stored
   unchanged as `pick` on the round, in the write that stores the speaker.
 - **Guarantees:**
@@ -1609,9 +1616,10 @@ gate of section 4.
   Each still writes a `pick` (basis `none`).
 - `NONE_KEY` is never selected (excluded). An answered none is abstained and
   hands back.
-- Floor: the record's `eligibility.floor` is `1/(2n)`, and each eligible
-  actor is selected at a frequency at least near that share over many seeds
-  (01c applies it; 02 tests only that it passes it).
+- Cutoff: the record's `eligibility.cutoff` is `1/(2n)` and it sets no
+  floor. An actor reported below the cutoff is never selected over many
+  seeds. A cutoff that removes every addressed actor re-draws with no
+  `only` or `cutoff` and keeps a speaker (5.2 rule 3).
 - Addressed: a post naming Mara gives `only=("…:mara",)`. Naming both Mara
   and Winifred gives both. A typed note naming Winifred narrows to Winifred.
   An answer outside `addressed` with no usable report re-draws with
@@ -1776,15 +1784,14 @@ run B and C before 02-D lands; argmax is a valid configuration.
      capture belongs to 09's and 11's call sites (9.1);
    - 11 section 5.4 runs its turn-path stage under `llm_call_budget`, which
      02-C6's deadline rule (3.4) does not allow.
-9. **Is 01c's `floor=1/(2n)` the right policy for the speaker?** 01c's floor
-   **lifts** every eligible actor to at least half the uniform share. The
-   original 02 draft meant the opposite: to cut the long tail the model
-   argued against. With the floor, an actor the report gave 0.02 is drawn
-   about `1/(2n)` of the time. *Recommendation:* ship the coordinator's
-   `1/(2n)` as ruled, and have C2a's gate run `floor` as an axis (`0` vs
-   `1/(2n)`), reporting the departure rate and mass on intended for each.
-   If the lift reads as noise, cutting the tail needs a new 01c
-   `Eligibility` field, not a 02 sampler.
+9. **Floor or cutoff for the speaker?** *Closed.* 01c now has a separate
+   `Eligibility.cutoff`. It excludes keys whose reported probability is
+   below it, after `only` and `exclude` and before any floor, and a cutoff
+   that empties the set gives `basis: none`, `why: cutoff` (01c section
+   5.3). That matches 02's original intent: cut the long tail the model
+   argued against, rather than lift it. 02 uses
+   `cutoff=1/(2n)` with no floor, for the speaker and the stance, and C2a's
+   gate runs `cutoff` as an axis (`0` vs `1/(2n)`).
 
 ---
 
@@ -1796,7 +1803,7 @@ baseline, and against the revised 01a, 01c and 01d specs.
 
 | Item | Finding | Disposition |
 |---|---|---|
-| B1 | 02's own support, floor, record shape and 63-bit seed contradict 01c | **Fixed, by the coordinator's ruling** (01c owns the sampler). `draws.draw` with `Eligibility(exclude=(NONE_KEY,), only=addressed, floor=1/(2n))`, `new_seed()`, 01c's record unchanged under `pick`, "decided" means the record is present (5.2-5.4, 6.5, 11). The same applies to the stance. |
+| B1 | 02's own support, floor, record shape and 63-bit seed contradict 01c | **Fixed, by the coordinator's ruling** (01c owns the sampler). `draws.draw` with `Eligibility(exclude=(NONE_KEY,), only=addressed, cutoff=1/(2n))` (01c's cutoff, no floor; open question 9 closed), `new_seed()`, 01c's record unchanged under `pick`, "decided" means the record is present (5.2-5.4, 6.5, 11). The same applies to the stance. |
 | B2 | A failed or skipped hop leaves `known` in `items`, and `access_of` cannot see it | **Fixed.** `access_of(questions, decision)` reads `Decision.escalations[*].outcome`; not answered maps to `UNKNOWN` (9.2, 9.4, 10, 13). |
 | B3 | A roll resume recomposes, so the intent drops out | **Fixed.** 1.4 rule 4 corrected. The resume branch passes `record.get("intent")` into `_compose`; tests added (3.1 rule 5, 13). |
 | S1 | A per-call ceiling is several times the stated wait, and `_noting` blames healthy connections | **Fixed.** One deadline per decision, `DeadlineRefused` unsent past it, no `_noting`, worst case stated (3.4). |
