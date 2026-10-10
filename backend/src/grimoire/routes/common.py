@@ -499,7 +499,9 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
         return
     chain = conn if isinstance(conn, wire.Chain) else None
     sent = conn.primary if isinstance(conn, wire.Chain) else conn
-    if sent is not None:
+    if sent is not None and "model_window" not in breakdown:
+        # A caller that names another attempt's model (a decision capture's
+        # answering call) has stamped that attempt's window already.
         breakdown = {**breakdown, "model_window": model_window(sent)}
     report = _sampling_report(sent)
     if report is not None:

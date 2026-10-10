@@ -253,11 +253,16 @@ def _file(scope: Scope, cid: str, sid: str, still: Callable[[], bool]) -> None:
             and out.record.get("mode") != decisions.NATIVE_BACKEND else None)
     model = named.target.model if named else ""
     kind = named.target.kind if named else ""
+    breakdown = _breakdown(scope)
+    if named is not None:
+        # The window of the model the row names (01i), stamped here because a
+        # native call is filed with no `conn` to read it from.
+        breakdown = {**breakdown, "model_window": common.model_window(named.target)}
     if sid == NO_SCENE:
-        common._record_campaign_prompt(cid, scope.task, _breakdown(scope), model=model,
+        common._record_campaign_prompt(cid, scope.task, breakdown, model=model,
                                        kind=kind, conn=conn, operation=DECIDE, still=still)
         return
-    common._record_prompt(cid, sid, scope.task, _breakdown(scope), model=model, kind=kind,
+    common._record_prompt(cid, sid, scope.task, breakdown, model=model, kind=kind,
                           conn=conn, operation=DECIDE, still=still)
 
 
