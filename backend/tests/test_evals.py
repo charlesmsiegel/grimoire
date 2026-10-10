@@ -559,7 +559,7 @@ def test_every_decide_case_is_counted():
     assert {c.id for c in DECIDE_CASES} == {
         "decide-scene-break", "decide-voice-drift", "decide-speaker",
         "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank",
-        "decide-select"}
+        "decide-select", "decide-joint"}
 
 
 #: 01e's offline cases: each counterexample read through `decisions.parse` as
@@ -573,6 +573,10 @@ VOCABULARY_READINGS = {
                       "unknown-id": ("unreadable", "not_an_option"),
                       "short": ("unreadable", ""),
                       "null": ("unreadable", "")},
+    "decide-joint": {"illegal-pair": ("unreadable", "not_an_option"),
+                     "head-only": ("unreadable", "not_an_option"),
+                     "list": ("unreadable", "not_an_option"),
+                     "null": ("unreadable", "")},
 }
 
 
@@ -585,6 +589,8 @@ def test_each_vocabulary_counterexample_reads_as_the_contract_says(case_id):
     (question,) = ctx["items"][0].questions
     readings = {}
     for recording in case.recordings:
+        if recording.native:
+            continue        # a native body is read by its adapter, below
         text = recording.path(case.id).read_text(encoding="utf-8")
         (result,) = decisions.parse(text, ctx["items"], explain=False)
         answer = result.answers[question.id]
@@ -594,6 +600,26 @@ def test_each_vocabulary_counterexample_reads_as_the_contract_says(case_id):
         assert decisions.was_read(answer) or answer.reason == "abstained", answer
         readings[recording.variant] = (answer.reason, answer.detail)
     assert readings == VOCABULARY_READINGS[case_id]
+
+
+def test_the_native_joint_recording_is_read_as_a_pair_with_its_distribution():
+    """The joint's native recording goes through the production adapter: sent
+    as one flattened choice, read back as a `Pair` whose distribution is
+    keyed by the legal pairs' keys -- the joint distribution 01c samples."""
+    from grimoire import decisions
+
+    case = case_mod.BY_ID["decide-joint"]
+    (recording,) = [r for r in case.recordings if r.native]
+    ctx = case.build()
+    runner.native_output(ctx, recording.native,
+                         recording.path(case.id).read_text(encoding="utf-8"))
+    answer = ctx["native_results"][0].answers["act"]
+    assert answer.answer == decisions.Pair("heal", "characters:mara")
+    assert set(answer.distribution) == {"strike=>creatures:sentinel",
+                                        "strike=>creatures:gulls",
+                                        "heal=>characters:mara", "withdraw"}
+    (joint,) = ctx["items"][0].questions
+    assert decisions.head_first(answer, joint) is None
 
 
 @pytest.mark.parametrize("case", DECIDE_CASES, ids=[c.id for c in DECIDE_CASES])

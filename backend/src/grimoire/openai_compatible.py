@@ -159,10 +159,12 @@ def _question(q: decisions.NativeQuestion) -> dict:
 
 def decision_body(item: decisions.Item, model: str) -> dict:
     """The request body asking `item` of `model`: `questions` an array, each
-    named by its question id. Aliases are the structured parser's and are not
+    named by its question id, lowered to the types the endpoint has
+    (`decisions.native_form`). Aliases are the structured parser's and are not
     sent; nothing asks for a rationale, which this endpoint does not return."""
-    return {"model": model, "input": item.context,
-            "questions": [_question(q) for q in decisions.native_questions(item)]}
+    lowered, _ = decisions.native_form(item)
+    return {"model": model, "input": lowered.context,
+            "questions": [_question(q) for q in decisions.native_questions(lowered)]}
 
 
 def _choice_distribution(keys: dict[str, str], reported: object) -> dict | None:
@@ -249,7 +251,9 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
     item falls through. A question missing beside answered ones is
     `unreadable`, with one warning per call; so is one whose name is answered
     twice, since which answer is meant cannot be told. An answer with no name,
-    or a name nobody asked, matches nothing."""
+    or a name nobody asked, matches nothing. The reply is read against the
+    lowered item it answered, then lifted back to `item`'s questions
+    (`decisions.native_lift`)."""
     answers = body.get("answers") if isinstance(body, Mapping) else None
     if not isinstance(answers, list):
         raise OpenAICompatibleError("bad_response", "the decisions reply held no answers")
@@ -262,15 +266,16 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
         if name in by_name:
             twice.add(name)
         by_name[name] = raw
+    lowered, lift = decisions.native_form(item)
     result = decisions.native_result(
-        item, {q.id: (decisions.Answer(None, "unreadable") if q.id in twice
-                      else _answer(q, by_name[q.id]))
-               for q in decisions.native_questions(item) if q.id in by_name},
+        lowered, {q.id: (decisions.Answer(None, "unreadable") if q.id in twice
+                         else _answer(q, by_name[q.id]))
+                  for q in decisions.native_questions(lowered) if q.id in by_name},
         "OpenAI")
     if result is None:
         raise OpenAICompatibleError("bad_response",
                                     "the decisions reply answered none of the questions")
-    return result
+    return decisions.native_lift(item, result, lift)
 
 
 def _decision_usage(body: object, usage: dict | None) -> None:

@@ -26,6 +26,9 @@ The object has one entry per item, keyed by the item's number ("0", "1", and so 
 {%- if "select" in kinds %}
 - a selection is answered with a list of option ids, each at most once, exactly as listed (an empty list means none of them apply), or null where the schema allows it;
 {%- endif %}
+{%- if "joint" in kinds %}
+- a joint choice is answered with the id of one of its listed pairs, exactly as listed (an action, or an action and its target joined by "=>"), or null where the schema allows it;
+{%- endif %}
 - a scale is answered with the number of one of its levels.
 
 Do not guess: when the material does not settle a choice that allows none, answer null.

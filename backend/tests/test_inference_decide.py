@@ -1275,7 +1275,8 @@ RANK = decisions.Rank("relevant", "Which scenes matter most to this turn?", SCEN
                       top=2, allow_none=True, pointwise="Does this scene bear on the ledger?")
 #: Each 01e kind's system-prompt bullet, as it opens.
 NEW_BULLETS = {"rank": "- a ranking is answered with a list of candidate ids",
-               "select": "- a selection is answered with a list of option ids"}
+               "select": "- a selection is answered with a list of option ids",
+               "joint": "- a joint choice is answered with the id of one of its listed pairs"}
 WITNESSES = (Option("characters:mara", "Mara"), Option("characters:winifred", "Winifred"))
 
 
@@ -1310,6 +1311,20 @@ def test_a_select_renders_its_line_bounds_options_and_bullet():
     assert "\n  - characters:winifred: Winifred" in user
     assert NEW_BULLETS["select"] in system and "an empty list means none of them apply" in system
     assert NEW_BULLETS["rank"] not in system
+
+
+def test_a_joint_renders_its_legal_pairs_and_bullet():
+    joint = decisions.Joint("act", "What does Seraphine do?",
+                            (Option("strike", "Strike"), Option("withdraw", "Withdraw")),
+                            (("strike", (Option("creatures:sentinel", "The sentinel"),)),),
+                            allow_none=True)
+    system, user = (m["content"] for m in inference.structured_messages(
+        [Item("The sentinel wakes.", (joint,))]))
+    assert ("- act (joint choice, or null for none of these): What does Seraphine do?\n"
+            "  - strike=>creatures:sentinel: Strike -> The sentinel\n"
+            "  - withdraw: Withdraw") in user
+    assert NEW_BULLETS["joint"] in system
+    assert NEW_BULLETS["rank"] not in system and NEW_BULLETS["select"] not in system
 
 
 def test_an_old_kind_batch_carries_no_new_bullet():

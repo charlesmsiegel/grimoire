@@ -8,7 +8,9 @@
                 ("rank": also `candidates`, each `id` and `description`, `top`
                 and `allow_none`) or a MultiSelect ("select": also `options`,
                 `min`, `max` and `allow_none`; a bound renders only when it is
-                set, `max` of 0 included). The branches test `KIND`, never which
+                set, `max` of 0 included) or a Joint ("joint": its legal
+                pairs are `choice.options`, the one flattened choice it is
+                asked as, each pair's id its key). The branches test `KIND`, never which
                 attributes a question has. Option `aliases` are the parser's
                 and are never shown, nor is a rank's `pointwise` (a native
                 stage's alone).
@@ -41,6 +43,11 @@ Questions:
 {%- elif q.KIND == "select" %}
 - {{ q.id }} (selection{% if q.min %}, at least {{ q.min }}{% endif %}{% if q.max is not none %}, at most {{ q.max }}{% endif %}{% if q.allow_none %}, or null if it cannot be said{% endif %}): {{ q.instructions }}
 {%- for opt in q.options %}
+  - {{ opt.id }}: {{ opt.description }}
+{%- endfor %}
+{%- elif q.KIND == "joint" %}
+- {{ q.id }} (joint choice{% if q.allow_none %}, or null for none of these{% endif %}): {{ q.instructions }}
+{%- for opt in q.choice.options %}
   - {{ opt.id }}: {{ opt.description }}
 {%- endfor %}
 {%- else %}

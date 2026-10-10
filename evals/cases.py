@@ -1793,6 +1793,52 @@ def grade_decide_select(ctx: dict, output: str) -> list[Check]:
                                     "each at most once")
 
 
+# ------------------------------------------- case 17: decide, joint
+
+#: Seraphine's turn on the pier: Mara will bleed out this turn unless someone
+#: tends her, the sentinel sleeps until touched, and the gulls are only gulls.
+DECIDE_JOINT_TURN = (
+    "Seraphine Vale's turn, on the Saltmarch pier at dusk. Mara lies on the planks "
+    "beside her, bleeding from a deep cut; she will die this turn unless someone tends "
+    "her. The brass sentinel at the end of the pier is dormant, and wakes only if "
+    "struck. A swarm of gulls squabbles over a fish crate, harming nobody.")
+DECIDE_JOINT_ACTIONS = (
+    decisions.Option("strike", "Strike with her cutlass"),
+    decisions.Option("heal", "Bind a wound"),
+    decisions.Option("withdraw", "Withdraw down the pier, alone"),
+)
+DECIDE_JOINT_TARGETS = (
+    ("strike", (decisions.Option("creatures:sentinel", "the dormant brass sentinel"),
+                decisions.Option("creatures:gulls", "the gull swarm"))),
+    ("heal", (decisions.Option("characters:mara", "Mara, bleeding on the planks"),)),
+)
+DECIDE_JOINT_EXPECTED = decisions.Pair("heal", "characters:mara")
+
+
+def build_decide_joint() -> dict:
+    """Three actions, two of them with legal targets and one without, asked
+    as one joint question. No store: the item is the whole fixture."""
+    joint = decisions.Joint("act", "What does Seraphine do this turn, and to whom?",
+                            DECIDE_JOINT_ACTIONS, DECIDE_JOINT_TARGETS)
+    return {"items": (decisions.Item(DECIDE_JOINT_TURN, (joint,)),), "explain": ""}
+
+
+def _grade_joint_answer(answer: decisions.Answer) -> tuple[bool, str]:
+    how = answer.reason + (f"/{answer.detail}" if answer.detail else "") or "read"
+    said = answer.answer.key if isinstance(answer.answer, decisions.Pair) else answer.answer
+    return (answer.answer == DECIDE_JOINT_EXPECTED,
+            f"chose {said!r} ({how}), wanted {DECIDE_JOINT_EXPECTED.key!r}")
+
+
+def grade_decide_joint(ctx: dict, output: str) -> list[Check]:
+    (joint,) = ctx["items"][0].questions
+    lines = [f"- {joint.id} (joint choice): {joint.instructions}",
+             *(f"  - {opt.id}: {opt.description}" for opt in joint.choice.options)]
+    return _grade_vocabulary(ctx, output, lines=lines, answer=_grade_joint_answer,
+                             bullet="- a joint choice is answered with the id of one of its "
+                                    "listed pairs")
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -2114,6 +2160,33 @@ CASES: tuple[Case, ...] = (
              Recording("short", ("decide.answer",), "json"),
              # A null, which this select does not allow.
              Recording("null", ("decide.answer",), "json"))),
+    Case(id="decide-joint",
+         task="response-selector",
+         hypothesis="asked through decide() for one action and its target in one "
+                    "question, on a turn where an ally bleeds out unless tended and "
+                    "nothing else threatens, the reply is the id of the legal pair that "
+                    "binds the ally's wound",
+         build=build_decide_joint,
+         prompt=_vocabulary_prompt,
+         grade=grade_decide_joint,
+         schema=_vocabulary_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # A pair the caller never listed (an action on a target it does
+             # not take): `not_an_option`, the model never offered it.
+             Recording("illegal-pair", ("decide.answer",), "json"),
+             # The action alone, where that action takes a target: no legal
+             # pair is named, so nothing is read rather than half of it.
+             Recording("head-only", ("decide.answer",), "json"),
+             # The action and target as a two-element list: a joint is one
+             # key, and a list is no answer to it.
+             Recording("list", ("decide.answer",), "json"),
+             # A null, which this joint does not allow.
+             Recording("null", ("decide.answer",), "json"),
+             # The compliant answer from OpenAI's decisions endpoint, which
+             # was sent the one flattened choice and answered it with a
+             # distribution over the legal pairs' keys.
+             Recording("native", (), "json", native="openai"))),
 )
 
 BY_ID = {c.id: c for c in CASES}

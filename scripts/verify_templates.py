@@ -1230,6 +1230,7 @@ _DECIDE_ITEMS = [
 _DECIDE_BULLETS = {
     "rank": "- a ranking is answered with a list of candidate ids, best first",
     "select": "- a selection is answered with a list of option ids",
+    "joint": "- a joint choice is answered with the id of one of its listed pairs",
 }
 _DECIDE_NEW_ITEMS = [
     dec.Item("Mara asks the harbourmaster about the Saltmarch ledger.", (
@@ -1245,7 +1246,12 @@ _DECIDE_NEW_ITEMS = [
                          dec.Option("characters:winifred", "Winifred")),
                         min=1, max=1, allow_none=True),
         dec.MultiSelect("helped", "Who helped?", (dec.Option("characters:mara", "Mara"),),
-                        max=0))),
+                        max=0),
+        dec.Joint("act", "What does Winifred do?",
+                  (dec.Option("strike", "Strike"), dec.Option("wait", "Wait")),
+                  (("strike", (dec.Option("characters:seraphine", "Seraphine"),
+                               dec.Option("creatures:gull", "A gull"))),),
+                  allow_none=True))),
 ]
 for _set, _items_all in (("decide", _DECIDE_ITEMS), ("decide 01e", _DECIDE_NEW_ITEMS)):
     for _explain in ("", "Say in one sentence what settled it."):
