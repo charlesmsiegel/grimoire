@@ -1119,7 +1119,8 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     assert outcome == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
                        "items": [{"backend": NATIVE, "answers": {"who": {
                            "answer": "mara",
-                           "distribution": {"mara": 0.7, "winifred": 0.3}}}}]}
+                           "distribution": {"mara": 0.7, "winifred": 0.3}}}}],
+                       "stage": 0, "at": [0]}
     assert conn.sampling == wire.Sampling()
     assert conn.account.decision_mode == NATIVE
     assert sent == conn
@@ -1165,7 +1166,8 @@ def test_an_item_refused_unsent_is_captured_with_no_messages(client):
     (refused, answered) = captured
     assert refused[0] == []
     assert refused[1] == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
-                          "error": f"bad_response: {decisions.native_gap(wide)}"}
+                          "error": f"bad_response: {decisions.native_gap(wide)}",
+                          "stage": 0, "at": [0]}
     assert answered[0] == fake.requests[0]["messages"]
     assert answered[1]["mode"] == STRUCTURED
 
@@ -1361,3 +1363,24 @@ def test_a_native_item_refused_unsent_has_a_record_and_no_row(client):
     assert unsent.row is None
     assert (unsent.error_kind, unsent.error_status) == ("bad_response", None)
     assert len(got.usage) == 1
+
+
+# ---- capture outcomes name their stage and batch indices (01b-S1) ----
+
+
+def test_a_fallback_stages_capture_names_batch_indices(client):
+    """01b §3.2: a native stage's outcomes name each item's batch index, and
+    the fallback stage's one structured call names stage 1 and the BATCH
+    indices of the items it took over -- a failed item and the ones a
+    connection-wide failure held back."""
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(10)
+    native: dict[str, object] = {i.context: _yes() for i in items}
+    native[items[0].context] = LLMError("auth", "invalid key", status=401)
+    fake = _Endpoint([[decision_reply(*({"over": False},) * 7)]], native)
+    captured = _Captures()
+    _decide(fake, items, resolved=resolved, capture=captured)
+    first = sorted(o["at"] for _m, o, _c in captured if o["stage"] == 0)
+    assert first == [[0], [1], [2], [3]]
+    (last,) = [o for _m, o, _c in captured if o["stage"] == 1]
+    assert last["mode"] == STRUCTURED and last["at"] == [0, 4, 5, 6, 7, 8, 9]

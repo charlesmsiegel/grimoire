@@ -416,8 +416,9 @@ def test_capture_records_each_structured_call_once_it_settles(client):
         assert conn.account.decision_mode == "structured"
         assert (conn.provider_id, conn.model) == ("openrouter", "vendor/active")
     first, second = (outcome for _m, outcome, _conn, _c in captured)
-    assert first == decisions.outcome("structured", "openrouter", "vendor/active",
-                                      got.items[:8])
+    assert first == {**decisions.outcome("structured", "openrouter", "vendor/active",
+                                         got.items[:8]),
+                     "stage": 0, "at": list(range(8))}
     assert first["mode"] == second["mode"] == "structured"
     assert first["items"][0] == {"backend": "structured",
                                  "answers": {"over": {"answer": False}}}
@@ -445,7 +446,8 @@ def test_a_schema_refusal_retry_is_one_capture(client):
     assert outcome == {"mode": "structured", "provider": "openrouter",
                        "model": "vendor/active",
                        "items": [{"backend": "structured",
-                                  "answers": {"over": {"answer": True}}}]}
+                                  "answers": {"over": {"answer": True}}}],
+                       "stage": 0, "at": [0]}
 
 
 def test_a_capture_names_the_fallback_that_answered(client):
@@ -487,7 +489,8 @@ def test_capture_records_a_failed_call_with_its_error(client):
     ((messages, outcome, conn, calls),) = captured
     assert calls == 1 and messages == fake.requests[0]["messages"]
     assert outcome == {"mode": "structured", "provider": "openrouter",
-                       "model": "vendor/active", "error": "rate_limit: slow down"}
+                       "model": "vendor/active", "error": "rate_limit: slow down",
+                       "stage": 0, "at": [0]}
     assert conn is fake.requests[0]["chain"].primary
 
 
@@ -1364,3 +1367,31 @@ def test_decide_answers_a_select_on_a_structured_stage(client):
     assert got.items[0].answers["saw"] == decisions.Answer(
         ("characters:mara", "characters:winifred"))
     assert got.items[1].answers["saw"] == decisions.Answer(())
+
+
+# ---- capture outcomes name their stage and batch indices (01b-S1) ----
+
+
+def test_each_chunks_capture_names_its_stage_and_batch_indices(client):
+    """01b §3.2: each capture outcome carries `stage` and `at`, the BATCH
+    indices its call carried -- the second chunk's item is 8, not 0."""
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": False}] * 8)],
+                    [decision_reply({"over": True})]])
+    captured = _Captures(fake)
+    _decide(fake, items, capture=captured)
+    assert [(o["stage"], o["at"]) for _m, o, _c, _n in captured] == [
+        (0, list(range(8))), (0, [8])]
+
+
+def test_a_failed_chunks_capture_names_its_stage_and_batch_indices(client):
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)]],
+                   error=LLMError("network", "connection reset"), fail_after=1)
+    captured = _Captures(fake)
+    _decide(fake, items, capture=captured)
+    _ok, (_m, failed, _c, _n) = captured
+    assert (failed["stage"], failed["at"]) == (0, [8])
+    assert "error" in failed
