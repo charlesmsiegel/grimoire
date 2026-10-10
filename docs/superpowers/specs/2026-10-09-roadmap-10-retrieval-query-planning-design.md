@@ -558,8 +558,7 @@ class RoundRecord:
     terms: tuple[str, ...]           # () for E0
     subjects: tuple[str, ...]        # refs; () for E0
     scene_keys: tuple[str, ...]      # SceneRef.key of each selected item (09 section 7.2)
-    evidence_ids: tuple[str, ...]    # one per rendered unit: "<scene key>" for a header/summary-only
-                                     # item, "<scene key>@<first post key, else index>" per excerpt
+    evidence_ids: tuple[str, ...]    # the selected items' `EvidenceItem.evidence_ids`, as 09-C1 defines them
 ```
 
 **Stable fields** (12's fold-in). `terminal`, `trigger`, `sufficiency`,
@@ -568,9 +567,9 @@ fields 12's RP trigger reads, and they are part of 10-C2: renaming or
 re-meaning one is a contract change, never a refactor. `sufficiency_source`
 says whether the last verdict was the check's own answer, an answer only
 after 01d-C2's escalation hop, or `unknown` (a non-answer that stayed one).
-An evidence id is the same string 02-C5b's rerank kit takes as
-`Candidate.ref` for a scene, extended per excerpt, so 12 can name exactly
-which evidence each round added. `steps` is diagnostic and not stable.
+Evidence ids are 09-C1's (`EvidenceItem.evidence_ids`), copied unchanged, so
+12 can name exactly which evidence each round added; 10 defines no spelling of
+its own. `steps` is diagnostic and not stable.
 
 `cheap_retrieval_failed` is the one field that means "planning and its one
 repair could not find enough". It is true only when the repair hop ran
@@ -954,7 +953,7 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 | S2 call cap counts steps | Fixed: `MAX_PLAN_STEPS` with the escalation hop inside a step; worst-case rows stated (3) |
 | S3 `PLAN_MAX_TOKENS` too small | Fixed: 1024 with a reasoning allowance, non-reasoning preset advised, maximal-plan eval case (5.3, 11) |
 | S4 terminal states insufficient for 12 | Fixed: `sufficiency`, `cheap_retrieval_failed`, `unrepaired`, `final_check`, combinations named (8.1) |
-| 12's fold-in: trace fields for the RP trigger | Fixed: `PlanTrace` gains `trigger`, `sufficiency_source`, `e0` and per-round `RoundRecord`s (questions, terms, scene keys, evidence ids) as stable 10-C2 fields, with a snapshot test (8.1, 10-C2, 14) |
+| 12's fold-in: trace fields for the RP trigger | Fixed: `PlanTrace` gains `trigger`, `sufficiency_source`, `e0` and per-round `RoundRecord`s (questions, terms, scene keys, and 09-C1's evidence ids) as stable 10-C2 fields, with a snapshot test (8.1, 10-C2, 14) |
 | S5 resolving on the loop | Fixed: `run_in_threadpool` around `_soft_resolved` (5.3, 7.1) |
 | S6 missing `_noting` and parse placement | Fixed: `draft_completion` pattern (5.3) |
 | S7 two `history_check` definitions; policy row | Fixed: 02-C5b's entry is the definition, 10 appends its task; 01d-C1 row given (4.1) |

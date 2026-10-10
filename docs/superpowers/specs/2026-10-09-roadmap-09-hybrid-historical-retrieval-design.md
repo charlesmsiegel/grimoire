@@ -1160,10 +1160,20 @@ tuple[Candidate, ...], coverage: Coverage, ceiling: int, query_digest: str)`:
 `SceneRef` (the **scene identity**, `None` for a legacy scene, the sid at
 retrieval, and `key`, section 7.2), header fields, an optional summary, its
 excerpts with **every included post's transcript index, post key and text**
-(`EvidencePost`, section 8: 08-C3b's `r-`/`p-` key and `part`), and its
-token cost; `candidates` are every admitted candidate in merged order (bounded
+(`EvidencePost`, section 8: 08-C3b's `r-`/`p-` key and `part`), its
+**evidence ids**, and its token cost; `candidates` are every admitted candidate in merged order (bounded
 by `POOL_MAX + WIDEN_LIMIT`), so a caller can see what was found and not
 selected. `Evidence.detail()` is the JSON-safe projection of section 9.5.
+
+**Evidence ids** are the one spelling every consumer uses to name a unit of
+evidence (10's `PlanTrace`, 11, 12). `EvidenceItem.evidence_ids:
+tuple[str, ...]` holds one id per rendered unit: `"<SceneRef.key>"` for an
+item that renders a header and summary only, and
+`"<SceneRef.key>@<first post key, else its index>"` for each excerpt, the post
+key being 08-C3b's `r-`/`p-` key. The scene part is the same string 02-C5b's
+rerank kit takes as `Candidate.ref`. Ids are stable within a turn; across a
+cut only the key form is, which is why the post key is preferred over the
+index.
 
 `history.merge(a, b, *, ceiling, expand, rerank=None) -> Evidence` (review
 S6) merges two evidences **by `SceneRef.key`**:
