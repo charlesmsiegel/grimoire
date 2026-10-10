@@ -172,3 +172,11 @@ facade was sent, with and without a schema, in both stream modes. Folded:
 
 Not folded: the 01i clamp is a pass-through by design until 01i-S1 is
 integrated (`inference.clamp_to_max_output`, TODO naming 01i-C1).
+
+## Integration with 01i (2026-10-10)
+
+`inference.clamp_to_max_output` now holds the caller's cap to
+`target.limits.max_output.value` when it is known (01i-C1), and applies the
+cap as asked when it is unknown. Tested in
+`test_the_cap_is_held_to_the_models_known_max_output`, including a chain whose
+two attempts have different maxima.
