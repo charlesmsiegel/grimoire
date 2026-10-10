@@ -168,13 +168,12 @@ def test_the_claude_subscription_reads_no_images_for_any_model(client):
     assert body["reason"] == "Claude subscription reads no images"
 
 
-def test_a_claude_provider_rules_tools_out_in_one_sentence(client):
-    """`need=tools` is a route's need (01g-S1), asked of a pin picker."""
+def test_a_claude_provider_no_longer_rules_tools_out(client):
+    """`need=tools` is a route's need (01g-S1), asked of a pin picker; since
+    01g-S8 a Claude subscription calls tools."""
     cid = _connection(client, "claude", api_key="")
     body = _get(client, cid, "tools").json()
-    assert body["groups"] == {"fits": [], "unverified": []}
-    assert body["hidden"] == []
-    assert body["reason"] == "Claude subscription calls no tools"
+    assert body["reason"] is None and body["hidden"] == []
 
 
 def test_tools_groups_by_what_the_openrouter_catalog_states(client):

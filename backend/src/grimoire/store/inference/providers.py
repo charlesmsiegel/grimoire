@@ -78,12 +78,13 @@ PRESETS: dict[str, Preset] = {p.id: p for p in (
     _preset(
         # The Agent SDK: no URL, and it reports a subscription-equivalent price.
         "claude", "Claude subscription", "claude", "",
-        locked=False, billing="subscription", reports_price=True, always=_GEN,
+        # Every Claude model calls tools, and since 01g-S8 the SDK path offers
+        # them as the loop's (`claude_agent`: declared, every call deferred);
+        # the adapter's `calls_tools` is held equal to the `never` below.
+        locked=False, billing="subscription", reports_price=True, always=_GEN | {"tools"},
         possible=_NONE,
-        # `tools` until 01g-S8 fits the SDK's own tool model to the loop; the
-        # adapter's `calls_tools` is held equal to it.
         never=frozenset({"vision", "embed", "decide_native",
-                         "structured_output", "prefill", "tools"})),
+                         "structured_output", "prefill"})),
     _preset(
         "openai", "OpenAI", "openai_compatible", "https://api.openai.com/v1",
         locked=True, always=_GEN,

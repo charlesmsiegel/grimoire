@@ -186,21 +186,22 @@ def test_calls_tools_is_exactly_the_presets_never():
     for preset in providers.PRESETS.values():
         assert ("tools" in preset.never) is (not registry[preset.kind].calls_tools), preset.id
     assert {k for k in adapters.KINDS if adapters.calls_tools(k)} == {
-        "openrouter", "openai_compatible", "anthropic"}
+        "openrouter", "openai_compatible", "anthropic", "claude"}
     assert adapters.calls_tools("x") is False
 
 
-async def test_the_claude_adapter_refuses_an_offer_of_tools_unsent():
+async def test_the_claude_adapter_hands_its_client_tools_only_when_offered():
+    """01g-S8: the SDK path takes an offer of tools, which its client
+    declares and defers (`claude_agent._tool_options`)."""
     clients = _clients()
     registry = _registry(clients)
     target = wire.Target(provider_id="c", kind="claude", model="sonnet")
-    stream = registry["claude"].generate(MESSAGES, target, None, tools=(TOOL,),
-                                         tool_choice="required")
-    with pytest.raises(LLMError) as exc:
-        [chunk async for chunk in stream]
-    assert exc.value.kind == "bad_response"
-    assert "cannot call tools" in exc.value.detail
-    assert clients["claude"].calls == []
+    [c async for c in registry["claude"].generate(MESSAGES, target, None)]
+    [c async for c in registry["claude"].generate(MESSAGES, target, None, tools=(TOOL,),
+                                                  tool_choice="required")]
+    (_, _, plain), (_, _, offered) = clients["claude"].calls
+    assert "tools" not in plain and "tool_choice" not in plain
+    assert offered["tools"] == (TOOL,) and offered["tool_choice"] == "required"
 
 
 @pytest.mark.parametrize("kind", ["openrouter", "openai_compatible", "anthropic"])

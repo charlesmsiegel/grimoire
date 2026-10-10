@@ -187,11 +187,9 @@ def test_a_malformed_row_contributes_nothing():
 
 
 # ---- tools (01g-S1) ----
-def test_tools_is_no_from_the_adapter_on_a_claude_subscription():
-    assert _resolve("claude")["tools"] == Cap("no", "adapter")
-    # Nothing below the adapter claims past it: not a passed test, not the user.
-    got = _resolve("claude", verified={"tools": {"ok": True}}, overrides={"tools": "yes"})
-    assert got["tools"] == Cap("no", "adapter")
+def test_tools_is_yes_from_the_preset_on_a_claude_subscription():
+    """01g-S8: the SDK path calls tools, every call deferred to the loop."""
+    assert _resolve("claude")["tools"] == Cap("yes", "preset")
 
 
 def test_tools_is_yes_from_the_anthropic_preset():
@@ -248,9 +246,7 @@ def test_a_passed_tools_test_or_the_users_yes_lifts_it():
 def test_fits_and_groups_for_tools():
     assert capabilities.fits(_resolve("anthropic"), "tools") == "yes"
     assert capabilities.fits(_resolve("custom"), "tools") == "unknown"
-    assert capabilities.fits(_resolve("claude"), "tools") == "no"
-    assert capabilities.group_for(_resolve("claude"), "tools", P["claude"]) == (
-        "hidden", "Claude subscription calls no tools")
+    assert capabilities.fits(_resolve("claude"), "tools") == "yes"
     assert capabilities.group_for(_resolve("custom", overrides={"tools": "no"}), "tools",
                                   P["custom"]) == (
         "hidden", "you marked this model as not calling tools")
