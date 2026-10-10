@@ -16,7 +16,8 @@ over. Nothing renders them yet.
   (spec 5.3) -- the seam refuses nothing over it, so this is the only place
   it shows. `fallback_problem` is the same for a fallback that cannot send at
   all (`resolve.problem`: no key, no base URL), left out of the chain just as
-  silently. The Embedding card's `problem` is its own (`embed_space.problem`,
+  silently -- or, on a route row, for one its task's code policy never sends
+  (`resolve.NO_FALLBACK_POLICY`; a role card resolves no task, so never). The Embedding card's `problem` is its own (`embed_space.problem`,
   then a model its provider is known not to embed with): why it embeds
   nothing, None when it embeds.
 - `inherits` is the same resolution with this scope's own choice for the row

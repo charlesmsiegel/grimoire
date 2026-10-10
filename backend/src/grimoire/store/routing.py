@@ -22,6 +22,12 @@ require_inference`; the legacy cascade that used to live here (`resolve`,
 inference slice C. The legacy keys it names (`CONFIG_KEYS`,
 `PRESET_CONFIG_KEYS`) are still read -- by `store.inference.legacy_plan`, for a
 store the migration has not reached -- and still swept on a delete.
+
+It also holds each task's POLICY (`TaskPolicy`, `TASK_POLICY`, `policy`; spec
+01d §4): what the code, not the user, says about a task -- whether it may fall
+back, and whether, how and to which role an unsure answer escalates. Every
+value is a literal, and `backend/tests/test_task_policy.py` holds the table to
+its rules. 01c shares the structure (`samples`, `native_first`).
 """
 
 from __future__ import annotations
@@ -60,6 +66,75 @@ class Route(NamedTuple):
 
 OPERATIONS: tuple[str, ...] = ("generate", "decide")
 DEFAULT_ROLES: tuple[str, ...] = ("primary", "fast", "decision")
+
+
+#: What hands an answered item to an escalation hop (spec 01d §5.1).
+TRIGGERS: tuple[str, ...] = ("low_margin", "abstained", "refused")
+#: A task's fallback: "role" (the role's fallback, as ever) or "none" (the
+#: resolver attaches none, and says so in `fallback_problem`).
+FALLBACKS: tuple[str, ...] = ("role", "none")
+#: The roles an escalation may hand an item to.
+ESCALATION_ROLES: tuple[str, ...] = ("primary", "fast")
+#: `escalate_to` for a caller-supplied resolver (spec 01d §5.2).
+CALLER = "caller"
+#: The largest `low_margin` threshold (spec 01d §6.2). Above it a predicate
+#: escalates every answer whose P is below 0.75 -- most answers -- and the task
+#: should move its route to the stronger role rather than disguise that as an
+#: escalation.
+MAX_MARGIN = 0.5
+#: The threshold a task's first eval starts from (spec 01d §6.2): a predicate
+#: between 0.4 and 0.6, or a choice whose top two are within 20 points, where
+#: moving 0.1 of mass from leader to runner-up would flip the answer. Tuned on
+#: that eval, never taken from a library.
+DEFAULT_MARGIN = 0.2
+
+
+class TaskPolicy(NamedTuple):
+    """What the code says about one task (spec 01d §4.1). The defaults are
+    today's behaviour: the role's fallback, and no escalation. 01c appends
+    `samples` and `native_first` after these fields."""
+
+    #: "role": the role's fallback, as today. "none": the resolver attaches
+    #: none, and says so in `fallback_problem` (`resolve.NO_FALLBACK_POLICY`).
+    #: A route's tasks agree on it: `inference.for_task` hands one sibling's
+    #: resolution to another.
+    fallback: str = "role"
+    #: The role escalation hands an item to (`ESCALATION_ROLES`, or `CALLER`);
+    #: "" = never escalates.
+    escalate_to: str = ""
+    #: What hands an item over (a subset of `TRIGGERS`).
+    escalate_on: tuple[str, ...] = ()
+    #: The deciding question id the triggers read (one per task).
+    question: str = ""
+    #: low_margin thresholds, per native endpoint kind: (("openrouter", 0.2), ...).
+    margins: tuple[tuple[str, float], ...] = ()
+    #: Items one decide call may escalate (spec 01d §6.2):
+    #: `decisions.MAX_ITEMS_PER_CALL`, restated as a literal (a test holds it).
+    escalate_max: int = 8
+    #: Optional answer filter: when non-empty, `low_margin` fires only on an
+    #: item whose deciding answer, as a key (option id, `str(level)`,
+    #: "true"/"false"), matches an entry. An entry ending in ":" matches by
+    #: prefix ("existing:"), any other entry exactly. Empty = every answer.
+    escalate_answers: tuple[str, ...] = ()
+    #: Whether the task's caller reads `abstained` and `refused` on its
+    #: deciding question as answers. Only then may a hop's decline replace a
+    #: base answer.
+    reads_declines: bool = False
+
+
+#: task -> its policy. Empty at landing: every task falls back as its role
+#: says and escalates nothing. A task's escalation is switched on only by the
+#: change that carries its evidence (`evals/README.md`, "Decision
+#: escalation"); `fallback="none"` must agree across a route's tasks.
+TASK_POLICY: dict[str, TaskPolicy] = {}
+
+_DEFAULT = TaskPolicy()
+
+
+def policy(task: str) -> TaskPolicy:
+    """`task`'s policy: its `TASK_POLICY` entry, else the default -- for ""
+    (a role resolved with no task) and any task not listed."""
+    return TASK_POLICY.get(task, _DEFAULT)
 
 
 def legacy_key(route: Route) -> str:

@@ -1521,7 +1521,8 @@ def override_inference(body, task: str = "", cid: str = "", *,
     resolution carries it (`wire.Chain.fallback`), with the sampling it would have
     had without the override; a fallback on the override's own provider is
     dropped there (`llm._same_route`'s rule), so "reroll this on the fallback"
-    does not double up.
+    does not double up. A task whose code policy is `fallback="none"`
+    (`routing.TaskPolicy`) carries none, overridden or not.
     """
     conn_id = ((getattr(body, "provider", None) or "").strip()
                or (getattr(body, "connection_id", None) or "").strip()) if body else ""

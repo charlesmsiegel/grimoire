@@ -506,6 +506,25 @@ def test_a_fallback_that_cannot_send_says_why_on_its_rows(client):
     assert _row(_campaign(client, cid), "scene")["fallback_problem"] == "OpenRouter key not set"
 
 
+def test_a_no_fallback_policy_says_why_on_its_route_rows_only(client, monkeypatch):
+    """Spec 01d §4.2: a task whose code policy sends no fallback says so on
+    its route's rows, at both scopes. A role card resolves no task, so it
+    reads the default policy and keeps its fallback; so does another route."""
+    cid = _fresh(client)
+    _ok(client, {"roles": {"primary": {"fallback": {"provider": "spare",
+                                                    "model": "vendor/spare"}}}})
+    for task in routing.route_by_key("scene").tasks:
+        monkeypatch.setitem(routing.TASK_POLICY, task, routing.TaskPolicy(fallback="none"))
+
+    got = _global(client)
+
+    assert _row(got, "scene")["fallback_problem"] == inference.NO_FALLBACK_POLICY
+    assert _row(_campaign(client, cid), "scene")["fallback_problem"] == inference.NO_FALLBACK_POLICY
+    assert got["roles"]["primary"]["fallback_problem"] is None
+    assert _row(got, "opener")["fallback_problem"] is None
+    assert len(inference.resolve("opener").attempts) == 2
+
+
 def test_a_fallback_on_the_primarys_own_provider_says_why_on_its_rows(client):
     """A fallback on the primary's own provider -- another model there -- is
     left out of the chain (a second try on the connection that just failed is

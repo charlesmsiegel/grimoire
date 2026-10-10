@@ -853,7 +853,11 @@ would answer neither question.
   (`fallback_missing`) and never rides, so the facade never sends it -- nor
   one that names the primary's own connection (a retry, which the retry budget
   covers -- except behind a Decision model that cannot generate, where it is a
-  decide stage of its own), nor one that cannot carry the call's images. A reroll's connection override goes through `override_inference`, and
+  decide stage of its own), nor one that cannot carry the call's images. A
+  task whose `routing.TaskPolicy` says `fallback="none"` is sent no fallback
+  at all, and its route row says so (`resolve.NO_FALLBACK_POLICY`) when its
+  role had one; a route's tasks agree on it, because `for_task` hands one
+  sibling's resolution to another (`test_task_policy.py`). A reroll's connection override goes through `override_inference`, and
   absorb's secondary phases hand `_soft_inference` a thunk (voice drift and the
   duplicate check hand one to `_soft_resolved`, which keeps the whole
   resolution `decide` takes), so a phase that cannot resolve reports itself
