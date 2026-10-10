@@ -533,3 +533,77 @@ def test_the_async_form_is_the_same_call(space):
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["task"] == "semantic-search"
+
+
+# ---- options and queries (01h-S2) -----------------------------------------------
+
+NOMIC_BLOCK = {"input": "prefix", "query_prefix": "search_query: ",
+               "document_prefix": "search_document: "}
+
+
+@pytest.fixture
+def nomic_space() -> dict:
+    from grimoire.store.inference import facts
+
+    conn = _provider()
+    _role(conn)
+    facts.state(conn, "embed-1", embedding=NOMIC_BLOCK)
+    got = embed_space.endpoint()
+    assert got is not None and "\0embopt1:" in got["space"]
+    return got
+
+
+@pytest.mark.parametrize(("texts", "queries"), [(["x"], 2), ([], 1), (["x"], -1)])
+def test_queries_out_of_range_files_nothing(space, texts, queries):
+    logs.apply_level("debug")
+    client, seen = _client()
+    with pytest.raises(ValueError):
+        embed.embed_sync("semantic-recall", texts, space=space, client=client, queries=queries)
+    assert seen == [] and _rows() == [] and _embed_rows() == []
+
+
+def test_a_space_without_options_sends_the_bare_body(space):
+    for bare in ({k: v for k, v in space.items() if k != "options"},
+                 {"space": "s", "model": "m", "key": "k", "base_url": "https://u.example/v1"}):
+        client, seen = _client()
+        embed.embed_sync("semantic-recall", ["q", "d"], space=bare, client=client, queries=1)
+        body = json.loads(seen[0].content)
+        assert set(body) == {"model", "input"} and body["input"] == ["q", "d"]
+
+
+def test_stated_options_reach_the_request(nomic_space, monkeypatch, _home):
+    logs.apply_level("debug")
+    monkeypatch.setattr(tokens, "_loaded", lambda: None)
+    client, seen = _client()
+    embed.embed_sync("semantic-recall", ["Where is Mara?", "Mara crossed."],
+                     space=nomic_space, client=client, queries=1)
+    sent = ["search_query: Where is Mara?", "search_document: Mara crossed."]
+    assert json.loads(seen[0].content)["input"] == sent
+    [line] = _embed_rows()
+    assert line["bytes"] == sum(len(t.encode("utf-8")) for t in sent)
+    assert line["space_id"] == nomic_space["space"]
+    assert _rows()[0]["prompt_tokens"] == sum(-(-len(t) // 4) for t in sent)
+    # The prefixes are user text: they never reach the log.
+    assert "search_document" not in _log_text(_home)
+
+
+def test_a_space_that_disagrees_with_its_options_is_refused(space, nomic_space):
+    for wrong in ({**space, "options": nomic_space["options"]},
+                  {**nomic_space, "options": wire.EmbedOptions()}):
+        client, seen = _client()
+        with pytest.raises(ValueError):
+            embed.embed_sync("semantic-recall", ["x"], space=wrong, client=client)
+        assert seen == [] and _rows() == []
+
+
+def test_nul_never_reaches_a_request(space):
+    client, seen = _client()
+    embed.embed_sync("semantic-recall", ["Mara\0 crossed"], space=space, client=client)
+    assert json.loads(seen[0].content)["input"] == ["Mara crossed"]
+
+
+def test_the_async_door_forwards_queries(nomic_space):
+    client, seen = _client()
+    asyncio.run(embed.embed("semantic-recall", ["q", "d"], space=nomic_space, client=client,
+                            queries=1))
+    assert json.loads(seen[0].content)["input"] == ["search_query: q", "search_document: d"]

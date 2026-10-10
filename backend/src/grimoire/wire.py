@@ -19,11 +19,19 @@ A target also carries what is known of its model's size (`Limits`, 01i): the
 window and the most a reply may be asked for, each with where it came from.
 They live here, beside `Target`, so an adapter or a capture holding a target
 reads them without importing the store.
+
+An embedding target may carry the options a model's facts state for it
+(`EmbedOptions`, 01h): how its input type is sent, and (later) a requested
+width. Their document side is part of the Embedding role's vector space id
+(`store.inference.resolve.space_of`), which is why its canonical form and
+digest are defined here, once.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -93,6 +101,69 @@ class Account:
     hop: str = ""
 
 
+#: The ways an embedding request can say whether a text is a query or a
+#: document (01h §3.1): not at all, as a text prefix, or as a request field.
+EMBED_INPUT_MODES: tuple[str, ...] = ("none", "prefix", "param")
+
+#: The tag a space id carries its options' digest under (01h §5.1). A change
+#: to `EmbedOptions.canonical` takes a new tag, deliberately: the old one
+#: names every vector already cached.
+EMBED_OPTIONS_TAG = "embopt1"
+
+
+@dataclass(frozen=True)
+class EmbedOptions:
+    """The embedding options stated for one model on one provider (its facts'
+    `embedding` block; `store.inference.facts.embed_options` reads them).
+
+    Grimoire has two input types, query and document. `input` says how the
+    type is sent: `none` sends texts unchanged, `prefix` prepends
+    `query_prefix` or `document_prefix` to each text, and `param` (sent from
+    a later slice) names the type in the request field `param_field`.
+    `dimensions` (later too) asks for a narrower vector, in
+    `dimensions_field`. `input` is one of `EMBED_INPUT_MODES`, held there by
+    the facts validator rather than a `Literal`."""
+
+    input: str = "none"
+    query_prefix: str = ""
+    document_prefix: str = ""
+    param_field: str = ""
+    query_value: str = ""
+    document_value: str = ""
+    dimensions: int | None = None
+    dimensions_field: str = "dimensions"
+
+    def canonical(self) -> str:
+        """The DOCUMENT side of these options, as the text two devices must
+        compute alike (01h §5.1): a JSON object with sorted keys, no spaces
+        and ASCII escapes, holding at most `doc_prefix`, `field` with
+        `doc_value`, and `dim` with `dim_field` -- each only where its mode or
+        field applies and never empty. A cached vector depends only on what
+        was sent for documents; a query is never cached and is embedded fresh,
+        so the query side is left out. The default is `{}`."""
+        doc: dict[str, object] = {}
+        if self.input == "prefix" and self.document_prefix:
+            doc["doc_prefix"] = self.document_prefix
+        if self.input == "param" and self.param_field and self.document_value:
+            doc["field"] = self.param_field
+            doc["doc_value"] = self.document_value
+        if self.dimensions is not None:
+            doc["dim"] = self.dimensions
+            if self.dimensions_field:
+                doc["dim_field"] = self.dimensions_field
+        return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+    def is_default(self) -> bool:
+        """Whether these options embed documents exactly as no options do."""
+        return self.canonical() == "{}"
+
+    def digest(self) -> str:
+        """The first 128 bits of `canonical()`'s SHA-256, in hex: what a space
+        id carries in place of the options themselves, so no prefix text
+        reaches a log line or a persisted basis."""
+        return hashlib.sha256(self.canonical().encode("ascii")).hexdigest()[:32]
+
+
 @dataclass(frozen=True)
 class Target:
     """One attempt as an adapter sends it."""
@@ -138,6 +209,10 @@ class Target:
     #: their descriptions (#377).
     degrade: bool = False
     account: Account = field(default_factory=Account)
+    #: The embedding options its model's facts state (01h), or None for none
+    #: (or a block a fail-soft read could not use). The Embedding role's
+    #: attempt carries the object its space id was computed from.
+    embed_options: EmbedOptions | None = None
 
     @property
     def label(self) -> str:

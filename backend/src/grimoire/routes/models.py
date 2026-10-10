@@ -138,18 +138,22 @@ class FactsUpdate(BaseModel):
     rates or a 400, `{}` removing them, null leaving them. `context_window`
     and `max_output` are the model's size on this provider (01i): a positive
     int sets one, `0` removes it, null leaves it -- and a `"8192"` is a 400
-    under either pydantic, since the store decides."""
+    under either pydantic, since the store decides. `embedding` is the
+    model's embedding options (01h, `facts._check_embedding`): null leaves
+    them, `{}` removes them, an object replaces them."""
 
     model: str = ""
     vision: Any = None
     prefill: Any = None
     post_process: Any = None
     overrides: Any = None
-    #: Only `true` confirms a write that turns the Embedding role on.
+    #: Only `true` confirms a write that moves the Embedding role's vector
+    #: space: turning it on, or changing its model's document-side options.
     confirm_embedding: Any = None
     rates: Any = None
     context_window: Any = None
     max_output: Any = None
+    embedding: Any = None
 
 
 class HealthCheck(BaseModel):

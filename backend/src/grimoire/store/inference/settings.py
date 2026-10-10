@@ -93,10 +93,12 @@ EMBEDDING_CONFIRM = ("Changing the embedding model re-embeds your library throug
 EMBEDDING_MOVE_CONFIRM = ("Changing this provider's address or key re-embeds your "
                           "library through {provider}, which may cost money — "
                           "confirm to change it.")
-#: The same question, for a model-facts write that turns the Embedding role on
+#: The same question, for a model-facts write that turns the Embedding role on,
+#: or changes the document side of its model's embedding options (01h)
 #: (`embed_space.facts_moved`), asked by `PUT /llm-connections/{id}/facts`.
-EMBEDDING_FACTS_CONFIRM = ("This turns embedding on through {provider}: your library "
-                           "will be embedded, which may cost money — confirm to save it.")
+EMBEDDING_FACTS_CONFIRM = ("This changes what the Embedding role embeds your library with "
+                           "through {provider}: it will be embedded under the new setting, "
+                           "which may cost money — confirm to save it.")
 
 NEWER_CAMPAIGN = {
     "kind": "newer_format",
@@ -320,12 +322,38 @@ def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:
     `missing` that switched the role off, so the card and the resolution are
     one decision (spec 12). Never raises."""
     why = embed_space.problem(cfg, embeds=False)
-    if why != embed_space.OFF or got is None or not got.missing or not got.attempts:
+    if why != embed_space.OFF or got is None or not got.attempts:
         return why
     attempt = got.attempts[0]
     name = attempt.target.provider_name or attempt.provider_id
+    # Before `missing`: with the facts unreadable, `missing` was judged from
+    # no facts at all and would blame the model for what the file did (01h).
+    options = _options_problem(got.embed_options_problem, name, attempt.provider_id,
+                               attempt.model)
+    if options is not None:
+        return options
+    if not got.missing:
+        return why
     return (f"{attempt.model} on {name} cannot {capabilities.CANNOT['embed']}, "
             "so embedding is off — choose another Embedding model.")
+
+
+def _options_problem(problem: str, name: str, provider_id: str, model: str) -> str | None:
+    """The Embedding card's sentence for a role its model's facts turned off
+    (`resolve.OPTIONS_*`, 01h), naming the facts file; None for none. A held
+    file clears on its own; a mangled one, or an invalid block, needs a
+    person, so neither is told to try again."""
+    where = f"llm_connections/{provider_id}.facts.json"
+    if problem == resolve.OPTIONS_HELD:
+        return (f"The model facts file of {name} ({where}) is held by another program, "
+                "so embedding is off until it can be read — try again shortly.")
+    if problem == resolve.OPTIONS_MANGLED:
+        return (f"The model facts file of {name} ({where}) is not valid JSON, so "
+                "embedding is off — fix or remove that file.")
+    if problem == resolve.OPTIONS_INVALID:
+        return (f"The embedding options of {model} on {name} are invalid, so embedding "
+                f"is off — fix them in the model's facts ({where}).")
+    return None
 
 
 def _providers() -> list[dict]:

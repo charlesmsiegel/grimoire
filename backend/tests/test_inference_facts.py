@@ -33,6 +33,7 @@ def test_an_unknown_model_has_the_empty_shape(conn):
     assert facts.of(cid, "mara-7b", rev) == {
         "vision": "", "prefill": None, "post_process": "", "rates": None,
         "verified": {}, "overrides": {}, "context_window": None, "max_output": None,
+        "embedding": None,
     }
     assert facts.read(cid) == {}
 
@@ -160,6 +161,7 @@ def test_a_mangled_file_reads_as_empty_and_never_raises(conn, raw):
     assert facts.of(cid, "m", rev) == {
         "vision": "", "prefill": None, "post_process": "", "rates": None,
         "verified": {}, "overrides": {}, "context_window": None, "max_output": None,
+        "embedding": None,
     }
 
 
@@ -175,7 +177,7 @@ def test_mangled_fields_inside_a_model_read_as_empty(conn):
     got = facts.of(cid, "m", rev)
     assert got == {"vision": "", "prefill": None, "post_process": "", "rates": None,
                    "verified": {"embed": _ok()}, "overrides": {"embed": "no"},
-                   "context_window": None, "max_output": None}
+                   "context_window": None, "max_output": None, "embedding": None}
 
 
 @pytest.mark.parametrize("bad", [0, -1, True, 8192.0, "8192", 2**31, None, [1]])
@@ -424,3 +426,131 @@ def test_removing_an_unstated_limit_leaves_no_entry(conn):
     cid, _ = conn
     facts.state(cid, "ghost", context_window=0, max_output=0)
     assert facts.read(cid) == {}
+
+
+# ---- embedding options (01h-S2) ----
+
+NOMIC_BLOCK = {"input": "prefix", "query_prefix": "search_query: ",
+               "document_prefix": "search_document: "}
+QWEN_QUERY = ("Instruct: Given a passage of a story, retrieve the lore, records or "
+              "images it concerns\nQuery: ")
+
+
+def test_embedding_options_are_a_stated_fact(conn):
+    from grimoire import wire
+
+    cid, rev = conn
+    facts.state(cid, "embed-1", embedding={**NOMIC_BLOCK, "colour": "red"})
+    assert facts.read(cid)["embed-1"]["embedding"] == NOMIC_BLOCK   # unknown key dropped
+    assert facts.embed_options(facts.of(cid, "embed-1", rev)) == wire.EmbedOptions(
+        input="prefix", query_prefix="search_query: ", document_prefix="search_document: ")
+    # A stated fact survives a rev restamp.
+    llm_connections.update_connection(cid, api_key="sk-new")
+    new_rev = llm_connections.read_connection_raw(cid)["rev"]
+    assert new_rev != rev
+    assert facts.of(cid, "embed-1", new_rev)["embedding"] == NOMIC_BLOCK
+
+
+def test_an_embedding_write_of_none_or_an_empty_block(conn):
+    cid, _ = conn
+    facts.state(cid, "embed-1", embedding=NOMIC_BLOCK)
+    facts.state(cid, "embed-1", prefill=True)                 # leaves the block
+    assert facts.read(cid)["embed-1"]["embedding"] == NOMIC_BLOCK
+    facts.state(cid, "embed-1", embedding={})
+    assert "embedding" not in facts.read(cid)["embed-1"]
+    facts.state(cid, "embed-1", embedding=NOMIC_BLOCK)
+    facts.state(cid, "embed-1", embedding={"input": "none"}, prefill=False)
+    assert "embedding" not in facts.read(cid)["embed-1"]
+    facts.state(cid, "embed-2", embedding=NOMIC_BLOCK)
+    facts.state(cid, "embed-2", embedding={})
+    assert "embed-2" not in facts.read(cid)                   # an empty entry is dropped
+
+
+def test_a_qwen_style_prefix_with_a_newline_is_kept(conn):
+    cid, _ = conn
+    block = {"input": "prefix", "query_prefix": QWEN_QUERY, "document_prefix": "doc:\t"}
+    facts.state(cid, "embed-1", embedding=block)
+    assert facts.read(cid)["embed-1"]["embedding"] == block
+
+
+@pytest.mark.parametrize(("block", "message"), [
+    ("prefix", facts.EMBED_NOT_OBJECT),
+    ([], facts.EMBED_NOT_OBJECT),
+    ({"input": "both"}, facts.EMBED_BAD_INPUT),
+    ({"input": "prefix", "document_prefix": 5}, facts.EMBED_NOT_TEXT),
+    ({"input": "prefix"}, facts.EMBED_NO_PREFIX),
+    ({"input": "prefix", "query_prefix": "", "document_prefix": ""}, facts.EMBED_NO_PREFIX),
+    ({"input": "prefix", "document_prefix": "x" * 201}, facts.EMBED_TOO_LONG),
+    ({"input": "prefix", "document_prefix": "a\0b"}, facts.EMBED_CONTROL),
+    ({"input": "prefix", "document_prefix": "a\x1bb"}, facts.EMBED_CONTROL),
+    ({"input": "prefix", "document_prefix": "a\x85b"}, facts.EMBED_CONTROL),
+    ({"input": "prefix", "document_prefix": "a\ud800b"}, facts.EMBED_CONTROL),
+    ({"document_prefix": "passage: "}, facts.EMBED_WRONG_MODE),
+    ({"input": "none", "query_prefix": "q: "}, facts.EMBED_WRONG_MODE),
+    ({"input": "prefix", "document_prefix": "p: ", "param_field": "task"},
+     facts.EMBED_WRONG_MODE),
+    ({"dimensions_field": "model"}, facts.EMBED_RESERVED),
+    ({"dimensions_field": "a.b"}, facts.EMBED_BAD_FIELD),
+    ({"dimensions_field": "Field"}, facts.EMBED_BAD_FIELD),
+    ({"dimensions_field": "f" * 42}, facts.EMBED_BAD_FIELD),
+    ({"input": "param", "param_field": "input_type", "query_value": "query",
+      "document_value": "document"}, facts.PARAM_NOT_YET),
+    ({"dimensions": 512}, facts.DIMENSIONS_NOT_YET),
+    ({"dimensions": 512.0}, facts.DIMENSIONS_NOT_YET),
+    ({"dimensions": True}, facts.DIMENSIONS_NOT_YET),
+])
+def test_invalid_embedding_options_are_refused_before_writing(conn, block, message):
+    cid, _ = conn
+    facts.state(cid, "embed-1", prefill=True)
+    before = llm_connections.facts_path(cid).read_bytes()
+    with pytest.raises(ValueError) as got:
+        facts.state(cid, "embed-1", embedding=block)
+    assert str(got.value) == message
+    assert llm_connections.facts_path(cid).read_bytes() == before
+
+
+def test_a_lone_dimensions_field_is_checked_and_dropped(conn):
+    cid, _ = conn
+    facts.state(cid, "embed-1", embedding={**NOMIC_BLOCK, "dimensions_field": "output_dimension"})
+    assert facts.read(cid)["embed-1"]["embedding"] == NOMIC_BLOCK
+
+
+@pytest.mark.parametrize("block", [
+    {"input": "param", "param_field": "input_type", "query_value": "query",
+     "document_value": "document"},
+    "prefix",
+    {"input": "prefix"},
+])
+def test_an_invalid_block_on_disk_is_named_by_its_reader(conn, block):
+    cid, rev = conn
+    p = llm_connections.facts_path(cid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"embed-1": {"embedding": block}}), encoding="utf-8")
+    known = facts.of(cid, "embed-1", rev)
+    assert known["embedding"] == block
+    with pytest.raises(ValueError):
+        facts.embed_options(known)
+
+
+def test_no_block_reads_as_no_options(conn):
+    cid, rev = conn
+    assert facts.embed_options(facts.of(cid, "embed-1", rev)) is None
+
+
+def test_adopted_strict_raises_on_a_held_file(conn, monkeypatch):
+    from pathlib import Path
+
+    cid, rev = conn
+    facts.state(cid, "m", prefill=True)
+    p = llm_connections.facts_path(cid)
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == p:
+            raise PermissionError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+    with pytest.raises(facts.FactsUnreadableError):
+        facts.adopted(cid, "m", rev, adopting="m", stated={}, strict=True)
+    assert facts.adopted(cid, "m", rev, adopting="m", stated={})["prefill"] is None

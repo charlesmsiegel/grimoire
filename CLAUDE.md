@@ -1169,6 +1169,20 @@ would answer neither question.
     Costs card offers rates rather than saying nobody counted. An embed row
     with no prompt count is still unmetered. An OpenRouter embed reports its
     cost, which is real spend and counts against the campaign's budget.
+  - **Options are a stated fact, and part of the space** (01h). A model's
+    embedding options live in its provider's facts (`embedding`: `input`
+    `none` or `prefix`, the query and document prefixes) and are only ever
+    the user's confirmed write -- no catalog, preset or probe derives one.
+    The Embedding role reads that file strictly: one it cannot read, or a
+    block the validator refuses, names no space and the card says why; it is
+    never read as "no options". The document side enters the space id as a
+    NUL, `embopt1:` and a digest after today's string, so a model with none
+    keeps its id and its cached vectors. The endpoint dict carries the
+    `options` its id came from, the request is built from them, and
+    `embed_sync` refuses a dict whose two disagree. A caller puts its query
+    first and passes `queries=1` (recall, search and art; continuity sends
+    documents only), and no caller caches a query vector. NUL is stripped
+    from what is sent and from the vector key alike.
   - `test_operation_guard.py` (the embed half) holds the task, the door, and
     where each call's `space=` comes from -- traced back through the package
     to `embed_space.endpoint`, so a space built by hand fails it -- and
@@ -1187,13 +1201,18 @@ would answer neither question.
   /inference/settings`), a new key or address on the provider it embeds
   through, which restamps that provider's `rev` (`PUT /llm-connections/{id}`,
   judged by `embed_space.moved_by`), or a model-facts write that turns the
-  role on, such as the user's `embed: yes` over a known `no` (`PUT
-  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`), or, on a
+  role on, such as the user's `embed: yes` over a known `no`, or changes the
+  document side of the embedding options of the model it embeds with (`PUT
+  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`; a
+  query-prefix-only change asks nothing), or, on a
   store not yet at format 2, a legacy `embeddings_connection_id` /
   `embeddings_model` change through `PUT /config` (judged by
   `embed_space.config_moved`) -- each
   400 `confirm_embedding` without `confirm_embedding: true`, compared inside
-  the hold that writes, because re-embedding a library may cost money. Two
+  the hold that writes, because re-embedding a library may cost money. A
+  side whose model facts cannot be judged (held, mangled, or invalid
+  options) is not "embeds nothing": a provider edit that moves its `rev`, or
+  a legacy key change, asks then too. Two
   things can still lift a known `no` without that question, because neither
   is a settings write the user makes to the Embedding role: a test call that
   PASSES (itself confirmed before it is sent; a failed test is `unknown` and

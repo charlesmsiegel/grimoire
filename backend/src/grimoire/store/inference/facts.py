@@ -6,6 +6,7 @@ true of every model behind a preset; this holds what is true of one):
 
     {"<model>": {"vision": "on"|"off", "prefill": bool, "post_process": str,
                  "rates": {...}, "context_window": int, "max_output": int,
+                 "embedding": {"input": "prefix", "query_prefix": str, ...},
                  "verified": {"rev": "<connection rev>", "caps": {cap: {...}}},
                  "overrides": {cap: "yes"|"no"}}}
 
@@ -20,8 +21,11 @@ Two kinds of fact, and they age differently:
   connection write holds -- otherwise a run that started on an old rev would
   replace the new rev's results, or recreate a deleted connection's file.
 - **Stated** facts (`overrides`, `vision`, `prefill`, `post_process`, `rates`,
-  and the model's size, `context_window` / `max_output`, 01i) are the user's
-  own word about the model and survive a rev change.
+  the model's size, `context_window` / `max_output`, 01i, and its embedding
+  options, `embedding`, 01h) are the user's own word about the model and
+  survive a rev change. Embedding options are never derived: only the user's
+  write (`state(..., embedding=)`) puts a block here, because their document
+  side is part of the Embedding role's vector space id.
 
 Reads never raise: the file is one a sync or a hand can mangle into any JSON,
 and it is read on the path of a turn. No write replaces a file it could not
@@ -45,10 +49,13 @@ recreate the file of a connection deleted meanwhile.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
+from ... import wire
 from .. import atomic, config, llm_connections, pricing
 from ..paths import now_iso, safe_id
 from .providers import CAPABILITIES
@@ -244,6 +251,10 @@ def _view(entry: dict, rev: str) -> dict:
                        if c in CAPABILITIES and v in OVERRIDE_VALUES}
                       if isinstance(overrides, dict) else {}),
         **{name: stated_limit(entry.get(name)) for name in LIMIT_FIELDS},
+        # Raw: judged by its readers (`embed_options`), strictly for the
+        # Embedding role and fail-soft elsewhere, never here.
+        "embedding": dict(block) if isinstance(block := entry.get("embedding"), dict)
+        else block,
     }
 
 
@@ -409,7 +420,7 @@ def set_stated(provider_id: str, model: str, *, vision: str | None = None,
 def state(provider_id: str, model: str, *, vision: object = None, prefill: object = None,
           post_process: object = None, overrides: object = None,
           rates: object = None, context_window: object = None, max_output: object = None,
-          guard: Guard | None = None) -> None:
+          embedding: object = None, guard: Guard | None = None) -> None:
     """The facts panel's write: `set_stated`'s fields, and `overrides` MERGED
     per capability -- `{cap: "yes"|"no"}` sets one, `{cap: ""}` removes it,
     and a capability the dict does not name is left as it is. Everything is
@@ -427,9 +438,17 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
     it. A write that would leave a stated output above a stated window is
     refused (`ValueError`) on the MERGED entry, inside the hold that writes,
     so nothing is stored.
+
+    `embedding` is the model's embedding options (01h, `_check_embedding`):
+    `None` leaves them, and anything else is checked and normalised before
+    the file is touched -- a block that normalises to nothing (`{}`, or
+    `{"input": "none"}`) removes them, and any other replaces them. Their
+    document side is part of the Embedding role's vector space id, so the
+    facts route confirms a write that moves it (`embed_space.facts_moved`).
     """
     _require_safe(provider_id)
     stated = _check_stated(vision, prefill, post_process)
+    embedded = None if embedding is None else _check_embedding(embedding)
     changed = {} if overrides is None else _check_overrides(overrides, blank=True)
     priced = (None if rates is None
               else {} if isinstance(rates, dict) and not rates
@@ -437,12 +456,13 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
     sized = {name: value for name, value in (
         ("context_window", check_limit("context_window", context_window)),
         ("max_output", check_limit("max_output", max_output))) if value is not None}
-    if not stated and not changed and priced is None and not sized:
+    if not stated and not changed and priced is None and not sized and embedded is None:
         return
 
     def change(entry: dict) -> None:
         entry.update(stated)
         _apply_sizes(entry, sized)
+        _apply_embedding(entry, embedded)
         if priced is not None:
             if priced:
                 entry["rates"] = priced
@@ -464,6 +484,159 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
             entry.pop("overrides", None)
 
     _write_existing(provider_id, model, change, guard)
+
+
+# ---- embedding options (01h) ----
+
+#: The longest prefix or input-type value a model may be stated to take, in
+#: characters (01h §3.2): room for a published query instruction, and well
+#: inside what the embed callers' byte bounds leave free under an 8k window.
+EMBED_TEXT_MAX = 200
+
+#: A request field the options may name: a literal top-level key of the
+#: request body, never a nested path (so no `.`).
+EMBED_FIELD_RE = re.compile(r"[a-z_][a-z0-9_]{0,40}")
+
+#: The request's own fields, which an option may never overwrite.
+EMBED_RESERVED_FIELDS = frozenset({"model", "input", "encoding_format", "user"})
+
+#: The keys a block may hold: `wire.EmbedOptions`' fields.
+_EMBED_FIELDS = tuple(f.name for f in dataclasses.fields(wire.EmbedOptions))
+#: The option fields that are text sent as part of an input or a request.
+_EMBED_TEXTS = ("query_prefix", "document_prefix", "query_value", "document_value")
+#: Which mode each mode-specific field belongs to.
+_EMBED_MODE_OF = {"query_prefix": "prefix", "document_prefix": "prefix",
+                  "param_field": "param", "query_value": "param",
+                  "document_value": "param"}
+
+#: Every refusal below is one of these fixed sentences: a message never
+#: quotes the value it refuses (it may be prompt text, or a control byte).
+EMBED_NOT_OBJECT = "embedding options must be an object"
+EMBED_BAD_INPUT = "embedding input must be 'none', 'prefix' or 'param'"
+EMBED_NOT_TEXT = "embedding prefixes, values and field names must be text"
+EMBED_TOO_LONG = f"embedding prefixes and values are at most {EMBED_TEXT_MAX} characters"
+EMBED_CONTROL = ("embedding prefixes and values may not contain control characters "
+                 "(other than a newline or a tab) or unpaired surrogates")
+EMBED_BAD_FIELD = ("an embedding request field must be lowercase letters, digits and "
+                   "underscores, start with a letter or underscore, and be at most 41 "
+                   "characters")
+EMBED_RESERVED = ("an embedding request field cannot be model, input, encoding_format "
+                  "or user")
+EMBED_SAME_FIELD = "the input-type field and the dimensions field must differ"
+EMBED_WRONG_MODE = "a prefix needs input 'prefix', and a request field needs input 'param'"
+EMBED_NO_PREFIX = "the prefix input type needs a query prefix or a document prefix"
+PARAM_NOT_YET = "the request-field input type is not supported by this build"
+DIMENSIONS_NOT_YET = "requested dimensions are not supported by this build"
+
+
+def _embed_text(value: str) -> None:
+    """Refuse a prefix or value that is too long, or carries a C0 control
+    other than a newline or a tab, a C1 control, or a lone surrogate (which
+    could not be encoded to send)."""
+    if len(value) > EMBED_TEXT_MAX:
+        raise ValueError(EMBED_TOO_LONG)
+    for ch in value:
+        code = ord(ch)
+        if ((code < 0x20 and ch not in "\n\t") or 0x80 <= code < 0xa0
+                or 0xd800 <= code <= 0xdfff):
+            raise ValueError(EMBED_CONTROL)
+
+
+def _embed_field(value: str) -> None:
+    """Refuse a request field name that is not a literal top-level key, or
+    is one of the request's own."""
+    if not EMBED_FIELD_RE.fullmatch(value):
+        raise ValueError(EMBED_BAD_FIELD)
+    if value in EMBED_RESERVED_FIELDS:
+        raise ValueError(EMBED_RESERVED)
+
+
+def _embed_fields(raw: Mapping) -> dict[str, object]:
+    """The block's known fields, each type-checked: absent or null reads as
+    the default, a key the block does not define is ignored."""
+    got: dict[str, object] = {}
+    for f in _EMBED_FIELDS:
+        value = raw.get(f)
+        if value is None:
+            continue
+        if f == "dimensions":
+            got[f] = value          # judged by the caller (refused in this build)
+            continue
+        if not isinstance(value, str):
+            raise ValueError(EMBED_NOT_TEXT)
+        got[f] = value
+    return got
+
+
+def _embed_shape(got: Mapping[str, object], mode: str) -> None:
+    """Refuse a block whose texts, field names or mode fields are wrong, in
+    the order a person fixes them: each text, each field name, then a field
+    belonging to another mode."""
+    for name in _EMBED_TEXTS:
+        _embed_text(str(got.get(name, "")))
+    for name in ("param_field", "dimensions_field"):
+        if got.get(name):
+            _embed_field(str(got[name]))
+    if (mode == "param" and got.get("dimensions") is not None
+            and got.get("param_field") == got.get("dimensions_field", "dimensions")):
+        raise ValueError(EMBED_SAME_FIELD)
+    if any(got.get(name) and _EMBED_MODE_OF[name] != mode for name in _EMBED_MODE_OF):
+        raise ValueError(EMBED_WRONG_MODE)
+
+
+def _check_embedding(raw: object) -> dict:
+    """An `embedding` block as a write stores it, or a `ValueError` naming the
+    problem in a fixed sentence (01h §3.2). Shared by every reader, so a
+    block on disk is judged by the rule a write is.
+
+    Only the fields the mode uses are kept, and a field that belongs to
+    another mode is refused rather than dropped; mode `none` stores nothing
+    (`{}`). A lone `dimensions_field` is checked and dropped: with no
+    `dimensions` it says nothing (§5.1). This build sends neither the `param`
+    mode nor `dimensions`, so both are refused (the 01h-S2 interim rule)."""
+    if not isinstance(raw, Mapping):
+        raise ValueError(EMBED_NOT_OBJECT)
+    got = _embed_fields(raw)
+    mode = str(got.get("input", "none"))
+    if mode not in wire.EMBED_INPUT_MODES:
+        raise ValueError(EMBED_BAD_INPUT)
+    _embed_shape(got, mode)
+    if mode == "param":
+        raise ValueError(PARAM_NOT_YET)
+    if got.get("dimensions") is not None:
+        raise ValueError(DIMENSIONS_NOT_YET)
+    if mode == "prefix" and not (got.get("query_prefix") or got.get("document_prefix")):
+        raise ValueError(EMBED_NO_PREFIX)
+    if mode == "none":
+        return {}
+    return {"input": mode, **{name: got[name] for name in ("query_prefix", "document_prefix")
+                              if got.get(name)}}
+
+
+def embed_options(model_facts: Mapping) -> wire.EmbedOptions | None:
+    """The embedding options `model_facts` (`of`'s shape) state, or None when
+    they state none. Raises `ValueError` for a block `_check_embedding`
+    refuses -- the Embedding role then names no space, and a fail-soft reader
+    reads it as none."""
+    block = model_facts.get("embedding")
+    if block is None:
+        return None
+    checked = _check_embedding(block)
+    return wire.EmbedOptions(
+        input=str(checked.get("input", "none")),
+        query_prefix=str(checked.get("query_prefix", "")),
+        document_prefix=str(checked.get("document_prefix", "")))
+
+
+def _apply_embedding(entry: dict, block: dict | None) -> None:
+    """Lay a checked block (`_check_embedding`) over `entry`: None leaves the
+    entry's, `{}` removes it, anything else replaces it."""
+    if block is None:
+        return
+    if block:
+        entry["embedding"] = block
+    else:
+        entry.pop("embedding", None)
 
 
 #: The stated fields a connection's legacy record carried (`vision`, `prefill`,
@@ -509,7 +682,7 @@ def _take_back_copies(doc: dict[str, dict]) -> None:
 
 
 def adopted(provider_id: str, model: str, rev: str, *, adopting: str,
-            stated: dict[str, object]) -> dict:
+            stated: dict[str, object], strict: bool = False) -> dict:
     """`of(provider_id, model, rev)` as it will read once the migration's
     step 3 has run `adopt_legacy(provider_id, adopting, stated)`: every copy an
     earlier, interrupted run recorded on this provider taken back first
@@ -520,8 +693,14 @@ def adopted(provider_id: str, model: str, rev: str, *, adopting: str,
     What play reads at format 1 (`resolve`, through the planner's
     `Overlay.facts`), so a field the user set back to its default since an
     interrupted run copied it is not sent as the stale copy -- the in-memory
-    answer is the one the migration persists."""
-    doc = {name: dict(entry) for name, entry in _load(provider_id).items()}
+    answer is the one the migration persists.
+
+    `strict` reads as `of(strict=True)` does: a file that exists and cannot be
+    read raises (`FactsUnreadableError`, `FactsMangledError`) -- what the
+    Embedding role's read needs (`resolve.embed_attempt`)."""
+    loaded = (_load_for_write(provider_id) if strict and safe_id(provider_id)
+              else _load(provider_id))
+    doc = {name: dict(entry) for name, entry in loaded.items()}
     _take_back_copies(doc)
     valid, _refused = _checked_legacy(stated)
     if valid:

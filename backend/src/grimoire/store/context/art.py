@@ -569,7 +569,7 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
     try:
         got = embed.embed_sync("art-catalog", [query_text, *missing], space=cfg,
                                client=_CLIENT, campaign=campaign, scene=scene,
-                               cached=len(known), uncached=len(uncached))
+                               cached=len(known), uncached=len(uncached), queries=1)
     except (LLMError, OSError):
         # Deliberately silent, and deliberately not fatal: this runs on every
         # turn, so a provider that is down would otherwise write one identical

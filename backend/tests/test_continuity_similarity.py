@@ -545,8 +545,10 @@ def test_a_wrong_length_reply_is_a_bad_response(home, monkeypatch):
     _configure()
 
     class Short(FakeEmbeddings):
-        def embed(self, texts, model, key, base_url, deadline=None, usage=None):
-            return super().embed(texts, model, key, base_url, deadline, usage)[:-1]
+        def embed(self, texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
+            return super().embed(texts, model, key, base_url, deadline, usage,
+                                 options=options, queries=queries)[:-1]
 
     monkeypatch.setattr(similarity, "_CLIENT", Short())
     got = similarity.semantic(["Mara's map", "Realm"], [], deadline=_soon())
@@ -729,3 +731,11 @@ def test_lexical_normalizes_each_text_once(monkeypatch):
     again = [similarity.lexical(a, b) for a, b in pairs]
     assert calls == {"tokens": 6, "trigrams": 6}
     assert first == again == reference
+
+
+def test_continuity_embeds_documents_only(home, fake):
+    """Record against record is symmetric (01h §3.1): both sides documents, so
+    the vectors recall, search, art and continuity share by text stay shared."""
+    _configure()
+    similarity.semantic(["Mara's map", "Saltmarch"], [], deadline=_soon())
+    assert fake.queries and all(q == 0 for q in fake.queries)
