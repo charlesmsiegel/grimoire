@@ -153,6 +153,31 @@ def test_the_cap_is_held_to_the_models_known_max_output():
     assert inference.clamp_to_max_output(CONN, 10**6) == inference.MAX_OUTPUT_CAP
 
 
+@pytest.mark.parametrize(("preset_cap", "sent"), [(None, 1500), (1200, 1200), (4000, 1500)])
+def test_a_route_preset_follows_the_fallback_with_its_own_maximum(preset_cap, sent):
+    """A route-scoped preset follows the primary onto the fallback
+    (`llm.fallback_sampling`), but the call's cap is held to the FALLBACK's
+    own maximum output, not the primary's (Codex review)."""
+    params = {"temperature": 0.9}
+    if preset_cap is not None:
+        params["max_tokens"] = preset_cap
+    route = wire.Sampling(preset_id="warm", preset_name="Warm", scope="campaign",
+                          params=params)
+    primary = replace(CONN, sampling=route, limits=wire.Limits(
+        max_output=wire.Limit(500, "catalog")))
+    spare = replace(SPARE, limits=wire.Limits(max_output=wire.Limit(1500, "user")))
+    chain = inference.call_chain(_resolved(sent=wire.Chain(primary, spare)),
+                                 max_tokens=2000)
+    assert chain.primary.sampling.params["max_tokens"] == 500
+    fallback = llm.fallback_sampling(chain.primary, chain.fallback)
+    assert fallback.sampling.params == {"temperature": 0.9, "max_tokens": sent}
+    assert (fallback.sampling.preset_id, fallback.sampling.scope) == ("warm", "campaign")
+    assert (fallback.sampling.call_cap, fallback.sampling.preset_cap) == (2000, preset_cap)
+    # Uncapped, the route's preset follows as it always did.
+    plain = llm.fallback_sampling(primary, spare)
+    assert plain.sampling == route
+
+
 # ---- inference.cap_sent: where the adapter puts the cap on the wire ----
 @pytest.mark.parametrize(("fields", "sent"), [
     ({"kind": "openrouter", "model_params": None}, True),              # unverified: sent

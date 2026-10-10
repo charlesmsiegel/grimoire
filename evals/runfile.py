@@ -22,6 +22,7 @@ axis, with no version bump. A v1 reader ignores keys it does not know.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -146,7 +147,10 @@ _FIGURES = ("calls", "priced_calls", "subscription_calls", "modelled_calls",
 
 
 def _number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """A finite number: JSON's `1e400` reads as `inf` and `NaN` as nan, and
+    neither is a figure anybody reported."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
 
 
 def _costed(value: object) -> bool:

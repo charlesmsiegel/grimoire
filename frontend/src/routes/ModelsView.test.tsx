@@ -274,6 +274,19 @@ test("the fallback line shows the riding fallback's window", async () => {
   expect(fallback).toHaveTextContent(/local\/small · no preset · 8k window$/);
 });
 
+test("a riding fallback whose window is unknown says so, with Set", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    fast: card({ fallback: sel("realm", "local/small"),
+                 limits: limits({ fallback_window: lim(null) }) }),
+  } }));
+  await openSummary();
+  const fallback = row("Fast").getByText(/Fallback:/);
+  expect(fallback).toHaveTextContent(/local\/small · no preset · window unknown Set$/);
+  expect(within(fallback).getByRole("link", { name: "Set" }))
+    .toHaveAttribute("href", "/providers/realm/models/local/small?edit=limits");
+});
+
 test("a ceiling reason shows under the row", async () => {
   const reason = "The preset asks for 32,000 reply tokens; vendor/m's window is 8,192.";
   (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
