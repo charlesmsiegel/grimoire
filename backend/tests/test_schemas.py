@@ -119,6 +119,19 @@ def test_required_names_every_property_exactly(required):
         schemas.check(node)
 
 
+def test_a_required_entry_is_a_string():
+    """A non-string entry is refused even when its repr matches a property
+    name (Codex review)."""
+    node = _obj(**{"{'a': 1}": {"type": "string"}})
+    node["required"] = [{"a": 1}]
+    with pytest.raises(SchemaError, match="required"):
+        schemas.check(node)
+    node = _obj(**{"1": {"type": "string"}})
+    node["required"] = [1]
+    with pytest.raises(SchemaError, match="required"):
+        schemas.check(node)
+
+
 def test_an_object_needs_properties():
     with pytest.raises(SchemaError, match="properties"):
         schemas.check({"type": "object", "additionalProperties": False, "required": []})

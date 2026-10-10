@@ -739,6 +739,16 @@ def test_a_campaign_scope_stamps_once_and_a_fenced_off_one_not_at_all(fresh):
     assert store.revision.current(cid) != before
 
 
+def test_a_campaign_capture_that_could_not_be_written_stamps_nothing(fresh, monkeypatch):
+    """`prompt_log.record` swallows its own I/O error and answers None: no
+    entry was filed, so a token holder has missed nothing."""
+    cid, _sid = _campaign(fresh)
+    monkeypatch.setattr(store.prompt_log, "record", lambda *a, **k: None)
+    before = store.revision.current(cid)
+    _campaign_held(cid)
+    assert store.revision.current(cid) == before
+
+
 def test_a_campaign_gone_before_filing_files_nothing(fresh, monkeypatch):
     cid, _sid = _campaign(fresh)
 
