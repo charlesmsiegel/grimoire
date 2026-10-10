@@ -144,13 +144,22 @@ These are headlines. The owning spec's Contract section is authoritative.
 - [ ] **01e-C4** `Answer.marginals`, kept separate from `distribution`.
 
 ### 01f: Structured generation
-- [ ] **01f-C1** `generate(schema=)` sends structured mode on each attempt
+- [x] **01f-C1** `generate(schema=)` sends structured mode on each attempt
   that can take it. The schema must also be in the prompt. Adds a per-call
-  `max_tokens` cap.
-- [ ] **01f-C2** A schema refusal is re-sent through a helper shared with
+  `max_tokens` cap. (The cap is `min(preset's, call's)`; holding it to 01i-C1's
+  max output waits for 01i, a soft edge.)
+- [x] **01f-C2** A schema refusal is re-sent through a helper shared with
   decide. It is never a health failure.
-- [ ] **01f-C3** `grimoire/schemas.py`: the portable schema subset, the
+- [x] **01f-C3** `grimoire/schemas.py`: the portable schema subset, the
   prompt spelling, and a tolerant reader.
+
+  All four slices (S1-S4, the `intent` pilot included) are coded in one PR,
+  each slice its own commit. They were built from the spec's slice sections
+  with no separate `writing-plans` plan, and Codex was not available where
+  they were built, so a substitute adversarial review (diff against the spec)
+  stands in for the review and final gates. The slice table below stays
+  unticked: its stages are ticked in order, and the plan and the Codex gates
+  are still owed.
 
 ### 01g: Tool calling, Decision as a tool, run budgets
 - [ ] **01g-C1** A `tools` capability, a probe, and the seam's `incapable`
