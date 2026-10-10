@@ -243,7 +243,8 @@ around that single sentence.
 **A row says what served it, and which numbers this side supplied.** Each
 row carries `provider_id` (the provider's store id; `provider` stays the
 adapter kind), `requested_model` (only when the answer named a dated snapshot),
-`operation`, `role`, `preset` and `billing`. Nobody passes them at a call site:
+`operation`, `role`, `preset` and `billing` (and `hop`, on a call an
+escalation hop sent). Nobody passes them at a call site:
 `llm._stamp` copies them off the target (`wire.Target`) of the attempt that
 served, a fallback included, and `usage.Meter.done` files what the holder carries.
 `billing` (`metered` or `subscription`) is a label, and only `cost_basis` moves
@@ -945,7 +946,14 @@ would answer neither question.
   that answers none of the item's questions, is `bad_response`), or an item
   refused unsent -- on a native-first stage too. A native `refused`, an abstention and a `None` from a
   well-formed body are answers; re-asking them elsewhere would be asking until
-  something agreed. A `llm.PresetRefusalError` ends the chain where it is met,
+  something agreed. A policy-declared escalation is not a stage
+  (`routing.TaskPolicy.escalate_to`, `inference.decide(escalation=)`): after
+  the unchanged chain it hands an ANSWERED item, once, to a stronger resolver
+  only on what the backend itself reported (`decisions.triggers`: a refusal,
+  an abstention, a low margin), never to the model that answered it, and a
+  hop that fails, garbles or declines leaves the original standing
+  (`Decision.escalations`; `Decision.errors` stays the chain's). Its calls
+  file `hop: escalation`. No task enables it yet. A `llm.PresetRefusalError` ends the chain where it is met,
   as it ends the facade's: the preset is the user's to fix, and a native stage
   that takes no sampling would only hide it. So does the caller's clock
   refusing a call unsent: the refusal comes out as the `BudgetRefused` it is,

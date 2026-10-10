@@ -1722,3 +1722,37 @@ def test_native_questions_are_the_three_an_endpoint_has():
     assert decisions.native_questions(_item()) == _item().questions
     with pytest.raises(ValueError, match="relevant"):
         decisions.native_questions(Item("c", (Predicate("p", "i"), _rank())))
+
+
+# ---- escalation records (roadmap 01d-S3) ----------------------------------
+
+def _escalation(**fields) -> decisions.Escalation:
+    base = {"index": 0, "trigger": "abstained", "margin": None,
+            "before": ItemResult({"over": Answer(True)}), "outcome": "skipped",
+            "detail": decisions.SKIPPED_CAP}
+    return decisions.Escalation(**{**base, **fields})
+
+
+def test_a_decision_records_no_escalation_by_default():
+    assert decisions.Decision(items=(), backend="").escalations == ()
+    assert decisions.Decision(items=(), backend="") == decisions.Decision(items=(), backend="")
+
+
+def test_an_escalation_checks_its_words():
+    for outcome in decisions.ESCALATION_OUTCOMES:
+        assert _escalation(outcome=outcome).outcome == outcome
+    _escalation(trigger="low_margin", margin=0.1,
+                served=("openrouter", "openrouter", "vendor/active"))
+    for bad in ({"trigger": "bored"}, {"outcome": "maybe"},
+                {"trigger": "low_margin"}, {"margin": 0.1},
+                {"served": ("openrouter", "vendor/active")}):
+        with pytest.raises(ValueError):
+            _escalation(**bad)
+
+
+def test_a_resolver_reply_defaults_to_no_rows():
+    assert decisions.ResolverReply((None,)).rows == ()
+
+
+def test_the_hop_word_is_the_one_the_eval_reads():
+    assert decisions.HOP_ESCALATION == "escalation"

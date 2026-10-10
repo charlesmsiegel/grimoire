@@ -178,7 +178,7 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
 #: `decision_mode` one call used. No adapter reads it, and nothing here sends
 #: it. A stamp is laid on a target's account (`wire.Target.with_account`).
 #: These are its fields `account` files, each as its own ledger field.
-ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode")
+ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode", "hop")
 
 
 def _text(value: object) -> str:

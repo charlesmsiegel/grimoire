@@ -62,6 +62,14 @@ Four rules `decide` keeps:
   threadpool before the switch, and it still does. A native item's capture
   (its request body, JSON-encoded) is built in a worker thread too.
 
+A policy-declared escalation (roadmap 01d, `decide(escalation=)`) is not a
+stage: after the unchanged chain has answered, an ANSWERED item whose own
+report says it is unsure (`decisions.triggers`) is handed once to a stronger
+resolver -- the escalation role's primary alone, or a caller's `Resolver` --
+and a hop that fails, garbles or declines leaves the original answer
+standing. One hop, never to the model that answered, recorded in
+`Decision.escalations`; `Decision.errors` stays the chain's.
+
 Nothing in `store/` or the gateway imports this module.
 """
 
@@ -136,6 +144,19 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 #: sent. One structured chunk is one call, its prompt-only re-send included;
 #: each native item is one call.
 Capture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
+
+#: A caller-supplied next resolver (01d §5.2, `routing.CALLER`): handed the
+#: triggered items it is to answer and their triggers, in the order taken;
+#: its reply is one result per item (`decisions.ResolverReply`). It opens its
+#: own meters, captures its own calls and runs under its own budget.
+Resolver = Callable[[tuple[decisions.Item, ...], tuple[decisions.Trigger, ...]],
+                    Awaitable[decisions.ResolverReply]]
+
+#: What `decide(escalation=)` awaits once some item triggered (01d §5.2):
+#: the escalation role's resolution of the task -- or, for a `CALLER`
+#: policy, a `Resolver` -- or None and the sentence why there is none. Soft:
+#: a refusal is `(None, sentence)`, never a raised 409.
+Escalator = Callable[[], Awaitable[tuple[ResolvedInference | Resolver | None, str]]]
 
 
 class Outcome(dict):
@@ -263,6 +284,10 @@ class _Call:
     #: index of the stage's item `p`; empty means the identity).
     stage: int = 0
     positions: tuple[int, ...] = ()
+    #: `decisions.HOP_ESCALATION` on a call an escalation hop makes (01d
+    #: §5.5): its `CallRecord.hop` and its capture outcome's "hop". "" on a
+    #: call of the chain itself, which then records and captures nothing new.
+    hop: str = ""
 
     def batch(self, unit: Sequence[int]) -> tuple[int, ...]:
         """`unit`'s stage positions as batch indices."""
@@ -411,7 +436,7 @@ def _record(call: _Call, mode: str, unit: Sequence[int], row: dict | None,
     return decisions.CallRecord(
         stage=call.stage, mode=mode, items=call.batch(unit), row=row,
         error_kind=error.kind if error is not None else "",
-        error_status=error.status if error is not None else None)
+        error_status=error.status if error is not None else None, hop=call.hop)
 
 
 async def _once(call: _Call, sending: wire.Chain, messages: list[dict], schema: dict,
@@ -490,7 +515,8 @@ def _outcome(call: _Call, unit: Sequence[int], mode: str, target: wire.Target,
     """A settled call's record for the capture (`decisions.outcome`): what
     answered it and its results, or -- failed -- the primary its stage sent
     (`target`) and its error; and, either way, the call's `stage` and `at`,
-    the BATCH indices of the stage positions `unit` it carried (01b §3.2).
+    the BATCH indices of the stage positions `unit` it carried (01b §3.2),
+    and -- on an escalation hop's call only -- its `hop` (01d §5.7).
     The error itself rides beside the record (`Outcome.failure`)."""
     if error is not None:
         record = decisions.outcome(mode, target.provider_id, target.model,
@@ -498,7 +524,8 @@ def _outcome(call: _Call, unit: Sequence[int], mode: str, target: wire.Target,
     else:
         provider, model = _served_by(holder or {})
         record = decisions.outcome(mode, provider, model, results)
-    out = Outcome({**record, "stage": call.stage, "at": list(call.batch(unit))})
+    out = Outcome({**record, "stage": call.stage, "at": list(call.batch(unit)),
+                   **({"hop": call.hop} if call.hop else {})})
     out.failure = error
     return out
 
@@ -901,7 +928,8 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
                  resolved: ResolvedInference, explain: str = "", campaign: str = "",
                  scene: str = "", post: int | None = None, round_id: str = "",
                  capture: Capture | None = None,
-                 around: Around | None = None) -> decisions.Decision:
+                 around: Around | None = None,
+                 escalation: Escalator | None = None) -> decisions.Decision:
     """Answer `items` (spec 7.4): one `ItemResult` per item, in input order.
 
     `resolved` is the call site's own resolution of `task` for the `decide`
@@ -915,19 +943,356 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     is handed each call once it settles (`Capture`); `around` is handed each
     facade call and the meter's live holder, and returns what to await
     instead (a caller's time budget).
+
+    `escalation` is handed in exactly when the task's code policy escalates
+    (`routing.policy(task).escalate_to`; 01d §5.2): a mismatch, an item that
+    does not ask the policy's deciding `question`, or a policy whose trigger
+    arguments `decisions.triggers` refuses is a `ValueError` before any meter
+    opens. It is awaited at most once, after the chain, and only when an item
+    triggered: the items it hands over are answered once more by the
+    escalation role's primary alone, or by the `Resolver` it returns, and
+    what became of each is `Decision.escalations` (`_escalate`).
     """
+    items = tuple(items)
     if resolved.task != task:
         raise ValueError(f"a resolution of {resolved.task!r} cannot decide {task!r}")
     if resolved.operation != "decide":
         raise ValueError(f"a {resolved.operation!r} resolution cannot decide")
     if resolved.chain is None:
         raise ValueError(f"{task!r} resolved to no connection")
+    policy = _policy_for(task, items, escalation)
     chain = stages(resolved)
     if not chain:
         raise ValueError(f"no decision backend for mode {resolved.decision_mode!r}")
-    return await run_stages(task, items, chain, client=client,
+    base = await run_stages(task, items, chain, client=client,
                             explain=explain, campaign=campaign, scene=scene, post=post,
                             round_id=round_id, capture=capture, around=around)
+    if policy is None or escalation is None:
+        return base
+    found = decisions.triggers(base.items, question=policy.question,
+                               escalate_on=policy.escalate_on,
+                               margins=dict(policy.margins),
+                               answers=policy.escalate_answers)
+    if not found:
+        return base
+    # The hop's own call, built once, with the base's attribution: one
+    # attempt (`retries=0`, 01d §11 Q4), after the chain's last stage, and
+    # marked as the hop on every record and capture it makes.
+    call = _Call(task=task, client=client, explain=explain, campaign=campaign,
+                 scene=scene, post=post, round_id=round_id, capture=capture,
+                 around=around, chain=chain[0].chain, retries=0, stage=len(chain),
+                 hop=decisions.HOP_ESCALATION)
+    return await _escalate(call, items, base, found, policy, escalation, chain)
+
+
+# ---- the escalation hop (roadmap 01d-C2b) ----
+
+def _policy_for(task: str, items: tuple[decisions.Item, ...],
+                escalation: Escalator | None) -> store.routing.TaskPolicy | None:
+    """`task`'s policy when it escalates, else None -- after every check that
+    must come before any meter opens (01d §5.2, S2's handoff): `escalation`
+    is given exactly when the policy escalates, every item asks its deciding
+    `question` (so `decisions.triggers` cannot raise after a paid call), and
+    `triggers` accepts the policy's arguments (run here over no results)."""
+    policy = store.routing.policy(task)
+    if bool(policy.escalate_to) != (escalation is not None):
+        raise ValueError(f"{task!r}'s policy escalates to {policy.escalate_to!r}, and the "
+                         f"call {'passed' if escalation else 'passed no'} escalation=")
+    if not policy.escalate_to:
+        return None
+    decisions.validate(items)
+    missing = [index for index, item in enumerate(items)
+               if all(q.id != policy.question for q in item.questions)]
+    if missing:
+        raise ValueError(f"items {missing} do not ask {task!r}'s deciding question "
+                         f"{policy.question!r}")
+    decisions.triggers((), question=policy.question, escalate_on=policy.escalate_on,
+                       margins=dict(policy.margins), answers=policy.escalate_answers)
+    return policy
+
+
+class _Settled(NamedTuple):
+    """One triggered item's escalation, and its merged result when the hop's
+    answer replaced the base's (None otherwise)."""
+
+    escalation: decisions.Escalation
+    merged: decisions.ItemResult | None = None
+
+
+class _HopDone(NamedTuple):
+    """What a hop did: each triggered item's `_Settled`, keyed by batch
+    index; the hop's ledger rows and `CallRecord`s; every `(provider id,
+    model)` that answered one of its calls; and the backend of every result
+    it returned."""
+
+    settled: dict[int, _Settled]
+    rows: tuple[dict, ...] = ()
+    calls: tuple[decisions.CallRecord, ...] = ()
+    served: tuple[tuple[str, str], ...] = ()
+    backends: tuple[str, ...] = ()
+
+
+def _skipped(found: Sequence[decisions.Trigger], base: decisions.Decision,
+             detail: str) -> dict[int, _Settled]:
+    """Each of `found` skipped, with `detail`: no hop ran for it."""
+    return {t.index: _Settled(decisions.Escalation(t.index, t.trigger, t.margin,
+                                                   base.items[t.index], "skipped", detail))
+            for t in found}
+
+
+async def _escalate(call: _Call, items: tuple[decisions.Item, ...], base: decisions.Decision,
+                    found: tuple[decisions.Trigger, ...], policy: store.routing.TaskPolicy,
+                    escalation: Escalator, chain: Sequence[Stage]) -> decisions.Decision:
+    """The hop after the chain (01d §5.3): await the escalator once, then
+    hand `found` to what it returned, and lay the result over `base`.
+
+    The base is paid for, so nothing the escalator does loses it: a thunk
+    that raises is every trigger skipped, `unresolved: <kind>` (its kind,
+    never its text); `(None, why)` is every trigger skipped with `why`, for
+    either kind of policy. Only a value of the wrong shape is a caller bug:
+    a `Resolver` for a role policy or a resolution for a `CALLER` one is a
+    `TypeError`, and a resolution of another task or operation a
+    `ValueError` -- each raised before any hop call."""
+    try:
+        target, why = await escalation()
+    except Exception as exc:  # noqa: BLE001 - the paid base answers must survive
+        kind = exc.kind if isinstance(exc, LLMError) else type(exc).__name__
+        return _escalated(base, found, _HopDone(_skipped(found, base, f"unresolved: {kind}")))
+    if target is None:
+        return _escalated(base, found, _HopDone(_skipped(found, base, why)))
+    if policy.escalate_to == store.routing.CALLER:
+        if isinstance(target, ResolvedInference) or not callable(target):
+            raise TypeError(f"{call.task!r} escalates to a caller resolver, "
+                            f"and the escalator returned {type(target).__name__}")
+        return _escalated(base, found, await _caller_hop(call, items, base, found, policy, target))
+    if not isinstance(target, ResolvedInference):
+        raise TypeError(f"{call.task!r} escalates to the {policy.escalate_to!r} role, "
+                        f"and the escalator returned {type(target).__name__}")
+    if target.task != call.task or target.operation != "decide":
+        raise ValueError(f"a {target.operation!r} resolution of {target.task!r} cannot "
+                         f"escalate {call.task!r}")
+    return _escalated(base, found, await _role_hop(call, items, base, found, policy, target, chain))
+
+
+def _hop_stage(target: ResolvedInference) -> Stage | None:
+    """The role hop's one stage (01d §5.3): the escalation primary ALONE --
+    no fallback -- with no retries, its backend by its `decision_mode`, and
+    its account marked as the hop. None when nothing resolved, or the
+    primary can neither generate nor decide natively. Never native-first
+    (01c): the stage is built here, not by `stages`."""
+    chain = target.chain
+    if chain is None or not target.attempts:
+        return None
+    mode = target.attempts[0].decision_mode
+    if mode not in decisions.BACKENDS:
+        return None
+    return Stage(mode, wire.Chain(chain.primary.with_account(hop=decisions.HOP_ESCALATION)), 0)
+
+
+def _on_dead_connection(base: decisions.Decision, chain: Sequence[Stage],
+                        provider_id: str) -> bool:
+    """Whether the base met a failure every call on `provider_id`'s
+    connection would meet (`_connection_wide`) and `provider_id` is the
+    connection of one of the base's stages: a hop there would only meet it
+    again."""
+    if not any(isinstance(e, LLMError) and _connection_wide(e) for e in base.errors):
+        return False
+    return any(_same_connection(provider_id, target.provider_id)
+               for stage in chain for target in stage.chain.attempts)
+
+
+def _take(found: tuple[decisions.Trigger, ...], items: tuple[decisions.Item, ...], most: int,
+          mode: str) -> tuple[tuple[decisions.Trigger, ...], tuple[decisions.Trigger, ...]]:
+    """`(taken, capped)` of `found`, in its priority order (01d §5.3, S6):
+    at most `most`, and on a structured hop only those `decisions.chunks`
+    puts in its FIRST chunk -- so the hop is one structured call (plus at
+    most one prompt-only re-send)."""
+    taken = found[:most]
+    if mode == STRUCTURED and taken:
+        taken = taken[:len(decisions.chunks([items[t.index] for t in taken])[0][1])]
+    return taken, found[len(taken):]
+
+
+def _merge(before: decisions.ItemResult, hop: decisions.ItemResult, question: str,
+           reads_declines: bool) -> tuple[decisions.ItemResult | None, str]:
+    """The item as the hop leaves it (01d §5.3), or None and why it stays.
+
+    Replaced only when the hop's `question` answer is a value, or a decline
+    (`abstained`, `refused`) on a task that reads one. The deciding answer,
+    rationale, backend and server are then the hop's, and every other
+    question keeps the base's answer unless the hop gave it a VALUE -- not
+    merely one it `was_read`: a garbled or missing key reads as an
+    `unreadable` that `was_read`, and it must not replace a good base answer
+    (the plan's Decision 7; each question of an item stands alone)."""
+    answer = hop.answers[question]
+    if answer.answer is None:
+        if answer.reason not in ("abstained", "refused"):
+            return None, (f"{answer.reason}: {answer.detail}" if answer.detail
+                          else answer.reason)
+        if not reads_declines:
+            return None, decisions.FAILED_DECLINED
+    merged = {qid: (hop.answers[qid] if qid == question or hop.answers[qid].answer is not None
+                    else old)
+              for qid, old in before.answers.items()}
+    return replace(hop, answers=merged), ""
+
+
+def _settle_one(trigger: decisions.Trigger, before: decisions.ItemResult,
+                result: decisions.ItemResult | None, error: LLMError | None,
+                policy: store.routing.TaskPolicy,
+                sent: tuple[()] | tuple[str, str, str]) -> _Settled:
+    """One taken item's escalation, from the hop's `result` for it (None when
+    its unit failed with `error`, or a caller gave none). `sent` names the
+    target a failed role hop was sent (`()` for a caller)."""
+    def record(outcome: str, detail: str,
+               served: tuple[()] | tuple[str, str, str]) -> decisions.Escalation:
+        return decisions.Escalation(trigger.index, trigger.trigger, trigger.margin, before,
+                                    outcome, detail, served)
+
+    if result is None:
+        detail = (f"{error.kind}: {error.detail}" if error is not None
+                  else decisions.FAILED_NO_RESULT)
+        return _Settled(record("failed", detail, sent))
+    merged, why = _merge(before, result, policy.question, policy.reads_declines)
+    if merged is None:
+        return _Settled(record("failed", why, result.served or sent))
+    return _Settled(record("answered", "", merged.served), merged)
+
+
+async def _role_hop(call: _Call, items: tuple[decisions.Item, ...], base: decisions.Decision,
+                    found: tuple[decisions.Trigger, ...], policy: store.routing.TaskPolicy,
+                    target: ResolvedInference, chain: Sequence[Stage]) -> _HopDone:
+    """The hop to the policy's role (01d §5.3, §5.4): its one stage, sent
+    the triggered items that are not on the model that answered them
+    (`same_model`) and that fit the cap, through the stage's backend --
+    the same dispatch `run_stages` makes, with a `_Call` whose `positions`
+    are the batch indices taken, so its records and captures name the
+    batch. A failed unit leaves its items' originals standing."""
+    stage = _hop_stage(target)
+    if stage is None:
+        return _HopDone(_skipped(found, base, decisions.SKIPPED_INCAPABLE))
+    primary = stage.chain.primary
+    if _on_dead_connection(base, chain, primary.provider_id):
+        return _HopDone(_skipped(found, base, decisions.SKIPPED_DEAD_CONNECTION))
+    server = (primary.provider_id, primary.model)
+    same = tuple(t for t in found if base.items[t.index].served[1:] == server)
+    taken, capped = _take(tuple(t for t in found if t not in same), items,
+                          policy.escalate_max, stage.mode)
+    settled = {**_skipped(same, base, decisions.SKIPPED_SAME_MODEL),
+               **_skipped(capped, base, decisions.SKIPPED_CAP)}
+    if not taken:
+        return _HopDone(settled)
+    got = await _BACKENDS[stage.mode](
+        tuple(items[t.index] for t in taken),
+        replace(call, chain=stage.chain, positions=tuple(t.index for t in taken)))
+    # `got.results` and `got.failed` are by SUBSET position p (the hop's own
+    # item order): item p is the batch's `taken[p].index`. Only `got.calls`,
+    # built through `call.positions`, already name batch indices.
+    errors = {p: error for unit, error in got.failed for p in unit}
+    sent = _server(primary)
+    for p, trigger in enumerate(taken):
+        settled[trigger.index] = _settle_one(trigger, base.items[trigger.index],
+                                             got.results[p], errors.get(p), policy, sent)
+    return _HopDone(settled, got.rows, got.calls, got.served,
+                    tuple(r.backend for r in got.results if r is not None))
+
+
+def _checked_result(result: object, item: decisions.Item) -> None:
+    """A caller result is None, or an `ItemResult` from one of `BACKENDS`
+    whose question ids are exactly `item`'s (so `_merge` reads every one)."""
+    if result is None:
+        return
+    if not isinstance(result, decisions.ItemResult) or result.backend not in decisions.BACKENDS:
+        raise ValueError(f"a caller resolver's result must be an ItemResult from one of "
+                         f"{decisions.BACKENDS}, not {result!r}")
+    if set(result.answers) != {q.id for q in item.questions}:
+        raise ValueError(f"a caller resolver's result answers {sorted(result.answers)}, "
+                         f"not the item's questions")
+
+
+def _checked_reply(reply: object, taken: tuple[decisions.Trigger, ...],
+                   items: tuple[decisions.Item, ...]) -> decisions.ResolverReply:
+    """A caller resolver's reply, held to its contract (01d §5.2): one result
+    per item handed over (`_checked_result`), and every row it filed marked
+    as the hop's -- a row that does not say so would be counted as the
+    chain's own call. A `ValueError` otherwise."""
+    if not isinstance(reply, decisions.ResolverReply):
+        raise ValueError(f"a caller resolver returns a ResolverReply, not {reply!r}")
+    if len(reply.results) != len(taken):
+        raise ValueError(f"a caller resolver was handed {len(taken)} items and returned "
+                         f"{len(reply.results)} results")
+    for trigger, result in zip(taken, reply.results, strict=True):
+        _checked_result(result, items[trigger.index])
+    if not all(isinstance(row, dict) and row.get("hop") == decisions.HOP_ESCALATION
+               for row in reply.rows):
+        raise ValueError("every row a caller resolver files carries hop: escalation")
+    return reply
+
+
+def _row_record(call: _Call, row: dict, taken: tuple[decisions.Trigger, ...]
+                ) -> decisions.CallRecord:
+    """A caller resolver's ledger row as a `CallRecord` of the hop: every item
+    it was handed, its backend as the row says (else `structured`, which a
+    tool loop ending in a generated answer stamps), and its error kind."""
+    mode = row.get("decision_mode")
+    return decisions.CallRecord(
+        stage=call.stage, mode=mode if mode in decisions.BACKENDS else STRUCTURED,
+        items=tuple(t.index for t in taken), row=row,
+        error_kind=str(row.get("error") or "") if row.get("status") == "error" else "",
+        hop=decisions.HOP_ESCALATION)
+
+
+async def _caller_hop(call: _Call, items: tuple[decisions.Item, ...], base: decisions.Decision,
+                      found: tuple[decisions.Trigger, ...], policy: store.routing.TaskPolicy,
+                      resolver: Resolver) -> _HopDone:
+    """The hop to a caller's `Resolver` (01d §5.2): at most `escalate_max`
+    items, once, with no same-model check (the resolver is not one model).
+    An `LLMError` it raises leaves every original standing; a cancel, and
+    anything else, passes through."""
+    taken, capped = found[:policy.escalate_max], found[policy.escalate_max:]
+    settled = _skipped(capped, base, decisions.SKIPPED_CAP)
+    try:
+        reply = await resolver(tuple(items[t.index] for t in taken), taken)
+    except LLMError as exc:
+        for trigger in taken:
+            settled[trigger.index] = _settle_one(trigger, base.items[trigger.index], None,
+                                                 exc, policy, ())
+        return _HopDone(settled)
+    reply = _checked_reply(reply, taken, items)
+    for trigger, result in zip(taken, reply.results, strict=True):
+        settled[trigger.index] = _settle_one(trigger, base.items[trigger.index], result,
+                                             None, policy, ())
+    answered = [r for r in reply.results if r is not None]
+    return _HopDone(settled, reply.rows,
+                    tuple(_row_record(call, row, taken) for row in reply.rows),
+                    tuple((r.served[1], r.served[2]) for r in answered if r.served),
+                    tuple(r.backend for r in answered))
+
+
+def _escalated(base: decisions.Decision, found: tuple[decisions.Trigger, ...],
+               hop: _HopDone) -> decisions.Decision:
+    """`base` with the hop laid over it (01d §5.5): each replaced item, the
+    hop's rows after the base's in `usage` and its records after the base's
+    in `calls`, `served` the union in first-answered order of the base's
+    and every server that answered a hop call (whether or not the merge kept
+    its answer), and `Decision.escalations` in `found`'s priority order.
+    `errors` stay the base's: a failed hop is not an unanswered unit.
+    `provider`/`model` stand only when one route answered every call, and
+    `backend` only when one backend did -- `run_stages`' own rule."""
+    items = list(base.items)
+    for index, done in hop.settled.items():
+        if done.merged is not None:
+            items[index] = done.merged
+    served = dict.fromkeys(base.served)
+    served.update(dict.fromkeys(hop.served))
+    provider, model = base.provider, base.model
+    if len(served) != len(base.served):
+        provider, model = next(iter(served)) if len(served) == 1 else ("", "")
+    backend = base.backend if all(b == base.backend for b in hop.backends) else ""
+    return replace(base, items=tuple(items), backend=backend, provider=provider, model=model,
+                   usage=base.usage + hop.rows, served=tuple(served),
+                   calls=base.calls + hop.calls,
+                   escalations=tuple(hop.settled[t.index].escalation for t in found))
 
 
 # ---- generate (spec 7.2) ----

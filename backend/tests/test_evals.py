@@ -1618,3 +1618,22 @@ def test_a_baseline_that_cannot_be_written_keeps_the_cases_cost(monkeypatch, tmp
     assert not result.passed and result.error_kind == "record"
     assert "could not record its baseline" in result.error
     assert len(result.rows) == 1 and result.bucket["cost_usd"] == 0.0042
+
+
+def test_item_records_name_the_chain_call_when_the_hop_was_rejected():
+    """Roadmap 01d-S3 (plan gate 4): a hop call is an item's answering call
+    only when its escalation was `answered`; a hop the merge rejected leaves
+    the item on the chain's call, and still marks it escalated."""
+    from grimoire import decisions
+
+    before = decisions.ItemResult({"over": decisions.Answer(True)}, backend="native")
+    calls = (decisions.CallRecord(stage=0, mode="native", items=(0,), row=None),
+             decisions.CallRecord(stage=1, mode="structured", items=(0,), row=None,
+                                  hop=decisions.HOP_ESCALATION))
+    for outcome, call, stage in (("failed", 0, 0), ("answered", 1, 1)):
+        escalation = decisions.Escalation(0, "abstained", None, before, outcome,
+                                          "" if outcome == "answered" else "declined")
+        decision = decisions.Decision(items=(before,), backend="native", calls=calls,
+                                      escalations=(escalation,))
+        (record,) = runner.item_records(decision)
+        assert (record["call"], record["stage"], record["escalated"]) == (call, stage, True)
