@@ -66,3 +66,17 @@ export function ControlsReadout({ presetId, provider, model, operation }:
     </ul>
   );
 }
+
+/** "What this sends", folded, asking the server only once it is opened: a
+ *  form of many rows would otherwise send one preview per row on load, for
+ *  answers nobody unfolded. */
+export function WhatItSends(props: { presetId: string; provider: string; model: string;
+                                     operation?: "decide" }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className="what-it-sends" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>What this sends</summary>
+      {open && <ControlsReadout {...props} />}
+    </details>
+  );
+}

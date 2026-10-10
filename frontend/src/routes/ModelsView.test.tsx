@@ -915,3 +915,62 @@ test("a settings refresh while the form is open does not make an untouched role 
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
   expect(putBody()[0]).toEqual({ routes: { summary: { use: "fast" } } });
 });
+
+test("a folded What this sends asks the server nothing until it is opened", async () => {
+  await openSummary();
+  await waitFor(() => expect(row("Primary").getByText("working")).toBeInTheDocument());
+  expect(api.previewControls).not.toHaveBeenCalled();
+  fireEvent.click(row("Primary").getByText("What this sends"));
+  await waitFor(() => expect(api.previewControls).toHaveBeenCalledTimes(1));
+  cleanup();
+  vi.mocked(api.previewControls).mockClear();
+  await openForm("#advanced");
+  expect(api.previewControls).not.toHaveBeenCalled();
+  fireEvent.click(task("Rolling summary").getByText("What this sends"));
+  await waitFor(() => expect(api.previewControls).toHaveBeenCalledTimes(1));
+});
+
+test("a task whose draft moved says it is checked on save, not what the saved one said", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+    ROUTES[0],
+    { ...ROUTES[1], problem: "The summary model is gone.", fallback_problem: "Realm Local has no key set" },
+    ROUTES[2], ROUTES[3],
+  ] }));
+  await openForm("#advanced");
+  expect(task("Rolling summary").getByText("The summary model is gone.")).toBeInTheDocument();
+  expect(task("Rolling summary").queryByText("Checked when you save.")).toBeNull();
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" }),
+                   { target: { value: "primary" } });
+  expect(task("Rolling summary").queryByText("The summary model is gone.")).toBeNull();
+  expect(task("Rolling summary").queryByText(/Realm Local has no key set/)).toBeNull();
+  expect(task("Rolling summary").queryByText("What this sends")).toBeNull();
+  expect(task("Rolling summary").getByText("Checked when you save.")).toBeInTheDocument();
+});
+
+test("a role whose draft moved says it is checked on save, not what the saved one said", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    fast: card({ stored: sel("saltmarch", "vendor/embed"), problem: "vendor/embed cannot generate text.",
+                 fallback: sel("realm", "vendor/m"), fallback_problem: "Realm Local has no key set" }),
+  } }));
+  await openForm();
+  expect(roleBox("Fast").getByText("vendor/embed cannot generate text.")).toBeInTheDocument();
+  pick("Fast provider", "realm");
+  expect(roleBox("Fast").queryByText("vendor/embed cannot generate text.")).toBeNull();
+  expect(roleBox("Fast").getByText("Checked when you save.")).toBeInTheDocument();
+  // The fallback's words were about the saved primary too.
+  expect(roleBox("Fast").queryByText(/Realm Local has no key set/)).toBeNull();
+});
+
+test("a pin on a route that sends images asks the provider for generate and vision", async () => {
+  await openForm("#advanced");
+  fireEvent.change(task("Image descriptions").getByRole("combobox", { name: "Image descriptions use" }),
+                   { target: { value: "model" } });
+  vi.mocked(api.readConnectionCapabilities).mockClear();
+  fireEvent.change(task("Image descriptions").getByRole("combobox",
+                   { name: "Image descriptions pinned provider" }), { target: { value: "realm" } });
+  await waitFor(() => {
+    expect(api.readConnectionCapabilities).toHaveBeenCalledWith("realm", "generate");
+    expect(api.readConnectionCapabilities).toHaveBeenCalledWith("realm", "vision");
+  });
+});
