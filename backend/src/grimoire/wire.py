@@ -13,7 +13,8 @@ refuses anything else. There is no connection dict any more: slice I
 deleted the lowering these replaced (Task 10).
 
 Every class is frozen. A change is a new value (`with_account`,
-`without_sampling`, `Chain.alone`), never a write into a shared one.
+`with_output_cap`, `without_sampling`, `Chain.alone`), never a write into a
+shared one.
 """
 
 from __future__ import annotations
@@ -33,6 +34,13 @@ class Sampling:
     #: "connection" or "none".
     scope: str = "none"
     params: dict = field(default_factory=dict)
+    #: The output cap THIS call added (`Target.with_output_cap`, 01f), or None:
+    #: what lets a refusal of `max_tokens` be worded as the call's rather than
+    #: the user's preset's (`llm.CapRefusalError`). Never set by a resolution.
+    call_cap: int | None = None
+    #: Whether the preset carried a `max_tokens` of its own under that cap:
+    #: then a refusal of it is the preset's too.
+    preset_cap: bool = False
 
 
 @dataclass(frozen=True)
@@ -99,6 +107,21 @@ class Target:
         """This target with `fields` laid over its account: a NEW target and a
         NEW `Account`. An unknown field raises TypeError."""
         return dataclasses.replace(self, account=dataclasses.replace(self.account, **fields))
+
+    def with_output_cap(self, n: int) -> Target:
+        """A NEW target whose sampling `max_tokens` is the smaller of the
+        preset's and `n` -- or `n` when the preset sets none (or sets
+        something that is not a positive int) -- per call (01f, 3.9). The
+        preset's id, name and scope are kept, so the ledger still names the
+        preset the call was sent with; `call_cap` records `n`. Whether the cap
+        reaches the wire is the adapter's (`inference.cap_sent`)."""
+        own = self.sampling.params.get("max_tokens")
+        valid = isinstance(own, int) and not isinstance(own, bool) and own > 0
+        capped = own if isinstance(own, int) and valid and own < n else n
+        sampling = dataclasses.replace(
+            self.sampling, params={**self.sampling.params, "max_tokens": capped},
+            call_cap=n, preset_cap=valid)
+        return dataclasses.replace(self, sampling=sampling)
 
     def without_sampling(self) -> Target:
         """This target with no sampler preset: what a native decision is sent,

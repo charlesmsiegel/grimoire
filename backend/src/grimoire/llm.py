@@ -687,6 +687,16 @@ class PresetRefusalError(LLMError):
     Every `except LLMError` still catches it, with the same kind and status."""
 
 
+class CapRefusalError(PresetRefusalError):
+    """A `PresetRefusalError` whose refused control is an output cap the CALL
+    added (`wire.Target.with_output_cap`, `inference.generate(max_tokens=)`)
+    and no preset of the user's carried (01f, 3.9): worded as the call's, so
+    nobody is sent to fix a preset that set nothing. The same kind and status,
+    and like its parent it is never handed to the fallback -- which would be
+    sent the same cap -- nor re-sent without the cap: a caller that needed it
+    as a bound (a spend ceiling) cannot use an uncapped reply."""
+
+
 #: Keys that select a variant rather than carry a setting: a refusal naming one
 #: alone (a content block's `type`) is not about the control that sent it, and
 #: one that IS names its parent (`thinking.type`, `thinking`) anyway.
@@ -779,9 +789,20 @@ def _preset_refusal(exc: LLMError, target: wire.Target) -> PresetRefusalError | 
                  for name in sent}
     # llama.cpp's spelling, whichever one this endpoint was sent.
     spellings.get("repetition_penalty", set()).add("repeat_penalty")
-    if not any(form in detail for forms in spellings.values() for form in forms):
+    named = [control for control, forms in spellings.items()
+             if any(form in detail for form in forms)]
+    if not named:
         return None
-    name = target.sampling.preset_name or target.sampling.preset_id or "?"
+    sampling = target.sampling
+    if named == ["max_tokens"] and sampling.call_cap is not None and not sampling.preset_cap:
+        # The cap is the call's alone (01f, 3.9): no preset of the user's
+        # carried it, so none is named as the thing to fix.
+        return CapRefusalError(
+            exc.kind,
+            f"{exc.detail} — this call's output cap (max_tokens) was refused, so the "
+            "fallback connection was not tried",
+            exc.retry_after, status=exc.status, code=exc.code)
+    name = sampling.preset_name or sampling.preset_id or "?"
     return PresetRefusalError(
         exc.kind,
         f"{exc.detail} — this request carried sampler preset “{name}” "

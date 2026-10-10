@@ -685,7 +685,8 @@ def report(target: wire.Target | None) -> dict | None:
     only where a drop could be happening that this side cannot see: an applied
     control whose state is `unknown` -- an OpenRouter connection with no cached
     catalog for its model, which sends everything and cannot say whether the
-    model takes it.
+    model takes it. `call_cap` is there only when the call added an output cap
+    of its own (`wire.Target.with_output_cap`, 01f).
     """
     if not isinstance(target, wire.Target):
         return None
@@ -710,7 +711,11 @@ def report(target: wire.Target | None) -> dict | None:
             # An `unknown` that sends nothing has applied nothing anyone knows.
             applied[name] = eff["requested"][name]
     verified = not any(eff["controls"][name]["state"] == UNKNOWN for name in applied)
-    return {**head,
+    # An output cap the call added (01f, `wire.Target.with_output_cap`):
+    # `applied` says whether it went on the wire, and this says it was the
+    # call's, not the preset's.
+    cap = {} if sampling.call_cap is None else {"call_cap": sampling.call_cap}
+    return {**head, **cap,
             "applied": applied, "dropped": _dropped(eff, CONTROLS), "verified": verified}
 
 

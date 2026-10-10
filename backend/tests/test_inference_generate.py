@@ -16,7 +16,16 @@ from dataclasses import fields
 
 import pytest
 
-from grimoire import inference, llm, llm_reasoning, model_guidance, schemas, store, wire
+from grimoire import (
+    inference,
+    llm,
+    llm_reasoning,
+    llm_sampling,
+    model_guidance,
+    schemas,
+    store,
+    wire,
+)
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store.inference.capabilities import NO, UNKNOWN, YES, Cap
@@ -411,3 +420,112 @@ def test_another_failure_is_not_resent():
         asyncio.run(inference.generate("chat", _prompt(), client=_real(provider),
                                        resolved=resolved, schema=SCHEMA, stream=False))
     assert len(provider.requests) == 1
+
+
+# ---- the per-call output cap (01f, 3.9) ----
+
+def _preset(target: wire.Target, **params) -> wire.Target:
+    return dataclasses.replace(target, sampling=wire.Sampling("warm", "Warm", "global",
+                                                              dict(params)))
+
+
+def test_with_output_cap_is_a_new_target_capped_at_the_smaller():
+    warm = _preset(CONN, temperature=0.7, max_tokens=4000)
+    capped = warm.with_output_cap(300)
+    assert capped.sampling.params == {"temperature": 0.7, "max_tokens": 300}
+    assert (capped.sampling.preset_id, capped.sampling.preset_name, capped.sampling.scope) == (
+        "warm", "Warm", "global")
+    assert (capped.sampling.call_cap, capped.sampling.preset_cap) == (300, True)
+    assert warm.sampling.params == {"temperature": 0.7, "max_tokens": 4000}
+    assert warm.sampling.call_cap is None
+    # The preset's own cap, when smaller, is the one sent.
+    assert warm.with_output_cap(9000).sampling.params["max_tokens"] == 4000
+    # No preset cap -- or one that is not a positive int -- is the call's.
+    for target in (CONN, _preset(CONN, max_tokens="lots"), _preset(CONN, max_tokens=0)):
+        capped = target.with_output_cap(300)
+        assert capped.sampling.params["max_tokens"] == 300
+        assert capped.sampling.preset_cap is False
+
+
+@pytest.mark.parametrize("bad", [0, -5, True, "300", 2.5])
+@pytest.mark.parametrize("stream", [True, False])
+def test_a_cap_that_is_not_a_positive_int_is_refused_before_any_call(bad, stream):
+    fake = FakeLLM([["never sent"]])
+    holder: dict = {}
+    with pytest.raises(ValueError, match="max_tokens"):
+        inference.generate("chat", _prompt(), client=fake, resolved=wire_kit.resolution(CONN),
+                           usage=holder, max_tokens=bad, stream=stream)
+    assert fake.calls == 0 and holder == {}
+
+
+@pytest.mark.parametrize("schema", [None, SCHEMA])
+def test_the_cap_is_sent_on_every_attempt_and_the_chain_is_call_chains(schema):
+    resolved = _capable(wire_kit.resolution(wire.Chain(_preset(CONN, max_tokens=4000), OTHER)),
+                        YES, NO)
+    before = resolved.chain
+    fake = FakeLLM([["{}"]])
+    asyncio.run(inference.generate("chat", _prompt(), client=fake, resolved=resolved,
+                                   schema=schema, max_tokens=250, stream=False))
+    sent = fake.requests[0]["chain"]
+    assert sent == inference.call_chain(resolved, schema=schema, max_tokens=250)
+    assert [t.sampling.params.get("max_tokens") for t in sent.attempts] == [250, 250]
+    assert [t.sampling.call_cap for t in sent.attempts] == [250, 250]
+    assert [t.structured for t in sent.attempts] == ([True, False] if schema else [False, False])
+    assert resolved.chain == before and before.primary.sampling.params == {"max_tokens": 4000}
+
+
+def test_the_cap_reaches_the_wire_where_cap_sent_says_so():
+    listed = dataclasses.replace(CONN, model_params=("temperature", "max_tokens"))
+    omitted = dataclasses.replace(CONN, model_params=("temperature",))
+    claude = wire_kit.target(provider_id="claude", kind="claude", model="claude-sonnet",
+                             api_key="")
+    anthropic = wire_kit.target(provider_id="anthropic", kind="anthropic",
+                                model="claude-opus-5", api_key="sk-ant")
+    assert inference.cap_sent(listed.with_output_cap(200))
+    assert inference.cap_sent(CONN.with_output_cap(200))          # no catalog: sent
+    assert inference.cap_sent(anthropic.with_output_cap(200))
+    assert not inference.cap_sent(omitted.with_output_cap(200))
+    assert not inference.cap_sent(claude.with_output_cap(200))
+    assert llm_sampling.effective(anthropic.with_output_cap(200))["effective"]["max_tokens"] == 200
+
+    for target, wanted in ((listed, {"max_tokens": 200}), (omitted, None)):
+        provider = SequencedProvider([["{}"]])
+        asyncio.run(inference.generate("chat", _prompt(), client=_real(provider),
+                                       resolved=wire_kit.resolution(target),
+                                       max_tokens=200, stream=False))
+        assert provider.requests[0]["kwargs"].get("sampling") == wanted
+
+
+def test_a_refused_call_cap_is_worded_as_the_calls():
+    seen: list = []
+    refused = LLMError("bad_response", "max_tokens is not supported by this endpoint",
+                       status=400)
+    provider = SequencedProvider([refused, ["never"]])
+    resolved = wire_kit.resolution(wire.Chain(CONN, OTHER))
+    with pytest.raises(llm.CapRefusalError) as exc:
+        asyncio.run(inference.generate("chat", _prompt(), client=_real(provider, seen),
+                                       resolved=resolved, max_tokens=200, stream=False))
+    assert isinstance(exc.value, llm.PresetRefusalError)
+    assert (exc.value.kind, exc.value.status) == ("bad_response", 400)
+    assert "this call's output cap (max_tokens) was refused" in exc.value.detail
+    assert "sampler preset" not in exc.value.detail
+    # Not handed to the fallback, never re-sent without the cap, not observed.
+    assert len(provider.requests) == 1 and seen == []
+
+
+def test_a_refused_cap_the_preset_carried_too_is_the_presets():
+    refused = LLMError("bad_response", "max_tokens is not supported", status=400)
+    provider = SequencedProvider([refused])
+    resolved = wire_kit.resolution(_preset(CONN, max_tokens=4000))
+    with pytest.raises(llm.PresetRefusalError) as exc:
+        asyncio.run(inference.generate("chat", _prompt(), client=_real(provider),
+                                       resolved=resolved, max_tokens=200, stream=False))
+    assert not isinstance(exc.value, llm.CapRefusalError)
+    assert "sampler preset “Warm”" in exc.value.detail
+
+
+def test_the_capture_report_names_the_calls_cap():
+    capped = _preset(CONN, temperature=0.7).with_output_cap(200)
+    report = llm_sampling.report(capped)
+    assert report["call_cap"] == 200 and report["applied"]["max_tokens"] == 200
+    assert "call_cap" not in llm_sampling.report(CONN)

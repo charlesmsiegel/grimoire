@@ -71,7 +71,17 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Literal, NamedTuple, TypeVar, overload
 
-from . import decisions, llm, llm_errors, model_guidance, prompts, schemas, store, wire
+from . import (
+    decisions,
+    llm,
+    llm_errors,
+    llm_sampling,
+    model_guidance,
+    prompts,
+    schemas,
+    store,
+    wire,
+)
 from .llm import LLMClient
 from .llm_errors import LLMError
 from .store.inference import resolve
@@ -802,28 +812,51 @@ def _generating(task: str, resolved: ResolvedInference) -> wire.Chain:
     return chain
 
 
-def call_chain(resolved: ResolvedInference, *, schema: dict | None = None) -> wire.Chain:
-    """The chain one `generate` call sends (01f, 3.2): `resolved.chain`, with
-    -- when the call asks for a `schema` -- each target whose attempt is
-    `resolve.structured_capable` replaced by a NEW target flagged for its
-    provider's structured mode. The primary is `attempts[0]`, the fallback,
-    when it rides, `attempts[1]`.
+def call_chain(resolved: ResolvedInference, *, schema: dict | None = None,
+               max_tokens: int | None = None) -> wire.Chain:
+    """The chain one `generate` call sends (01f, 3.2 and 3.9): `resolved.chain`,
+    with -- when the call asks for a `schema` -- each target whose attempt is
+    `resolve.structured_capable` flagged for its provider's structured mode,
+    and -- when it names `max_tokens` -- every target's output capped at it
+    (`wire.Target.with_output_cap`). The primary is `attempts[0]`, the
+    fallback, when it rides, `attempts[1]`.
 
     Pure, and per call: a resolution's targets are frozen and shared, and
-    the flag is a property of this call rather than of the route, so the
-    resolution is never changed. A caller that records the prompt hands the
-    same chain to `routes.common._record_prompt`, so the log says what this
-    call was sent. A resolution of nothing is a `ValueError`."""
+    the flag and the cap are properties of this call rather than of the
+    route, so the resolution is never changed -- each change is a NEW target.
+    A caller that records the prompt hands the same chain to
+    `routes.common._record_prompt`, so the log says what this call was sent.
+    A resolution of nothing, or a `max_tokens` that is not a positive int, is
+    a `ValueError`."""
     chain = resolved.chain
     if chain is None:
         raise ValueError(f"{resolved.task!r} resolved to no connection")
-    if schema is None:
+    if max_tokens is not None and (not isinstance(max_tokens, int)
+                                   or isinstance(max_tokens, bool) or max_tokens < 1):
+        raise ValueError(f"max_tokens must be a positive int, not {max_tokens!r}")
+    if schema is None and max_tokens is None:
         return chain
-    flagged = [replace(target, structured=resolve.structured_capable(attempt))
-               for target, attempt in zip(chain.attempts, resolved.attempts, strict=False)]
-    if flagged == list(chain.attempts):
-        return chain
-    return wire.Chain(*flagged)
+    sent = []
+    for target, attempt in zip(chain.attempts, resolved.attempts, strict=False):
+        one = target
+        if schema is not None:
+            capable = resolve.structured_capable(attempt)
+            if one.structured != capable:
+                one = replace(one, structured=capable)
+        if max_tokens is not None:
+            one = one.with_output_cap(max_tokens)
+        sent.append(one)
+    return chain if sent == list(chain.attempts) else wire.Chain(*sent)
+
+
+def cap_sent(target: wire.Target) -> bool:
+    """Whether this attempt's adapter puts its `max_tokens` (or the wire's
+    translation of it) on the wire: not on the Claude Agent SDK, which takes
+    no sampling, nor to an OpenRouter model whose cached catalog leaves the
+    parameter out -- there a call's cap is silently no bound (01f, 3.9). Pure.
+    A caller that needs the cap to BE a bound (a spend ceiling) asks this
+    before the call."""
+    return "max_tokens" in llm_sampling.sent_names(target)
 
 
 def _says(message: object, text: str) -> bool:
@@ -884,20 +917,20 @@ def _add_attempts(usage: dict | None, before: int) -> None:
 @overload
 def generate(task: str, messages: list[dict], *, client: LLMClient,
              resolved: ResolvedInference, usage: dict | None = None,
-             schema: dict | None = None,
+             schema: dict | None = None, max_tokens: int | None = None,
              stream: Literal[True] = True) -> AsyncIterator[str]: ...
 
 
 @overload
 def generate(task: str, messages: list[dict], *, client: LLMClient,
              resolved: ResolvedInference, usage: dict | None = None,
-             schema: dict | None = None,
+             schema: dict | None = None, max_tokens: int | None = None,
              stream: Literal[False]) -> Awaitable[str]: ...
 
 
 def generate(task: str, messages: list[dict], *, client: LLMClient,
              resolved: ResolvedInference, usage: dict | None = None,
-             schema: dict | None = None,
+             schema: dict | None = None, max_tokens: int | None = None,
              stream: bool = True) -> AsyncIterator[str] | Awaitable[str]:
     """Generate free text for `task` (spec 7.2): with `stream=True` an async
     iterator of the reply's deltas, with `stream=False` an awaitable of the
@@ -929,17 +962,26 @@ def generate(task: str, messages: list[dict], *, client: LLMClient,
     made. On the streamed path that happens only before any text reached the
     caller, which `llm._resilient` guarantees.
 
-    The facade is sent the call's chain positionally, with `schema=` only
-    when one is given, so a call without one is the request, ledger row and
-    capture it was before 01f."""
+    `max_tokens`, with or without a schema, caps each attempt's output at the
+    smaller of its preset's cap and this one, on new per-call targets
+    (`wire.Target.with_output_cap`) -- where that attempt's adapter sends the
+    parameter at all (`cap_sent`). A value that is not a positive int is a
+    `ValueError` before any call; a provider refusing a cap only the call
+    carried is `llm.CapRefusalError`, worded as the call's and never re-sent
+    without it. A cap that cuts a structured reply short leaves JSON that
+    does not parse, which is the caller's "no JSON" outcome.
+
+    The facade is sent the call's chain (`call_chain`) positionally, with
+    `schema=` only when one is given, so a call that names neither is the
+    request, ledger row and capture it was before 01f."""
     base = _generating(task, resolved)
     if schema is None:
-        chain = call_chain(resolved)
+        chain = call_chain(resolved, max_tokens=max_tokens)
         if stream:
             return client.stream(messages, chain, usage)
         return client.complete(messages, chain, usage)
     _refuse_unschemable(schema, messages, base)
-    chain = call_chain(resolved, schema=schema)
+    chain = call_chain(resolved, schema=schema, max_tokens=max_tokens)
     # The facade calls stay here, so `test_usage_guard.FORWARDERS` sees each
     # one forward this function's own `usage`; the re-send around them is
     # `_joined` / `_streamed`'s.
