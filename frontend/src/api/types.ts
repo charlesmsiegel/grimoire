@@ -452,6 +452,13 @@ export type ModelFacts = {
   verified: Partial<Record<CapabilityName, VerifiedResult>>;
   overrides: Partial<Record<CapabilityName, "yes" | "no">>;
   capabilities: Record<CapabilityName, CapabilityValue>;
+  /** The model's size as the user STATED it (01i): what the form edits.
+   *  `null` when not stated. */
+  context_window: number | null;
+  max_output: number | null;
+  /** The model's size as a call would use it: the stated value, else the
+   *  catalog's, else unknown -- each with the catalog's own figure beside it. */
+  limits: { window: ModelLimit; max_output: ModelLimit };
   /** The facts file exists and could not be read: nothing above is what the
    *  user said, and a save is refused, so none is offered. */
   unreadable?: boolean;
@@ -460,6 +467,12 @@ export type ModelFacts = {
    *  person has to fix (a save answers 409 `facts_unreadable`). */
   unreadable_reason?: "held" | "mangled";
 };
+/** Where a model's size came from (01i): the user's word, the provider's
+ *  catalog, or nowhere. */
+export type LimitSource = "user" | "catalog" | "unknown";
+/** One size fact: a positive token count, `null` exactly when `unknown`.
+ *  `catalog` (the facts panel only) is the listing's own figure. */
+export type ModelLimit = { value: number | null; source: LimitSource; catalog?: number | null };
 /** `PUT /api/llm-connections/{id}/facts`. A field left out is left as it is;
  *  an override of `""` removes that override. */
 export type ModelFactsUpdate = {
@@ -474,6 +487,10 @@ export type ModelFactsUpdate = {
   /** The model's own rates: both base rates, no unknown field, and an unset
    *  rate LEFT OUT (a present `null` is refused); `{}` clears them. */
   rates?: PricingEntry | Record<string, never>;
+  /** The model's size on this provider (01i): a positive whole number sets
+   *  one, `0` removes it. A max output above the window is refused. */
+  context_window?: number;
+  max_output?: number;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
 export type TestableCapability = "generate" | "vision" | "embed" | "decide_native";
