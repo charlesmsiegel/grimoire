@@ -952,7 +952,8 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
                  capture: Capture | None = None,
                  around: Around | None = None,
                  escalation: Escalator | None = None, response_id: str = "",
-                 run_id: str = "", loop_turn: int | None = None) -> decisions.Decision:
+                 run_id: str = "", loop_turn: int | None = None,
+                 max_tokens: int | None = None) -> decisions.Decision:
     """Answer `items` (spec 7.4): one `ItemResult` per item, in input order.
 
     `resolved` is the call site's own resolution of `task` for the `decide`
@@ -977,8 +978,16 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     triggered: the items it hands over are answered once more by the
     escalation role's primary alone, or by the `Resolver` it returns, and
     what became of each is `Decision.escalations` (`_escalate`).
+
+    `max_tokens` (01g-S7) caps each structured stage's output, held to each
+    attempt's own maximum (`wire.Target.with_output_cap`, as `generate`'s
+    `max_tokens=` is): what the decide tool's spend projection bounds. A
+    native stage takes no sampling, so no cap; a value that is not a positive
+    whole number is a `ValueError` before any meter opens.
     """
     items = tuple(items)
+    if max_tokens is not None:
+        _check_cap(max_tokens)
     if resolved.task != task:
         raise ValueError(f"a resolution of {resolved.task!r} cannot decide {task!r}")
     if resolved.operation != "decide":
@@ -989,6 +998,8 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     chain = stages(resolved)
     if not chain:
         raise ValueError(f"no decision backend for mode {resolved.decision_mode!r}")
+    if max_tokens is not None:
+        chain = tuple(_capped_stage(stage, max_tokens) for stage in chain)
     base = await run_stages(task, items, chain, client=client,
                             explain=explain, campaign=campaign, scene=scene, post=post,
                             round_id=round_id, capture=capture, around=around,
@@ -1323,6 +1334,66 @@ def _escalated(base: decisions.Decision, found: tuple[decisions.Trigger, ...],
 
 
 # ---- generate (spec 7.2) ----
+
+def _capped(target: wire.Target, max_tokens: int) -> wire.Target:
+    return target.with_output_cap(max_tokens, most=clamp_to_max_output(target, max_tokens))
+
+
+def _capped_stage(stage: Stage, max_tokens: int) -> Stage:
+    """A structured stage's chain, each attempt output-capped (01g-S7); a
+    native stage as it is (it sends no sampling)."""
+    if stage.mode != STRUCTURED:
+        return stage
+    chain = stage.chain
+    return stage._replace(chain=wire.Chain(
+        _capped(chain.primary, max_tokens),
+        None if chain.fallback is None else _capped(chain.fallback, max_tokens)))
+
+
+def decide_projection(resolved: ResolvedInference, item: decisions.Item, max_tokens: int,
+                      prices: dict[tuple[str, str], Price | None]) -> float | None:
+    """What one decide call over `item` could cost, as the spend guard prices
+    it (01g-S7; spec 3.9): the rendered decide prompt's tokens with the margin
+    and the call's output cap, at each attempt's price, summed over every call
+    the decision could make -- each stage's attempts, and each one's
+    prompt-only re-send. None when any stage is native (a native call is
+    never modelled) or any attempt is unpriceable or uncapped. Renders a
+    template: run it off the event loop."""
+    counted = _prompt_count(structured_messages([item], explain=""), ())
+    prompt = counted * tool_calls.PROJECTION_MARGIN
+    total = 0.0
+    for stage in stages(resolved):
+        if stage.mode != STRUCTURED:
+            return None
+        for target in stage.chain.attempts:
+            sent = _capped(target, max_tokens)
+            cost = (_cost(prices.get((target.provider_id, target.model)), prompt,
+                          clamp_to_max_output(target, max_tokens)) if cap_sent(sent) else None)
+            if cost is None:
+                return None
+            total += 2 * cost
+    return total
+
+
+def rows_cost(rows: Sequence[dict], prices: dict[tuple[str, str], Price | None]
+              ) -> float | None:
+    """`rows` priced as the spend guard prices a row (its counts at its
+    attempt's price), or None when any one cannot be. Never a reported
+    figure."""
+    total = 0.0
+    for row in rows:
+        prompt, completion = row.get("prompt_tokens"), row.get("completion_tokens")
+        if not (isinstance(prompt, int) and isinstance(completion, int)):
+            return None
+        provider = row.get("provider_id", "")
+        price = (prices.get((provider, row.get("requested_model", "")))
+                 or prices.get((provider, row.get("model", ""))))
+        cost = _cost(price, prompt, completion)
+        if cost is None:
+            return None
+        total += cost
+    return total
+
 
 def _generating(task: str, resolved: ResolvedInference) -> wire.Chain:
     """The chain `resolved` sends for `task`'s generation (its primary's
@@ -1813,6 +1884,29 @@ def _loop_refusal(task: str, messages: list[dict], toolset: tool_calls.Toolset,
         raise ValueError("a tool loop cannot start inside another")
 
 
+class _RunView:
+    """What a tool may ask of the run it is in (`tool_calls.RunView`): a
+    decision against the run's cap, the spend left under its ceiling, and
+    a charge for what a tool's own LLM calls cost (01g-S7)."""
+
+    def __init__(self, loop: _Loop):
+        self._loop = loop
+
+    def take_decision(self) -> bool:
+        loop = self._loop
+        if loop.decisions_used >= loop.budget.max_decisions:
+            return False
+        loop.decisions_used += 1
+        return True
+
+    def room_usd(self) -> float | None:
+        ceiling = self._loop.budget.spend_ceiling_usd
+        return None if ceiling is None else ceiling - self._loop._spent()
+
+    def charge(self, usd: float) -> None:
+        self._loop.charged += max(0.0, usd)
+
+
 @dataclass(frozen=True)
 class _Turn:
     """One settled model turn."""
@@ -1871,6 +1965,10 @@ class _Loop:
         self.last_prompt: float | None = None
         self.next_prompt = 0.0
         self.sent_len = 0
+        #: The decide tool's share (01g-S7): decisions taken, and what its
+        #: calls cost as the guard prices them.
+        self.decisions_used = 0
+        self.charged = 0.0
 
     # ---- the run ----
     async def events(self) -> AsyncGenerator[tool_calls.LoopEvent, None]:
@@ -2018,6 +2116,8 @@ class _Loop:
         self._append(turn, results)
         if self.calls_used >= self.budget.max_tool_calls:
             self.limit = self.limit or "tool_calls"
+        if self.decisions_used and self.decisions_used >= self.budget.max_decisions:
+            self.limit = self.limit or "decisions"
         self._note_switch(turn.target)
         return None
 
@@ -2134,7 +2234,7 @@ class _Loop:
         """Every sent turn's cost as the guard prices it: its row's counts at
         its attempt's price, else that turn's projection. Never a reported
         figure (`cost_usd`) -- the guard keeps one unit."""
-        total = 0.0
+        total = self.charged
         for projection, row in self.spends:
             cost = self._row_cost(row)
             total += cost if cost is not None else projection
@@ -2434,7 +2534,8 @@ class _Loop:
         end = self.t0 + self.wall if self.wall > 0 else float("inf")
         ctx = tool_calls.ToolContext(campaign=self.attribution["campaign"],
                                      scene_identity=self.scene_identity, run_id=self.run_id,
-                                     deadline=end, root=self.root)
+                                     deadline=end, root=self.root, turn=self.turns,
+                                     run=_RunView(self))
         seconds = min(spec.timeout, end - time.monotonic())
 
         async def marked() -> tool_calls.ToolOutput:
