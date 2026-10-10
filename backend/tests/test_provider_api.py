@@ -1154,9 +1154,10 @@ def test_an_options_write_on_another_model_asks_nothing(client):
 
 
 @pytest.mark.parametrize(("block", "message"), [
-    ({"input": "param", "param_field": "input_type", "query_value": "query",
-      "document_value": "document"}, facts.PARAM_NOT_YET),
-    ({"dimensions": 512}, facts.DIMENSIONS_NOT_YET),
+    ({"input": "param", "param_field": "input_type", "query_value": "query"},
+     facts.EMBED_NO_PARAM),
+    ({"dimensions": 512.0}, facts.EMBED_BAD_DIMENSIONS),
+    ({"dimensions": True}, facts.EMBED_BAD_DIMENSIONS),
     ({"input": "prefix", "document_prefix": "a\u0000b"}, facts.EMBED_CONTROL),
     ({"dimensions_field": "model"}, facts.EMBED_RESERVED),
     ({"document_prefix": "passage: "}, facts.EMBED_WRONG_MODE),
@@ -1185,11 +1186,11 @@ def test_an_invalid_block_on_disk_is_flagged(client):
     path = store.llm_connections.facts_path(pid)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"vendor/embed-small": {"embedding": {
-        "input": "param", "param_field": "input_type", "query_value": "query",
-        "document_value": "document"}}}), encoding="utf-8")
+        "input": "param", "param_field": "input_type", "query_value": "query"}}}),
+        encoding="utf-8")
     read = client.get(_facts_url(pid), params={"model": "vendor/embed-small"}).json()
     assert read["embedding_invalid"] is True
-    assert read["embedding_invalid_reason"] == facts.PARAM_NOT_YET
+    assert read["embedding_invalid_reason"] == facts.EMBED_NO_PARAM
     assert store.embed_space.resolve() is None
 
 
@@ -1236,3 +1237,28 @@ def test_moving_the_legacy_embedding_keys_onto_unreadable_facts_still_asks(clien
     got = client.put("/api/config", json={"embeddings_connection_id": spare})
     assert got.status_code == 400, got.text
     assert got.json()["kind"] == "confirm_embedding"
+
+
+# ---- the request field and dimensions (01h-S3) ----
+
+JINA = {"input": "param", "param_field": "task", "query_value": "retrieval.query",
+        "document_value": "retrieval.passage", "dimensions": 512}
+
+
+def test_a_request_field_and_dimensions_write_asks_then_moves_the_space(client):
+    pid = _embedding_on(client)
+    space = store.embed_space.resolve()["space"]
+    body = {"model": "vendor/embed-small", "embedding": JINA}
+    got = client.put(_facts_url(pid), json=body)
+    assert got.status_code == 400 and got.json()["kind"] == "confirm_embedding"
+    assert facts.read(pid) == {}
+    got = client.put(_facts_url(pid), json={**body, "confirm_embedding": True})
+    assert got.status_code == 200, got.text
+    moved = store.embed_space.resolve()["space"]
+    assert moved.startswith(space + "\0embopt1:")
+    assert store.embed_space.endpoint()["options"].dimensions == 512
+    # The query value is query-side: changing it moves nothing and asks nothing.
+    got = client.put(_facts_url(pid), json={
+        "model": "vendor/embed-small", "embedding": {**JINA, "query_value": "query"}})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve()["space"] == moved

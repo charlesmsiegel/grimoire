@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+from grimoire import wire
 from grimoire.store import llm_connections
 from grimoire.store.inference import facts
 
@@ -493,11 +494,19 @@ def test_a_qwen_style_prefix_with_a_newline_is_kept(conn):
     ({"dimensions_field": "a.b"}, facts.EMBED_BAD_FIELD),
     ({"dimensions_field": "Field"}, facts.EMBED_BAD_FIELD),
     ({"dimensions_field": "f" * 42}, facts.EMBED_BAD_FIELD),
-    ({"input": "param", "param_field": "input_type", "query_value": "query",
-      "document_value": "document"}, facts.PARAM_NOT_YET),
-    ({"dimensions": 512}, facts.DIMENSIONS_NOT_YET),
-    ({"dimensions": 512.0}, facts.DIMENSIONS_NOT_YET),
-    ({"dimensions": True}, facts.DIMENSIONS_NOT_YET),
+    ({"input": "param", "param_field": "input_type", "query_value": "query"},
+     facts.EMBED_NO_PARAM),
+    ({"input": "param", "query_value": "query", "document_value": "document"},
+     facts.EMBED_NO_PARAM),
+    ({"input": "param", "param_field": "model", "query_value": "q",
+      "document_value": "d"}, facts.EMBED_RESERVED),
+    ({"input": "param", "param_field": "dimensions", "query_value": "q",
+      "document_value": "d", "dimensions": 512}, facts.EMBED_SAME_FIELD),
+    ({"dimensions": 512.0}, facts.EMBED_BAD_DIMENSIONS),
+    ({"dimensions": True}, facts.EMBED_BAD_DIMENSIONS),
+    ({"dimensions": "512"}, facts.EMBED_BAD_DIMENSIONS),
+    ({"dimensions": 0}, facts.EMBED_BAD_DIMENSIONS),
+    ({"dimensions": 32769}, facts.EMBED_BAD_DIMENSIONS),
 ])
 def test_invalid_embedding_options_are_refused_before_writing(conn, block, message):
     cid, _ = conn
@@ -515,9 +524,38 @@ def test_a_lone_dimensions_field_is_checked_and_dropped(conn):
     assert facts.read(cid)["embed-1"]["embedding"] == NOMIC_BLOCK
 
 
+@pytest.mark.parametrize(("block", "stored", "options"), [
+    ({"input": "param", "param_field": "input_type", "query_value": "query",
+      "document_value": "document"},
+     {"input": "param", "param_field": "input_type", "query_value": "query",
+      "document_value": "document"},
+     wire.EmbedOptions(input="param", param_field="input_type", query_value="query",
+                       document_value="document")),
+    ({"dimensions": 512},
+     {"dimensions": 512}, wire.EmbedOptions(dimensions=512)),
+    ({"input": "prefix", "document_prefix": "passage: ", "dimensions": 256,
+      "dimensions_field": "output_dimension"},
+     {"input": "prefix", "document_prefix": "passage: ", "dimensions": 256,
+      "dimensions_field": "output_dimension"},
+     wire.EmbedOptions(input="prefix", document_prefix="passage: ", dimensions=256,
+                       dimensions_field="output_dimension")),
+    ({"input": "param", "param_field": "task", "query_value": "retrieval.query",
+      "document_value": "retrieval.passage", "dimensions": 32768, "dimensions_field": None},
+     {"input": "param", "param_field": "task", "query_value": "retrieval.query",
+      "document_value": "retrieval.passage", "dimensions": 32768},
+     wire.EmbedOptions(input="param", param_field="task", query_value="retrieval.query",
+                       document_value="retrieval.passage", dimensions=32768)),
+])
+def test_the_request_field_and_dimensions_save(conn, block, stored, options):
+    cid, rev = conn
+    facts.state(cid, "embed-1", embedding=block)
+    assert facts.read(cid)["embed-1"]["embedding"] == stored
+    assert facts.embed_options(facts.of(cid, "embed-1", rev)) == options
+
+
 @pytest.mark.parametrize("block", [
-    {"input": "param", "param_field": "input_type", "query_value": "query",
-     "document_value": "document"},
+    {"input": "param", "param_field": "input_type", "query_value": "query"},
+    {"dimensions": 512.0},
     "prefix",
     {"input": "prefix"},
 ])

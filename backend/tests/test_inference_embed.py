@@ -607,3 +607,45 @@ def test_the_async_door_forwards_queries(nomic_space):
     asyncio.run(embed.embed("semantic-recall", ["q", "d"], space=nomic_space, client=client,
                             queries=1))
     assert json.loads(seen[0].content)["input"] == ["search_query: q", "search_document: d"]
+
+
+# ---- the request field and dimensions (01h-S3) ----
+
+def _stated_space(block: dict) -> dict:
+    from grimoire.store.inference import facts
+
+    conn = _provider()
+    _role(conn)
+    facts.state(conn, "embed-1", embedding=block)
+    got = embed_space.endpoint()
+    assert got is not None
+    return got
+
+
+def test_a_param_call_is_two_requests_one_row_one_line(_home):
+    logs.apply_level("debug")
+    space = _stated_space({"input": "param", "param_field": "input_type",
+                           "query_value": "query", "document_value": "document"})
+    client, seen = _client(_answer({"prompt_tokens": 2}))
+    out = embed.embed_sync("semantic-recall", ["Where is Mara?", "Mara crossed.", "Dusk."],
+                           space=space, client=client, queries=1)
+    assert len(out) == 3
+    assert [json.loads(r.content)["input_type"] for r in seen] == ["query", "document"]
+    rows = _rows()
+    assert len(rows) == 1 and rows[0]["prompt_tokens"] == 4
+    [line] = _embed_rows()
+    assert line["inputs"] == 3 and line["space_id"] == space["space"]
+
+
+def test_a_width_ignoring_endpoint_files_kind_and_code_only(_home):
+    space = _stated_space({"dimensions": 4})
+    client, seen = _client()          # answers two components, not four
+    with pytest.raises(embeddings.DimensionsMismatchError) as got:
+        embed.embed_sync("semantic-recall", [TEXT], space=space, client=client)
+    assert got.value.returned_dims == 2
+    assert json.loads(seen[0].content)["dimensions"] == 4
+    rows = _rows()
+    assert len(rows) == 1 and (rows[0]["status"], rows[0]["error"]) == ("error", "missing_key")
+    [logged] = logs.read(level="error")["rows"]
+    assert logged["message"] == "missing_key, code dimensions_mismatch"
+    assert logged["kind"] == "missing_key"

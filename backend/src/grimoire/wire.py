@@ -21,8 +21,8 @@ They live here, beside `Target`, so an adapter or a capture holding a target
 reads them without importing the store.
 
 An embedding target may carry the options a model's facts state for it
-(`EmbedOptions`, 01h): how its input type is sent, and (later) a requested
-width. Their document side is part of the Embedding role's vector space id
+(`EmbedOptions`, 01h): how its input type is sent, and a requested width.
+Their document side is part of the Embedding role's vector space id
 (`store.inference.resolve.space_of`), which is why its canonical form and
 digest are defined here, once.
 """
@@ -118,10 +118,9 @@ class EmbedOptions:
 
     Grimoire has two input types, query and document. `input` says how the
     type is sent: `none` sends texts unchanged, `prefix` prepends
-    `query_prefix` or `document_prefix` to each text, and `param` (sent from
-    a later slice) names the type in the request field `param_field`.
-    `dimensions` (later too) asks for a narrower vector, in
-    `dimensions_field`. `input` is one of `EMBED_INPUT_MODES`, held there by
+    `query_prefix` or `document_prefix` to each text, and `param` names the
+    type in the request field `param_field` (one type per request).
+    `dimensions` asks for a narrower vector, in `dimensions_field`. `input` is one of `EMBED_INPUT_MODES`, held there by
     the facts validator rather than a `Literal`."""
 
     input: str = "none"

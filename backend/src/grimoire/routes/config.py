@@ -1350,6 +1350,14 @@ async def _probe(client: LLMClient, cap: str, raw: dict, target: wire.Target,
                     m.usage, **offer), ceiling=MODEL_TEST_CEILING)
                 if calls is not None and not calls.called:
                     return _missed_call(calls)
+    except embeddings.DimensionsMismatchError as exc:
+        # A verdict on the model's stated options at this endpoint (01h §4.4):
+        # filed as a failed `embed` probe -- `unknown`, never `no` -- with both
+        # widths, so the panel can say the endpoint ignores the field. It
+        # halts nothing: the other probes ask other questions.
+        return _Outcome({"ok": False, "kind": exc.kind, "code": exc.code,
+                         "error": exc.detail, "requested_dims": exc.requested_dims,
+                         "returned_dims": exc.returned_dims}, True, False)
     except LLMError as exc:
         return _Outcome({"ok": False, "kind": exc.kind,
                          "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},
@@ -1376,6 +1384,12 @@ def _missed_call(calls: tool_calls.Collector) -> _Outcome:
     return _Outcome({"ok": False, "kind": "no_tool_call", "error": probes.NO_CALL}, True, False)
 
 
+#: What a probe's filed verdict keeps of its result: `dims` from a passed
+#: `embed` probe, and both widths from one whose endpoint ignored a requested
+#: `dimensions` (01h §4.4).
+_VERDICT_KEYS = ("ok", "error", "dims", "requested_dims", "returned_dims")
+
+
 async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict,
                      target: wire.Target, model: str) -> tuple[dict[str, dict], dict[str, dict]]:
     """`(results, verdicts)` for `caps`, probed in order.
@@ -1394,7 +1408,7 @@ async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict,
         outcome = await _probe(client, cap, raw, target, model)
         results[cap] = outcome.result
         if outcome.records:
-            verdicts[cap] = {k: outcome.result[k] for k in ("ok", "error", "dims")
+            verdicts[cap] = {k: outcome.result[k] for k in _VERDICT_KEYS
                              if k in outcome.result}
         if outcome.halts:
             stopped = f"the {cap} probe failed first ({outcome.result['error']})"
