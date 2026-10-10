@@ -20,6 +20,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -28,22 +29,32 @@ sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
 from evals import cases as case_mod  # noqa: E402
 from evals import gate, runner  # noqa: E402
+from grimoire.store import paths, usage  # noqa: E402
 
 
 @contextlib.contextmanager
 def temp_home():
-    """A throwaway GRIMOIRE_HOME for one case, restored afterwards."""
+    """A throwaway GRIMOIRE_HOME for one case, restored afterwards -- except
+    when the case's follow-ups are still running (`runner.FollowUpsRunningError`):
+    then the home is kept and the environment is NOT restored, because a
+    straggler that resolved `paths.home()` after the restore would file its
+    row in the real library."""
     previous = os.environ.get("GRIMOIRE_HOME")
     path = tempfile.mkdtemp(prefix="grimoire-eval-")
     os.environ["GRIMOIRE_HOME"] = path
+    kept = False
     try:
         yield Path(path)
+    except runner.FollowUpsRunningError:
+        kept = True
+        raise
     finally:
-        if previous is None:
-            os.environ.pop("GRIMOIRE_HOME", None)
-        else:
-            os.environ["GRIMOIRE_HOME"] = previous
-        shutil.rmtree(path, ignore_errors=True)
+        if not kept:
+            if previous is None:
+                os.environ.pop("GRIMOIRE_HOME", None)
+            else:
+                os.environ["GRIMOIRE_HOME"] = previous
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def run_gate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
@@ -108,7 +119,13 @@ def run_live(args: argparse.Namespace, selected: tuple) -> list[runner.Result] |
             f"{modes.get(key, '')}"))
     if args.record:
         print("  [recording baselines]")
-    return runner.live_all(selected, conns, temp_home, record=args.record, backend=backend)
+    # Still in the real store: the tripwire's reference, and the one set of
+    # rates every eval row is priced against (as a rollup has one).
+    real_home = paths.home()
+    rates = usage.Rates.current()
+    return runner.live_all(selected, conns, temp_home, record=args.record, backend=backend,
+                           real_home=real_home, run_id=str(uuid.uuid4()),
+                           run_day=usage._today(), rates=rates)
 
 
 def main(argv: list[str] | None = None) -> int:

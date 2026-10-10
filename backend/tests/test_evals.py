@@ -836,3 +836,336 @@ def test_native_grading_reads_what_the_endpoint_answered(monkeypatch, tmp_path):
     runner.native_output(ctx, "openrouter", json.dumps(bodies))
     assert ctx["native_results"][1].answers["decision"].reason == "abstained"
 
+
+
+# ---- 01a-S2: metered live runs in an eval scope ----
+
+def _generate_store(monkeypatch, home: Path):
+    """A real home whose Primary is an OpenAI-compatible connection, and the
+    `scene-length` case's resolution read from it."""
+    from grimoire.store import config, llm_connections
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(home))
+    config.read_config()
+    llm_connections.create_connection("openai_compatible", "Mara Local",
+                                      base_url="http://localhost:1234/v1")
+    config.write_config(role_primary_provider="mara-local", role_primary_model="big")
+    case = case_mod.BY_ID["scene-length"]
+    return case, runner.resolve_connections((case,))[runner.conn_key(case)]
+
+
+def _isolates(monkeypatch, root: Path, real: Path):
+    """An isolate factory as `evals/run.py`'s `temp_home` behaves: a fresh
+    home per case, the real one restored afterwards. Each made home is kept
+    in `made` so a test can look inside it."""
+    import contextlib
+
+    made: list[Path] = []
+
+    @contextlib.contextmanager
+    def isolate():
+        home = root / f"iso-{len(made)}"
+        home.mkdir(parents=True)
+        made.append(home)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(home))
+        try:
+            yield home
+        finally:
+            monkeypatch.setenv("GRIMOIRE_HOME", str(real))
+
+    return isolate, made
+
+
+#: What the fake stamps after a generation: a billed call with both counts.
+BILLED = {"prompt_tokens": 12, "completion_tokens": 3, "cost_usd": 0.0042}
+
+
+def test_a_live_generate_case_files_one_eval_row(monkeypatch, tmp_path):
+    """Test 1 (rows): the generation is metered by the production meter into
+    the isolate; the harvested copy is stamped as an eval row, the ledger's
+    own row is not."""
+    from grimoire.store import usage
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    fake = FakeLLM([[_compliant(case)]], usage=BILLED)
+    with isolate():
+        result = runner.live(case, target, client=fake, real_home=real, run_id="r1")
+        (filed,) = list(usage.calls(days=1))
+    assert result.passed, result.error or result.failures
+    (row,) = result.rows
+    assert row["task"] == case.task == "chat" and not row.get("campaign")
+    assert (row["scope"], row["eval_run"], row["case"]) == ("eval", "r1", case.id)
+    assert row["cost_usd"] == 0.0042
+    assert "scope" not in filed and "eval_run" not in filed
+    assert "calls 1" in runner.report([result])
+    assert not (real / "usage").exists()
+
+
+def test_the_tripwire_sends_and_builds_nothing(monkeypatch, tmp_path):
+    """Test 7: an isolate that is the real home is refused before the
+    fixture is built and before anything is sent; `real_home=None` checks
+    nothing."""
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    fake = FakeLLM([[_compliant(case)]])
+    before = sorted(p.relative_to(real) for p in real.rglob("*"))
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def not_isolated():
+        yield real
+
+    (result,) = runner.live_all((case,), {runner.conn_key(case): target}, not_isolated,
+                                client=fake, real_home=real)
+    assert fake.calls == 0
+    assert sorted(p.relative_to(real) for p in real.rglob("*")) == before
+    assert not list(real.glob("campaigns/*")) and not list(real.glob("worlds/*"))
+    assert result.error == runner.ISOLATE_ERROR and not result.passed
+    assert result.rows is None
+
+    unchecked = runner.live(case, target, client=fake, real_home=None)
+    assert fake.calls == 1 and unchecked.passed
+
+
+def test_no_eval_row_reaches_the_real_home(monkeypatch, tmp_path):
+    """Test 8: after a whole `live_all`, the real home has no ledger at all;
+    each case's rows are its own."""
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    isolate, made = _isolates(monkeypatch, tmp_path, real)
+    fake = FakeLLM([[_compliant(case)]], usage=BILLED)
+    results = runner.live_all((case, case), {runner.conn_key(case): target}, isolate,
+                              client=fake, real_home=real)
+    assert [len(r.rows) for r in results] == [1, 1]
+    assert results[0].rows[0]["eval_run"] == results[1].rows[0]["eval_run"]
+    assert not (real / "usage").exists()
+    assert all((home / "usage").is_dir() for home in made)
+
+
+def test_a_run_crossing_midnight_keeps_its_rows(monkeypatch, tmp_path):
+    """Test 10: the harvest reads from the run's start day, not today."""
+    from grimoire.store import usage
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    monkeypatch.setattr(usage, "_now", lambda: "2026-10-31T23:59:59Z")
+    monkeypatch.setattr(usage, "_today", lambda: "2026-11-01")
+    with isolate():
+        result = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                             real_home=real, run_day="2026-10-31")
+    assert len(result.rows) == 1 and result.rows[0]["ts"].startswith("2026-10-31")
+
+
+def test_an_unreadable_ledger_is_reported_not_zero(monkeypatch, tmp_path):
+    """Test 17: a ledger the strict read cannot decode says so, and is never
+    `calls 0`; the case is still graded."""
+    from grimoire.store import usage
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+
+    def broken(*args, **kwargs):
+        raise OSError("cost ledger could not be read: 2026-10.jsonl")
+        yield  # pragma: no cover - a generator, as the real reader is
+
+    with isolate() as home:
+        result = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                             real_home=real)
+        # And the real strict read, on a month file that is not UTF-8.
+        month = home / "usage" / f"{usage._today()[:7]}.jsonl"
+        month.write_bytes(b"\xff\xfe not json")
+        with pytest.raises(OSError):
+            runner.harvest(usage._today(), "r1", case.id)
+        monkeypatch.setattr(usage, "_read_rows", broken)
+        unread = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                             real_home=real)
+    assert result.passed and len(result.rows) == 1
+    assert unread.passed and unread.ledger_error
+    text = runner.report([unread])
+    assert "cost: not reported (ledger unreadable)" in text and "calls 0" not in text
+
+
+class _FollowUps:
+    """An app whose run registry has a live run until its follow-up thread
+    ends, and that thread, which files its row once `release` is set or
+    `delay` has passed -- after the case's own call returned."""
+
+    def __init__(self, home: Path, delay: float):
+        import threading
+        from types import SimpleNamespace
+
+        from grimoire.store import usage
+
+        self.release = threading.Event()
+
+        def follow_up():
+            self.release.wait(delay)
+            # Resolved at write time, as a detached run's row is.
+            assert str(home) in str(usage.ledger_dir())
+            usage.record(task="scene-break", prompt_tokens=4, completion_tokens=1,
+                         status="ok", operation="decide")
+
+        self.thread = threading.Thread(target=follow_up, daemon=True)
+        self.state = SimpleNamespace(runs=SimpleNamespace(any_live=self.any_live))
+        self.thread.start()
+
+    def any_live(self):
+        return object() if self.thread.is_alive() else None
+
+
+def _play_case(holder: dict, delay: float):
+    """The scene-length case, but its fixture hands over an app with a
+    follow-up still running, as a play case through the routes would."""
+    import dataclasses
+
+    from grimoire.store import paths
+
+    plain = case_mod.BY_ID["scene-length"]
+
+    def build():
+        ctx = plain.build()
+        holder["app"] = ctx["app"] = _FollowUps(paths.home(), delay)
+        return ctx
+
+    return dataclasses.replace(plain, build=build)
+
+
+def test_the_drain_waits_for_a_follow_up(monkeypatch, tmp_path):
+    """Test 18, first half: a follow-up that files its row after the case's
+    call returned is in the harvest."""
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    _plain, target = _generate_store(monkeypatch, real)
+    holder: dict = {}
+    case = _play_case(holder, delay=0.2)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    with isolate():
+        result = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                             real_home=real)
+    assert result.passed, result.error
+    assert sorted(r["task"] for r in result.rows) == ["chat", "scene-break"]
+
+
+def test_a_follow_up_past_the_ceiling_keeps_the_isolate(monkeypatch, tmp_path):
+    """Test 18, second half: past `DRAIN_CEILING_S` the case fails, the run
+    stops, the isolate is kept and GRIMOIRE_HOME is not restored while the
+    follow-up may still write."""
+    import os
+
+    from evals import run
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    plain, target = _generate_store(monkeypatch, real)
+    monkeypatch.setattr(runner, "DRAIN_CEILING_S", 0.1)
+    monkeypatch.setattr(run.tempfile, "mkdtemp",
+                        lambda prefix="": str((tmp_path / "kept").mkdir() or tmp_path / "kept"))
+    holder: dict = {}
+    case = _play_case(holder, delay=5)
+    try:
+        results = runner.live_all((case, plain), {runner.conn_key(plain): target},
+                                  run.temp_home, client=FakeLLM([[_compliant(plain)]]),
+                                  real_home=real)
+        assert os.environ["GRIMOIRE_HOME"] == str(tmp_path / "kept")
+        assert (tmp_path / "kept").is_dir()
+    finally:
+        holder["app"].release.set()
+        holder["app"].thread.join(5)
+    first, second = results
+    assert "follow-ups still running" in first.error and not first.passed
+    assert second.error == runner.NOT_RUN
+    assert not (real / "usage").exists()
+
+
+def test_rates_are_read_in_the_real_store(monkeypatch, tmp_path):
+    """The one set of rates is read before any isolate, in the real home,
+    and handed to every case with the tripwire's reference."""
+    from evals import run
+    from grimoire.store import paths, usage
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    seen: list[Path] = []
+    handed: dict = {}
+
+    def current():
+        seen.append(paths.home())
+        return usage.Rates.off()
+
+    monkeypatch.setattr(usage.Rates, "current", staticmethod(current))
+    monkeypatch.setattr(runner, "resolve_connections",
+                        lambda *_a, **_k: {runner.conn_key(case): target})
+    monkeypatch.setattr(runner, "live_all",
+                        lambda *_a, **kwargs: handed.update(kwargs) or [])
+    assert run.main(["--live", "--case", "scene-length"]) == 0
+    assert seen == [real]
+    assert handed["real_home"] == real and handed["rates"] is not None
+    assert handed["run_id"] and handed["run_day"] == usage._today()
+
+
+def test_an_unexpected_exception_is_drained_before_the_isolate_restores(
+        monkeypatch, tmp_path):
+    """Review B1: a case whose model work raises something other than a
+    provider's error is still drained; past the ceiling it becomes the
+    drain failure, so `temp_home` keeps the isolate rather than restoring
+    the real home under a running follow-up. Its rows so far are kept,
+    marked partial."""
+    import os
+
+    from evals import run
+
+    real = tmp_path / "real"
+    plain, target = _generate_store(monkeypatch, real)
+    monkeypatch.setattr(runner, "DRAIN_CEILING_S", 0.1)
+    monkeypatch.setattr(run.tempfile, "mkdtemp",
+                        lambda prefix="": str((tmp_path / "kept").mkdir() or tmp_path / "kept"))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("the portal died")
+
+    monkeypatch.setattr(runner, "_model_work", boom)
+    holder: dict = {}
+    case = _play_case(holder, delay=5)
+    try:
+        (result,) = runner.live_all((case,), {runner.conn_key(plain): target},
+                                    run.temp_home)
+        assert os.environ["GRIMOIRE_HOME"] == str(tmp_path / "kept")
+    finally:
+        holder["app"].release.set()
+        holder["app"].thread.join(5)
+    assert "follow-ups still running" in result.error
+    assert result.partial and result.rows == ()
+    assert "(partial: follow-ups still running)" in runner.report([result])
+
+
+def test_live_all_trips_on_the_home_active_when_it_starts(monkeypatch, tmp_path):
+    """Review S2: a caller that names no `real_home` still has a tripwire,
+    the home active before the first isolate."""
+    import contextlib
+
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    fake = FakeLLM([[_compliant(case)]])
+
+    @contextlib.contextmanager
+    def not_isolated():
+        yield real
+
+    (result,) = runner.live_all((case,), {runner.conn_key(case): target}, not_isolated,
+                                client=fake)
+    assert result.error == runner.ISOLATE_ERROR and fake.calls == 0

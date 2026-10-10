@@ -48,3 +48,23 @@ run files; it imports nothing from the store, so `--compare` reads no settings.
 - [ ] **Step 1: Failing tests** — test 11 (two synthetic files, blank cells, `version: 2` → exit 2, `--compare` with `--live` refused); test 12 (repeatable backend with one refused → exit 2 before `live_all`; `--record --repeat 2` refused); test 19 (failed call `{"kind","status"}`, the fake's detail nowhere in the file bytes, a 500-char check detail truncated to 200); test 22 (generate case listed once with `configs: ["c1", "c2"]` and filled in both columns; an unknown `axes` key read); the end-to-end `--live --out` with a fake client then `--compare` of the file against itself.
 - [ ] **Step 2: Run** → fail. **Step 3: Implement.** **Step 4: Run** `tests/test_evals.py tests/test_eval_runfile.py tests/test_eval_costs.py` → PASS.
 - [ ] **Step 5: README + .gitignore**, then `make check`. Commit `01a-S4: eval run files and --compare`.
+
+## Plan gate (substitute review, 2026-10-10)
+
+Folded into this slice:
+
+- **B2** `build` folds with each result's own `rates` (S3's `Result.rates`).
+- **S3** Every (config, case, repeat) runs in its own `isolate()`, so a
+  harvest never re-reads an earlier repeat's rows.
+- **S4** Each call entry in the file carries `bucket` (its one row folded with
+  the run's rates), so `--compare` can show a native item's money without
+  reading rates. A structured call's bucket is never drawn on an item cell:
+  that cell says `(chunk)`. `costs.merge` adds buckets (it never folds a row),
+  sums every numeric key so the lazy counts and coverage tallies carry, and is
+  tested for both.
+- **M2** `runfile` imports `costs` (and through it `store.usage` for folding);
+  `--compare` reads no store and no settings, which is the property C3 needs.
+- **M6** `--repeat` is live-only; `--repeat` defaults to None so `--gate
+  --repeat 1` clashes; the README states `--repeat` multiplies spend.
+- A case that is `partial` or whose ledger was unreadable makes its column's
+  totals say `incomplete`.

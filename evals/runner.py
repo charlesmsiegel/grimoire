@@ -20,18 +20,31 @@ Isolation is the caller's job: every run_* function here assumes GRIMOIRE_HOME
 already points at a fresh, empty directory. That keeps this module usable from
 pytest (tmp_path + monkeypatch) and from the CLI (tempfile) without either one
 inheriting the other's setup.
+
+A live case is metered by the production meter (`store.usage.meter`, directly
+for a generation, through `run_stages` for a decision), so every row it files
+lands in that throwaway home's ledger -- the eval scope (spec 01a, §3). Before
+the home is deleted, the case's rows are harvested onto `Result.rows`, each
+copy stamped `scope: "eval"`, `eval_run` and `case`; nothing is ever filed in
+the library's own ledger. A tripwire (`real_home`) refuses a case whose home is
+the real one, before its fixture is built and again before the harvest, and a
+drain (`drain`) keeps a detached follow-up from outliving the home.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from grimoire import adapters, decisions, inference, openai_compatible, openrouter, wire
+from grimoire.store import paths, usage
 from grimoire.store.inference import providers
 from grimoire.store.inference import resolve as inference_resolve
 
@@ -47,6 +60,23 @@ if TYPE_CHECKING:
 CHAIN = "chain"
 DECIDE_BACKENDS = (CHAIN, decisions.NATIVE_BACKEND, decisions.STRUCTURED_BACKEND)
 
+#: A case refused by the tripwire: its home is the real one, so nothing was
+#: built, sent or harvested.
+ISOLATE_ERROR = "eval isolate is not a throwaway home"
+
+#: How long a case that ran through the app may wait, after its last request
+#: returned, for the app's detached follow-ups (a turn's rolling summary,
+#: scene-break check, tracker) to settle before its rows are harvested. At
+#: least the longest single LLM call budget; structural, to be tuned later.
+DRAIN_CEILING_S = 120
+
+#: How often the drain looks again.
+DRAIN_POLL_S = 0.05
+
+#: What every case after a drain failure reports: the run stops, because a
+#: follow-up still running would write into whatever home comes next.
+NOT_RUN = "not run: an earlier case's follow-ups are still running"
+
 
 @dataclass
 class Result:
@@ -57,6 +87,16 @@ class Result:
     error: str = ""
     #: What answered a live decide case (`backend_note`); "" otherwise.
     note: str = ""
+    #: Every ledger row a live case filed in its isolate, each a copy stamped
+    #: `scope`, `eval_run` and `case` (`harvest`). None when nothing was
+    #: harvested (replay, or a case refused before it ran).
+    rows: tuple[dict, ...] | None = None
+    #: Why the isolate's ledger could not be read, when it could not: the
+    #: case's cost is then not reported, never zero.
+    ledger_error: str = ""
+    #: True when `rows` were read while the case's follow-ups were still
+    #: running (`FollowUpsRunningError`): what they held then, not the whole.
+    partial: bool = False
 
     @property
     def passed(self) -> bool:
@@ -299,8 +339,147 @@ def backend_note(decision: decisions.Decision) -> str:
     return note
 
 
+class FollowUpsRunningError(RuntimeError):
+    """A case whose follow-ups outlived `DRAIN_CEILING_S`. Raised through the
+    isolate, which keeps its home and does not restore the environment while
+    anything might still write (`evals/run.py`'s `temp_home`); `result` is
+    the case's failed result."""
+
+    def __init__(self, result: Result):
+        super().__init__(result.error)
+        self.result = result
+
+
+def _is_real_home(real_home: Path | None) -> bool:
+    """Whether the active home is `real_home` (None checks nothing)."""
+    if real_home is None:
+        return False
+    try:
+        return paths.home().resolve() == Path(real_home).resolve()
+    except OSError:
+        return str(paths.home()) == str(real_home)
+
+
+def drain(ctx: dict) -> bool:
+    """Wait for a case's app to settle: True once `ctx["app"]` (a case that
+    ran through the app hands it over) has no live run, False past
+    `DRAIN_CEILING_S`. Then `ctx["shutdown"]`, when given, ends the app's
+    lifespan. A case that made its calls directly (every case today) has
+    neither, and returns at once."""
+    app = ctx.get("app")
+    if app is not None:
+        deadline = time.monotonic() + DRAIN_CEILING_S
+        while app.state.runs.any_live() is not None:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(DRAIN_POLL_S)
+    shutdown = ctx.get("shutdown")
+    if shutdown is not None:
+        shutdown()
+    return True
+
+
+def harvest(run_day: str, run_id: str, case_id: str) -> tuple[dict, ...]:
+    """Every call row filed in the active home since `run_day` (the run's
+    start, so a run across UTC midnight keeps its earlier rows), each a copy
+    stamped `scope: "eval"`, `eval_run` and `case`. The read is strict: an
+    unreadable ledger raises `OSError` rather than reading as no rows, which
+    would print as a free case. The isolate holds nothing else, so this is
+    every row the case filed."""
+    rows = [row for row in usage._read_rows(run_day, usage._today(), strict=True)
+            if usage._is_call(row)]
+    return tuple({**row, "scope": "eval", "eval_run": run_id, "case": case_id}
+                 for row in rows)
+
+
+def _settle(case: Case, ctx: dict, output: str, *, real_home: Path | None, run_day: str,
+            run_id: str) -> tuple[tuple[dict, ...], str] | None:
+    """After a case's model work: drain it (`FollowUpsRunningError` past the
+    ceiling), check the tripwire again (None when it trips), then harvest:
+    its rows, and why the ledger could not be read when it could not."""
+    if not drain(ctx):
+        raise _still_running(case, output, run_day, run_id)
+    if _is_real_home(real_home):
+        return None
+    return _harvested(run_day, run_id, case.id)
+
+
+def _harvested(run_day: str, run_id: str, case_id: str) -> tuple[tuple[dict, ...], str]:
+    """`harvest`, and the reason it could not read the ledger ("" when it
+    could)."""
+    try:
+        return harvest(run_day, run_id, case_id), ""
+    except OSError as exc:
+        return (), str(exc)
+
+
+def _still_running(case: Case, output: str, run_day: str,
+                   run_id: str) -> FollowUpsRunningError:
+    """The failure of a case whose follow-ups outlived the drain. What its
+    ledger holds so far is still read (reading writes nothing), so the spend
+    it already made is reported, marked partial, rather than dropped."""
+    rows, ledger_error = _harvested(run_day, run_id, case.id)
+    return FollowUpsRunningError(Result(
+        case, BASELINE, [], output,
+        f"follow-ups still running past {DRAIN_CEILING_S}s; "
+        f"its isolate is kept at {paths.home()}",
+        rows=rows, ledger_error=ledger_error, partial=True))
+
+
+async def _ask(case: Case, ctx: dict, target: ResolvedInference,
+               stages: tuple[inference.Stage, ...] | None,
+               client) -> tuple[str, decisions.Decision | None]:
+    """The case's model work on `client`: a generation (`stages` None) or a
+    decision down `stages`, as the reply text its graders read and the
+    `Decision` when there is one."""
+    if stages is None:
+        # The production meter, into this case's throwaway home: no campaign
+        # and no scene, as the case plays none.
+        with usage.meter(case.task) as m:
+            text = await inference.generate(case.task, ctx["messages"], client=client,
+                                            resolved=target, usage=m.usage, stream=False)
+        return text, None
+    explain = ctx.get("explain", "")
+    decision = await inference.run_stages(case.task, ctx["items"], stages, client=client,
+                                          explain=explain)
+    # Which items a native endpoint answered: it is asked for no rationale,
+    # so a grader reads that item's as not applicable.
+    ctx["native_items"] = frozenset(
+        index for index, result in enumerate(decision.items)
+        if result.backend == decisions.NATIVE_BACKEND)
+    # And what it answered, as read: `render` writes an unread answer as
+    # null, which a grader would read as a structured null.
+    ctx["native_results"] = {index: decision.items[index] for index in ctx["native_items"]}
+    return decisions.render(decision.items, ctx["items"], explain=bool(explain)), decision
+
+
+def _model_work(case: Case, ctx: dict, target: ResolvedInference,
+                stages: tuple[inference.Stage, ...] | None,
+                client) -> tuple[str, decisions.Decision | None, Exception | None]:
+    """`_ask` on `client`, or on one `LLMClient` opened and closed here:
+    the reply, the decision, and the provider's `LLMError` when it failed."""
+    from grimoire.llm import LLMClient, LLMError
+
+    async def run() -> tuple[str, decisions.Decision | None]:
+        if client is not None:
+            return await _ask(case, ctx, target, stages, client)
+        own = LLMClient()
+        try:
+            return await _ask(case, ctx, target, stages, own)
+        finally:
+            await own.aclose()
+
+    try:
+        output, decision = asyncio.run(run())
+    except LLMError as exc:
+        return "", None, exc
+    return output, decision, None
+
+
 def live(case: Case, target: ResolvedInference, record: bool = False, *,
-         client=None, backend: str = CHAIN) -> Result:
+         client=None, backend: str = CHAIN, real_home: Path | None = None,
+         run_id: str = "", run_day: str = "",
+         rates: usage.Rates | None = None) -> Result:
     """One real generation for `case`, scored against the baseline expectation
     (live output must PASS). With `record`, the reply replaces the baseline
     recording — counterexample variants are never overwritten.
@@ -314,52 +493,44 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     (`decisions.render`) the case's graders read, and `Result.note` says which
     backend answered (`backend_note`). `client` is the facade to send
     through, owned by the caller (a test's fake); by default one `LLMClient`
-    is opened and closed here."""
-    from grimoire.llm import LLMClient, LLMError
+    is opened and closed here.
 
-    ctx = prepare(case)
-    decide = case.schema is not None
+    Every call is metered into the active home, and once the case's model
+    work is done and drained (`drain`) its rows are harvested onto
+    `Result.rows` (`harvest`; `run_id` and `run_day` name the run). With
+    `real_home`, a case whose active home IS that home is refused before its
+    fixture is built (`ISOLATE_ERROR`), and again before the harvest; None
+    skips both checks. A case whose follow-ups outlive `DRAIN_CEILING_S`
+    raises `FollowUpsRunningError`. `rates` prices modelled figures (read once
+    in the real store by the caller)."""
     if isinstance(target, dict):
         raise TypeError(f"{case.id}: pass its resolution, not a connection")
-    if decide:
-        stages = chain(target, backend)
-    note = ""
-
-    async def ask(c) -> str:
-        nonlocal note
-        if not decide:
-            return await inference.generate(case.task, ctx["messages"], client=c,
-                                            resolved=target, stream=False)
-        explain = ctx.get("explain", "")
-        decision = await inference.run_stages(case.task, ctx["items"], stages, client=c,
-                                              explain=explain)
-        note = backend_note(decision)
-        # Which items a native endpoint answered: it is asked for no
-        # rationale, so a grader reads that item's as not applicable.
-        ctx["native_items"] = frozenset(
-            index for index, result in enumerate(decision.items)
-            if result.backend == decisions.NATIVE_BACKEND)
-        # And what it answered, as read: `render` writes an unread answer as
-        # null, which a grader would read as a structured null.
-        ctx["native_results"] = {index: decision.items[index]
-                                 for index in ctx["native_items"]}
-        return decisions.render(decision.items, ctx["items"], explain=bool(explain))
-
-    async def run() -> str:
-        if client is not None:
-            return await ask(client)
-        own = LLMClient()
-        try:
-            return await ask(own)
-        finally:
-            await own.aclose()
-
+    if _is_real_home(real_home):
+        return Result(case, BASELINE, [], "", ISOLATE_ERROR)
+    run_day = run_day or usage._today()
+    ctx = prepare(case)
     try:
-        output = asyncio.run(run())
-    except LLMError as exc:
-        return Result(case, BASELINE, [], "", f"{exc.kind}: {exc.detail}")
+        stages = chain(target, backend) if case.schema is not None else None
+        output, decision, failure = _model_work(case, ctx, target, stages, client)
+    except Exception:
+        # Anything but a provider's error: still drained before it passes
+        # through the isolate, which restores the environment -- a follow-up
+        # left running would then file its row in the real library.
+        if not drain(ctx):
+            raise _still_running(case, "", run_day, run_id) from None
+        raise
+    note = backend_note(decision) if decision is not None else ""
+    error = f"{failure.kind}: {failure.detail}" if failure is not None else ""
+    settled = _settle(case, ctx, output, real_home=real_home, run_day=run_day,
+                      run_id=run_id)
+    if settled is None:
+        return Result(case, BASELINE, [], output, ISOLATE_ERROR)
+    rows, ledger_error = settled
+    if error:
+        return Result(case, BASELINE, [], "", error, rows=rows, ledger_error=ledger_error)
 
-    result = Result(case, BASELINE, list(case.grade(ctx, output)), output, note=note)
+    result = Result(case, BASELINE, list(case.grade(ctx, output)), output, note=note,
+                    rows=rows, ledger_error=ledger_error)
     if record:
         path = case.baseline.path(case.id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -368,14 +539,35 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
 
 
 def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isolate,
-             record: bool = False, *, client=None, backend: str = CHAIN) -> list[Result]:
+             record: bool = False, *, client=None, backend: str = CHAIN,
+             real_home: Path | None = None, run_id: str = "", run_day: str = "",
+             rates: usage.Rates | None = None) -> list[Result]:
     """Each case live, on what its task resolved to (`resolve_connections`,
-    keyed by `conn_key`); a decide case down `chain(..., backend)`."""
-    out = []
-    for case in cases:
-        with isolate():
-            out.append(live(case, conns[conn_key(case)], record=record, client=client,
-                            backend=backend))
+    keyed by `conn_key`); a decide case down `chain(..., backend)`. Each case
+    runs inside its own `isolate()`, checked against `real_home` before its
+    fixture is built (`live`). One run id and start day name every case's
+    rows. A case whose follow-ups are still running stops the run: its
+    isolate is kept (`FollowUpsRunningError` passes through it), and every case
+    after it reports `NOT_RUN` rather than running into a home a straggler
+    may still write to.
+
+    `real_home` is the tripwire's reference; when the caller names none, it
+    is the home active NOW, before the first isolate -- so the tripwire is
+    never off for a caller that forgot it."""
+    real_home = real_home if real_home is not None else paths.home()
+    run_id = run_id or str(uuid.uuid4())
+    run_day = run_day or usage._today()
+    out: list[Result] = []
+    for number, case in enumerate(cases):
+        try:
+            with isolate():
+                out.append(live(case, conns[conn_key(case)], record=record, client=client,
+                                backend=backend, real_home=real_home, run_id=run_id,
+                                run_day=run_day, rates=rates))
+        except FollowUpsRunningError as exc:
+            out.append(exc.result)
+            out.extend(Result(later, BASELINE, [], "", NOT_RUN) for later in cases[number + 1:])
+            break
     return out
 
 
@@ -396,6 +588,7 @@ def report(results: list[Result]) -> str:
         status = "ok  " if r.passed else "FAIL"
         note = f"  ({r.note})" if r.note else ""
         lines.append(f"  [{status}] {r.case.id}.{r.variant}{note}")
+        lines.extend(_metrics(r))
         if r.passed:
             lines.extend(_not_applicable(r))
             continue
@@ -411,6 +604,18 @@ def report(results: list[Result]) -> str:
     lines.append(f"{total - failed}/{total} passed" if failed
                  else f"all {total} checks passed")
     return ascii_safe("\n".join(lines))
+
+
+def _metrics(r: Result) -> list[str]:
+    """A live case's metrics line: how many calls its rows hold, or -- an
+    unreadable ledger -- that its cost is not reported, never `calls 0`.
+    Nothing for a result with no harvest (replay)."""
+    if r.ledger_error:
+        return ["           cost: not reported (ledger unreadable)"]
+    if r.rows is None:
+        return []
+    partial = " (partial: follow-ups still running)" if r.partial else ""
+    return [f"           calls {len(r.rows)}{partial}"]
 
 
 def _not_applicable(r: Result) -> list[str]:

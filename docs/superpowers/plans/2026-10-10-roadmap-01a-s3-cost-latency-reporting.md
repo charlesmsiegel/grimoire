@@ -59,3 +59,17 @@ report prints a metrics line, a `by task` block and the aggregate block.
 
 - [ ] **Step 1: Failing tests** — test 1's `bucket["cost_usd"] == 0.0042`; test 2 (no rates: `cost: not reported`, no `$0.00` in the report; with `Rates({"*": ...})`: `modelled ~$`, no `billed`); test 5 (mixed chain item lines name stage 1 for items 1 and 2); test 6 (three structured items share `call`, no money key on an item); test 15 (`by task` block for three tasks); the aggregate block lines.
 - [ ] **Step 2: Run** → fail. **Step 3: Implement** — `wall_ms` from `time.monotonic()` around `asyncio.run(run())`; metrics line `wall Xs  calls N (stage S: mode ok/n; …)  tokens …  <cost>`. **Step 4: Run** `tests/test_evals.py tests/test_eval_costs.py` → PASS. Commit `01a-S3: eval cost, latency and token reporting`.
+
+## Plan gate (substitute review, 2026-10-10)
+
+Folded into this slice:
+
+- **B2** The aggregate block re-folds rows and must price them against the
+  run's rates. `Result.rates` carries the rates the case was folded with, and
+  the aggregate folds each result's rows with its own `rates`.
+- **M1** `wall_ms` times the `_ask` coroutine alone, not the client's open
+  and close.
+- **M5** An item's `call` is the record that answered it: the last record
+  carrying it with no error (else the last record carrying it).
+- A case with `partial` rows or an unreadable ledger is counted in the
+  aggregate as `N case(s) not fully costed`, never silently.

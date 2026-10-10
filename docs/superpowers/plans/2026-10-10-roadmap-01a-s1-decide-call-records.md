@@ -57,3 +57,9 @@ production reads the new field.
 - [ ] **Step 4: Implement.** `_once` takes keyword `records: list` and `items: tuple[int, ...]` and appends one record after its meter settles (kind/status from the `LLMError`, `row=m.row`); `_ask` threads them through. `_structured` maps each chunk's stage positions through `call.positions` (identity when empty). `_native`'s `one` appends after its `try/finally` (never on a non-`LLMError` exception or cancel). `run_stages` builds each stage's call with `replace(call, chain=..., retries=..., stage=i, positions=tuple(pending))` and passes `calls=` to `Decision`.
 - [ ] **Step 5: Run** the two files plus `tests/test_decide_*` and `tests/test_evals.py` → PASS.
 - [ ] **Step 6: Commit** `01a-S1: decide call records on Decision.calls`.
+
+## Plan gate (substitute review, 2026-10-10)
+
+The Codex CLI is not installed in this environment; a hostile subagent review
+stood in for `/codex:adversarial-review` over all four 01a plans. For S1: no
+finding. One minor (M5) belongs to S3's item records and is folded there.
