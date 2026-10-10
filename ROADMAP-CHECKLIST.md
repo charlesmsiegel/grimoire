@@ -221,7 +221,7 @@ These are headlines. The owning spec's Contract section is authoritative.
   for the spec: §3.11's `required` downgrade misses implicit thinking (the
   loop reuses `probes.tool_choice`); the probe's 64-token cap leaves
   reasoning models inconclusive. S8 makes `claude` able to call tools
-  (extra floor `claude-agent-sdk>=0.1.74`); the separate "found on main"
+  (extra floor `claude-agent-sdk>=0.1.76`); the separate "found on main"
   fix (tool-less Claude calls still send only `allowed_tools=[]`, without
   `tools=[]`/`setting_sources=[]`, §9 Q6) is not done. No `tool-decision`
   route, `routing.NO_LEGACY` or `TOOLS_OPTIONAL` entry ships: each lands
