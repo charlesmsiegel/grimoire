@@ -698,7 +698,7 @@ class RunBudget:
     max_turns: int = 6               # model turns, the finalize turn included
     max_tool_calls: int = 12         # executions attempted, refused ones included
     max_decisions: int = 2           # decide-tool calls (3.12); also count as tool calls
-    wall_seconds: float | None = None    # None: config.llm_call_budget()
+    wall_seconds: float | None = None    # None: config.llm_call_budget(); <= 0: no wall
     spend_ceiling_usd: float | None = None   # None: no spend axis
     max_output_tokens: int = 2048    # per turn; sent as the turn's output cap
     max_result_chars_total: int = 48_000
@@ -720,40 +720,63 @@ eval gate):
 
 **Enforced before each send**, in this order. The first refusal wins:
 
-1. cancelled (the run's cancel flag; `CancelledError` propagates anyway);
+1. cancelled: the caller's `cancelled: Callable[[], bool] | None` (the
+   detached run's `cancel_requested`, or 12's callback), asked before every
+   send and every tool execution. `CancelledError` propagates anyway;
 2. turns: `turns_used + 1 + (1 if reserve_final and final pending else 0) >
    max_turns`;
-3. wall: `elapsed + MIN_TURN_SECONDS > wall_seconds`, where
-   `MIN_TURN_SECONDS = 5`, the shortest window in which a turn could
+3. wall (only when `wall_seconds > 0`; `<= 0` is no wall, matching
+   `_bounded_call`'s reading of `llm_call_budget <= 0`,
+   `routes/common.py:584-586`): `elapsed + MIN_TURN_SECONDS > wall_seconds`,
+   where `MIN_TURN_SECONDS = 5`, the shortest window in which a turn could
    plausibly answer;
 4. spend: `projected_spent + projection(next_turn) > spend_ceiling_usd`.
 
 Before each tool execution the checks are `tool_calls_used + 1 >
 max_tool_calls`, then (decide tool only) `decisions_used + 1 >
-max_decisions`, then `elapsed >= wall_seconds`. Result characters are
-checked when appending. A result past `max_result_chars_total` is
-truncated to what remains and the run stops after the turn, with `limit =
-"result_chars"`.
+max_decisions` and the decide spend check (below), then `elapsed >=
+wall_seconds`. Result characters are checked when appending. A result past
+`max_result_chars_total` is truncated to what remains and the run stops
+after the turn, with `limit = "result_chars"`.
 
-**The per-turn wall bound.** A turn's facade call runs under
-`min(llm_call_budget(), wall_seconds - elapsed)` with `_bounded_call`'s
-abandon semantics. The plan moves those semantics into a gateway-neutral
-helper (`grimoire/deadline.py`) so that `routes.common._bounded_call` and
-the loop share one implementation. An overrun is
-`LLMError("timeout", ...)`, filed at the turn's meter, and the outcome is
-noted against the attempt that was running (`llm.ATTEMPTED`), as
-`routes.common._noting` does.
+**A tool-call or decision limit stops the run, as the turn limit does.**
+Once `max_tool_calls` or `max_decisions` is reached, every call beyond it in
+that turn gets the "not run" error result, as every call id needs one. The
+next turn is then the finalize turn (`tool_choice="none"`) when one is
+reserved. Otherwise the run stops. Either way `limit` names the limit that
+was reached, so a run that hit `max_tool_calls` never reports `turns`.
 
-**The per-turn output cap is sent, not assumed.** The projection is only a
-ceiling if each turn cannot exceed it. So each turn's target is
-`target.with_output_cap(max_output_tokens)`, a new `wire.Target` method that
-returns a new target whose sampling `max_tokens` is
-`min(preset's, cap)`. `llm_sampling.effective` translates it per adapter as
-it already does a preset's cap (`max_completion_tokens` on the OpenAI API,
-the required `max_tokens` on Anthropic). Where 01i-C1 knows the model's
-maximum output, the cap is `min(cap, max_output)`. The Claude Agent SDK
-takes no output cap (section 3.13), which is one reason C2b keeps a
-different spend rule.
+**The per-turn wall bound**, with its three cases kept apart:
+
+- **`run_tools` (joined).** A turn's facade call runs under
+  `min(llm_call_budget(), wall_seconds - elapsed)` (either term absent when
+  `<= 0`), with `_bounded_call`'s abandon semantics. The plan moves those
+  semantics into a gateway-neutral helper (`grimoire/deadline.py`) so that
+  `routes.common._bounded_call` and the loop share one implementation.
+- **The run's wall expiring** is a budget stop, not a failure: status
+  `budget_exhausted`, `limit = "wall"`. The turn's meter files `aborted`
+  (the overrun is raised with `store.usage.NOT_A_FAILURE` set False, as
+  absorb's `BudgetRefused` is). Only an overrun of `llm_call_budget` itself
+  is `LLMError("timeout")`, an error row, noted against the attempt that was
+  running (`llm.ATTEMPTED`), as `routes.common._noting` does.
+- **`stream_tools`.** Streamed prose is idle-bounded only, deliberately
+  (`config.py:155-158`, `llm._guard`): a long reply must not be cut
+  mid-sentence. So the wall bound **never interrupts a turn that has yielded
+  visible text**. It only refuses the next send. Before any visible text,
+  the turn is bounded as in the joined case.
+
+**The per-turn output cap is 01f-C1's `max_tokens`.** Each turn's chain is
+`inference.call_chain(resolved, max_tokens=budget.max_output_tokens)` (and
+`schema=final_schema` on the finalize turn). That is the one function
+`generate(max_tokens=)` sends through (01f section 3.9), so the loop
+reimplements nothing:
+
+- each target is `with_output_cap(cap)`;
+- 01i-C1's maximum output tightens the cap where known;
+- a refused cap is 01f's `CapRefusalError`.
+
+Where the cap is not sent (`cap_sent` is False), it is not a bound, and
+under a spend ceiling that attempt is unpriceable (above).
 
 **How spend is estimated before a send.** This is the part that must not
 break the three-columns rule (CLAUDE.md, "Costs"). It prices a call the way
@@ -897,29 +920,50 @@ the app's other pre-send estimate already does, the model-test preview
 ### 3.11 Fallback across a loop
 
 Each turn is one facade call, so each turn gets the facade's retries and
-fallback (`_resilient`). Three rules make a mid-loop provider switch safe:
+fallback (`_resilient`). Four rules make a mid-loop provider switch safe:
 
 1. **Sticky after a fallback serves.** After each turn the loop reads
-   `m.usage[llm.ATTEMPTED]`. If the target that answered is not the
-   primary, every later turn sends `wire.Chain(that_target)` alone, with
-   the facade's normal retry budget and no fallback behind it.
+   `m.usage[llm.ATTEMPTED]`. **"The fallback served"** means
+   `ATTEMPTED.provider_id != primary.provider_id or ATTEMPTED.model !=
+   primary.model`. It is never an identity comparison: every turn sends new
+   targets (`call_chain`, `_streamed`'s unflagging), so identity is never
+   equal. It ignores `degrade`, since a degrade sibling is the same
+   connection sending images as text. Once the fallback has served, every
+   later turn sends `wire.Chain(that_target)` alone, with the facade's
+   normal retry budget and no fallback behind it.
    - Flapping back to a primary that just failed would pay its retries
      again on every turn, and would let two models alternate within one
      chain of reasoning.
    - The trace records the switch (`kind="model"`, `note="fell back"`).
    - Whether a task may fall back at all is 01d-C1's policy. The loop only
      honours a chain that carries no fallback.
-2. **Call ids are the loop's.** Every call is renamed `gc_<run_id[:8]>_<n>`
-   before it is appended, and the provider's id is kept in
-   `ToolCall.provider_id` for the capture. A history written by one
-   provider is then valid for any other, and a provider's id format can
-   never reach another provider's validator.
+2. **Ids are the provider's until a switch.** The loop keeps the provider's
+   own call ids while the same provider serves, because an OpenRouter
+   `reasoning_details` entry (a Gemini thought signature, for one) can
+   reference its call id, and renaming would orphan it. At a switch to
+   another `(provider_id, model)`, every id in the history the new target is
+   sent is rewritten consistently (call and result alike) to
+   `gc_<run_id[:8]>_<n>`, which matches `^[A-Za-z0-9_-]{1,64}$`. The
+   original stays in `ToolCall.provider_id` for the capture. A provider's id
+   format therefore never reaches another provider's validator.
 3. **Opaque state never crosses providers.** `_opaque` is re-sent only to a
    target whose `(kind, provider_id, model)` matches its provenance (section
    3.4). After a switch the fallback sees a plain tool history. A switch
-   *back* cannot happen (rule 1). An Anthropic primary that reaches a later
-   turn has its own thinking blocks for the turns it served, which is what
-   its API requires.
+   *back* cannot happen (rule 1).
+4. **Thinking is off on a target that inherits tool turns it did not
+   write.** An Anthropic fallback with extended thinking would be sent a
+   history whose last assistant `tool_use` turn has no thinking block,
+   which the Messages API refuses while thinking is enabled. So a target
+   whose history holds tool turns written by another `(provider_id, model)`
+   is sent with its reasoning control `off` (a new target, built the way
+   `with_output_cap` is). The trace notes it.
+
+**`tool_choice="required"` with thinking on.** The Anthropic API refuses
+`tool_choice: any` beside extended thinking with a 400 naming `thinking`,
+which `_preset_refusal` would read as the user's preset refused, skipping
+the fallback. So the loop sends `"auto"` in place of `"required"` to any
+target whose reasoning control sends thinking (`llm_sampling.sent_names`
+includes `reasoning`), and the trace notes the downgrade.
 
 The preset rule is unchanged: a route-scoped preset follows the route onto
 the fallback (`llm.fallback_sampling`). The output cap of section 3.9 is

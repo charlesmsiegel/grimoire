@@ -636,7 +636,9 @@ four rules:
    the outcome it chose, under the lock that write holds. For the speaker
    pick, that is `_round_state(..., actor_ref=draw.value, pick=draw.record)`,
    one `responses.update_round` under `campaign_lock`. For 13, it is the
-   transaction-ledger entry that commits the Action. It never goes into a
+   action proposal and the round record, written together when the NPC's
+   proposal is created (13 section 24.5). The transaction-ledger entry that
+   later commits the Action copies it. It never goes into a
    side store, and never only into the prompt log. Capture can be switched
    off, and is not persistence.
 2. **Never re-draw a persisted outcome.** "Already decided" means **the

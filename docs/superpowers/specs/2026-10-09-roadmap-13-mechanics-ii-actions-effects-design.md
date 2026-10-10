@@ -1608,7 +1608,7 @@ then: no delta; a delta (as today); a warning; a warning. The output schema
 - **Guards**, in the style of `check_proposal_guard`:
   `action_proposal_guard(mid, aid)` refuses an Action rename or delete while a
   non-terminal action proposal names it in a bound campaign; and
-  `open_transactions_guard(mid)` runs `txn.recover` for every campaign bound to
+  `open_transactions_guard(mid)` runs `resolve.recover` for every campaign bound to
   `mid` (the edit already holds every campaign lock) and refuses any edit while
   a stalled transaction remains, because a field rename would strand its units.
 - The impact report gains `actions_newly_invalid` and `actions_dangling`

@@ -368,6 +368,12 @@ Therefore:
 The write-through queue (section 5.4) runs after a quiet period far longer than
 `PERSIST_WINDOW`, so its batches normally record the row as well.
 
+**A purge wins.** 03 captures a purge generation when a write batch's first
+read starts, and drops the whole batch at commit if a purge has landed since
+(03 section 12). A sync batch is such a batch, so a world or campaign deleted
+mid-sync never has its derived text committed back into the purged file. The
+report counts what was dropped this way, as artifacts not stored.
+
 ## 5. Covered by default: the write set (05-C4) and the write-through queue
 
 ### 5.1 The problem
@@ -587,7 +593,11 @@ class WarmHook(Protocol):
 ```
 
 - `hot` maps each path that has rows of this hook's kinds to those kinds. A
-  hook never sees another hook's rows.
+  hook never sees another hook's rows. A hook **may read its own kinds'
+  `materialized` rows** for the paths it was handed (for their `instance`,
+  or to fan out from an input path to the paths that feed the same artifact,
+  as 08's `affected` does), always by those listed paths and never by
+  enumeration.
 - `local` rebuilds and stores artifacts and **touches no network**. It returns
   per-path outcomes and an `EmbedPlan`: the projection texts that would need a
   vector, which hits the vector cache already has, and how each text is
@@ -625,7 +635,8 @@ them:
 
 - `overview`: `local` calls `overview.warm_paths(sorted(hot))` once, and maps
   its result to outcomes. It has no network phase.
-- `searchdocs`: `local` calls 08's `affected(sorted(hot))`, then
+- `searchdocs`: this hook is 08-C2c, with `on_write="explicit"`. `local`
+  calls 08's `affected(sorted(hot))`, then
   `rebuild_documents(cid, sids)` per campaign, and turns 08's "has a vector in
   the current document space" answers into the plan. `network` calls
   `reembed(cid, docs, space=ctx.space, client=..., limit=...)` per campaign,
@@ -671,11 +682,14 @@ another's projection was embedded. So 05 relies on the vector kind form that
 
 1. **The kind names the projection**: `vector:<projection>:<space-digest>`.
    `<projection>` is a registry kind whose compute produces the embedded text
-   from the path's bytes. `<space-digest>` is a short hash of
-   `embed_space.endpoint()["space"]`. The raw space id joins provider, rev and
-   model with NUL bytes, which do not belong in a kind name.
-2. **An optional `instance` column**: small, opaque JSON recorded beside the
-   row. 05 uses it for two things:
+   from the path's bytes. `<space-digest>` is always
+   `compiled.space_digest(space)`, 03's one spelling of it; 05 never derives
+   its own. The raw space id joins provider, rev and model with NUL bytes,
+   which do not belong in a kind name.
+2. **The `instance` column**: canonical JSON, or `""`, recorded beside the
+   row. A row is keyed by `(path, kind, instance)`, so a world entry read by
+   two campaigns has two rows, and 05 re-embeds and attributes each for its
+   own campaign. 05 uses the instance for two things:
    - **Which instance**: for example `{"campaign": "saltmarch", "entity":
      ["lore", "pact"]}`. It lets a hook rebuild an overlaid entry for the
      campaign that read it, and claim the embedding for that campaign
@@ -689,7 +703,10 @@ another's projection was embedded. So 05 relies on the vector kind form that
      uses it to re-embed only units that were embedded.
 
 Both are read only by path, so neither changes 03 section 9's query-safety
-rule.
+rule. A row may have no artifact behind it (a vector row, or a rename copy,
+section 7.5). 03-C3 touches a row whenever what it describes is hit, a
+`vectors.load` hit included, so least-recently-used eviction does not age out
+the hottest content's rows and empty "what was hot".
 
 **05 wires the three existing producers.** Nothing records a `vector:` row
 today (section 1.1), and 03 wires none of the producers. So 05's `vectors`
@@ -725,8 +742,7 @@ where the next ordinary read would embed the same text anyway:
   running a semantic search. Under write-through, every scene whose
   transcript was ever search-warmed would re-embed at every play pause, for a
   feature the user may never use again. Only an explicit sync rebuilds it.
-- **08's documents** choose their own (Open question 5); a query-driven
-  default is `explicit` for the same reason.
+- **08's documents: `on_write="explicit"`** (08-C2c), for the same reason.
 
 `continuity-similarity` is left out. It embeds rows of continuity ledgers
 inside absorb and the reconcile sweep, both of which recompute what they need
@@ -737,8 +753,8 @@ under their own budgets, and its rows are not files an agent edits directly.
 For each `vector:` row on a hot path, the owning hook's local phase:
 
 1. **Checks the space.** It compares the row's space digest with the batch's
-   (`ctx`'s digest of `embed_space.endpoint()`, read once at the start of the
-   batch).
+   (`ctx`'s `compiled.space_digest` of `embed_space.endpoint()["space"]`, read
+   once at the start of the batch).
    - If they differ, the row belongs to a space the Embedding role has moved
      away from. Re-embedding under the new space would be embedding content
      never embedded there, which is exactly the spend `confirm_embedding`
@@ -955,10 +971,10 @@ listing, never from the cache:
    device's cache (section 7.6).
 2. **Walk the scope**, skipping `atomic` temp files (`atomic.is_write_temp`,
    `atomic.py:162`) and anything section 8 refuses, and stat every file.
-3. **Look up the rows.** In one batched read of 03's tables, keyed by the
-   listed paths, fetch each file's `materialized` rows and its `sources` row.
-   That is within 03 section 9's rule, since the keys came from the
-   filesystem.
+3. **Look up the rows.** Call 03-C4's batch form with the listed paths. It
+   reads their `sources` rows in one query, hashes only files whose stamps
+   moved, and returns each path's `materialized` rows too. That is within 03
+   section 9's rule, since the paths came from the filesystem.
 4. **Pick the candidates.** A file with no `materialized` rows is cold, and is
    skipped without being read. Every other file is a candidate unless all of
    its hot kinds are known to be current, which needs two things:
@@ -1003,10 +1019,11 @@ That is the draft's rule, and it is right. The caller may state one:
 - `--renamed OLD=NEW` (and `renamed=` on the primitive) copies OLD's
   `materialized` kinds, without their instances or `built_from`, to NEW before
   NEW is classified, so NEW is rebuilt as hot. Each hook derives NEW's
-  instance from NEW's path. OLD is then handled as an intended delete. 03
-  writes rows only beside an artifact, so this needs one more 03-C3
-  operation: `copy_materialized(old, new)`, which writes rows for NEW naming
-  the same kinds (multi-unit vector rows included) and nothing else.
+  instance from NEW's path. OLD is then handled as an intended delete. 03-C3
+  allows these rename-copy rows with no artifact behind them. 05 still needs
+  the write call that makes them, `copy_materialized(old, new)`, which writes
+  rows for NEW naming the same kinds (multi-unit vector rows included) and
+  nothing else.
 - A wrong statement costs some compute and, at worst, embeddings of NEW's
   projections, up to the units OLD had embedded and each producer's lazy
   limit. That is the one way sync can embed text whose predecessor was not
@@ -1020,8 +1037,11 @@ A world or campaign root (`worlds/<wid>` or `campaigns/<cid>`) named in
 has lost a whole world or campaign outside the app. When the app deletes one,
 03-C8 purges the cache, so that derived private text does not outlive it,
 either in this device's file or in other devices' synced copies. A delete made
-by hand deserves the same. So sync calls 03-C8's purge (the marker, plus this
-device's purge) and reports `purged`. If 03-C8 has not landed, sync reports
+by hand deserves the same. So sync calls 03-C8's
+`compiled.purge_for_delete()` (the marker, plus this device's purge) and
+reports `purged`. That callable takes no root: it acts on whatever
+`paths.home()` names at call time, so sync calls it only after its root check
+(section 4.1) has passed. If 03-C8 has not landed, sync reports
 the root as deleted and says the purge did not run.
 
 The purge is triggered **only** by an explicit `--deleted` naming the root.
@@ -1283,8 +1303,12 @@ Re-embeds only text not already cached. No confirmation step.**
   cold for it, and costs nothing. Composite kinds record a row on every input
   path.
 - Hooks run in the fixed order `files`, `overview` (04-C2a), `searchdocs`
-  (08-C2c), then `vectors`. Every local phase, which touches no network, runs
-  before any network phase.
+  (08-C2c, `on_write="explicit"`), then `vectors`. Every local phase, which
+  touches no network, runs before any network phase. A hook may read its own
+  kinds' `materialized` rows for the paths it was handed, and never
+  enumerates them.
+- `materialized` is keyed by `(path, kind, instance)` (03-C3), and every
+  `<space-digest>` is `compiled.space_digest(space)`.
 - A vector unit is re-embedded only:
   - in the batch's space, re-checked against `embed_space.endpoint()` just
     before sending;
@@ -1565,11 +1589,9 @@ Cross-spec requests raised by the spec gate (section 16) are listed first.
    `python -m grimoire.cache sync`. *Recommendation:* no console script. The
    house form is `python -m` (`grimoire.where`), and an entry point adds one
    more thing the installers, the venv and the APK must agree on.
-5. **Write-through for 08's scene documents.** A played scene's transcript
-   changes every turn. With the quiet period, its SearchDocument and vector
-   are rebuilt when play pauses. 08 may prefer `on_write="explicit"`, and
-   rebuild at absorb instead. *Recommendation:* leave the choice to 08; the
-   hook field exists so that each owner decides.
+5. **Write-through for 08's scene documents.** *Resolved:* 08-C2c is the
+   `searchdocs` hook with `on_write="explicit"`, so a played scene's document
+   is rebuilt only by an explicit sync or by 08's own lazy read.
 
 6. **Two more 03-C3 operations (cross-spec, 03).** Section 7.3 needs a
    `built_from` column on each `materialized` row, and section 7.5 needs
@@ -1581,11 +1603,11 @@ Cross-spec requests raised by the spec gate (section 16) are listed first.
    one chunk at a time to save as it goes (section 6.6). *Recommendation:* let
    01h add an optional `on_group(result)` callback, which would let 05 make one
    call per batch; until then the per-chunk calls are correct.
-8. **08's write-through policy and per-campaign limit (cross-spec, 08).** 05
-   defaults query-driven producers to `on_write="explicit"` and passes 08's
-   own `limit` to `reembed` (section 6.2). *Recommendation:* 08 confirms both,
-   and records a `materialized` row on every input path its document reads
-   (section 6.1).
+8. **08's per-campaign limit and input rows (cross-spec, 08).** 05 passes
+   08's own `limit` to `reembed` (section 6.2), and relies on 08 recording a
+   `materialized` row on every input path its document reads (section 6.1).
+   *Recommendation:* 08 confirms both. Its write-through policy is settled
+   (Open question 5).
 
 ## 16. Review record
 
@@ -1632,6 +1654,14 @@ finding below was verified against the code before it was folded in.
 - **From the 01h review.** There is no "document type" to pass: under 01h-C1
   a document simply omits `queries`. Section 6.6 now says so, and the 01h-C1
   dependency row is kept only as the property that sync sends documents.
+- **Addendum from 08 and from 03's gate.** Hooks may read their own kinds'
+  `materialized` rows for listed paths, and 08-C2c is an `explicit` hook
+  (6.2, 6.4, 11). `materialized` is keyed by `(path, kind, instance)`, rows
+  may have no artifact and are touched on a hit, 03-C4's batch form returns
+  the rows, a purge generation drops a batch that straddles a purge,
+  `compiled.purge_for_delete()` takes no root, and `compiled.space_digest` is
+  the one spelling of the digest (4.4, 6.4, 6.5, 7.3, 7.5, 7.6, 11). 03 does
+  not yet carry `built_from` or the rename-copy write call (Open question 6).
 - **From the 06 review.** The image description door is now
   `image_descriptions` in both specs (06 M4), and the report vocabulary is
   exported for 06's drift test (06 S1, S2).
