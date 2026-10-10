@@ -291,6 +291,51 @@ def test_only_a_natively_answered_item_reads_its_rationale_as_not_applicable(
     assert native.ok and native.detail == graders.NATIVE_RATIONALE
 
 
+def _pick(distribution):
+    """The speaker case's right pick, as a native endpoint returns it, with
+    the distribution it reported beside it."""
+    from grimoire import decisions
+    return decisions.ItemResult({"next": decisions.Answer("characters:winifred",
+                                                          distribution=distribution)})
+
+
+@pytest.mark.parametrize(("distribution", "ok"), [
+    ({"characters:winifred": 0.8, "characters:mara": 0.15, "grimoire": 0.05}, True),
+    ({"characters:winifred": 0.5, "characters:mara": 0.1}, False),
+    ({"characters:mara": 0.95, "grimoire": 0.05}, False),
+])
+def test_live_grades_a_native_picks_distribution(monkeypatch, tmp_path, distribution, ok):
+    """Spec 01c section 4.3's bar, measured the way the evidence run measures
+    it: `--decide-backend native` on a model that also generates. A usable
+    distribution passes `decide.distribution`; a partial or inconsistent one
+    fails it alone, the pick itself still right."""
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", BOTH)
+    case = case_mod.BY_ID["decide-speaker"]
+    fake = FakeLLM([["never sent"]], decisions=[_pick(distribution)])
+    result = runner.live(case, _decide_target(case), client=fake, backend="native")
+    assert result.note == "backend: native"
+    (check,) = [c for c in result.checks if c.name == "decide.distribution"]
+    assert check.ok is ok, check.detail
+    assert [c.name for c in result.failures] == ([] if ok else ["decide.distribution"])
+
+
+def test_live_a_structured_pick_reads_its_distribution_as_not_applicable(monkeypatch,
+                                                                         tmp_path):
+    from evals import graders
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", BOTH)
+    case = case_mod.BY_ID["decide-speaker"]
+    fake = FakeLLM([[_compliant(case)]])
+    result = runner.live(case, _decide_target(case), client=fake, backend="structured")
+    assert result.passed, result.failures
+    (check,) = [c for c in result.checks if c.name == "decide.distribution"]
+    assert check.detail == graders.STRUCTURED_DISTRIBUTION
+    assert f"decide.distribution: {graders.STRUCTURED_DISTRIBUTION}" in runner.report([result])
+
+
 def test_live_forces_the_native_backend_on_a_dual_capable_model(monkeypatch, tmp_path):
     from grimoire import inference
     from tests.llm_fakes import FakeLLM
@@ -762,7 +807,14 @@ def test_decide_speaker_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
     assert case.task == "response-selector"
     assert {r.variant: r.expect_fail for r in case.recordings} == {
         "compliant": (), "undecodable": ("decide.json",),
-        "off-roster": ("decide.answer",), "abstained": ("decide.answer",)}
+        "off-roster": ("decide.answer",), "abstained": ("decide.answer",),
+        # Spec 01c section 4.3's bar, from each kind's endpoint.
+        "native": (), "native-openrouter": (),
+        "native-partial": ("decide.distribution",),
+        "native-inconsistent": ("decide.distribution",)}
+    assert {r.variant: r.native for r in case.recordings if r.native} == {
+        "native": "openai", "native-openrouter": "openrouter",
+        "native-partial": "openai", "native-inconsistent": "openrouter"}
     ctx = runner.prepare(case)
     (item,) = ctx["items"]
     (choice,) = item.questions

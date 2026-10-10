@@ -1,0 +1,3 @@
+[
+  {"id": "gen-dec-handAuthoredSpeaker", "model": "typesafe/jev-1.13-20260917", "provider": "TypeSafe", "answers": {"next": {"type": "choice", "choice": "characters:winifred", "probabilities": {"characters:mara": 0.14, "characters:winifred": 0.79, "grimoire": 0.03, "none": 0.04}}}, "usage": {"prompt_tokens": 250, "completion_tokens": 0, "total_tokens": 250}}
+]
