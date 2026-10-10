@@ -335,7 +335,14 @@ def test_find_value_reads_an_object_or_an_array(text, expected):
 
 
 def test_find_value_never_raises():
-    assert schemas.find_value("[" * 100_000 + "]" * 100_000) is None
+    # Valid JSON nested past any recursion limit: whether the decoder reads it
+    # depends on the interpreter (3.13 raises RecursionError, so None; 3.14's
+    # decoder returns the list). Either way nothing raises, and an objects-only
+    # read -- the one production uses -- never answers with an array.
+    deep = "[" * 100_000 + "]" * 100_000
+    value = schemas.find_value(deep)
+    assert value is None or isinstance(value, list)
+    assert schemas.find_value(deep, arrays=False) is None
     assert schemas.find_value(None) is None  # type: ignore[arg-type]
     assert schemas.find_value(b"{}") is None  # type: ignore[arg-type]
 
