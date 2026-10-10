@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import prompts
+from .. import prompts, schemas
 from . import (
     birthdays,
     calendars,
@@ -704,23 +704,76 @@ def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
 INTENT_LIMIT = 2000
 
 
-def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[dict]:
-    """Prompt for extracting metadata from the user's own scene description.
+def _intent_shape(locations: list[str], tokens: list[str]) -> dict:
+    """The intent reply's schema with these enums: `location` one of `""` and
+    `locations`, `cast` an array of `tokens` -- or, for an empty list, a
+    plain string (array of strings), since an empty `enum` is refused
+    (`schemas.check`)."""
+    location: dict = ({"type": "string", "enum": ["", *locations]} if locations
+                      else {"type": "string"})
+    member: dict = {"type": "string", "enum": tokens} if tokens else {"type": "string"}
+    return {"type": "object", "additionalProperties": False,
+            "required": ["title", "date", "location", "cast"],
+            "properties": {"title": {"type": "string"}, "date": {"type": "string"},
+                           "location": location,
+                           "cast": {"type": "array", "items": member}}}
+
+
+def intent_schema(snapshot: dict) -> dict:
+    """The JSON Schema of the scene-intent reply (spec 01f 3.8, the pilot),
+    over the SAME snapshot the prompt renders, so the ids it offers are the
+    ones the prompt lists: `title` and `date` strings, `location` an enum of
+    `""` (the prompt's "implies none") and the available location ids, `cast`
+    an array of the available cast tokens. What the mode buys is the enums: a
+    provider that enforces them cannot invent an id. A field with nothing to
+    offer is a plain string (array); a campaign whose enums would break a
+    strict-mode budget drops the cast enum, then the location enum, until the
+    schema is inside the portable subset. `parse_intent` drops an unknown id
+    either way."""
+    locations = list(dict.fromkeys(loc["id"] for loc in snapshot.get("available_locations") or []))
+    tokens = list(dict.fromkeys(c["token"] for c in snapshot.get("cast") or []))
+    for keep_locations, keep_cast in ((True, True), (True, False), (False, True)):
+        shape = _intent_shape(locations if keep_locations else [],
+                              tokens if keep_cast else [])
+        try:
+            schemas.check(shape)
+        except schemas.SchemaError:
+            continue
+        return shape
+    return _intent_shape([], [])
+
+
+def build_intent_request(cid: str, typed: str,
+                         offscreen: bool = False) -> tuple[list[dict], dict]:
+    """The scene-intent prompt and the schema its reply is asked for in
+    (`intent_schema`), from one snapshot: the system message renders the
+    schema (`schema_json`), which is what `inference.generate(schema=)`
+    checks for.
 
     Over the FULL snapshot, story-so-far included: "the morning after the
     funeral" is exactly the kind of phrase this has to resolve, and only the
     recent chronicle can resolve it. The legacy (`drivers=False`) snapshot and
-    render: the intent prompt is promised byte-identical (spec §15), so it
-    keeps its Upcoming line and does no pressure or driver work."""
+    render: the intent prompt keeps its Upcoming line and does no pressure or
+    driver work (spec §15) -- its only change since is the schema paragraph
+    at the end of the system message (01f-S4)."""
+    snapshot = build_snapshot(cid, offscreen=offscreen, drivers=False)
+    schema = intent_schema(snapshot)
     # `direction`, `drivers` and `view` are here because scene_intent/user.j2
     # INCLUDES scene_suggestions/user.j2, which reads them — and both this env
     # and verify_templates render with StrictUndefined, so omitting one is a
     # hard failure, not a silently-empty block.
-    vars = {"s": build_snapshot(cid, offscreen=offscreen, drivers=False),
+    vars = {"s": snapshot, "schema": schema,
             "offscreen": offscreen, "greeting_candidates": None, "direction": "",
             "drivers": False, "view": None, "typed": typed.strip()[:INTENT_LIMIT]}
-    return [{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
-            {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}]
+    return ([{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
+             {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}],
+            schema)
+
+
+def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[dict]:
+    """Prompt for extracting metadata from the user's own scene description:
+    `build_intent_request`'s messages."""
+    return build_intent_request(cid, typed, offscreen)[0]
 
 
 def valid_ids(cid: str):

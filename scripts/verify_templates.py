@@ -30,6 +30,12 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined  # noqa: E402
 
 env = Environment(loader=FileSystemLoader(str(REPO / "templates")),
                   undefined=StrictUndefined)
+# The one spelling of a `generate` schema (01f-C3), the same function the app's
+# environment registers: a template and `inference.generate`'s in-prompt check
+# must agree on it, so this harness does not restate it.
+from grimoire import schemas  # noqa: E402
+
+env.filters["schema_json"] = schemas.render
 
 class Report:
     """The running tally: how many comparisons were made, and which failed.
@@ -2007,7 +2013,8 @@ iexp = suggest.build_intent_prompt(cid, TYPED)
 isnap = suggest.build_snapshot(cid, drivers=False)
 check("intent system (store)", iexp[0]["content"],
       render("scene_intent/system.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
+             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED,
+             schema=suggest.intent_schema(isnap)))
 check("intent user (store)", iexp[1]["content"],
       render("scene_intent/user.j2", s=isnap, offscreen=False,
              greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))

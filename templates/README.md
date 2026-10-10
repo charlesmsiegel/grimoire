@@ -182,6 +182,11 @@ Mirrors `store/suggest.py:build_intent_prompt`. Messages: system, user.
 file's vars plus `typed`. It renders with `drivers=False` and `view=None`, over
 `build_snapshot(drivers=False)` — the legacy snapshot, `upcoming` included —
 so the intent prompt is byte-identical whatever drivers exist (spec §15).
+`system.j2` also takes `schema` (`suggest.intent_schema`, built from the same
+snapshot): the reply's JSON Schema, rendered at its end with the `schema_json`
+filter -- the one spelling `inference.generate(schema=)` checks the prompt
+for (01f-S4, the pilot of structured generation). A template that carries a
+`generate` schema renders it that way; `decide/system.j2` keeps `tojson`.
 
 `instruction/date_notation.j2` is a **shared** partial, and the one file here
 included from outside its own family: `date_addendum.j2` and

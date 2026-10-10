@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
-from grimoire import llm, routes, wire
+from grimoire import llm, routes, schemas, wire
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -10226,6 +10226,43 @@ def test_scene_intent_forwards_offscreen_to_the_parser(client):
     r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
                     json={"text": "while she sleeps", "offscreen": True})
     assert r.json()["cast"] == []
+
+
+def test_scene_intent_asks_for_its_reply_in_the_schema_its_prompt_carries(client):
+    """01f-S4, the pilot: the schema (enums of the campaign's location ids and
+    cast tokens) reaches the facade, and the system prompt carries it as
+    `schema_json` renders it."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    fake = FakeOpenRouterComplete('{"title": "T", "date": "", "location": "", "cast": []}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "back at the marsh house", "offscreen": False})
+    assert r.status_code == 200
+    (schema,) = fake.schemas
+    assert schema["properties"]["location"]["enum"] == ["", "saltmarch"]
+    assert "characters:mara" in schema["properties"]["cast"]["items"]["enum"]
+    assert schemas.render(schema) in fake.messages[0]["content"]
+
+
+def test_scene_intent_drops_an_id_outside_the_enum(client):
+    """Nothing about the reply is guaranteed to conform (a provider without
+    the mode answers from the prompt), so `parse_intent` still drops an id
+    the campaign does not have."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    reply = ('{"title": "T", "date": "", "location": "the-realm", '
+             '"cast": ["characters:mara", "characters:seraphine"]}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "somewhere new", "offscreen": False})
+    assert r.status_code == 200
+    assert r.json()["location"] is None
+    assert [c["id"] for c in r.json()["cast"]] == ["mara"]
 
 
 # ---- the scene ledger (#88) ----

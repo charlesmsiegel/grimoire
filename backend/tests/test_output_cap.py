@@ -262,3 +262,26 @@ def test_the_sampling_report_names_the_flag_and_the_cap_only_when_set():
     assert report["structured"] is True and report["call_cap"] == 400
     assert report["applied"]["max_tokens"] == 400
     assert common._sampling_report(None) is None
+
+
+# ---- draft_completion's keywords (01f-S4) ----
+def _draft(fake, **kwargs) -> dict:
+    return asyncio.run(common.draft_completion(
+        fake, _resolved(sent=CONN), MESSAGES, "chat", lambda text: text, **kwargs))
+
+
+def test_draft_completion_passes_neither_keyword_unless_given(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    fake = FakeLLM([['{"title": "Dawn"}']])
+    assert _draft(fake) == {"state": "landed", "result": '{"title": "Dawn"}'}
+    # The resolution's own chain, no schema: what every other draft sends.
+    assert fake.requests[0]["chain"] == _resolved(sent=CONN).chain
+    assert fake.schemas == [None]
+
+
+def test_draft_completion_forwards_a_schema_and_a_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    fake = FakeLLM([['{"title": "Dawn"}']])
+    assert _draft(fake, schema=SCHEMA, max_tokens=256)["state"] == "landed"
+    assert fake.schemas == [SCHEMA]
+    assert fake.requests[0]["chain"].primary.sampling.params == {"max_tokens": 256}

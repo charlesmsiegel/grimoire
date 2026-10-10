@@ -3,6 +3,7 @@ import textwrap
 
 import pytest
 
+from grimoire import schemas
 from grimoire.store import (
     appearances,
     calendars,
@@ -1262,3 +1263,57 @@ def test_parse_survives_a_raising_plugin(monkeypatch, tmp_path):
     intent = suggest.parse_intent('{"title": "A", "date": "2026-05-12"}', cid)
     assert (intent["title"], intent["date"]) == ("A", "")
     assert suggest.ref_validator(cid)([], "", "2026-05-12")["date"] == ""
+
+
+# ---- 01f-S4: the intent pilot's schema ----
+def _intent_snap(locations=(), tokens=()) -> dict:
+    return {"available_locations": [{"id": i, "name": i.title()} for i in locations],
+            "cast": [{"token": t, "name": t, "tagline": "", "status": "unseen",
+                      "role": "npc"} for t in tokens]}
+
+
+def test_the_intent_schema_offers_the_snapshots_ids():
+    schema = suggest.intent_schema(_intent_snap(["saltmarch", "the-realm"],
+                                                ["characters:mara", "characters:winifred"]))
+    schemas.check(schema)
+    props = schema["properties"]
+    assert props["title"] == {"type": "string"} and props["date"] == {"type": "string"}
+    # "" first: the prompt asks for "" when the text implies no location.
+    assert props["location"] == {"type": "string", "enum": ["", "saltmarch", "the-realm"]}
+    assert props["cast"] == {"type": "array",
+                             "items": {"type": "string",
+                                       "enum": ["characters:mara", "characters:winifred"]}}
+
+
+def test_a_field_with_nothing_to_offer_is_a_plain_string():
+    """An empty `enum` is refused (strict mode answers it with a 400)."""
+    schema = suggest.intent_schema(_intent_snap())
+    schemas.check(schema)
+    assert schema["properties"]["location"] == {"type": "string"}
+    assert schema["properties"]["cast"] == {"type": "array", "items": {"type": "string"}}
+    only_cast = suggest.intent_schema(_intent_snap(tokens=["characters:mara"]))
+    assert only_cast["properties"]["location"] == {"type": "string"}
+    assert only_cast["properties"]["cast"]["items"]["enum"] == ["characters:mara"]
+
+
+def test_an_enum_past_the_budget_falls_back_to_plain_strings():
+    many = [f"characters:extra-{n:04d}" for n in range(schemas.MAX_ENUM_VALUES)]
+    schema = suggest.intent_schema(_intent_snap(["saltmarch"], many))
+    schemas.check(schema)
+    assert schema["properties"]["location"]["enum"] == ["", "saltmarch"]
+    assert schema["properties"]["cast"] == {"type": "array", "items": {"type": "string"}}
+    places = [f"place-{n:04d}" for n in range(schemas.MAX_ENUM_VALUES)]
+    both = suggest.intent_schema(_intent_snap(places, many))
+    schemas.check(both)
+    assert "enum" not in both["properties"]["location"]
+
+
+def test_the_intent_request_carries_its_schema_in_the_system_message(monkeypatch, tmp_path):
+    cid, _event = _store_campaign(monkeypatch, tmp_path)
+    messages, schema = suggest.build_intent_request(cid, "x")
+    assert messages == suggest.build_intent_prompt(cid, "x")
+    schemas.check(schema)
+    assert schemas.render(schema) in messages[0]["content"]
+    assert schemas.render(schema) not in messages[1]["content"]
+    snapshot = suggest.build_snapshot(cid, drivers=False)
+    assert schema == suggest.intent_schema(snapshot)
