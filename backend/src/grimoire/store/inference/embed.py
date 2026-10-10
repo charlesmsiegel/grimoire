@@ -128,7 +128,7 @@ def _on_app_loop() -> bool:
 
 def _caller_frames() -> str:
     """The caller's innermost `ON_LOOP_FRAMES` frames, outermost first, as
-    `dir/file.py:line in function` -- no source text and no locals. This
+    `<dir>/<module>:<line> in <function>` -- no source text and no locals. This
     module's own two frames are left out."""
     frames = traceback.extract_stack()[:-2][-ON_LOOP_FRAMES:]
     return "".join(f"{'/'.join(PurePath(f.filename).parts[-2:])}:{f.lineno} in {f.name}\n"
