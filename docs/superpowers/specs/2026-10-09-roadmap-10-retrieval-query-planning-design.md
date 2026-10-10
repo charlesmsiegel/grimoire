@@ -1,6 +1,6 @@
 # 10. Retrieval query planning
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 10 in `ROADMAP-CHECKLIST.md`. Lane: retrieval.
 **Baseline:** `main` at `35c1fb7`.
@@ -26,6 +26,7 @@ Edges as `ROADMAP-CHECKLIST.md` lists them for 10.
 | 09-C2 the `Coverage` verdict | 09 | The free gate: the planner runs only when the first retrieval is `thin` or `empty` | Hard |
 | 09-C3 the `history_recall` section and its row | 09 | Planned evidence renders through the same section; the plan's trace rides its inspector row | Hard |
 | 01f-C1 `generate(schema=)` sends structured mode per attempt; per-call `max_tokens` cap | 01f | The planner's reply is schema-shaped where the provider supports it, and its output is hard-capped (section 5.3) | Hard |
+| 01f-C3 the portable schema subset, `schemas.render`, `schemas.find_object` | 01f | The plan schema stays inside the subset, the prompt carries its rendering, and the parse uses the shared tolerant reader (5.2, 5.4) | Hard (part of 01f-C1's refusal) |
 | 01a-C1 eval cost, latency and token reporting | 01a | The planning arms report the calls, tokens, time and three money columns they add (section 11) | Hard for live evals; offline needs nothing |
 | 01f-C2 schema refusal re-sent through the helper shared with decide | 01f | A provider that refuses the field still yields a plan | Soft |
 | 01d-C1 task policy; 01d-C2 one-hop escalation | 01d | Declaring that `history-sufficiency` may escalate, and escalating a non-answer or low margin once (section 7.3) | Soft: without it a non-answer is `unknown` and the repair hop does not run |
@@ -38,7 +39,7 @@ Edges as `ROADMAP-CHECKLIST.md` lists them for 10.
 | Contract (provided here) | Consumer | Hard or soft | What the consumer uses it for |
 |---|---|---|---|
 | 10-C1 `history_plan` route, `Plan`, `plan.build_messages`, `plan.parse`, taking a `perspective` | 11 | Soft | Planning an actor's history questions once 11 lifts 09's NPC blanking, with the planner shown only what that actor may know |
-| 10-C2 the bounded repair hop and its `PlanTrace` | 12 | Hard for RP mode | "Cheap retrieval failed" is a terminal trace state 12 reads rather than re-derives |
+| 10-C2 the bounded repair hop and its `PlanTrace` | 12 | Hard for RP mode | `PlanTrace.cheap_retrieval_failed` and `PlanTrace.tried`: the repair hop ran and 10-C3 still judged the evidence insufficient, and what was tried (section 8.1) |
 | 10-C3 the evidence-sufficiency predicate (`history-sufficiency` on `history_check`) | 12 | Hard for RP mode | The same question gates escalation from retrieval to investigation |
 
 ## 1. Current state (reconciled against main)
@@ -110,24 +111,29 @@ section, and never run when the free gate says retrieval already succeeded.
 ## 3. Flow
 
 All of it inside `routes/history_recall.gather` (09 section 10.1), after 09's
-first retrieval and before the evidence is handed to compose:
+first retrieval and before the evidence is handed to compose, **under 09's
+turn-phase deadline** (09 section 10.2: `HISTORY_PHASE_PLANNED_SECONDS`, 12 s,
+when `history_plan` is `auto`), from which every step below draws
+`min(own ceiling, remaining)`:
 
 ```text
 E0 = retrieve(turn query)                                   09; no model call unless rerank
-if mode == "off" or (E0.coverage.verdict == "sufficient" and not force): return E0
-if not plan_allowed(cid):                                   resolution, budget, deadline
-    return E0
-P1 = plan(turn, E0)                                         generate #1, history-query-plan
+if mode == "off" and not force:                    return E0
+if E0.coverage.verdict not in {"thin", "empty"} and not force:
+    return E0                                       sufficient, exhausted or error: never plan
+if not plan_allowed(cid, remaining):               return E0   resolution, budget, deadline
+P1 = plan(turn, E0)                                         step 1: generate, history-query-plan
 if P1 is None:                return E0                     failed or unusable: fail soft
 if not P1.needs_history:      return E0                     planner says history is not needed
-E1 = merge(E0, retrieve(query_of(P1)), ceiling)             09, rerank=None
-if not repair_enabled:        return finish(E1)
-S = sufficient(turn, E1)                                    decide #1, history-sufficiency (+01d hop)
-if S != "insufficient":       return finish(E1)             sufficient or unknown: stop
-P2 = plan(turn, E1, tried=P1)                               generate #2, the repair hop
-if P2 is None or P2.adds_nothing_to(P1): return finish(E1)
-E2 = merge(E1, retrieve(query_of(P2)), ceiling)
-return finish(E2)                                           no further check, ever
+E1 = merge(E0, retrieve(query_of(P1)), ceiling, expand)     09, rerank=None
+if not repair_enabled:        return finish(E1)             (final check below if asked)
+S1 = sufficient(turn, E1)                                   step 2: decide, history-sufficiency (+01d hop)
+if S1 != "insufficient":      return finish(E1)             sufficient or unknown: stop
+P2 = plan(turn, E1, tried=P1)                               step 3: generate, the repair hop
+if P2 is None or P2.adds_nothing_to(P1): return finish(E1)  `unrepaired` / `repair_redundant`
+E2 = merge(E1, retrieve(query_of(P2)), ceiling, expand)
+if final_check: S2 = sufficient(turn, E2)                   step 4, only when asked (8.1)
+return finish(E2)                                           never another plan
 ```
 
 `finish` applies 09's optional rerank once to the final merge
@@ -135,11 +141,30 @@ return finish(E2)                                           no further check, ev
 at most. Every branch returns evidence; the worst case is `E0`, which is what
 09 alone would have sent.
 
-**Call ceiling per turn**: two `generate` calls, one `decide` call, and one
-01d escalation hop, plus 09's per-round embed requests (one each, three at
-most) and its one optional rerank. `MAX_PLAN_CALLS = 3` model calls
-(escalation counted inside 01d's own bound) is checked before every call, so
-a refactor that adds a step cannot silently exceed it.
+**The gate is `thin` or `empty`, and nothing else** (review B4). 09's
+`exhausted` verdict (09 section 11.2: no eligible scene left unadmitted,
+including a campaign's first scene) and its `error` verdict never plan:
+there is nothing more to find, or retrieval itself failed. The trace records
+`not_run:exhausted` or `not_run:error`.
+
+**Once per player post** (review S8). On the round path 09 retrieves once per
+round and reuses the evidence for every narrator contribution (09 section
+10.1); planning runs inside that one retrieval, so a round plans at most once.
+
+**The step cap and what it means in rows** (review S2). `MAX_PLAN_STEPS` is 3,
+or 4 with `final_check`, counted before every step; the 01d escalation hop is
+inside step 2 or 4, not beside it. A step is not one request:
+
+| Step | Ledger rows, worst case |
+|---|---|
+| A plan (`generate`) | 1: 01f-C2's re-send and the facade's fallback file through the one meter (01f-C2: "`generate` files one row ... with `attempts` counting every attempt") |
+| A check (`decide`, one item) | up to 4: primary stage, its prompt-only re-send, the fallback stage, its re-send (01f-C2: `decide` files a row per re-send); one request per stage on a native model |
+| The 01d hop inside a check | up to 4 more, by the same count |
+
+So the worst case is 2 + 2 x 8 = 18 rows with `final_check`, 10 without, and
+a typical planned turn files 1 to 3 (one plan, one structured check, and on
+a repair one more plan). Each row is attributed to the post. The phase
+deadline, not the row count, is what bounds the wait.
 
 ## 4. Routes and tasks
 
@@ -152,11 +177,22 @@ Route("history_plan", "History recall planning",
       "When recalled history looks thin, one short call that rewrites what the turn "
       "needs from the campaign's past.",
       ("history-query-plan",), True, default_role="fast", legacy=routing.NO_LEGACY),
-Route("history_check", "History recall checks",
-      "Whether recalled history is enough, and (when on) its rerank.",
-      ("history-sufficiency",), True, operation="decide", default_role="decision",
-      legacy=routing.NO_LEGACY),
 ```
+
+and `history-sufficiency` **appended to 02-C5b's `history_check` entry**
+(02 section 9.3), which is the single definition of that route: its label,
+hint, `operation="decide"`, `default_role="decision"` and `NO_LEGACY` are
+02's, and 10 changes only its task tuple (review S7). If 10-C3 lands before
+09's rerank, 10's change adds 02-C5b's entry as written with
+`("history-sufficiency",)` alone, and the rerank slice appends
+`history-rerank`.
+
+The 01d-C1 row for `history-sufficiency` (02 section 10's table, one row
+added): `fallback="role"` (agreeing with `history-rerank`, as
+`test_task_policy.py` requires of one route's tasks), escalation **on**
+(`abstained`, `refused`, and `low_margin` where a margin is reported),
+`samples` off. A sufficiency verdict is never sampled: it gates spend, and a
+sampled gate would make spend random.
 
 Neither `legacy=""` nor `legacy="summary"` is right for a route that never
 existed under the format-1 layout:
@@ -174,7 +210,12 @@ So routes born at format 2 use `routing.NO_LEGACY`, the shared structure
 `ROADMAP-CHECKLIST.md` records for 01g (`tool-decision`), 02-C5, 09 and 10
 (`NO_LEGACY = None`; whichever lands first adds it):
 
-- `_legacy_routes()` skips such a route, so `LEGACY_ROUTES`, `CONFIG_KEYS`,
+- `Route.legacy` becomes `str | None`, which the mypy ratchet sees, and every
+  test of it is an explicit `route.legacy is NO_LEGACY`. A truthiness test
+  would be wrong: `_legacy_routes()`'s `if r.legacy: continue`
+  (`routing.py:150`) reads `None` as falsy and would *include* such a route as
+  a legacy route (review M5).
+- `_legacy_routes()` skips such a route by that explicit test, so `LEGACY_ROUTES`, `CONFIG_KEYS`,
   `PRESET_CONFIG_KEYS` and the campaign allow-list (`routes_for`,
   `store/campaigns/lifecycle.py:536`) are unchanged and their frozen tests
   stay green as written.

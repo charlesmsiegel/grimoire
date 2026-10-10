@@ -756,51 +756,88 @@ takes no output cap (section 3.13), which is one reason C2b keeps a
 different spend rule.
 
 **How spend is estimated before a send.** This is the part that must not
-break the three-columns rule (CLAUDE.md, "Costs"):
+break the three-columns rule (CLAUDE.md, "Costs"). It prices a call the way
+the app's other pre-send estimate already does, the model-test preview
+(`routes/config.py:1355-1390`, `probes.estimate_usd` and
+`estimate_from_rates`).
 
-- The guard figure is **one kind of arithmetic applied uniformly**: tokens
-  times the user's rates, `pricing.estimate(entry, prompt_tokens=,
-  completion_tokens=)`. The entry is the same precedence function every
-  modelled figure uses (`usage.Rates.current().entry(model,
-  provider_id=, requested_model=)`), and the rates are snapshotted once per
-  run, off the event loop, at loop start.
-- It never reads `cost_usd`, `estimated_usd` or `modelled_usd` from a row
-  and adds them together. A turn a provider priced is *re-priced* here at
-  the user's rates, because the guard needs one unit. So it is a
-  **projection**, like the Costs trend's "Estimated total": never spend,
-  never written to the ledger as money, never shown as what the run cost.
-  What the run cost is read from its rows by `run_id`, in three columns.
-- **Projection for the next turn:** `pricing.estimate(entry,
-  prompt_tokens=P, completion_tokens=C)`.
-  - `P` is `tokens.count_if_loaded` over the serialised messages plus the
-    tool definitions. It never starts an encoder load, and the
-    characters/4 heuristic rounds up, which is the safe direction for a
-    ceiling.
-  - `C` is the turn's output cap.
+- **Per-attempt price, in this order** (`tool_calls.price_for(attempt)`,
+  built once per run off the event loop):
+  1. **The attempt's cached catalog row** (`llm_connections.cached_row`), its
+     per-token `prompt` and `completion` prices. A stated `0` is a free
+     model: a reported price, projecting to `0.0`.
+  2. **Otherwise the user's rates** (`pricing.rate_for_call`: the model's own,
+     then `pricing.json`), **only when the attempt's preset does not
+     `reports_price`**. For a provider that reports its own price, the ledger
+     never prices its calls from the user's rates, so a `"": 0` default meant
+     for local models would otherwise project a billed OpenRouter turn at
+     `$0.00`, the exact failure the preview's docstring names.
+  3. **Otherwise unpriceable.**
+- **A projection, never accounting.** The guard figure is that arithmetic
+  applied uniformly (price times counts). It never reads `cost_usd`,
+  `estimated_usd` or `modelled_usd` from a row and adds them together. A turn
+  a provider priced is re-priced here by the same rule, because the guard
+  needs one unit. So it is a projection, like the Costs trend's "Estimated
+  total": never spend, never written to the ledger as money, never shown as
+  what the run cost. What the run cost is read from its rows by `run_id`, in
+  three columns.
+- **Projection for the next turn:** the price applied to `P` prompt tokens
+  and `C` completion tokens.
+  - **Turn 1:** `P` is `tokens.count_if_loaded` over the serialised messages
+    plus the tool definitions, counted **in a worker thread**, never on the
+    event loop, times `PROJECTION_MARGIN = 1.5`.
+  - **From turn 2:** `P` is the previous turn's reported `prompt_tokens`
+    (else its counted `P`) plus a count of the appended turns, with the
+    margin on the appended part only.
+  - The margin is structural, because `count_if_loaded` is not an upper
+    bound: chars/4 under-counts CJK text, and a cl100k-style encoder
+    under-counts Claude's tokenizer. To be tuned against real runs.
+  - `C` is the turn's output cap. It is a bound **only where it is sent**:
+    `inference.cap_sent(target)`, 01f-C1. An attempt whose cap is not sent
+    (the Claude SDK; an OpenRouter model whose catalog omits `max_tokens`)
+    is **unpriceable under a ceiling**.
   - Across the chain, the projection is the **maximum** over the attempts
-    that could serve this turn (primary, and the riding fallback). Which
-    one will answer is not known before the send.
-- **Spent so far:** for each settled turn, the same `pricing.estimate`
-  applied to its row's counts. That means the reported counts, else the
-  facade's local estimate (`tokens_estimated`), else, for a turn whose
-  counts nobody has, its own projection. A turn that failed and filed no
-  row adds its projection, because a failed attempt can still bill.
-- **Unpriceable means refused, not zero.** With a ceiling set, a chain on
-  which any attempt has no rate raises `RunRefused("unpriceable")` before
-  anything is sent. The message names the model and says to set rates for
-  it or run without a spend ceiling. This is "a price nobody reported is
-  never rendered as zero", applied to a guard: a ceiling that counted an
-  unpriced turn as free would not be a ceiling.
-- **A native decision is never modelled** (`Rates.estimate` refuses it). So
-  with a spend ceiling set, the decide tool is offered only when its
-  resolution answers on structured stages alone (section 3.12). A native
-  decide stage has no price this guard can model, and the per-run decision
-  cap alone would not make the ceiling true.
+    that could serve this turn.
+- **Spent so far:** for each settled call of the run (every turn row, and
+  every row in each decide-tool call's `Decision.usage`), the same rule
+  applied to its row's counts: the reported counts, else the local estimate,
+  else that call's own projection. A turn that failed and filed no row adds
+  its projection, because a failed attempt can still bill.
+- **What the ceiling cannot promise, stated:** the facade's retries, a
+  connection dropped after generating, and 01f's prompt-only re-send in a
+  finalize turn are each billed and not separately projected. A ceiling can
+  therefore be overrun by **at most the billed failed attempts of one turn**
+  (the primary's retries plus the fallback's one attempt). Every later send
+  sees them in "spent so far".
+- **Unpriceable means refused, not zero** (the recorded cross-spec decision
+  in `ROADMAP-CHECKLIST.md`, which 12 follows). With a ceiling set, a chain
+  on which any attempt is unpriceable raises `RunRefused("unpriceable")`
+  before anything is sent. The message names the model and says to set rates
+  for it, or run without a spend ceiling. A ceiling that counted an unpriced
+  turn as free would not be a ceiling.
+- **A subscription attempt** (`billing: subscription`) is projected by the
+  same rule, so under a ceiling the guard bounds *usage at list price*, not
+  money owed. `usage.budget` keeps such calls out of a campaign's spend
+  (`usage.py:1711-1715`) for the opposite question. A `claude` attempt has
+  no catalog and `reports_price`, so it is unpriceable, and a ceiling over a
+  Claude subscription chain is refused, as section 3.13 already says.
+- **Decide-tool calls go through the same pre-send check** (section 3.12):
+  - before each decide call, `spent + projection(decide) <= ceiling`;
+  - the projection is the rendered decide prompt's tokens and the decide
+    call's output cap (`decide(max_tokens=)`, applied to its structured stage
+    targets through 01f's `with_output_cap`), summed over every call the
+    decision could make: each stage, plus each stage's prompt-only re-send;
+  - a native decide stage is never modelled (`Rates.estimate` refuses it),
+    so under a ceiling the decide tool is not offered when any stage is
+    native, unpriceable or uncapped.
 - **Campaign budgets are not read.** A campaign budget measures `cost_usd`
-  only and only warns (`usage.budget`). The run ceiling is a modelled
-  projection, so combining the two would add columns. Whether an
-  investigation should be refused while its campaign is `over` is the
-  consumer's policy (section 9, question 4).
+  only and only warns (`usage.budget`). Combining it with this projection
+  would add columns. Whether an investigation should be refused while its
+  campaign is `over` is the consumer's policy (section 9, question 4).
+- **`tool_calls.tool_run_refusal(task, resolved, budget, prices) ->
+  RunRefused | None`** is the same check as a pure preflight. A `def` route
+  calls it **before reserving**, so 12's E2 and E3 answer 409 `unpriceable`
+  before a 202, and `run_tools` repeats it at entry.
 
 ### 3.10 Metering, capture and the trace (01g-C3)
 

@@ -605,7 +605,7 @@ tuple the count allows, in target-pool order: for `max == 0` the single empty
 tuple; for `max == 1`, one option per eligible target (plus the empty tuple when
 `min == 0`); for `max > 1`, **not enumerated** (the combinations explode) but
 represented by one option with `targets == ()` and a flag `multi: true`, which
-13-C3 answers with 01e-C3b's `Joint` (24.3). The pack stamp is a digest of
+13-C3 asks as a two-step question, the second step a `MultiSelect` (01e-C3a, 24.3). The pack stamp is a digest of
 the pack's `actions`, `checks` and `sheets` objects, the shape
 `audit.baselines.schema_stamp` already uses for `sheets`.
 
@@ -1464,7 +1464,10 @@ kept):
 
 A rejected outcome renders `scene/action_rejected.j2`: the roll and why its
 effects could not be applied, and an instruction to narrate the attempt without
-inventing a mechanical consequence. A declined Action reuses
+inventing a mechanical consequence; the costs it lists did land (7.4). A
+paused character round resumes with `action_result.j2` (or
+`action_rejected.j2`) as `resume_roll`'s appended block, in place of
+`roll_result.j2`. A declined Action reuses
 `scene/roll_declined.j2` with an `action_label` variable added.
 
 `verify_templates.py` and the template README gain both templates.
@@ -1658,6 +1661,10 @@ count of detached handlers in CLAUDE.md does not change.
   read-only by default with **Undo** and, for a stalled one, **Settle** in the
   sidebar. No new rail row: Sheets already appears exactly where a module is
   bound (`frontend/src/shell/rail.ts:255-259`).
+- **Mechanics status** (the draft's 26, MII 23.4): not a new surface in II-A.
+  The play view's existing sheet panel already shows each present actor's
+  resources; II-B adds conditions to it and II-C adds active clocks, each in
+  the slice that creates that state.
 - **Authoring**: an Actions section in the module editor, following
   `EntityEditor`'s pattern: an Effects builder (op, selector, field picked from
   the declared sheet types' mutable fields, amount with inline expression
@@ -1915,7 +1922,7 @@ Legality is enforced after the draw (24.5), never by editing the distribution.
   Action. The NPC's turn proceeds as prose (01c-C4).
 - **Errors degrade, never fail the round**: `DecideRequestError`, any
   `LLMError`, and the seam's `require_inference` refusals (409 `incapable`,
-  `missing_key`, `not_migrated`) are logged with a code and the turn proceeds
+  `missing_key`) are logged with a code and the turn proceeds
   as prose. This is deliberately more forgiving than the speaker pick, which
   returns control only on `DecideRequestError` and lets an `LLMError`
   propagate (`character_turns.py:728-761`): a missing NPC Action loses a
@@ -2006,18 +2013,24 @@ seeded as the plan is (24.7). Without 02-C3 the question is its own
   resolution or none.
 - **Outputs**: `effects.plan(...) -> Plan` (pure; a rejected outcome is a
   `Plan` with `rejection` set);
-  `txn.record/apply/complete/recover/settle/undo` and
+  `txn.open_for_proposal/complete/close/settle/undo` (no `proposals` import),
+  `resolve.finish/recover` (the proposal-facing half), and
   `sheets.writer.apply_unit_locked` (10-12).
 - **Guarantees**: II-A ops are `set`, `add`, `spend`, `restore` on `resource`
-  and `track` fields with the bounds of 7.2. A roll is durable in an `open/`
-  record before any unit is written; recovery never rolls; a unit is
+  and `track` fields with the direction-preserving bounds of 7.2, and every
+  value and amount within `MAX_EFFECT_MAGNITUDE`. A roll is durable in an
+  `open/` record before any unit is written; costs land even when the outcome
+  is rejected; recovery never rolls; a unit is
   applied at most once and only over its exact `before`; a value someone else
   wrote is never overwritten (stall, not overwrite); undo is a new transaction
   under the same compare-and-swap. Every transaction is in `open/` until its
-  proposal handoff is complete. Revision bumped wherever a transaction writes.
+  proposal handoff is complete, and nothing is handed off or projected unless
+  the record's scene identity and proposal still match (otherwise `orphaned`).
+  Revision bumped wherever a transaction writes.
 - **Failure**: a precondition fails before the roll (nothing recorded); an
-  outcome fails after it (`rejected`, roll kept); a foreign write before
-  recovery (`stalled`, settled by the player); `StoreBusy` propagates as the
+  outcome fails after it (`rejected`, roll and costs kept); a foreign write, a
+  changed module or a missing module before recovery (`stalled`, settled by the
+  player; never a raise out of `heal`); `StoreBusy` propagates as the
   409 every lock holder already answers.
 
 ### 13-C1c: Action proposals, narration and audit
@@ -2056,13 +2069,15 @@ entries, one target (22). Guarantee: no retry re-rolls either side.
 ### 13-C3: The NPC action seam, sampled through 01c
 
 - **Inputs**: a sheeted NPC about to take a turn in a round; the campaign's
-  `npc_actions` setting; 13-C1a's legal set; 01c-C2/C3/C4; 01e-C3b where 24.3
-  needs it; 02-C2's intent and 02-C3's `extra` slot when present.
+  `npc_actions` setting; 13-C1a's legal set; 01c-C2/C3/C4 (`draws.draw`,
+  `new_seed`); 01e-C3a for multi-target Actions; 01e-C3b optionally; 02-C2's
+  intent and 02-C3's `extra` slot when present.
 - **Outputs**: either nothing (the turn proceeds as prose) or an action proposal
   with `source: "npc"` and a replay record (24.5).
-- **Guarantees**: the selection is a member of the legal set re-checked under
-  the lock; the replay record is persisted on the proposal, the round and the
-  transaction; abstention, refusal or failure never become an Action; no Action
+- **Guarantees**: the distribution is drawn from as reported, never reshaped;
+  the selection is a member of the legal set re-checked under the lock; the
+  replay record is persisted on the proposal payload and the round record, and
+  copied into the transaction when one exists; abstention, refusal or failure never become an Action; no Action
   resolves without the player's accept.
 - **Failure**: any decide failure or stale selection degrades to prose, logged,
   never a failed round.
@@ -2123,15 +2138,21 @@ entries, one target (22). Guarantee: no retry re-rolls either side.
 
 - **Pack validation**, one case per error in 5.4, including reachable tiers
   with and without a ladder and with and without `vs`; a roll name the shape
-  cannot produce; a value name colliding with a field; a cost on a target.
+  cannot produce; a value name colliding with a field or a `<key>_max`; a cost
+  on a target; a cost naming `targets`, `difficulty`, `modifier` or a
+  roll-dependent value; too many values, a chain too deep, an expression too
+  long.
 - **`reachable_tiers` and `roll_shape`** against both shipped packs' checks.
 - **Availability**: each reason code; pool order; `self`; a target whose type
   lacks a touched field is ineligible; the legal set's order and digest are
   stable across runs and change when a sheet value that affects payability does.
 - **Effects** (pure): each op on `resource` and `track` at, inside and past
   each bound; `add` clamp and reject; `spend` refusal; `restore` clamp; negative
-  amounts for `spend`/`restore`; float-to-int; `ambiguous_name`; values in file
-  order; two ops on one field fold into one unit; fan-out order; one failing
+  amounts for `spend`/`restore`; **a `before` already outside the bounds**
+  (`add -2` on `-3/8` stays `-3`; `restore 1` on `11/8` stays `11`; `add -1`
+  with `bounds: reject` on `11/8` is allowed to `10`); float-to-int;
+  `ambiguous_name`; `amount_out_of_range` on a value chain that would grow past
+  the magnitude cap; values in file order; two ops on one field fold into one unit; fan-out order; one failing
   expansion rejects all; a no-op unit is dropped.
 - **Sheet unit writer**: `applied`, `already`, conflict on a changed value,
   conflict on a re-created sheet with a new `gen`, conflict on a type change;
@@ -2139,20 +2160,32 @@ entries, one target (22). Guarantee: no retry re-rolls either side.
 - **Transactions and recovery**, each with a dice fake that fails if
   `resolve_check` is called during recovery:
   - crash (injected exception) after claim, before record: no transaction; the
-    revert is allowed; a fresh accept rolls fresh;
+    chip answers 409 until a send supersedes it; nothing was recorded;
   - after record, before the first unit: recovery applies all units once;
   - after the first of several units (multi-target): recovery finishes the rest
     once;
-  - after commit, before hand-off; after hand-off, before close: each finished
-    by recovery with no second write to any sheet;
+  - after commit, before hand-off; after hand-off, before close; after close,
+    before project: each finished by recovery or the next heal with no second
+    write to any sheet and no second roll. In particular, no ordering of
+    `complete`, `transition`, `close` leaves an empty `open/` beside a
+    `resolving` proposal (the revert guard would then hand back a re-rollable
+    chip);
+  - scene deleted and its sid reused before recovery: units land, the record
+    closes `orphaned`, the new scene's transcript is unchanged; a renamed
+    scene's record is handed off under its new id;
+  - another device's open record inside the grace period is left alone;
+  - `heal` with the module rebound, deleted or made invalid: the transaction
+    stalls and the send proceeds (no 500);
   - a foreign sheet write before recovery: `stalled`, value untouched; settle
     moves it to `partial`;
   - the revert edge refused while an open transaction names the proposal;
   - `heal` (through `supersede` and `new`) completes an open transaction and
     projects its line before retiring the record;
-  - rejected outcome: roll recorded, record `resolved`, a second accept answers
-    the existing stale/narrated paths and rolls nothing.
-- **Undo**: succeeds on unchanged fields; 409 when any touched field moved;
+  - rejected outcome: roll recorded, costs applied, record `resolved`, a second
+    accept answers the existing stale/narrated paths and rolls nothing.
+- **Undo**: succeeds on unchanged fields; 409 when any touched field moved,
+  **with nothing written** (the dry check covers every unit before the record);
+  409 `not_undoable` after a module rename; no 500 from a `SheetError`;
   redo of an undo; a crash between the undo's commit and marking the original
   is finished by recovery.
 - **Fan-outs**: a scene rename repoints transactions; a reclassify repoints
@@ -2162,8 +2195,10 @@ entries, one target (22). Guarantee: no retry re-rolls either side.
 
 - A model fence with `action` produces an action proposal; with problems, it
   opens in Modify; with both `check` and `action`, `check_and_action`.
-- A player Action: create (400 with problems; 200 with a record), accept with
-  `narrate: false` (one frame, record `resolved`, line projected), accept with
+- A player Action: create (400 with problems; 200 with a record; 409
+  `round_open` while a character round is unfinished), accept with
+  `narrate: false` (one frame, record `narrated`, line projected, works with no
+  usable model), accept with
   `narrate: true` (continuation streams with `action_result.j2` appended).
 - Double accept and a lost-response retry each produce one transaction and one
   line.
@@ -2175,8 +2210,14 @@ entries, one target (22). Guarantee: no retry re-rolls either side.
   is refused while a bound campaign has a stalled transaction.
 - **Byte identity**: for each shipped pack and for a fixture pack whose Actions
   are all unavailable, the composed prompt equals the pre-II-A prompt.
-- The audit drops a delta that would reverse a committed transaction, with its
-  reason, and lists transactions in its prompt.
+- The audit stages, unselected and flagged, a delta that would reverse a
+  listed transaction, and lists in its prompt every transaction since the
+  scene began that touched an in-scope sheet, from any scene, undo included.
+- A proposal superseded before accept has no effects; a module edit between
+  proposal and accept that makes the proposal illegal refuses it before any
+  roll (MII 32's two cases).
+- An older build's view: an action payload's `check` is `null`; a no-roll
+  resolution has no `result` key.
 
 ### 27.3 Frontend tests
 
@@ -2238,8 +2279,8 @@ refusal, an illegal option, and an error.
    the snapshot deliberately.
 2. **`add` clamps by default.** MII preferred reject. **Recommendation:** clamp,
    recorded, for outcome effects (7.2), because a post-roll rejection erases the
-   whole outcome; `bounds: "reject"` remains available. Revisit if authors
-   report surprise.
+   whole outcome; `bounds: "reject"` remains available. The clamp never moves a
+   value against the sign of its op (7.2). Revisit if authors report surprise.
 3. **Effects on `number`/`dots`.** Some systems drain attributes.
    **Recommendation:** no; II-B conditions express a temporary drain as a
    modifier, and a permanent one is advancement or a hand edit.
@@ -2270,3 +2311,52 @@ refusal, an illegal option, and an error.
 10. **Per-transaction files vs one file.** **Recommendation:** per-file with
     `open/`/`done/` (10.1). If History listing over `done/` grows slow, 03-C1's
     cache can key a projection over the directory; nothing here depends on it.
+    The audit and the other multi-record readers already use the derived
+    `index.jsonl` (10.1).
+11. **01c's persistence sentence for 13.** 01c 6.1 says 13 persists the replay
+    record in "the transaction-ledger entry that commits the Action", but a
+    declined NPC proposal has no transaction. **Recommendation:** 01c's
+    sentence becomes "the proposal payload and the round record, copied into
+    the transaction" (24.5). This is a request to the 01c owner, not a change
+    13 can make.
+
+## 30. Review record
+
+**Substitute spec-gate review, 2026-10-10** (`reviews/13.md`: 5 blocking, 10
+should-fix, 13 minor). Each finding was checked against the code at the
+baseline. Disposition:
+
+| Finding | Disposition |
+|---|---|
+| B1 clamp moves an out-of-bounds value the wrong way | Fixed: direction-preserving bounds, formulas and examples (7.2), tests (27.1) |
+| B2 costs on a rejected outcome contradicted | Fixed: costs always land; a rejected record carries cost units only (7.4, 9, 10.3, 11.1, 11.6) |
+| B3 recovery projects into a recycled or renamed scene | Fixed: identity and proposal fence, `orphaned` close, delete-route recovery, `proposals` joins the scene-rename fan-out (11.3, 16) |
+| B4 unbounded chained values hang the lock | Fixed: value count, chain depth, expression length and magnitude caps (5.3, 5.4, 7.3) |
+| B5 recovery layering vs import guard; close order | Fixed: `txn` (no proposals import) vs `resolve`; `complete` never closes; order complete -> fence -> hand off -> close -> project (11.1, 11.3, 11.4) |
+| S1 `heal` can 500 every send | Fixed: `complete` never raises on store content; recovery at rebind, module delete and import (11.3, 11.4, 17) |
+| S2 `narrate: false` leaves "narration owed" | Fixed: ends in `commit_narration(..., lambda: None)`; skips `require_inference` (8.4) |
+| S3 player Action strands a paused round; line match breaks | Fixed: 409 `round_open`; `mechanics.lines.format_line` everywhere a line is rebuilt (8.3, 11.4, 13.2) |
+| S4 undo half-applies; 1.2 wrong about `gen` | Fixed: dry check of every unit first; module-change 409; 1.2 corrected (1.2, 12) |
+| S5 audit keyed by scene, sheets are campaign-wide | Fixed: by time and sheet; undo carries no scene; reversal is a flag, not a drop (12, 15) |
+| S6 older builds break on action records | Fixed: no `result` on a no-roll resolution; `action_check` with `check: null` (8.1, 9) |
+| S7 costs vs values timing | Fixed: costs may name only the actor's sheet and static values (5.4, 7.4) |
+| S8 13-C3 contracts disagree with 01c and 01e | Fixed: two-step questions, `MultiSelect` (01e-C3a hard) for multi-target, `Joint` soft and keyed `head=>tail`, `draws.draw` unmodified, persistence point and turn-plan metering named, `incapable`/`missing_key` degrade; 01c's sentence raised as Open question 11 (Depends on, 24.3-24.7) |
+| S9 recovery breaks the scene freeze; one-device assumption | Fixed: projection only where the scene is free; device stamp and grace period; 10.1 no longer reads as a concurrency promise (10.1, 10.2, 11.3) |
+| S10 wrong citations | Fixed (`writer.py`, `binding.py`, `rolls.py`, `migrate.py`). They came from line numbers read off a multi-file listing |
+| M1 `<key>_max` names | Fixed (5.3) |
+| M2 ambiguous labels | Fixed: `target_ambiguous` / `actor_ambiguous` (8.2) |
+| M3 regex path problem and `reaction` | Fixed (8.2) |
+| M4 total prompt cap | Fixed: `MAX_PROMPT_ACTIONS_TOTAL` (14) |
+| M5 `done/` scans | Fixed: derived `index.jsonl` (10.1) |
+| M6 status panel dropped silently | Fixed: stated in 19 |
+| M7 speaker-pick wording; `legacy` | Fixed: the difference is stated; `routing.NO_LEGACY` (24.4, 24.7) |
+| M8 Modify cannot change the Action | Fixed: `action_id` override, re-checked (8.2, 8.4) |
+| M9 resolution status at hand-off | Fixed: hand-off stamps `status` and `landed` (9, 10.2) |
+| M10 "revert" of a crashed claim | Fixed: 409 until a send supersedes (11.1, 11.6, 27.1) |
+| M11 `apply_unit_locked` and the lock-domain guard | Fixed: the `_locked` convention (11.2) |
+| M12 recovery after a data-dir move | Fixed (11.3) |
+| M13 MII 32's two missing cases | Fixed (11.6, 27.2) |
+
+Cross-spec inputs folded in at the same time: 01e's settled `Joint` (one
+target, `Pair.key` spelled `head=>tail`, soft for 13), and the checklist's
+decision that 13 may act on a plain answer recorded `sampled: false`.

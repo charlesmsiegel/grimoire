@@ -1243,29 +1243,37 @@ has not landed when 04's plan starts, 04 builds the core to this section and
 - `overview.world_row` and `overview.campaign_row` are 03 registry kinds:
   byte-fed, persisted-`sources`-allowed, one input each (`world.md`,
   `campaign.md`). They return the row fields with `name: null` for an absent
-  key. `campaign_row` adds `module` (Open question 4).
+  key. `campaign_row` adds `module` (Open question 4); `"none"` renders no
+  chip.
 - `overview.world_rows()` and `overview.campaign_cards()` compose the rows with
   the live counts, cover tokens and activity.
-- `GET /worlds` is byte-identical to today's. `GET /campaigns` is identical
-  except for `module` and the `last_scene` tie-break.
+- `GET /worlds` is byte-identical to today's, unless Open question 4 picks
+  (b), which adds `module`. `GET /campaigns` is identical except for `module`,
+  the `last_scene` tie-break, and an unreadable scene degrading (3.4).
 - **Guarantee:** cache on (cold or warm), cache off and after a restart all
   give the same payload.
-- **Failure:** the cache degrades to the live compute (03 section 12). A row
-  that cannot be read raises exactly as it does today.
+- **Failure:** whenever the compiled layer is off, absent, busy or corrupt, or
+  an input read fails (03-C4 as amended), the live path (3.3) answers, at
+  today's cost. A `campaign.md` that cannot be read raises exactly as it does
+  today.
 
 **04-C1b. Scene and continuity projections.**
 
-- `overview.scene_head`, `overview.scene_summary` (collection digest over
-  `scenes/*.md` with `safe_id` stems), `overview.scene_turns` (scene bytes plus
-  sorted `players`) and `overview.continuity_summary` (five absent-ok files),
-  with the outputs in sections 3.2 to 3.5.
+- Persisted: `overview.scene_turns` (scene bytes plus sorted `players`) and
+  `overview.continuity_summary` (five absent-ok files, keyed per 03-C1 as
+  amended). In-process only in v1: `overview.scene_summary`, folded from
+  head-only `_scene_row` reads (3.4). Outputs are in sections 3.2 to 3.5.
 - **Guarantees:**
-  - each compute reads nothing it was not handed, which an audit-hook test
-    proves;
+  - each byte-fed compute reads nothing it was not handed, which an
+    audit-hook test proves, and has a live path that is today's code;
+  - no overview path reads a closed scene's transcript, in any cache state;
+  - one undecodable or unreadable scene degrades that scene's row, never the
+    shelf, the shell or Todo;
   - each compute reads no clock;
-  - content-determined failures are part of the value, and I/O failures are
+  - content-determined failures are part of the value, and failed reads are
     never stored;
-  - only the four overview read routes reach these kinds (3.7).
+  - every in-process layer is keyed on `stamp` (with ctime), in its own pool;
+  - only the four overview read routes reach these kinds (3.8).
 
 **04-C1c. A Todo scope assembled from projections plus live chores, and
 the shell composed from the same projections.** Three campaign chores
@@ -1280,7 +1288,10 @@ because their inputs cannot be named in advance (4.4).
 - The shell's campaign block takes its rows, scenes, open turns and
   `ledger_open` from 04-C1a/b (4.3).
 - **Guarantees:**
-  - every chore keeps its current answer for the same files;
+  - every chore keeps its current answer for the same files, except the
+    deliberate changes listed in 12.1 (`owed` and the continuity chores read
+    "unknown" on any exception; an unreadable scene degrades);
+  - `has_campaign` keeps today's mapping of `CampaignNotFound` and `OSError`;
   - a change confined to campaign X misses only X's projection keys;
   - no projection key includes the ignore set, config, routing or the usage
     ledger, and no projection reads them;
@@ -1290,12 +1301,12 @@ because their inputs cannot be named in advance (4.4).
 **04-C2a. A post-turn warm hook, and no server-side retirement step.**
 
 - No server-side retirement step exists or is needed (03-C2).
-- `overview.warm_scene(cid, sid)` stores `scene_head` and `scene_turns` for a
-  scene's current on-disk bytes. It is called from the turn's follow-up
-  (`_fire_follow_up`) on a worker thread, holding no lock or exclusion key,
-  storing artifacts only and never a `sources` row. It never raises.
-- `overview.warm_paths(paths)` is exposed for 05-C1, which owns every other
-  call site.
+- `overview.warm_scene(cid, sid)` stores `scene_turns` for a scene's current
+  on-disk bytes. It is called from the turn's follow-up (`_fire_follow_up`) on
+  a worker thread, holding no lock or exclusion key, storing artifacts only and
+  never a `sources` row. It never raises.
+- `overview.warm_paths(paths)`, with the path-to-kind mapping in 5.3, is the
+  `overview` hook 05-C1 registers. 05 owns every other call site.
 - **Guarantee:** a warmed artifact is keyed on bytes read back from disk.
 - **Failure:** a failed warm is a later miss, and nothing else.
 
@@ -1303,43 +1314,56 @@ because their inputs cannot be named in advance (4.4).
 
 - `listWorlds`, `listCampaigns` and `getTodo` answers are remembered, root-
   and key-scoped, in memory only.
-- `WorldsView`, `CampaignsView` and `TodoView` paint a remembered answer on
-  their first render, with `aria-busy`, and always revalidate.
-- Every client write forgets every remembered read, both before it is sent and
-  when it settles. An observed run ending forgets. A root change forgets.
-- Post-mutation refreshes pass `fresh`.
-- Empty states wait for a settled read. A failed revalidation drops the
-  remembered answer.
+- `WorldsView`, `CampaignsView` and `TodoView` read through `useRevalidated`:
+  - keyed state, never the previous key's payload;
+  - only the newest read for the current key may paint;
+  - an answer issued before the current memo epoch is discarded and re-read
+    `fresh`;
+  - a remembered answer is painted on the first render with `aria-busy`, and
+    destructive actions are disabled until the revalidation lands.
+- Every client write forgets every remembered read and retires every in-flight
+  GET, both before it is sent and when it settles. An observed run ending does
+  the same. A root change forgets.
+- Post-mutation refreshes go through `reload()`.
+- Empty states wait for a successful read. A failed revalidation drops the
+  remembered answer and shows the page's failure state, which 04 adds to
+  Worlds and Campaigns.
 - **Guarantee:** the bound in section 6.5.
 
 **04-C3a. Counters and a debug line.**
 
 - `store/readstats.py` is a leaf, contextvar-scoped counter set with the
-  counter names in section 8.
-- Each overview request writes one Debug `overview_read` log row holding
-  counts and milliseconds only.
+  counter names in section 8. Counters are in-process only.
+- Each overview request writes one Debug `overview_read` log row holding the
+  endpoint, scope kind, milliseconds and cache state, and no counters.
 - **Failure:** instrumentation never raises and never changes an answer.
 
 **04-C3b. A benchmark harness that runs on synthetic libraries only**, extending 03-C9's generator.
 
-- The generator (03-C9, extended here) uses store writers only, placeholder names, generated
-  prose and images, a seeded clock, and the `.synthetic-library` marker.
-- `bench_overview.py` refuses anything but a marked synthetic library away from
-  the default store, runs the scenarios in 9.2, and prints counters and timings
-  only.
-- Counter assertions on the `small` profile run inside `make check-py`.
+- The generator (03-C9, extended here) uses store writers only, placeholder
+  names, generated prose and images, a seeded clock, backdated file and
+  directory mtimes, and the `.synthetic-library` marker.
+- `bench_overview.py` refuses anything but a marked synthetic library outside
+  the default store, the pointer's store and any inherited `GRIMOIRE_HOME`.
+  It runs the scenarios in 9.2 and prints counters and timings only.
+- Counter assertions on the `small` profile run inside `make check-py`, with
+  the clocks injected (9.1).
 
 **Relation to the checklist:** these IDs and headlines match
-`ROADMAP-CHECKLIST.md`. Two readings are recorded here: the draft's single
-per-scope Todo artifact is a composition (4.4), and on the server
-"synchronous retirement" is inherited from 03-C2, so the mechanism lives in
-the client (04-C2b).
+`ROADMAP-CHECKLIST.md`. Three readings are recorded here:
+
+- the draft's single per-scope Todo artifact is a composition (4.4);
+- on the server, "synchronous retirement" is inherited from 03-C2, so the
+  mechanism lives in the client (04-C2b);
+- "scene projections" in 04-C1b no longer includes a persisted scene head,
+  and the scene summary is in-process in v1 (3.3, 3.4).
 
 ## 11. Interaction with repo rules
 
 - **Module placement and the import guard.**
   - `store/overview/` is a package: `kinds.py` (registry entries and byte-fed
-    computes), `read.py` (the entry points in 3.7) and `warm.py`.
+    computes and their live paths), `read.py` (the entry points in 3.8) and
+    `warm.py` (`warm_scene`, `warm_paths`).
   - It imports `scenes`, `campaigns`, `worlds`, `continuity`, `frontmatter`,
     `statcache` and 03's module by submodule binding (`CLAUDE.md`, imports).
     Routes import `store.overview`.
@@ -1357,10 +1381,12 @@ the client (04-C2b).
 - **03's query-safety guard** (03 section 9). Every overview read starts from a
   live listing or a live path, so nothing enumerates the cache.
 - **03's decision-site guard** (03 section 5, rule 5) is given the overview
-  kinds and the route allowlist in 3.7. `closed_by`, `list_campaigns` and
+  kinds and the route allowlist in 3.8. `closed_by`, `list_campaigns` and
   `read_scene` stay off it.
 - **Observability.** One writer: `logs.record`. No second handler, no new log
-  file, nothing at a level that could reach the error store.
+  file, nothing at a level that could reach the error store. The debug row
+  carries no library-size figure (section 8), so the Settings text that says
+  what the log holds does not change.
 - **Detached runs.** `warm_scene` rides `_fire_follow_up`. It is not a run,
   holds no exclusion key, and cannot refuse a turn or freeze a scene.
   `PUT /config/data-dir` is unaffected: 03 closes its handles on a root change,
@@ -1373,8 +1399,9 @@ the client (04-C2b).
   fields are untouched.
 - **Android.**
   - The read paths must work with the cache off. 03's first plan task confirms
-    `sqlite3` and the `BUILD` stamp in the Chaquopy build. Until then 04's kinds
-    compute live, and the server gains only 4.5.
+    `sqlite3` and the `BUILD` stamp in the Chaquopy build. Until then 04's
+    persisted kinds take their live paths (3.3), at today's cost and never
+    more. The server still gains 4.5 and the in-process layers (3.4, 3.6).
   - The client memo is memory-only, which suits a WebView.
   - No base dependency is added.
 - **pydantic.** No models are added. Routes return dicts, as today.
