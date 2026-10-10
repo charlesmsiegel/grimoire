@@ -61,6 +61,7 @@ vi.mock("./AuthorsNotesPanel", () => ({
 }));
 import { ApiError, api, PRESET_CLEAR } from "../api/client";
 import { getModels } from "../api/models";
+import { NO_FALLBACK_POLICY } from "./inference/selection";
 
 const GREG_MONTHS = [
   { key: "01", name: "January", days: 31 },
@@ -1109,6 +1110,23 @@ describe("the Models section", () => {
     expect(await section.findByText(
       "The fallback cannot be sent (Endpoint base URL not set), so it is never tried."))
       .toBeInTheDocument();
+  });
+
+  test("a route whose task's policy sends no fallback says so, not that it cannot be sent", async () => {
+    const base = campaignInference();
+    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+      routes: [{ ...base.routes[0], fallback_problem: NO_FALLBACK_POLICY }] }));
+    const section = await openModels();
+
+    fireEvent.click(section.getByRole("button", { name: "Routes" }));
+    fireEvent.click(await section.findByRole("button", { name: /^Scene turns/ }));
+    const line = await section.findByText(
+      "The fallback is never sent: Scene turns runs without a fallback.");
+    expect(line).toBeInTheDocument();
+    // A code choice, not a fault: plain hint styling, not a problem.
+    expect(line).toHaveClass("field-hint");
+    expect(line).not.toHaveClass("problem");
+    expect(section.queryByText(/cannot be sent/)).toBeNull();
   });
 
   test("a role whose fallback is sent says nothing of a dropped one", async () => {

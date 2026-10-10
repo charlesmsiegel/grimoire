@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { api, PRESET_CLEAR, type CapabilityNeed } from "../api/client";
+import { NO_FALLBACK_POLICY } from "../components/inference/selection";
 import { forgetModelTests } from "../components/inference/TestCallDialog";
 import ModelsView from "./ModelsView";
 
@@ -959,6 +960,21 @@ test("each task keeps what its detail page said: vision, a dropped fallback, the
   expect(task("Scene break").getByText("No native decision API; structured generation will be used."))
     .toBeInTheDocument();
   expect(task("Image descriptions").getByText(/Also needs: vision/)).toBeInTheDocument();
+});
+
+test("a task whose policy sends no fallback says so, not that it cannot be sent", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+    ROUTES[0], { ...ROUTES[1], fallback_problem: NO_FALLBACK_POLICY }, ROUTES[2], ROUTES[3],
+  ] }));
+  open("/models/edit#advanced");
+  await main().findByRole("form", { name: "Edit models" });
+  const line = await task("Rolling summary").findByText(
+    "The fallback is never sent: Rolling summary runs without a fallback.");
+  expect(line).toBeInTheDocument();
+  // A code choice, not a fault: plain hint styling, not a problem.
+  expect(line).toHaveClass("field-hint");
+  expect(line).not.toHaveClass("problem");
+  expect(task("Rolling summary").queryByText(/cannot be sent/)).toBeNull();
 });
 
 test("a pinned model is warned of when it is unverified for the task's images", async () => {

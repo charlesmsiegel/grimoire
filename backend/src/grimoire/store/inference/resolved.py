@@ -126,7 +126,8 @@ class ResolvedInference:
     #: Why the chosen fallback is left out of `attempts` though it exists: it
     #: cannot send at all (`resolve.problem`: no key, no base URL), or it is on
     #: the primary's own provider (`resolve.SAME_PROVIDER`; lifted behind a
-    #: decide primary that cannot generate). None when it is
+    #: decide primary that cannot generate), or the task's code policy sends
+    #: none (`resolve.NO_FALLBACK_POLICY`, which outranks both). None when it is
     #: attempted, or there is no fallback to send. Never refused on -- the primary is
     #: what the call runs on -- so the settings view is where it shows.
     fallback_problem: str | None = None

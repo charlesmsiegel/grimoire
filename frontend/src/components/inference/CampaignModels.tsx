@@ -15,7 +15,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { upgradePollDelay, upgrading } from "./useInferenceSettings";
 import {
   CHOOSE_A_MODEL, describe, droppedFallbackWords, inheritedPreset, inheritWords, ROLE_LABEL,
-  ROLE_NEEDS, routePinNeeds, routePresetWords, wantsModel,
+  NO_FALLBACK_POLICY, ROLE_NEEDS, routePinNeeds, routePresetWords, wantsModel,
 } from "./selection";
 import { providerPath } from "../../providerPaths";
 
@@ -423,8 +423,11 @@ function RouteDetail({ row, settings, blocked, onEdit }:
       {row.hint && <p className="field-hint">{row.hint}</p>}
       <p>Runs on {describe(row.resolves)}</p>
       <Problem text={row.problem} />
-      <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "",
-                                                row.fallback_problem)} />
+      {/* A policy that sends no fallback is a code choice, not a fault. */}
+      {row.fallback_problem === NO_FALLBACK_POLICY
+        ? <p className="field-hint">{droppedFallbackWords([], row.label, "", NO_FALLBACK_POLICY)}</p>
+        : <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "",
+                                              row.fallback_problem)} />}
       <div className="campaign-models-meta">
         <h6>Uses</h6>
         {/* The role choice alone, so the inherited model without a preset:
