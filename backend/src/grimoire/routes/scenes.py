@@ -5477,6 +5477,34 @@ def get_scene_prompt(cid: str, sid: str, eid: str):
     return entry
 
 
+def _require_campaign(cid: str) -> None:
+    try:
+        store.campaigns.read_campaign(cid)
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+
+
+@router.get("/campaigns/{cid}/prompts")
+def get_campaign_prompts(cid: str):
+    """The campaign-level prompt-log entries, newest first (roadmap 01b): the
+    decisions no scene made -- today the continuity sweep's, one per pass.
+    Rows only, as the scene list is."""
+    _require_campaign(cid)
+    return {"entries": store.prompt_log.list_entries(cid, store.prompt_log.NO_SCENE)}
+
+
+@router.get("/campaigns/{cid}/prompts/{eid}")
+def get_campaign_prompt(cid: str, eid: str):
+    """One campaign-level entry, scoped to `prompt_log.NO_SCENE` as a scene's
+    detail route is to its scene: no scene's entry is served here, and none of
+    these through a scene's route. There is no diff route at this level."""
+    _require_campaign(cid)
+    entry = store.prompt_log.read_entry(cid, eid, scene=store.prompt_log.NO_SCENE)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="prompt snapshot not found")
+    return entry
+
+
 #: The `against` value that means "the composition as it stands now" rather than
 #: a second frozen turn. Not a valid entry id -- those are all digits -- so it
 #: cannot collide with one.

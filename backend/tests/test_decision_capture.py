@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 
 import pytest
 
@@ -500,3 +501,103 @@ def test_a_legacy_speaker_entry_is_not_comparable_either(client):
     eid = store.prompt_log.record(cid, sid, "response-selector", _breakdown())
     r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}/diff")
     assert r.status_code == 409 and r.json()["kind"] == "not_comparable"
+
+
+# ---- campaign level: the reconciliation sweep (01b-S3) ----
+
+from .llm_fakes import from_entries  # noqa: E402
+from .test_continuity_reconcile_routes import (  # noqa: E402 - the sweep's own fixtures
+    _campaign,
+    _duplicate,
+    _held,
+    _install,
+    _live,
+    _refresh,
+    _reply,
+    _settled,
+    _threads,
+)
+from .test_continuity_reconcile_routes import _entry as _sweep_entry  # noqa: E402
+from .test_continuity_reconcile_routes import _key as _sweep_key  # noqa: E402
+
+
+def _swept(client) -> tuple[str, str]:
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _sweep_key(client)
+    _install(client, from_entries([_sweep_entry(_reply(_duplicate()))]))
+    return cid, sid
+
+
+def test_a_sweep_files_one_campaign_level_entry(client):
+    cid, sid = _swept(client)
+    run = _settled(client, cid, _refresh(client, cid))
+    assert run["state"] == "landed" and run["result"]["llm"] == "ok", run
+    (row,) = client.get(f"/api/campaigns/{cid}/prompts").json()["entries"]
+    assert (row["task"], row["operation"], row["scene"]) == (
+        "continuity-reconcile", "decide", store.prompt_log.NO_SCENE)
+    entry = client.get(f"/api/campaigns/{cid}/prompts/{row['id']}").json()
+    (call,) = _envelope(entry)["calls"]
+    assert (call["stage"], call["at"]) == (0, [0])
+    assert call["items"][0]["rationale"]
+    # No scene's list holds it, and no scene's route can read it.
+    assert store.prompt_log.list_entries(cid, sid) == []
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{row['id']}")
+    assert r.status_code == 404
+
+
+def test_the_campaign_routes_list_only_campaign_level_entries(client):
+    cid, sid = _scene(client, posts=0)
+    turn = store.prompt_log.record(cid, sid, "chat", _breakdown())
+    check = store.prompt_log.record(cid, sid, "scene-break", _breakdown(), operation="decide")
+    sweep = store.prompt_log.record(cid, "", "continuity-reconcile", _breakdown(),
+                                    operation="decide")
+    rows = client.get(f"/api/campaigns/{cid}/prompts").json()["entries"]
+    assert [r["id"] for r in rows] == [sweep]
+    for eid in (turn, check):
+        assert client.get(f"/api/campaigns/{cid}/prompts/{eid}").status_code == 404
+    assert client.get("/api/campaigns/nope/prompts").status_code == 404
+
+
+def test_a_forgotten_sweep_files_nothing(client):
+    """Test 6: the sweep fences itself on its run -- a run forgotten by a
+    campaign delete must not file into a same-named replacement."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _sweep_key(client)
+    held = _install(client, _held(_reply(_duplicate())))
+    assert _refresh(client, cid).status_code == 202
+    held.await_held()
+    run = _live(client, cid)
+    run.forgotten = True
+    held.release()
+    # Forgotten, the run answers no route: wait on it directly.
+    deadline = time.monotonic() + 10
+    while run.state == "running" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert run.state != "running"
+    assert store.prompt_log.list_entries(cid, store.prompt_log.NO_SCENE) == []
+
+
+def test_campaign_decisions_are_a_pool_of_their_own(client):
+    """Test 7 (the campaign pool): sweeps evict only sweeps, and neither turns
+    nor scene checks evict a sweep."""
+    cid, sid = _scene(client, posts=0)
+    store.config.write_config(prompt_log_depth="3")
+
+    def sweeps(n):
+        return [store.prompt_log.record(cid, "", "continuity-reconcile", _breakdown(),
+                                        operation="decide") for _ in range(n)]
+
+    def checks(n):
+        return [store.prompt_log.record(cid, sid, "scene-break", _breakdown(),
+                                        operation="decide") for _ in range(n)]
+
+    turn = store.prompt_log.record(cid, sid, "chat", _breakdown())
+    check = checks(1)
+    swept = sweeps(4)
+    assert {r["id"] for r in store.prompt_log.list_entries(cid, "")} == set(swept[1:])
+    assert {r["id"] for r in store.prompt_log.list_entries(cid, sid)} == {turn, *check}
+    check += checks(3)
+    assert {r["id"] for r in store.prompt_log.list_entries(cid, "")} == set(swept[1:])
+    assert {r["id"] for r in store.prompt_log.list_entries(cid, sid)} == {turn, *check[1:]}

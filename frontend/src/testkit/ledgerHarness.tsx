@@ -48,6 +48,7 @@ export function installLedgerMocks() {
   mocked(api.campaignLedger).mockResolvedValue(EMPTY_LEDGER);
   mocked(api.campaignChanges).mockResolvedValue([]);
   mocked(api.campaignRelationshipHistory).mockResolvedValue([]);
+  mocked(api.listCampaignPrompts).mockResolvedValue({ entries: [] });
   for (const k of ["ledgerCreateThread", "ledgerSaveThread", "ledgerDeleteThread",
                    "ledgerCreateCommitment", "ledgerSaveCommitment", "ledgerDeleteCommitment",
                    "ledgerRecordFact", "ledgerSaveFact", "ledgerRetireFact", "ledgerDeleteFact",

@@ -538,6 +538,39 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
         return   # gone, contended, or unreadable: capture nothing, cost nothing
 
 
+def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str = "",
+                            kind: str = "", conn: wire.Target | None = None,
+                            operation: str = "",
+                            fence: Callable[[], bool] | None = None) -> None:
+    """`_record_prompt` for an entry no scene owns (`prompt_log.NO_SCENE`,
+    the continuity sweep's decisions, roadmap 01b).
+
+    It proves the CAMPAIGN is still here instead of a scene, inside the same
+    non-blocking hold that covers the write, then asks `fence` (the site's
+    own: a sweep forgotten by a campaign delete must not file into a
+    same-named replacement), writes, and stamps the campaign's write token
+    after the write and inside the hold -- `_record_prompt`'s ordering, for
+    its reasons. Contended, gone or unreadable costs the capture alone; a
+    capture that wrote nothing stamps nothing."""
+    report = llm_sampling.report(conn)
+    if report is not None:
+        breakdown = {**breakdown, "sampling": report}
+    try:
+        with store.locks.campaign_lock_nowait(cid) as got:
+            if not got:
+                return
+            store.campaigns.read_campaign(cid)
+            if fence is not None and not fence():
+                return
+            try:
+                store.prompt_log.record(cid, store.prompt_log.NO_SCENE, task, breakdown,
+                                        model=model, kind=kind, operation=operation)
+            finally:
+                store.revision.bump(cid)
+    except (store.campaigns.CampaignNotFound, store.locks.StoreBusy, OSError):
+        return
+
+
 def _abandon(task: asyncio.Task) -> None:
     """Ask an overrun call to stop, then stop waiting on it.
 

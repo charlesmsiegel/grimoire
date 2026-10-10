@@ -57,10 +57,12 @@ Decisions are kept apart (roadmap 01b §3.5). An entry `record`ed with
 `operation="decide"` -- one per decision scope, `routes.decision_capture` --
 is counted in a pool of its own, so a turn's snapshot is never evicted by the
 checks around it (a speaker pick, a scene-break check, an absorb's voice
-checks), nor a decision by a long run of turns. Each pool keeps `depth()`
-entries: one setting governs both, and 0 still turns all capture off. A row
-written before this has no `operation` and counts as a generation until it
-ages out.
+checks), nor a decision by a long run of turns. A decision that belongs to no
+scene -- the continuity sweep's, filed under `NO_SCENE` -- has a pool of its
+own again, so a run of per-turn checks cannot evict the sweeps either. Each
+pool keeps `depth()` entries: one setting governs all three, and 0 still
+turns all capture off. A row written before this has no `operation` and
+counts as a generation until it ages out.
 """
 
 from __future__ import annotations
@@ -210,6 +212,12 @@ _META_TYPES = {"task": str, "ts": str, "model": str,
 #: and the only value that moves an entry out of the generation pool.
 DECIDE = "decide"
 
+#: The `scene` of a campaign-level entry: a decision no scene made (the
+#: continuity sweep). Never a scene id -- `safe_id` refuses "" -- so no
+#: scene's list, rename or delete ever reaches one, and a scene-scoped URL
+#: (whose path segment is never empty) cannot read one.
+NO_SCENE = ""
+
 
 def _optional_str(data: dict, key: str) -> bool:
     """Whether `key` is absent or a string: `operation` is optional, since
@@ -218,9 +226,11 @@ def _optional_str(data: dict, key: str) -> bool:
 
 
 def _pool(row: dict) -> str:
-    """Which retention pool a row counts in (module docstring): a decision's,
-    or a generation's."""
-    return DECIDE if row.get("operation") == DECIDE else ""
+    """Which retention pool a row counts in (module docstring): a scene's
+    decision, a campaign's decision, or a generation."""
+    if row.get("operation") != DECIDE:
+        return ""
+    return "campaign" if row.get("scene") == NO_SCENE else "scene"
 
 
 def _valid_id(eid: object) -> bool:

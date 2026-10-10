@@ -170,6 +170,35 @@ test("selecting a group lists its findings", async () => {
   expect(main().queryByRole("button", { name: /mara's oath/i })).toBeNull();
 });
 
+test("what the sweep asked opens a captured sweep read-only", async () => {
+  // Roadmap 01b: the sweep's decisions are campaign-level captures, listed
+  // under Refresh, collapsed, and opened read-only through the breakdown.
+  (api.listCampaignPrompts as any).mockResolvedValue({ entries: [
+    { id: "000007", scene: "", ts: "2026-10-01T10:00:00Z", task: "continuity-reconcile",
+      operation: "decide", model: "m", total_tokens: 50, dropped_tokens: 0, budget_tokens: 0 },
+  ] });
+  (api.getCampaignPrompt as any).mockResolvedValue({
+    id: "000007", ts: "2026-10-01T10:00:00Z", task: "continuity-reconcile",
+    operation: "decide", model: "m", total_tokens: 50, dropped_tokens: 0, budget_tokens: 0,
+    sections: [
+      { id: "message_0", label: "user", text: "Candidate — Mara's map", tokens: 50,
+        tier: "lock-in", dropped: false, trimmed: 0 },
+      { id: "decision", label: "decision", text: '{"task": "continuity-reconcile"}',
+        tokens: 0, tier: "lock-in", dropped: false, trimmed: 0 },
+    ],
+  });
+  renderLedger("/campaigns/run/ledger/continuity/overlaps");
+  const summary = await main().findByText("What the sweep asked");
+  expect(api.listCampaignPrompts).not.toHaveBeenCalled();     // collapsed: not read
+  fireEvent.click(summary);
+  fireEvent.click(await main().findByRole("button", { name: /^Continuity sweep/ }));
+  await waitFor(() => expect(api.getCampaignPrompt).toHaveBeenCalledWith("run", "000007"));
+  expect(await main().findByText("outcome · not sent")).toBeInTheDocument();
+  expect(main().queryByRole("textbox")).toBeNull();
+  fireEvent.click(main().getByRole("button", { name: /All sweeps/ }));
+  expect(await main().findByRole("button", { name: /^Continuity sweep/ })).toBeInTheDocument();
+});
+
 test("a finding in the list addresses that finding", async () => {
   renderLedger("/campaigns/run/ledger/continuity/resolutions");
   fireEvent.click(await main().findByRole("button", { name: /mara's oath/i }));

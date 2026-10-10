@@ -35,6 +35,8 @@ export async function ledgerApiMock() {
       reconcileContinuity: vi.fn(), awaitCampaignRun: vi.fn(),
       applyCandidate: vi.fn(), dismissCandidate: vi.fn(), restoreSuppression: vi.fn(),
       removeAlias: vi.fn(), removeLink: vi.fn(),
+      // What the sweep asked (roadmap 01b).
+      listCampaignPrompts: vi.fn(), getCampaignPrompt: vi.fn(),
       staleCurrent: actual.api.staleCurrent,
     },
   };

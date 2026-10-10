@@ -28,7 +28,16 @@ The rules, each of which the spec argues:
   entry and captures nothing for a scene that has none (or cannot be read);
   at filing the same strict read is repeated inside the hold that covers the
   write, and a different answer files nothing. A recycled scene id never
-  inherits a decision, and no identity is ever minted for a capture.
+  inherits a decision, and no identity is ever minted for a capture. A
+  campaign-level scope (`NO_SCENE`: the continuity sweep) has no identity to
+  read, so it is fenced by the site's own `fence`, asked in that same hold;
+  its entries are listed by `GET /campaigns/{cid}/prompts`.
+
+  The residual, stated: between a campaign's store delete and
+  `runs.forget_subject` (the window `routes/runs.py` documents as partial),
+  only the filer's campaign-exists check covers a sweep's capture, so a
+  same-named campaign recreated inside that window is the one path left to a
+  misfiled campaign-level entry.
 - **Never raises, never waits.** A contended lock, a gone scene, an I/O or
   serialisation error, a failed fence: each costs the capture alone, and
   writes one `warning` line naming the task and the exception type -- never
@@ -55,6 +64,10 @@ from ..llm_errors import LLMError
 from . import common
 
 log = logging.getLogger(__name__)
+
+#: The `sid` of a campaign-level scope (`store.prompt_log.NO_SCENE`): a
+#: decision no scene made, which the site fences itself.
+NO_SCENE = store.prompt_log.NO_SCENE
 
 #: The prompt-log section a decision's outcome is filed under. The frontend
 #: draws a section with this id as the outcome, "not sent", rather than as a
@@ -268,11 +281,16 @@ def _file(cid: str, sid: str, scope: Scope, identity: str | None,
 
     try:
         named = _named(scope)
-        common._record_prompt(cid, sid, scope.task, _breakdown(scope),
-                              model=named.model if named is not None else "",
-                              kind=named.kind if named is not None else "",
-                              conn=_sampled(scope), operation=store.prompt_log.DECIDE,
-                              fence=holds)
+        model = named.model if named is not None else ""
+        kind = named.kind if named is not None else ""
+        if sid == NO_SCENE:
+            common._record_campaign_prompt(cid, scope.task, _breakdown(scope), model=model,
+                                           kind=kind, conn=_sampled(scope),
+                                           operation=store.prompt_log.DECIDE, fence=holds)
+        else:
+            common._record_prompt(cid, sid, scope.task, _breakdown(scope), model=model,
+                                  kind=kind, conn=_sampled(scope),
+                                  operation=store.prompt_log.DECIDE, fence=holds)
     except Exception as exc:  # noqa: BLE001 - a capture costs itself, never the decision
         log.warning("could not capture a %s decision: %s", scope.task, type(exc).__name__)
 
@@ -282,6 +300,8 @@ def _opening(cid: str, sid: str) -> tuple[bool, str | None]:
     the scene identity its filing must still find."""
     if not store.prompt_log.capturing():
         return False, None
+    if sid == NO_SCENE:
+        return True, None
     try:
         identity = store.scenes.scene_identity_strict(cid, sid)
     except Exception:  # noqa: BLE001 - unreadable: capture nothing, cost nothing

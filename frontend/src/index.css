@@ -3705,6 +3705,9 @@ a.column-back { text-decoration: none; }
 .context-column .continuity-refresh { padding: 8px 16px 0; }
 .context-column .continuity-matching { padding: 0 16px; }
 .shelf-head .continuity-refresh { align-items: flex-end; text-align: right; max-width: 320px; }
+.continuity-captures { margin: 0 0 12px; }
+.continuity-captures > summary { cursor: pointer; color: var(--muted, inherit); font-size: 0.9em; }
+.continuity-capture { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .continuity-error { color: var(--alert); margin: 0 0 12px; }
 /* One finding or one decided link per row: a button (or a row with its one
    action), never a clickable <li>, so the keyboard reaches every one. */

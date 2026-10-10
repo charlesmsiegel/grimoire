@@ -2902,6 +2902,14 @@ export const api = {
   listScenePrompts: (cid: string, sid: string) =>
     request<{ entries: PromptEntry[] }>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts`, undefined, { fresh: true }),
+  // The campaign-level entries (roadmap 01b): the decisions no scene made --
+  // the continuity sweep's, one per pass. `fresh` for the scene list's reason.
+  listCampaignPrompts: (cid: string) =>
+    request<{ entries: PromptEntry[] }>(
+      "GET", `/api/campaigns/${cid}/prompts`, undefined, { fresh: true }),
+  // Frozen, like `getScenePrompt`, so not `fresh`.
+  getCampaignPrompt: (cid: string, eid: string) =>
+    request<PromptSnapshot>("GET", `/api/campaigns/${cid}/prompts/${eid}`),
   // Deliberately NOT `fresh`: a snapshot is frozen by construction, so two
   // readers of one entry can share an answer that cannot go stale.
   getScenePrompt: (cid: string, sid: string, eid: string) =>

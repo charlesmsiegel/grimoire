@@ -982,11 +982,30 @@ would answer neither question.
   and its error; an adapter's `missing_key` is raised after the attempt is
   stamped, so it is captured with the request it would have sent and files an
   `error` row; a cancelled call, and a chunk or item held back
-  after a connection-wide failure, are not captured at all. The outcome is
-  filed as a zero-token section whose id is
-  `routes/character_turns.OUTCOME_SECTION_ID` (`"decision"`), which the prompt
-  viewer draws as "outcome · not sent" rather than as a prompt section; the
-  scene-break, voice-drift and continuity decisions capture nothing. The
+  after a connection-wide failure, are not captured at all. **Every decide
+  site captures through one helper, `routes/decision_capture.py`** (roadmap
+  01b): `async with decision_capture.capturing(cid, sid, task) as scope:` and
+  `capture=scope.hook()` (a `part` names a sub-decision, voice drift's
+  anchored record id). The hook only appends each settled call -- its
+  outcome stamped with the `stage` that sent it and the batch positions `at`
+  it carried -- and the scope files ONE prompt-log entry when it exits: on
+  success, an `LLMError` or a `DecideRequestError`, never on a cancel, an
+  `Abandoned` or a review whose `abandoned` check answers True. A failed call
+  is kept as its error kind, status and code, never the provider's text
+  (`inference.Recorder` hands the scope the error for that). A scene-level
+  scope is fenced on the scene's strict identity, read on entry and again
+  inside the hold that covers the write; the reconciliation sweep's scope is
+  campaign-level (`prompt_log.NO_SCENE`, fenced on its own run), and its
+  entries are read through `GET /campaigns/{cid}/prompts` and shown under
+  the continuity review's "What the sweep asked". Decisions are kept in the
+  prompt log's own pools -- a scene's and a campaign's -- each
+  `prompt_log_depth` deep, so a check never ages out a turn, and the
+  inspector lists them under Decisions rather than Turn history.
+  `test_capture_guard.py` fails a `decide` call that captures any other way
+  (`# capture-ok:`, capped). The outcome is the last section, the envelope
+  `{task, calls, notes, elided_calls, truncated}`, filed at zero tokens under
+  the id `decision_capture.OUTCOME_SECTION_ID` (`"decision"`), which the prompt
+  viewer draws as "outcome · not sent" rather than as a prompt section. The
   settings view carries `decision_mode` and `decides_natively` (`yes`, `no` or
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
