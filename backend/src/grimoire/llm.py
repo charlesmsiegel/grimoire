@@ -355,6 +355,25 @@ def _target_of(attempt: wire.Target) -> wire.Target:
     raise TypeError(f"the facade sends a wire.Chain or wire.Target, not {type(attempt).__name__}")
 
 
+def _unflagged(attempt: wire.Chain | wire.Target) -> wire.Chain | wire.Target:
+    """`attempt` with every target unflagged for structured mode: what a call
+    that sends no schema is sent (01f 3.4), so `wire.Target.structured` means
+    "this attempt was sent the envelope" on every path, and
+    `_structured_share` reads only an attempt that was. A target already
+    unflagged is kept as the same object, so a call that never carried a
+    flag sends exactly what it did."""
+    if isinstance(attempt, wire.Target):
+        return dataclasses.replace(attempt, structured=False) if attempt.structured else attempt
+    chain = _chain_of(attempt)
+    if not any(t.structured for t in chain.attempts):
+        return chain
+    primary = _unflagged(chain.primary)
+    fallback = None if chain.fallback is None else _unflagged(chain.fallback)
+    assert isinstance(primary, wire.Target)
+    assert fallback is None or isinstance(fallback, wire.Target)
+    return wire.Chain(primary, fallback)
+
+
 def _may_send_refs(messages: list[dict]) -> bool:
     """Whether any route could be sent an image reference -- asked of every
     variant a prepared prompt holds, not only the primary's: a fallback packed
@@ -710,9 +729,11 @@ def _structured_share(target: wire.Target) -> dict:
     question id that happened to spell a sampler (`temperature`) would be
     subtracted from that sampler's spellings, so a refusal of the sampler
     would stop reading as the preset refused. Only the adapters' own envelope
-    keys are named. Read from the flag rather than from
-    whether a schema was sent, because only a decide resolution carries the
-    flag and `decide` always sends one."""
+    keys are named. Read from the flag rather than from whether a schema was
+    sent, which is the same question by construction: a call that sends no
+    schema sends every target unflagged (`_unflagged`, in `_streamed` and
+    `single`; 01f 3.4), so a flagged target is one that was sent the
+    envelope, whichever operation flagged it."""
     if not target.structured:
         return {}
     kind = target.kind
@@ -785,8 +806,9 @@ class SchemaRefusalError(LLMError):
     the structured-output field THAT attempt was sent was refused
     (`_schema_refusal`).
 
-    A subclass so `inference.decide` can ask the type: it re-sends each
-    refusing attempt once without the mode (spec M-4, ruling 3). The schema
+    A subclass so `inference.decide` and `inference.generate` can ask the
+    type: each re-sends each refusing attempt once without the mode (spec
+    M-4, ruling 3; `inference._without_refused_mode`, 01f-C2). The schema
     always rides the prompt, so the reply still parses -- and the call that
     worked as a prompt-only call before slice F still works after it, whether
     the refusal came from the primary or its fallback, and whatever the other
@@ -932,7 +954,8 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
     When both routes fail the caller gets the *primary's* kind, with the
     fallback's failure appended: see `routes_failed`. When a route's failure
     was its structured field refused, the error is a `SchemaRefusalError`
-    carrying that attempt, which `inference.decide` re-sends without the mode.
+    carrying that attempt, which `inference.decide` and `inference.generate`
+    re-send without the mode.
 
     `counter` (`str -> int`, or None for no estimate) counts what a provider
     did not report, for an attempt whose stream ended on its own: each prose
@@ -1388,6 +1411,9 @@ class LLMClient:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
             sink = None
+        if schema is None:
+            # No envelope goes out, so no target says it did (01f 3.4).
+            chain = _unflagged(chain)
         return _resilient(lambda route, holder: self._dispatch(messages, route, holder, schema),
                           self._usable_routes(messages, chain, retries), self._timeout_seconds(),
                           usage=usage, observer=self._observer, capture=sink,
@@ -1435,8 +1461,11 @@ class LLMClient:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
             sink = None
+        # Never a schema, so never a flag (01f 3.4).
+        sent = _unflagged(_target_of(target))
+        assert isinstance(sent, wire.Target)
         agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
-                          [_Route(_target_of(target), 0)],
+                          [_Route(sent, 0)],
                           self._timeout_seconds(),
                           usage=usage, capture=sink, counter=self._count_tokens)
         return "".join([chunk async for chunk in agen])

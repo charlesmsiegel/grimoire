@@ -170,6 +170,12 @@ class PreparedMessages(list):
         variant."""
         return self.for_connection(target, target.model)
 
+    @property
+    def tailed(self) -> bool:
+        """Whether this prompt ends in a tail chosen per attempt
+        (`with_tails`), so two attempts may be sent different endings."""
+        return self._tails is not None
+
     def mode_for(self, target: wire.Target) -> str | None:
         """The tail `target` would be sent, or None for an untailed prompt."""
         if self._tails is None or self._choose is None:
