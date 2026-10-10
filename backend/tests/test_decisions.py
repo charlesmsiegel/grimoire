@@ -645,7 +645,11 @@ def test_constants():
 
 
 def test_decisions_is_a_leaf():
-    assert _sibling_imports("decisions") == set()
+    """Nothing from the package but `schemas` (01f-C3), which is a leaf of
+    its own: the portable subset, its budgets and the reader are shared,
+    never a reach into the store or the gateway."""
+    assert _sibling_imports("decisions") == {"schemas"}
+    assert _sibling_imports("schemas") == set()
 
 
 # --- native: reserved none, option limit, string budgets ---------------------
