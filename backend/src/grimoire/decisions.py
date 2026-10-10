@@ -19,7 +19,8 @@ native result (`render`) -- the one grouping rule for any ordered signal,
 `tiers`, which makes a tie explicit rather than breaking it -- and what hands
 an answered item to a second opinion: an answer's key (`answer_key`), its
 margin over its rival in its own report (`margin`) and the triggers an item
-meets (`triggers`, roadmap 01d-C2a).
+meets (`triggers`, roadmap 01d-C2a) -- and what one did with it
+(`Escalation`, `ResolverReply`, 01d-C2b).
 
 It is a gateway leaf on purpose, and imports nothing from the package but
 the standard-library leaf `schemas` (spec §7.4, ruling 15; 01f-C3, whose
@@ -533,8 +534,7 @@ class CallRecord:
     call refused unsent files no row). A failed call keeps its `LLMError`'s
     kind and HTTP status only, never its detail: the detail is the provider's
     own text, which no persisted store keeps. `hop` is "" for a call of the
-    chain itself; it is reserved for an escalation hop, which sets
-    "escalation".
+    chain itself, and `HOP_ESCALATION` for a call an escalation hop made.
 
     A row is what costs money, so this counts requests; nothing in production
     reads it (the eval runner does)."""
@@ -594,6 +594,10 @@ class Decision:
     #: its order (`usage` keeps a native stage's in item order); nothing in
     #: production reads this field.
     calls: tuple[CallRecord, ...] = ()
+    #: One per triggered item, in trigger priority order (01d §5.5): what an
+    #: escalation hop did with it (`Escalation`). Empty when nothing
+    #: escalated.
+    escalations: tuple[Escalation, ...] = ()
 
     def __post_init__(self) -> None:
         if self.backend and self.backend not in BACKENDS:
@@ -1849,6 +1853,85 @@ def triggers(results: Sequence[ItemResult], *, question: str,
     return tuple(sorted(found, key=lambda t: (_PRIORITY[t.trigger],
                                               0.0 if t.margin is None else t.margin,
                                               t.index)))
+
+
+# --- the escalation hop's record (roadmap 01d-C2b) ----------------------------
+
+#: `CallRecord.hop`, a ledger row's `hop` and a capture outcome's `"hop"` for a
+#: call an escalation hop made (01d §5.5, §5.7); "" for a call of the chain.
+HOP_ESCALATION = "escalation"
+
+#: What became of one triggered item (01d §5.5).
+ESCALATION_OUTCOMES: tuple[str, ...] = ("answered", "failed", "skipped")
+
+#: `Escalation.detail` words this module names (the rest are composed: a
+#: failed call's ``"kind: detail"``, ``"unreadable: <detail>"``,
+#: ``"unresolved: <kind>"`` and the escalator's own sentence).
+SKIPPED_CAP = "cap"
+SKIPPED_SAME_MODEL = "same_model"
+SKIPPED_INCAPABLE = "incapable"
+SKIPPED_DEAD_CONNECTION = "dead_connection"
+FAILED_DECLINED = "declined"
+FAILED_NO_RESULT = "no_result"
+
+
+@dataclass(frozen=True)
+class Escalation:
+    """What one escalation hop did with one triggered item (01d §5.5): the
+    item's batch `index`, the `trigger` it met (one of `TRIGGERS`) and -- for
+    `low_margin` only -- its `margin`, the base answer it had (`before`), and
+    the `outcome` (one of `ESCALATION_OUTCOMES`): `answered` (the hop's
+    answer replaced the item's deciding answer), `failed` (the hop ran and
+    the original stands) or `skipped` (no hop ran for it).
+
+    `detail` says why, for every outcome but `answered` (""): skipped --
+    `cap`, `same_model`, `incapable`, `dead_connection` (the base met a
+    failure every call on the hop's connection would meet),
+    ``unresolved: <kind>`` (the escalator raised; its kind, never its text),
+    or the escalator's own sentence; failed -- `declined` (a hop decline on a
+    task that does not read one), `no_result` (a caller resolver gave none),
+    ``unreadable`` or ``unreadable: <detail>`` (a garbled hop answer), or a
+    failed call's ``"kind: detail"``. **That last can carry a provider's own
+    text, so `detail` is never persisted**: a capture or a log that keeps an
+    escalation keeps the part before the first ``": "``.
+
+    `served` is the hop's `(kind, provider id, model)`: the server of the
+    answer that replaced the item, or the hop target a failed role hop was
+    sent; `()` when skipped, or when nothing names one."""
+
+    index: int
+    trigger: str
+    margin: float | None
+    before: ItemResult
+    outcome: str
+    detail: str = ""
+    served: tuple[()] | tuple[str, str, str] = ()
+
+    def __post_init__(self) -> None:
+        if self.trigger not in TRIGGERS:
+            raise ValueError(f"unknown trigger {self.trigger!r}")
+        if self.outcome not in ESCALATION_OUTCOMES:
+            raise ValueError(f"unknown escalation outcome {self.outcome!r}")
+        if (self.trigger == "low_margin") != (self.margin is not None):
+            raise ValueError("an escalation carries a margin exactly when it is low_margin")
+        if self.served != () and not (
+                isinstance(self.served, tuple) and len(self.served) == 3
+                and all(isinstance(part, str) for part in self.served)):
+            raise ValueError("served is () or (kind, provider_id, model)")
+
+
+@dataclass(frozen=True)
+class ResolverReply:
+    """What a caller-supplied escalation resolver returns (01d §5.2): one
+    result per item it was handed, in that order -- an `ItemResult` whose
+    `backend` is one of `BACKENDS` (a tool loop that ends in a generated
+    answer stamps `structured`), whose questions are exactly the item's, and
+    whose `served` is its final target's ``(kind, provider_id, model)`` -- or
+    None where it produced nothing; and the ledger rows its calls filed, each
+    carrying ``hop: "escalation"`` (`HOP_ESCALATION`)."""
+
+    results: tuple[ItemResult | None, ...]
+    rows: tuple[dict[str, Any], ...] = ()
 
 
 def _present(record: dict[str, Any]) -> dict[str, Any]:

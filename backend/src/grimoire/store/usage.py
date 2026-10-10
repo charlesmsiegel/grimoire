@@ -275,7 +275,7 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            response_id: str = "", images: int = 0, operation: str = "",
            provider_id: str = "", requested_model: str = "", role: str = "",
            preset: str = "", billing: str = "", decision_mode: str = "",
-           tokens_estimated: bool = False) -> dict | None:
+           hop: str = "", tokens_estimated: bool = False) -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
 
@@ -306,8 +306,9 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
     ``role`` (the slot that supplied the resolution; none for a pin, or for
     an override that changed the provider or the model), ``preset`` (the sampler preset sent), ``billing`` (``metered``
     or ``subscription``: a label, which moves no figure between columns),
-    ``decision_mode``, and ``tokens_estimated`` (true only when a count was
-    estimated locally rather than reported).
+    ``decision_mode``, ``hop`` (``escalation`` on a call an escalation hop
+    sent, roadmap 01d §5.7), and ``tokens_estimated`` (true only when a count
+    was estimated locally rather than reported).
     """
     ts = ts or _now()
     # The WHOLE body is inside the guard, the row's construction included. The
@@ -329,7 +330,7 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
                            ("operation", operation), ("provider_id", provider_id),
                            ("requested_model", _differs(requested_model, model)),
                            ("role", role), ("preset", preset), ("billing", billing),
-                           ("decision_mode", decision_mode)):
+                           ("decision_mode", decision_mode), ("hop", hop)):
             if value:
                 row[key] = value
         row.update(_estimated(tokens_estimated))
@@ -605,7 +606,7 @@ class Meter:
     #: What served the call, as the facade filed it into the holder
     #: (`llm._stamp`, `llm_usage.account`): each one a `record` field.
     SERVED = ("operation", "provider_id", "requested_model", "role", "preset",
-              "billing", "decision_mode")
+              "billing", "decision_mode", "hop")
 
     def _served(self) -> dict:
         """The `SERVED` fields from the holder, `str` values only, and

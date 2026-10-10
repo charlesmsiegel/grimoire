@@ -360,15 +360,15 @@ def item_records(decision: decisions.Decision) -> tuple[dict, ...]:
     it, its answers' reasons (`refused`, `abstained`, `unreadable`, `error`),
     whether any answer carries a distribution, whether an escalation hop's
     call carried it, and `call` -- the index in `decision.calls` of the call
-    that answered it (the last call carrying it that did not fail; else the
-    last one carrying it; None for an item no call carried). Money is never
+    that answered it (`_answering_call`: the last call carrying it that did
+    not fail, a hop's only when its escalation was answered; else the last
+    one carrying it; None for an item no call carried). Money is never
     here: a structured call's figures belong to the call, never to its items
     (spec 01a, section 6)."""
     out = []
     for index, result in enumerate(decision.items):
         carried = [n for n, record in enumerate(decision.calls) if index in record.items]
-        answered = [n for n in carried if not decision.calls[n].error_kind]
-        call = (answered or carried or [None])[-1]
+        call = _answering_call(decision, index, carried)
         answers = result.answers.values()
         out.append({
             "index": index, "backend": result.backend,
@@ -378,6 +378,21 @@ def item_records(decision: decisions.Decision) -> tuple[dict, ...]:
             "escalated": any(decision.calls[n].hop == "escalation" for n in carried),
             "call": call})
     return tuple(out)
+
+
+def _answering_call(decision: decisions.Decision, index: int,
+                    carried: list[int]) -> int | None:
+    """The index in `decision.calls` of the call that answered item `index`
+    (`item_records`): the last call carrying it that did not fail, else the
+    last carrying it, else None. An escalation hop's call counts only when
+    the item's escalation was `answered` (01d-S3): a hop whose answer the
+    merge rejected left the item as the chain answered it."""
+    hopped = any(e.index == index and e.outcome == "answered"
+                 for e in decision.escalations)
+    eligible = [n for n in carried
+                if hopped or decision.calls[n].hop != decisions.HOP_ESCALATION]
+    answered = [n for n in eligible if not decision.calls[n].error_kind]
+    return (answered or eligible or carried or [None])[-1]
 
 
 def backend_note(decision: decisions.Decision) -> str:
