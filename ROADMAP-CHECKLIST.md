@@ -53,7 +53,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01d | Decision escalation and per-task policy | now (01a has landed: escalation is enabled with its evidence) | [x] | [~] substitute | 5 | [x] |
 | 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
 | 01f | Structured generation | now | [x] | [~] substitute | 4 | [x] |
-| 01g | Tool calling, Decision as a tool, run budgets | now (01f has landed) | [x] | [~] substitute | 8 | [ ] |
+| 01g | Tool calling, Decision as a tool, run budgets | now (01f has landed) | [x] | [~] substitute | 8 | [x] |
 | 01h | Embedding options, async embed, embedding evals | now (01a has landed, so C6 too) | [x] | [~] substitute | 7 | [x] |
 | 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
 | 02 | Decision integration (what 01's slices F–H did not land) | now (01a, 01b landed); 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
@@ -71,15 +71,15 @@ all of them have landed. `check` holds both to the slice checklist.
 
 ## Parallel lanes
 
-- **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01h, 01i. 01s was ticked after the fact:
+- **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01g, 01h, 01i. 01s was ticked after the fact:
   every task of its plan is in the tree and its tests pass, but the history
   that would show its Codex review gates was not available to check.
-- **Now:** 01c, 01d, 01g, 01h, 02 (from 02-S1), 03, 07, 13 (II-A to II-D).
-  01a has landed, so 01c, 01d and 01h switch a task on as soon as 01a's
-  evidence supports it, rather than waiting on a spec.
-- **Decision lane:** ~~01a + 01b~~ → 01c + 01d → 02 → 11 (Decision stage).
+- **Now:** 02, 03, 07, 13 (II-A to II-D). No task samples, goes native-first
+  or escalates yet: each is switched on by the change that carries its live
+  evidence (`evals/README.md`).
+- **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → 02 → 11 (Decision stage).
   01e (landed) feeds 02, 09 and 13.
-- **Generate lane:** ~~01f~~ → 01g → 12.
+- **Generate lane:** ~~01f~~ → ~~01g~~ → 12.
 - **Cache lane:** 03 → 04 → 05 → 06. 03 + 05 + 01h → 08.
 - **Retrieval lane:** 08 + 01h-C4 + 01i → 09 → 10 (with 01f) → 11 → 12.
 
@@ -198,22 +198,34 @@ These are headlines. The owning spec's Contract section is authoritative.
   prompt spelling, and a tolerant reader.
 
 ### 01g: Tool calling, Decision as a tool, run budgets
-- [ ] **01g-C1** A `tools` capability, a probe, and the seam's `incapable`
+- [x] **01g-C1** A `tools` capability, a probe, and the seam's `incapable`
   refusal.
-- [ ] **01g-C2a** Tool calling over OpenRouter, OpenAI-compatible and
+- [x] **01g-C2a** Tool calling over OpenRouter, OpenAI-compatible and
   Anthropic. The loop primitive: the caller executes the tools, supplies the
   run id, and gets the final call back.
-- [ ] **01g-C2b** Claude Agent SDK. Until it lands, `claude` reads as unable
+- [x] **01g-C2b** Claude Agent SDK. Until it lands, `claude` reads as unable
   to call tools.
-- [ ] **01g-C3** Each turn is a ledger row with `run_id` and `loop_turn`,
+- [x] **01g-C3** Each turn is a ledger row with `run_id` and `loop_turn`,
   plus capture. The trace carries no argument or result text.
-- [ ] **01g-C4** Run budget: turns, tool calls, decisions, wall clock, spend
+- [x] **01g-C4** Run budget: turns, tool calls, decisions, wall clock, spend
   ceiling, per-turn output cap. It reports which limit stopped the run. An
   unpriced model under a spend ceiling is refused before sending.
-- [ ] **01g-C5** A decide tool on the `tool-decision` route, capped per run,
+- [x] **01g-C5** A decide tool on the `tool-decision` route, capped per run,
   with no recursion. The task name is supplied by the caller.
-- [ ] **01g-C6** The final loop turn streams, and the loop can decline a tool
+- [x] **01g-C6** The final loop turn streams, and the loop can decline a tool
   call that comes after visible text (needed by 02-C4).
+
+- **Landed:** S1-S8. S1 and S3 with substitute reviews, the rest in speed
+  mode (no review round); the Codex gates are owed. Slice-graph drift: S1
+  pulled the wire pieces its probe needs from S2, so S2 built on S1. Open
+  for the spec: §3.11's `required` downgrade misses implicit thinking (the
+  loop reuses `probes.tool_choice`); the probe's 64-token cap leaves
+  reasoning models inconclusive. S8 makes `claude` able to call tools
+  (extra floor `claude-agent-sdk>=0.1.74`); the separate "found on main"
+  fix (tool-less Claude calls still send only `allowed_tools=[]`, without
+  `tools=[]`/`setting_sources=[]`, §9 Q6) is not done. No `tool-decision`
+  route, `routing.NO_LEGACY` or `TOOLS_OPTIONAL` entry ships: each lands
+  with its first consumer (12 or 02-C4).
 
 ### 01h: Embedding options, async embed, embedding evals
 - [x] **01h-C1** Input type, with a `queries: int` split and modes
@@ -357,14 +369,14 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [x] 01d ← 01a-C1/C3 (H to enable), 01b-C1 (S)
 - [x] 01e ← 01a-C1 (S), 01b-C1 (S)
 - [x] 01f ← 01a-C1 (S), 01i-C1 (S: the `max_tokens` cap respects the model's max output)
-- [ ] 01g ← 01f-C1/C2/C3 (H); 01d-C1, 01i-C1, 01c-C2/C3, 01b-C1 (S)
-- [ ] 01h ← 01a-C1/C2 (H for C6), 01a-C3 (S), 01s (S); 01g-C3 run id (S)
+- [x] 01g ← 01f-C1/C2/C3 (H); 01d-C1, 01i-C1, 01c-C2/C3, 01b-C1 (S)
+- [x] 01h ← 01a-C1/C2 (H for C6), 01a-C3 (S), 01s (S); 01g-C3 run id (S)
 - [x] 01i ← 01s (S)
-- [ ] 02 ← 01a-C1/C2/C3 (H for every play gate), 01b-C1/C2 (H for
+- [x] 02 ← 01a-C1/C2/C3 (H for every play gate), 01b-C1/C2 (H for
   C2b/C3/C4; S for the C5 kits, which make no call themselves), 01c-C1..C4 (H
   for C2 sampling), 01d-C1..C3 (H for C5a);
   01g-C1..C6 (H for C4 only); 01e-C1..C3 (S)
-- [ ] 03 ← 01h-C3 (S)
+- [x] 03 ← 01h-C3 (S)
 - [ ] 04 ← 03-C1, 03-C2, 03-C4 (H); 03-C5 (H for C2a); 03-C6, 03-C9 (S)
 - [ ] 05 ← 03-C2, 03-C3, 03-C4, 03-C5 (H); 04-C2b (H, a property relied
   on); 03-C1, 03-C8, 04-C2a, 08-C2c, 01h-C1/C3/C5 (S)
@@ -467,9 +479,9 @@ alone. This table is generated: after a spec's slices change, run
 | 01g-S3 | Run attribution on the ledger and the capture | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01g-S4 | The loop primitive (joined) | L | 4 | 01d-S1 (S), 01f-S1, 01f-S2, 01f-S3, 01g-S2, 01g-S3, 01i-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01g-S5 | The spend ceiling | M | 5 | 01f-S3, 01g-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01g-S6 | Streaming the loop | M | 5 | 01g-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01g-S7 | The decide tool | M | 6 | 01b-S2 (S), 01c-S1 (S), 01g-S4, 01g-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01g-S8 | The Claude Agent SDK adapter | M | 5 | 01g-S1, 01g-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S6 | Streaming the loop | M | 5 | 01g-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01g-S7 | The decide tool | M | 6 | 01b-S2 (S), 01c-S1 (S), 01g-S4, 01g-S5 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01g-S8 | The Claude Agent SDK adapter | M | 5 | 01g-S1, 01g-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01h
 
