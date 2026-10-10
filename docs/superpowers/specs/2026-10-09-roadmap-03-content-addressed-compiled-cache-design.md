@@ -1002,6 +1002,157 @@ new path.
   residuals a remedy short of deleting files, and to run the plan's
   cached-versus-uncached equivalence tests. It is not a user setting.
 
+## Slices
+
+Landing order within this spec: S1 → S2 → (S3 ∥ S4) → S5 → S6. S3 and S4
+both need only S2 and can land in either order.
+
+### 03-S1: The cache file, its guards, and failing safe
+
+- **Delivers:** 03-C7 (full); 03-C2 (part: every lookup goes through a key
+  computed by the caller, enforced by the guard); 03-C6 (part: single-key
+  lookup only)
+- **Needs (this spec):** none
+- **Needs (other specs):** none. 01h-C3 is soft: until it lands, the space id
+  is 01's, unchanged.
+- **Scope:**
+  - **Module.** A new `store/compiled.py`, the only importer of `sqlite3`.
+  - **Location and schema.** The per-device file
+    `<home>/.cache/compiled/<device>-v<SCHEMA>.sqlite`, with the device key
+    memoized per (process, root). A linked `.cache` component turns the cache
+    off.
+  - **Connections.** DELETE journal mode, one connection per process and root
+    behind a lock, reads that never wait, and a millisecond busy timeout.
+    The handle is closed on idle and on `PUT /config/data-dir`.
+  - **Rows and keys.** The kind registry and the `artifacts` table, with
+    per-row checksums over key and payload. `BUILD`, from the source and
+    package-data manifest plus templates, `sys.version` and dependency
+    versions. The APK reads a gradle-written stamp, and the cache is off if
+    that stamp is absent.
+  - **Failure and switches.** Rename-aside happens only on `SQLITE_CORRUPT` /
+    `SQLITE_NOTADB`, under a proclock. The `GRIMOIRE_COMPILED_CACHE=0` kill
+    switch. One log line per failure kind.
+  - **Guards.** The import guard (only `compiled.py` imports `sqlite3`) and
+    the query-safety guard (every read takes the caller's keys).
+  - **Not yet.** No consumer is wired.
+  - **First task of the plan.** Confirm that Chaquopy ships `sqlite3`, and add
+    the gradle `BUILD` stamp.
+- **Acceptance:** the section 14 items **Degradation**, **Links**,
+  **Contention**, **Keys** (a changed `version` misses; `__pycache__` leaves
+  `BUILD` unchanged) and **Build fingerprint**. The import and query-safety
+  guards fail on a planted violation. A test pins `vectors.py`'s key as
+  unchanged. `make check-apk` passes with the stamp.
+- **Size:** L
+
+### 03-S2: The trust point and the validate-and-hash primitive
+
+- **Delivers:** 03-C4 (full: single and batch forms, `known_hashes`,
+  absent-ok roles, `InputUnavailable`); 03-C2 (full); 03-C1 (part: keys over
+  single files, `params`, path-derived inputs and absent-ok roles, with no
+  collections yet)
+- **Needs (this spec):** 03-S1 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - **The `sources` table.** It follows section 5's rules: stamp before the
+    read; the age test at `t0` against the filesystem clock, measured from a
+    sentinel; `PERSIST_WINDOW`; all four stamp fields must match; checksummed
+    rows.
+  - **Decision kinds.** The registry flag that keeps decision kinds off
+    persisted sources, plus its guard.
+  - **The composite key** of section 6.
+  - **The injectable clock,** as a public test seam.
+  - **Fix in place.** The racy-window measurement in
+    `migrations._backfill_campaign` (section 5, rule 2).
+- **Acceptance:**
+  - section 14's **Change detection**, **Racy window** and **Decision kinds**;
+  - **Inputs**: absent-ok `ABSENT`; a read failure stores nothing;
+  - a vanished member voids the key;
+  - `known_hashes` never reads a file.
+- **Size:** L
+
+### 03-S3: Collections and live-set lookups
+
+- **Delivers:** 03-C1 (full: collection digests with member filters);
+  03-C6 (full: batch lookup over a live key set, per-kind hit and miss
+  counts, and the rule that an index ranks only within that set)
+- **Needs (this spec):** 03-S2 (H)
+- **Needs (other specs):** none
+- **Scope:** section 7's collection digest: list the directory, filter
+  members, hash each, sort, digest. Also section 9's batch lookup with
+  per-kind counts. The "index ranks within the live set" rule is stated and
+  guarded, but no index is built. FTS5 belongs to whichever later spec wants
+  it.
+- **Acceptance:**
+  - a composite key over a collection and an input that is not a file misses
+    when either changes, and hits when an unrelated file changes;
+  - a member filter excludes non-members from the digest;
+  - lookup counts are reported per kind;
+  - a planted query outside the live set fails the guard.
+- **Size:** M
+
+### 03-S4: Write-time artifacts and the `materialized` record
+
+- **Delivers:** 03-C5 (full); 03-C3 (full: the `(path, kind, instance)` key,
+  `built_from`, rows with no artifact, touches on hits, `copy_materialized`,
+  and `compiled.space_digest`)
+- **Needs (this spec):** 03-S2 (H)
+- **Needs (other specs):** none
+- **Scope:** storing artifacts straight after a write while the `sources` row
+  waits; the `materialized` table and its write and touch paths; and the one
+  spelling of `<space-digest>`.
+- **Acceptance:**
+  - an artifact stored straight after a write is hit by the next read, and no
+    `sources` row is recorded inside the window;
+  - every stored artifact leaves a row for each path it read;
+  - rows are unique per `(path, kind, instance)`, and a hit touches its rows;
+  - dropping the table changes no answer.
+- **Size:** M
+
+### 03-S5: Bounding, retention and the purge
+
+- **Delivers:** 03-C8 (full)
+- **Needs (this spec):** 03-S4 (H: eviction covers `materialized`)
+- **Needs (other specs):** none. 01s is soft: until it lands, the sharing text
+  goes in today's Settings page.
+- **Scope:**
+  - **Eviction.** Least-recently-used, measured on live pages under
+    `auto_vacuum=INCREMENTAL`, with an explicit `incremental_vacuum`.
+    `last_used` is batched.
+  - **Retention.** Device leases (`<device>.alive`) and lease-based removal.
+  - **Purge.** The purge marker; `purge_for_delete()`; the purge generation
+    checked at commit; `secure_delete`.
+  - **Delete routes.** World and campaign deletes call the purge after the
+    delete lands.
+  - **Settings text.** The sharing boundary, the vectors residual and the
+    dormant-device residual.
+- **Acceptance:** section 14's **Size**, **Deletes** and **Purge race**
+  items. A second connection purges at its next batch, and no file is
+  unlinked.
+- **Size:** M
+
+### 03-S6: Synthetic library and the first consumers
+
+- **Delivers:** 03-C9 (full)
+- **Needs (this spec):** 03-S3 (H), 03-S4 (H)
+- **Needs (other specs):** none
+- **Scope:**
+  - **The generator.** `backend/scripts/synth_library.py`, which refuses a
+    non-empty target and writes placeholder names only.
+  - **The first consumers** (section 8): `search.py`'s per-file extraction,
+    and token measures (`tokens.record_tokens`, where only counts made by the
+    encoder persist). Each is composed at the call site under `statcache`.
+  - **The wiring check.** `world_row` and `campaign_row` are wired as the
+    end-to-end proof, with the directory name as a path-derived input.
+  - **The benchmark** for section 14's four cases.
+- **Acceptance:**
+  - **Equivalence** (cold, warm, off, after a restart, including CRLF,
+    non-UTF-8 and identical bytes at two stems);
+  - **Token counts** (no heuristic count persisted);
+  - the **Frozen campaign** sweep is byte-identical;
+  - **Performance**: each wired kind shows a warm-after-restart win on a
+    synthetic library, and no figure from a real store is committed.
+- **Size:** L
+
 ## 14. Acceptance
 
 **Correctness.** Each item is a test, run on `tmp_path` stores with the
@@ -1160,6 +1311,8 @@ should-fix and 5 minor issues, and all of them are folded in:
 - C8's interface and the dormant-device residual;
 - a batch form of C4;
 - lookup counts per kind.
+
+Slices added (6 slices).
 
 The PR's Codex review is not the CLI's `/codex:adversarial-review`. That
 gate should still be run against this spec before the plan, if it can be.
