@@ -51,7 +51,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [ ] |
 | 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | 3 | [ ] |
 | 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | 5 | [ ] |
-| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [ ] |
+| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
 | 01f | Structured generation | now | [x] | [~] substitute | 4 | [ ] |
 | 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [~] substitute | 8 | [ ] |
 | 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [~] substitute | 7 | [ ] |
@@ -134,14 +134,21 @@ These are headlines. The owning spec's Contract section is authoritative.
   starting at 0.2. All existing tasks are off.
 
 ### 01e: Decision vocabulary
-- [ ] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
+- [x] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
   Natively it uses a per-candidate `pointwise` predicate, or is refused
   unsent.
-- [ ] **01e-C2** `Answer.expected`, `tiers()`. `MAX_LEVELS` stays 10.
-- [ ] **01e-C3a** `MultiSelect`, where an empty selection is a real answer.
-- [ ] **01e-C3b** `Joint`: a flattened choice over the legal (action, target)
+- [x] **01e-C2** `Answer.expected`, `tiers()`. `MAX_LEVELS` stays 10.
+- [x] **01e-C3a** `MultiSelect`, where an empty selection is a real answer.
+- [x] **01e-C3b** `Joint`: a flattened choice over the legal (action, target)
   pairs.
-- [ ] **01e-C4** `Answer.marginals`, kept separate from `distribution`.
+- [x] **01e-C4** `Answer.marginals`, kept separate from `distribution`.
+
+  01e's plan gate, review and final gate were substitute reviews: no Codex CLI
+  was available where it was built (see the "Gate record" in
+  `docs/superpowers/plans/2026-10-10-roadmap-01e-decision-vocabulary.md`).
+  The Codex gates are still owed, as for the spec gates marked `[~]`.
+  `MAX_RANK_CANDIDATES` and `MAX_SELECT_OPTIONS` stay at 32, untuned, until
+  01a-S3 lands (01e-S5's soft need).
 
 ### 01f: Structured generation
 - [ ] **01f-C1** `generate(schema=)` sends structured mode on each attempt
@@ -391,11 +398,11 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01e-S1 | Answer fields, `expected` and `tiers` | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S2 | `Rank` on the structured path, and the template switch to `KIND` | M | 2 | 01e-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S3 | `MultiSelect` on the structured path | S | 3 | 01e-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S4 | `Joint` on both paths, and the native lowering framework | M | 3 | 01e-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S5 | Native `Rank` and `MultiSelect` through pointwise predicates | M | 4 | 01a-S3 (S), 01e-S3, 01e-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01e-S1 | Answer fields, `expected` and `tiers` | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S2 | `Rank` on the structured path, and the template switch to `KIND` | M | 2 | 01e-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S3 | `MultiSelect` on the structured path | S | 3 | 01e-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S4 | `Joint` on both paths, and the native lowering framework | M | 3 | 01e-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S5 | Native `Rank` and `MultiSelect` through pointwise predicates | M | 4 | 01a-S3 (S), 01e-S3, 01e-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01f
 
