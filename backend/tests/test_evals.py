@@ -1486,3 +1486,28 @@ def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
     assert second.passed and second.repeat == 1
     text = runner.report(results)
     assert "scene-length.compliant [#1]" in text and "scene-length.compliant [#2]" in text
+
+
+def test_a_grader_crash_keeps_what_the_case_cost(monkeypatch, tmp_path):
+    """Review: a grader that raises on live output fails its case, and the
+    case keeps its harvested rows, bucket and wall time."""
+    import dataclasses
+
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    plain, target = _generate_store(monkeypatch, real)
+
+    def broken(_ctx, _output):
+        raise KeyError("a grader slipped")
+
+    case = dataclasses.replace(plain, grade=broken)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    (result,) = runner.live_all((case,), {runner.conn_key(plain): target}, isolate,
+                                client=FakeLLM([[_compliant(plain)]], usage=BILLED),
+                                real_home=real)
+    assert not result.passed and result.error_kind == "KeyError"
+    assert "grading raised" in result.error
+    assert len(result.rows) == 1 and result.bucket["cost_usd"] == 0.0042
+    assert result.wall_ms is not None
+    assert "call time" in runner.report([result])

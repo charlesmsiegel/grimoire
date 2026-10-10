@@ -648,8 +648,13 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
         return Result(case, BASELINE, [], "", error, error_kind=getattr(failure, "kind", ""),
                       error_status=getattr(failure, "status", None), **metrics)
 
-    result = Result(case, BASELINE, list(case.grade(ctx, output)), output, note=note,
-                    **metrics)
+    try:
+        checks = list(case.grade(ctx, output))
+    except Exception as exc:  # noqa: BLE001 - a grader's crash fails its case, not the run
+        # Harvested already: the case fails with what it cost kept.
+        return Result(case, BASELINE, [], output, f"grading raised {type(exc).__name__}: {exc}",
+                      error_kind=type(exc).__name__, note=note, **metrics)
+    result = Result(case, BASELINE, checks, output, note=note, **metrics)
     if record:
         path = case.baseline.path(case.id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -823,7 +828,7 @@ def _metrics(r: Result) -> list[str]:
 
 def _aggregate_block(results: list[Result]) -> list[str]:
     """Every live case's rows keyed by route, backend and hop, each folded at
-    its case's rates. Wall time is per case, so it is `-` here; a hop's own
+    its case's rates. Wall time is per case, so it is `-` here; each row's
     time is the sum of its calls' durations, labelled `call time`, never
     wall."""
     costed = [r for r in results if r.rows is not None and not r.ledger_error]
@@ -834,8 +839,8 @@ def _aggregate_block(results: list[Result]) -> list[str]:
         bucket = entry["bucket"]
         line = (f"  {entry['route']} / {entry['backend']} / {entry['hop']}: wall -  "
                 f"{costs.bucket_line(bucket)}")
-        if entry["hop"] != costs.NO_HOP:
-            line += f"  call time {costs.seconds(bucket['duration_ms'])}"
+        # Summed call durations, labelled as such: never wall time.
+        line += f"  call time {costs.seconds(bucket['duration_ms'])}"
         lines.append(line)
     short = sum(1 for r in results
                 if r.rows is not None and (r.partial or r.ledger_error))

@@ -180,18 +180,28 @@ def _escalated(entries: list[dict], index: int | None = None) -> str:
 
 def _money(buckets: list[dict], missing: int) -> list[str]:
     """Tokens and money summed across repeats, or `-` when nothing was
-    costed; `(N not costed)` when some repeats could not be."""
+    costed; `(N not fully costed)` when some repeats could not be."""
     out = (["- / -", "-"] if not buckets
            else [_tokens(merged := costs.merge(buckets)), costs.cost_text(merged)])
     if missing:
-        out.append(f"({missing} not costed)")
+        out.append(f"({missing} not fully costed)")
     return out
+
+
+def _short(entry: dict) -> bool:
+    """Whether a live case's cost is not the whole of it: rows read while
+    its follow-ups still ran (`partial`), a ledger that could not be read, or
+    a bucket a hand edit broke. A replay entry (no bucket, nothing to read)
+    is not short; it simply has no cost."""
+    bucket = entry.get("bucket")
+    return bool(entry.get("partial") or entry.get("ledger_unreadable")
+                or (bucket is not None and not _costed(bucket)))
 
 
 def _case_cell(entries: list[dict]) -> str:
     buckets = [e["bucket"] for e in entries if _costed(e.get("bucket"))]
     parts = [_passes(entries), _wall(entries), _escalated(entries),
-             *_money(buckets, len(entries) - len(buckets))]
+             *_money(buckets, sum(1 for e in entries if _short(e)))]
     return "  ".join(p for p in parts if p)
 
 
@@ -216,7 +226,10 @@ def _item_cell(entries: list[dict], index: int) -> str:
             # A native call refused before it was sent filed no row: not
             # costed, and never a chunk.
             missing += 1
-    money = ["(chunk)"] if chunked else _money(buckets, missing)
+    # A repeat a structured chunk carried shows as `(chunk)` beside what the
+    # native repeats cost, never in place of it.
+    money = ((_money(buckets, missing) if buckets or missing or not chunked else [])
+             + (["(chunk)"] if chunked else []))
     parts = [_passes(entries), _wall(entries), _escalated(entries, index), *money]
     return "  ".join(p for p in parts if p)
 
@@ -225,12 +238,8 @@ def _totals(entries: list[dict]) -> str:
     if not entries:
         return BLANK
     buckets = [e["bucket"] for e in entries if _costed(e.get("bucket"))]
-    if not buckets:
-        return "-"
-    merged = costs.merge(buckets)
-    text = costs.cost_text(merged)
-    short = sum(1 for e in entries
-                if not _costed(e.get("bucket")) or e.get("partial"))
+    short = sum(1 for e in entries if _short(e))
+    text = costs.cost_text(costs.merge(buckets)) if buckets else "-"
     if short:
         text += f"  (incomplete: {short} case(s) not fully costed)"
     return text
