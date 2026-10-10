@@ -1,6 +1,6 @@
 # 01c. Decision distributions and seeded sampling
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01c in `ROADMAP-CHECKLIST.md`. Lane: decision.
 **Baseline:** `main` at `35c1fb7`.
@@ -21,19 +21,24 @@ first for a model that also generates.
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | `decide`, `Answer.probability` / `Answer.distribution`, `inference.stages` / `run_stages`, `resolve.native_only` | 01 (landed) | The distributions sampled here, and the chain section 4 adds a stage to | Hard, and met |
-| 01a-C1 per-item and aggregate wall time, tokens and cost per backend | 01a | The evidence section 4.3 requires before `native_first` is switched on for any task | Hard for switching a task on; not for landing the helper |
-| 01a-C3 one comparison table across `--decide-backend` | 01a | The recorded form of that evidence | Hard, as above |
-| 01b-C1 capture at every decide site, with any distribution | 01b | Lets a reader see the distribution a draw was made from in the prompt log | Soft. The replay record (C3) is persisted by the caller, not by capture, so nothing here waits on 01b. The checklist lists 01b as a hard dependency; this spec needs it only softly |
-| `routing.TaskPolicy` (shared structure) | 01d-C1 or this spec, whichever lands first | Holds `samples` and `native_first` | Coordination, not an edge (section 4.1) |
+| 01a-C1 per-case and per-call wall time, tokens and money, per route, backend and `hop` | 01a | The evidence section 4.3 requires before `native_first` is switched on for any task | Hard to switch a task on; not needed to land the mechanism |
+| 01a-C3 repeatable `--decide-backend`, `--out`, `--compare` | 01a | The recorded comparison table for that evidence | Hard to switch a task on |
+| 01b-C1 capture at every decide site | 01b | Lets a reader see, in the prompt log, the distribution a draw was made from | Soft. The replay record (C3) is persisted by the caller, not by capture |
+| `routing.TaskPolicy` (shared structure) | 01d-C1 or this spec, whichever lands first | Holds `samples` and `native_first` | Shared structure (section 4.1) |
+| `ItemResult.served` (shared structure) | 01d | The record's `provider` and `model` per item (section 6) | Shared structure. Until it lands, the caller passes `served=` |
 
 ## Required by
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01c-C1 the distribution policy for generating Decision models | 02 | Whether the speaker pick and turn intent get a distribution at all on the user's Decision model, and how a task is switched to native-first |
-| 01c-C2 the sampling helper | 02, 13 | A sampled next speaker and turn intent (02-C2); a sampled NPC Action over legal Actions (13-C3) |
-| 01c-C3 the replay record | 02, 13 | Persisted on the round record (02) and beside the Action resolution in the transaction ledger (13) |
-| 01c-C4 no sampled answer from an abstention, a refusal or a missing distribution | 02, 13 | What each caller does when there is nothing to sample |
+| 01c-C1 recorded policy, `native_first`, `reports_distribution(resolved)` | 02 (H for 02-C2 sampling) | Whether a play decision can be sampled on the user's Decision model (`reports_distribution`), and how a task is switched to native-first |
+| 01c-C1 | 13 (S) | Whether 13-C3's NPC action seam can expect a distribution, or will act on a plain answer |
+| 01c-C2 `draws.py` | 02 (H for 02-C2a/C2b), 13 (H for 13-C3), 01g (S) | A sampled next speaker and turn intent; a sampled NPC Action over the legal set; a decide tool's sampled answer (01g-C5) |
+| 01c-C3 replay record | 02 (H), 13 (H for 13-C3), 01g (S) | Stored on the round record (02), beside the Action resolution in the transaction ledger (13), and in a tool loop's outcome (01g) |
+| 01c-C4 never sampled | 02 (H), 13 (H for 13-C3), 11 (S) | What each caller does when there is nothing to sample. 13 may act on a plain Choice answer recorded `sampled: false`. 11's Decision stage never samples an epistemic class |
+
+09 and 10 reach this spec only through 02-C5b (history relevance), which
+classifies and never samples.
 
 ## 1. Current state (reconciled against main)
 
@@ -218,6 +223,14 @@ rules:
 - `samples` and `native_first` appear only on a task whose route's
   `operation` is `decide`;
 - `native_first` implies `samples` or a `low_margin` trigger (01d);
+- `samples=True` is refused together with `low_margin` in `escalate_on`
+  (02 asked for this). A low-margin answer is exactly the case sampling
+  exists for: it is where the distribution has two live options. Escalating
+  it would replace a reported distribution with a hop answer that may carry
+  none (a structured role), so the draw would silently fall back to
+  `basis: answer` on the items that most needed it. A sampling task may
+  still escalate on `refused` or `abstained`, where there is nothing to
+  sample;
 - a sampling task names its distribution-bearing question, using the same
   `question` field 01d uses, and a test pins that field to the store constant
   (for example `response_protocol.SELECTOR_QUESTION`).
@@ -243,6 +256,16 @@ otherwise -> today's stages, unchanged
   adapter-source `no` (`capabilities.py:206-209`). `evals/runner.chain`
   (`evals/runner.py:233-280`) makes the same checks for `--decide-backend
   native`, and the two share this function.
+- `inference.reports_distribution(resolved) -> bool` is the one predicate
+  a caller asks before it plans to sample (02-C2 asks it to decide whether
+  the sampled path is available at all). It is True when the first stage
+  `stages(resolved)` builds is native: a native-only primary, or a
+  `native_first` task on a `native_capable` primary. It is pure, reads only
+  the resolution and the task policy, and sends nothing. It is a forecast,
+  not a guarantee: an item the native stage fails is answered by a later
+  structured stage with no distribution, so the caller still goes through
+  `draw`, and C4 still decides each item. The settings view may show the
+  same predicate.
 - **The failure-driven rule is unchanged.** The structured stage takes only
   the items the native stage *failed* (`run_stages`, `inference.py:595-681`).
   A native `refused`, an `abstained` or an `unreadable` from a well-formed
@@ -411,6 +434,7 @@ support key, `NONE_KEY` included), and `record` (the C3 dict).
   "question": "next",
   "purpose": "next",
   "basis": "sampled",
+  "sampled": true,
   "distribution": [["characters:mara", 0.55], ["characters:seraphine", 0.3],
                    ["grimoire", 0.1], ["<none>", 0.05]],
   "mass": 1.0,
@@ -427,6 +451,8 @@ support key, `NONE_KEY` included), and `record` (the C3 dict).
   the *reported* weights. A JSON object's key order is not a contract, and
   the draw depends on order. Python's `json` and JavaScript's `JSON.parse`
   both round-trip binary64 exactly, so a persisted record replays exactly.
+- `sampled` is `basis == "sampled"`, kept as its own boolean because a
+  consumer that only acts (13) reads it rather than the basis vocabulary.
 - `basis` is `sampled` (a draw was made; `seed` is set), `answer` (the
   backend answered with no usable distribution; `selected` is that answer,
   `seed` is null), or `none` (no answer; `selected` is null and `reason`
@@ -495,6 +521,21 @@ Consequences:
 - The caller's issue mapping stays the caller's. `selection_of`'s
   `INELIGIBLE` and `INVALID_HANDOFF` are decided from the `Answer` before any
   draw, exactly as today.
+- **A plain answer can be acted on, and is not a draw** (cross-spec
+  decision, 13's open question 4). When an NPC action decision comes back
+  with no usable distribution, 13 may act on the plain Choice answer. The
+  record says `sampled: false` (`basis: answer`, `seed: null`), it is never
+  presented as a sample, and nothing is replayed from it: `replay` returns
+  the stored `selected` for such a record without drawing.
+- **Rank and MultiSelect marginals are never sampled.** 01e-C4 adds
+  `Answer.marginals`, per-candidate probabilities kept apart from
+  `distribution`. Marginals do not sum to one over a set of mutually
+  exclusive outcomes (each candidate's is its own event), so an inverse-CDF
+  draw over them would be a draw from a distribution nobody reported.
+  `support` reads `distribution` and `probability` only, and a `Rank`,
+  `MultiSelect` or other question with no `distribution` gives
+  `basis: answer` (or `none`). A `Joint` (01e-C3b) is a flattened Choice, so
+  its `distribution` is sampled like any Choice's.
 - Only a task whose policy has `samples = True` calls `draw` (an assertion
   in `draw`'s callers' tests, not at runtime). Factual classifications
   (continuity, scene-break, voice drift) never sample. A verdict about what
@@ -503,28 +544,33 @@ Consequences:
 
 ## 8. Contract
 
-- **01c-C1. Distribution policy.** Structured verbalised probabilities are
-  never requested or read. A task may set `TaskPolicy.native_first`; then
-  `inference.stages` puts a native stage on the same model before the
-  structured stage, for a primary that generates and is `native_capable`
-  (known `yes`). The failure-driven chain is unchanged. A task sets the flag
-  only with the section 4.3 evidence, recorded in `evals/README.md`. Default
-  for every task: off. Failure behaviour: a native stage that fails an item
-  hands it to the structured stage, as any failed stage does. A model that
-  is not `native_capable` gets today's chain.
-- **01c-C2. Sampling helper.** `draws.draw_from(weights, seed, purpose) ->
-  key` and `draws.draw(question, result, *, seed, purpose, served) -> Draw`.
-  The draw is a pure function of (canonical weights, seed, purpose) under
-  `ALGORITHM`. It is identical across interpreters and platforms, and it
-  never raises on a valid `ItemResult`. `replay(record)` recomputes it.
-- **01c-C3. Replay record.** The section 6 dict, JSON-safe and holding no
-  prose. The caller persists it in the same write and under the same lock as
-  the outcome it chose, and never re-draws a persisted outcome. Guarantee:
+- **01c-C1. Recorded policy.** Structured verbalised probabilities are
+  rejected: never requested, never read. Native-first is opt-in per task
+  (`TaskPolicy.native_first`): `inference.stages` then puts a native stage on
+  the same model before the structured stage, for a primary that generates
+  and is `native_capable` (a known `yes`), with the failure-driven chain
+  unchanged. A task sets the flag only with the section 4.3 evidence from
+  01a, recorded in `evals/README.md`. Every task is off at landing.
+  `inference.reports_distribution(resolved)` says whether the first stage is
+  native. Failure behaviour: a native stage that fails an item hands it to
+  the structured stage, as any failed stage does; a model that is not
+  `native_capable` gets today's chain.
+- **01c-C2. `draws.py`.** A SHA-256 inverse-CDF draw:
+  `draws.draw_from(weights, seed, purpose) -> key` and
+  `draws.draw(question, result, *, seed, purpose, served) -> Draw`. The draw
+  is a pure function of (canonical weights, seed, purpose) under `ALGORITHM`,
+  stable across Python versions, Android and a browser, and never raises on a
+  valid `ItemResult`. `replay(record)` recomputes it.
+- **01c-C3. Replay record.** The section 6 dict, JSON-safe, holding no
+  prose. The caller stores it with the outcome it chose, in the same write
+  and under the same lock, and never re-draws a stored outcome. Guarantee:
   `replay(record) == record["selected"]` for every record `draw` produced.
-- **01c-C4. No sampled non-answer.** `basis: sampled` occurs only for an
-  answered question with a usable reported distribution or probability.
-  Abstention, refusal, unreadable, error, or an absent or unusable report
-  never produce a draw.
+- **01c-C4. Never sampled.** `basis: sampled` occurs only for an answered
+  question with a usable reported `distribution` or `probability`.
+  Abstained, refused, unreadable, error, or no usable distribution never
+  produce a draw. Rank or MultiSelect marginals (01e-C4) are never sampled.
+  A plain answer may be acted on, recorded `sampled: false`; it is not a
+  draw and is never replayed.
 
 ## 9. Interaction with repo rules
 

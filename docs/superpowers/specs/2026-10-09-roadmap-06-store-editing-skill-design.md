@@ -374,8 +374,8 @@ discovers the adapter.
 
 ## 7. Contract
 
-**06-C1. A canonical `grimoire-store-editing` skill, with thin adapters and a
-drift test.**
+**06-C1. A canonical skill in `.claude/skills/grimoire-store-editing/`, an
+`.agents/` adapter, and `test_skills_guard.py`.**
 
 - *Canonical:* `.claude/skills/grimoire-store-editing/SKILL.md`, with the
   frontmatter in section 4.1 and a body that follows section 4.2, under about
@@ -393,8 +393,8 @@ drift test.**
 - *Failure:* a drift fails `make check-py` with a message naming the file and
   the missing flag, link or duplicated run.
 
-This is the checklist's 06-C1, unchanged in substance. The one refinement is
-that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
+This matches the checklist's 06-C1. Against the bundle draft, the one change
+is that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
 
 ## 8. Interaction with repo rules
 

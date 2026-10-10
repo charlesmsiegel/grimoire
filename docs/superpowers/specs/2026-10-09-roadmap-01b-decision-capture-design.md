@@ -357,16 +357,23 @@ against another frozen entry of the same task is allowed.
 
 ## 4. Contract
 
-**01b-C1. Every decide site can file a capture.**
+**01b-C1. One capture helper, used at all five decide sites and every new
+one.** Each outcome records `stage` and `at`. Captures go to their own
+retention pool. The reconcile sweep captures at campaign level. Every capture
+is fenced.
 
 - `decision_capture.capturing(cid, sid, task, *, fence=None)` and
   `Scope.hook(part="")` are the one way a site captures a decision. The five
-  sites in §3.6 use them.
+  sites in §3.6 use them. Every decide site added later (02, 10, 11, 13, and
+  01g's Decision-as-tool) uses them too, and the AST test in §6 holds that.
 - A filed entry holds:
   - the request as sent per call (structured messages, or the native
     normalised body);
   - per call: mode, the provider and model that answered, `stage`, the batch
-    indices `at`, and the error of a failed call;
+    indices `at`, and the error of a failed call. An escalation call 01d
+    sends inside the scope is one more call record. It carries
+    `hop: "escalation"` when 01d-C2b stamps it on the call's outcome, and the
+    capture passes the field through unchanged;
   - per item: backend, normalised answers with `reason`, `detail`,
     `probability` and `distribution` exactly as the backend reported them
     (never computed here), and the rationale.
@@ -374,10 +381,13 @@ against another frozen entry of the same task is allowed.
   labelled, and listed apart from turns.
 - Campaign-level decisions are filed with `scene: ""` and are readable
   through the two campaign routes.
+- Every capture is fenced: on scene identity at scene level, and on the
+  site's own `fence` at campaign level (§3.3).
 - **Inputs a new decide site must supply:** `cid`, `sid` (or `NO_SCENE` with
   a `fence`), and the task.
 
-**01b-C2. Capture is off the decide path.**
+**01b-C2. Capture stays off the decide path.** It is filed after the call
+settles, never on cancel, and keeps the speaker capture's privacy.
 
 - The per-call hook does no I/O beyond what `_captured` already does in a
   worker thread.
@@ -521,6 +531,8 @@ green.
    continuity pane is the wrong home? *Recommendation: there.* It is the only
    surface where the reconcile sweep is visible, and it already has Refresh.
    A global "decision log" page is a later choice.
-5. **Missing edge (soft).** 01a and 01b both add `_Call.stage` and
+5. **Shared structure, not a missing edge.** `ROADMAP-CHECKLIST.md`
+   ("Shared structures") lists `_Call.stage` / `positions` under 01a and 01b.
+   Both specs add `_Call.stage` and
    `_Call.positions`. If 01a's plan lands first, this spec's plan reuses its
    fields and drops that task. Nothing else is shared.
