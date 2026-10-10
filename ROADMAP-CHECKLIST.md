@@ -48,14 +48,14 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | — | [x] |
 | 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [ ] |
 | 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [x] |
-| 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [ ] |
+| 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [x] |
 | 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | 3 | [ ] |
 | 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | 5 | [ ] |
-| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [ ] |
-| 01f | Structured generation | now | [x] | [~] substitute | 4 | [ ] |
+| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
+| 01f | Structured generation | now | [x] | [~] substitute | 4 | [x] |
 | 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [~] substitute | 8 | [ ] |
 | 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [~] substitute | 7 | [ ] |
-| 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [ ] |
+| 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
 | 02 | Decision integration (what 01's slices F–H did not land) | 01a, 01b, plus 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
 | 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | 6 | [ ] |
 | 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | 10 | [ ] |
@@ -106,12 +106,17 @@ These are headlines. The owning spec's Contract section is authoritative.
   so the Codex gates are still owed here, as the spec gate's `[~]` says.
 
 ### 01b: Decision capture
-- [ ] **01b-C1** One capture helper used at all five decide sites, plus every
+- [x] **01b-C1** One capture helper used at all five decide sites, plus every
   new one. Each outcome records `stage` and `at`. Captures go to their own
   retention pool. The reconcile sweep captures at campaign level. Captures
   are fenced.
-- [ ] **01b-C2** Capture stays off the decide path: it is filed after the
+- [x] **01b-C2** Capture stays off the decide path: it is filed after the
   call settles, never on cancel, with the speaker capture's privacy.
+- Landed together with 01e, 01f and 01i in one PR, each slice its own
+  commit (plans in `docs/superpowers/plans/2026-10-10-roadmap-<id>-s*.md`).
+  As for 01a, every slice's plan gate, review and final gate were
+  **substitute** reviews, recorded in each plan, plus one review across the
+  four specs' seams; the Codex gates are still owed.
 
 ### 01c: Distributions and seeded sampling
 - [ ] **01c-C1** Recorded policy:
@@ -139,22 +144,22 @@ These are headlines. The owning spec's Contract section is authoritative.
   starting at 0.2. All existing tasks are off.
 
 ### 01e: Decision vocabulary
-- [ ] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
+- [x] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
   Natively it uses a per-candidate `pointwise` predicate, or is refused
   unsent.
-- [ ] **01e-C2** `Answer.expected`, `tiers()`. `MAX_LEVELS` stays 10.
-- [ ] **01e-C3a** `MultiSelect`, where an empty selection is a real answer.
-- [ ] **01e-C3b** `Joint`: a flattened choice over the legal (action, target)
+- [x] **01e-C2** `Answer.expected`, `tiers()`. `MAX_LEVELS` stays 10.
+- [x] **01e-C3a** `MultiSelect`, where an empty selection is a real answer.
+- [x] **01e-C3b** `Joint`: a flattened choice over the legal (action, target)
   pairs.
-- [ ] **01e-C4** `Answer.marginals`, kept separate from `distribution`.
+- [x] **01e-C4** `Answer.marginals`, kept separate from `distribution`.
 
 ### 01f: Structured generation
-- [ ] **01f-C1** `generate(schema=)` sends structured mode on each attempt
+- [x] **01f-C1** `generate(schema=)` sends structured mode on each attempt
   that can take it. The schema must also be in the prompt. Adds a per-call
   `max_tokens` cap.
-- [ ] **01f-C2** A schema refusal is re-sent through a helper shared with
+- [x] **01f-C2** A schema refusal is re-sent through a helper shared with
   decide. It is never a health failure.
-- [ ] **01f-C3** `grimoire/schemas.py`: the portable schema subset, the
+- [x] **01f-C3** `grimoire/schemas.py`: the portable schema subset, the
   prompt spelling, and a tolerant reader.
 
 ### 01g: Tool calling, Decision as a tool, run budgets
@@ -191,11 +196,11 @@ These are headlines. The owning spec's Contract section is authoritative.
   baseline.
 
 ### 01i: Context window
-- [ ] **01i-C1** `wire.Limits(window, max_output)` with a source, on every
+- [x] **01i-C1** `wire.Limits(window, max_output)` with a source, on every
   target.
-- [ ] **01i-C2** `prompt_ceiling(resolved)`: the smallest window minus a
+- [x] **01i-C2** `prompt_ceiling(resolved)`: the smallest window minus a
   reserve. Unknown means `None`, never 0.
-- [ ] **01i-C3** User-stated facts, the Models readout, and `model_window` in
+- [x] **01i-C3** User-stated facts, the Models readout, and `model_window` in
   context breakdowns.
 
 ### 02: Decision integration
@@ -306,10 +311,10 @@ Tick an edge when its provider has landed. **H** is hard: the consuming slice
 cannot start without it. **S** is soft: it degrades, or waits only for one
 sub-feature. Edges come from each spec's Depends-on table.
 
-- [ ] 01c ← 01a-C1/C3 (H to switch a task on), 01b-C1 (S), 01e-C4 (S: marginals are never sampled)
-- [ ] 01d ← 01a-C1/C3 (H to enable), 01b-C1 (S)
-- [ ] 01e ← 01a-C1 (S), 01b-C1 (S)
-- [ ] 01f ← 01a-C1 (S), 01i-C1 (S: the `max_tokens` cap respects the model's max output)
+- [x] 01c ← 01a-C1/C3 (H to switch a task on), 01b-C1 (S), 01e-C4 (S: marginals are never sampled)
+- [x] 01d ← 01a-C1/C3 (H to enable), 01b-C1 (S)
+- [x] 01e ← 01a-C1 (S), 01b-C1 (S)
+- [x] 01f ← 01a-C1 (S), 01i-C1 (S: the `max_tokens` cap respects the model's max output)
 - [ ] 01g ← 01f-C1/C2/C3 (H); 01d-C1, 01i-C1, 01c-C2/C3, 01b-C1 (S)
 - [ ] 01h ← 01a-C1/C2 (H for C6), 01a-C3 (S), 01s (S); 01g-C3 run id (S)
 - [ ] 01i ← 01s (S)
@@ -370,9 +375,9 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01b-S1 | Stage and batch positions on the decide outcome | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01b-S2 | The capture helper, the decision pool and the four scene-level sites | L | 2 | 01b-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01b-S3 | Campaign-level capture for the reconcile sweep, and the guard | M | 3 | 01b-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01b-S1 | Stage and batch positions on the decide outcome | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01b-S2 | The capture helper, the decision pool and the four scene-level sites | L | 2 | 01b-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01b-S3 | Campaign-level capture for the reconcile sweep, and the guard | M | 3 | 01b-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01c
 
@@ -396,20 +401,20 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01e-S1 | Answer fields, `expected` and `tiers` | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S2 | `Rank` on the structured path, and the template switch to `KIND` | M | 2 | 01e-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S3 | `MultiSelect` on the structured path | S | 3 | 01e-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S4 | `Joint` on both paths, and the native lowering framework | M | 3 | 01e-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01e-S5 | Native `Rank` and `MultiSelect` through pointwise predicates | M | 4 | 01a-S3 (S), 01e-S3, 01e-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01e-S1 | Answer fields, `expected` and `tiers` | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S2 | `Rank` on the structured path, and the template switch to `KIND` | M | 2 | 01e-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S3 | `MultiSelect` on the structured path | S | 3 | 01e-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S4 | `Joint` on both paths, and the native lowering framework | M | 3 | 01e-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01e-S5 | Native `Rank` and `MultiSelect` through pointwise predicates | M | 4 | 01a-S3 (S), 01e-S3, 01e-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01f
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01f-S1 | The portable-schema leaf | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01f-S2 | Structured mode on `generate`, and the shared refusal re-send | M | 2 | 01f-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01f-S3 | The per-call output cap | S | 3 | 01f-S2, 01i-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01f-S4 | The `intent` pilot | S | 4 | 01f-S2, 01f-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01f-S1 | The portable-schema leaf | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01f-S2 | Structured mode on `generate`, and the shared refusal re-send | M | 2 | 01f-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01f-S3 | The per-call output cap | S | 3 | 01f-S2, 01i-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01f-S4 | The `intent` pilot | S | 4 | 01f-S2, 01f-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01g
 
@@ -440,10 +445,10 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01i-S1 | The resolved fact and the ceiling | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01i-S2 | Stating the limits | M | 2 | 01i-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01i-S3 | `model_window` in context breakdowns | S | 2 | 01i-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01i-S4 | The Models page readout | S | 2 | 01i-S1, 01i-S2 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01i-S1 | The resolved fact and the ceiling | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01i-S2 | Stating the limits | M | 2 | 01i-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01i-S3 | `model_window` in context breakdowns | S | 2 | 01i-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01i-S4 | The Models page readout | S | 2 | 01i-S1, 01i-S2 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 02
 
@@ -593,7 +598,8 @@ alone. This table is generated: after a spec's slices change, run
 ## Shared structures: whichever spec lands first adds them
 
 - `routing.TaskPolicy`: 01c and 01d.
-- `inference._Call.stage` / `positions`: 01a and 01b. Added by 01a-S1.
+- `inference._Call.stage` / `positions`: 01a and 01b. Added by 01a-S1;
+  01b-S1 stamps them on each capture outcome.
 - `decisions.CallRecord`, `Decision.calls`: 01a, used by 01d. Added by
   01a-S1.
 - `ItemResult.served`: 01d, read by 01c.
