@@ -600,12 +600,12 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     try:
         stages = chain(target, backend) if case.schema is not None else None
         output, decision, failure, asked = _model_work(case, ctx, target, stages, client)
-    except Exception:
+    except Exception as exc:
         # Anything but a provider's error: still drained before it passes
         # through the isolate, which restores the environment -- a follow-up
         # left running would then file its row in the real library.
         if not drain(ctx):
-            raise _still_running(case, "", run_day, run_id, rates) from None
+            raise _still_running(case, "", run_day, run_id, rates) from exc
         raise
     note = backend_note(decision) if decision is not None else ""
     error = f"{failure.kind}: {failure.detail}" if failure is not None else ""
@@ -683,11 +683,22 @@ def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isola
                               run_day=run_day, rates=rates)
         except FollowUpsRunningError as exc:
             result = exc.result
+            if exc.__context__ is not None and not isinstance(exc.__context__,
+                                                              FollowUpsRunningError):
+                cause = exc.__context__
+                result = replace(result, error=f"{result.error} (after "
+                                 f"{type(cause).__name__}: {cause})")
             out.append(replace(result, configs=configs, repeat=n))
             out.extend(Result(later, BASELINE, [], "", NOT_RUN, error_kind="not_run",
                               configs=later_configs, repeat=later_n)
                        for later, _b, later_configs, later_n in runs[number + 1:])
             break
+        except Exception as exc:  # noqa: BLE001 - one case's crash is that case's
+            # Drained already (`live`), and the isolate has restored: the
+            # case fails, and the run -- the spend every earlier case made,
+            # and its report -- carries on.
+            result = Result(case, BASELINE, [], "", f"{type(exc).__name__}: {exc}",
+                            error_kind=type(exc).__name__)
         out.append(replace(result, configs=configs, repeat=n))
     return out
 
@@ -705,10 +716,13 @@ def report(results: list[Result]) -> str:
     report is transcoded on the way out.
     """
     lines, failed = [], 0
+    several = len({c for r in results for c in r.configs}) > 1
+    repeated = any(r.repeat for r in results)
     for r in results:
         status = "ok  " if r.passed else "FAIL"
         note = f"  ({r.note})" if r.note else ""
-        lines.append(f"  [{status}] {r.case.id}.{r.variant}{note}")
+        lines.append(f"  [{status}] {r.case.id}.{r.variant}"
+                     f"{_which(r, several, repeated)}{note}")
         lines.extend(_metrics(r))
         if r.passed:
             lines.extend(_not_applicable(r))
@@ -726,6 +740,17 @@ def report(results: list[Result]) -> str:
     lines.append(f"{total - failed}/{total} passed" if failed
                  else f"all {total} checks passed")
     return ascii_safe("\n".join(lines))
+
+
+def _which(r: Result, several: bool, repeated: bool) -> str:
+    """Which config and repeat a case line is, when the run had more than
+    one of either: ` [c2 #3]`."""
+    parts = []
+    if several and r.configs:
+        parts.append(",".join(r.configs))
+    if repeated:
+        parts.append(f"#{r.repeat + 1}")
+    return f" [{' '.join(parts)}]" if parts else ""
 
 
 #: The indent of a case's detail lines.

@@ -805,6 +805,21 @@ def test_a_connection_wide_failure_sends_no_further_structured_chunk(client):
     assert fake.calls == 1 and len(_rows()) == 1
 
 
+def test_a_structured_chunk_held_back_has_no_call_record(client):
+    """01a-S1: after a connection-wide stop on a structured stage, the
+    chunks held back have no `CallRecord`; with a later answer the decision
+    lists the sent chunk's record only for that stage."""
+    resolved = _structured_resolution(client, fallback_mode=NATIVE)
+    items = _chunks(3)
+    unauthorised = LLMError("auth", "invalid key", status=401)
+    fake = FakeLLM([[decision_reply({"over": True})]], error=unauthorised,
+                   decisions=[_yes()])
+    got = _decide(fake, items, resolved=resolved)
+    first = [c for c in got.calls if c.stage == 0]
+    assert len(first) == 1 and first[0].error_kind == "auth"
+    assert first[0].items == tuple(range(decisions.MAX_ITEMS_PER_CALL))
+
+
 def test_structured_chunks_held_back_move_to_the_next_stage(client):
     resolved = _structured_resolution(client, fallback_mode=NATIVE)
     items = _chunks(3)
@@ -1289,7 +1304,7 @@ def test_a_mixed_chain_names_each_calls_stage_and_batch_items(client):
     assert last.mode == STRUCTURED and last.items == (0, 4, 5, 6, 7, 8, 9)
     assert last.row is not None and last.row["decision_mode"] == STRUCTURED
     assert got.calls[-1] is last
-    assert [c.row for c in got.calls] == list(got.usage)
+    assert sorted(map(id, (c.row for c in got.calls))) == sorted(map(id, got.usage))
 
 
 def test_a_native_item_refused_unsent_has_a_record_and_no_row(client):

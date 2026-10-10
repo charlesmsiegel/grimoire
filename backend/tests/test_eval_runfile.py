@@ -135,3 +135,26 @@ def test_a_replay_file_compares_with_no_money(tmp_path, capsys):
     assert {tuple(c["configs"]) for c in doc["cases"]} == {("c1",)}
     assert run.main(["--compare", str(out)]) == 0
     assert "1/1 ok  -  - / -  -" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("doc", [
+    {**_doc([], []), "version": True},
+    {**_doc([], []), "version": 1.0},
+    _doc([runfile.config("c1", "x", {})], [{"configs": ["c1"]}]),
+    _doc([runfile.config("c1", "x", {})], [{**_entry("scene-length", ["c1"]), "items": 7}]),
+], ids=["version-true", "version-float", "case-without-id", "items-not-a-list"])
+def test_a_malformed_file_is_one_sentence_and_exit_2(tmp_path, capsys, doc):
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert run.main(["--compare", str(path)]) == 2
+    captured = capsys.readouterr()
+    assert len(captured.err.strip().splitlines()) == 1 and "Traceback" not in captured.err
+
+
+def test_a_hand_edited_bucket_is_not_costed_rather_than_zero(tmp_path, capsys):
+    bad = {**_bucket(0.002), "cost_usd": "x"}
+    doc = _doc([runfile.config("c1", "x", {})], [_entry("scene-length", ["c1"], bucket=bad)])
+    assert run.main(["--compare", str(_write(tmp_path / "e.json", doc))]) == 0
+    out = capsys.readouterr().out
+    assert "$0.00" not in out
+    assert "1/1 ok  1.00s  - / -  -" in out

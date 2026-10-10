@@ -50,7 +50,10 @@ def temp_home():
     kept = False
     try:
         yield Path(path)
-    except runner.FollowUpsRunningError:
+    except (runner.FollowUpsRunningError, KeyboardInterrupt):
+        # An interrupt is never drained (the person asked to stop now), so
+        # the home is kept and the environment left as it is: a follow-up a
+        # play case left running cannot reach the real library either way.
         kept = True
         raise
     finally:
@@ -105,10 +108,16 @@ def run_compare(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                  f"it takes no {', '.join(clash)}")
     try:
         docs = [(Path(name).stem, runfile.read(Path(name))) for name in args.compare]
+        table = runfile.compare(docs)
     except runfile.RunFileError as exc:
         print(runner.ascii_safe(f"compare: {exc}"), file=sys.stderr)
         return 2
-    print(runner.ascii_safe(runfile.compare(docs)))
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        # A v1 file whose inner shape a hand edit broke: one sentence, exit 2.
+        print(runner.ascii_safe(f"compare: a run file is malformed "
+                                f"({type(exc).__name__}: {exc})"), file=sys.stderr)
+        return 2
+    print(runner.ascii_safe(table))
     return 0
 
 
