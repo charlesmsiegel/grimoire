@@ -1,9 +1,10 @@
 # Roadmap checklist
 
-> **Working file. Delete it once the roadmap has landed.** It is a ledger of
-> the roadmap's specs: what each one owes the others, and what is done. The
-> design itself lives in the specs. Tick a box in the same PR that makes it
-> true.
+> **Working file. Delete it once the roadmap has landed.** See
+> [Final step](#final-step-delete-this-file) at the end of this file. It is a
+> ledger of the roadmap's specs: what each one owes the others, and what is
+> done. The design itself lives in the specs. Tick a box in the same PR that
+> makes it true.
 
 Specs live in `docs/superpowers/specs/2026-10-09-roadmap-<id>-<slug>-design.md`.
 Each spec has two tables: **Depends on** and **Required by**. Both cite
@@ -387,3 +388,19 @@ These are not specs, and each needs a decision on whether to fix it.
   rather than at stamp time (03).
 - [ ] Stale docstrings: `entities.py:420` (ref fields do reach prompts),
   `embed_space.facts_moved`, and `context/pack.py:69-73`.
+
+## Final step: delete this file
+
+When every spec in the status table is `Landed`, and every box above is
+ticked or explicitly dropped with a reason, the PR that lands the last spec
+also does three things:
+
+- [ ] Re-check every edge and cross-spec decision above against the landed
+  code. Anything still open becomes an issue or a section in a spec, never a
+  line kept here.
+- [ ] Remove the specs' references to this file. Each "Roadmap:" header line
+  points here. Change it to name the spec IDs it depends on, or drop it.
+- [ ] **Delete `ROADMAP-CHECKLIST.md`**, in that same PR.
+
+The specs stay. Only this ledger goes. Its job ends when there is nothing left
+to coordinate.
