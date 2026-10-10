@@ -63,3 +63,21 @@ production reads the new field.
 The Codex CLI is not installed in this environment; a hostile subagent review
 stood in for `/codex:adversarial-review` over all four 01a plans. For S1: no
 finding. One minor (M5) belongs to S3's item records and is folded there.
+
+## Review and final gate (substitute review, 2026-10-10)
+
+One hostile subagent review over the whole 01a diff stood in for both
+`/codex:review` and the final spec gate (the Codex CLI is not installed). No
+blocking finding; every section 11 test and every C1-C3 guarantee was traced
+to a test. Folded: a non-provider exception in one case now fails that case
+and the run carries on (its spend and report kept); `runfile.read` refuses a
+`version` that is not the integer 1 and a malformed case, and `--compare`
+turns any malformed inner shape into one sentence and exit 2; a hand-edited
+bucket with a non-number figure is not costed rather than read as zero; the
+drain-failure message keeps the exception that caused it; an interrupt keeps
+the isolate; a structured held-back chunk has its own no-record test; case
+lines name their config and repeat in a multi-config or repeated run; the
+`Decision.calls` comment says its order is not `usage`'s. Left as drift, on
+purpose: `Result.calls` is one flat list (today's cases make one decide
+invocation; 02's play cases add per-invocation lists), and the console
+aggregate is lines rather than a columned table.

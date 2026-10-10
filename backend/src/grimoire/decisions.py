@@ -341,7 +341,8 @@ class Decision:
     #: answered.
     errors: tuple[Exception, ...] = ()
     #: Every metered request the chain made (`CallRecord`), in the order the
-    #: calls settled. `usage` is these records' rows alone; nothing in
+    #: calls settled. Their rows are the rows `usage` holds, though not in
+    #: its order (`usage` keeps a native stage's in item order); nothing in
     #: production reads this field.
     calls: tuple[CallRecord, ...] = ()
 

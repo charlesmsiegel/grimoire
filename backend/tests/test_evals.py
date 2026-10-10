@@ -1448,3 +1448,32 @@ def test_live_out_then_compare_end_to_end(monkeypatch, tmp_path, capsys):
     assert table[0].count("[native]") == 2 and table[0].count("[structured]") == 2
     (generate_row,) = [line for line in table if line.startswith(plain.id + " ")]
     assert generate_row.count("2/2 ok") == 4 and generate_row.count("billed $0.0084") == 4
+
+
+def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
+    """Review: an exception that is not a provider's error fails its own
+    case; the cases after it still run and the run is still reported. Each
+    line names its config and repeat when the run had several."""
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    original = runner._model_work
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("an adapter broke")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_model_work", flaky)
+    results = runner.live_all((case,), {runner.conn_key(case): target}, isolate,
+                              client=FakeLLM([[_compliant(case)]], usage=BILLED),
+                              repeat=2, real_home=real)
+    first, second = results
+    assert (first.error_kind, first.passed) == ("RuntimeError", False)
+    assert second.passed and second.repeat == 1
+    text = runner.report(results)
+    assert "scene-length.compliant [#1]" in text and "scene-length.compliant [#2]" in text

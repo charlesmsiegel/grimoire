@@ -120,15 +120,34 @@ def read(path: Path) -> dict:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise RunFileError(f"{path}: not a readable run file ({exc})") from exc
+    version = doc.get("version") if isinstance(doc, dict) else None
     if not isinstance(doc, dict) or doc.get("format") != FORMAT \
-            or doc.get("version") != VERSION:
+            or type(version) is not int or version != VERSION:
         got = (doc.get("format"), doc.get("version")) if isinstance(doc, dict) else None
         raise RunFileError(f"{path}: not an {FORMAT} v{VERSION} file "
                            f"(format and version {got!r})")
+    if not isinstance(doc.get("configs"), list) or not isinstance(doc.get("cases"), list) \
+            or not all(isinstance(c, dict) and isinstance(c.get("case"), str)
+                       and isinstance(c.get("configs"), list) for c in doc["cases"]) \
+            or not all(isinstance(c, dict) for c in doc["configs"]):
+        raise RunFileError(f"{path}: an {FORMAT} v{VERSION} file whose configs or "
+                           f"cases are malformed")
     return doc
 
 
 # ---------------------------------------------------------------- compare
+
+#: The bucket fields a figure is read from; a bucket where any of them is
+#: not a number (a hand edit) is not costed, rather than read as zero.
+_FIGURES = ("calls", "priced_calls", "subscription_calls", "modelled_calls",
+            "unpriced_calls", "cost_usd", "estimated_usd", "modelled_usd",
+            "prompt_tokens", "completion_tokens", *costs.COVERAGE)
+
+
+def _costed(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(value.get(key, 0), (int, float))
+        and not isinstance(value.get(key, 0), bool) for key in _FIGURES)
 
 def _row_key(entry: dict) -> str:
     variant = entry.get("variant", BASELINE)
@@ -172,7 +191,7 @@ def _money(buckets: list[dict], missing: int) -> list[str]:
 
 
 def _case_cell(entries: list[dict]) -> str:
-    buckets = [e["bucket"] for e in entries if isinstance(e.get("bucket"), dict)]
+    buckets = [e["bucket"] for e in entries if _costed(e.get("bucket"))]
     parts = [_passes(entries), _wall(entries), _escalated(entries),
              *_money(buckets, len(entries) - len(buckets))]
     return "  ".join(p for p in parts if p)
@@ -190,7 +209,7 @@ def _item_cell(entries: list[dict], index: int) -> str:
         calls = entry.get("calls", [])
         if not isinstance(call, int) or not 0 <= call < len(calls):
             continue
-        if calls[call].get("mode") == "native" and isinstance(calls[call].get("bucket"), dict):
+        if calls[call].get("mode") == "native" and _costed(calls[call].get("bucket")):
             buckets.append(calls[call]["bucket"])
         else:
             chunked = True
@@ -202,13 +221,13 @@ def _item_cell(entries: list[dict], index: int) -> str:
 def _totals(entries: list[dict]) -> str:
     if not entries:
         return BLANK
-    buckets = [e["bucket"] for e in entries if isinstance(e.get("bucket"), dict)]
+    buckets = [e["bucket"] for e in entries if _costed(e.get("bucket"))]
     if not buckets:
         return "-"
     merged = costs.merge(buckets)
     text = costs.cost_text(merged)
     short = sum(1 for e in entries
-                if not isinstance(e.get("bucket"), dict) or e.get("partial"))
+                if not _costed(e.get("bucket")) or e.get("partial"))
     if short:
         text += f"  (incomplete: {short} case(s) not fully costed)"
     return text
