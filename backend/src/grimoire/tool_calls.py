@@ -882,12 +882,23 @@ class RunRefused(Exception):  # noqa: N818 - the spec's name for it (01g 3.9)
         self.kind = kind
 
 
+def _cut_marker(omitted: int) -> str:
+    return f"\n[truncated: {omitted} more characters]"
+
+
 def truncate(text: str, limit: int) -> str:
-    """`text` held to `limit` characters, with a marker saying how much was
-    cut."""
+    """`text` held to `limit` characters, the marker saying how much was cut
+    included: room for it (at the widest count it could carry) comes out of
+    the kept text, so the result never passes `limit`. A limit too small for
+    the marker keeps the first `limit` characters and no marker -- the cap is
+    the promise, the marker a courtesy."""
+    limit = max(0, limit)
     if len(text) <= limit:
         return text
-    return text[:max(0, limit)] + f"\n[truncated: {len(text) - max(0, limit)} more characters]"
+    keep = limit - len(_cut_marker(len(text)))
+    if keep < 0:
+        return text[:limit]
+    return text[:keep] + _cut_marker(len(text) - keep)
 
 
 def loop_id(run_id: str, n: int) -> str:
@@ -895,20 +906,30 @@ def loop_id(run_id: str, n: int) -> str:
     return f"gc_{re.sub(r'[^A-Za-z0-9]', '', run_id)[:8]}_{n}"
 
 
-def rewrite_ids(messages: list[dict], mapping: dict[str, str]) -> list[dict]:
-    """`messages` with each call id in `mapping` renamed, call and result
-    alike, on new messages; the rest as they were."""
+def rewrite_ids(messages: list[dict], mint: Callable[[], str]) -> list[dict]:
+    """`messages` with every call id renamed to a fresh `mint()`, call and
+    result alike, on new messages; the rest as they were. Renamed per
+    occurrence, never by id: a provider may reuse an id from one turn to the
+    next, and two calls must not come out sharing one. A result is paired
+    with the call of that id in the latest assistant turn before it."""
     out: list[dict] = []
+    current: dict[str, str] = {}
     for message in messages:
         calls = message.get("tool_calls") if isinstance(message, dict) else None
         renamed = message
         if isinstance(calls, list):
-            renamed = {**message, "tool_calls": [
-                {**c, "id": mapping.get(c.get("id", ""), c.get("id", ""))}
-                if isinstance(c, dict) else c for c in calls]}
+            current = {}
+            fresh = []
+            for c in calls:
+                if isinstance(c, dict) and c.get("id"):
+                    current[c["id"]] = new = mint()
+                    fresh.append({**c, "id": new})
+                else:
+                    fresh.append(c)
+            renamed = {**message, "tool_calls": fresh}
         elif (isinstance(message, dict) and message.get("role") == "tool"
-              and message.get("tool_call_id") in mapping):
-            renamed = {**message, "tool_call_id": mapping[message["tool_call_id"]]}
+              and message.get("tool_call_id") in current):
+            renamed = {**message, "tool_call_id": current[message["tool_call_id"]]}
         out.append(renamed)
     return out
 
