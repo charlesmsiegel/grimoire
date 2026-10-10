@@ -301,11 +301,14 @@ def test_decide_system_template_is_unchanged():
     assert "{{ schema | tojson(indent=2) }}" in source and "schema_json" not in source
     bare = jinja2.Environment(loader=jinja2.FileSystemLoader(str(prompts.templates_dir())),
                               undefined=jinja2.StrictUndefined)
-    schema = decisions.schema([Item("Mara's <door> & bell", (Predicate("a", "?"),))],
-                              explain=True)
+    items = [Item("Mara's <door> & bell", (Predicate("a", "?"),))]
+    schema = decisions.schema(items, explain=True)
+    kinds = decisions.kinds(items)
     for explain in (True, False):
-        assert prompts.render("decide/system.j2", schema=schema, explain=explain) == \
-            bare.get_template("decide/system.j2").render(schema=schema, explain=explain)
+        assert prompts.render("decide/system.j2", schema=schema, explain=explain,
+                              kinds=kinds) == \
+            bare.get_template("decide/system.j2").render(schema=schema, explain=explain,
+                                                         kinds=kinds)
 
 
 # ---- find_value ----
