@@ -1121,7 +1121,7 @@ ordered list of questions:
 | `choice` | `id`, `instructions`, `options: [{id, description, aliases}]` (2–255), `allow_none` | an option id or `None`, optional `distribution` |
 | `score` | `id`, `instructions`, `levels: [description, …]` (2–10, ordered) | a level index, optional `distribution` |
 
-`rank` is not provided — nothing needs it.
+`rank` is not provided — nothing needs it. *(Superseded by 01e, `2026-10-09-roadmap-01e-decision-vocabulary-design.md`: `rank`, `select` (`MultiSelect`) and `joint` were added, each lowered to the three types above on a native endpoint.)*
 
 An option may carry `aliases`, which the structured parser accepts after one
 generic spelling normalisation (case-folded, stripped, runs of spaces or
@@ -2542,6 +2542,24 @@ picker; newer-format banner.
   keeps from marking the connection failing). The reference also accepts
   public HTTP(S) image URLs where the guide says only data URLs; Grimoire
   sends a string `input`, so neither matters yet.
+- **Re-checked for 01e (2026-10-10)**, before its decision vocabulary landed
+  (`2026-10-09-roadmap-01e-decision-vocabulary-design.md`). Nothing moved
+  that 01e depends on:
+  - Both decisions endpoints still define exactly three question types
+    (OpenRouter `noul`, `choice`, `score`; OpenAI `predicate`, `choice`,
+    `score`), with no rank, multi-select or joint type, so `Rank`,
+    `MultiSelect` and `Joint` are lowered to those (`decisions.native_form`).
+  - Neither documents a bound on questions per request; OpenRouter's
+    reference names only a 413 for an oversized payload, which is what a
+    32-predicate lowered rank would meet first. OpenRouter's `noul`
+    requires only `type` and `instructions` (its optional `criteria` must
+    carry both `true` and `false` keys when sent; Grimoire sends none).
+  - OpenAI Structured Outputs still lists `minItems` and `maxItems`, not
+    `uniqueItems`, and still caps 10 levels of nesting, 5,000 properties and
+    1,000 enum values. Anthropic structured outputs still supports an array
+    `minItems` of only 0 or 1 and refuses "array constraints beyond
+    `minItems` of 0 or 1", so a ranking or selection schema carries no array
+    constraint and the parser holds count and uniqueness.
 - z.ai: pay-as-you-go `https://api.z.ai/api/paas/v4`; GLM Coding Plan keys work
   only at `https://api.z.ai/api/coding/paas/v4`.
   https://docs.z.ai/api-reference/introduction

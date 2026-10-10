@@ -595,6 +595,43 @@ def test_an_unrepresentable_item_moves_to_the_fallback_with_its_reason(client):
     assert (newest["kind"], newest["message"]) == ("bad_response", gap)
 
 
+#: A rank with no `pointwise`: a native stage cannot carry it (01e-S5).
+_UNPOINTED = Item("Mara asks Winifred about the debt.", (decisions.Rank(
+    "order", "Which scene matters most?",
+    (Option("scenes:pier", "The debt at the pier"),
+     Option("scenes:ledger", "The ledger changes hands")),),))
+
+
+def test_a_rank_with_no_pointwise_moves_to_the_structured_fallback(client):
+    """01e-C1: on a native primary a rank that names no pointwise question is
+    refused unsent (`native_gap`) and answered by the structured stage."""
+    resolved = _native_resolution(client, fallback=True)
+    fake = FakeLLM([[decision_reply({"order": ["scenes:ledger", "scenes:pier"]})]],
+                   decisions=[_yes()])
+    got = _decide(fake, [_UNPOINTED], resolved=resolved)
+    assert got.items[0].answers["order"] == Answer(decisions.Ranking(
+        tiers=(("scenes:ledger",), ("scenes:pier",))))
+    assert got.items[0].backend == STRUCTURED
+    assert fake.native_requests == [] and got.errors == ()
+    assert [r["decision_mode"] for r in _rows()] == [STRUCTURED]
+
+
+def test_a_rank_with_no_pointwise_and_no_fallback_is_native_unrepresentable(client):
+    """With no stage behind the native one, the rank's item is left
+    unanswered and its `Decision.errors` entry is the refusal, while an item
+    the endpoint can carry still answers."""
+    full = _native_resolution(client, fallback=True)
+    resolved = dataclasses.replace(full, attempts=full.attempts[:1])
+    fake = FakeLLM([["unused"]], decisions=[_yes()])
+    got = _decide(fake, [_item(), _UNPOINTED], resolved=resolved)
+    assert got.items[0].answers["over"] == Answer(True)
+    assert got.items[1].answers["order"].answer is None
+    (error,) = got.errors
+    assert error.code == "native_unrepresentable"
+    assert error.detail == decisions.native_gap(_UNPOINTED)
+    assert len(fake.native_requests) == 1
+
+
 def test_around_runs_inside_each_native_meter(client):
     """`around` is handed each native call and its meter's live holder: a
     timeout it raises is that meter's `error/timeout` row, stamped native, and

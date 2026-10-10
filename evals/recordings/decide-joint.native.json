@@ -1,0 +1,3 @@
+[
+  {"model": "gpt-6-luna", "answers": [{"type": "choice", "name": "action", "probabilities": [{"value": "strike=>creatures:the-sentinel", "probability": 0.05}, {"value": "strike=>characters:the-smuggler", "probability": 0.03}, {"value": "heal=>characters:mara", "probability": 0.82}, {"value": "heal=>characters:winifred", "probability": 0.04}, {"value": "parley", "probability": 0.06}], "choice": "heal=>characters:mara"}], "usage": {"input_tokens": 540, "output_tokens": 0, "total_tokens": 540}}
+]

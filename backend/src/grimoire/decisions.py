@@ -164,6 +164,12 @@ NATIVE_MAX_OPTIONS = 255
 NATIVE_NONE = "none"
 NATIVE_NONE_TEXT = "None of the other options fits."
 
+#: The predicate a native selection asks of each option (01e-C3a). A fixed
+#: wording is honest here, as it is not for a rank: "is this option selected"
+#: is exactly the per-option question a selection asks.
+NATIVE_SELECT_TEXT = ("{instructions}\n\nOption {id}: {description}\n\n"
+                      "Is this option one of those selected?")
+
 #: `native_answer`'s "the body named no answer", told apart from an explicit
 #: `None` (which a nullable choice reads as abstained).
 UNSTATED: Final = object()
@@ -1223,10 +1229,84 @@ class Lift:
 
 
 def _lowered(q: Question) -> tuple[Question, ...]:
-    """The questions a decisions endpoint is asked in `q`'s place."""
+    """The questions a decisions endpoint is asked in `q`'s place. A lowered
+    predicate's id is `f"{q.id}#{index}"`. A rank with no `pointwise` is
+    left as itself: `native_gap` refuses it before anything is built or
+    sent."""
     if isinstance(q, Joint):
         return (q.choice,)
+    if isinstance(q, Rank) and q.pointwise:
+        return tuple(Predicate(f"{q.id}#{n}",
+                               f"{q.pointwise}\n\nCandidate {opt.id}: {opt.description}")
+                     for n, opt in enumerate(q.candidates))
+    if isinstance(q, MultiSelect):
+        return tuple(Predicate(f"{q.id}#{n}",
+                               NATIVE_SELECT_TEXT.format(instructions=q.instructions,
+                                                         id=opt.id,
+                                                         description=opt.description))
+                     for n, opt in enumerate(q.options))
     return (q,)
+
+
+def _marginals(keys: Sequence[str], got: Sequence[Answer]) -> dict[str, float] | None:
+    """Each key's reported P(true), read off its lowered predicate's
+    `Answer` as `native_answer` produced it (never re-thresholded); None when
+    no predicate reported one."""
+    out = {key: a.probability for key, a in zip(keys, got, strict=True)
+           if a.probability is not None}
+    return out or None
+
+
+def _pointwise(got: Sequence[Answer], marginals: dict[str, float] | None,
+               keys: Sequence[str]) -> Answer | None:
+    """The failure a set of lowered predicates reads as, or None when every
+    one reported a usable probability: every one refused is `refused`, and
+    any one without a probability -- refused, unreadable or missing -- is
+    `unreadable`, with the probabilities that were reported riding in
+    `marginals`. A partial order, or a selection with an option unknown, is
+    not what the caller asked for, and the missing place cannot be guessed."""
+    if all(a.reason == "refused" for a in got):
+        return Answer(None, "refused", marginals=marginals)
+    if marginals is None or any(key not in marginals for key in keys):
+        return Answer(None, "unreadable", marginals=marginals)
+    return None
+
+
+def _lift_rank(q: Rank, got: Sequence[Answer]) -> Answer:
+    """A native rank: the candidates in tiers by P(true) under `pointwise`
+    (`tiers`, so only values within `MASS_TIE` tie), `rest` empty -- the
+    endpoint scored every candidate, so `top` holds by construction. A P(true)
+    of exactly 0.5 places its candidate like any other value: `allow_none`
+    has no native trigger, so a native rank never abstains."""
+    keys = [opt.id for opt in q.candidates]
+    marginals = _marginals(keys, got)
+    failed = _pointwise(got, marginals, keys)
+    if failed is not None or marginals is None:
+        return failed or Answer(None, "unreadable")
+    return Answer(Ranking(tiers=tiers({key: marginals[key] for key in keys})),
+                  marginals=marginals)
+
+
+def _lift_select(q: MultiSelect, got: Sequence[Answer]) -> Answer:
+    """A native selection: every option whose predicate answered True, in
+    option order, `marginals` riding. An option at exactly 0.5 (its predicate
+    abstained) cannot be placed: `abstained` with `allow_none`, else
+    `unreadable`, as a native choice keeps a none it was not allowed. A
+    selection outside `min` to `max` is `unreadable`, never repaired by
+    taking the top or padding: a caller that wants top-k by probability reads
+    `marginals` and says so in its own code."""
+    keys = [opt.id for opt in q.options]
+    marginals = _marginals(keys, got)
+    failed = _pointwise(got, marginals, keys)
+    if failed is not None:
+        return failed
+    if any(a.reason == "abstained" for a in got):
+        return Answer(None, "abstained" if q.allow_none else "unreadable",
+                      marginals=marginals)
+    selected = tuple(key for key, a in zip(keys, got, strict=True) if a.answer is True)
+    if not q.min <= len(selected) <= q.most:
+        return Answer(None, "unreadable", marginals=marginals)
+    return Answer(selected, marginals=marginals)
 
 
 def native_form(item: Item) -> tuple[Item, Lift]:
@@ -1234,7 +1314,10 @@ def native_form(item: Item) -> tuple[Item, Lift]:
     reply back (`native_lift`). Neither endpoint has a rank, a selection or a
     joint question, so both adapters send what this lowers them to: a
     predicate, a choice and a score pass through unchanged under their own
-    ids, and a joint becomes its one flattened choice under its id. An item
+    ids; a joint becomes its one flattened choice under its id; and a rank
+    (with `pointwise`) or a selection becomes one predicate per candidate or
+    option, all in the one request, since each question there is answered
+    alone. An item
     of the three plain kinds comes back as itself, so its body is the one it
     always was."""
     parts = tuple((q, _lowered(q)) for q in item.questions)
@@ -1248,13 +1331,22 @@ def native_lift(item: Item, lowered: ItemResult, lift: Lift) -> ItemResult:
     """`lowered`, the reply to `native_form(item)`'s item as the adapter read
     it, as `item`'s own result: each question's answer from the lowered
     questions `lift` names for it -- a joint's flattened choice split back
-    into its `Pair`, the distribution kept by the flattened key -- with the
-    backend and rationale as they were."""
+    into its `Pair`, the distribution kept by the flattened key; a rank's or
+    a selection's predicates read into a `Ranking` or a selection with their
+    `marginals` (`_lift_rank`, `_lift_select`) -- with the backend and
+    rationale as they were."""
     parts = dict(lift.parts)
     answers: dict[str, Answer] = {}
     for q in item.questions:
         got = [lowered.answers.get(qid, _UNREADABLE) for qid in parts.get(q.id, (q.id,))]
-        answers[q.id] = _joint_answer(got[0]) if isinstance(q, Joint) else got[0]
+        if isinstance(q, Joint):
+            answers[q.id] = _joint_answer(got[0])
+        elif isinstance(q, Rank) and q.pointwise:
+            answers[q.id] = _lift_rank(q, got)
+        elif isinstance(q, MultiSelect):
+            answers[q.id] = _lift_select(q, got)
+        else:
+            answers[q.id] = got[0]
     return ItemResult(answers, rationale=lowered.rationale, backend=lowered.backend)
 
 
@@ -1262,16 +1354,15 @@ def native_gap(item: Item) -> str:
     """`""` when a decisions endpoint can carry `item`; otherwise one sentence
     naming what it cannot (ruling 25), which the native call refuses unsent.
     Today that is a choice whose options, with the reserved none, pass
-    `NATIVE_MAX_OPTIONS`, and any rank or selection: no decisions endpoint
-    has either, and their native lowering has not landed (01e-S5). A limit is
-    named here, never met by truncating."""
+    `NATIVE_MAX_OPTIONS` (a joint's flattened choice included); a rank that
+    names no `pointwise` question, which no default wording stands in for;
+    and an item whose lowered question ids collide (`native_form`). It runs
+    on the ORIGINAL item, so each sentence names the caller's question ids.
+    A limit is named here, never met by truncating."""
     for q in item.questions:
-        if isinstance(q, Rank):
-            return (f"Question {q.id} ranks its candidates; a decisions endpoint "
-                    f"cannot order them until the native lowering lands.")
-        if isinstance(q, MultiSelect):
-            return (f"Question {q.id} selects any of its options; a decisions endpoint "
-                    f"cannot carry a selection until the native lowering lands.")
+        if isinstance(q, Rank) and not q.pointwise:
+            return (f"Question {q.id} ranks its candidates and names no pointwise "
+                    f"question; a decisions endpoint cannot order them.")
         choice = q.choice if isinstance(q, Joint) else q
         if isinstance(choice, Choice) and (
                 n := len(native_choice_keys(choice))) > NATIVE_MAX_OPTIONS:
@@ -1281,12 +1372,14 @@ def native_gap(item: Item) -> str:
     # A lowered question's id must be unique in the lowered item: a collision
     # is a native-only problem (a structured stage can still answer the item),
     # so it is refused unsent here rather than by `validate`.
-    seen: set[str] = set()
-    for q in native_form(item)[0].questions:
-        if q.id in seen:
-            return (f"Question id {q.id} is asked twice once the item is lowered for a "
-                    f"decisions endpoint.")
-        seen.add(q.id)
+    owner: dict[str, str] = {}
+    for qid, lows in native_form(item)[1].parts:
+        for low in lows:
+            if low in owner:
+                return (f"Questions {owner[low]} and {qid} are both asked as {low} "
+                        f"once lowered; a decisions endpoint cannot tell their "
+                        f"answers apart.")
+            owner[low] = qid
     return ""
 
 

@@ -1235,3 +1235,119 @@ def test_a_native_joint_keeps_its_distribution_by_flattened_key(provider):
                            JOINT_ITEM).answers["act"]
     assert (stray.reason, stray.detail, stray.stated) == (
         "unreadable", decisions.NOT_AN_OPTION, "heal=>creatures:sentinel")
+
+
+PIER = Option("scenes:pier", "The debt at the pier.")
+LEDGER = Option("scenes:ledger", "The ledger changes hands.")
+TIDE = Option("scenes:tide", "The tide comes in.")
+POINTWISE = "Does this scene hold something the turn must stay consistent with?"
+RANK = decisions.Rank("order", "Order the scenes by relevance.", (PIER, LEDGER, TIDE),
+                      pointwise=POINTWISE)
+SAW = decisions.MultiSelect("saw", "Who saw the ledger change hands?", (MARA, WINIFRED),
+                            allow_none=True)
+
+
+def predicates_reply(provider: str, probabilities: dict[str, float | None],
+                     refused: tuple[str, ...] = ()) -> dict:
+    """A decisions reply answering lowered predicates by id: a probability,
+    or (OpenAI) a refusal for each id in `refused`; an id mapped to None is
+    left out of the reply."""
+    if provider == "openrouter":
+        return {"answers": {qid: {"type": "noul", "noul": p}
+                            for qid, p in probabilities.items() if p is not None}}
+    answers = [{"type": "refusal", "name": qid} if qid in refused
+               else {"type": "predicate", "name": qid, "probability": p}
+               for qid, p in probabilities.items() if p is not None or qid in refused]
+    return {"answers": answers}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_rank_and_a_selection_are_sent_as_lowered_predicates(provider):
+    body_of = decision_body if provider == "openrouter" else openai_compatible.decision_body
+    item = Item(CONTEXT, (OVER, RANK, SAW))
+    sent = body_of(item, MODEL)
+    lowered, _ = decisions.native_form(item)
+    assert sent == body_of(lowered, MODEL)
+    ids = (list(sent["questions"]) if provider == "openrouter"
+           else [q["name"] for q in sent["questions"]])
+    assert ids == ["over", "order#0", "order#1", "order#2", "saw#0", "saw#1"]
+    first = (sent["questions"]["order#0"] if provider == "openrouter"
+             else sent["questions"][1])
+    assert first["instructions"] == f"{POINTWISE}\n\nCandidate scenes:pier: The debt at the pier."
+    assert first["type"] == ("noul" if provider == "openrouter" else "predicate")
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_rank_reads_back_as_tiers(provider):
+    item = Item(CONTEXT, (RANK,))
+    result = read(provider)(predicates_reply(
+        provider, {"order#0": 0.6, "order#1": 0.9, "order#2": 0.6}), item)
+    order = result.answers["order"]
+    assert order.answer == decisions.Ranking(tiers=(("scenes:ledger",),
+                                                    ("scenes:pier", "scenes:tide")))
+    assert order.marginals == {"scenes:pier": 0.6, "scenes:ledger": 0.9, "scenes:tide": 0.6}
+    assert order.distribution is None
+    assert result.backend == "native" and list(result.answers) == ["order"]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_rank_with_a_candidate_missing_is_unreadable(provider, caplog):
+    item = Item(CONTEXT, (RANK,))
+    with caplog.at_level(logging.WARNING, logger="grimoire.decisions"):
+        result = read(provider)(predicates_reply(
+            provider, {"order#0": 0.6, "order#1": None, "order#2": 0.2}), item)
+    assert result.answers["order"] == Answer(
+        None, "unreadable", marginals={"scenes:pier": 0.6, "scenes:tide": 0.2})
+
+
+def test_a_native_rank_all_refused_is_refused():
+    item = Item(CONTEXT, (RANK,))
+    ids = ("order#0", "order#1", "order#2")
+    result = openai_compatible.decision_result(
+        predicates_reply("openai", dict.fromkeys(ids), refused=ids), item)
+    assert result.answers["order"] == Answer(None, "refused")
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_selection_at_a_half(provider):
+    reply = predicates_reply(provider, {"saw#0": 0.5, "saw#1": 0.9})
+    marginals = {"characters:mara": 0.5, "characters:winifred": 0.9}
+    lenient = read(provider)(reply, Item(CONTEXT, (SAW,))).answers["saw"]
+    assert lenient == Answer(None, "abstained", marginals=marginals)
+    strict = replace(SAW, allow_none=False)
+    assert read(provider)(reply, Item(CONTEXT, (strict,))).answers["saw"] == Answer(
+        None, "unreadable", marginals=marginals)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_selection_out_of_bounds_is_not_repaired(provider):
+    reply = predicates_reply(provider, {"saw#0": 0.8, "saw#1": 0.9})
+    capped = replace(SAW, max=1)
+    assert read(provider)(reply, Item(CONTEXT, (capped,))).answers["saw"] == Answer(
+        None, "unreadable", marginals={"characters:mara": 0.8, "characters:winifred": 0.9})
+    assert read(provider)(reply, Item(CONTEXT, (SAW,))).answers["saw"] == Answer(
+        ("characters:mara", "characters:winifred"),
+        marginals={"characters:mara": 0.8, "characters:winifred": 0.9})
+
+
+async def test_a_rank_with_no_pointwise_is_refused_before_any_request():
+    item = Item(CONTEXT, (replace(RANK, pointwise=""),))
+    gap = decisions.native_gap(item)
+    assert "order" in gap and "pointwise" in gap
+    wire = Wire((200, body("answered")))
+    with pytest.raises(LLMError) as exc:
+        await facade(wire).decide_native(item, CONN, {})
+    assert (exc.value.code, exc.value.detail) == ("native_unrepresentable", gap)
+    assert wire.requests == []
+
+
+async def test_a_pointwise_rank_posts_one_request_and_captures_the_lowered_body():
+    item = Item(CONTEXT, (RANK,))
+    wire = Wire((200, predicates_reply("openrouter",
+                                       {"order#0": 0.2, "order#1": 0.7, "order#2": 0.4})))
+    result = await facade(wire).decide_native(item, CONN, {})
+    assert len(wire.requests) == 1
+    assert wire.sent() == decision_body(item, MODEL)
+    assert llm.native_body(item, CONN) == decision_body(item, MODEL)
+    assert result.answers["order"].answer.flat() == ("scenes:ledger", "scenes:tide",
+                                                     "scenes:pier")

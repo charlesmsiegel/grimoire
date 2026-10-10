@@ -1,0 +1,3 @@
+[
+  {"model": "gpt-6-luna", "answers": [{"type": "predicate", "name": "witnesses#0", "probability": 0.93}, {"type": "predicate", "name": "witnesses#1", "probability": 0.5}, {"type": "predicate", "name": "witnesses#2", "probability": 0.88}, {"type": "predicate", "name": "witnesses#3", "probability": 0.02}], "usage": {"input_tokens": 540, "output_tokens": 0, "total_tokens": 540}}
+]

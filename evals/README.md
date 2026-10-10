@@ -183,6 +183,18 @@ backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME 
 
 -- then the same with `--decide-backend structured`. A native-only model
 against a structured one would compare the models as well as the backends.
+
+The vocabulary cases (`decide-rank`, `decide-select`, `decide-joint`) run
+under both values as well, with `--case decide-rank --case decide-select
+--case decide-joint` in place of the list above. Natively a rank is asked as
+one pointwise predicate per scene and a selection as one predicate per
+option, all in the one request, and a joint as its one flattened choice
+(`decisions.native_form`); their `native` recordings replay that lowering
+offline. A native rank is graded on the tiers its probabilities give, so a
+tie between a relevant and an irrelevant scene fails `decide.answer` rather
+than being broken. That pair of runs is the per-type comparison 01a-C3's
+table reports once it lands, and what `MAX_RANK_CANDIDATES` and
+`MAX_SELECT_OPTIONS` are tuned against.
 That comparison is the measurement the later "native first" decision (spec
 16) waits on: the chain serves a model that can generate structured until
 native wins on evals. Like every live run it **costs money**, and is never

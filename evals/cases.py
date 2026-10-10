@@ -2115,7 +2115,13 @@ CASES: tuple[Case, ...] = (
              # A null, which this rank does not allow.
              Recording("null", ("decide.answered", "decide.answer"), "json"),
              # Well formed, and the storm and the market first.
-             Recording("wrong", ("decide.answer",), "json"))),
+             Recording("wrong", ("decide.answer",), "json"),
+             # OpenAI's decisions endpoint, asked one pointwise predicate per
+             # scene in one request (01e-S5) and lifted into tiers by P(true).
+             Recording("native", (), "json", native="openai"),
+             # The storm scored exactly as high as the ledger: one tier holds
+             # a relevant and an irrelevant scene, which is never broken.
+             Recording("native-tied", ("decide.answer",), "json", native="openai"))),
     Case(id="decide-select",
          task="scene-break",
          hypothesis="asked through decide() which of four onlookers saw a purse change "
@@ -2137,7 +2143,14 @@ CASES: tuple[Case, ...] = (
              # A null, which this selection does not allow.
              Recording("null", ("decide.answered", "decide.answer"), "json"),
              # Well formed, and the lamplighter who had his back turned.
-             Recording("wrong", ("decide.answer",), "json"))),
+             Recording("wrong", ("decide.answer",), "json"),
+             # OpenAI's decisions endpoint, one predicate per onlooker,
+             # thresholded at 0.5 in option order.
+             Recording("native", (), "json", native="openai"),
+             # The lamplighter at exactly 0.5: the selection cannot be stated,
+             # and without allow_none that is unreadable, not abstained.
+             Recording("native-half", ("decide.answered", "decide.answer"), "json",
+                       native="openai"))),
     Case(id="decide-joint",
          task="scene-break",
          hypothesis="asked through decide() for Winifred's next action and its target "
@@ -2159,7 +2172,12 @@ CASES: tuple[Case, ...] = (
              # A null, which this joint does not allow.
              Recording("null", ("decide.answered", "decide.answer"), "json"),
              # Well formed, and a strike at the retreating sentinel.
-             Recording("wrong", ("decide.answer",), "json"))),
+             Recording("wrong", ("decide.answer",), "json"),
+             # OpenAI's decisions endpoint, asked the one flattened choice.
+             Recording("native", (), "json", native="openai"),
+             # No choice named: the argmax pair is a strike, whatever the
+             # head-level reading (`head_first`) would say.
+             Recording("native-split", ("decide.answer",), "json", native="openai"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "
