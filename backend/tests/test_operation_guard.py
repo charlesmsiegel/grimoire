@@ -1001,6 +1001,10 @@ def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
             out.append(f"{modname}:{ref.lineno}: decide handed around as a value")
     for call in decide_calls(tree, modname, is_pkg):
         task = _task(call)
+        if task is None and modname == DECISION_TOOL_MODULE and _reads_its_task(call):
+            # The shim's one inner `decide(resolved.task, ...)` (01g spec 3.12):
+            # the caller's literal is checked at `decision_tool(...)`.
+            continue
         if task is None:
             out.append(f"{modname}:{call.lineno}: decide's task is not a string literal")
             continue
@@ -1018,10 +1022,76 @@ def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
     return out
 
 
+#: The decide tool's builder (01g-S7): a `decision_tool(...)` call is a decide
+#: call site whose literal task the caller names, and the module's one inner
+#: `decide(<resolution>.task, ...)` is accepted.
+DECISION_TOOL_MODULE = "grimoire.routes.tool_decision"
+DECISION_TOOL = "decision_tool"
+
+
+def _reads_its_task(call: ast.Call) -> bool:
+    first = call.args[0] if call.args else None
+    return isinstance(first, ast.Attribute) and first.attr == "task"
+
+
+def decision_tool_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.Call]:
+    """Every `decision_tool(...)` call through a binding of its module."""
+    modules, names = bindings(tree, modname, DECISION_TOOL_MODULE, is_pkg=is_pkg)
+    aliases = {local for local, name in names.items() if name == DECISION_TOOL}
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and (
+        (isinstance(n.func, ast.Name) and n.func.id in aliases)
+        or (isinstance(n.func, ast.Attribute) and n.func.attr == DECISION_TOOL
+            and _dotted(n.func.value) in modules))]
+
+
+def decision_tool_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
+                           route_of: Callable[[str], routing.Route | None] = routing.route,
+                           ) -> list[str]:
+    """A `decision_tool(...)` names a literal task on a decide route and
+    passes a resolution (its second argument, or `resolved=`)."""
+    out = []
+    for call in decision_tool_calls(tree, modname, is_pkg):
+        task = _task(call)
+        route = route_of(task) if task is not None else None
+        if route is None or route.operation != "decide":
+            out.append(f"{modname}:{call.lineno}: decision_tool's task is not a literal "
+                       "on a decide route")
+        if len(call.args) < 2 and not any(k.arg == "resolved" for k in call.keywords):
+            out.append(f"{modname}:{call.lineno}: decision_tool passes no resolution")
+    return out
+
+
 def _decided_tasks() -> set[str]:
     return {task for modname, tree, is_pkg in _walk()
-            for call in decide_calls(tree, modname, is_pkg)
+            for call in (*decide_calls(tree, modname, is_pkg),
+                         *decision_tool_calls(tree, modname, is_pkg))
             if (task := _task(call)) is not None}
+
+
+def test_every_decision_tool_names_a_task_on_a_decide_route():
+    found = [p for modname, tree, is_pkg in _walk()
+             for p in decision_tool_problems(tree, modname, is_pkg)]
+    assert not found, "\n  ".join(found)
+
+
+@pytest.mark.parametrize("src", [
+    "from .tool_decision import decision_tool\ndecision_tool('chat', r, c, cid=x)\n",
+    "from .tool_decision import decision_tool\ndecision_tool(task, r, c, cid=x)\n",
+    "from . import tool_decision\ntool_decision.decision_tool('scene-break')\n",
+])
+def test_the_decision_tool_guard_flags_planted_cases(src):
+    assert decision_tool_problems(ast.parse(src), "grimoire.routes.scenes"), src
+
+
+def test_the_decision_tool_guard_passes_a_planted_call_and_the_shims_inner_decide():
+    src = ("from .tool_decision import decision_tool\n"
+           "decision_tool('scene-break', r, c, cid=x)\n")
+    assert decision_tool_problems(ast.parse(src), "grimoire.routes.scenes") == []
+    inner = ("from .. import inference as operations\n"
+             "operations.decide(using.task, [item], client=c, resolved=using)\n")
+    assert decide_problems(ast.parse(inner), DECISION_TOOL_MODULE) == []
+    # Anywhere else, a task read off a resolution is not a literal.
+    assert decide_problems(ast.parse(inner), "grimoire.routes.scenes")
 
 
 def test_every_decide_names_a_task_on_a_decide_route():

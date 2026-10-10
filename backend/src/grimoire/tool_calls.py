@@ -56,7 +56,7 @@ import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from . import schemas
 
@@ -120,15 +120,31 @@ class ToolOutput:
     proposal: dict | None = None
 
 
+class RunView(Protocol):
+    """What a tool may ask of the run it is in (01g-S7): the decide tool
+    takes a decision against the run's `max_decisions`, asks the spend left
+    under its ceiling (None: no ceiling), and charges what its own calls
+    cost as the guard prices them. Nothing it could write the store with."""
+
+    def take_decision(self) -> bool: ...
+
+    def room_usd(self) -> float | None: ...
+
+    def charge(self, usd: float) -> None: ...
+
+
 @dataclass(frozen=True)
 class ToolContext:
-    """What a tool may know: ids, its deadline and the pinned store root --
-    and nothing it could write with."""
+    """What a tool may know: ids, its deadline, the pinned store root, the
+    loop turn that asked, and a view of the run's budget -- and nothing it
+    could write with."""
     campaign: str
     scene_identity: str
     run_id: str
     deadline: float
     root: str
+    turn: int = 0
+    run: RunView | None = None
 
 
 class ToolError(Exception):
