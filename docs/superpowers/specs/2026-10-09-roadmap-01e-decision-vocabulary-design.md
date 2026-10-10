@@ -152,6 +152,7 @@ class Ranking:
 class Pair:
     head: str
     tail: str | None   # None for a head that takes no tail
+    # .key: the flattened spelling (section 6.2), the one key a pair has
 ```
 
 **Why value objects rather than nested tuples.** A ranking with ties and a
@@ -361,6 +362,21 @@ plus `n` candidate descriptions (01 Appendix B: decisions bill input tokens
 only). Its ledger row is a native decision row, so it is never modelled
 (`usage.Rates.estimate`, CLAUDE.md "`modelled_usd` is never computed for a
 native decision row").
+
+### 4.4 The caller's rule
+
+A caller does not need to know in advance whether a native endpoint "supports
+`Rank`": none does, and the lowering is the support. What a caller must do:
+
+- **Always set `pointwise`** on a `Rank` that may meet a native Decision
+  model (`resolved.decision_mode == "native"`, or a native stage behind a
+  structured primary). Without it, every native attempt is refused unsent, and
+  with no structured stage behind it every rerank fails
+  `native_unrepresentable`.
+- **Never rely on a native `Rank` abstaining.** `allow_none` has no native
+  trigger (section 4.3). A caller that needs "cannot order these" asks a
+  separate `Predicate` beside the rank.
+- **Read ties through `Ranking.tiers`**, never a silent flatten.
 
 ## 5. 01e-C2: a finer Score, with ties explicit
 
@@ -722,19 +738,20 @@ refused unsent.
 `backend/tests/test_decisions.py`:
 
 - **`validate`**: each new bound refused (candidate and option counts, `top`,
-  `min`/`max`, `JOINT_SEP` in an id, aliases on a joint, a `tails` key naming
-  no head, too many flattened pairs).
+  `min`/`max` including `max=0`, `JOINT_SEP` in an id, aliases on a joint, a
+  `tails` key naming no head or naming one head twice, too many flattened
+  pairs).
 - **`schema`**: rank and select render as an array of an enum, nullable as
   `anyOf`; a joint renders as a flat enum. `schema_chars` and `enum_values`
   count the new enums.
 - **`parse`**, per type:
   - exact, aliased and normalised entries;
-  - an unknown entry gives `NOT_AN_OPTION` with `stated`;
+  - an unknown entry gives `NOT_AN_OPTION`, with no `stated`;
   - a duplicate gives `unreadable` with no detail, and `was_read` is true;
   - too short a reply gives `unreadable`;
   - null with and without `allow_none`;
   - the empty selection is `()`, not None;
-  - a joint reply splits into a `Pair`.
+  - a joint reply splits into a `Pair`, and `split_joint(pair.key) == pair`.
 - **`tiers`**: exact ties, ties within `MASS_TIE`, the greedy anchor rule
   (three values each just inside tolerance of the next do not collapse into
   one tier), and integer levels.
@@ -742,7 +759,14 @@ refused unsent.
 - **`expected`**: computed over the reported mass; set on an abstained
   (tied) answer; absent on a structured answer and without a distribution;
   never taken from a provider `score` field.
-- **`chunks`** splits on the enum budget with large joints.
+- **`chunks`** splits on the enum budget with large joints: three
+  255-pair joints fit a chunk, a fourth opens the next. `enum_values` counts
+  each new type.
+- **`outcome` and `render`**: a `Pair` is written as its key, never as a
+  two-element list; a selection as a list; a tied `Ranking` renders `null`.
+- **Prompts**: `verify_templates.py` renders today's `_DECIDE_ITEMS`
+  byte-identically (no new bullet), and a second set with each new kind
+  renders its bullet.
 
 `backend/tests/test_native_decisions.py`, for both providers:
 
@@ -750,9 +774,10 @@ refused unsent.
   `pointwise`) and a select, and the flattened choice for a joint.
 - Lifting canned bodies: a rank with a candidate missing gives `unreadable`
   with `marginals`; all refused (OpenAI) gives `refused`; equal P(true) gives
-  one tier; 0.5 on a select gives `abstained`; a select outside bounds gives
+  one tier; 0.5 on a select gives `abstained` with `allow_none` and
+  `unreadable` (marginals kept) without it; a select outside bounds gives
   `unreadable` and is not repaired; a joint's distribution is kept by
-  flattened key and `head_first` regroups it.
+  flattened key, and `head_first` regroups it with `NONE_KEY` excluded.
 - `native_gap` names a rank with no `pointwise`, and a lowered-id collision.
 
 `backend/tests/test_inference_decide_native.py`:
@@ -805,3 +830,46 @@ are byte-identical. The decide gate and `test_decide_chain_golden.py` are unchan
 5. **01c and marginals.** 01c-C2's sampler must refuse `marginals` (01e-C4)
    and any answer whose `distribution` is None (01c-C4). Recommendation: 01c
    cites 01e-C4 and refuses any answer to a `Rank` or `MultiSelect`.
+
+## 14. Review record
+
+Substitute adversarial review, 2026-10-10 (Codex gate still pending). Each
+finding was checked against the code at `35c1fb7`.
+
+- **B1 (blocking), fixed.** `Joint` cannot cover multi-target actions or
+  legal sets past the choice cap, and 13's hard edge on C3b had nothing to
+  stand on. Required by now says exactly what 13 needs: C3a (hard) for
+  multi-target, nothing from 01e for a legal set past 254 (a `Choice` of
+  action, then a `Choice` or a `MultiSelect` of its targets), and C3b soft.
+  The C3b contract states both limits. **Routed:** the checklist edge becomes
+  `13 ← 01e-C3a (H for multi-target)`, with `01e-C3b (S)`. 13 sections 24.3
+  and the `LegalOption.multi` note must answer `multi` with the two-step
+  shape, not with `Joint`.
+- **S1, fixed.** A native select at 0.5 is `abstained` only with
+  `allow_none`, and `unreadable` otherwise (sections 6.1, 9, 11).
+- **S2, fixed.** `Pair.key`, `joint_key` and `split_joint` are the one
+  spelling. `head_first` works on the key, `NONE_KEY` is excluded, and
+  `outcome`/`render` write a pair as its key. **Routed to 01d:** a `Joint`
+  answer is filtered by its key, and the filter does not apply to `Rank` or
+  `MultiSelect`. **Routed to 01c:** a draw and its replay record use the key.
+- **S3, fixed.** The new system-prompt bullets render only when the batch
+  holds that kind, and the existing decide renders are asserted
+  byte-identical.
+- **S4, fixed.** Section 4.4 states the caller's rule. The 09 row now says 09
+  uses `Rank` and `tiers`, and `expected` only if it chooses to. **Routed to
+  09:** section 7.3 must set `pointwise`, must not expect a native rank to
+  abstain, and must not describe `Score` as "fine levels" (levels stay 2 to
+  10; the finer signal is `expected`).
+- **S5, routed.** Add `01e-C4 (S)` to the checklist's `01c ←` edge.
+- **M1, fixed.** A structured rank sets no `stated`, as a structured choice
+  sets none.
+- **M2, fixed.** `max=0` means zero.
+- **M3, fixed.** A head listed twice in `tails` is refused.
+- **M4, fixed.** A chunk holds three 255-pair joints, not four.
+- **M5, kept, routed.** `JOINT_SEP` stays `"=>"`: it is ASCII, and contains
+  no space or hyphen that `normalise` would rewrite. 13 section 24.3's `→`
+  spelling should become `Pair.key` (`=>`), so one legal pair has one key.
+- **M6, fixed.** `enum_values` needs a branch per new type, with a test.
+- **M7, fixed.** `KIND` is a `ClassVar`.
+- **M8, fixed.** The native lift reads each lowered predicate's `Answer`, and
+  never re-thresholds a raw probability.

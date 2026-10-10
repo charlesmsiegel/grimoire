@@ -1,6 +1,6 @@
 # 01h. Embedding options, async embed, embedding evals
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01h in `ROADMAP-CHECKLIST.md`. Lane: retrieval (feeds 03, 05, 08, 09).
 **Baseline:** `main` at `35c1fb7`.
@@ -40,6 +40,26 @@ field to land in until 01g-C3 does. Only C6 waits for 01a (hard).
 | 01h-C4a, 01h-C4b | 09 (hard for the turn path) | Retrieval on the turn path without blocking the event loop |
 | 01h-C2 | (no named consumer) | Smaller vectors for a larger corpus, at the user's choice |
 | 01h-C6 | 09 (09-C4), and every change of C1/C2 defaults | Evidence that an option, a model or a retrieval change helps |
+
+**The consumer-facing API, exactly** (S6 of the review; 05, 08 and 09 should
+match it):
+
+- **There is no `input_type` keyword.** Documents are the default: omit
+  `queries` (it defaults to 0). A query is marked by putting it first and
+  passing `queries=1` (or N). `embed_groups_sync` embeds documents only.
+- **The document key is `embed_space.endpoint()["space"]`**, unchanged by
+  C1 landing. It moves only when a user states document-side options
+  (section 5.1). Landing 01h re-embeds nothing.
+- **Sync callers** (any worker thread or CLI) call `embed_sync(task, texts, *,
+  space, client: embeddings.EmbeddingsClient, ...)` with their own module
+  client. **Async callers** call `await embed(task, texts, *, space, client:
+  embeddings.AsyncEmbeddingsClient, ...)` with the app's client from
+  `routes.get_embeddings`. A sync client is never awaited and an async one
+  is never handed to `embed_sync`.
+- **Round trips.** In `none` and `prefix` modes a query plus a warm run is
+  one request per `BATCH`. In `param` mode the query and the documents are
+  separate requests (section 3.4), so "one round trip per retrieval" holds
+  only outside `param` mode.
 
 ## 1. Current state (reconciled against main)
 
@@ -185,19 +205,47 @@ fact in `<home>/llm_connections/<id>.facts.json`, under the model:
 - They are written through `facts.state(..., embedding=...)`: `None` leaves
   them, `{}` removes them, and anything else replaces them after
   `_check_embedding`. The validation:
-  - field names match `^[a-z_][a-z0-9_.]{0,40}$`;
+  - field names match `^[a-z_][a-z0-9_]{0,40}$`. A field name is a literal
+    top-level key of the request body, never a nested path, which is why `.`
+    is not allowed;
   - field names are not in the reserved set `model`, `input`,
     `encoding_format`, `user`, and are not each other;
-  - prefixes and values are at most 200 characters, with no control
-    characters;
+  - prefixes and values are at most 200 characters. `\n` and `\t` are
+    allowed, because published query instructions use a newline (section
+    3.5). Every other C0 or C1 control character, NUL included, is refused;
   - `prefix` has at least one non-empty prefix;
   - `param` has a field and both values;
-  - `1 <= dimensions <= embeddings.MAX_DIMS`.
+  - `dimensions` is a JSON integer (a `bool` or a float such as `512.0` is
+    refused, so two spellings can never be two spaces), with
+    `1 <= dimensions <= embeddings.MAX_DIMS`;
+  - a key the block does not define is ignored, and is not kept by a write
+    from this build. A newer build that adds a key sends something this build
+    does not, so the two builds compute different spaces from what each
+    sends. The invariant in section 3.3 holds either way.
 
   A failed check is a 400 before anything is written.
-- `facts.of` reads the block through the same check. **A block that fails
-  validation reads as no options, as a whole.** It never reads as a mix of
-  valid fields. `GET .../facts` flags it as `embedding_invalid`.
+- **The Embedding role reads the block strictly** (review S1).
+  - An **absent** block, or an absent facts file, means default options.
+  - A facts file that **exists and cannot be read** (`facts.of(...,
+    strict=True)` raising `FactsUnreadableError`, for example a sync client
+    holding it) means `embed_attempt` names **no space**. Embedding is off
+    for that call. That is the precedent `embed_space.endpoint` already sets
+    for an unreadable provider file (`embed_space.py:71-74`).
+  - A block that is **present and fails validation** also names no space,
+    until it is fixed.
+
+  Reading either as default would be a silent, unconfirmed move. It would
+  warm documents into the option-less space, and a continuity sweep in that
+  window would persist the base space in its basis (`reconcile.py:864`) and
+  re-salt every identity hash (`reconcile.py:679`), so the next sweep would
+  rescore every ref. Today the space depends on the connection record alone
+  (`facts._load` turns any read failure into `{}`, `facts.py:63-73`). C3
+  makes it depend on a facts read, so the read must fail closed.
+
+  The Embedding card's `problem` says "Embedding options could not be read"
+  or "Embedding options are invalid". `GET .../facts` flags the block as
+  `embedding_invalid`. A strict read is taken only for the Embedding
+  resolution: chat targets keep `_read_facts`'s fail-soft read.
 - Below format 2 the facts route already answers 409 `not_migrated`
   (`routes/config.py:1677-1700`). So a legacy store never has options, and its
   space ids cannot move.
@@ -217,16 +265,18 @@ options to `space_of` (section 5). `embed_space.endpoint_of` adds `"options":
 target.embed_options or EmbedOptions()` to its dict.
 
 **The one invariant C1 to C3 rest on: the request is built from the same
-`EmbedOptions` object the space id was computed from.** Whatever a read
-yields, including a mangled block read as default, what is sent and where it
-is cached agree.
+`EmbedOptions` object the space id was computed from.** What is sent and where
+it is cached always agree, and a read that cannot be trusted embeds nothing
+(section 3.2).
 
 ### 3.4 The operation and the client
 
 `embed_sync(..., queries: int = 0)` says that the first `queries` texts are
 query-side and the rest are documents. Every current call site already puts
 its query first (`[query_text, *missing]`). Recall, search and art pass
-`queries=1`, including on their query-only retries. Continuity passes `0`.
+`queries=1`. Recall and search also pass it on their query-only retries. Art
+has no retry (`art.py:569-579`). Continuity passes `0`. A `queries` greater
+than `len(texts)`, or negative, raises `ValueError` before anything is sent.
 
 The client's `embed` gains `options: EmbedOptions | None = None` and
 `queries: int = 0`. The model-test probe (`routes/config.py:1203`) passes the
@@ -253,15 +303,43 @@ them.
   meter covers the whole call, as it already does across batches. The extra
   round trip is stated on the Embedding card.
 - **`dimensions`**: `<dimensions_field>: n` is added to every request body.
-  Every returned vector must be `n` wide. If one is not, the client raises
-  `EmbeddingsError("bad_response", ..., code="dimensions_mismatch")`. This is
-  an endpoint that silently ignores unknown fields (common among
-  OpenAI-compatible servers). Storing its native-width vectors under a space
-  that claims `n` would be honest only until it started honouring the field.
-  The error is filed like any other: kind and status only.
+  Every returned vector must be `n` wide. If one is not, this is an endpoint
+  that silently ignores unknown fields (common among OpenAI-compatible
+  servers). Storing its native-width vectors under a space that claims `n`
+  would be honest only until it started honouring the field.
+  - The client raises `EmbeddingsError("missing_key", ...,
+    code="dimensions_mismatch")`, carrying the width that came back as
+    `exc.returned_dims`.
+  - `missing_key` is the kind for "configured, but not usably", the redirect
+    precedent (`embeddings.py:509-529`). No caller retries it: recall and
+    search do not retry the query alone (`semantic.py:363-370`), and C5
+    stops its run. With `bad_response`, every turn would bill a second
+    request and file a second error row, forever (review S2).
+  - `record_failure` files the `code` beside kind and status. A code is a
+    fixed token, never provider text, so the error store and the Embedding
+    card can say "this endpoint ignores `dimensions`".
+- **A 4xx on a request that carried an option field stays `bad_response`.**
+  The client cannot tell an option the server refuses from a document it
+  refuses. So recall and search may still retry the query alone, which also
+  fails. That costs at most two requests per turn, both filed. It is
+  accepted, because reclassifying would stop a document's fault from being
+  retried. A confirmed test call surfaces the refusal before the user relies
+  on the option (section 4.4).
+- **A deadline between `param`'s requests** fails the whole call. Recall's
+  query-only retry then finds the deadline spent (`NOT_SENT`), so the query
+  vector already paid for is lost for that turn. This is accepted and
+  stated, not engineered around.
 
 `estimate_prompt` counts what was sent, prefixes included. The capture line's
 `bytes` counts the bytes sent.
+
+**NUL never reaches a key or a request.** `embed_sync`, `embed` and
+`vectors._path` remove `\0` from a text before keying and sending it. A
+NUL-free text, which is every real one, keys exactly as today. A text that
+contained NUL keys as its NUL-free form, which providers would have refused
+anyway. Without this, the NUL-joined key `sha256(space\0text)` is not
+injective: a document text that begins `embopt1:<digest>\0` would key like a
+document in the options space (review M2).
 
 ### 3.5 What providers accept (to verify at plan time)
 
@@ -292,12 +370,13 @@ entries; check each against its model card when the plan is written:
 | nomic-embed-text v1 / v1.5 | `search_query: ` | `search_document: ` |
 | E5 (e5-*-v2, multilingual-e5) | `query: ` | `passage: ` |
 | BGE en v1.5, mxbai-embed-large-v1 | `Represent this sentence for searching relevant passages: ` | (none) |
-| Qwen3-Embedding | `Instruct: <task>\nQuery: ` | (none) |
+| Qwen3-Embedding | `Instruct: Given a passage of a story, retrieve the lore, records or images it concerns\nQuery: ` (Suggest fills a concrete task sentence; `<task>` is never stored literally) | (none) |
 | EmbeddingGemma | `task: search result \| query: ` | `title: none \| text: ` |
 
 Behaviour for an unknown field is covered both ways. A server that refuses it
-gets a 4xx, which is `bad_response`. A server that ignores it gets the
-dimensions check, while an ignored input type is undetectable and harmless:
+gets a 4xx, which is `bad_response` (section 3.4). A server that ignores
+`dimensions` fails the dimensions check as `missing_key`. An ignored input
+type is undetectable and harmless:
 the vectors are what the model made of that text.
 
 ## 4. Confirm before spend, and the UI
@@ -312,6 +391,11 @@ from "turns the Embedding role on" to "moves the Embedding role to a new
 vector space". The rule stays the one CLAUDE.md states: the 400 is decided
 inside the hold that writes (`facts.state`'s `guard`).
 
+- **A query-side-only change is not a move**, and asks nothing (review
+  S5). The space digests document-side options only (section 5.1), and a
+  query vector is always embedded fresh under the current options. So
+  setting a BGE-style query instruction, or editing `param`'s
+  `query_value`, re-embeds nothing, and nothing is asked.
 - Moving **back** to no options is a move too. The option-less vectors may
   still be cached, because nothing prunes them (`vectors.py:61-66`). Knowing
   whether they are would mean scanning the cache, which the guard has no
@@ -335,9 +419,10 @@ passed test may lift.
 |---|---|
 | Options write for the role's model without `confirm_embedding: true` | 400 `confirm_embedding`, nothing written |
 | Invalid options body | 400, nothing written |
-| Mangled block on disk | Reads as no options, and GET flags `embedding_invalid`. Requests and space agree, so nothing mixes |
-| Endpoint ignores `dimensions` | Every call fails `dimensions_mismatch`, callers degrade to keyword, and the error store shows the kind |
-| Endpoint refuses the field | 4xx, `bad_response`, same degradation |
+| Invalid block on disk | No space: embedding is off, and the card and GET say why. Nothing mixes and nothing moves |
+| Facts file exists but cannot be read | No space for that call, so embedding is off and callers degrade. The base space is never used in its place |
+| Endpoint ignores `dimensions` | `missing_key`/`dimensions_mismatch`, not retried. Callers degrade to keyword with one error row per call, and the code names the cause |
+| Endpoint refuses the field | 4xx, `bad_response`, degrade. Recall and search may retry the query alone once per turn (section 3.4) |
 
 ### 4.4 Where the user sees and edits them
 
@@ -353,9 +438,14 @@ passed test may lift.
   "two requests per recall" when the mode is `param`. The line comes from a
   new `EmbeddingCard.options` field (the canonical dict, or null). Nothing is
   editable on `/models/edit`, which fits 01s's form unchanged.
-- The test call dialog's `embed` probe result already returns `dims`
-  (`routes/config.py:1214`). The panel shows "requested 512, test returned
-  1536: this endpoint ignores `dimensions`" when they differ.
+- The test call dialog's `embed` probe sends the stated options
+  (section 3.4).
+  - On success it returns `dims` as today (`routes/config.py:1214`).
+  - On `dimensions_mismatch` the probe is a **failed** `embed` probe, which
+    is `unknown` and never `no`. Its verdict carries `requested_dims` and
+    `returned_dims` from the exception (S3).
+  - The panel then shows "requested 512, test returned 1536: this endpoint
+    ignores `dimensions`".
 
 ## 5. Space identity (C3)
 
@@ -369,22 +459,38 @@ def space_of(conn: dict, model: str, options: EmbedOptions | None = None) -> str
     return f"{base}\0embopt1:{sha256(options.canonical())[:32]}"
 ```
 
-`canonical()` is JSON with sorted keys, `separators=(",", ":")` and
-`ensure_ascii=True`, holding only the fields that **change what is sent**:
+`canonical()` is the **document side** only (review S5). A cached vector
+depends only on what was sent for documents. A query is never cached and is
+always embedded fresh under the current options. So query-side fields
+(`query_prefix`, `query_value`) do not enter the space. Moving them would
+re-embed every document into bytes identical to the ones already cached.
 
-- `input` and its two prefixes or field and values, when the mode is not
-  `none` and it sends something;
-- `dimensions` and `dimensions_field`, when `dimensions` is set.
+Its exact shape, which two devices must compute alike:
 
-So `prefix` with two empty prefixes, or a stray `dimensions_field` with no
-`dimensions`, canonicalises to `{}`, which is the default. The identity
-follows what is sent and nothing else.
+- It is a JSON object with sorted keys, `separators=(",", ":")` and
+  `ensure_ascii=True`.
+- It holds at most these keys:
+  - `"doc_prefix": <document_prefix>`, present only when the mode is `prefix`
+    and the document prefix is non-empty;
+  - `"field": <param_field>` and `"doc_value": <document_value>`, both
+    present only when the mode is `param`;
+  - `"dim": <dimensions>` (an integer) and `"dim_field": <dimensions_field>`,
+    both present only when `dimensions` is set.
+- No other key appears, and an empty or absent value is never written.
+
+So a `prefix` mode whose document prefix is empty (the BGE case), a stray
+`dimensions_field` with no `dimensions`, and any query-side-only setting all
+canonicalise to `{}`, which is the default. The identity follows what is sent
+for documents and nothing else. The golden test pins this exact text for
+representative sets.
 
 - **The digest, not the JSON, goes in the space.** The space string is logged
   as the capture line's `space_id` (`embed.py:223`) and persisted in the
   continuity basis (`reconcile.py:864`). A digest keeps both short. It keeps
   user-typed prefix text out of the log, and a raw `\0` can never come from
-  inside the options. 128 bits make a collision irrelevant.
+  inside the options. 128 bits make a digest collision irrelevant. The
+  NUL-joined key is injective because NUL is removed from every embedded text
+  (section 3.4).
 - **`embopt1` versions the encoding.** A future change to `canonical()` must
   take a new tag deliberately. A golden test pins representative space ids,
   and it is never regenerated to make a change pass (the
@@ -407,21 +513,17 @@ follows what is sent and nothing else.
   `ROADMAP-CHECKLIST.md`), so the NUL bytes a space id carries never reach its
   SQLite column, and an options change is a new digest there too.
 
-### 5.3 Document vectors only, and a rule for query vectors
+### 5.3 Document vectors only
 
-`vectors.py` caches **document-side** vectors under the space id. No path
-caches a query vector today, and none is added here: under 01h-C1 a query
-vector is never cached. Should a later spec ever change that by its own
-contract, the key it must use is fixed now so it cannot collide:
-
-```python
-def cache_space(space: str, options: EmbedOptions, side: Literal["query", "document"]) -> str
-```
-
-It returns `space` for a document, or for any side when `options.input ==
-"none"`. In that mode a query vector **is** a document vector of the same
-text, so sharing the key is correct. Otherwise it returns `space + "\0query"`
-for a query.
+`vectors.py` caches **document-side** vectors under the space id. Under
+01h-C1 a query vector is **never cached**, and is compared only with document
+vectors read under the same space it was embedded in. An earlier draft fixed
+a `space + "\0query"` key for later use. It is withdrawn (review M2): a
+NUL-joined side tag is not injective against document text without further
+care, and no caller needs it. A later spec that wants cached query vectors
+defines its key by its own contract. That key must be injective (for example
+length-prefixed fields), and must include the query-side options this space
+id leaves out.
 
 ## 6. Async embed (C4a, C4b)
 
@@ -431,17 +533,38 @@ for a query.
    `run_in_threadpool` around `compose_opener` and `_record_prompt`. That
    moves its recall, its art ranking and its whole store read off the loop.
    The per-speaker loop and the frames it yields are unchanged.
-2. **A runtime guard in `embed_sync`.** If `asyncio.get_running_loop()`
-   succeeds in the calling thread, the call is on a loop thread.
-   `asyncio.get_running_loop()` raises in a worker, an anyio portal thread and
-   a CLI. On a loop thread, `embed_sync` raises
-   `EmbeddingsError("network", "embedding refused on the event loop",
-   code=ON_LOOP)` before any meter opens, and writes one ERROR log row (task
-   only). `network` is the kind every caller already treats as "the endpoint
-   is unavailable, do not retry" (`semantic.py:363-370`), so the turn
-   degrades to keyword rather than freezing every other request for up to
-   `TIMEOUT + READ_SLICE`. A static guard cannot catch this: the opener
-   reaches `embed_sync` six frames down, through sync code.
+2. **A runtime guard in `embed_sync`, scoped to the app's loop** (review
+   S7).
+   - `runner.install` (`runner.py:122-136`) already runs on the lifespan loop
+     and takes `threading.get_ident()` as `loop_thread`. It also registers
+     that id with `store.inference.embed.mark_app_loop(ident)`, and the
+     lifespan's exit unregisters it. It is a set, because tests build an app
+     per test.
+   - `embed_sync` refuses only when `threading.get_ident()` is a registered
+     app loop thread. This uses `runner._PortalEvent`'s own
+     thread-identity test (`runner.py:98-106`), not "is any loop running".
+   - Not refused:
+     - a worker thread;
+     - a CLI, including 05's `cache sync`;
+     - a thread that calls *through* a portal;
+     - a private loop such as the one `evals/runner.py:348-358` runs each
+       live case in. That loop serves nothing else, so blocking it blocks no
+       one.
+   - A sync function `portal.call`ed onto the app loop does run on it, and
+     is refused.
+   - The guard runs **after** the empty-input early return. An empty call
+     returns `[]` wherever it is made. It runs **before** any meter opens.
+   - On the app loop, `embed_sync` raises `EmbeddingsError("network",
+     "embedding refused on the event loop", code=ON_LOOP)` and writes one
+     ERROR log row (task and code only). `network` is the kind every caller
+     already treats as "the endpoint is unavailable, do not retry"
+     (`semantic.py:363-370`). So the turn degrades to keyword rather than
+     freezing every other request for up to `TIMEOUT + READ_SLICE`.
+   - That error row is a **named exception** to CLAUDE.md's "a call that
+     sends nothing files nothing": it records a programming error, not a
+     call. The CLAUDE.md edit (section 10) says so (review M1).
+   - A static guard cannot catch this. The opener reaches `embed_sync` six
+     frames down, through sync code.
 
 ### 6.2 A native async door (C4b)
 
@@ -450,7 +573,8 @@ for a query.
 ```python
 async def embed(task, texts, *, space, client: embeddings.AsyncEmbeddingsClient,
                 deadline=None, budgeted=False, campaign="", scene="",
-                cached=None, uncached=None, queries=0) -> list[list[float]]
+                cached=None, uncached=None, queries=0,
+                run_id="") -> list[list[float]]
 ```
 
 It has the same validation, meter, `_stamp`, `record_failure`, NOT_SENT and
@@ -463,9 +587,13 @@ helpers both doors call, so the two cannot drift.
   the transport loop differs. The **whole call** runs under one
   `asyncio.timeout(deadline - now)`. That closes the header-drip hole
   `embeddings.py:28-38` names, which the sync client cannot close.
-- **Cancellation.** A cancel mid-request runs `_Spend.lose()` if a batch was
-  in flight, files the meter `aborted` and re-raises. The capture line says
-  `error: "aborted"`. A cancel is never an error row.
+- **Cancellation (C4b callers only).** A cancel mid-request runs
+  `_Spend.lose()` if a batch was in flight, files the meter `aborted` and
+  re-raises. The capture line says `error: "aborted"`. A cancel is never an
+  error row. An `embed_sync` in a worker cannot be cancelled
+  (`run_in_threadpool`, `routes/streaming.py:139`). That covers every current
+  caller, and the opener once C4a moves it. Its request finishes after a run
+  is cancelled, and files an ordinary row.
 - **One client per app.** It is built in the lifespan and closed at shutdown,
   as the LLM clients are (#215). Callers reach it through a
   `routes.get_embeddings` dependency, whose override is the test seam. It is
@@ -496,8 +624,9 @@ class EmbedGroup:
 
 def attribute(claims: Iterable[tuple[str, str]]) -> list[EmbedGroup]
 def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
-                      deadline=None, budgeted=False,
-                      run_id: str = "") -> list[GroupResult]
+                      deadline=None, budgeted=False, run_id: str = "",
+                      cached: int | None = None,
+                      uncached: int | None = None) -> list[GroupResult]
 # GroupResult: vectors (in the group's text order) or None, and error kind or ""
 ```
 
@@ -505,15 +634,26 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   one campaign goes to that campaign's group. A text claimed by several, or by
   none (world-scoped), goes to the unattributed `""` group, embedded once.
   Charging it to whichever campaign sorted first would put one campaign's
-  spend in another's total. Groups are ordered by campaign id with `""` last,
-  and texts by first claim. The result is deterministic.
+  spend in another's total. Groups are ordered with the unattributed `""`
+  group **first**, then by campaign id, and texts by first claim. The result
+  is deterministic. Shared texts go first because they serve several
+  campaigns: a run that is cut short should not always starve them (review
+  M5).
+- **Groups embed documents only.** There is no `queries` keyword: a query
+  belongs to a turn, which is one campaign's and uses `embed_sync`.
+- **Unattributed spend counts toward no campaign's `usage.budget`.** Like
+  library-wide search's rows, it appears in the global Costs totals only.
+  Where 05 shows a sync's cost, it says so (review M6).
 - **`embed_groups_sync`** makes one `embed_sync` call per group, under one
-  shared deadline. That gives one ledger row and one capture line per group,
+  shared deadline. With `deadline=None` that deadline is
+  `time.monotonic() + embeddings.TIMEOUT`, taken once at entry and handed to
+  every group's call. It is never a fresh `TIMEOUT` per group, which would
+  make N groups N times 30s. That gives one ledger row and one capture line per group,
   and no request ever mixes campaigns. The cost is at most one extra request
   per group boundary, compared with perfect packing.
 - **Failure.** `bad_response` (the input's fault) fails its group and the next
-  group still runs. Any other kind (`auth`, `missing_key`, `rate_limit`,
-  `network`, a deadline) stops the run. Every later group comes back with
+  group still runs. Any other kind (`auth`, `missing_key` including
+  `dimensions_mismatch`, `rate_limit`, `network`, a deadline) stops the run. Every later group comes back with
   `error="not_sent"` and files nothing (01's "nothing sent, nothing filed").
   This is the same split `semantic._embed` makes (`semantic.py:363-370`). The
   caller saves what landed, as `similarity.embed_missing` does per chunk
@@ -573,6 +713,16 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
     tokens.
   - `--embed-options <json>` (repeatable) runs the same corpus under each
     option set in memory, without writing facts. That is the C1/C2 A/B.
+    - Each set is validated as a facts write would be.
+    - Its endpoint dict's `space` is recomputed with `space_of(conn, model,
+      opts)`, so capture lines and rows of different sets never share a
+      `space_id` (review M7).
+    - Recording files are named by model and option digest
+      (`<model-slug>-<digest or "none">.json`), never by connection id.
+  - Live cases call `embed_sync` outside any coroutine, or `await embed(...)`.
+    The C4a guard refuses only the app's loop thread, so the eval's private
+    `asyncio.run` loop is not refused. The rule still keeps the harness from
+    looking like a provider outage if the guard is ever widened.
   - Rows are filed in the case's isolate, which is 01a-C2's eval scope, and
     harvested into the report before it is deleted; they never reach the
     library's ledger. Each carries the real embed task of its shape, so
@@ -587,8 +737,11 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
 ## 9. Contract
 
 - **01h-C1, input type.**
-  - `embed_sync`/`embed`/`embed_groups_sync(..., queries: int)` mark the
-    first `queries` texts as queries.
+  - `embed_sync`/`embed(..., queries: int = 0)` mark the first `queries`
+    texts as queries. `queries` outside `0..len(texts)` is a `ValueError`.
+    `embed_groups_sync` embeds documents only.
+  - Documents need no keyword, and there is no `input_type` keyword. The
+    document key is `embed_space.endpoint()["space"]`.
   - With the space's stated `input` mode, the request carries the type as a
     prefix (any batch) or as `param_field` (one type per request, under one
     meter).
@@ -599,27 +752,35 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
 - **01h-C2, dimensions.**
   - A stated `dimensions` is sent as `dimensions_field`.
   - Every returned vector must be that wide, or the call fails
-    `bad_response`/`dimensions_mismatch` and the caller degrades.
+    `missing_key`/`dimensions_mismatch`. That is never retried, the caller
+    degrades, and the error carries `returned_dims`.
   - There is no local truncation.
 - **01h-C3, identity.**
-  - `space_of(conn, model, options)` is today's string when the options are
-    default, and `base + "\0embopt1:" + digest(canonical)` otherwise.
-  - Options come only from stated facts.
+  - `space_of(conn, model, options)` is today's string when the
+    document-side canonical form (section 5.1) is `{}`, and `base +
+    "\0embopt1:" + digest(canonical)` otherwise.
+  - Options come only from stated facts. The role reads them strictly: an
+    unreadable facts file or an invalid block names no space.
+  - NUL is removed from embedded text.
   - The request is built from the object the space was computed from.
   - Vectors are keyed `sha256(space\0text)`, independent of `BUILD`.
-  - Query vectors, if ever cached, use `cache_space` (5.3).
-  - A change of the role's options is a confirmed move.
+  - A change of the role's document-side options is a confirmed move. A
+    query-side-only change moves nothing and asks nothing.
 - **01h-C4a, no embedding on the event loop.**
   - The opener's compose runs in `run_in_threadpool`.
-  - Nothing calls `embed_sync` on a loop thread. The runtime guard refuses it
-    as `network`/`on_loop`, so the caller degrades, and logs one error row.
+  - Nothing calls `embed_sync` on the app's lifespan loop thread. The
+    runtime guard refuses it there (registered by `runner.install`) as
+    `network`/`on_loop`, so the caller degrades, and logs one error row.
+    Private loops and every other thread are not refused.
 - **01h-C4b, native async embed.**
   - `await embed(...)` is native async: one total deadline, cancellable (a
-    cancel files `aborted`), metered and captured as `embed_sync` is.
+    cancel files `aborted`), metered and captured as `embed_sync` is, with
+    the same keywords including `queries` and `run_id`.
   - Async callers get the client from `routes.get_embeddings`.
 - **01h-C5, attribution.**
   - `attribute(claims)` plus `embed_groups_sync(groups)` give one row per
-    group, and no request spans groups.
+    group, and no request spans groups. One deadline covers the run, and the
+    unattributed group goes first.
   - A text shared by several campaigns is unattributed.
   - An endpoint-wide failure stops the run, and the rest is `not_sent` and
     files nothing.
@@ -669,12 +830,21 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   - No new dependency is added. In particular there is no numpy: the eval
     computes cosines in pure Python.
 - **Detached runs.** The opener stays a `draft`-class run, and only where its
-  compose runs changes. The async client is per app. A cancel of a detached
-  run that is mid-embed files `aborted`.
+  compose runs changes. The async client is per app. Only a C4b caller's
+  embed is cancelled mid-request (and files `aborted`). The opener's compose,
+  once in a worker, completes its embed after a cancel and files an ordinary
+  row.
 - **CLAUDE.md.** The embedding paragraph ("There is one door, `embed_sync`")
   is updated in the same PR. It should list three doors (`embed_sync`,
-  `embed`, `embed_groups_sync`) in one module, the loop guard, and options as
+  `embed`, `embed_groups_sync`) in one module, the loop guard and its named
+  exception to "a call that sends nothing files nothing", and options as
   stated facts in the space. `facts_moved`'s docstring is corrected.
+- **`docs/store-guarantees.md`** gains a note (review M8). An older build
+  sharing the store ignores the `embedding` block and computes the base
+  space. Devices on both builds that take turns running continuity sweeps
+  therefore flip the basis each time, and every ref rescores. This is
+  harmless to correctness, because each build's requests match its own
+  space, but it costs work until every device is upgraded.
 
 ## 11. Tests and acceptance
 
@@ -682,8 +852,11 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   - `space_of(conn, m)` and `space_of(conn, m, EmbedOptions())` equal
     `"id\0rev\0m"`.
   - `vectors._path` for a fixed text is pinned to today's digest.
-  - Canonically empty options (empty prefixes, a lone `dimensions_field`)
-    are default.
+  - Canonically empty options (empty prefixes, a lone `dimensions_field`,
+    a query-only prefix) are default.
+  - The exact canonical JSON text is pinned for representative sets.
+  - `dimensions` as `512.0` or `true` is refused.
+  - A text containing NUL keys as its NUL-free form.
   - Representative option sets pin their `embopt1` ids.
 - **No re-embed on upgrade.** A store whose vectors were written by today's
   code, with no facts block, reads every vector after the change (load hits,
@@ -693,20 +866,30 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   - `prefix` gives prefixed inputs, one request.
   - `param` gives the query request then the document request, one meter
     row, and vectors in input order.
-  - `dimensions` adds the field. A wrong width is `dimensions_mismatch`, with
-    an error row carrying kind and status only.
+  - `dimensions` adds the field. A wrong width is
+    `missing_key`/`dimensions_mismatch` with `returned_dims`, and the error
+    row carries kind, status and code only.
+  - Recall with a width-ignoring endpoint sends **one** request per turn,
+    with no query-only retry.
 - **Facts.**
   - Validation refusals are 400 and write nothing.
-  - A mangled block reads as default and is flagged.
+  - An invalid block names no space. The card says why, and no request is
+    sent.
+  - An unreadable facts file (a held file) with options stated sends no
+    request, and leaves the continuity basis space unchanged.
+  - A Qwen-style prefix with `\n` saves.
+  - A query-side-only change asks nothing.
   - An options write on the role's model without confirm is 400
     `confirm_embedding`, and with confirm it writes.
   - An options write on another model asks nothing.
   - Moving back to none still asks.
   - A format-1 store answers 409 `not_migrated`.
 - **Loop guard.**
-  - `embed_sync` called inside `asyncio.run` raises `on_loop`, files no
-    usage row, and writes one error log row.
-  - From `run_in_threadpool` it is fine.
+  - `embed_sync` called on a registered app loop thread raises `on_loop`,
+    files no usage row, and writes one error log row.
+  - From `run_in_threadpool`, a CLI and a private `asyncio.run` loop, it is
+    fine.
+  - An empty input returns `[]` even on the app loop.
   - An opener with recall and art configured completes with recall applied
     and no `on_loop` row (the fix is live).
 - **Async door.**
@@ -722,11 +905,13 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   - One row per group, with the right `campaign`.
   - `bad_response` in group 2 still runs group 3.
   - `rate_limit` in group 2 leaves group 3 `not_sent` with no row.
+  - `deadline=None` gives one deadline for all groups.
+  - The `""` group is sent first.
   - No request body mixes groups.
 - **Evals.** Replay grades recorded rankings. The MockTransport case passes
   under `pytest backend`. The graders flag a planted ranking that misses.
 - **Probe.** The model test of a model with options sends them and returns
-  `dims`.
+  `dims`. A mismatch is a failed probe (`unknown`) carrying both widths.
 - **Frontend.**
   - `ModelFactsPanel` shows the options section only for an embedding-capable
     model.
@@ -761,7 +946,8 @@ embedding request it would not have issued before.
    per-campaign figures nobody reported. *Recommend unattributed.*
 3. **Loop-guard behaviour.** Degrade with an error row (recommended), or raise
    a hard error that fails the turn. *Recommend degrade.* A hard error turns
-   a latency bug into a lost turn.
+   a latency bug into a lost turn. It is scoped to the app's loop thread
+   either way.
 4. **Native async client now, or keep `to_thread`.** The native client closes
    a documented hole and makes cancel real. It has no caller until 09.
    *Recommend native now*, because 09's plan should not also carry a
@@ -776,3 +962,48 @@ embedding request it would not have issued before.
    `ROADMAP-CHECKLIST.md` makes 03's `materialized` vector kind
    `vector:<projection>:<space-digest>`, so the NUL bytes in a space id never
    reach 03's column. Nothing is left to decide here.
+
+## 14. Review record
+
+**Substitute spec gate (adversarial review, 0 blocking, 8 should-fix, 10
+minor).** Every finding was checked against the code.
+
+Changed:
+
+- **S1.** The Embedding role reads its options strictly. An unreadable facts
+  file or an invalid block names no space, instead of silently reading as
+  default (3.2, 4.3).
+- **S2.** `dimensions_mismatch` is `missing_key` (the redirect precedent).
+  It is not retried, C5 stops on it, and its code is recorded. A 4xx on an
+  option field stays `bad_response`, with the cost stated (3.4).
+- **S3.** The mismatch carries `returned_dims`. The probe reports a failed
+  `embed` probe (`unknown`) with both widths (4.4).
+- **S4.** `\n` and `\t` are allowed in prefixes. The Qwen suggestion fills
+  a concrete task sentence (3.2, 3.5).
+- **S5.** The space digests document-side options only, so a query-side
+  change neither moves the space nor asks (4.1, 5.1).
+- **S6.** The consumer-facing API is stated exactly under Required by. The
+  mismatches in 05, 08 and 09 are left to the coordinator.
+- **S7.** The guard is scoped to the app's loop thread
+  (`runner.install`), the portal wording is corrected, and the eval
+  harness's rule is stated (6.1, 8).
+- **S8.** Cancellation is scoped to C4b callers (6.2, 10).
+- **M1.** The guard runs after the empty-input return. Its error row is a
+  named exception that the CLAUDE.md edit records.
+- **M2.** NUL is removed from embedded text, and `cache_space` is
+  withdrawn.
+- **M3.** Validation now pins an integer `dimensions`, literal field names
+  with no `.`, unknown keys ignored, and the exact canonical JSON.
+- **M4.** The signatures now carry `run_id`, `queries`, `cached` and
+  `uncached` where the contract says. Groups embed documents only, and a
+  `queries` outside range is a `ValueError`.
+- **M5.** One deadline covers a C5 run, and the unattributed group goes
+  first.
+- **M6.** Unattributed spend is stated to count toward no campaign's budget.
+- **M7.** `--embed-options` recomputes the space, and recordings are named
+  by model and option digest.
+- **M8.** A note for `docs/store-guarantees.md` about mixed builds.
+- **M9.** The `param` mid-call deadline loss is stated.
+- **M10.** Art has no query-only retry.
+
+Rejected: none.

@@ -889,8 +889,10 @@ prompt (section 17.4).
 ### 9.2 What the model is shown
 
 `group_snapshot(cid)` becomes `group_snapshot(cid, cast=())`, called with
-`facts["cast"]` at `routes/scenes.py:3089`. For each listed group, when at
-least one present actor is in its `affiliated` set, the line gains one segment:
+`facts["cast"]` at `routes/scenes.py:3089`. It reads affiliations from
+`membership.campaign_index(cid)`, so section 7.6's detached rule holds here
+too. For each listed group, when at least one present actor is in its
+`affiliated` set, the line gains one segment:
 
 ```
 - groups/salt-circle (Salt Circle): Goals: ... | Members here: Mara (characters/mara)
@@ -906,9 +908,11 @@ least one present actor is in its `affiliated` set, the line gains one segment:
   members therefore produces a byte-identical context block.
 - gm-only groups stay out (`snapshots.py:97-104`), and so does their
   membership.
-- A leader present but not a member is named as `Seraphine (characters/seraphine,
-  leader)`: a leader's membership is unrecorded by design (section 4.4), and
-  telling the model they lead keeps it from proposing they "join".
+- A present leader is named once, as `Seraphine (characters/seraphine,
+  leader)`, whether or not `members` also lists them. Telling the model they
+  lead keeps it from proposing a leader-only affiliate "join"; a leader who is
+  also listed gets no second entry. Order: the leader first, then members in
+  stored order.
 
 ### 9.3 Parsing and staging
 
@@ -935,8 +939,12 @@ not exist (`materializer.py:877-878`):
   dropped. A group created by a `new_lore` row in the same reply does not exist
   yet and is dropped (section 19, Q5).
 - `actor` normalizes `characters/<id>` to `characters:<id>`
-  (`continuity.canon.actor_ref`'s rule) and must exist through the overlay
-  (`materializer._actor_exists`, `:96-111`); otherwise dropped.
+  (`continuity.canon.actor_ref`'s rule), must be `characters:<id>` or
+  `pcs:<id>` with `entity_schema.referenceable(id)`, and must exist through the
+  overlay (`materializer._actor_exists`, `:96-111`); otherwise dropped.
+  Existence alone is not enough: an imported actor whose id holds a comma
+  exists, and writing its ref would store a line that reads back as two refs
+  (`entity_schema.py:172-211`).
 - A `join` for an actor already in `members`, or a `leave` for one not in it,
   is dropped: its before equals its after, and the materializer stages no
   no-op anywhere else either.
@@ -951,7 +959,7 @@ The staged edit:
  "kind": "membership",
  "target": {"kind": "groups", "id": "salt-circle"},
  "label": "Salt Circle -- Mara joins",
- "field": "members",
+ "field": "members:characters:mara",
  "before": "not a member", "after": "member",
  "authored": False,
  "payload": {"group": "salt-circle", "actor": "characters:mara", "change": "join"}}
@@ -966,23 +974,40 @@ about it is a claim, which is exactly how the existing tiers already read.
 two rows on one group independent (section 9.4) and is why the kind is not
 `MERGEABLE` (`conflicts.py:98-105`).
 
+`field` is per actor, `members:<actor ref>`, not the bare `members`. Provenance
+is keyed `<kind>/<id>#<field>` (`store/provenance.py:43-61`), and the save
+upserts a citation per key (`absorb/apply.py:844-847`): with a shared `field`,
+"Mara joins" and "Winifred leaves" saved together would overwrite each other's
+citation, and undoing one would `provenance.forget` the other's
+(`undo.py:620-631`). Nothing else reads `field` as a frontmatter key for this
+kind: the apply branch writes `members` by name.
+
 ### 9.4 Applying
 
 `apply._apply_one` gains a `membership` branch, under the campaign lock the
 chronicle save already holds across the whole batch:
 
+0. **Shape, before any read.** The row comes off the `PUT /chronicle` body,
+   which is validated only as "a dict" (the reason the dossier and voice-drift
+   branches re-guard their rows). `payload.actor` must be `characters:<id>` or
+   `pcs:<id>` with a `referenceable` id, `payload.change` must be `join` or
+   `leave`, and `target.kind` must be `groups` with a `safe_id` id equal to
+   `payload.group`; otherwise `skipped`, as a forged or corrupt row is today.
+   This is the boundary `routes.entities._check_fields` would have applied,
+   which `overlay.update_entity` does not.
 1. Read the group through the overlay; gone -> `failed`, "that group no longer
    exists in this campaign".
 2. For a `join`, the actor must still exist (`_actor_exists`); gone ->
    `failed`, "that character no longer exists in this campaign". A `leave`
    does not check: removing a dangling ref is legitimate cleanup.
-3. Re-read `members`, apply the **delta** (append the actor for a join, remove
-   every occurrence for a leave), and write
-   `overlay.update_entity(cid, "groups", gid, fields={"members": new_line})`.
-   An empty `new_line` removes the key (`entities.update_entity`'s rule,
+3. Re-read the raw `members` value and write
+   `membership.edited_line(raw, actor, change)` (section 4.3) with
+   `overlay.update_entity(cid, "groups", gid, fields={"members": line})`.
+   Every token the change does not touch, a legacy name included, is kept.
+   An empty `line` removes the key (`entities.update_entity`'s rule,
    `:254-258`).
-4. Already in the desired state (step 3 would write the same line) ->
-   `skipped`, nothing written.
+4. Already in the desired state (`edited_line` returns the raw line unchanged
+   as tokens) -> `skipped`, nothing written.
 
 **Why a delta and not the staged `after`.** Two approved rows on one group
 ("Mara joins", "Winifred leaves") were staged against the same `before`.
@@ -998,17 +1023,23 @@ here is permission").
 
 ### 9.5 Conflicts, journal, undo
 
-- **Conflict.** `conflicts._REASONS["membership"] = "this person's membership
-  in this group changed since the scene was absorbed"`; `current_value` reads
-  the actor's status ("member" / "not a member", or None if the group will not
-  read); `target_key` is `("membership", gid, actor)`. A stored status that
-  already equals `after` is **not** a conflict: the edit already holds, and
-  step 4 skips it. That needs one small addition to `survey`
-  (`conflicts.py:414-451`): a kind in a new `SETTLED_WHEN_AFTER =
-  frozenset({"membership"})` returns no conflict when `stored == after`. For
-  every other kind nothing changes.
+- **Conflict reading.** `current_value` reads the actor's status ("member" /
+  "not a member", or None if the group will not read), and `target_key` is
+  `("membership", gid, actor)`. A stored status that equals `after` is not a
+  conflict: the edit already holds, and step 4 skips it. That needs one small
+  addition to `survey` (`conflicts.py:414-451`): a kind in a new
+  `SETTLED_WHEN_AFTER = frozenset({"membership"})` returns no conflict when
+  `stored == after`. For every other kind nothing changes.
+  **The status is binary, so a membership row never reaches the reviewer as a
+  conflict**: the stored value always equals `before` (no drift) or `after`
+  (settled). The `_REASONS["membership"]` entry ("this person's membership in
+  this group changed since the scene was absorbed") exists because
+  `target_key` covers exactly the kinds in `_REASONS`
+  (`test_every_judged_kind_has_a_target_key`), and the reading is what a
+  resumed commit's `_outside_drift` compares against. Nothing should be
+  written expecting the sentence to be shown.
 - **Journal.** Recorded as kind `membership`, `ref {"kind": "groups", "id":
-  gid}`, field `members`, label as staged. It is not in
+  gid}`, field `members:<actor ref>`, label as staged. It is not in
   `changes.BROWSABLE_KINDS` (that log is for bodies, `changes.py:20-27`).
 - **Undo.** A new descriptor in `undo.probe`:
   `{"w": "membership", "kind": "groups", "id": gid, "actor": ref}`.
@@ -1018,8 +1049,16 @@ here is permission").
   if Mara's own membership moved since, not because Winifred's did. The
   generic `entity_fields` descriptor (`undo.py:298-304`, `:355-358`) would
   restore the whole line and refuse whenever any member changed; it stays for
-  the editor's adopt path, which writes whole keys. A restore never
-  de-materializes the group (the module's stated limit, `undo.py:53-60`).
+  the editor's adopt path and for hand edits (section 6.4), which write whole
+  lines. A restore uses `edited_line`, so it too keeps every other token, and
+  never de-materializes the group (the module's stated limit,
+  `undo.py:53-60`). Undo clears only this row's citation, because the key is
+  per actor (section 9.3).
+- **Older builds sharing the store.** An older build asked to undo a
+  `{"w": "membership"}` entry raises the base `UndoError` from `read_value`,
+  which `post_journal_undo` does not map (`routes/campaigns.py:1305-1315`), so
+  the older build answers 500. This is the pre-existing cost of any new writer
+  tag in a synced store; it is named here, not fixed.
 
 ### 9.6 The review panel
 
@@ -1034,6 +1073,9 @@ kind union in `api/types.ts` gains `"membership"`.
 
 - Change `leader` (section 19, Q5).
 - Record members on a group it creates in the same review (Q5).
+- Propose a change for an actor who is not on the `Present:` line. A scene
+  that reports an absent member's expulsion ("word came that Seraphine had been
+  cast out") cannot be proposed; the reviewer records it in the editor.
 - Infer membership from prose already on disk. Absorb reads a scene, not the
   library.
 
