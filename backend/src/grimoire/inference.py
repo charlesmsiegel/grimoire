@@ -78,6 +78,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
@@ -102,7 +103,7 @@ from . import (
 from .llm import LLMClient
 from .llm_errors import LLMError
 from .store.inference import probes, resolve
-from .store.inference.resolved import ResolvedInference
+from .store.inference.resolved import Attempt, ResolvedInference
 
 log = logging.getLogger(__name__)
 
@@ -1647,6 +1648,99 @@ TurnCapture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
 _LOOPING: weakref.WeakSet[asyncio.Task] = weakref.WeakSet()
 
 
+@dataclass(frozen=True)
+class Price:
+    """What one attempt costs per token, as the spend guard prices it (spec
+    3.9): its catalog's per-token prices (`basis` "catalog"), or the user's
+    rates entry (`basis` "rates", priced by `pricing.estimate`)."""
+    basis: Literal["catalog", "rates"]
+    prompt: float = 0.0
+    completion: float = 0.0
+    entry: dict | None = None
+
+
+def price_for(attempt: Attempt) -> Price | None:
+    """`attempt`'s price, in the model-test preview's order: its cached
+    catalog row's per-token prices (a stated 0 is a free model), else -- only
+    for a provider that does not report its own price -- the user's rates
+    (`pricing.rate_for_call`: the model's own, then `pricing.json`), else None
+    (unpriceable). For a provider that reports its price the ledger never
+    prices its calls from the user's rates, so a `"": 0` default meant for
+    local models must not project a billed turn at nothing. Reads the store:
+    run it off the event loop."""
+    row = store.llm_connections.cached_row(attempt.provider_id, attempt.model)
+    if isinstance(row, dict):
+        prompt, completion = probes._rate(row.get("prompt")), probes._rate(row.get("completion"))
+        if prompt is not None and completion is not None:
+            return Price("catalog", prompt=prompt, completion=completion)
+    preset = store.inference.providers.PRESETS.get(attempt.provider_preset)
+    if preset is not None and preset.reports_price:
+        return None
+    entry = store.pricing.rate_for_call(store.pricing.read_pricing(),
+                                        store.pricing.provider_rates(),
+                                        provider_id=attempt.provider_id, model=attempt.model)
+    if entry is None or store.pricing.estimate(entry, prompt_tokens=1,
+                                               completion_tokens=1) is None:
+        return None
+    return Price("rates", entry=entry)
+
+
+def prices_for(resolved: ResolvedInference) -> dict[tuple[str, str], Price | None]:
+    """Every attempt's `price_for`, keyed by `(provider_id, model)` -- both
+    the attempt's and the model its target sends. Reads the store."""
+    out: dict[tuple[str, str], Price | None] = {}
+    for attempt in resolved.attempts:
+        price = price_for(attempt)
+        out[(attempt.provider_id, attempt.model)] = price
+        out[(attempt.target.provider_id, attempt.target.model)] = price
+    return out
+
+
+def _cost(price: Price | None, prompt: float, completion: float) -> float | None:
+    """`prompt` and `completion` tokens at `price`, or None unpriced."""
+    if price is None:
+        return None
+    if price.basis == "catalog":
+        return prompt * price.prompt + completion * price.completion
+    return store.pricing.estimate(price.entry, prompt_tokens=math.ceil(prompt),
+                                  completion_tokens=math.ceil(completion))
+
+
+def _prompt_count(messages: list[dict], defs: Sequence[dict]) -> int:
+    """`messages` and `defs` counted as the guard counts a prompt
+    (`tokens.count_if_loaded`, which never starts an encoder load)."""
+    text = "\n".join([json.dumps(m, ensure_ascii=False, default=str) for m in messages]
+                     + [json.dumps(d, ensure_ascii=False) for d in defs])
+    return store.tokens.count_if_loaded(text)
+
+
+def tool_run_refusal(task: str, resolved: ResolvedInference, budget: tool_calls.RunBudget,
+                     prices: dict[tuple[str, str], Price | None] | None = None
+                     ) -> tool_calls.RunRefused | None:
+    """Why a tool run on `resolved` would be refused before anything is sent
+    (spec 3.9), or None: with a spend ceiling, an attempt with no price this
+    side knows (`price_for`) or whose output cap is not sent (`cap_sent`:
+    without it the completion has no bound). The same check `run_tools`
+    makes at entry, as a preflight a `def` route runs BEFORE it reserves, so
+    an unpriceable run is a 409 rather than a 202 that fails. `prices`, when
+    not given, are read from the store."""
+    if budget.spend_ceiling_usd is None:
+        return None
+    chain = call_chain(resolved, max_tokens=budget.max_output_tokens)
+    known = prices if prices is not None else prices_for(resolved)
+    for target in chain.attempts:
+        name = f"{target.model} on {target.label}"
+        if known.get((target.provider_id, target.model)) is None:
+            return tool_calls.RunRefused(
+                "unpriceable", f"{task}: {name} has no price this side knows -- set rates "
+                               "for it, or run without a spend ceiling")
+        if not cap_sent(target):
+            return tool_calls.RunRefused(
+                "unpriceable", f"{task}: {name} cannot be sent an output cap, so a turn "
+                               "has no price bound -- run without a spend ceiling")
+    return None
+
+
 class _WallSpentError(LLMError):
     """The run's own wall clock ran out while a turn was in flight: a budget
     stop, not a failure, so the turn's meter files `aborted`."""
@@ -1731,7 +1825,9 @@ class _Loop:
                  resolved: ResolvedInference, budget: tool_calls.RunBudget, run_id: str,
                  attribution: dict, scene_identity: str,
                  cancelled: Callable[[], bool] | None, final_schema: dict | None,
-                 tool_choice: str, capture: TurnCapture | None):
+                 tool_choice: str, capture: TurnCapture | None,
+                 prices: dict[tuple[str, str], Price | None] | None = None):
+        prices = prices or {}
         self.task, self.base, self.toolset, self.execute = task, messages, toolset, execute
         self.client, self.resolved, self.budget, self.run_id = client, resolved, budget, run_id
         self.attribution, self.scene_identity = attribution, scene_identity
@@ -1751,6 +1847,14 @@ class _Loop:
         self.t0 = time.monotonic()
         self._hist: list[dict] | None = None
         self._hist_len = 0
+        #: The spend axis (01g-S5): each attempt's price, read at entry, each
+        #: sent turn's `(projection, row)`, and the prompt count the next
+        #: projection builds on.
+        self.prices = prices
+        self.spends: list[tuple[float, dict | None]] = []
+        self.last_prompt: float | None = None
+        self.next_prompt = 0.0
+        self.sent_len = 0
 
     # ---- the run ----
     async def events(self) -> AsyncGenerator[tool_calls.LoopEvent, None]:
@@ -1787,6 +1891,8 @@ class _Loop:
             return self._result("failed", error=LLMError(
                 "bad_response", "the store moved during the run", code="store_moved"))
         turn = await self._turn(final=False)
+        if turn is None:
+            return await self._finalize_or_stop()
         if isinstance(turn, tool_calls.LoopResult):
             return turn
         return await self._settle(turn)
@@ -1828,6 +1934,8 @@ class _Loop:
         note = await asyncio.to_thread(partial(finalize_message, self.final_schema,
                                                stopped=stopped))
         turn = await self._turn(final=True, extra=note)
+        if turn is None:
+            return self._result("budget_exhausted")
         if isinstance(turn, tool_calls.LoopResult):
             return turn
         status: Literal["completed", "budget_exhausted", "failed"] = (
@@ -1885,17 +1993,26 @@ class _Loop:
 
     # ---- one model turn ----
     async def _turn(self, *, final: bool, extra: dict | None = None
-                    ) -> _Turn | tool_calls.LoopResult:
-        k = self.turns = self.turns + 1
+                    ) -> _Turn | tool_calls.LoopResult | None:
+        """One model turn, or None when the spend ceiling refused it unsent
+        (`limit` says `spend`)."""
         chain, notes = self._chain(final)
         choice = "none" if final else self._choice(chain, notes)
         sending = self._outgoing(extra)
+        projection = await self._projected(chain, sending, extra)
+        if projection is not None and self._spent() + projection > (
+                self.budget.spend_ceiling_usd or 0.0):
+            self.limit = self.limit or "spend"
+            return None
+        k = self.turns = self.turns + 1
         if extra is not None:
             self.appended.append(extra)
+        self.sent_len = len(self.appended)
         collector = tool_calls.Collector()
         started = time.monotonic()
         try:
-            text, holder = await self._metered(k, chain, sending, choice, collector, final)
+            text, holder = await self._metered(k, chain, sending, choice, collector, final,
+                                               projection)
         except _WallSpentError:
             self._trace(k, "model", ok=False, note="wall", started=started)
             self.limit = "wall"
@@ -1905,6 +2022,12 @@ class _Loop:
             if k == 1:
                 raise
             return self._result("failed", error=exc)
+        return await self._settled_turn(k, text, holder, collector, final, notes, sending,
+                                        started)
+
+    async def _settled_turn(self, k: int, text: str, holder: dict,
+                            collector: tool_calls.Collector, final: bool, notes: list[str],
+                            sending: list[dict], started: float) -> _Turn:
         target = holder.get(llm.ATTEMPTED)
         target = target if isinstance(target, wire.Target) else None
         calls = tuple(self._named(c) for c in collector.calls()) if not final else ()
@@ -1921,6 +2044,62 @@ class _Loop:
                                                  interstitial=bool(calls)))
         return turn
 
+    # ---- the spend ceiling (01g-S5; spec 3.9) ----
+    async def _projected(self, chain: wire.Chain, sending: list[dict],
+                         extra: dict | None) -> float | None:
+        """What the next send could cost, as the guard prices it: None with no
+        ceiling. Prompt tokens are counted in a worker thread with the margin
+        -- the whole prompt on the first send, else what was appended since
+        the last, on top of that send's reported (else projected) count --
+        and the completion is the turn's cap; the maximum over the attempts
+        that could serve it."""
+        if self.budget.spend_ceiling_usd is None:
+            return None
+        if self.last_prompt is None:
+            counted = await asyncio.to_thread(_prompt_count, list(sending), self.defs)
+            prompt = counted * tool_calls.PROJECTION_MARGIN
+        else:
+            fresh = [*self.appended[self.sent_len:], *([extra] if extra is not None else [])]
+            counted = await asyncio.to_thread(_prompt_count, fresh, ())
+            prompt = self.last_prompt + counted * tool_calls.PROJECTION_MARGIN
+        self.next_prompt = prompt
+        costs = [_cost(self.prices.get((t.provider_id, t.model)), prompt,
+                       clamp_to_max_output(t, self.budget.max_output_tokens))
+                 for t in chain.attempts]
+        known = [c for c in costs if c is not None]
+        # Every attempt was priced at entry (`tool_run_refusal`); one that
+        # still is not counts as the dearest known, never as free.
+        return max(known) if known else float("inf")
+
+    def _spent(self) -> float:
+        """Every sent turn's cost as the guard prices it: its row's counts at
+        its attempt's price, else that turn's projection. Never a reported
+        figure (`cost_usd`) -- the guard keeps one unit."""
+        total = 0.0
+        for projection, row in self.spends:
+            cost = self._row_cost(row)
+            total += cost if cost is not None else projection
+        return total
+
+    def _row_cost(self, row: dict | None) -> float | None:
+        if not isinstance(row, dict):
+            return None
+        prompt, completion = row.get("prompt_tokens"), row.get("completion_tokens")
+        if not (isinstance(prompt, int) and isinstance(completion, int)):
+            return None
+        provider = row.get("provider_id", "")
+        price = (self.prices.get((provider, row.get("requested_model", "")))
+                 or self.prices.get((provider, row.get("model", ""))))
+        return _cost(price, prompt, completion)
+
+    def _note_spend(self, projection: float | None, row: dict | None) -> None:
+        if projection is None:
+            return
+        self.spends.append((projection, row))
+        prompt = row.get("prompt_tokens") if isinstance(row, dict) else None
+        self.last_prompt = (float(prompt) if isinstance(prompt, int)
+                            and not isinstance(prompt, bool) else self.next_prompt)
+
     def _turn_seconds(self) -> tuple[float | None, bool]:
         """This turn's wait (spec 3.9, joined): `min(llm_call_budget, wall
         left)`, either absent at `<= 0`, and whether the run's wall is the
@@ -1931,7 +2110,8 @@ class _Loop:
         return left, left is not None
 
     async def _metered(self, k: int, chain: wire.Chain, sending: list[dict], choice: str,
-                       collector: tool_calls.Collector, final: bool) -> tuple[str, dict]:
+                       collector: tool_calls.Collector, final: bool,
+                       projection: float | None = None) -> tuple[str, dict]:
         """One turn through the facade, under its own meter carrying the run
         id and the turn (01g-C3), bounded by `_turn_seconds`."""
         schema = self.final_schema if final else None
@@ -1968,6 +2148,7 @@ class _Loop:
         finally:
             if meter.row is not None:
                 self.rows.append(meter.row)
+            self._note_spend(projection, meter.row)
         return text, m.usage
 
     def _note_overrun(self, holder: dict, chain: wire.Chain, error: LLMError) -> None:
@@ -2238,17 +2419,30 @@ async def run_tools(task: str, messages: list[dict], *, toolset: tool_calls.Tool
     `final_schema`, the answer is read and checked against it, with one
     finalize turn for one that does not conform.
 
-    Raises only for invalid input (`ValueError`, before any meter opens), an
-    `LLMError` on turn 1, and cancellation -- `cancelled()` returning True
+    With `budget.spend_ceiling_usd` (01g-S5), each send is projected first
+    (`price_for`; a guard, never accounting) and refused when it would carry
+    the run past the ceiling; a chain with an unpriceable attempt is
+    `tool_calls.RunRefused("unpriceable")` before anything is sent
+    (`tool_run_refusal`, which a route runs before it reserves).
+
+    Raises only for invalid input (`ValueError`, before any meter opens),
+    `RunRefused`, an `LLMError` on turn 1, and cancellation -- `cancelled()` returning True
     included, as `asyncio.CancelledError`. Every later failure is a `failed`
     result with the rows filed so far."""
     _loop_refusal(task, messages, toolset, resolved, run_id, final_schema, tool_choice)
+    prices: dict[tuple[str, str], Price | None] = {}
+    if budget.spend_ceiling_usd is not None:
+        prices = await asyncio.to_thread(prices_for, resolved)
+        refused = tool_run_refusal(task, resolved, budget, prices)
+        if refused is not None:
+            raise refused
     loop = _Loop(task, messages, toolset=toolset, execute=execute, client=client,
                  resolved=resolved, budget=budget, run_id=run_id,
                  attribution={"campaign": campaign, "scene": scene, "post": post,
                               "round_id": round_id, "response_id": response_id},
                  scene_identity=scene_identity, cancelled=cancelled,
-                 final_schema=final_schema, tool_choice=tool_choice, capture=capture)
+                 final_schema=final_schema, tool_choice=tool_choice, capture=capture,
+                 prices=prices)
     current = asyncio.current_task()
     if current is not None:
         _LOOPING.add(current)

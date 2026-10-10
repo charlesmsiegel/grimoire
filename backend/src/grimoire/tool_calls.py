@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import re
 import threading
 from collections.abc import Awaitable, Callable
@@ -760,6 +761,12 @@ TOOL_FAILED = "the tool failed"
 TIMED_OUT = "timed out"
 CAPACITY = "tool capacity exhausted"
 
+#: How far a counted prompt is scaled up before it is priced (spec 3.9): a
+#: local count is not an upper bound -- chars/4 under-counts CJK text, and a
+#: cl100k-style encoder under-counts Claude's tokenizer. Structural; to be
+#: tuned against real runs.
+PROJECTION_MARGIN = 1.5
+
 #: A tool-call id every provider accepts (spec 3.11).
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -780,8 +787,16 @@ class RunBudget:
     max_output_tokens: int = 2048
     max_result_chars_total: int = 48_000
     reserve_final: bool = True
+    #: The most a run's projected spend may reach, in USD (01g-S5); None is
+    #: no spend axis. A projection, never accounting (`inference.price_for`).
+    spend_ceiling_usd: float | None = None
 
     def __post_init__(self) -> None:
+        ceiling = self.spend_ceiling_usd
+        if ceiling is not None and (isinstance(ceiling, bool)
+                                    or not isinstance(ceiling, (int, float))
+                                    or not math.isfinite(ceiling) or ceiling < 0):
+            raise ValueError("RunBudget.spend_ceiling_usd is a finite amount of at least 0")
         for name in ("max_turns", "max_tool_calls", "max_output_tokens",
                      "max_result_chars_total"):
             if not _positive_int(getattr(self, name)):
