@@ -145,7 +145,8 @@ class Ranking:
     tiers: tuple[tuple[str, ...], ...]   # best first; members of a tier are tied
     rest: tuple[str, ...] = ()           # candidates the answer did not rank, input order
 
-    def flat(self, tiebreak: Callable[[str], object] | None = None) -> tuple[str, ...]: ...
+    def flat(self, tiebreak: Callable[[str], object] | None = None, *,
+             rest: bool = False) -> tuple[str, ...]: ...   # rest: append it as one bottom group
     def position(self, candidate: str) -> int | None: ...  # tier index; None for rest
 
 @dataclass(frozen=True)
@@ -160,7 +161,10 @@ flat order are different facts. A bare `tuple[tuple[str, ...], ...]` invites
 a caller to flatten it by input order without noticing, and that is exactly
 the silent tie-break 01e-C2 exists to prevent. `Ranking.flat` takes the
 tie-break as an argument, so whoever flattens must choose one. With no
-tie-break, `flat` raises `ValueError` on a tier of more than one.
+tie-break, `flat` raises `ValueError` on a tier of more than one. `rest` is
+left out unless `rest=True` asks for it, and then it follows as one bottom
+group under the same rule (implementation note, 01e-S2: the unranked set has
+no order, so appending it in input order would be the same silent tie-break).
 
 **Why a multi-select answers in option order.** A set has no order the model
 can be trusted to mean. Mechanics II fans a target effect out "in selection
@@ -669,7 +673,7 @@ with.
 - **Needs (other specs):** none
 - **Needs (slices):** none
 - **Scope:** `decisions.py` only. `Answer` gains `marginals` and `expected`, both checked in `__post_init__`. `native_answer` sets `expected` from a valid score distribution, normalised by the reported mass and riding on an abstained answer. `tiers(values, tolerance=MASS_TIE)` is added, with the greedy top anchor. `outcome` writes the two new fields under `_present`'s rule. No adapter, template or call site changes, and no existing answer changes.
-- **Acceptance:** section 11's `tiers` tests, its `expected` tests, and `outcome` with the new fields. `test_native_decisions.py` and the decide gate are unchanged.
+- **Acceptance:** section 11's `tiers` tests, its `expected` tests, and `outcome` with the new fields. The decide gate is unchanged, and so is every assertion in `test_native_decisions.py` except that a native `Score` answer now also carries `expected` (implementation note: its whole-`Answer` comparisons check `expected` beside the unchanged answer and distribution).
 - **Size:** S
 
 ### 01e-S2: `Rank` on the structured path, and the template switch to `KIND`

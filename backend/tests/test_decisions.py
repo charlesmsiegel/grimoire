@@ -1275,6 +1275,8 @@ def test_native_gap_refuses_only_a_rank_with_no_pointwise_question():
     gap = decisions.native_gap(Item("c", (PRED, _rank())))
     assert "order" in gap and "pointwise" in gap
     assert decisions.native_gap(Item("c", (PRED, _rank(pointwise="Does it bear on this?")))) == ""
+    # Whitespace is no question: it would lower into blank predicates.
+    assert "pointwise" in decisions.native_gap(Item("c", (_rank(pointwise=" \n "),)))
     assert decisions.native_gap(Item("c", (PRED, TONE))) == ""
 
 

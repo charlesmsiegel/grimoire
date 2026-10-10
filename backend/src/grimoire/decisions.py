@@ -1235,7 +1235,7 @@ def _lowered(q: Question) -> tuple[Question, ...]:
     sent."""
     if isinstance(q, Joint):
         return (q.choice,)
-    if isinstance(q, Rank) and q.pointwise:
+    if isinstance(q, Rank) and q.pointwise.strip():
         return tuple(Predicate(f"{q.id}#{n}",
                                f"{q.pointwise}\n\nCandidate {opt.id}: {opt.description}")
                      for n, opt in enumerate(q.candidates))
@@ -1341,7 +1341,7 @@ def native_lift(item: Item, lowered: ItemResult, lift: Lift) -> ItemResult:
         got = [lowered.answers.get(qid, _UNREADABLE) for qid in parts.get(q.id, (q.id,))]
         if isinstance(q, Joint):
             answers[q.id] = _joint_answer(got[0])
-        elif isinstance(q, Rank) and q.pointwise:
+        elif isinstance(q, Rank) and q.pointwise.strip():
             answers[q.id] = _lift_rank(q, got)
         elif isinstance(q, MultiSelect):
             answers[q.id] = _lift_select(q, got)
@@ -1360,7 +1360,7 @@ def native_gap(item: Item) -> str:
     on the ORIGINAL item, so each sentence names the caller's question ids.
     A limit is named here, never met by truncating."""
     for q in item.questions:
-        if isinstance(q, Rank) and not q.pointwise:
+        if isinstance(q, Rank) and not q.pointwise.strip():
             return (f"Question {q.id} ranks its candidates and names no pointwise "
                     f"question; a decisions endpoint cannot order them.")
         choice = q.choice if isinstance(q, Joint) else q

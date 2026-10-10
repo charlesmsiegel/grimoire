@@ -267,6 +267,18 @@ def test_decision_result_reads_the_canned_bodies(provider, caplog):
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
+def test_expected_is_never_read_from_the_providers_weighted_score(provider):
+    """01e-C2: `expected` comes from the distribution alone. A provider's
+    own weighted `score`, moved to disagree, changes nothing."""
+    payload = canned(provider, "answered")
+    reference = read(provider)(payload, ITEM).answers["tension"].expected
+    answer_in(provider, payload, "tension")["score"] = 0.0
+    assert read(provider)(payload, ITEM).answers["tension"].expected == reference
+    del answer_in(provider, payload, "tension")["probabilities"]
+    assert read(provider)(payload, ITEM).answers["tension"].expected is None
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
 def test_an_unoffered_key_spelled_like_the_reserved_none_is_not_an_option(provider):
     sly = canned(provider, "none")
     speaker = answer_in(provider, sly, "speaker")
