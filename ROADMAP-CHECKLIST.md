@@ -54,7 +54,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
 | 01f | Structured generation | now | [x] | [~] substitute | 4 | [x] |
 | 01g | Tool calling, Decision as a tool, run budgets | now (01f has landed) | [x] | [~] substitute | 8 | [ ] |
-| 01h | Embedding options, async embed, embedding evals | now (01a has landed, so C6 too) | [x] | [~] substitute | 7 | [ ] |
+| 01h | Embedding options, async embed, embedding evals | now (01a has landed, so C6 too) | [x] | [~] substitute | 7 | [x] |
 | 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
 | 02 | Decision integration (what 01's slices F–H did not land) | now (01a, 01b landed); 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
 | 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | 6 | [ ] |
@@ -71,7 +71,7 @@ all of them have landed. `check` holds both to the slice checklist.
 
 ## Parallel lanes
 
-- **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01i. 01s was ticked after the fact:
+- **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01h, 01i. 01s was ticked after the fact:
   every task of its plan is in the tree and its tests pass, but the history
   that would show its Codex review gates was not available to check.
 - **Now:** 01c, 01d, 01g, 01h, 02 (from 02-S1), 03, 07, 13 (II-A to II-D).
@@ -216,19 +216,26 @@ These are headlines. The owning spec's Contract section is authoritative.
   call that comes after visible text (needed by 02-C4).
 
 ### 01h: Embedding options, async embed, embedding evals
-- [ ] **01h-C1** Input type, with a `queries: int` split and modes
+- [x] **01h-C1** Input type, with a `queries: int` split and modes
   `none | prefix | param`. A query vector is compared within its space and
   is never cached.
-- [ ] **01h-C2** Requested `dimensions`. A mismatch raises
+- [x] **01h-C2** Requested `dimensions`. A mismatch raises
   `dimensions_mismatch`, and callers degrade.
-- [ ] **01h-C3** Stated options go into the space id as `\0embopt1:<digest>`.
+- [x] **01h-C3** Stated options go into the space id as `\0embopt1:<digest>`.
   Default options produce today's exact space string.
-- [ ] **01h-C4a** No embedding on the event loop: a guard degrades instead.
-- [ ] **01h-C4b** A native async `embed()` with a total deadline.
-- [ ] **01h-C5** `attribute(claims)` + `embed_groups_sync`: one row per
+- [x] **01h-C4a** No embedding on the event loop: a guard degrades instead.
+- [x] **01h-C4b** A native async `embed()` with a total deadline.
+- [x] **01h-C5** `attribute(claims)` + `embed_groups_sync`: one row per
   campaign group, plus an optional `run_id`.
-- [ ] **01h-C6** `evals/run.py --embed`: recall@k and MRR against a lexical
+- [x] **01h-C6** `evals/run.py --embed`: recall@k and MRR against a lexical
   baseline.
+- **Landed:** S1-S7. S1 and S2 with substitute reviews, S3 onward in speed
+  mode (no review round); the Codex gates are owed. Deliberate readings: the
+  loop guard's error row carries campaign, scene and a bounded trace; an
+  unreadable facts file turns embedding off and a continuity sweep then
+  carries its stored basis forward; `EmbeddingCard.options` is the stored
+  block, query side included. Real-model `--embed` recordings are owed (only
+  the mock's ships), and `--embed` writes no run file.
 
 ### 01i: Context window
 - [x] **01i-C1** `wire.Limits(window, max_output)` with a source, on every
@@ -470,11 +477,11 @@ alone. This table is generated: after a spec's slices change, run
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 01h-S1 | No embedding on the event loop | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01h-S2 | Options in the space identity, the `queries` split and prefix mode | L | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01h-S3 | Request-field input type and requested dimensions | M | 2 | 01h-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01h-S4 | Options in the UI | M | 3 | 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01h-S5 | Native async embed | M | 3 | 01g-S3 (S), 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01h-S6 | Cross-campaign attribution | M | 1 | 01g-S3 (S), 01h-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01h-S7 | Embedding evals | M | 3 | 01a-S2, 01a-S3, 01a-S4 (S), 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S3 | Request-field input type and requested dimensions | M | 2 | 01h-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01h-S4 | Options in the UI | M | 3 | 01h-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01h-S5 | Native async embed | M | 3 | 01g-S3 (S), 01h-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01h-S6 | Cross-campaign attribution | M | 1 | 01g-S3 (S), 01h-S3 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01h-S7 | Embedding evals | M | 3 | 01a-S2, 01a-S3, 01a-S4 (S), 01h-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01i
 
