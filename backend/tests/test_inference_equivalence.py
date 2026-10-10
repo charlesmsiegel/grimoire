@@ -17,7 +17,6 @@ it plays in memory equal to what it plays once migrated.
 from __future__ import annotations
 
 import copy
-import dataclasses
 import json
 from typing import NamedTuple
 from unittest import mock
@@ -31,6 +30,7 @@ from grimoire.store.inference import migrate
 from grimoire.store.inference import resolve as inference
 
 from . import inference_baseline as baseline
+from . import wire_kit
 
 BASELINE = json.loads(baseline.FIXTURE.read_text(encoding="utf-8"))
 
@@ -364,12 +364,12 @@ def planned_cells(cid: str) -> dict:
             return out
         first = resolved.attempts[0]
         out.update(provider=first.provider_id, model=first.model, preset=first.preset_id,
-                   sampling=dataclasses.asdict(first.target.sampling),
+                   sampling=wire_kit.sampling_block(first.target.sampling),
                    effective=llm_sampling.effective(first.target)["effective"])
         if len(resolved.attempts) > 1:
             fb = resolved.attempts[1]
             out["fallback"] = {"provider": fb.provider_id, "model": fb.model,
-                               "preset": fb.preset_id, "sampling": dataclasses.asdict(fb.target.sampling),
+                               "preset": fb.preset_id, "sampling": wire_kit.sampling_block(fb.target.sampling),
                                "sent": resolved.chain is not None
                                and resolved.chain.fallback is not None}
         return out

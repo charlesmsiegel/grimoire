@@ -31,7 +31,6 @@ invented connection ids; nothing here describes a real library.
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import importlib
 import json
 import os
@@ -52,6 +51,7 @@ from grimoire.main import create_app
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import resolve as inference
+from tests import wire_kit
 from tests.inference_fixtures import legacy_store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inference_baseline.json"
@@ -293,7 +293,7 @@ def _resolved(target: wire.Target) -> dict:
     off the connection dict it once was: the provider id as `conn`, the
     model it runs, its sampling block and its catalog's `model_params`."""
     return {"conn": target.provider_id, "model": target.model,
-            "sampling": dataclasses.asdict(target.sampling),
+            "sampling": wire_kit.sampling_block(target.sampling),
             "model_params": None if target.model_params is None else list(target.model_params)}
 
 
@@ -324,7 +324,7 @@ def _task(client: TestClient, task: str, cid: str) -> dict:
     fallback = attempts[1].target if len(attempts) > 1 else None
     return {**_resolved(narrowed.chain.primary),
             "fallback": None if fallback is None
-            else {"id": fallback.provider_id, "sampling": dataclasses.asdict(fallback.sampling)}}
+            else {"id": fallback.provider_id, "sampling": wire_kit.sampling_block(fallback.sampling)}}
 
 
 #: Each body is what a reroll request carries; only the two override fields are
