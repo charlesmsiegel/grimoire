@@ -328,6 +328,19 @@ export type RoleCard = {
   decides_natively: DecidesNatively;
   /** What would price this role's calls; null when nothing resolves. */
   rate: RateInfo | null;
+  /** The resolved model's size (01i); null when nothing resolves and on a
+   *  native decision, which sends no prompt to pack. */
+  limits: CardLimits | null;
+};
+/** A card's or row's model size (01i, spec 6.3): the resolved primary's
+ *  window and max output, the riding fallback's window (null when none
+ *  rides), and what a prompt may hold across them -- `tokens` null when no
+ *  window is known, 0 (with a `reason`) when the reply reserve fills it. */
+export type CardLimits = {
+  window: ModelLimit;
+  max_output: ModelLimit;
+  fallback_window: ModelLimit | null;
+  ceiling: { tokens: number | null; binding: [string, string] | null; reason: string };
 };
 /** Which backend answers a decision (`RoleCard.decision_mode`). */
 export type DecisionMode = "native" | "structured" | "";
@@ -344,6 +357,9 @@ export type EmbeddingCard = {
   problem: string | null;
   /** As on `RoleCard`; null while the role is off. */
   rate: RateInfo | null;
+  /** As on `RoleCard`, null while the role is off; nothing is reserved for a
+   *  reply, so its ceiling is the window itself. */
+  limits: CardLimits | null;
 };
 /** What a route's `use` says: inherit (`""`), a generative role, or the
  *  route's own pin (`"model"`). */
@@ -380,6 +396,8 @@ export type RouteRow = {
   uses: GenerativeRole | null;
   /** As on `RoleCard`. */
   rate: RateInfo | null;
+  /** As on `RoleCard`. */
+  limits: CardLimits | null;
 };
 /** A provider as the settings view lists it, with whether it can send at all. */
 export type InferenceProvider = {
