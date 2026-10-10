@@ -1322,3 +1322,129 @@ def test_a_decide_case_with_no_answer_is_reported_from_its_rows(monkeypatch, tmp
     assert not result.passed and result.calls == () and result.items == ()
     assert result.bucket["calls"] == 1 and result.bucket["errors"] == 1
     assert "calls 1  tokens: not reported  cost: not reported" in runner.report([result])
+
+
+# ---- 01a-S4: run file and comparison ----
+
+def test_one_refused_backend_of_several_refuses_the_run(monkeypatch, tmp_path, capsys):
+    """Test 12: every backend's chain is built first; one refusal exits 2
+    before `live_all` runs."""
+    from evals import run
+    from grimoire.store import config, llm_connections
+
+    _decision_store(monkeypatch, tmp_path / "home", DECIDER)
+    llm_connections.create_connection("openai_compatible", "Winifred Local",
+                                      base_url="http://localhost:5678/v1")
+    config.write_config(role_decision_provider="winifred-local", role_decision_model="small")
+
+    def never(*_a, **_k):
+        raise AssertionError("a refused run sent something")
+
+    monkeypatch.setattr(runner, "live_all", never)
+    code = run.main(["--live", "--decide-backend", "structured", "--decide-backend", "native",
+                     "--case", "decide-scene-break"])
+    assert code == 2
+    assert "never decides natively" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flags", [
+    ["--live", "--record", "--repeat", "2"],
+    ["--live", "--record", "--decide-backend", "native", "--decide-backend", "structured"],
+    ["--live", "--repeat", "0"],
+    ["--live", "--repeat", "11"],
+    ["--repeat", "2"],
+    ["--gate", "--repeat", "1"],
+    ["--gate", "--out", "x.json"],
+])
+def test_repeat_and_record_refusals(flags):
+    from evals import run
+    with pytest.raises(SystemExit) as exc:
+        run.main(flags)
+    assert exc.value.code == 2
+
+
+def test_the_run_file_keeps_kinds_never_words(monkeypatch, tmp_path):
+    """Test 19: a failed call and a failed case are `{"kind", "status"}`;
+    the provider's detail is nowhere in the file's bytes, and a long check
+    detail is cut to `MAX_DETAIL_CHARS`."""
+    from evals import runfile
+    from evals.graders import Check
+    from grimoire import decisions
+    from grimoire.llm_errors import LLMError
+    from tests.llm_fakes import FakeLLM
+
+    _decision_store(monkeypatch, tmp_path / "home", DECIDER)
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    target = _decide_target(case)
+    ctx = runner.prepare(case)
+    parsed = decisions.parse(_compliant(case), ctx["items"], explain=True)
+    secret = "Seraphine-provider-words-never-stored"
+    failure = LLMError("bad_response", secret, status=503)
+    fake = FakeLLM([["unused"]], decisions=[decisions.ItemResult(parsed[0].answers), failure,
+                                            decisions.ItemResult(parsed[2].answers)])
+    isolate, _made = _isolates(monkeypatch, tmp_path, tmp_path / "home")
+    with isolate():
+        partly = runner.live(case, target, client=fake, real_home=tmp_path / "home")
+        whole = runner.live(case, target, real_home=tmp_path / "home",
+                            client=FakeLLM([["unused"]], decisions=[failure]))
+    long = runner.Result(case_mod.BY_ID["scene-length"], "compliant",
+                         [Check("scene.length", False, "y" * 500)], "")
+    doc = runfile.build([partly, whole, long], [runfile.config("c1", "x", {})],
+                        run_id="r", started="s")
+    path = tmp_path / "out" / "run.json"
+    runfile.write(path, doc)
+    data = path.read_bytes()
+    assert secret.encode() not in data
+    failed = [c for c in doc["cases"][0]["calls"] if c["error"]]
+    assert [c["error"] for c in failed] == [{"kind": "bad_response", "status": 503}]
+    assert doc["cases"][1]["error"] == {"kind": "bad_response", "status": 503}
+    (check,) = doc["cases"][2]["checks"]
+    assert len(check["detail"]) == runfile.MAX_DETAIL_CHARS
+    assert runfile.read(path) == json.loads(data)
+
+
+def test_live_out_then_compare_end_to_end(monkeypatch, tmp_path, capsys):
+    """The acceptance check: `--live --out` over two backends with fakes
+    writes a valid eval-run v1 file whose generate case stands for both
+    configs (test 22), and `--compare` of it against itself prints the
+    table. Nothing reaches the real home's ledger."""
+    from evals import run, runfile
+    from tests.llm_fakes import FakeLLM
+
+    home = tmp_path / "home"
+    _decision_store(monkeypatch, home, BOTH)
+    decide, plain = case_mod.BY_ID["decide-scene-break"], case_mod.BY_ID["scene-length"]
+    deciding = FakeLLM([[_compliant(decide)]], decisions=[_over()])
+    generating = FakeLLM([[_compliant(plain)]], usage=BILLED)
+    original = runner.live
+
+    def faked(case, target, record=False, **kwargs):
+        kwargs["client"] = deciding if case.schema is not None else generating
+        return original(case, target, record, **kwargs)
+
+    monkeypatch.setattr(runner, "live", faked)
+    out = tmp_path / "evals-out" / "run.json"
+    code = run.main(["--live", "--decide-backend", "native", "--decide-backend", "structured",
+                     "--repeat", "2", "--case", decide.id, "--case", plain.id,
+                     "--out", str(out)])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert "case.item" in printed                      # the multi-config table
+    doc = runfile.read(out)
+    assert [c["axes"]["backend"] for c in doc["configs"]] == ["native", "structured"]
+    plain_runs = [c for c in doc["cases"] if c["case"] == plain.id]
+    assert [(c["configs"], c["repeat"]) for c in plain_runs] == [(["c1", "c2"], 0),
+                                                                (["c1", "c2"], 1)]
+    assert len([c for c in doc["cases"] if c["case"] == decide.id]) == 4
+    assert all(row["scope"] == "eval" and row["eval_run"] == doc["run"]
+               for c in doc["cases"] for row in c["rows"])
+    assert doc["aggregates"]["by_route_backend_hop"]
+    assert not (home / "usage").exists()
+
+    copy = tmp_path / "evals-out" / "again.json"
+    copy.write_bytes(out.read_bytes())
+    assert run.main(["--compare", str(out), str(copy)]) == 0
+    table = capsys.readouterr().out.splitlines()
+    assert table[0].count("[native]") == 2 and table[0].count("[structured]") == 2
+    (generate_row,) = [line for line in table if line.startswith(plain.id + " ")]
+    assert generate_row.count("2/2 ok") == 4 and generate_row.count("billed $0.0084") == 4

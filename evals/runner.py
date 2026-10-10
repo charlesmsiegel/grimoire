@@ -38,7 +38,7 @@ import json
 import time
 import uuid
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -78,6 +78,12 @@ DRAIN_POLL_S = 0.05
 #: follow-up still running would write into whatever home comes next.
 NOT_RUN = "not run: an earlier case's follow-ups are still running"
 
+#: How many times `--repeat` may run each (config, case). The flag is for
+#: seeing variance, and ten is past what a person reads in one table; a live
+#: run is paid, so an unbounded flag is a typo away from a large bill.
+#: Structural; to be tuned later.
+MAX_REPEAT = 10
+
 
 @dataclass
 class Result:
@@ -115,6 +121,17 @@ class Result:
     #: The rates the buckets were folded with (read once, in the real store),
     #: so a later fold of the same rows (the aggregate) prices them alike.
     rates: usage.Rates | None = field(default=None, repr=False, compare=False)
+    #: What a failed case's error is, without its words (the provider's own
+    #: text is never written to a run file): an `LLMError`'s kind and HTTP
+    #: status, or this harness's own kind (`isolate`, `follow_ups`,
+    #: `not_run`).
+    error_kind: str = ""
+    error_status: int | None = None
+    #: The configs this result stands for (`c1`, ...: one per
+    #: `--decide-backend`; a generate case, run once, stands for every one),
+    #: and which of `--repeat`'s runs it is.
+    configs: tuple[str, ...] = ()
+    repeat: int = 0
 
     @property
     def passed(self) -> bool:
@@ -480,7 +497,7 @@ def _still_running(case: Case, output: str, run_day: str, run_id: str,
         case, BASELINE, [], output,
         f"follow-ups still running past {DRAIN_CEILING_S}s; "
         f"its isolate is kept at {paths.home()}",
-        partial=True, **_metered(rows, ledger_error, rates)))
+        error_kind="follow_ups", partial=True, **_metered(rows, ledger_error, rates)))
 
 
 async def _ask(case: Case, ctx: dict, target: ResolvedInference,
@@ -577,7 +594,7 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     if isinstance(target, dict):
         raise TypeError(f"{case.id}: pass its resolution, not a connection")
     if _is_real_home(real_home):
-        return Result(case, BASELINE, [], "", ISOLATE_ERROR)
+        return Result(case, BASELINE, [], "", ISOLATE_ERROR, error_kind="isolate")
     run_day = run_day or usage._today()
     ctx = prepare(case)
     try:
@@ -595,13 +612,14 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     settled = _settle(case, ctx, output, real_home=real_home, run_day=run_day,
                       run_id=run_id, rates=rates)
     if settled is None:
-        return Result(case, BASELINE, [], output, ISOLATE_ERROR)
+        return Result(case, BASELINE, [], output, ISOLATE_ERROR, error_kind="isolate")
     rows, ledger_error, drained = settled
     metrics = {"wall_ms": asked + drained, **_metered(rows, ledger_error, rates)}
     if decision is not None:
         metrics.update(calls=decision.calls, items=item_records(decision))
-    if error:
-        return Result(case, BASELINE, [], "", error, **metrics)
+    if failure is not None:
+        return Result(case, BASELINE, [], "", error, error_kind=getattr(failure, "kind", ""),
+                      error_status=getattr(failure, "status", None), **metrics)
 
     result = Result(case, BASELINE, list(case.grade(ctx, output)), output, note=note,
                     **metrics)
@@ -612,18 +630,42 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     return result
 
 
+def config_ids(backends: tuple[str, ...]) -> tuple[str, ...]:
+    """One config id per decide backend, in order: `c1`, `c2`, ..."""
+    return tuple(f"c{n}" for n in range(1, len(backends) + 1))
+
+
+def _plan(cases: tuple[Case, ...], backends: tuple[str, ...],
+          repeat: int) -> list[tuple[Case, str, tuple[str, ...], int]]:
+    """Every run `live_all` makes, in order: `(case, backend, configs,
+    repeat)`. A decide case runs once per backend (its own config); a
+    generate case, which no backend changes, runs once and stands for every
+    config. Each runs `repeat` times."""
+    ids = config_ids(backends)
+    runs = []
+    for case in cases:
+        per = (tuple(zip(backends, ((i,) for i in ids), strict=True))
+               if case.schema is not None else ((backends[0], ids),))
+        for backend, configs in per:
+            runs.extend((case, backend, configs, n) for n in range(repeat))
+    return runs
+
+
 def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isolate,
              record: bool = False, *, client=None, backend: str = CHAIN,
+             backends: tuple[str, ...] = (), repeat: int = 1,
              real_home: Path | None = None, run_id: str = "", run_day: str = "",
              rates: usage.Rates | None = None) -> list[Result]:
     """Each case live, on what its task resolved to (`resolve_connections`,
-    keyed by `conn_key`); a decide case down `chain(..., backend)`. Each case
-    runs inside its own `isolate()`, checked against `real_home` before its
-    fixture is built (`live`). One run id and start day name every case's
-    rows. A case whose follow-ups are still running stops the run: its
-    isolate is kept (`FollowUpsRunningError` passes through it), and every case
-    after it reports `NOT_RUN` rather than running into a home a straggler
-    may still write to.
+    keyed by `conn_key`); a decide case down `chain(..., backend)` -- once per
+    backend of `backends` (default: `backend` alone), each its own config --
+    and every case `repeat` times (`_plan`). EVERY run gets its own
+    `isolate()`, so no harvest reads another run's rows; each is checked
+    against `real_home` before its fixture is built (`live`). One run id and
+    start day name every case's rows. A case whose follow-ups are still
+    running stops the run: its isolate is kept (`FollowUpsRunningError` passes
+    through it), and every run after it reports `NOT_RUN` rather than running
+    into a home a straggler may still write to.
 
     `real_home` is the tripwire's reference; when the caller names none, it
     is the home active NOW, before the first isolate -- so the tripwire is
@@ -631,17 +673,22 @@ def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isola
     real_home = real_home if real_home is not None else paths.home()
     run_id = run_id or str(uuid.uuid4())
     run_day = run_day or usage._today()
+    runs = _plan(cases, backends or (backend,), repeat)
     out: list[Result] = []
-    for number, case in enumerate(cases):
+    for number, (case, chosen, configs, n) in enumerate(runs):
         try:
             with isolate():
-                out.append(live(case, conns[conn_key(case)], record=record, client=client,
-                                backend=backend, real_home=real_home, run_id=run_id,
-                                run_day=run_day, rates=rates))
+                result = live(case, conns[conn_key(case)], record=record, client=client,
+                              backend=chosen, real_home=real_home, run_id=run_id,
+                              run_day=run_day, rates=rates)
         except FollowUpsRunningError as exc:
-            out.append(exc.result)
-            out.extend(Result(later, BASELINE, [], "", NOT_RUN) for later in cases[number + 1:])
+            result = exc.result
+            out.append(replace(result, configs=configs, repeat=n))
+            out.extend(Result(later, BASELINE, [], "", NOT_RUN, error_kind="not_run",
+                              configs=later_configs, repeat=later_n)
+                       for later, _b, later_configs, later_n in runs[number + 1:])
             break
+        out.append(replace(result, configs=configs, repeat=n))
     return out
 
 
