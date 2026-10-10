@@ -1049,22 +1049,32 @@ validator would be exact rather than time-bucketed, but it still costs the
 listings, so it saves only encode and transfer. Open question 5 asks whether
 to mark the read-path spec's layer 3 superseded.
 
-## 7. Startup
+## 7. Startup and cold cost
 
 There is no startup sweep (draft section 8; 03 section 3, "rebuilt lazily, by
 reads, and never by a startup sweep"). The first overview read after a restart:
 
 1. lists the top-level directories, which are live;
-2. stats members and looks their stamps up in `sources` in a batch, so only
-   files whose stamp moved, or that are inside `PERSIST_WINDOW`, are read and
-   hashed;
-3. looks up artifacts for the keys, in a batch;
-4. computes only the misses.
+2. for each persisted kind's inputs (`campaign.md`, `world.md`, the five
+   continuity files, and each open scene's transcript), stats the file and
+   looks its stamp up in `sources`. That is one lookup per path, unless 03-C4
+   offers a batched form; 03-C6 batches only the artifact lookups. Only files
+   with no matching `sources` row are read and hashed;
+3. looks the artifact keys up in one batch (03-C6);
+4. computes only the misses;
+5. lists each campaign's `scenes/` and reads every scene head, head-only. That
+   is today's cost, unchanged, because scene heads are not persisted (3.3).
 
-`BUILD` (03 section 6) makes every artifact cold once after an upgrade, or
-after each pull for someone running from a checkout. The first visit after an
-upgrade then costs what a cold visit costs today, plus one hash per file read.
-The benchmark measures it (section 9, scenario `cold`).
+**Cold cost, honestly:**
+
+| Case | Cost against today's |
+|---|---|
+| First visit ever (empty `sources`), cache on | today's reads, plus one hash of each `campaign.md`, `world.md` and continuity file read. Open scenes' transcripts are read in full today anyway, and the key adds a hash of each. No closed scene's transcript is read. |
+| After an upgrade or a pull (`BUILD` moved) | `sources` rows are not keyed by `BUILD` (03 section 4), so no extra hashing. Every artifact misses once, and each compute costs what the live path costs today. |
+| Cache off, absent (Android before 03 confirms `sqlite3`), busy, or a failed input read | exactly today's cost: the live path (3.3) |
+| A file younger than `PERSIST_WINDOW` | its `sources` row is not recorded yet (03 section 5), so the next restart hashes it again |
+
+Nothing on the overview path reads a closed scene's transcript, in any case.
 
 ## 8. Instrumentation (04-C3a)
 
@@ -1091,7 +1101,9 @@ set costs a `ContextVar.get` and a `None` test.
 | `transcript.parse` | `serialize._parse_messages` |
 | `compiled.hit.<kind>`, `.miss.<kind>`, `.store.<kind>`, `.bypass` | 03's lookups (03-C6 reports hit and miss counts) |
 | `compiled.sources_hit`, `.sources_miss`, `.bytes_hashed`, `.collection_digest` | 03's validate-and-hash and collection paths |
-| `overview.computed.<kind>` | the overview computes |
+| `overview.computed.<kind>` | the overview computes, byte-fed or live |
+| `overview.live_path.<kind>` | a persisted kind falling back to its live path (3.3) |
+| `overview.unreadable_scene` | a scene head the summary fold could not read (3.4) |
 | `todo.scope.library`, `todo.scope.campaign` | `live()` |
 | `todo.chore.<id>` | each builder run |
 
@@ -1100,8 +1112,16 @@ set costs a `ContextVar.get` and a `None` test.
 - **In-process, to tests and the harness.** This is the primary consumer.
 - **One Debug-level log row per overview request**, through `logs.record`
   (the only writer; `CLAUDE.md`, Observability), with `kind="overview_read"`,
-  the endpoint, the scope kind (`library` or `campaign`), wall milliseconds and
-  the counter snapshot.
+  the endpoint, the scope kind (`library` or `campaign`), wall milliseconds,
+  and the cache state (`on`, `off` or `degraded`, where `degraded` means at
+  least one live-path fallback).
+  - **No counter snapshot.** Most counters scale with the library: the number
+    of campaign scopes is the number of campaigns, bytes hashed track
+    transcript sizes, and per-kind miss counts equal record counts. The log is
+    a file users share, and `CLAUDE.md` says Settings describes what it
+    carries (ids, occasionally a name). Library-size figures would be a new
+    category of content in it. The counters stay in-process, for tests and
+    the harness.
   - No ids, names, paths or payload, even though ids are permitted in logs.
   - It is Debug because it fires on every navigation. The level is the user's
     choice and the monthly cap still applies.
@@ -1145,9 +1165,18 @@ python -m scripts.synth_library --out DIR --profile {small,medium,large} --seed 
 - **Images** are generated solid-colour PNGs, ingested through
   `assets.put_in`, so placements and objects are real.
 - **The library is dated deterministically.** `paths.now_iso` is patched to a
-  seeded clock during generation, and file mtimes are backdated past
-  `PERSIST_WINDOW` (03 section 5), so a freshly generated library caches like
-  an old one.
+  seeded clock during generation. File **and directory** mtimes are backdated
+  with `os.utime` past `PERSIST_WINDOW` (03 section 5), deepest first, so a
+  child's backdating does not move its parent again.
+  - **ctime cannot be backdated** on POSIX: `os.utime` itself moves it to now,
+    and 03 section 14 says so. A freshly generated library therefore records
+    no `sources` rows, and `memo_stamped` stores nothing over its directories,
+    until both windows have passed.
+  - So the counter assertions (12.3) do not wait on wall time. They run with
+    03's injectable clock (the `migrations._clock` precedent) and statcache's
+    clock patched forward past both windows. The harness, which measures real
+    time, waits out `PERSIST_WINDOW` after generation and says so in its
+    output.
 - **It writes `DIR/.synthetic-library`**, holding the profile, seed and
   generator version, and it refuses a non-empty `DIR`.
 
@@ -1176,9 +1205,10 @@ has not landed when 04's plan starts, 04 builds the core to this section and
 
 - **Privacy guard.**
   - It refuses unless `DIR/.synthetic-library` exists.
-  - It refuses if `DIR` resolves to the default store location (`~/.grimoire`)
-    or to the path named by the bootstrap pointer. It reads only the pointer's
-    path value, never the store.
+  - It refuses if `DIR` resolves to the default store location (`~/.grimoire`),
+    to the path named by the bootstrap pointer, or to the `GRIMOIRE_HOME` it
+    inherited. It also refuses if `DIR` is inside any of those roots. It reads
+    only the pointer's path value, never the store.
   - It sets `GRIMOIRE_HOME=DIR` itself.
   - Its output holds endpoint names, scenario names, counters and timings, and
     nothing else, even though the library is synthetic. One output shape for
@@ -1196,6 +1226,7 @@ has not landed when 04's plan starts, 04 builds the core to this section and
 | `relevant_change` | after warm: append a post to one scene of one campaign (store writer); separately, edit that campaign's `commitments.json` |
 | `unrelated_change` | after warm: edit one lore entry in a world, through the entity writer |
 | `one_campaign_in_large` | `large` profile; after warm: change one campaign; compare per-kind miss counters to the campaign count |
+| `visit_after_turn` | after warm: one turn through the chat route with the fake LLM (`llm_fakes`), its follow-up warm included, then each endpoint once, as a page visited right after play would be (the client remembers nothing after a write, 6.3) |
 | `cache_off` | `GRIMOIRE_COMPILED_CACHE=0`, as the baseline |
 
 - **Output:** per scenario and endpoint, the median wall time over `--repeat`

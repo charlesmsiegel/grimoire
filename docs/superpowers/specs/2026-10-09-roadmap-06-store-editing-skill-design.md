@@ -1,6 +1,6 @@
 # 06. Store-editing skill
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 06 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06).
 **Baseline:** `main` at `35c1fb7`.
@@ -196,16 +196,22 @@ deciding whether it applies does not have to open the file.
    `CLAUDE.md` for the rest. Examples in the skill use the placeholder names
    only.
 
-3. **Find the store** (a command block, both platforms):
+3. **Find the store** (a command block, every form, run from the repository
+   root):
 
    ```
-   backend/.venv/bin/python -m grimoire.where          # macOS/Linux
-   backend/.venv/Scripts/python.exe -m grimoire.where  # Windows
+   PYTHONPATH=backend/src backend/.venv/bin/python -m grimoire.where          # macOS/Linux
+   PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.where  # Windows (Git Bash)
+   $env:PYTHONPATH="backend/src"; backend\.venv\Scripts\python.exe -m grimoire.where  # Windows (PowerShell)
    ```
 
-   It prints where the library lives and why. "Never assume `~/.grimoire`."
-   If the store is a git repository, run `git -C <store> status` before
-   starting, so that the edit is a clean diff of its own.
+   `PYTHONPATH` is in every form because the venv's editable install points
+   at whichever checkout created it. In a worktree, which has no
+   `backend/.venv` of its own, one sentence links CONTRIBUTING.md's `PY` rule
+   rather than restating it. The command prints where the library lives and
+   why. "Never assume `~/.grimoire`." If the store is a git repository, run
+   `git -C <store> status` before starting, so that the edit is a clean diff
+   of its own.
 
 4. **Write through the store where you can** (about 15 lines).
    - Prefer `grimoire.store` functions. For where they are, link to
@@ -216,11 +222,12 @@ deciding whether it applies does not have to open the file.
      example: Seraphine's voice anchor in world `realm` through
      `voice_anchors.write`, inside `collecting()`, then print the report.
    - "Campaign records are edited through the store functions, or not while
-     the app is playing that campaign." The store's functions take the
-     cross-process campaign lock. A hand edit of a transcript that a turn is
-     rewriting at the same moment can be lost. Link
+     the app is playing that campaign." The transcript and ledger functions
+     take the cross-process campaign lock; not every campaign write does, and
+     the skill does not claim more than that. It links
      `docs/store-guarantees.md`, section "A second process on the same
-     store".
+     store", for which ones. A hand edit of a transcript that a turn is
+     rewriting at the same moment can be lost.
    - "Image descriptions and subjects are written through `image_descriptions`
      / `image_subjects`, never by editing files under `assets/image-store/`."
      The object sidecars are written under image locks, and GC reads them.
@@ -241,18 +248,25 @@ deciding whether it applies does not have to open the file.
 
 6. **Sync once per coherent batch** (the core, about 25 lines).
    - Collect the paths you created or changed, the ones you deleted and any
-     you renamed. With a git store, `git -C <store> status --porcelain` lists
-     all three (a rename shows as `R old -> new`).
+     you renamed. With a git store, list them with
+     `git -C <store> status --porcelain=v1 -z --untracked-files=all`, which
+     neither quotes special characters nor collapses an untracked directory to
+     `dir/`. An unstaged rename shows as a delete plus a new file, and is
+     passed that way (`--deleted` for the old path, the new path plainly); a
+     staged one shows as `R`, and may be passed as `--renamed OLD=NEW`. A
+     mistyped or quoted path is reported `missing` and exits `1` (05 section
+     7.2), so a bad list cannot pass silently.
    - Before an `--all` sync, or any batch of more than a handful of hot records,
      run it with `--dry-run` first and read how many texts it would embed.
-   - Then run, from the repository root, in both forms:
+   - Then run, from the repository root, in every form item 3 gives:
 
      ```
      PYTHONPATH=backend/src backend/.venv/bin/python -m grimoire.cache sync \
          worlds/realm/lore/pact.md worlds/realm/characters/seraphine/voice_anchor.md \
          --deleted worlds/realm/lore/tidewatch.md \
          --renamed worlds/realm/items/lantern.md=worlds/realm/items/tide-lantern.md
-     PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync ...   # Windows
+     PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync ...   # Windows (Git Bash)
+     $env:PYTHONPATH="backend/src"; backend\.venv\Scripts\python.exe -m grimoire.cache sync ...  # Windows (PowerShell)
      ```
 
    - "One sync after the batch, not one per file." Scoped forms
@@ -260,16 +274,25 @@ deciding whether it applies does not have to open the file.
    - `--no-embed` when the user has asked not to spend; the vectors are then
      rebuilt lazily.
 
-7. **Read the result** (a status table, about 12 lines). Exit status `0` is
-   done. `1` means some path is `failed` or `refused`.
-   - `failed: <ExceptionClass>`: a reader rejects the file. Fix the file, not
-     the cache.
-   - `refused: <reason>`: the path is outside the store, goes through a link,
-     or is not a record directory. Check the path.
-   - `cold`: nothing was built from this file yet. That is fine.
-   - `stale_space` and `embedding_off`: nothing to embed in the current space.
-     That is fine.
-   - `cache: off`: the compiled cache is disabled here. That is fine.
+7. **Read the result** (three short tables, about 20 lines), written from
+   05-C2's exported vocabulary (`cache_sync.PATH_STATUSES`,
+   `REFUSAL_REASONS`, `KIND_OUTCOMES`, `BATCH_FIELDS`) and held to it by the
+   drift test.
+   - **Exit status.** `0` done; `1` some path is `failed`, `refused`,
+     `missing` or `verify_failed`; `2` the command was malformed; `3` the
+     store root cannot be used.
+   - **Path statuses.** `refreshed` and `current`: done. `cold`: nothing was
+     built from this file yet, which is fine. `deleted`: an intended removal.
+     `missing`: the path does not exist and was not named in `--deleted`;
+     check the path. `refused: <reason>`: outside the store, through a link,
+     not a record directory, and so on; check the path. `failed:
+     <ExceptionClass>`: a reader rejects the file; fix the file, not the
+     cache. `verify_failed`: a bug in a cache kind, not in your edit; report
+     it.
+   - **Batch totals.** `stale_space` and `embedding_off` count vectors with
+     nothing to embed in the current space, which is fine. `deferred` counts
+     vectors left for later (`--no-embed`). `cache: off` means the compiled
+     cache is disabled here, which is fine.
 
    The report never contains record text, so it can be pasted into the
    conversation as it is.
@@ -279,8 +302,9 @@ deciding whether it applies does not have to open the file.
    For a bulk pass, run the sync again with `--verify`.
 
 9. **A store you cannot run Python against** (about 5 lines). On a phone,
-   call `POST /api/cache/sync` on the running app, and poll the run it
-   returns. Otherwise do nothing: the app rebuilds lazily. An open app page
+   do nothing: the app rebuilds lazily. Its server listens on the device's
+   loopback only, so `POST /api/cache/sync` is reachable only from a PC
+   through `adb forward`, for someone who already has that set up. An open app page
    may show the old answer for one frame of the next visit and then replace
    it, with or without a sync (04-C2b). That is expected, not a failure.
 
@@ -337,8 +361,10 @@ ADAPTER_MAX_BODY_LINES = 12
 
 Checks:
 
-1. **Every adapter has a canonical.** For each `<adapter dir>/<name>/SKILL.md`,
-   `.claude/skills/<name>/SKILL.md` exists.
+1. **Adapters and canonicals pair up, both ways.** For each
+   `<adapter dir>/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md` exists.
+   And for each skill in `ROUTING_SKILLS`, every directory in `ADAPTER_DIRS`
+   holds its adapter, so deleting the adapter fails the build.
 2. **The frontmatter is identical.** The adapter's `name` and `description`
    equal the canonical's byte for byte, and `name` equals the directory name in
    both. A drifted description is a trigger that fires for one agent and not
@@ -348,17 +374,36 @@ Checks:
    canonical file and resolves, and shares no run longer than
    `MAX_SHARED_RUN` words with the canonical body. Its directory holds nothing
    but `SKILL.md`, so no script can be copied beside it.
-4. **The canonical's links resolve.** Every relative link in a
-   `ROUTING_SKILLS` file resolves, checked with `test_docs_guard`'s `_refs`
-   and case-exact spelling.
-5. **The commands exist.** Every `--flag` that appears after
-   `-m grimoire.cache sync` in the canonical file (fenced or inline) is an
-   option string of `grimoire.cache.build_parser()`'s `sync` subparser, and
-   every `python -m grimoire.<module>` the file names is an importable module.
-   This is the check that keeps the skill and 05-C2 in step: rename a flag and
-   the skill fails until it is updated.
-6. **It routes rather than restates.** A `ROUTING_SKILLS` file shares no run
-   longer than `MAX_SHARED_RUN` words with any document in `test_docs_guard`'s
+4. **The canonical's links resolve, anchors included.** Every relative link
+   in a `ROUTING_SKILLS` file resolves, checked with `test_docs_guard`'s
+   `_refs` and case-exact spelling, and a link's `#anchor` names a heading in
+   its target (`test_docs_guard`'s `_anchors`). The callers of `_refs` drop
+   anchors, so this part is new: a renamed store-guarantees heading must fail.
+5. **Every code-facing name exists.** The file is read whole, prose and fences
+   alike, with fenced commands first joined across `\` continuation lines.
+   - Every backticked or fenced `--flag` is an option string of
+     `grimoire.cache.build_parser()`'s `sync` subparser, except flags of other
+     commands on an explicit allowlist (`--porcelain=v1`, `--untracked-files`,
+     `-z`, `-C`). So a flag named only in prose (`--dry-run`, `--no-embed`)
+     is checked, and one on a continuation line is too.
+   - Every `python -m grimoire.<module>` is an importable module.
+   - Every backticked dotted name under the store (`voice_anchors.write`,
+     `entities.delete_entity`, `cache_sync.collecting`) resolves by import
+     and `getattr` from `grimoire.store`, and a call shown with a keyword
+     (`collecting(deleted=...)`) names a real parameter, checked with
+     `inspect.signature`.
+   - Every word item 7 lists as a status, a refusal reason, an outcome or a
+     batch total is in the matching `cache_sync` tuple, and every member of
+     `PATH_STATUSES` appears in item 7, so a new status cannot go
+     undocumented.
+   - Every `/api/...` path the file names is a route on `main.create_app()`.
+
+   This is the check that keeps the skill and 05-C2 in step: rename a flag, a
+   status or a function and the skill fails until it is updated.
+6. **It routes rather than restates.** A `ROUTING_SKILLS` file, frontmatter
+   description included (so the new `AGENTS.md` sentence cannot restate it),
+   shares no run longer than `MAX_SHARED_RUN` words with any document in
+   `test_docs_guard`'s
    `PROSE` (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`,
    `docs/store-guarantees.md` and the rest), nor with another skill's
    `SKILL.md`, `world-card-integration` included. Fenced code is excluded, as it
@@ -383,12 +428,14 @@ discovers the adapter.
 - *Adapters:* one per directory in `ADAPTER_DIRS` (initially
   `.agents/skills/`), each holding only `SKILL.md`: identical frontmatter and a
   link to the canonical file.
-- *Drift test:* `backend/tests/test_skills_guard.py`, checks 1 to 6, plus the
-  canonical file added to `test_install_scripts.py`'s `DOCS` (check 7).
+- *Drift test:* `backend/tests/test_skills_guard.py`, checks 1 to 6 (pairing
+  both ways; links and anchors; every flag, store function, status word and
+  API path the skill names), plus the canonical file added to
+  `test_install_scripts.py`'s `DOCS` (check 7).
 - *Routing:* `AGENTS.md` names the skill. The four skills that write the store
   end by pointing to it.
-- *Guarantee:* every command and flag the skill names exists in the code that
-  ships with it. The skill restates no maintained document. No store content
+- *Guarantee:* every command, flag, store function, status word and API path
+  the skill names exists in the code that ships with it. The skill restates no maintained document. No store content
   appears in it.
 - *Failure:* a drift fails `make check-py` with a message naming the file and
   the missing flag, link or duplicated run.
@@ -417,10 +464,14 @@ is that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
 ## 9. Tests and acceptance
 
 - `test_skills_guard.py` passes on the new files, and each check fails on a
-  fixture that breaks it: a description differing by one character, an adapter
-  body of thirteen lines, a broken canonical link, a flag the parser does not
-  have, a seventeen-word run copied from `CLAUDE.md`, and a file beside an
-  adapter's `SKILL.md`.
+  fixture that breaks it: a description differing by one character, a
+  missing adapter for a `ROUTING_SKILLS` skill, an adapter body of thirteen
+  lines, a broken canonical link, a link to a heading that does not exist, a
+  flag the parser does not have (in prose, and on a `\` continuation line), a
+  store function that does not exist, a keyword `collecting` does not take, a
+  status word not in `PATH_STATUSES`, a `PATH_STATUSES` member item 7 omits,
+  an `/api/` path with no route, a seventeen-word run copied from `CLAUDE.md`,
+  and a file beside an adapter's `SKILL.md`.
 - `test_install_scripts.py` fails on a Unix-only venv command added to the
   skill.
 - `test_docs_guard.py` still passes with the `AGENTS.md` and `CONTRIBUTING.md`
@@ -431,7 +482,9 @@ is that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
   Realm and delete the old tidewatch lore entry" follows the skill: it
   writes through `voice_anchors.write`, deletes through `entities.delete_entity`
   inside `collecting(deleted=...)` or runs one CLI sync, gets exit status 0,
-  and reports counts without record text. This is checked by a person, not CI.
+  and reports counts without record text. This is checked by a person, not CI,
+  and its transcript summary (counts and statuses only) goes in the PR
+  description, so the gate leaves evidence.
 
 ## 10. Non-goals
 
@@ -461,3 +514,31 @@ is that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
 4. **Should `ROUTING_SKILLS` include the existing six?** *Recommendation:* no,
    not in this change (Non-goals). Each would need rewording to pass check 6,
    which is a review of its own.
+
+## 12. Review record
+
+**Spec gate (substitute review), 2026-10-10.** An adversarial review checked
+this spec against the repository (0 blocking, 5 should-fix, 5 minor). Codex
+was not used; the CLI's `/codex:adversarial-review` gate is still pending.
+Each finding was verified against the code before it was folded in.
+
+- **Should-fix, all folded in.**
+  - S1. The drift test saw only flags written after the command. Check 5 now
+    reads the whole file, joins `\` continuations, and checks every flag,
+    store function and keyword, status word and API path; check 4 checks
+    anchors.
+  - S2. The result table did not match 05's report schema. Item 7 is now
+    three tables written from 05-C2's exported vocabulary, with exits 0 to 3
+    and `missing` and `verify_failed`, and check 5 holds it both ways.
+  - S3. Commands assumed one layout. Every form sets `PYTHONPATH`, a
+    PowerShell form is given, and a worktree is routed to CONTRIBUTING.md's
+    `PY` rule.
+  - S4. `git status --porcelain` could quote or collapse paths, and drops
+    unstaged renames. The skill now uses `-z --untracked-files=all`, and 05
+    now reports a nonexistent path as `missing` with exit 1.
+  - S5. Check 1 runs both ways.
+- **Minor, all folded in.** M1 the description is included in check 6. M2
+  the lock claim is narrowed to the transcript and ledger functions, with a
+  link. M3 the phone case says loopback and `adb forward`. M4 05's acceptance
+  now uses `image_descriptions`, the door this skill names. M5 the manual dry
+  run's result goes in the PR description.
