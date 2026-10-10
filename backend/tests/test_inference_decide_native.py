@@ -1775,3 +1775,61 @@ def test_triggers_read_the_kind_decide_stamped(client):
     assert decisions.triggers(got.items, question="over", escalate_on=("low_margin",),
                               margins={"openai_compatible": 0.2}) == ()
     assert len(fake.native_requests) == 2 and fake.calls == 0
+
+
+# ---- run attribution (01g-S3) ----
+def test_native_rows_carry_the_run(client):
+    resolved = _native_resolution(client, fallback=True)
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes(), _yes()])
+    _decide(fake, _items(2), resolved=resolved, run_id="run-1", loop_turn=3,
+            response_id="response-winifred")
+    rows = _rows()
+    assert len(rows) == 2 and all(r["decision_mode"] == NATIVE for r in rows)
+    assert all((r["run_id"], r["loop_turn"], r["response_id"])
+               == ("run-1", 3, "response-winifred") for r in rows)
+
+
+def test_a_clock_refusal_under_a_run_files_no_row_and_captures_no_messages(client):
+    """A meter seeded with a run id is still unsent until the facade stamps
+    it: a chunk the clock refused files no row, and its capture no messages."""
+    _structured_store(client, fallback=False)
+
+    async def around(call, holder):
+        call.close()
+        raise _budget_refused()
+
+    captured = _Captures()
+    with pytest.raises(LLMError):
+        _decide(FakeLLM([[decision_reply({"over": True})]]), [_item()],
+                resolved=_resolved(), around=around, capture=captured, run_id="run-1")
+    ((messages, _outcome, _conn),) = captured
+    assert messages == [] and _rows() == []
+
+
+def test_a_native_item_refused_unsent_under_a_run_captures_no_messages(client):
+    wide = Item("Seraphine weighs the roster.",
+                (Choice("who", "Who steps forward?",
+                        tuple(Option(f"o{n}", f"Candidate {n}") for n in range(255)),
+                        allow_none=True),))
+    resolved = _native_resolution(client, fallback=True)
+    fake = FakeLLM([[decision_reply({"who": "o3"})]], decisions=[_yes()])
+    captured = _Captures()
+    _decide(fake, [wide], resolved=resolved, capture=captured, run_id="run-1")
+    (refused, _answered) = captured
+    assert refused[0] == []
+    (row,) = _rows()
+    assert row["decision_mode"] == STRUCTURED and row["run_id"] == "run-1"
+
+
+def test_run_stages_files_the_run(client):
+    resolved = _native_resolution(client, fallback=True)
+    native, fallback = (a.target for a in resolved.attempts)
+    fake = FakeLLM([[decision_reply({"over": False})]],
+                   decisions=[LLMError("network", "connection reset")])
+    asyncio.run(inference.run_stages(
+        "scene-break", [_item()], (Stage(NATIVE, wire.Chain(native), None),
+                                   Stage(STRUCTURED, wire.Chain(fallback), 0)),
+        client=fake, run_id="run-1", loop_turn=1))
+    rows = _rows()
+    assert len(rows) == 2
+    assert all((r["run_id"], r["loop_turn"]) == ("run-1", 1) for r in rows)

@@ -166,7 +166,7 @@ def _stamp(holder: dict, space: dict) -> None:
 
     The identity keys `llm._stamp` writes for a chat attempt -- `model`,
     `connection`, `provider`, `attempts` -- plus `operation`. A stamped holder
-    is what makes `Meter.done` file a row at all (an empty one means "never
+    is what makes `Meter.done` file a row at all (an unstamped one means "never
     sent"). The provider fields are read with `.get`, because a test double's
     space may carry only the four keys `embed_space.resolve` returns.
 

@@ -28,6 +28,9 @@ per-attempt `sequence`, and `elapsed_ms` since that attempt started. The
 provider's actual model field remains in the captured body. Start/end events
 mark each attempt; end status distinguishes complete, error, and interrupted
 calls. Retries and fallback attempts share a call ID and keep separate frames.
+A call made under a caller's run (a tool loop's turn, or a decision it asked)
+also carries that run's `run_id`, the same on every attempt; the ledger row
+for the call carries it too. An embedding call's own capture line does not.
 
 To reconstruct one event, group rows by `(call_id, attempt, sequence)`, order
 them by `part`, concatenate their `payload` strings, and JSON-decode the result
