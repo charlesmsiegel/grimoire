@@ -575,11 +575,20 @@ before reserving, like the seam's.
      - Otherwise the text is read with `schemas.find_object` and checked with
        `tool_calls.conforms`. A conforming object is `final`, status
        `completed`. Anything else goes to step 7, once.
+   - **A call to a terminal tool** (section 3.6) ends the loop: its
+     arguments are validated (a non-conforming one is an error result and
+     the loop continues), and a valid one is returned as `final_call`,
+     status `completed`, unexecuted. Calls after it in the same turn are
+     answered with nothing and recorded in the trace as `not_run`.
+   - **Calls after visible text, with `decline_after_text`** (01g-C6,
+     section 3.8): none is executed. The turn's text is the answer, status
+     `completed`, and each call is recorded as `declined: "after_text"` in
+     the trace and in `LoopResult.declined`.
    - **`finish_reason == "length"` with calls** means the arguments were cut
      off. Each such call is answered with an error result ("your arguments
      were cut off; call again with a shorter request"), and the turn counts.
-5. **Execute the calls in order**, one at a time. Before each, check the
-   budget for a tool call. A call past `max_tool_calls`, or past the wall
+5. **Execute the calls in order**, one at a time, through the caller's
+   `execute` (section 3.6). Before each, check the budget for a tool call. A call past `max_tool_calls`, or past the wall
    clock, is *not* executed. It gets an error result (`"not run: the run's
    tool budget is spent"`), because every provider requires a result for
    every call id. An unknown name, unparseable arguments or non-conforming
@@ -611,16 +620,19 @@ before reserving, like the seam's.
 @dataclass(frozen=True)
 class LoopResult:
     status: Literal["completed", "budget_exhausted", "failed"]
-    limit: str = ""            # with budget_exhausted: turns|tool_calls|decisions|
-                               #   wall|spend|result_chars
-    text: str = ""             # the last model turn's text
+    limit: str = ""            # the limit that stopped the run (01g-C4), with
+                               #   budget_exhausted: turns|tool_calls|decisions|
+                               #   wall|spend|result_chars; "" otherwise
+    text: str = ""             # the last model turn's text (the visible text, with C6)
     final: dict | None = None  # the conforming final record, with final_schema
+    final_call: ToolCall | None = None  # the terminal call, validated, unexecuted
+    declined: tuple[ToolCall, ...] = ()  # calls declined after visible text (C6)
     proposals: tuple[dict, ...] = ()
     messages: tuple[dict, ...] = ()   # the loop's appended turns, as sent
     trace: tuple[TraceEntry, ...] = ()
     rows: tuple[dict, ...] = ()       # every ledger row this run filed, in order
     error: LLMError | None = None     # with failed
-    run_id: str = ""
+    run_id: str = ""           # the caller's, echoed
 ```
 
 **`LoopEvent`** (from `stream_tools`) is one of:
@@ -652,6 +664,29 @@ text* turn_end (tool_start tool_end)* ... done
 ```
 
 `done` comes last, after every meter has filed.
+
+**01g-C6: the final turn streams, and a call after text is declined.** A
+scene contribution (02-C4) cannot be carried by a loop that only joins
+replies, so:
+
+- **Every turn is sent through the generate streaming path.** In
+  `stream_tools` each turn is the same `client.stream(...)` call inside
+  `inference.py` that `generate(stream=True)` makes: the same `_resilient`
+  retries, idle bound and `""` heartbeats. `tool_calls.text_deltas(events)`
+  turns the event stream back into the plain `AsyncIterator[str]` that
+  `generate(stream=True)` yields, heartbeats included, so a caller such as
+  `_stream_contribution` keeps its display and its watcher as they are.
+- **A display reasoning buffer rides each turn.** The caller passes its
+  `llm_reasoning.Buffer` as `reasoning=`, and the loop installs it in each
+  turn's holder, so thinking still reaches the display across turns.
+- **`decline_after_text=True`** makes visible text final. Once any turn has
+  yielded a non-empty delta, a tool call that turn ends with is **not
+  executed**. The loop ends with that text as the answer, status
+  `completed`, and records each such call as declined after text. No turn
+  follows it, so the visible stream is one continuous generation. A tool
+  call made before any visible text runs normally, and the visible stream
+  starts on the next turn. That is 02's rule (02 section 8.2), made a loop
+  option rather than a caller's workaround.
 
 ### 3.9 The run budget (01g-C4)
 
