@@ -38,16 +38,116 @@ store, the line `routes.scenes._embedding_reason` draws for the absorb. A
 deadline that only bounds the provider (the client's own `TIMEOUT`, or lore
 recall's and search's, which share one `TIMEOUT` across a retry) cutting a slow
 provider is that provider failing: an error like any other.
+
+**Never on the app's loop** (roadmap 01h-C4a). The client is synchronous, so
+an `embed_sync` made on the lifespan's event loop would freeze every other
+request for as long as the endpoint took. `runner.install` marks that loop
+(`mark_app_loop`) and the lifespan's exit unmarks it, and a call made while it
+is the running loop is refused before any meter as `network`/`ON_LOOP`, which
+every caller already reads as "the endpoint is unavailable, do not retry", so
+the turn degrades to keyword rather than stalling. It is the one exception to
+"nothing sent, nothing filed": the refusal writes ONE error row (the task, the
+kind, the code, the campaign and scene it was handed, and the caller's
+innermost frames as `file:line in function` -- never its text), because it
+records a programming error rather than a call, and the frames are what find
+the caller a dozen frames below a route. A worker, a CLI, a thread calling
+through a portal and a private `asyncio.run` loop are never refused; an
+`async def` caller reaches a compose or an embed through `run_in_threadpool`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
+import traceback
+from pathlib import PurePath
 from typing import Any
 
 from ... import embeddings, llm_usage, wire
-from .. import logs, routing, tokens, usage
+from .. import errors, logs, routing, tokens, usage
+
+#: The `code` of the refusal on the app's loop (see the module docstring). Its
+#: kind is `network`.
+ON_LOOP = "on_loop"
+
+#: How many of the caller's frames the refusal's error row keeps. Enough to
+#: reach from `embed_sync` up past the whole compose path (recall is about a
+#: dozen frames below the route function that composed) to the route module
+#: that called it; each is one short `file:line in function` line, so the row
+#: stays far inside `logs.MAX_TRACE` and is never clipped from the caller's end.
+ON_LOOP_FRAMES = 16
+
+#: The app loops, each with how many live lifespans marked it.
+#:
+#: Module state, not `app.state`, deliberately: the spec puts the registry
+#: here, and the guard runs frames below any route, in store code that has no
+#: app in hand. The loop OBJECT rather than its thread's ident, because an
+#: ident is reused once its thread ends and a loop object is not. A count
+#: rather than a set because a test suite builds an app per test, and two apps
+#: sharing one loop (or one lifespan re-entered) must not unmark each other's.
+_APP_LOOPS: dict[asyncio.AbstractEventLoop, int] = {}
+_APP_LOOPS_LOCK = threading.Lock()
+
+
+def mark_app_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Say that `loop` is an app's lifespan loop (`runner.install`)."""
+    with _APP_LOOPS_LOCK:
+        _APP_LOOPS[loop] = _APP_LOOPS.get(loop, 0) + 1
+
+
+def unmark_app_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Undo one `mark_app_loop(loop)`; a no-op for a loop nobody marked."""
+    with _APP_LOOPS_LOCK:
+        left = _APP_LOOPS.get(loop, 0) - 1
+        if left > 0:
+            _APP_LOOPS[loop] = left
+        else:
+            _APP_LOOPS.pop(loop, None)
+
+
+def app_loop_marked(loop: asyncio.AbstractEventLoop) -> bool:
+    """Whether `loop` is marked as an app loop."""
+    return loop in _APP_LOOPS
+
+
+def _on_app_loop() -> bool:
+    """Whether this call runs on a marked app loop: the loop running in this
+    thread, if any, is one `runner.install` marked.
+
+    Not "is any loop running": a private `asyncio.run` loop serves nobody
+    else, and blocking it blocks no one. A worker thread, a CLI, and a thread
+    calling through a portal run no loop of their own, so none is refused.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return app_loop_marked(loop)
+
+
+def _caller_frames() -> str:
+    """The caller's innermost `ON_LOOP_FRAMES` frames, outermost first, as
+    `dir/file.py:line in function` -- no source text and no locals. This
+    module's own two frames are left out."""
+    frames = traceback.extract_stack()[:-2][-ON_LOOP_FRAMES:]
+    return "".join(f"{'/'.join(PurePath(f.filename).parts[-2:])}:{f.lineno} in {f.name}\n"
+                   for f in frames)
+
+
+def _refuse_on_loop(task: str, *, campaign: str, scene: str) -> None:
+    """Raise the `ON_LOOP` refusal when called on an app's loop, after
+    writing its one error row (the module docstring says why it files one).
+    The exception is marked recorded, so a caller that records it again adds
+    nothing."""
+    if not _on_app_loop():
+        return
+    exc = embeddings.EmbeddingsError("network", "embedding refused on the event loop",
+                                     code=ON_LOOP)
+    errors.record(task, "network", ON_LOOP, campaign=campaign, scene=scene, task=task,
+                  trace=_caller_frames())
+    errors.mark_recorded(exc)
+    raise exc
 
 
 def _stamp(holder: dict, space: dict) -> None:
@@ -161,12 +261,15 @@ def embed_sync(task: str, texts: list[str], *, space: dict,
     chunk of the same run passes neither.
 
     Raises `ValueError` for a task that is not an embed task, before anything
-    else, and whatever the client raises, unchanged.
+    else; `EmbeddingsError(..., code=ON_LOOP)` on an app's loop, before
+    anything is sent or metered (see the module docstring); and whatever the
+    client raises, unchanged.
     """
     if task not in routing.EMBED_TASKS:
         raise ValueError(f"{task!r} is not an embed task")
     if not texts:
         return []
+    _refuse_on_loop(task, campaign=campaign, scene=scene)
     if deadline is not None and time.monotonic() >= deadline:
         # The client's own kind and wording, raised outside any meter: nothing
         # was sent, so nothing is filed.

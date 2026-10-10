@@ -344,6 +344,9 @@ async def _lifespan(app: FastAPI):
                 _stop_migration(app)
             tg.cancel_scope.cancel()
     finally:
+        # FIRST, before any `await`, on every way out: the loop stops being an
+        # app loop for the embed guard before it can end (01h-C4a).
+        runner.uninstall(app)
         # Closing the gateway clients' `httpx` pools (#215). Worth nothing
         # where the server *is* the process -- the pool dies with it -- and
         # everything where an app is rebuilt inside a living one: the Android
