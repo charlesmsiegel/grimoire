@@ -134,6 +134,12 @@ These are headlines. The owning spec's Contract section is authoritative.
   and never re-drawn.
 - [ ] **01c-C4** Abstain, refuse, unreadable, error or no usable
   distribution: never sampled. Rank or MultiSelect marginals: never sampled.
+- **Departures from C1's text (01c-S2):** a failure on the isolated
+  native-first stage is not composed into the error of an item a later stage
+  answered, and a clock refusal at that stage ends the chain rather than
+  handing its items on. The settings "native first" phrase (§12 Q3) and the
+  health and error-store cost of a failing decisions endpoint are left to
+  02-C2a, the first change that lists a kind.
 
 ### 01d: Escalation and per-task policy
 - [ ] **01d-C1** `routing.TaskPolicy` (shared with 01c). `fallback="none"`
@@ -394,7 +400,7 @@ alone. This table is generated: after a spec's slices change, run
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 01c-S1 | The sampler, the record and replay | M | 1 | 01d-S2 (S), 01e-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01c-S2 | Native-first in the decide chain (mechanism, all tasks off) | M | 1 | 01d-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01c-S2 | Native-first in the decide chain (mechanism, all tasks off) | M | 1 | 01d-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01c-S3 | The recorded evidence and the distribution grader | S | 4 | 01a-S3, 01a-S4, 01c-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01d
