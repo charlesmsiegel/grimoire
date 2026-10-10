@@ -47,7 +47,7 @@ all of them have landed. `check` holds both to the slice checklist.
 |----|------|----------------|:-:|:-:|:-:|:-:|
 | 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | — | [x] |
 | 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [ ] |
-| 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [ ] |
+| 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [x] |
 | 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [ ] |
 | 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | 3 | [ ] |
 | 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | 5 | [ ] |
@@ -89,16 +89,21 @@ slice checklist's **Wave** column says how deep each one sits.
 These are headlines. The owning spec's Contract section is authoritative.
 
 ### 01a: Eval cost, latency and token reporting
-- [ ] **01a-C1** Per-case and per-call wall time, tokens and the three money
+- [x] **01a-C1** Per-case and per-call wall time, tokens and the three money
   columns, never added together. Aggregated per route, backend and `hop`. A
   play case can be summed across its tasks. An absent price is never shown
   as zero.
-- [ ] **01a-C2** Live evals are metered by the production meter inside a
+- [x] **01a-C2** Live evals are metered by the production meter inside a
   throwaway home. Rows are copied to the run file stamped `scope: "eval"` and
   never reach the library's ledger. A tripwire refuses to run against the
   real home.
-- [ ] **01a-C3** `--decide-backend` can be repeated. Adds `--repeat`, `--out`
+- [x] **01a-C3** `--decide-backend` can be repeated. Adds `--repeat`, `--out`
   (eval-run v1) and `--compare FILE...`, which works offline.
+- Landed as one PR, slices S1-S4 (plans in
+  `docs/superpowers/plans/2026-10-10-roadmap-01a-s*.md`). Every slice's plan
+  gate, review and final gate were **substitute** reviews (the Codex CLI was
+  not available), recorded in each plan; the slice table can only tick `[x]`,
+  so the Codex gates are still owed here, as the spec gate's `[~]` says.
 
 ### 01b: Decision capture
 - [ ] **01b-C1** One capture helper used at all five decide sites, plus every
@@ -356,10 +361,10 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01a-S1 | Decide call records | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01a-S2 | Metered live runs in an eval scope | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01a-S3 | Cost, latency and token reporting | M | 2 | 01a-S1, 01a-S2, 01d-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01a-S4 | Run file and comparison | M | 3 | 01a-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01a-S1 | Decide call records | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01a-S2 | Metered live runs in an eval scope | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01a-S3 | Cost, latency and token reporting | M | 2 | 01a-S1, 01a-S2, 01d-S3 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01a-S4 | Run file and comparison | M | 3 | 01a-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01b
 
@@ -588,8 +593,9 @@ alone. This table is generated: after a spec's slices change, run
 ## Shared structures: whichever spec lands first adds them
 
 - `routing.TaskPolicy`: 01c and 01d.
-- `inference._Call.stage` / `positions`: 01a and 01b.
-- `decisions.CallRecord`, `Decision.calls`: 01a, used by 01d.
+- `inference._Call.stage` / `positions`: 01a and 01b. Added by 01a-S1.
+- `decisions.CallRecord`, `Decision.calls`: 01a, used by 01d. Added by
+  01a-S1.
 - `ItemResult.served`: 01d, read by 01c.
 - `routing.NO_LEGACY` sentinel for routes new at format 2: 01g
   (`tool-decision`), 09 and 10 (`history_check`, `history_plan`), 02-C5.
