@@ -6,7 +6,6 @@ import {
 import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { EMBEDDINGS_COPY } from "../components/inference/copy";
-import { onConfigChanged } from "../appEvents";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
@@ -119,7 +118,8 @@ const LINKS: LinkDef[] = [
   { key: "inference-presets", group: "Inference", label: "Presets", to: "/presets" },
 ];
 
-/** The column, as data: three groups, fourteen sections, and which draft
+/** The column, as data: four groups -- Inference's links (`LINKS`) above
+ *  three groups of sections -- fourteen sections, and which draft
  *  fields each one owns — the last part is what lets a section carry an
  *  unsaved dot, so the footer's count is always findable rather than being a
  *  number about somewhere else. */
@@ -272,10 +272,10 @@ async function lastPrompt(): Promise<Probe> {
 export default function ConfigView() {
   const [config, setConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  // `?section=` opens one section from a link elsewhere -- Todo's embeddings
-  // chore lands on Models, by its old `semantic` id. Anything that is not a
-  // section id, current or retired, is ignored and the page opens where it
-  // always has.
+  // `?section=` opens one section from a link elsewhere. An id whose pane
+  // became a page of its own (`MOVED`: `semantic`, `pricing`, ...) redirects
+  // to that page. Anything that is neither a section id nor a moved one is
+  // ignored and the page opens where it always has.
   const asked = useSearchParams()[0].get("section") ?? "";
   const navigate = useNavigate();
   const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? null;
@@ -314,16 +314,6 @@ export default function ConfigView() {
       setDraft(draftOf(c));
     });
   }, []);
-
-  // The Models summary is `GET /config`'s, read once above; a model-settings
-  // change made on this page (a preset renamed or deleted in the editor
-  // below) or anywhere else announces, and the summary follows. Only the
-  // summary: the draft is the reader's, and a re-read must not reset it.
-  useEffect(() => onConfigChanged(() => {
-    api.getConfig()
-      .then((c) => setConfig((prev) => (prev ? { ...prev, inference: c.inference } : prev)))
-      .catch(() => {});
-  }), []);
 
   // Fetched when the Context section is first opened, not on mount: it is
   // three round trips into a campaign for one bar, and ten of the eleven
@@ -464,9 +454,6 @@ export default function ConfigView() {
 
   const current = SECTIONS.find((s) => s.id === section)!;
 
-  /** Where the upgrade stands, in the words every model-settings surface
-   *  uses (`inference/migration`): the banner while the library's settings
-   *  cannot be saved, else a quiet line on the card. */
   const column = (
     <>
       <div className="column-head">

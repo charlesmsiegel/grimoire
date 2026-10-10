@@ -258,7 +258,7 @@ export function CostsView() {
                           ? <Link to={modelRatesPath(m.provider_id, asked)}>Set its rates</Link>
                           : (providers !== null || !m.provider_id
                              || report.rates_editable !== true)
-                            && <Link to="/config?section=pricing">Add a pricing entry</Link>}
+                            && <Link to="/models#rates">Add a pricing entry</Link>}
                       </li>
                     );
                   })}
