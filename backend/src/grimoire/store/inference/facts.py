@@ -647,6 +647,23 @@ def embed_options(model_facts: Mapping) -> wire.EmbedOptions | None:
         dimensions_field=str(checked.get("dimensions_field", "dimensions")))
 
 
+def options_block(options: wire.EmbedOptions | None) -> dict | None:
+    """`options` in the shape a stated block is stored in (`_check_embedding`),
+    or None for no options at all: what the Embedding card reads them back as
+    (01h §4.4). Query side included, since the card says what is sent; an
+    object the validator refuses is None too (it names no space, so nothing
+    embeds with it)."""
+    if options is None:
+        return None
+    try:
+        block = _check_embedding(dataclasses.asdict(options))
+    except ValueError:
+        return None
+    if block.get("dimensions_field") == wire.EmbedOptions.dimensions_field:
+        del block["dimensions_field"]           # the default, which a write leaves out
+    return block or None
+
+
 def _apply_embedding(entry: dict, block: dict | None) -> None:
     """Lay a checked block (`_check_embedding`) over `entry`: None leaves the
     entry's, `{}` removes it, anything else replaces it."""

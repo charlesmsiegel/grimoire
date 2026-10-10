@@ -629,6 +629,31 @@ test("an Embedding that is on shows provider and model, no preset, and an input-
     expect(emb.queryByText(/ out/)).toBeNull();
   });
 
+test("the Embedding row says what options its requests carry", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
+                 resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null,
+                 options: { input: "param", param_field: "input_type", query_value: "query",
+                            document_value: "document", dimensions: 512 } },
+  } }));
+  await openSummary();
+  expect(row("Embedding").getByText(
+    "Options: query/document in `input_type`, 512 dimensions, two requests per recall"))
+    .toBeInTheDocument();
+});
+
+test("an Embedding with no options draws no options line", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
+                 resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null,
+                 options: null },
+  } }));
+  await openSummary();
+  expect(row("Embedding").queryByText(/^Options:/)).toBeNull();
+});
+
 test("a newer store says so and disables Edit models", async () => {
   (api.getInferenceSettings as any).mockResolvedValue(settings({ newer: true }));
   await openSummary();

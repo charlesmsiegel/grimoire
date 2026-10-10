@@ -357,6 +357,9 @@ export type EmbeddingCard = {
   resolves: ResolvedSelection | null;
   on: boolean;
   problem: string | null;
+  /** The stated embedding options its requests are built from (01h), in
+   *  their stored shape; null while it is off or when none are stated. */
+  options?: EmbeddingOptionsBlock | null;
   /** As on `RoleCard`; null while the role is off. */
   rate: RateInfo | null;
   /** As on `RoleCard`, null while the role is off; nothing is reserved for a
@@ -456,7 +459,23 @@ export type InferenceWrite = Omit<CampaignInferenceWrite, "roles"> & {
 };
 
 /** One recorded test result, kept only for the provider's current `rev`. */
-export type VerifiedResult = { ok: boolean; at?: string; error?: string; dims?: number };
+/** How an embedding request says query or document (01h): not at all, as a
+ *  text prefix, or as a request field. */
+export type EmbeddingInputMode = "none" | "prefix" | "param";
+/** A model's stated embedding options (01h), as stored: only the fields its
+ *  mode uses, and a width only when one is requested. `{}` is none. */
+export type EmbeddingOptionsBlock = {
+  input?: EmbeddingInputMode;
+  query_prefix?: string; document_prefix?: string;
+  param_field?: string; query_value?: string; document_value?: string;
+  dimensions?: number; dimensions_field?: string;
+};
+/** A probe's filed verdict. A failed `embed` probe whose endpoint ignored a
+ *  requested width carries both widths (01h). */
+export type VerifiedResult = {
+  ok: boolean; at?: string; error?: string; dims?: number;
+  requested_dims?: number; returned_dims?: number;
+};
 /** `GET /api/llm-connections/{id}/facts`: what the user said about one model
  *  on one provider, what a test call found, and every capability as it
  *  resolves with them. */
@@ -486,6 +505,13 @@ export type ModelFacts = {
    *  answers 503, try again) -- or `mangled` -- it does not parse, which a
    *  person has to fix (a save answers 409 `facts_unreadable`). */
   unreadable_reason?: "held" | "mangled";
+  /** The stated embedding options block as it is on disk (01h), which may be
+   *  one the validator refuses; absent or null when none is stated. */
+  embedding?: EmbeddingOptionsBlock | null;
+  /** The block is refused by the validator, so the Embedding role names no
+   *  space with this model; `embedding_invalid_reason` is the fixed sentence. */
+  embedding_invalid?: boolean;
+  embedding_invalid_reason?: string;
 };
 /** Where a model's size came from (01i): the user's word, the provider's
  *  catalog, or nowhere. */
@@ -511,6 +537,10 @@ export type ModelFactsUpdate = {
    *  one, `0` removes it. A max output above the window is refused. */
   context_window?: number;
   max_output?: number;
+  /** The model's embedding options (01h): a block replaces them, `{}`
+   *  removes them. A change of their document side on the Embedding role's
+   *  model asks `confirm_embedding`. */
+  embedding?: EmbeddingOptionsBlock;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
 export type TestableCapability = "generate" | "vision" | "embed" | "decide_native" | "tools";
@@ -529,7 +559,11 @@ export type ModelTestPreview = {
  *  earlier failure that answered for it too. The `tools` probe adds two:
  *  `no_tool_call` (the model answered without calling -- filed, read as
  *  unverified) and `capped` (the reply reached the cap first -- not filed). */
-export type ModelTestProbe = { ok: boolean; kind?: string; error?: string; dims?: number };
+export type ModelTestProbe = {
+  ok: boolean; kind?: string; error?: string; dims?: number;
+  /** A failed `embed` probe whose endpoint ignored a requested width (01h). */
+  code?: string; requested_dims?: number; returned_dims?: number;
+};
 /** What a landed test run holds. `recorded` is whether any verdict was filed
  *  -- none is when nothing answered for the model, or the provider was edited
  *  while the probes were out. */

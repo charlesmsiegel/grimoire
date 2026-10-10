@@ -1112,3 +1112,17 @@ def test_the_view_never_carries_a_key(client):
                  client.get(f"/api/campaigns/{cid}/inference").text):
         assert "sk-test-active" not in text and "sk-spare" not in text
         assert "api_key" not in text
+
+
+# ---- the Embedding card's options (01h-S4) ----
+
+def test_the_embedding_card_reads_back_its_options(client):
+    from grimoire.store.inference import facts
+
+    _fresh(client)
+    _ok(client, {**EMBED, "confirm_embedding": True})
+    assert _global(client)["roles"]["embedding"]["options"] is None
+    block = {"input": "param", "param_field": "input_type", "query_value": "query",
+             "document_value": "document", "dimensions": 512}
+    facts.state("spare", "vendor/embed-small", embedding=block)
+    assert _global(client)["roles"]["embedding"]["options"] == block
