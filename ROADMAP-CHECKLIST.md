@@ -286,7 +286,7 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [ ] 01c ← 01a-C1/C3 (H to switch a task on), 01b-C1 (S)
 - [ ] 01d ← 01a-C1/C3 (H to enable), 01b-C1 (S)
 - [ ] 01e ← 01a-C1 (S), 01b-C1 (S)
-- [ ] 01f ← 01a-C1 (S)
+- [ ] 01f ← 01a-C1 (S), 01i-C1 (S: the `max_tokens` cap respects the model's max output)
 - [ ] 01g ← 01f-C1/C2/C3 (H); 01d-C1, 01i-C1, 01c-C2/C3, 01b-C1 (S)
 - [ ] 01h ← 01a-C1/C2 (H for C6), 01a-C3 (S), 01s (S); 01g-C3 run id (S)
 - [ ] 01i ← 01s (S)

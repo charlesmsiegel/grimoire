@@ -201,9 +201,10 @@ three HTTP adapters, Anthropic included) and C2b (the SDK).
 
 One provider-neutral tool-calling substrate that later specs build on:
 
-1. **Tools are Python callables the caller registers.** Grimoire executes
-   them, never an adapter or a provider SDK, and they are read-only unless
-   they *propose*.
+1. **Tools are the caller's.** The caller declares them and executes them
+   through the executor it hands the loop. An adapter or a provider SDK never
+   executes one. They are read-only unless they *propose*, and a terminal
+   call comes back to the caller unexecuted.
 2. **A bounded loop** of model turns and tool executions, with:
    - every turn metered under one run id;
    - a budget checked **before** every send;
@@ -233,9 +234,9 @@ Not the goal:
 caller (routes/, inside a detached run)
   resolved = require_inference("<task>", cid)        # route requires ("tools",)
   result = await operations.run_tools("<task>", messages,
-               toolset=..., client=client, resolved=resolved,
-               budget=RunBudget(...), campaign=cid, scene=sid,
-               final_schema=None | {...}, capture=..., run_id=None)
+               toolset=..., execute=..., client=client, resolved=resolved,
+               budget=RunBudget(...), run_id=run.id, campaign=cid, scene=sid,
+               final_schema=None | {...}, capture=...)
                  |
                  v
 inference.run_tools  (the loop; the only door, in inference.py)
@@ -249,7 +250,8 @@ inference.run_tools  (the loop; the only door, in inference.py)
     no calls -> final (parse final_schema if any) -> done
     for each call (in order):
         budget.check_tool()       --refused-->  error result "budget"
-        result = await execute(call)        # thread for sync tools
+        terminal call -> return it unexecuted (final_call)
+        result = await execute(call, ctx)   # the caller's executor
         append assistant tool turn + tool results
   -> LoopResult(status, text, final, messages, trace, rows, error)
 ```
@@ -262,9 +264,9 @@ inference.run_tools  (the loop; the only door, in inference.py)
 - **`inference.py` gains the loop** (`run_tools`, `stream_tools`), because
   `client.complete` may be spelled only there (`test_routing_guard.py:236-244`)
   and its meters are scanned there (`test_usage_guard.py`).
-- **`routes/tool_decision.py` (new) builds the decide tool**, where its
-  literal task and `require_inference` call are visible to both guards
-  (section 3.12).
+- **`routes/tool_decision.py` (new) builds the decide tool** for a task the
+  caller names and resolves at its own call site, where the literal is
+  visible to both guards (section 3.12).
 
 ### 3.2 Provider-neutral shapes (`tool_calls.py`)
 
@@ -805,9 +807,12 @@ break the three-columns rule (CLAUDE.md, "Costs"):
 - **One meter per turn**, opened in `run_tools`. A finalize turn is a turn.
   A 01f re-send inside a turn files on that turn's holder (01f-C2), so it is
   that turn's row. Each row carries:
-  - **`run_id`**: one per loop. The caller may pass its own, for example the
-    detached run's `Run.id`, so the ledger and the run registry share an id.
-    Otherwise the loop mints `uuid4().hex`.
+  - **`run_id`**: the caller's (section 3.7), normally the detached run's
+    `Run.id`, so the ledger and the run registry share an id. The loop never
+    mints one.
+  - Embeds made inside a tool are filed under the same `run_id` through
+    01h-C5's optional `run_id` on `embed_sync` / `embed_groups_sync`. The
+    tool reads it from `ToolContext.run_id`.
   - **`loop_turn`**: `k`.
   - `usage.record`, `Meter` and `meter` gain both as optional keywords,
     written only when set, like `round_id`. An older build reads such a row
@@ -889,30 +894,50 @@ A generating model meets a bounded choice that Grimoire did not know to ask
 in advance ("does Mara tell the truth, lie, or evade?"). It asks the
 Decision role rather than settling it in prose. The Primary keeps the prose.
 
-**The route:** `Route("tool_decision", "Decisions asked by a model", ...,
-("tool-decision",), True, operation="decide", default_role="decision")`. It
-is added with the builder below, which is its call site, so
-`test_operation_guard.py`'s rule that every decide task has a call site holds
-from the start.
+**The route.** `Route("tool_decision", "Decisions asked by a model", ...,
+tasks, True, operation="decide", default_role="decision",
+legacy=routing.NO_LEGACY)`. `routing.NO_LEGACY` is the shared sentinel for a
+route born at format 2 (`ROADMAP-CHECKLIST.md`, "Shared structures"): 01g,
+09, 10 and 02 may each be the first to add it. It tells the planner and the
+legacy route list that no format-1 key exists to read. **The task names come
+from callers**, such as 02's `turn-tool-decision`. A consumer may instead put
+its decide tool on a decide route of its own (12 proposes
+`investigation_decide`), and the shim accepts either. The route lands in the
+slice of its first consumer, because `test_routing_guard.py` fails a route
+whose tasks nothing uses.
 
-**The builder** (`routes/tool_decision.py`):
+**The builder** (`routes/tool_decision.py`). The caller names the task and
+resolves it at its own call site, so the literal sits where the guards read
+it:
 
 ```python
-def decision_tool(cid: str, client: LLMClient, *, scene: str = "",
-                  context: str = "", spend_ceiling: bool = False
+resolved, why, kind = _soft_resolved(
+    lambda: require_inference("turn-tool-decision", cid, operation="decide"))
+
+def decision_tool(task: str, resolved: UsableInference | None, client: LLMClient, *,
+                  cid: str, scene: str = "", context: str = "",
+                  spend_ceiling: bool = False, why: str = ""
                   ) -> tuple[tool_calls.ToolSpec | None, str]:
-    """The `decide` tool for one loop, or (None, why) when it cannot be
-    offered. Resolves softly: `_soft_resolved(lambda: require_inference(
-    "tool-decision", cid, operation="decide"))`. A refusal means the tool is
-    simply not offered, and the loop runs without it; never a 409 for the
-    whole run. With `spend_ceiling`, a resolution that would answer on a
-    native stage is not offered either (3.9)."""
+    """The `decide` tool for one loop, metered under `task`, or (None, why)
+    when it cannot be offered: no resolution (the caller's soft refusal,
+    never a 409 for the whole run), a resolution of another task, or with
+    `spend_ceiling`, one that would answer on a native stage (3.9)."""
 ```
 
-The handler is async and calls `operations.decide("tool-decision", [item],
+The handler is async and calls `operations.decide(resolved.task, [item],
 client=client, resolved=resolved, campaign=cid, scene=scene,
-run_id=ctx.run_id, around=<the run's remaining wall clock>)` with a
-**literal** task and `resolved=`, which is what the guard reads.
+run_id=ctx.run_id, around=<the run's remaining wall clock>)`. `decide`
+itself refuses a resolution of any other task.
+
+**Guard change.** `test_operation_guard.py` needs two changes:
+
+- It recognises a `decision_tool(...)` call as a decide call site. Its first
+  argument must be a literal task on a decide route, and it must pass a
+  resolution. So "every decide task is decided by a call site" counts the
+  caller's literal.
+- It accepts the shim's one inner `decide(resolved.task, ...)` call, in
+  `routes/tool_decision.py`, where the task is read off the resolution rather
+  than spelled.
 
 **The tool's parameters** (inside the 01f-C3 subset):
 
@@ -1098,8 +1123,16 @@ bounded loop, on OpenRouter, OpenAI-compatible and Anthropic.**
 - Calls are read from the stream through the holder's `Collector`, reset
   per attempt.
 - `operations.run_tools` / `stream_tools` run the loop of section 3.7.
-  Tools are executed by the loop, never by an adapter. They are read-only
-  or proposing, never writing, and validated before execution.
+- **The caller executes the tools.** The loop hands each call, validated
+  against its schema, to the caller's `execute(call, ctx)` (section 3.6),
+  never to an adapter or an SDK. Tools are read-only or proposing, never
+  writing.
+- **The caller supplies the run id** (`run_id`, required and non-empty;
+  normally the detached run's `Run.id`). The loop never mints one.
+- **The caller gets the final call back.** A call to a `terminal` tool ends
+  the loop unexecuted, returned as `LoopResult.final_call` with its
+  arguments validated. Without one, the final model turn's text (and, with
+  `final_schema`, its conforming record) is returned.
 - Terminal status is `completed`, `budget_exhausted` (with `limit`) or
   `failed` (with `error`). The loop raises only for invalid input
   (`ValueError`), `RunRefused`, an `LLMError` on turn 1 (nothing was done,
@@ -1135,19 +1168,38 @@ after C2a. Until then `claude` is `tools: no` (adapter).
   chain.
 - It is never accounting, never added to a reported figure, and never zero
   for an unpriced model. An unpriced chain under a ceiling is
-  `RunRefused("unpriceable")` before any send.
+  `RunRefused("unpriceable")` before any send. This is the recorded
+  cross-spec decision in `ROADMAP-CHECKLIST.md`, which 12 follows.
+- **It reports which limit stopped the run.** `LoopResult.limit` names it
+  (`turns`, `tool_calls`, `decisions`, `wall`, `spend` or `result_chars`),
+  and the trace's `stop` entry repeats it.
 
 **01g-C5 — Decision-as-tool.**
 
-- `routes/tool_decision.decision_tool(...)` returns a `decide` tool (or
-  None and a reason) on the `tool-decision` route (operation `decide`,
-  Decision role).
-- Each call asks one `Choice` through `operations.decide` with a literal
-  task, capped per run by `max_decisions`.
+- `routes/tool_decision.decision_tool(task, resolved, ...)` returns a
+  `decide` tool, or None and a reason.
+- **The task name is supplied by the caller**, as a literal resolved at the
+  caller's own call site. It is on the `tool-decision` route (operation
+  `decide`, Decision role, `routing.NO_LEGACY`) or on a decide route of the
+  caller's own.
+- Each call asks one `Choice` through `operations.decide`, metered under that
+  task with the run's `run_id`, and capped per run by `max_decisions`.
 - It returns only what the backend reported (an answer, a status, and a
   probability or distribution where the backend gave one).
 - It cannot recurse: `decide` takes no tools, and `run_tools` refuses to
   start inside a running loop.
+
+**01g-C6 — the final loop turn streams, and the loop can decline a tool call
+that comes after visible text** (section 3.8).
+
+- Every turn of `stream_tools` is sent through the same streaming facade
+  call `generate(stream=True)` makes, heartbeats included.
+- `tool_calls.text_deltas` yields the plain text iterator a streaming caller
+  already consumes.
+- The caller's reasoning buffer rides each turn.
+- With `decline_after_text=True`, a tool call ending a turn that already
+  yielded visible text is never executed. The text is final, and the call
+  is in `LoopResult.declined` and the trace as declined `"after_text"`.
 
 ## 5. Interaction with repo rules
 
@@ -1163,8 +1215,9 @@ after C2a. Until then `claude` is `tools: no` (adapter).
   - every route requiring `tools` is used by such a call, so the safety rule
     holds both ways, as it does for decide.
 
-  The decide tool's call passes the existing decide rule (a literal task on
-  a decide route, with `resolved=`).
+  The decide tool follows section 3.12's guard change. `decision_tool(...)`
+  is a decide call site with a literal task on a decide route and a
+  resolution, and its one inner `decide(resolved.task, ...)` is accepted.
 - **`test_usage_guard.py`.** The loop's facade calls pass a meter's holder
   opened in `inference.py` (`m.usage`), which the guard already scans there.
   `single(...)` for the probe passes a meter's holder, as the other probes do.
@@ -1219,11 +1272,13 @@ after C2a. Until then `claude` is `tools: no` (adapter).
   Provider-level fakes (`ScriptedProvider`, `CassetteProvider`) gain
   tool-call SSE bodies per kind, so the adapters' parsers are exercised
   under the real facade. `test_llm_fakes.py` renders `finalize.j2`.
-- **The equivalence baseline.** Adding the `tool-decision` route changes
-  what `tests/inference_baseline.py` enumerates through
+- **The equivalence baseline and `NO_LEGACY`.** Adding the `tool-decision`
+  route changes what `tests/inference_baseline.py` enumerates through
   `routing.TASK_ROUTE`. The plan handles it as the split routes were
-  handled. A route new at format 2 has no legacy parent, and the plan checks
-  how `LEGACY_ROUTES` and the legacy config keys treat one.
+  handled. The route is born at format 2 (`legacy=routing.NO_LEGACY`, the
+  shared sentinel 09, 10 and 02 also use). Whichever spec lands first adds
+  the sentinel and teaches `LEGACY_ROUTES` and the legacy config keys to
+  skip such a route.
 
 ## 6. Tests and acceptance
 
@@ -1250,6 +1305,17 @@ after C2a. Until then `claude` is `tools: no` (adapter).
   capturing provider compares bodies).
 
 **The loop (`test_tool_loop.py`):**
+
+- **The caller's side (01g-C2a):** every tool runs through the caller's
+  `execute`, never the adapter's or the loop's own; an empty `run_id` is a
+  `ValueError` and every row carries the caller's; a terminal call ends the
+  loop unexecuted as `final_call`, and a non-conforming terminal call is an
+  error result.
+- **01g-C6:** with `decline_after_text`, a call after a visible delta is not
+  executed, no further turn is sent, and the call is in `declined`; a call
+  before any text runs and the next turn streams; `text_deltas` yields the
+  same deltas and heartbeats `generate(stream=True)` would; a caller's
+  reasoning buffer receives every turn's thinking.
 
 - **Happy path:** search, then read, then answer. One row per turn, all
   with one `run_id` and increasing `loop_turn`.
@@ -1305,7 +1371,11 @@ after C2a. Until then `claude` is `tools: no` (adapter).
 - `DecideRequestError` becomes an error result.
 - The cap is enforced, and each decision counts as a tool call.
 - Rows carry the run's `run_id`.
-- `test_operation_guard.py` sees the literal call.
+- `test_operation_guard.py` counts the caller's literal task at
+  `decision_tool(...)` and accepts the shim's inner
+  `decide(resolved.task, ...)`.
+- The task is the caller's: a decision is metered under the task the caller
+  named, and a resolution of another task is refused.
 
 **C2b (when it lands):**
 
@@ -1344,15 +1414,19 @@ after C2a. Until then `claude` is `tools: no` (adapter).
   the checklist named but which cannot be driven the same way (section
   3.13). C2b lands after C2a. Until then a Claude subscription primary is
   refused at the seam for a tools route.
-- C1, C3, C4 and C5 are as listed. C3 adds `loop_turn` and `tool_calls`
-  beside `run_id`. C5 adds the `tool-decision` route.
+- C1, C3, C4 and C5 match the checklist's headlines. C2a states that the
+  caller executes the tools, supplies the run id and gets the final call
+  back. C3 adds `loop_turn` and `tool_calls` beside `run_id`. C4 reports the
+  limit that stopped the run. C5 takes its task from the caller, and its
+  `tool-decision` route uses the shared `routing.NO_LEGACY`.
+- **01g-C6 is new** (02-C4 needs it). The final turn streams through the
+  generate streaming path, and a call after visible text can be declined.
 
 ## 9. Open questions
 
-1. **Should `run_id` be the detached run's id?** *Recommendation:* the
-   caller may pass `Run.id`, and 12 should. The registry and the ledger
-   then name a run the same way. The loop mints one only when nobody passes
-   it.
+1. **Settled: `run_id` is the caller's.** It is required, and a loop in a
+   detached run passes `Run.id` (01g-C2a). Kept here only so the numbering of
+   the other questions does not move.
 2. **Sticky fallback, or full chain every turn?** *Recommendation:* sticky,
    as written. It is cheaper on a provider that is down, and one model
    reasons through the whole run. Revisit if 12's evals show a primary
@@ -1379,12 +1453,11 @@ after C2a. Until then `claude` is `tools: no` (adapter).
    versions. It shortens every prompt on that path and removes a model
    behaviour nobody wants. It is listed here because 01g's reading found it.
    It is not a 01g contract.
-7. **A missing edge for embed calls inside tools.** A tool that embeds (12's
-   `search_history`) files its embed row through `embed_sync`, which takes a
-   single `campaign` and no `run_id`. *Recommendation:* 01h-C5 (embedding
-   attribution) should accept `run_id`, so a run's whole cost is one query.
-   Until then, an investigation's embed rows are attributed to its campaign
-   and scene but not its run.
-8. **Interstitial text in play (02-C4).** *Recommendation:* 02-C4 hides
-   interstitial turns behind the same disclosure the play view uses for a
-   director note, and shows only the final turn inline. 01g only marks them.
+7. **Settled: embed calls inside tools.** 01h-C5 now carries an optional
+   `run_id` on `embed_sync` / `embed_groups_sync`, filed in 01g-C3's
+   `run_id` ledger field (section 3.10). A tool passes `ToolContext.run_id`.
+   Until 01h-C5 lands, such rows are attributed to the campaign and scene
+   but not the run.
+8. **Interstitial text in play (02-C4).** *Settled by 02:* play passes
+   `decline_after_text=True` (01g-C6), so a contribution never has
+   interstitial text. Other callers still see `turn_end.interstitial`.

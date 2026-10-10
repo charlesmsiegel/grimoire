@@ -1,6 +1,6 @@
 # 12. Bounded agentic investigation
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 12 in `ROADMAP-CHECKLIST.md`. Lane: retrieval (… → 09 → 10 → 11
 → **12**, with 01g). It is the last item of the lane and has no consumers.
@@ -9,33 +9,37 @@
 (2026-10-06, written against `7f80c42`). It builds on the continuity
 capstone's proposal and review machinery
 (`2026-10-04-continuity-capstone-design.md` §6, §11, §12), which has landed.
-It relies on contracts that specs being drafted in parallel will provide:
-01g (tool calling) is held to the contract wording in `ROADMAP-CHECKLIST.md`,
-and section 15 lists every assumption made about it.
+Contract IDs follow `ROADMAP-CHECKLIST.md`, including its cross-spec
+decision on unpriced models under a spend ceiling (section 7.2).
 
 > Implementation rule: re-read the code and every PR landed on this subsystem
-> since the baseline before planning. 01g, 09, 10 and 11 are specified in
-> parallel with this document. Re-check every interface in section 15 against
+> since the baseline before planning. 01g, 09, 10 and 11 were specified in
+> parallel with this document. Re-check the points in section 15 against
 > their landed form before the plan starts.
 
 ## Depends on
 
+Matches the checklist edge `12 ← 01g-C1..C5, 01i-C1, 08-C3, 09-C1,
+01a-C1/C2 (H); 01d-C2b, 10-C2/C3, 11-C1/C2 (H for RP mode); 11-C4 (S)`.
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 01g-C1 `tools` capability with provenance; seam refusal | 01g | The `investigation` route `requires=("tools",)`. A primary known not to call tools is refused at the seam, and the entry point is skipped | Hard |
-| 01g-C2 provider-neutral tool schemas, parsing, bounded loop primitive | 01g | The loop itself (section 5) | Hard |
-| 01g-C3 metering and capture per loop turn under one run id | 01g | Every model turn of an investigation is a ledger row attributed to the run (section 9) | Hard |
-| 01g-C4 run budget: turns, tool calls, wall clock, spend, enforced before sending | 01g | The budgets of section 7 | Hard |
-| 01g-C5 Decision-as-tool shim with a per-run cap | 01g | The `decide` tool in maintenance modes (section 4.4) | Hard for that tool only |
-| 01d-C2 escalation helper with a declared next resolver | 01d | RP mode is reached only as the declared next resolver after 10's repair hop (section 3.2) | Hard for RP mode only |
-| 01i-C1 `context_window` and max output as a resolved fact | 01i | The loop's context ceiling (section 7.3) | Hard (with a structural fallback when unknown) |
-| 08-C3 history embed task and transcript-expansion helper | 08 | `get_scene_excerpt`; and `search_history`'s embedding, through 09 | Hard |
-| 09-C1 bounded evidence set with signals | 09 | `search_history` is 09's retrieval, not a second one | Hard |
-| 10-C2 one repair hop, escalation through 01d-C2 | 10 | The trigger: RP investigation runs only after 10's hop reports insufficient evidence | Hard for RP mode only |
-| 11-C1 perspective-aware classification | 11 | Every tool result in RP actor mode is filtered through it (section 4.2) | Hard for RP mode |
-| 11-C2 narrator/actor prompt separation | 11 | What an RP investigation selects is rendered through 11-C2, never as model prose (section 6.1) | Hard for RP mode (not in the checklist's edge list; see section 15) |
-| 11-C4 leakage graders | 11 | The eval gate's leakage line (section 10) | Soft |
-| 01a-C1 / 01a-C2 eval cost, latency and token reporting; metered live evals | 01a | The eval gate compares cost and latency, not only correctness (section 10) | Hard for the gate (not in the checklist's edge list; see section 15) |
+| 01g-C1 `tools` capability, probe, seam `incapable` refusal | 01g | The `investigation` route `requires=("tools",)`. A primary known not to call tools is refused at the seam, and the entry point is skipped | Hard |
+| 01g-C2a tool calling over OpenRouter, OpenAI-compatible and Anthropic; the loop primitive (`inference.run_tools`): the caller executes the tools, supplies the run id, and gets the final call back | 01g | The loop itself (section 5) | Hard |
+| 01g-C2b Claude Agent SDK tools (until it lands, `claude` reads as unable to call tools) | 01g | Nothing beyond C1's refusal: a `claude` primary is skipped until C2b | Part of the `01g-C1..C5` hard edge; only bounds which adapters can serve |
+| 01g-C3 a ledger row per loop turn with `run_id` and `loop_turn`, plus capture | 01g | Every model turn of an investigation is attributed to the run (sections 8, 9) | Hard |
+| 01g-C4 run budget (turns, tool calls, decisions, wall clock, spend ceiling, per-turn output cap); reports which limit stopped the run; refuses an unpriced model under a ceiling before sending | 01g | The budgets of section 7 | Hard |
+| 01g-C5 decide tool on the `tool_decision` route, capped per run, no recursion, task name supplied by the caller | 01g | The `decide` tool in maintenance modes (section 4.4) | Hard for that tool only |
+| 01i-C1 `wire.Limits(window, max_output)` with a source, on every target | 01i | The loop's context ceiling (section 7.3) | Hard (with a structural fallback when unknown) |
+| 08-C3 (`08-C3a` `history-index` embed task; `08-C3b` `expand(...)`, the caller naming the phase) | 08 | `get_scene_excerpt` in the prompt phase; `search_history`'s embedding, through 09 | Hard |
+| 09-C1 `history.retrieve(Query) -> Evidence` with a `perspective` seam | 09 | `search_history` is 09's retrieval, not a second one | Hard |
+| 01a-C1 / 01a-C2 eval cost, latency and token reporting; metered live evals | 01a | The eval gate compares cost and latency, not only correctness (section 10) | Hard |
+| 01d-C2b one escalation hop whose next resolver may be caller-supplied | 01d | E1 is the caller-supplied resolver after 10's repair hop (section 3.2) | Hard for RP mode |
+| 10-C2 one repair hop, at most three calls per turn, a phase deadline | 10 | E1 runs only after 10's hop; its seed names what the hop tried | Hard for RP mode |
+| 10-C3 the evidence-sufficiency predicate on `history_check` | 10 | The verdict that escalates to E1 (section 3.2) | Hard for RP mode |
+| 11-C1 per-actor classes | 11 | Every tool result in RP actor mode is filtered through it (section 4.2); E1's selection is re-classified at finish (6.1) | Hard for RP mode |
+| 11-C2 narrator and actor prompt separation | 11 | What an RP investigation selects is rendered through 11-C2, never as model prose (section 6.1) | Hard for RP mode |
+| 11-C4 leakage eval suite | 11 | The eval gate's leakage line (section 10) | Soft |
 
 ## Required by
 
@@ -59,7 +63,8 @@ contracts.
   (`store/usage.py:629`).
 
 01g is therefore a prerequisite in substance, not only in name. 12 adds no
-tool plumbing of its own (section 15 lists what it assumes 01g provides).
+tool plumbing of its own: it uses 01g-C2a's `run_tools`, 01g-C4's budget and
+01g-C5's decide tool.
 
 ### 1.2 The read side already exists, as functions
 
@@ -221,16 +226,18 @@ and must pass the eval gate separately (section 10).
 
 ### 3.2 E1's trigger, precisely
 
-E1 is the **declared next resolver** of 10-C2's repair hop, through 01d-C2:
+E1 is a **caller-supplied next resolver** (01d-C2b) for 10's sufficiency
+question:
 
-1. 09 retrieves (09-C1). If the evidence is sufficient, stop.
-2. 10 plans and runs its one repair hop (10-C2). Its sufficiency judgement
-   is a decide item, and an `insufficient` verdict, or a low-margin,
-   abstained or `refused` one, is what 01d-C2 escalates.
-3. 01d-C2 hands the item to its declared next resolver. For the
-   `history-query-plan` task's policy (01d-C1), that resolver is
-   `investigation-turn` when `investigation_rp` is on, and nothing
-   otherwise.
+1. 09 retrieves (09-C1). If 09-C2's coverage verdict is sufficient, stop.
+2. 10 plans and runs its one repair hop (10-C2). Its sufficiency judgement is
+   10-C3's predicate on `history_check` (task `history-sufficiency`). An
+   `insufficient` verdict, or a low-margin, abstained or `refused` one under
+   01d-C2a's trigger, is what escalates.
+3. 01d-C2b runs one hop. For the `history-sufficiency` task's policy
+   (01d-C1), the declared next resolver is `investigation-turn`, supplied by
+   the turn path when `investigation_rp` is on, and nothing otherwise. Its
+   ledger rows carry `hop: escalation`.
 4. E1 runs at most **once per round** (once per player post), for the first
    actor whose retrieval escalates. A round is what the player waits on, and
    a round with three NPCs must not run three investigations. Later actors in
@@ -250,7 +257,7 @@ investigation never fails a turn.
 ### 4.1 Shape
 
 `store/investigation/tools.py` declares a registry of `Tool` records. The
-model sees only names, descriptions and JSON-schema parameters in 01g-C2's
+model sees only names, descriptions and JSON-schema parameters in 01g-C2a's
 provider-neutral form:
 
 ```python
@@ -338,9 +345,9 @@ would let the model probe for the existence of what it may not read.
 
 | Tool | Args | Backed by | Modes | Notes |
 |---|---|---|---|---|
-| `search_history` | `query: str (<=200 chars)`, `max: int (<=6)` | 09-C1 retrieval for this campaign, with the run's perspective; units filtered through 11-C1 in R | R N C Q | Returns unit ids, scene refs, titles and short texts. Embeds through 08-C3's history task under 09's rules. With no embeddings it runs structural plus lexical, as 09-C2 does |
+| `search_history` | `query: str (<=200 chars)`, `max: int (<=6)` | 09-C1 retrieval for this campaign, with the run's perspective; units filtered through 11-C1 in R | R N C Q | Returns unit ids, scene refs, titles and short texts. Embeds through 08-C3a's `history-index` task under 09's rules. With no embeddings it runs structural plus lexical, as 09-C2 does |
 | `get_scene_summary` | `scene` | `chronicle.get_record` + `scenes.read.read_scene_meta` (date, location, cast names) | R N C Q | In R only when 11-C1 classes the scene unit `witnessed` (whole-scene attendance, 11 rule R6) or `known` |
-| `get_scene_excerpt` | `scene`, `query: str`, `max_posts: int (<=8)` | 08-C3 transcript expansion (prompt view) | R N C Q | In R, only the actor's visible slices of the window are returned |
+| `get_scene_excerpt` | `scene`, `query: str`, `max_posts: int (<=8)` | 08-C3b `expand(...)` with the phase named `prompt` | R N C Q | In R, only the actor's visible slices of the window are returned |
 | `read_scene_window` | `scene`, `before: int or null`, `limit: int (<=12)` | `scenes.read.read_scene_window` (`store/scenes/read.py:169`), then rule 2 | C Q | The draft's "expensive, explicit" transcript read, paged and capped. Never in RP |
 | `get_record` | `ref` | `effective.records`, `facts.get`, `events.get`, `overlay.read_entity` | N C Q (R: `lore`, `locations`, `items` only, through `actor.knows`) | Thread and commitment titles, status and latest beat. Lore bodies honour secrecy and `known_by` in R |
 | `get_record_history` | `ref` | beats; facts supersession; `relationship_history.for_pair` for `pair:<a>+<b>` | N C Q | Bounded to the latest `HISTORY_ROWS` rows |
@@ -374,11 +381,16 @@ paid?". The rules:
 - **The shim's per-run cap is set by the entry point**: 2 for C, 1 for Q, 0
   for R and N. RP mode's Decision-as-tool is 02-C4's business, behind its own
   gate, and 12 does not open a second path to it.
-- The question shapes are `decisions.Predicate`, `Choice` and `Score`
-  (`backend/src/grimoire/decisions.py:181-205`). The `context` the model
-  supplies is clipped to `TOOL_RESULT_BYTES`.
+- The tool is 01g-C5's, offered on the `tool_decision` route under the task
+  name 12 supplies, `investigation-decide`. Its shape is 01g-C5's: one
+  `Choice` over the options the model names, `allow_none` as it asks, and a
+  context capped by 01g-C5 (the caller's bound part first, then the model's).
+  12 binds the run's mode and candidate (E2) or question (E3) as the bound
+  context. If 01g-C5's soft resolution refuses, the tool is simply not
+  offered and the run proceeds without it.
 - A `decide` call **cannot start an investigation**. It is a Decision, and
-  01g-C5's shim does not offer tools to the decide backend. The draft's rule
+  01g-C5 has no recursion: the decide backend is offered no tools, and
+  `run_tools` refuses to run inside itself. The draft's rule
   that "a Decision call should not recursively create another free-running
   agent" holds by construction.
 - The answer comes back as a tool result: the answer, any probability the
@@ -410,8 +422,11 @@ async def investigate(app, *, cid: str, sid: str, mode: str, task: str,
    - for E3: the reader's question and the campaign date.
 
    The seed contains no tool results and no hidden posts.
-2. **Run** 01g-C2's loop primitive with the mode's tools, `budget`
-   (01g-C4) and `run_id` (01g-C3). Tools execute through
+2. **Run** 01g-C2a's loop primitive, `inference.run_tools(task, messages,
+   toolset=…, client=…, resolved=…, budget=…, campaign=…, scene=…, post=…,
+   run_id=…)`, with the mode's tools, the mode's `RunBudget` (01g-C4) and the
+   run id (01g-C3). The caller executes each tool call and gets the final
+   call back for validation. Tools execute through
    `anyio.to_thread.run_sync` (they read files), never on the event loop.
 3. **Stop** at the first terminal tool call (validated, section 6), at a
    budget limit (01g-C4 refuses the next call before sending it), on cancel
@@ -548,18 +563,28 @@ the eval gate (section 10). The plan must not hard-code them anywhere but
 
 ### 7.2 Enforcement
 
-01g-C4 enforces every limit **before a call is sent**: the turn and tool-call
-counters, the wall clock (time left must cover the next call's ceiling), and
-the spend ceiling (an estimate of the next call, prompt tokens plus max
-output at the model's rate, through `pricing.rate_for_call`). A limit reached
-ends the run as `budget_exhausted` with `limit` set. It is not an error, and
-it files no error row.
+01g-C4 enforces every limit **before a call is sent**: the turn, tool-call
+and decision counters, the wall clock (time left must cover the next call's
+ceiling), the per-turn output cap, and the spend ceiling (an estimate of the
+next call, prompt tokens plus max output at the model's rate, through
+`pricing.rate_for_call`). A limit reached ends the run as `budget_exhausted`,
+with `limit` set from the limit 01g-C4 reports. It is not an error, and it
+files no error row.
 
-**An unpriced model cannot be held to a spend ceiling.** Then the run is
-bounded by turns, tool calls, wall clock and context only, and the trace
-records `spend: "unpriced"`, never `$0.00` (the cost rule: "a price nobody
-reported is never rendered as zero"). Section 14, question 3 asks whether an
-unpriced model should be refused instead.
+**An unpriced model under a spend ceiling is refused before sending**
+(01g-C4; the checklist's cross-spec decision). A ceiling cannot hold against
+a price nobody reported, and counting such a call as free would break the
+cost rule ("a price nobody reported is never rendered as zero"). `run_tools`
+raises `RunRefused(kind="unpriceable")` before any send, and 12 treats it as
+a skipped entry point with its reason recorded:
+
+- **E1** skips silently for the turn, which proceeds on 09/10's evidence. The
+  reason `unpriceable` is filed in the turn's prompt-log capture (8.2) and in
+  the status frame (9.1).
+- **E2 and E3** refuse at the start route **before reserving**, with 409
+  `unpriceable`, as they refuse an `incapable` seam. The setting's hint says
+  that a model with no rate cannot investigate under a spend ceiling, and
+  that setting rates for it (or clearing the ceiling) lifts this.
 
 ### 7.3 Context window (01i-C1)
 
@@ -614,6 +639,9 @@ raised once evals show it binds. Tool results are already clipped (4.2 rule
   model-written, and they are the only record of *why* a tool was called.
   They may contain private prose derived from the store, so the trace is
   stored only in places that already hold private campaign content.
+  This is 12's own trace, not 01g-C3's: 01g-C3's per-turn ledger rows and
+  loop trace carry no argument or result text, and nothing here adds any to
+  them.
 - **Money is the three columns, never added** (CLAUDE.md, Costs), and
   `unpriced_calls` makes an incomplete figure say so.
 
@@ -657,7 +685,8 @@ covers that.
   investigation ends the turn as the turn's cancel already does.
 - **Frames**: the turn stream emits `{"type": "status", "phase":
   "investigating"}` while E1 runs, and `{"type": "status", "phase":
-  "investigated", "selected": n}` when it ends, so the composer can say
+  "investigated", "selected": n, "reason": <terminal state or "unpriceable">}`
+  when it ends, so the composer can say
   "Searching history…". This spec has not verified that the client ignores
   an unknown frame type. The plan must check `api.streamDraft` and the turn
   stream reader, and add the frame type to both, with a test, before the
@@ -674,7 +703,8 @@ covers that.
 reserves may not be, CLAUDE.md):
 
 - 404 for an unknown candidate; 409 `not_live` for a candidate not `live`;
-  409 from the seam for an incapable primary; 400 when
+  409 from the seam for an incapable primary; 409 `unpriceable` for an
+  unpriced model under a spend ceiling (7.2); 400 when
   `investigation_continuity` is off. All of these are refused before
   reserving;
 - reserves a `background` run, kind `continuity-investigate`, on
@@ -782,11 +812,11 @@ from. E1 is last, because it is the only entry point a player waits on.
 
 ## 11. Contract
 
-**12-C1: A read-only investigation toolset over the store (01g-C2).**
+**12-C1: A read-only toolset, perspective-filtered in RP** (over 01g-C2a).
 
 - *Inputs*: a mode (`rp_actor`, `rp_narrator`, `continuity`, `question`), a
   campaign, and a perspective bound by the run.
-- *Outputs*: the tools of 4.3 in 01g-C2's provider-neutral schema form, each
+- *Outputs*: the tools of 4.3 in 01g-C2a's provider-neutral schema form, each
   returning the 4.1 envelope.
 - *Guarantees*:
   - no tool mutates anything;
@@ -801,16 +831,18 @@ from. E1 is last, because it is the only entry point a player waits on.
 - *Failure*: a reader failure is a `{"ok": false, "error": "unavailable"}`
   tool result; the run continues.
 
-**12-C2a: Run budgets and the context ceiling (01g-C4, 01i-C1).**
+**12-C2a: Budgets** (01g-C4, 01i-C1).
 
 - The limits of 7.1 per entry point, enforced before each call is sent.
 - Context is bounded by 7.3, with a structural fallback for an unknown
   window.
-- Reaching a limit is `budget_exhausted` with `limit`, never an error.
-- An unpriced model is bounded without a spend ceiling, and the trace says
-  so.
+- Reaching a limit is `budget_exhausted` with `limit` (from 01g-C4's report),
+  never an error.
+- An unpriced model under a spend ceiling is refused before sending
+  (01g-C4). E1 skips with the reason recorded; E2 and E3 answer 409
+  `unpriceable` before reserving.
 
-**12-C2b: The trace.**
+**12-C2b: Trace.**
 
 - The 8.1 shape: tools, argument refs and queries, result refs, sizes and
   truncation, the inspected set, the final validated payload, and usage in
@@ -818,10 +850,11 @@ from. E1 is last, because it is the only entry point a player waits on.
 - No tool result text and no reasoning.
 - Stored where 8.2 says, and nowhere else.
 
-**12-C2c: The eval gate.** Arms A, B and C on the 10.2 corpus with the 10.3
+**12-C2c: An eval gate.** Arms A, B and C on the 10.2 corpus with the 10.3
 metrics. Each entry point stays default-off until a recorded run meets 10.4.
 
-**12-C3: Write posture** (added; the draft's section 5, made a contract).
+**12-C3: Write posture: selection in RP, one proposal for continuity,
+nothing for questions.**
 
 - E1 selects evidence that a tool returned, re-classified at finish, and
   rendered through 11-C2. No model prose reaches a turn.
@@ -832,9 +865,10 @@ metrics. Each entry point stays default-off until a recorded run meets 10.4.
 - No investigation code calls a ledger, alias, link, knowledge (11-C3),
   transcript or record mutator, and the guards of section 12 hold that.
 
-**12-C4: Entry points and runtime ownership** (added).
+**12-C4: Three entry points and their run classes.**
 
-- E1 is reached only as 01d-C2's declared next resolver after 10-C2 (or by
+- E1 is reached only as 01d-C2b's caller-supplied next resolver after
+  10-C2's hop and 10-C3's sufficiency verdict (or by
   the explicit deep-history option), once per round, fail-soft, inside the
   turn run.
 - E2 is a `background` run on the campaign, one live per campaign, 202.
@@ -849,14 +883,16 @@ metrics. Each entry point stays default-off until a recorded run meets 10.4.
   "investigation-continuity", "investigation-question"), True,
   default_role="primary", requires=("tools",))` to `routing.ROUTES`. Every
   task is resolved through `require_inference`, and no `inference.resolve`
-  call appears in `routes/`. The `decide` tool's task is 01g-C5's (section 15,
-  item 4).
+  call appears in `routes/`. The `decide` tool runs on 01g-C5's
+  `tool_decision` route; 12 supplies the task name `investigation-decide`
+  (01g-C5 takes it from the caller), registered on that route's tasks, so
+  investigation sub-questions meter apart from play's.
 - **Operation guard** (`test_operation_guard.py`): the loop's generations go
-  through 01g-C2's primitive, which the guard must recognise as the generate
+  through 01g-C2a's primitive, which the guard must recognise as the generate
   operation's tool form (01g's job). The `decide` tool goes through
   `operations.decide` with `resolved=`.
 - **Usage guard**: every model turn and every embed under `search_history`
-  passes a meter's holder (01g-C3, 08-C3).
+  passes a meter's holder (01g-C3, 08-C3a).
 - **Regex prompt guard**: its scan is extended to `store/investigation/`, and
   `investigation.tools` readers that render transcript text are pinned by
   name.
@@ -884,8 +920,9 @@ metrics. Each entry point stays default-off until a recorded run meets 10.4.
   write). E1 writes nothing, and E3 writes nothing.
 - **Pydantic v1 / Android**: tool schemas are plain dicts; route bodies are
   plain `BaseModel` fields via `_dump`. Tool calling on Android depends on
-  01g-C2's adapters (OpenRouter and OpenAI-compatible are pure Python). The
-  Claude Agent adapter is a desktop extra and is unavailable there, as today.
+  01g-C2a's adapters (OpenRouter and OpenAI-compatible are pure Python). The
+  Claude Agent adapter is a desktop extra, unavailable there as today, and
+  reads as unable to call tools everywhere until 01g-C2b lands.
 - **Privacy**: eval fixtures and the corpus use invented names only. No
   committed file describes a real store, and the gate's recorded table
   reports only metrics over the synthetic corpus.
@@ -909,7 +946,7 @@ metrics. Each entry point stays default-off until a recorded run meets 10.4.
 - Persisting E3 answers, or a campaign "investigation history" page.
 - Raw `search.py`/`semsearch.py`, filesystem, SQL, shell or vector tools.
 - Provider-specific agent SDK features: Claude Agent's own tools stay off,
-  and 12 uses 01g-C2's neutral loop on every adapter.
+  and 12 uses 01g-C2a's neutral loop on every adapter.
 - Showing chain-of-thought, in the trace or anywhere else.
 
 ## 14. Tests and acceptance
@@ -939,7 +976,9 @@ tool-call turns; a new scripted fake class for tool calls, added to
 - a prose-only turn is `insufficient_evidence`;
 - cancel between steps stops the run and abandons the in-flight call;
 - a failed call is `failed` with the kind only;
-- an unpriced model runs, and the trace says `unpriced`.
+- an unpriced model under a spend ceiling is refused before any send:
+  E1 skips with `unpriceable` in the capture, E2 and E3 answer 409
+  `unpriceable` before reserving.
 
 **Write posture** (`test_investigation_persist.py`):
 
@@ -986,42 +1025,23 @@ same as the existing offline suite. The live arms are opt-in.
 5. An actor-perspective investigation passes 11-C4's leakage graders.
 6. The gate's table exists for any entry point whose default is turned on.
 
-## 15. Assumptions about parallel specs (missing edges)
+## 15. What to re-check against the parallel specs
 
-These are not stated by the checklist's headline wording and must be
-confirmed with the owning spec:
+The earlier assumptions are now contracts in `ROADMAP-CHECKLIST.md` and are
+cited by ID above: 01g-C2a (caller-executed tools, caller-supplied run id,
+final call returned), 01g-C4 (reports the stopping limit; refuses an unpriced
+model under a ceiling), 01g-C5 (task name from the caller), 01d-C2b (a
+caller-supplied next resolver), 10-C3 (the sufficiency predicate), 09-C1
+(scene identity, post indices, keys and texts; a `perspective` seam), 10-C1
+(takes a perspective), and the edges to 11-C2 and 01a-C1/C2. Three points
+remain for the plan to confirm against the landed specs:
 
-1. **01g-C2's loop primitive accepts caller-executed tools.** The caller
-   supplies an `execute(call) -> dict` that 12 runs in the threadpool. The
-   primitive returns the terminal call to the caller for validation rather
-   than acting on it, and it stops on a `terminal` tool. Tool results are sent
-   as text content in the provider's tool-result form.
-2. **01g-C3's run id** is a parameter the caller supplies (the registry's run
-   id for E2/E3, the turn run's id for E1), and every ledger row of the loop
-   carries it.
-3. **01g-C4's budget object** accepts per-run turn, tool-call, `decide`-call,
-   wall-clock and spend limits, checks them before sending, and reports which
-   limit stopped it. Spend estimation for an unpriced model reports
-   "unpriced" rather than zero.
-4. **01g-C5's shim** lets the caller name the decide task its calls meter
-   under, and offers no tools to the decide backend. 12 proposes task
-   `investigation-decide` on a decide route `investigation_decide` with the
-   Decision role. Section 16, question 2 asks whether to share 02's routes
-   instead.
-5. **01d-C2** can declare a *generate-loop* resolver (E1) as the next hop
-   for 10-C2's sufficiency item, not only another decide stage. If 01d-C2 is
-   decide-only, 10-C2 must instead expose its terminal `insufficient` outcome
-   to the turn path, and E1 triggers on that.
-6. **10-C2** exposes, with its outcome, the queries it tried and the evidence
+1. **10-C2's outcome carries what it tried**: the queries and the evidence
    ids it returned, so E1's seed can say what was already tried.
-7. **09-C1** is callable as a tool: given a query, a campaign and a
-   perspective, it returns bounded units with ids, with no turn context
-   required.
-8. **11-C2** (not only 11-C1) is a dependency. E1's selection renders through
-   it. The checklist edge `12 ← 11-C1` should read `11-C1, 11-C2`, and 12's
-   eval gate also needs `01a-C1/C2`.
-9. **01i-C1** reports `max_output` where known. Where it does not, 7.3 uses
-   the route preset's `max_tokens`, or a structural 1024.
+2. **09-C1 is callable as a tool**: given a query, a campaign and a
+   perspective, it returns bounded units with ids and needs no turn context.
+3. **01i-C1's `max_output`** where the source does not state one: 7.3 then
+   uses the route preset's `max_tokens`, or a structural 1024.
 
 ## 16. Open questions
 
@@ -1029,26 +1049,16 @@ confirmed with the owning spec:
    review path. *Recommendation:* specify it now, build it after E2's gate
    passes, and drop it if E2's results show that adaptive search rarely
    beats the sweep.
-2. **The `decide` tool's task and route.** Its own
-   (`investigation-decide`), or the continuity route's existing
-   `continuity-reconcile` task for E2? *Recommendation:* its own, for
-   separate metering and a separate gate. Sharing would make the sweep's
-   per-task costs and error counts include investigation sub-questions.
-3. **Unpriced models and the spend ceiling.** Run bounded by turns, tool
-   calls and time (as specified), or refuse to start when a spend ceiling is
-   set and the model is unpriced? *Recommendation:* run, and say "unpriced"
-   in the trace and the run result. Refusing would make a local model unable
-   to investigate at all, and the other limits already bound it.
-4. **E3 answer retention.** Hold on the run only (as specified), or offer
+2. **E3 answer retention.** Hold on the run only (as specified), or offer
    "save as note" into an existing user-authored surface? *Recommendation:*
    run only for v1. A saved answer is a model claim, and if it is ever stored
    it should go through a review path, not a button.
-5. **Once per round for E1.** Is the *first* escalating actor the right one,
+3. **Once per round for E1.** Is the *first* escalating actor the right one,
    or should the narrator turn get priority when it is in the round?
    *Recommendation:* first escalating actor, since narrator turns are rarer
    in a round and are the ones least likely to need old history. Revisit with
    eval data.
-6. **Investigate from a `live` candidate with a non-`uncertain` proposal?**
+4. **Investigate from a `live` candidate with a non-`uncertain` proposal?**
    *Recommendation:* allow it (a reader may doubt a confident sweep), but
    label it "second opinion". The fencing in 6.2 already keeps the newer
    answer from being clobbered.
