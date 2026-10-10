@@ -1591,6 +1591,98 @@ def test_grade_decision_reads_a_native_items_rationale_as_not_applicable():
     assert failed(wrong) == {"decide.answer"}
 
 
+# ---------------------------------------------------- decide.distribution
+
+#: The speaker pick's shape: who opens the round, null allowed.
+_PICK = decisions.Choice("next", "Who speaks next?", (
+    decisions.Option("characters:mara", "Mara"),
+    decisions.Option("characters:winifred", "Winifred"),
+    decisions.Option("grimoire", "The narrator")), allow_none=True)
+_PICK_ITEM = decisions.Item("Rowan asks Winifred where she was.", (_PICK,))
+
+
+def _native_pick(**report) -> decisions.ItemResult:
+    return decisions.ItemResult({"next": decisions.native_answer(_PICK, **report)},
+                                backend=decisions.NATIVE_BACKEND)
+
+
+def _distribution_check(result):
+    (check,) = graders.grade_distribution(_PICK_ITEM, "next", result)
+    assert check.name == "decide.distribution"
+    return check
+
+
+def test_grade_distribution_is_not_applicable_to_a_structured_answer():
+    """A structured answer reports no distribution, by policy (spec 01c
+    section 3.1): its check passes, visibly, as not applicable -- as a native
+    item's `decide.rationale` does in the other direction."""
+    check = _distribution_check(None)
+    assert check.ok and check.detail == graders.STRUCTURED_DISTRIBUTION
+
+
+def test_grade_distribution_passes_a_native_answer_with_a_usable_distribution():
+    check = _distribution_check(_native_pick(
+        chosen="characters:winifred",
+        distribution={"characters:winifred": 0.8, "characters:mara": 0.15,
+                      "grimoire": 0.03, decisions.NONE_KEY: 0.02}))
+    assert check.ok, check.detail
+    assert "mass 1.0000" in check.detail
+    # Rounded reports inside the slack are still usable, and so is an argmax
+    # answer with nothing chosen explicitly.
+    assert _distribution_check(_native_pick(
+        distribution={"characters:winifred": 0.7, "characters:mara": 0.29})).ok
+
+
+def test_grade_distribution_passes_a_predicates_probability():
+    item = _decision_items()[0]
+    result = decisions.ItemResult(
+        {"over": decisions.native_answer(item.questions[0], probability=0.9)},
+        backend=decisions.NATIVE_BACKEND)
+    (check,) = graders.grade_distribution(item, "over", result)
+    assert check.ok, check.detail
+
+
+def test_grade_distribution_fails_a_partial_report():
+    """Mass under `1 - draws.MASS_SLACK` is not drawn from (spec 01c section
+    5.4), so it is no usable distribution."""
+    check = _distribution_check(_native_pick(
+        chosen="characters:winifred",
+        distribution={"characters:winifred": 0.4, "characters:mara": 0.1}))
+    assert not check.ok
+    assert "partial" in check.detail and "0.5000" in check.detail
+
+
+def test_grade_distribution_fails_an_inconsistent_report():
+    """An explicit choice the report gives no weight: the answer stands, and
+    the distribution is no distribution of it."""
+    check = _distribution_check(_native_pick(
+        chosen="characters:winifred",
+        distribution={"characters:mara": 0.9, "grimoire": 0.1}))
+    assert not check.ok
+    assert "inconsistent" in check.detail and "characters:winifred" in check.detail
+
+
+def test_grade_distribution_fails_a_native_answer_with_no_report():
+    """A native answer that came back with no distribution, or with one the
+    adapter dropped as invalid, has nothing to sample."""
+    for report in ({"chosen": "characters:winifred"},
+                   {"chosen": "characters:winifred",
+                    "distribution": {"characters:winifred": 1.5}}):
+        check = _distribution_check(_native_pick(**report))
+        assert not check.ok and "no_report" in check.detail, report
+
+
+def test_grade_distribution_leaves_a_non_answer_to_the_answer_check():
+    """A refusal or an abstention is no answer, so there is nothing to draw
+    from: the distribution check is not applicable, and `decide.answer` is
+    what grades it."""
+    for result in (_native_pick(refused=True),
+                   _native_pick(distribution={"characters:winifred": 0.5,
+                                              "characters:mara": 0.5})):
+        check = _distribution_check(result)
+        assert check.ok and check.detail.startswith("n/a: no answer"), check.detail
+
+
 def test_grade_decision_asks_no_rationale_when_none_was_asked_for():
     """A decision asked with no rationale (the speaker pick) is graded on its
     object and its answer alone: there is no `decide.rationale` to fail."""

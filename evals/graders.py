@@ -23,7 +23,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from grimoire import decisions
+from grimoire import decisions, draws
 from grimoire.store import absorb, fence, length_drift, scenes, suggest
 from grimoire.store.continuity import drivers, identity, reconcile
 
@@ -753,6 +753,62 @@ def _rationale_check(rationale: str, cap: int | None) -> Check:
     return Check("decide.rationale", cap is None or len(rationale) <= cap,
                  f"a rationale of {len(rationale)} characters, over the {cap} the call "
                  f"site accepts")
+
+
+#: The detail of a `decide.distribution` that is not applicable: the item was
+#: answered structured, which reports no distribution by policy (spec 01c
+#: section 3.1: a verbalised probability is never asked for, nor read).
+STRUCTURED_DISTRIBUTION = "n/a: answered structured, which reports no distribution"
+
+#: What each of `draws.draw`'s plain-answer rows says about a native report.
+_UNUSABLE = {
+    "no_report": "no usable distribution came back (none reported, or one dropped as "
+                 "invalid)",
+    "partial": "a partial distribution",
+    "inconsistent": "an inconsistent distribution",
+}
+
+
+def grade_distribution(item: decisions.Item, question: str,
+                       native: decisions.ItemResult | None) -> list[Check]:
+    """Would the sampler draw from what a native endpoint reported for
+    `item`'s `question` (spec 01c section 4.3's bar)?
+
+    `native` is the item's result when a native endpoint answered it (a live
+    run's or a native recording's `native_results`), else None: a structured
+    answer carries no distribution by policy, so its check passes, visibly, as
+    `STRUCTURED_DISTRIBUTION` -- the mirror of `NATIVE_RATIONALE`.
+
+    "Usable" is the sampler's own judgement, not a second copy of it: the
+    result goes through `draws.draw` (a fixed seed, nothing narrowed) and the
+    check passes when the draw would be `sampled`. Its plain-answer rows fail
+    it -- `no_report`, `partial` (mass under `1 - draws.MASS_SLACK`, never
+    normalised) and `inconsistent` (an answer the report gives no weight) --
+    each saying which, with the reported mass beside it. An item with no
+    answer (refused, abstained, unreadable) has nothing to draw from, so the
+    check is not applicable there and `decide.answer` grades it. The mass is
+    shown on a pass too, which is the per-kind figure `MASS_SLACK` is to be
+    tuned against (spec 01c section 12, question 1)."""
+    if native is None:
+        return [Check("decide.distribution", True, STRUCTURED_DISTRIBUTION)]
+    (q,) = [q for q in item.questions if q.id == question]
+    drawn = draws.draw(q, native, seed=0, purpose=question)
+    record = drawn.record
+    if drawn.basis == "none":
+        return [Check("decide.distribution", True,
+                      f"n/a: no answer to draw from ({record['why'] or 'none'})")]
+    mass = "" if record["mass_q"] is None else f"; mass {record['mass_q'] / draws.QUANTUM:.4f}"
+    if drawn.basis == "sampled":
+        reported = len(record["distribution"])
+        return [Check("decide.distribution", True,
+                      f"a usable distribution over {reported} of {len(record['offered'])} "
+                      f"keys{mass}")]
+    why = record["why"]
+    detail = (f"{_UNUSABLE.get(why, 'not drawable')} ({why}){mass}; the answer "
+              f"{record['answer']!r} would stand unsampled")
+    if why == "partial":
+        detail += f", under the {1 - draws.MASS_SLACK:.2f} the sampler draws from"
+    return [Check("decide.distribution", False, detail)]
 
 
 # ------------------------------------------------------------ prompt contract
