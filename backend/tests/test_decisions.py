@@ -981,3 +981,109 @@ def test_render_round_trips_answered_values():
     assert json.loads(nullable) == {"0": {"answers": {"over": True, "who": None, "tone": 1}}}
     (back,) = decisions.parse(nullable, items[:1], explain=False)
     assert back.answers["who"] == Answer(None, "abstained")
+
+
+# --- 01e: the new reports, `expected` and `tiers` ------------------------------
+
+def test_answer_checks_its_new_reports():
+    Answer(None, "unreadable", marginals={"a": 0.0, "b": 1})
+    Answer(2, expected=1.5)
+    Answer(None, "abstained", expected=0)
+    for bad in (
+        lambda: Answer(None, "unreadable", marginals={"a": 1.2}),
+        lambda: Answer(None, "unreadable", marginals={"a": True}),
+        lambda: Answer(None, "unreadable", marginals={"a": float("nan")}),
+        lambda: Answer(None, "unreadable", marginals={1: 0.5}),
+        lambda: Answer(None, "unreadable", marginals=[("a", 0.5)]),
+        lambda: Answer(2, expected=float("nan")),
+        lambda: Answer(2, expected=float("inf")),
+        lambda: Answer(2, expected=True),
+        lambda: Answer(2, expected="1.5"),
+    ):
+        with pytest.raises(ValueError):
+            bad()
+    # `expected` is a reading of the compared distribution, so it is not
+    # compared itself; marginals are a report of their own, and are.
+    assert Answer(2, expected=1.5) == Answer(2)
+    assert Answer(None, "unreadable", marginals={"a": 0.4}) != Answer(None, "unreadable")
+
+
+def test_native_score_expected_is_the_mass_normalised_level():
+    dist = {"0": 0.1, "1": 0.2, "2": 0.7}
+    assert _native(TONE, distribution=dist).expected == pytest.approx(1.6)
+    # An omitted level is unreported, not zero: it adds to neither sum.
+    tied = _native(TONE, distribution={"1": 0.2, "2": 0.2})
+    assert (tied.answer, tied.reason) == (None, "abstained")
+    assert tied.expected == pytest.approx(1.5)
+    # A tie between two levels still yields the level between them.
+    bimodal = _native(TONE, distribution={"0": 0.45, "1": 0.1, "2": 0.45})
+    assert bimodal.reason == "abstained" and bimodal.expected == pytest.approx(1.0)
+    # Zero mass, no distribution, an invalid one: no expected level.
+    assert _native(TONE, distribution={"0": 0.0, "1": 0.0}).expected is None
+    assert _native(TONE, chosen=2).expected is None
+    assert _native(TONE, distribution={"0": 0.1, "3": 0.9}).expected is None
+    # A provider's weighted score is never the expected level.
+    assert _native(TONE, chosen=1.4, distribution=dist).expected == pytest.approx(1.6)
+    assert _native(TONE, chosen=1.4).expected is None
+    # A chosen level keeps its distribution's expected level beside it.
+    assert _native(TONE, chosen=0, distribution=dist).expected == pytest.approx(1.6)
+    assert _native(TONE, refused=True, distribution=dist).expected is None
+    # Only a score has one.
+    assert _native(PRED, probability=0.8).expected is None
+    assert _native(WHO, distribution={"characters:mara": 0.2, "grimoire": 0.8}).expected is None
+
+
+def test_a_structured_answer_carries_no_marginals_or_expected():
+    text = json.dumps({"0": {"answers": {"over": True, "who": None, "tone": 1},
+                             "rationale": "r"}})
+    for answers in _answers(text, [_item()]):
+        for answer in answers.values():
+            assert answer.marginals is None and answer.expected is None
+
+
+def test_tiers_groups_exact_ties_in_mapping_order():
+    assert decisions.tiers({"b": 0.2, "a": 0.9, "c": 0.2, "d": 0.5}) == (
+        ("a",), ("d",), ("b", "c"))
+    assert decisions.tiers({}) == ()
+
+
+def test_tiers_ties_within_mass_tie():
+    # Float error in a summed probability never decides an order.
+    summed = 0.1 + 0.2
+    assert summed != 0.3
+    assert decisions.tiers({"x": 0.3, "y": summed}) == (("x", "y"),)
+    assert decisions.tiers({"x": 0.3, "y": 0.3 + 2 * decisions.MASS_TIE}) == (("y",), ("x",))
+
+
+def test_tiers_anchor_on_the_tiers_highest_value():
+    """Greedy from the top: three values each just inside tolerance of the
+    next do not chain into one tier."""
+    assert decisions.tiers({"a": 3.0, "b": 2.1, "c": 1.2}, tolerance=1.0) == (
+        ("a", "b"), ("c",))
+    assert decisions.tiers({"c": 2.0, "a": 3.0, "b": 2.0}, tolerance=1.0) == (("c", "a", "b"),)
+
+
+def test_tiers_takes_integer_levels():
+    assert decisions.tiers({"mara": 7, "winifred": 7, "seraphine": 9, "rowan": 2}) == (
+        ("seraphine",), ("mara", "winifred"), ("rowan",))
+
+
+def test_tiers_refuses_a_value_it_cannot_place():
+    for bad in (float("nan"), True, "0.5", None, float("inf")):
+        with pytest.raises(ValueError):
+            decisions.tiers({"a": 0.5, "b": bad})
+
+
+def test_outcome_writes_marginals_and_expected():
+    dist = {"0": 0.1, "1": 0.2, "2": 0.7}
+    score = _native(TONE, distribution=dist)
+    results = (ItemResult({"tone": score,
+                           "rank": Answer(None, "unreadable", marginals={"a": 0.25})},
+                          backend="native"),)
+    out = decisions.outcome("native", "openai", "m", results)
+    answers = out["items"][0]["answers"]
+    assert answers["tone"] == {"answer": 2, "distribution": dist,
+                               "expected": pytest.approx(1.6)}
+    assert answers["rank"] == {"answer": None, "reason": "unreadable",
+                               "marginals": {"a": 0.25}}
+    json.dumps(out)
