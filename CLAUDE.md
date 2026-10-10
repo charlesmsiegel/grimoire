@@ -813,6 +813,15 @@ would answer neither question.
   another task or operation before any client call, so a call that generates
   under a sibling task of the route it resolved -- a director turn on the
   send's `chat` -- says so with `operations.for_task(resolved, <task>)`.
+  A generation may also pass `schema=` (01f: each attempt whose model takes
+  it is sent its provider's structured mode, on a per-call target; the schema
+  must ride the prompt too, a refusal of the field is re-sent once without
+  the mode, and the reply is read with `schemas.find_value`) and
+  `max_tokens=` (a per-call output cap, held to the model's known maximum
+  output, `wire.Target.limits`; a refused cap the preset did not carry is
+  `llm.CapRefusalError`, never re-sent uncapped). A caller that records its
+  prompt passes `operations.call_chain(...)` as `conn`, so the capture says
+  what the call was sent with.
   `client.stream`/`complete` are spelled only in `inference.py`, and
   `test_routing_guard.py` fails one anywhere else. What the seam returns
   carries the `wire.Chain` the facade is sent as `.chain` (`generate` hands it
@@ -886,7 +895,8 @@ would answer neither question.
   between the two writes sees a YES with no title and the inspector shows the
   proposal untitled until its next refresh. Whether an attempt is also sent
   its provider's structured mode is decided per attempt
-  (`wire.Target.structured`, set on a decide resolution's targets only); the
+  (`wire.Target.structured`, set on a decide resolution's targets, and on a
+  `generate(schema=)` call's own per-call targets); the
   schema is in the prompt either way, and the mode is filed per call on a new
   target's account (`with_account`), never by mutating the resolution's. An attempt whose provider refuses the structured
   field is sent once more without the mode once every route has failed -- a

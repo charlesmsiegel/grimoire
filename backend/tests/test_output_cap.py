@@ -116,7 +116,7 @@ def test_generate_sends_exactly_call_chain(stream, schema):
     assert all(a.target is t for a, t in zip(resolved.attempts, before, strict=True))
 
 
-@pytest.mark.parametrize("bad", [0, -5, True, 200_001, "500", 1.0])
+@pytest.mark.parametrize("bad", [0, -5, True, "500", 1.0])
 @pytest.mark.parametrize("stream", [True, False])
 def test_a_cap_that_is_not_a_positive_int_is_refused_before_any_call(bad, stream):
     fake = FakeLLM([["never"]])
@@ -143,7 +143,14 @@ def test_the_cap_is_held_to_the_models_known_max_output():
     spare = dataclasses.replace(SPARE, limits=wire.Limits(
         max_output=wire.Limit(1000, "user")))
     chain = inference.call_chain(_resolved(sent=wire.Chain(capped, spare)), max_tokens=777)
-    assert (chain.primary.sampling.call_cap, chain.fallback.sampling.call_cap) == (500, 777)
+    # The cap asked for is recorded as asked; each attempt sends what its
+    # own maximum allows.
+    assert (chain.primary.sampling.call_cap, chain.fallback.sampling.call_cap) == (777, 777)
+    assert (chain.primary.sampling.params["max_tokens"],
+            chain.fallback.sampling.params["max_tokens"]) == (500, 777)
+    # "As much as the model allows" is held, never refused.
+    assert inference.clamp_to_max_output(capped, 10**6) == 500
+    assert inference.clamp_to_max_output(CONN, 10**6) == inference.MAX_OUTPUT_CAP
 
 
 # ---- inference.cap_sent: where the adapter puts the cap on the wire ----
@@ -299,3 +306,18 @@ def test_draft_completion_forwards_a_schema_and_a_cap(monkeypatch, tmp_path):
     assert _draft(fake, schema=SCHEMA, max_tokens=256)["state"] == "landed"
     assert fake.schemas == [SCHEMA]
     assert fake.requests[0]["chain"].primary.sampling.params == {"max_tokens": 256}
+
+
+def test_a_clamped_cap_on_a_preset_that_carried_one_is_the_presets():
+    """Review S2: the preset sent `max_tokens` itself, so a refusal of it is
+    the preset's -- even when the call's cap, held to the model's maximum,
+    came out at the same figure. `call_cap` still records what was asked."""
+    preset = replace(WARM, params={"max_tokens": 4096})
+    target = replace(CONN, sampling=preset)
+    capped = target.with_output_cap(8000, most=4096)
+    assert capped.sampling.params["max_tokens"] == 4096
+    assert (capped.sampling.call_cap, capped.sampling.preset_cap) == (8000, 4096)
+    assert not llm._call_capped(capped)
+    bare = CONN.with_output_cap(8000, most=4096)
+    assert bare.sampling.params["max_tokens"] == 4096 and bare.sampling.preset_cap is None
+    assert llm._call_capped(bare)

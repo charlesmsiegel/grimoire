@@ -180,3 +180,19 @@ integrated (`inference.clamp_to_max_output`, TODO naming 01i-C1).
 cap as asked when it is unknown. Tested in
 `test_the_cap_is_held_to_the_models_known_max_output`, including a chain whose
 two attempts have different maxima.
+
+## Combined review across 01b/01e/01f/01i (substitute, 2026-10-10)
+
+A hostile review of the integrated diff found, for this slice:
+- **S2 (folded):** `call_cap` now records the cap the call asked for (n),
+  not the clamped figure, and the preset's own `max_tokens` is kept as
+  `Sampling.preset_cap`. A refusal is `CapRefusalError` only when the preset
+  sent no `max_tokens` (spec 3.9); a preset that carried one keeps the
+  preset's wording, whatever the clamp held it to.
+- **S3 (folded):** a cap above `MAX_OUTPUT_CAP` is no longer refused; it is
+  held to `MAX_OUTPUT_CAP` and the model's known maximum
+  (`clamp_to_max_output`), so "as much as the model allows" can be asked.
+- **M1 (not folded):** `_check_structured` checks the base message list
+  only; a `PreparedMessages` with per-connection variants could send a
+  fallback variant without the schema. No caller passes such variants with a
+  schema today; the first one that does should extend the check.

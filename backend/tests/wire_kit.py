@@ -58,6 +58,7 @@ def sampling_dict(sampling: wire.Sampling) -> dict:
     `wire.Target.with_output_cap`), so it is left out when None -- and kept
     when set, so a resolution that ever carried one still differs."""
     out = dataclasses.asdict(sampling)
-    if out.get("call_cap") is None:
-        out.pop("call_cap", None)
+    for key in ("call_cap", "preset_cap"):
+        if out.get(key) is None:
+            out.pop(key, None)
     return out

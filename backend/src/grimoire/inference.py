@@ -885,22 +885,24 @@ def _structured_chain(resolved: ResolvedInference) -> wire.Chain:
     return wire.Chain(primary, fallback)
 
 
-#: The highest output cap a call may ask for: the sampler parameter's own
-#: bound. Above it `llm_sampling` reads the value as invalid and sends none
-#: (the Anthropic API its default instead), so the cap would silently not be
-#: one; it is refused instead.
-MAX_OUTPUT_CAP = next(p.high for p in llm_sampling.PARAMS if p.name == "max_tokens")
+#: The highest output cap a call is sent: the sampler parameter's own bound.
+#: Above it `llm_sampling` reads the value as invalid and sends none (the
+#: Anthropic API its default instead), so the cap would silently not be one;
+#: a larger cap is held to it (`clamp_to_max_output`) rather than refused.
+MAX_OUTPUT_CAP = int(next(p.high for p in llm_sampling.PARAMS if p.name == "max_tokens"))
 
 
 def clamp_to_max_output(target: wire.Target, requested: int) -> int:
     """The output cap `target` is sent for a call that asked for `requested`
     (01f 3.9): the caller's cap, held to the model's own maximum output where
     that is known (01i-C1: `wire.Target.limits.max_output`, stated by the
-    user or listed by the provider's catalog). An unknown maximum holds
-    nothing back -- the cap applies as asked, and the Anthropic API's catalog
+    user or listed by the provider's catalog), and always to `MAX_OUTPUT_CAP`,
+    the most a sampler `max_tokens` may carry. An unknown maximum holds
+    nothing else back -- the cap applies as asked, and the Anthropic API's catalog
     limit still holds it there (`llm_sampling._anthropic_max_tokens`)."""
+    bound = min(requested, MAX_OUTPUT_CAP)
     most = target.limits.max_output.value
-    return requested if most is None else min(requested, most)
+    return bound if most is None else min(bound, most)
 
 
 def call_chain(resolved: ResolvedInference, *, schema: dict | None = None,
@@ -918,9 +920,12 @@ def call_chain(resolved: ResolvedInference, *, schema: dict | None = None,
         raise ValueError(f"{resolved.task!r} resolved to no connection")
     if max_tokens is None:
         return chain
-    primary = chain.primary.with_output_cap(clamp_to_max_output(chain.primary, max_tokens))
-    fallback = (None if chain.fallback is None else
-                chain.fallback.with_output_cap(clamp_to_max_output(chain.fallback, max_tokens)))
+    # The cap asked for is recorded as asked (`Sampling.call_cap`); what is
+    # sent is held to each attempt's own maximum.
+    primary = chain.primary.with_output_cap(
+        max_tokens, most=clamp_to_max_output(chain.primary, max_tokens))
+    fallback = (None if chain.fallback is None else chain.fallback.with_output_cap(
+        max_tokens, most=clamp_to_max_output(chain.fallback, max_tokens)))
     return wire.Chain(primary, fallback)
 
 
@@ -934,12 +939,13 @@ def cap_sent(target: wire.Target) -> bool:
 
 
 def _check_cap(max_tokens: object) -> None:
-    """`generate`'s refusal of an output cap that is not an int in
-    `[1, MAX_OUTPUT_CAP]`, before any client call."""
-    if (isinstance(max_tokens, bool) or not isinstance(max_tokens, int)
-            or not 1 <= max_tokens <= MAX_OUTPUT_CAP):
-        raise ValueError(f"max_tokens must be a whole number from 1 to {MAX_OUTPUT_CAP}, "
-                         f"not {max_tokens!r}")
+    """`generate`'s refusal of an output cap that is not a positive int,
+    before any client call. A cap above what can be sent is not refused: it
+    is held to `MAX_OUTPUT_CAP` and the model's own maximum
+    (`clamp_to_max_output`), so "as much as the model allows" is a cap a
+    caller can ask for."""
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ValueError(f"max_tokens must be a positive whole number, not {max_tokens!r}")
 
 
 def _texts(content: object) -> Iterator[str]:
@@ -1098,7 +1104,7 @@ def generate(task: str, messages: list[dict], *, client: LLMClient,
     output is capped at `min(preset's, max_tokens)` -- and the model's own
     maximum where known (`clamp_to_max_output`) -- on new per-call targets,
     where that attempt's adapter sends `max_tokens` (`cap_sent`). A value
-    that is not a whole number in `[1, MAX_OUTPUT_CAP]` is a `ValueError`
+    that is not a positive whole number is a `ValueError`
     before any call. A provider refusing a cap only the call carried is
     `llm.CapRefusalError`, worded as the call's; it is never re-sent without
     the cap. The chain sent is exactly `call_chain(resolved, schema=,

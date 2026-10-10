@@ -72,6 +72,10 @@ class Sampling:
     #: 3.9), or None: never a preset's. It tells a refusal of a cap the call
     #: added (`llm.CapRefusalError`) from one the user's preset carried.
     call_cap: int | None = None
+    #: The preset's own `max_tokens` before the call capped it, or None when
+    #: the preset set none (or the call set no cap): a refused cap is the
+    #: call's only when the preset itself sent no `max_tokens` (01f 3.9).
+    preset_cap: int | None = None
 
 
 @dataclass(frozen=True)
@@ -142,25 +146,28 @@ class Target:
         NEW `Account`. An unknown field raises TypeError."""
         return dataclasses.replace(self, account=dataclasses.replace(self.account, **fields))
 
-    def with_output_cap(self, n: int) -> Target:
+    def with_output_cap(self, n: int, *, most: int | None = None) -> Target:
         """A NEW target whose sampling `max_tokens` is `min(the preset's, n)`,
-        or `n` when the preset sets none (01f 3.9): a cap THIS CALL asks for,
-        recorded as `Sampling.call_cap`. The preset's id, name and scope are
-        kept, so the ledger still names the preset the call was sent with.
-        Whether the cap reaches the wire is the adapter's, as a preset's
-        `max_tokens` is (`inference.cap_sent`). A cap that is not a positive
-        int is a ValueError."""
+        or `n` when the preset sets none (01f 3.9), and never above `most`
+        when one is given (the model's known maximum output, 01i-C1;
+        `inference.clamp_to_max_output`). `n` is the cap THIS CALL asked for,
+        recorded as `Sampling.call_cap` whatever was sent, and the preset's
+        own `max_tokens` as `Sampling.preset_cap`. The preset's id, name and
+        scope are kept, so the ledger still names the preset the call was
+        sent with. Whether the cap reaches the wire is the adapter's, as a
+        preset's `max_tokens` is (`inference.cap_sent`). A cap that is not a
+        positive int is a ValueError."""
         if isinstance(n, bool) or not isinstance(n, int) or n < 1:
             raise ValueError(f"an output cap is a positive int, not {n!r}")
         params = dict(self.sampling.params)
         own = params.get("max_tokens")
-        if isinstance(own, int) and not isinstance(own, bool) and own > 0:
-            n_sent = min(own, n)
-        else:
-            n_sent = n
+        preset = own if isinstance(own, int) and not isinstance(own, bool) and own > 0 else None
+        n_sent = n if most is None else min(n, most)
+        if preset is not None:
+            n_sent = min(preset, n_sent)
         params["max_tokens"] = n_sent
-        return dataclasses.replace(
-            self, sampling=dataclasses.replace(self.sampling, params=params, call_cap=n))
+        return dataclasses.replace(self, sampling=dataclasses.replace(
+            self.sampling, params=params, call_cap=n, preset_cap=preset))
 
     def without_sampling(self) -> Target:
         """This target with no sampler preset: what a native decision is sent,

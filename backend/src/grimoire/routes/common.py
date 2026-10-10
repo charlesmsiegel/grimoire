@@ -611,7 +611,11 @@ def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str 
     passes once a same-named campaign has been recreated -- the one way left
     for a campaign-level capture to land in the wrong campaign.
     """
-    report = llm_sampling.report(conn)
+    if conn is not None and "model_window" not in breakdown:
+        breakdown = {**breakdown, "model_window": model_window(conn)}
+    # What the call added (`structured`, `call_cap`) as `_record_prompt`
+    # reports it, so a campaign-level capture reads like a scene-level one.
+    report = _sampling_report(conn)
     if report is not None:
         breakdown = {**breakdown, "sampling": report}
     try:
