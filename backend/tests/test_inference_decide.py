@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 from copy import deepcopy
 
 import pytest
@@ -1395,3 +1396,22 @@ def test_a_failed_chunks_capture_names_its_stage_and_batch_indices(client):
     _ok, (_m, failed, _c, _n) = captured
     assert (failed["stage"], failed["at"]) == (0, [8])
     assert "error" in failed
+
+
+def test_a_captured_outcome_carries_its_failure_beside_the_record(client):
+    """01b §3.3: the capture needs a failed call's kind and status, which the
+    record's `"kind: detail"` string cannot give back, so the `LLMError`
+    rides beside it (`inference.Outcome.failure`) -- the record itself, its
+    equality and its JSON, are `decisions.outcome`'s."""
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    error = LLMError("rate_limit", "slow down", status=429)
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)]], error=error, fail_after=1)
+    captured = _Captures(fake)
+    _decide(fake, items, capture=captured)
+    (_m, ok, _c, _n), (_m2, failed, _c2, _n2) = captured
+    assert isinstance(ok, inference.Outcome) and ok.failure is None
+    assert isinstance(failed, inference.Outcome)
+    assert (failed.failure.kind, failed.failure.status) == ("rate_limit", 429)
+    assert json.loads(json.dumps(failed)) == dict(failed)
+    assert type(dict(failed)) is dict and dict(failed) == failed

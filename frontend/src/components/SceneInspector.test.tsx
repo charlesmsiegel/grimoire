@@ -2556,6 +2556,62 @@ test("the turn being compared against is offered, and the one being compared is 
   expect(values).not.toContain("000001");     // that is the turn being compared
 });
 
+// ---- decisions, listed apart from turns (roadmap 01b) ----
+
+const DECISIONS = [
+  { id: "000005", scene: "s", ts: "2026-08-06T12:40:00Z", task: "scene-break",
+    operation: "decide", model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0 },
+  { id: "000004", scene: "s", ts: "2026-08-06T12:30:00Z", task: "scene-break",
+    operation: "decide", model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0 },
+  // A speaker pick filed before decisions had an operation: still a decision.
+  { id: "000003", scene: "s", ts: "2026-08-06T11:30:00Z", task: "response-selector",
+    model: "m", total_tokens: 30, dropped_tokens: 0, budget_tokens: 0 },
+];
+
+const FROZEN_DECISION = {
+  id: "000005", ts: "2026-08-06T12:40:00Z", task: "scene-break", operation: "decide",
+  model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0,
+  sections: [
+    { id: "message_0", label: "user", text: "Is the scene over yet?", tokens: 40,
+      tier: "lock-in", dropped: false, trimmed: 0 },
+    { id: "decision", label: "decision", text: '{"task": "scene-break", "calls": []}',
+      tokens: 0, tier: "lock-in", dropped: false, trimmed: 0 },
+  ],
+};
+
+test("turn history hides decisions, which a collapsed section lists apart", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [...DECISIONS, ...TURNS] });
+  renderInspector();
+  await screen.findByText("Regenerate");
+  expect(screen.queryByText("Scene-break check")).toBeNull();
+  expect(screen.queryByText("Speaker pick")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: /^Decisions/ }));
+  expect(await screen.findAllByText("Scene-break check")).toHaveLength(2);
+  await screen.findByText("Speaker pick");
+});
+
+test("a scene with only decisions has no captured turns", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: DECISIONS });
+  renderInspector();
+  await screen.findByText("No captured turns yet.");
+});
+
+test("a decision opens read-only and compares only with its own task", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [...DECISIONS, ...TURNS] });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN_DECISION);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Decisions/ }));
+  fireEvent.click((await screen.findAllByRole("button", { name: /^Scene-break check/ }))[0]);
+
+  await waitFor(() => expect(api.getScenePrompt).toHaveBeenCalledWith("c", "s", "000005"));
+  await screen.findByText("outcome · not sent");
+  expect(screen.queryByRole("textbox")).toBeNull();
+  const picker = await screen.findByLabelText<HTMLSelectElement>("Compare with");
+  const values = Array.from(picker.options).map((o) => o.value);
+  expect(values).toEqual(["", "000004"]);
+});
+
 test("two captured turns compare against each other, oldest end first", async () => {
   // The rail is newest-first, so a reader picking a row means "what changed
   // since then" — and a diff whose insertions are what the OLDER prompt had is

@@ -14,6 +14,9 @@ const LABELS: Record<PromptEntry["task"], string> = {
   chat: "Send", director: "Director", retry: "Retry",
   regenerate: "Regenerate", continuation: "Roll result", opener: "Opener",
   replay: "Replay", extend: "Extend",
+  "response-selector": "Speaker pick", "scene-break": "Scene-break check",
+  "voice-drift": "Voice check", "continuity-identity": "Duplicate check",
+  "continuity-reconcile": "Continuity sweep",
 };
 
 /** Typed against the union above so a new task cannot be forgotten here, read
@@ -23,6 +26,14 @@ const OPEN: Record<string, string> = LABELS;
 
 export function taskLabel(task: string): string {
   return OPEN[task] ?? task;
+}
+
+/** Whether a captured entry is a decision rather than a turn (roadmap 01b):
+ *  filed under `operation: "decide"`, or a speaker pick filed before
+ *  decisions had one. The server's `decision_capture.is_decision` asks the
+ *  same, so the diff route refuses what this keeps off the live comparison. */
+export function isDecision(row: Pick<PromptEntry, "task" | "operation">): boolean {
+  return row.operation === "decide" || row.task === "response-selector";
 }
 
 /** The captured timestamp is UTC (`…Z`, stamped by the store); show it local.

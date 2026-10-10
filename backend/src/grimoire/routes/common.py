@@ -433,7 +433,9 @@ def _sampling_report(target: wire.Target | None) -> dict | None:
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
                    messages: list[dict] | None = None,
-                   conn: wire.Chain | wire.Target | None = None) -> None:
+                   conn: wire.Chain | wire.Target | None = None,
+                   operation: str = "",
+                   still: Callable[[], bool] | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -469,6 +471,14 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     provider *failed* is one of the turns whose prompt is most worth having.
     `prompt_log.record` swallows its own storage failures and never waits on a
     lock, so this cannot cost the turn either way.
+
+    `operation` is handed to `prompt_log.record` (a decision capture's
+    `prompt_log.DECIDE`, which files the entry in a retention pool of its
+    own). `still` is a decision capture's fence (`routes.decision_capture`):
+    asked INSIDE the hold, after the scene read and before the write, and a
+    False answer skips the write -- and with it the revision bump, since
+    nothing was written. A `still` that raises leaves this function: the
+    one caller that passes it turns that into its own warning.
     """
     # None means the caller composed with `describe=False` because capture is
     # off. Nothing to record, and nothing was built to record.
@@ -516,12 +526,16 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
             # proves the scene is still here, which is the check this whole
             # critical section exists for.
             meta = store.scenes.read_scene_meta(cid, sid)
+            # The same scene, not merely a scene under this id: a decision
+            # capture's fence, checked in the hold that covers the write.
+            if still is not None and not still():
+                return
             # `is None`, not `or`: see the docstring. "" is a real answer.
             try:
                 store.prompt_log.record(
                     cid, sid, task, breakdown,
                     model=meta.get("model", "") if model is None else model,
-                    kind=kind)
+                    kind=kind, operation=operation)
             finally:
                 # A capture IS a campaign write (`prompts/index.json`), and
                 # the one route that reaches this while persisting nothing else

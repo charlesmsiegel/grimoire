@@ -595,3 +595,61 @@ def test_prompt_log_round_trips_rows_with_entries(monkeypatch, tmp_path):
     old = prompt_log.read_entry(cid, eid)
     assert old is not None
     assert "entries" not in next(r for r in old["sections"] if r["id"] == "world_info")
+
+
+# ---- decision pools (roadmap 01b §3.5) ----
+
+
+def _decision(cid, sid):
+    """A decision capture's minimal breakdown, filed with `operation`."""
+    breakdown = {"sections": [], "total_tokens": 0, "dropped_tokens": 0,
+                 "budget_tokens": 0}
+    return prompt_log.record(cid, sid, "scene-break", breakdown, model="test/model",
+                             operation="decide")
+
+
+def test_a_decision_records_its_operation_on_the_row_and_the_payload(monkeypatch, tmp_path):
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    eid = _decision(cid, sid)
+    (row,) = prompt_log.list_entries(cid, sid)
+    assert row["operation"] == "decide"
+    assert prompt_log.read_entry(cid, eid)["operation"] == "decide"
+    # A generation carries none, as every row written before this.
+    gen = _record(cid, sid)
+    assert "operation" not in prompt_log.read_entry(cid, gen)
+
+
+def test_a_non_string_operation_is_ill_formed(monkeypatch, tmp_path):
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    eid = _decision(cid, sid)
+    index = campaigns.campaign_root(cid) / "prompts" / "index.json"
+    data = json.loads(index.read_text(encoding="utf-8"))
+    data["entries"][0]["operation"] = {}
+    index.write_text(json.dumps(data), encoding="utf-8")
+    assert prompt_log.list_entries(cid, sid) == []
+    payload = campaigns.campaign_root(cid) / "prompts" / f"{eid}.json"
+    body = json.loads(payload.read_text(encoding="utf-8"))
+    body["operation"] = 3
+    payload.write_text(json.dumps(body), encoding="utf-8")
+    assert prompt_log.read_entry(cid, eid) is None
+
+
+def test_decisions_evict_only_decisions(monkeypatch, tmp_path):
+    """Four scene decisions at depth 3 leave three of them and every turn."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    config.write_config(prompt_log_depth="3")
+    turns = [_record(cid, sid) for _ in range(3)]
+    decided = [_decision(cid, sid) for _ in range(4)]
+    kept = [e["id"] for e in prompt_log.list_entries(cid, sid)]
+    assert sorted(kept) == sorted(turns + decided[1:])
+    assert prompt_log.read_entry(cid, decided[0]) is None
+
+
+def test_turns_evict_only_turns(monkeypatch, tmp_path):
+    """Four turns at depth 3 leave three of them and every decision."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    config.write_config(prompt_log_depth="3")
+    decided = [_decision(cid, sid) for _ in range(3)]
+    turns = [_record(cid, sid) for _ in range(4)]
+    kept = [e["id"] for e in prompt_log.list_entries(cid, sid)]
+    assert sorted(kept) == sorted(decided + turns[1:])

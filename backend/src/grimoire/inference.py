@@ -134,6 +134,17 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 Capture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
 
 
+class Outcome(dict):
+    """The outcome a `Capture` is handed: `decisions.outcome`'s record, equal
+    to and JSON-encoded as that plain dict, with the failed call's `LLMError`
+    beside it as `failure` (None when the call answered) -- never inside it.
+    The record's `error` is `"kind: detail"`, and the detail is the
+    provider's own text; a capture that persists keeps the kind, status and
+    code read off `failure` instead (01b §3.3)."""
+
+    failure: LLMError | None = None
+
+
 def structured_messages(items: Sequence[decisions.Item], *,
                         explain: str = "") -> list[dict]:
     """The structured backend's prompt for one chunk: the system message
@@ -428,18 +439,21 @@ async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dic
 
 def _outcome(call: _Call, unit: Sequence[int], mode: str, target: wire.Target,
              holder: dict | None, results: Sequence[decisions.ItemResult],
-             error: LLMError | None) -> dict:
+             error: LLMError | None) -> Outcome:
     """A settled call's record for the capture (`decisions.outcome`): what
     answered it and its results, or -- failed -- the primary its stage sent
     (`target`) and its error; and, either way, the call's `stage` and `at`,
-    the BATCH indices of the stage positions `unit` it carried (01b §3.2)."""
+    the BATCH indices of the stage positions `unit` it carried (01b §3.2).
+    The error itself rides beside the record (`Outcome.failure`)."""
     if error is not None:
         record = decisions.outcome(mode, target.provider_id, target.model,
                                    error=f"{error.kind}: {error.detail}")
     else:
         provider, model = _served_by(holder or {})
         record = decisions.outcome(mode, provider, model, results)
-    return {**record, "stage": call.stage, "at": list(call.batch(unit))}
+    out = Outcome({**record, "stage": call.stage, "at": list(call.batch(unit))})
+    out.failure = error
+    return out
 
 
 async def _captured(call: _Call, messages: list[dict] | Callable[[], list[dict]],
