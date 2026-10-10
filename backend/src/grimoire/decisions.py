@@ -472,13 +472,11 @@ class Answer:
             raise ValueError("a detail qualifies an unreadable answer only")
         if self.stated and self.detail != NOT_AN_OPTION:
             raise ValueError("a stated value qualifies an answer that named no option only")
-        if self.marginals is not None and not all(
+        if self.marginals is not None and not (isinstance(self.marginals, Mapping) and all(
                 isinstance(key, str) and _probability(p) is not None
-                for key, p in self.marginals.items()):
+                for key, p in self.marginals.items())):
             raise ValueError("marginals are probabilities keyed by string")
-        if self.expected is not None and not (
-                isinstance(self.expected, (int, float)) and not isinstance(self.expected, bool)
-                and math.isfinite(self.expected)):
+        if self.expected is not None and not _finite(self.expected):
             raise ValueError("an expected level is a finite number")
 
 
@@ -648,7 +646,7 @@ def _check_tails(q: Joint) -> None:
             raise DecideRequestError(f"joint {q.id!r} has a tails entry that is not "
                                      f"(head id, targets)")
         head, targets = entry
-        if head not in heads:
+        if not isinstance(head, str) or head not in heads:
             raise DecideRequestError(f"joint {q.id!r} lists targets for {head!r}, "
                                      f"which is not one of its heads")
         if head in named:
@@ -1383,6 +1381,15 @@ def native_gap(item: Item) -> str:
     return ""
 
 
+def _finite(value: object) -> bool:
+    """Whether `value` is a finite real number: an int (never a bool), which
+    is always finite however large -- so `math.isfinite` never has to convert
+    one too large for a float -- or a finite float."""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
+
+
 def _probability(value: object) -> float | None:
     """`value` as a probability: a finite number (never a bool) in [0, 1].
     The range is checked before anything converts it, so an int too large for
@@ -1547,11 +1554,10 @@ def tiers(values: Mapping[str, float | int], *,
     candidates answered the same level are one tier. A value that is not a
     finite number (a bool included) is a `ValueError`: it has no place in
     an order."""
-    if not (isinstance(tolerance, (int, float)) and tolerance >= 0):
-        raise ValueError("a tie tolerance is a number of at least 0")
+    if not (_finite(tolerance) and tolerance >= 0):
+        raise ValueError("a tie tolerance is a finite number of at least 0")
     for key, value in values.items():
-        if (isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value)):
+        if not _finite(value):
             raise ValueError(f"{key!r} has no finite value to order by")
     place = {key: n for n, key in enumerate(values)}
     out: list[tuple[str, ...]] = []

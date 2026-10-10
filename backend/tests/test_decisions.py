@@ -954,12 +954,14 @@ def test_a_structured_answer_carries_no_expected_or_marginals():
 def test_answer_checks_its_marginals_and_expected():
     Answer(None, "unreadable", marginals={"a": 0.0, "b": 1.0})
     Answer(2, expected=1.5)
-    for bad in ({"a": 1.5}, {"a": -0.1}, {"a": True}, {"a": float("nan")}, {1: 0.5}):
+    for bad in ({"a": 1.5}, {"a": -0.1}, {"a": True}, {"a": float("nan")}, {1: 0.5}, [1],
+                {"a": 10**400}):
         with pytest.raises(ValueError):
             Answer(None, "unreadable", marginals=bad)
-    for bad in (float("inf"), float("nan"), True):
+    for bad in (float("inf"), float("nan"), True, "1.5"):
         with pytest.raises(ValueError):
             Answer(1, expected=bad)
+    Answer(1, expected=10**400)   # an int is finite however large
 
 
 # --- tiers --------------------------------------------------------------------
@@ -995,8 +997,11 @@ def test_tiers_refuses_a_value_with_no_place_in_an_order():
     for bad in (float("nan"), float("inf"), True, None, "0.5"):
         with pytest.raises(ValueError):
             decisions.tiers({"a": 0.5, "b": bad})
-    with pytest.raises(ValueError):
-        decisions.tiers({"a": 0.5}, tolerance=-1)
+    for tolerance in (-1, True, float("nan")):
+        with pytest.raises(ValueError):
+            decisions.tiers({"a": 0.5}, tolerance=tolerance)
+    # An int too large for a float still orders, rather than overflowing.
+    assert decisions.tiers({"a": 10**400, "b": 1}) == (("a",), ("b",))
 
 
 def test_native_answer_refused():
@@ -1444,6 +1449,7 @@ def test_validate_joint_refusals():
         (_joint(tails=(("strike", (Option("creatures:sentinel", "", aliases=("s",)),)),)),
          "aliases"),
         (_joint(tails=(("dance", (SENTINEL,)),)), "not one of its heads"),
+        (_joint(tails=((["strike"], (SENTINEL,)),)), "not one of its heads"),
         (_joint(tails=(("strike", (SENTINEL,)), ("strike", (SMUGGLER,)))), "twice"),
         (Joint("j", "i", (WAIT,)), "legal pairs"),
         (Joint("j", "i", (STRIKE, Option("Strike", ""))), "collides"),
