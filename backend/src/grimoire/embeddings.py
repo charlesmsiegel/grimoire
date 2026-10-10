@@ -10,9 +10,12 @@ world-info activation seam (`store/context/world_state.activate`), which is
 reached from a synchronous `build_messages`; an async client here would mean
 threading `await` up through the whole context builder and its six call sites,
 for a call that is off by default. The cost is real and stated rather than
-hidden: while a recall is in flight the event loop is blocked, which is why
-`TIMEOUT` is a tight bound rather than the generous one the streaming clients
-take. See semantic.py's docstring for the tradeoff in full.
+hidden: while a recall is in flight it holds a worker thread -- every caller
+is a `def` handler, a `run_in_threadpool` or a `to_thread`, and
+`store.inference.embed` refuses a call on the app's event-loop thread
+(01h-C4a) -- which is why `TIMEOUT` is a tight bound rather than the generous
+one the streaming clients take. See semantic.py's docstring for the tradeoff
+in full.
 
 Two invariants the parser exists to hold, both of which produce a *silently*
 wrong prompt rather than an error when they are missed:
@@ -32,8 +35,8 @@ every successful socket read resets httpx's timer. An endpoint that drip-feeds
 an incomplete header a byte at a time is therefore bounded per read and not in
 total. No arrangement of httpx timeouts fixes it — httpx has no total-request
 deadline, and a synchronous call cannot be cancelled from outside without a
-watchdog thread that would outlive the call it abandoned. The fix is the async
-rewrite named above, where the whole thing is one `asyncio.wait_for`. Until
+watchdog thread that would outlive the call it abandoned. The fix is an async
+client, where the whole call is one `asyncio` deadline (roadmap 01h-C4b). Until
 then it is a real hole against a deliberately hostile endpoint, and the user
 chooses the endpoint.
 """
@@ -60,9 +63,9 @@ BATCH = 64
 
 #: Seconds one `embed` call may take **in total** — every batch, every read,
 #: start to finish. Deliberately tighter than the chat clients' 120s: this call
-#: blocks the event loop (see the module docstring), and a recall that has not
-#: returned by now is worth abandoning — the caller's fallback is the keyword
-#: activation that shipped before any of this.
+#: holds a worker thread for its length (see the module docstring), and a
+#: recall that has not returned by now is worth abandoning — the caller's
+#: fallback is the keyword activation that shipped before any of this.
 #:
 #: A wall-clock deadline, not an httpx timeout, because those are not the same
 #: thing and the difference is the whole point. httpx bounds each network

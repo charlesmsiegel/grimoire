@@ -346,7 +346,9 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # authors_notes.json the same: rewritten whole by every save, so two
     # unlocked saves lose one note -- and a lost write here is a steer the
     # player set and then finds the next turn ignoring, the reason `pins`
-    # gives. Reads stay lock-free (the opener composes on the event loop).
+    # gives. Reads stay lock-free: they sit on every compose path, the
+    # opener's included, which runs in a worker where a lock wait would
+    # hold the turn being built.
     # New module (play controls V), so it starts inside the exclusion rather
     # than joining the frozen `UNREVIEWED` backlog.
     "store.authors_notes",

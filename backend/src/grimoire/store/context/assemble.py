@@ -156,9 +156,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     selects the full story-so-far variant over the compact recap. `turn` is a
     one-shot, unpersisted override (e.g. a per-turn response-length chip) that
     outranks every stored scope in response_presets.resolve -- see build_messages.
-    `opener` skips the tracker read: its section is `except_opener`, and the
-    opener is composed inside an async generator on the event loop, where the
-    read's lock waits would stall every other request."""
+    `opener` skips the tracker read: its section is `except_opener`, so the
+    read and its lock waits would buy the opener nothing. (The opener composes
+    in a worker, `routes.greetings._compose_opener_call`, never on the event
+    loop.)"""
     # BEST-EFFORT, not `campaign_lock`: `post_chat` appends the player's post
     # before calling this and only wires the undo that would take it back off
     # afterwards, so a `StoreBusy` raised here would strand that post with no

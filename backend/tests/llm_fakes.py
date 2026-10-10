@@ -757,6 +757,9 @@ class FakeEmbeddings:
     `usage_for`, when given, maps a call's texts to what the endpoint
     "reported" (`{"prompt_tokens": 7}`), folded into the meter's holder the
     way the real client folds a response's usage block.
+
+    `threads` is the `threading.get_ident()` of each call, so a test can say
+    which thread embedded (01h-C4a: never the app's loop).
     """
 
     def __init__(self, vector_for=lambda t: [1.0, 0.0], error=None, fail_after=0,
@@ -767,10 +770,12 @@ class FakeEmbeddings:
         self.usage_for = usage_for
         self.calls: list[list[str]] = []
         self.deadlines: list[float | None] = []
+        self.threads: list[int] = []
 
     def embed(self, texts, model, key, base_url, deadline=None, usage=None):
         self.calls.append(list(texts))
         self.deadlines.append(deadline)
+        self.threads.append(threading.get_ident())
         if self.error is not None and len(self.calls) > self.fail_after:
             raise self.error
         if usage is not None and self.usage_for is not None:

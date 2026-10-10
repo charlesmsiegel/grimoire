@@ -11,7 +11,9 @@ Three things live here:
 * ``install`` -- attaches the machinery that needs a running loop (the portal,
   the task group, the reaper) and swaps the registry's event factory for one
   that builds events *on* the loop. The registry itself is created in
-  ``create_app``, because a bare ``TestClient`` never runs a lifespan.
+  ``create_app``, because a bare ``TestClient`` never runs a lifespan. It also
+  marks the loop as an app loop, so a blocking embed made on it is
+  refused (``store.inference.embed``, 01h-C4a); ``uninstall`` unmarks it.
 * ``start`` / ``cancel`` / ``release_before_start`` -- the handles a producing
   route uses.
 * ``_guarded`` -- the per-run failure boundary. Without it, one run raising
@@ -23,6 +25,7 @@ Three things live here:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -31,6 +34,8 @@ from typing import Any
 
 import anyio
 from anyio.from_thread import BlockingPortal
+
+from .store.inference import embed as embed_operation
 
 _log = logging.getLogger(__name__)
 
@@ -130,9 +135,26 @@ def install(app, tg) -> None:
     """
     portal = app.state.run_portal
     loop_thread = threading.get_ident()      # `install` runs ON the loop
+    # The attribute first, then the mark: a mark never exists without the
+    # record `uninstall` reads to undo it.
+    app.state.run_loop = asyncio.get_running_loop()
+    embed_operation.mark_app_loop(app.state.run_loop)
     app.state.run_task_group = tg
     app.state.runs.set_event_factory(lambda: _PortalEvent(portal, loop_thread))
     tg.start_soon(_reaper, app)
+
+
+def uninstall(app) -> None:
+    """Unmark the loop ``install`` marked. Called from ``_lifespan``'s
+    outermost ``finally``, before its first ``await``, so every way out of the
+    lifespan unmarks it and the registry does not keep a finished loop alive.
+    A second call, or one after a startup that never reached ``install``,
+    unmarks nothing.
+    """
+    loop = getattr(app.state, "run_loop", None)
+    if isinstance(loop, asyncio.AbstractEventLoop):
+        embed_operation.unmark_app_loop(loop)
+    app.state.run_loop = None
 
 
 async def _reaper(app) -> None:

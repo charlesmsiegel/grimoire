@@ -10,7 +10,9 @@ import re
 from collections.abc import Callable
 from urllib.parse import quote
 
+import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from .. import inference as operations
 from .. import store
@@ -89,24 +91,43 @@ def _opener_parts(parts: list[dict], cast: list[dict]) -> list[dict]:
     return cleaned
 
 
+def _compose_opener_call(cid: str, sid: str, prompt: str, actor: dict, prior: list[dict],
+                         resolved: UsableInference, adapt: bool) -> list[dict]:
+    """Compose one speaker's opener prompt and record it; the messages to send.
+
+    Synchronous, and called through `run_in_threadpool` (01h-C4a): the compose
+    reads the whole store and can embed -- lore recall and the art ranking --
+    and the opener's frames run on the lifespan's event loop, where a blocking
+    request would stall every other request (and `embed_sync` refuses one).
+    """
+    # The display facts of the attempt the opener asks for first.
+    primary = resolved.chain.primary
+    messages, breakdown = store.context.compose_opener(
+        cid, sid, prompt, actor_ref=actor["actor_ref"], prior=prior,
+        describe=store.prompt_log.capturing(), model=primary.model, adapt=adapt)
+    _record_prompt(cid, sid, "opener", breakdown, model=primary.model, kind=primary.kind,
+                   messages=messages, conn=resolved.chain)
+    return messages
+
+
 def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
                    completed: list[dict], resolved: UsableInference, client: LLMClient,
                    outcome: StreamOutcome, adapt: bool = False):
-    # The display facts of the attempt the opener asks for first.
-    primary = resolved.chain.primary
-
     async def frames():
         parts = list(completed)
         try:
             yield f"data: {json.dumps({'snapshot': cast})}\n\n"
             for actor in _opener_speakers(cast)[len(parts):]:
-                messages, breakdown = store.context.compose_opener(
-                    cid, sid, prompt, actor_ref=actor["actor_ref"], prior=parts,
-                    describe=store.prompt_log.capturing(), model=primary.model,
-                    adapt=adapt)
-                _record_prompt(cid, sid, "opener", breakdown,
-                               model=primary.model, kind=primary.kind, messages=messages,
-                               conn=resolved.chain)
+                # Off the loop: a worker holds the compose (and any embed in
+                # it). Not cancellable, so a Stop that arrives meanwhile waits
+                # for it -- and then lands HERE, at a checkpoint, rather than
+                # at the generation's first await, by which time a stopped
+                # opener could have sent its request (`runner._guarded` makes
+                # the same argument for its own checkpoint).
+                messages = await run_in_threadpool(
+                    _compose_opener_call, cid, sid, prompt, actor, list(parts), resolved,
+                    adapt)
+                await anyio.lowlevel.checkpoint()
                 yield f"data: {json.dumps({'speaker_start': actor})}\n\n"
                 meter = store.usage.meter("opener", campaign=cid, scene=sid)
                 prose = ""

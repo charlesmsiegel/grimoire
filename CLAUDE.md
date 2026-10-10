@@ -1067,7 +1067,18 @@ would answer neither question.
     none and is unattributed. A
     call that sends nothing files nothing -- no row, no error, no capture line
     -- whether its input was empty or its deadline lapsed before the first
-    request. When the caller's own budget cuts a request that did go out
+    request. One named exception: **never on the app's event loop**.
+    `runner.install` marks the lifespan's loop and the lifespan's exit
+    unmarks it, and `embed_sync` called while that is the running loop is
+    refused before any meter as `network`/`on_loop`, so the caller degrades
+    as it does for an unreachable endpoint -- and it writes ONE error row (the
+    task, the kind, the code, the campaign and scene it was handed, and the
+    caller's innermost frames as `file:line in function`, never its text),
+    because it records a programming error rather than a call and the frames
+    are what find the caller. A worker, a CLI, a thread calling through a portal, the `embed`
+    door and a private `asyncio.run` loop are never refused; an `async def`
+    caller reaches a compose or an embed through `run_in_threadpool`, as the
+    greeting opener does. When the caller's own budget cuts a request that did go out
     (`budgeted=True`: absorb's identity check and the continuity sweep), the
     row is `aborted` and nothing reaches the error store: that is the
     caller's clock, not the provider failing. A deadline that only bounds the
