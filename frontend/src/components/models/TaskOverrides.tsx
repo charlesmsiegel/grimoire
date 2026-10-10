@@ -4,13 +4,13 @@ import type {
   CapabilityNeed, InferenceSelection, InferenceSettings, InferenceWrite, ProviderHealth,
   RouteRow, RouteUse, RouteWrite,
 } from "../../api/client";
-import { ControlsReadout } from "../inference/ControlsReadout";
+import { WhatItSends } from "../inference/ControlsReadout";
 import { PresetSelect } from "../inference/PresetSelect";
 import {
   CHOOSE_A_MODEL, droppedFallbackWords, inheritedPreset, ROLE_LABEL, routePinNeeds, wantsModel,
 } from "../inference/selection";
 import { ModelSelect } from "./ModelSelect";
-import { DecideNote, Problem, useWarning, Warning } from "./notes";
+import { CHECKED_ON_SAVE, DecideNote, Problem, useWarning, Warning } from "./notes";
 import { EMPTY_SEL, GENERATIVE, sameSel } from "./selections";
 import { ADVANCED_HASH, taskFromHash } from "./taskHash";
 
@@ -50,8 +50,14 @@ const PIN_PRESET = "Pin preset";
 const OVERRIDE_PRESET = "Preset override";
 const overrides = (d: RouteDraft) => d.use !== "" || d.preset !== "";
 
-function TaskRow({ row, draft, onChange, settings, health, blocked }:
-  { row: RouteRow; draft: RouteDraft; onChange: (d: RouteDraft) => void;
+/** Whether a task's draft differs from the row the form opened with. */
+function moved(d: RouteDraft, row: RouteRow): boolean {
+  return d.use !== row.use || d.preset !== row.preset
+    || (d.use === "model" && !sameSel(d.pin, row.pin));
+}
+
+function TaskRow({ row, base, draft, onChange, settings, health, blocked }:
+  { row: RouteRow; base: RouteRow | undefined; draft: RouteDraft; onChange: (d: RouteDraft) => void;
     settings: InferenceSettings; health: ReadonlyMap<string, ProviderHealth>; blocked: boolean }) {
   const needs = routePinNeeds(row);
   const vision: CapabilityNeed | null = row.requires.includes("vision") ? "vision" : null;
@@ -65,6 +71,10 @@ function TaskRow({ row, draft, onChange, settings, health, blocked }:
   const pinWarning = useWarning(draft.use === "model" ? draft.pin.provider : "",
                                 draft.use === "model" ? draft.pin.model : "", vision, row.label);
   const decides = row.operation === "decide";
+  // The row's problem, dropped fallback, decide note and readout describe the
+  // SAVED resolution; beside a changed draft they would answer the wrong
+  // question, so they wait for the save that checks it.
+  const stale = moved(draft, base ?? row);
   return (
     <fieldset className="task-row" aria-label={row.label} data-task={row.key}>
       <legend>
@@ -111,15 +121,16 @@ function TaskRow({ row, draft, onChange, settings, health, blocked }:
       {row.requires.length > 0 && (
         <p className="field-hint">Also needs: {row.requires.join(", ")}</p>
       )}
-      <Problem text={row.problem} />
-      {decides && <DecideNote mode={row.decision_mode} decidesNatively={row.decides_natively} />}
-      <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "", row.fallback_problem)} />
-      {row.resolves && (
-        <details className="what-it-sends">
-          <summary>What this sends</summary>
-          <ControlsReadout presetId={row.resolves.preset} provider={row.resolves.provider}
-                           model={row.resolves.model} operation={decides ? "decide" : undefined} />
-        </details>
+      {stale ? <p className="field-hint">{CHECKED_ON_SAVE}</p> : (
+        <>
+          <Problem text={row.problem} />
+          {decides && <DecideNote mode={row.decision_mode} decidesNatively={row.decides_natively} />}
+          <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "", row.fallback_problem)} />
+          {row.resolves && (
+            <WhatItSends presetId={row.resolves.preset} provider={row.resolves.provider}
+                         model={row.resolves.model} operation={decides ? "decide" : undefined} />
+          )}
+        </>
       )}
     </fieldset>
   );
@@ -129,9 +140,10 @@ function TaskRow({ row, draft, onChange, settings, health, blocked }:
  *  the section (`#advanced`) or for one task (`#task-<encoded key>`). A task
  *  set here overrides its role's model, its preset, or both -- the resolver's
  *  precedence, unchanged; the form only labels it. */
-export function TaskOverrides({ settings, health, blocked, drafts, onChange }:
-  { settings: InferenceSettings; health: ReadonlyMap<string, ProviderHealth>; blocked: boolean;
-    drafts: Record<string, RouteDraft>; onChange: (key: string, d: RouteDraft) => void }) {
+export function TaskOverrides({ settings, baseline, health, blocked, drafts, onChange }:
+  { settings: InferenceSettings; baseline: RouteRow[]; health: ReadonlyMap<string, ProviderHealth>;
+    blocked: boolean; drafts: Record<string, RouteDraft>;
+    onChange: (key: string, d: RouteDraft) => void }) {
   const { hash } = useLocation();
   const asked = taskFromHash(hash);
   const target = asked !== null && settings.routes.some((r) => r.key === asked) ? asked : null;
@@ -153,7 +165,8 @@ export function TaskOverrides({ settings, health, blocked, drafts, onChange }:
         model, its preset override, or both, win over the role for that task.
       </p>
       {settings.routes.map((row) => (
-        <TaskRow key={row.key} row={row} draft={drafts[row.key]} settings={settings}
+        <TaskRow key={row.key} row={row} base={baseline.find((b) => b.key === row.key)}
+                 draft={drafts[row.key]} settings={settings}
                  health={health} blocked={blocked} onChange={(d) => onChange(row.key, d)} />
       ))}
     </details>

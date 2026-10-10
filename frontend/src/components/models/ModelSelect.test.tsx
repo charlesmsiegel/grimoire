@@ -179,3 +179,25 @@ test("a slow answer for the provider just left never fills the new one's list", 
   await act(async () => { release(); });
   expect(screen.queryByRole("option", { name: "vendor/m" })).toBeNull();
 });
+
+test("a test dialog closed mid-run and opened again rejoins that run", async () => {
+  (api.previewModelTest as any).mockResolvedValue({
+    provider: "Saltmarch Router", provider_id: "saltmarch", model: "vendor/eye",
+    sends: [], estimated_cost_usd: null });
+  // A run that never lands: closing the dialog does not stop it on the server.
+  (api.runModelTest as any).mockImplementation(() => new Promise(() => {}));
+  render(<Holder start={{ provider: "saltmarch", model: "vendor/eye" }} needs={["generate", "vision"]} seen={[]} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Test vendor/eye" }));
+  let dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  fireEvent.click(await within(dialog).findByRole("button", { name: "Run test" }));
+  await within(dialog).findByRole("button", { name: /testing/i });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Test vendor/eye" }));
+  dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  // The same run, still going -- not a second, paid one on offer.
+  expect(within(dialog).getByRole("button", { name: /testing/i })).toBeDisabled();
+  expect(within(dialog).queryByRole("button", { name: "Run test" })).toBeNull();
+  expect(api.runModelTest).toHaveBeenCalledTimes(1);
+});

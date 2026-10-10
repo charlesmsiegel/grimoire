@@ -63,6 +63,11 @@ export function useWarning(provider: string, model: string, need: CapabilityNeed
   return warning;
 }
 
+/** Said in place of a row's problem, dropped-fallback words and readout once
+ *  its draft has moved: those describe the saved state, and the save is what
+ *  checks the new one. */
+export const CHECKED_ON_SAVE = "Checked when you save.";
+
 export function Warning({ text }: { text: string | null }) {
   return text ? <p className="field-hint field-warning" role="note">{text}</p> : null;
 }

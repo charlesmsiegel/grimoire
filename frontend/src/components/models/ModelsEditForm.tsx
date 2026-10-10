@@ -5,13 +5,13 @@ import {
 } from "../../api/client";
 import { errorText } from "../../api/errors";
 import { ErrorNote } from "../ErrorNote";
-import { ControlsReadout } from "../inference/ControlsReadout";
+import { WhatItSends } from "../inference/ControlsReadout";
 import { PresetSelect } from "../inference/PresetSelect";
 import {
   CHOOSE_A_MODEL, droppedFallbackWords, ROLE_LABEL, ROLE_NEEDS, wantsModel,
 } from "../inference/selection";
 import { ModelSelect } from "./ModelSelect";
-import { Problem, useWarning, Warning } from "./notes";
+import { CHECKED_ON_SAVE, Problem, useWarning, Warning } from "./notes";
 import { SAME_AS } from "./RoleRow";
 import { EMPTY_SEL, GENERATIVE, sameSel } from "./selections";
 import { routeBody, routesIncomplete, startRouteDrafts, TaskOverrides, type RouteDraft } from "./TaskOverrides";
@@ -48,11 +48,11 @@ export function roleBody(drafts: Drafts, settings: InferenceSettings): Inference
  *  model warning, what it sends. "Same as" / "Not set" (provider "") clears
  *  the WHOLE selection, preset included (spec 3.2), and hides model and preset. */
 function SelectionControls({ label, role, value, onChange, settings, health, blocked,
-                             emptyLabel, presetLabel, children }:
+                             emptyLabel, presetLabel, stale, children }:
   { label: string; role: GenerativeRole; value: InferenceSelection;
     onChange: (next: InferenceSelection) => void; settings: InferenceSettings;
     health: ReadonlyMap<string, ProviderHealth>; blocked: boolean; emptyLabel: string;
-    presetLabel: string; children?: ReactNode }) {
+    presetLabel: string; stale: boolean; children?: ReactNode }) {
   const decision = role === "decision";
   const warning = useWarning(value.provider, value.model,
                              decision ? null : ROLE_NEEDS[role][0], ROLE_LABEL[role]);
@@ -80,13 +80,10 @@ function SelectionControls({ label, role, value, onChange, settings, health, blo
                   onClick={() => onChange({ ...value, preset: "" })}>Clear it</button>
         </p>
       )}
-      {children}
-      {value.provider && value.model && (
-        <details className="what-it-sends">
-          <summary>What this sends</summary>
-          <ControlsReadout presetId={value.preset} provider={value.provider} model={value.model}
-                           operation={decision ? "decide" : undefined} />
-        </details>
+      {!stale && children}
+      {!stale && value.provider && value.model && (
+        <WhatItSends presetId={value.preset} provider={value.provider} model={value.model}
+                     operation={decision ? "decide" : undefined} />
       )}
     </>
   );
@@ -178,6 +175,11 @@ export function ModelsEditForm({ settings, health, blocked, onSaved, onCancel }:
         const d = drafts[role];
         const fbName = settings.providers.find((p) => p.id === card.fallback.provider)?.name
           ?? card.fallback.provider;
+        // The role's problem, dropped-fallback words and readouts describe the
+        // SAVED resolution; once its selection or fallback moved they would
+        // answer the wrong question, so they wait for the save that checks it.
+        const base = baseline.roles[role];
+        const stale = !sameSel(d.sel, base.stored) || !sameSel(d.fallback, base.fallback);
         const dropped = droppedFallbackWords(card.fallback_missing, label,
           card.fallback.provider && card.fallback.model ? `${fbName} ▸ ${card.fallback.model}` : "",
           card.fallback_problem);
@@ -186,16 +188,18 @@ export function ModelsEditForm({ settings, health, blocked, onSaved, onCancel }:
             <legend>{label}</legend>
             <SelectionControls label={label} role={role} value={d.sel} settings={settings}
                                health={health} blocked={blocked} presetLabel="Preset"
-                               emptyLabel={SAME_AS[role] ?? "Not set"}
+                               emptyLabel={SAME_AS[role] ?? "Not set"} stale={stale}
                                onChange={(sel) => setRole(role, { sel })}>
               <Problem text={card.problem} />
             </SelectionControls>
+            {stale && <p className="field-hint">{CHECKED_ON_SAVE}</p>}
             {d.fallbackOpen ? (
               <fieldset className="models-edit-fallback" aria-label={`${label} fallback`}>
                 <legend>Fallback, tried once when {label} cannot answer</legend>
                 <SelectionControls label={`${label} fallback`} role={role} value={d.fallback}
                                    settings={settings} health={health} blocked={blocked}
                                    presetLabel="Fallback preset" emptyLabel="No fallback"
+                                   stale={stale}
                                    onChange={(fallback) => setRole(role, { fallback })}>
                   <Problem text={dropped} />
                 </SelectionControls>
@@ -225,7 +229,7 @@ export function ModelsEditForm({ settings, health, blocked, onSaved, onCancel }:
           {!settings.roles.embedding.on && <Problem text={settings.roles.embedding.problem ?? null} />}
         </fieldset>
       )}
-      <TaskOverrides settings={settings} health={health} blocked={blocked} drafts={routes}
+      <TaskOverrides settings={settings} baseline={baseline.routes} health={health} blocked={blocked} drafts={routes}
                      onChange={(key, d) => { setRoutes((r) => ({ ...r, [key]: d })); setAsking(null); }} />
       {asking !== null && (
         <div className="banner" role="group" aria-label="Confirm the re-embedding">

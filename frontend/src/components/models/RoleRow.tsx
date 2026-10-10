@@ -3,7 +3,7 @@ import type {
   EmbeddingCard, GenerativeRole, InferenceSettings, ProviderHealth, RateInfo, RouteRow,
 } from "../../api/client";
 import { providerPath } from "../../providerPaths";
-import { ControlsReadout } from "../inference/ControlsReadout";
+import { WhatItSends } from "../inference/ControlsReadout";
 import { describe, droppedFallbackWords, ROLE_LABEL, ROLE_NEEDS } from "../inference/selection";
 import { HealthDot } from "./health";
 import { DecideNote, Problem, useWarning, Warning } from "./notes";
@@ -132,11 +132,8 @@ export function RoleRow({ role, settings, health }:
         {decision && <DecideNote mode={card.decision_mode} decidesNatively={card.decides_natively} />}
         <Problem text={dropped} />
         {sel && (
-          <details className="what-it-sends">
-            <summary>What this sends</summary>
-            <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
-                             operation={decision ? "decide" : undefined} />
-          </details>
+          <WhatItSends presetId={sel.preset} provider={sel.provider} model={sel.model}
+                       operation={decision ? "decide" : undefined} />
         )}
         {decision && <DecisionRoutes routes={settings.routes} />}
       </div>
