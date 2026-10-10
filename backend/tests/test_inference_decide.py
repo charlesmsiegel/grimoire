@@ -1630,3 +1630,59 @@ def test_an_unstamped_holder_names_no_server(client):
     got = _decide(UnstampedHolder([[decision_reply({"over": True})]]), [_item()])
     assert got.items[0].answers["over"] == decisions.Answer(True)
     assert got.items[0].served == ()
+
+
+# ---- run attribution (01g-S3; spec 01g §3.10, §3.12) ----
+RUN = {"run_id": "run-1", "loop_turn": 2, "response_id": "response-mara"}
+
+
+def _carries_the_run(rows: list[dict]) -> bool:
+    return bool(rows) and all({k: r.get(k) for k in RUN} == RUN for r in rows)
+
+
+def test_every_row_a_decide_files_carries_the_run(client):
+    """A structured stage that fails and a native stage that answers: each
+    meter `decide` opens files the caller's run, turn and response."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["text"]}])
+    _catalog("spare", [{"id": "vendor/spare", "outputs": ["decisions"]}])
+    fake = FakeLLM([[""]], error=LLMError("network", "connection reset"), decisions=[_yes()])
+    got = _decide(fake, [_item()], **RUN)
+    rows = _rows()
+    assert [(r["status"], r["decision_mode"]) for r in rows] == [
+        ("error", "structured"), ("ok", "native")]
+    assert _carries_the_run(rows) and list(got.usage) == rows
+
+
+def test_a_schema_resend_files_under_the_run(client):
+    """The prompt-only re-send after a refused structured field is its own
+    metered call, and it files the run too."""
+    _store(client)
+    _flagged(spare=True)
+    provider = SequencedProvider([LLMError("network", "connection reset"),
+                                  _refused_schema(), [decision_reply({"over": False})]])
+    fake = LLMClient(openrouter=provider, timeout=0, retries=0)
+    _decide(fake, [_item()], **RUN)
+    rows = _rows()
+    assert len(rows) == 2 and _carries_the_run(rows)
+
+
+def test_a_decide_without_a_run_files_no_run_fields(client):
+    _store(client, fallback=False)
+    _decide(FakeLLM([[decision_reply({"over": True})]]), [_item()])
+    (row,) = _rows()
+    assert not {"run_id", "loop_turn", "response_id"} & set(row)
+
+
+def test_a_decide_under_a_run_captures_its_run_id(client):
+    """End to end through a real `LLMClient`: the meter `decide` opens seeds
+    the run, and every incoming-response capture event names it."""
+    _store(client, fallback=False)
+    events: list[dict] = []
+    fake = LLMClient(openrouter=SequencedProvider([[decision_reply({"over": True})]]),
+                     timeout=0, retries=0, capture=lambda: events.append)
+    got = _decide(fake, [_item()], run_id="run-1")
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert events and all(e["run_id"] == "run-1" for e in events)
+    (row,) = _rows()
+    assert row["run_id"] == "run-1"
