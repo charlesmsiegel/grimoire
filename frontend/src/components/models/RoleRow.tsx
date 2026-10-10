@@ -1,12 +1,13 @@
 import { Link } from "react-router-dom";
 import type {
-  EmbeddingCard, GenerativeRole, InferenceSettings, ProviderHealth, RateInfo, RouteRow,
+  CardLimits, EmbeddingCard, GenerativeRole, InferenceSettings, ProviderHealth, RateInfo, RouteRow,
 } from "../../api/client";
-import { providerPath } from "../../providerPaths";
+import { modelLimitsPath, providerPath } from "../../providerPaths";
 import { WhatItSends } from "../inference/ControlsReadout";
 import { describe, droppedFallbackWords, ROLE_LABEL, ROLE_NEEDS } from "../inference/selection";
 import { HealthDot } from "./health";
 import { DecideNote, Problem, useWarning, Warning } from "./notes";
+import { compactTokens, windowWords } from "./limits";
 import { rateWords, setRateHref } from "./rates";
 import { taskHash } from "./taskHash";
 
@@ -46,19 +47,49 @@ const providerName = (settings: InferenceSettings, id: string) =>
 const presetName = (settings: InferenceSettings, id: string) =>
   settings.presets.find((p) => p.id === id)?.name ?? id;
 
-/** The rate line, and Set rate where nothing prices the model (spec 3.5). */
-function RateLine({ rate, model, promptOnly = false }:
-  { rate: RateInfo | null; model: string; promptOnly?: boolean }) {
+/** The model's window (01i), after the rate: `200k window`, or `window
+ *  unknown` with Set, which opens that model's size form on its provider.
+ *  Nothing where the server sent no `limits` (nothing resolves, or a native
+ *  decision, which packs no prompt). Display-only: the facts panel owns the
+ *  write. */
+function WindowReadout({ limits, provider, model }:
+  { limits: CardLimits | null; provider: string; model: string }) {
+  if (!limits) return null;
+  const known = limits.window.value != null;
+  return (
+    <span title={known ? `${limits.window.value!.toLocaleString("en-US")} tokens` : undefined}>
+      {windowWords(limits.window)}
+      {!known && provider && model && (
+        <> <Link to={modelLimitsPath(provider, model)}>Set</Link></>
+      )}
+    </span>
+  );
+}
+
+/** The rate line, and Set rate where nothing prices the model (spec 3.5);
+ *  then the model's window (01i). */
+function RateLine({ rate, model, promptOnly = false, limits = null, provider = "" }:
+  { rate: RateInfo | null; model: string; promptOnly?: boolean;
+    limits?: CardLimits | null; provider?: string }) {
   const words = rateWords(rate, { promptOnly });
-  if (!words) return null;
+  if (!words && !limits) return null;
   return (
     <p className="field-hint">
       {words}
       {rate?.source === "none" && model && (
         <> · <Link to={setRateHref(model)}>Set rate</Link></>
       )}
+      {limits && (
+        <>{words ? " · " : ""}<WindowReadout limits={limits} provider={provider} model={model} /></>
+      )}
     </p>
   );
+}
+
+/** The riding fallback's window on its line, so a ceiling it binds shows. */
+function fallbackWindow(limits: CardLimits | null | undefined): string {
+  const value = limits?.fallback_window?.value;
+  return value != null ? ` · ${compactTokens(value)} window` : "";
 }
 
 /** Every task Decision answers -- its own `uses`, inherited or not -- each a
@@ -124,9 +155,12 @@ export function RoleRow({ role, settings, health }:
             <SelectionLine provider={fb.provider} providerName={fbName} model={fb.model}
                            preset={fb.preset} presetName={presetName(settings, fb.preset)}
                            health={health} />
+            {fallbackWindow(card.limits)}
           </p>
         )}
-        <RateLine rate={card.rate} model={sel?.model ?? ""} />
+        <RateLine rate={card.rate} model={sel?.model ?? ""} limits={card.limits ?? null}
+                  provider={sel?.provider ?? ""} />
+        <Problem text={card.limits?.ceiling.reason || null} />
         <Problem text={card.problem} />
         <Warning text={warning} />
         {decision && <DecideNote mode={card.decision_mode} decidesNatively={card.decides_natively} />}
@@ -158,7 +192,8 @@ export function EmbeddingRow({ card, settings, health }:
                               providerName={providerName(settings, card.resolves.provider)
                                 ?? card.resolves.provider_name}
                               model={card.resolves.model} health={health} withPreset={false} /></p>
-            <RateLine rate={card.rate} model={card.resolves.model} promptOnly />
+            <RateLine rate={card.rate} model={card.resolves.model} promptOnly
+                      limits={card.limits ?? null} provider={card.resolves.provider} />
           </>
         ) : (
           <>

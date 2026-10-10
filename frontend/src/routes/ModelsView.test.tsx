@@ -230,6 +230,73 @@ test("a native Decision says why it has no figure", async () => {
   expect(row("Decision").queryByRole("link", { name: "Set rate" })).toBeNull();
 });
 
+// ---- 01i: the model's window ----
+const lim = (value: number | null, source = value == null ? "unknown" : "catalog") =>
+  ({ value, source });
+const limits = (over: Record<string, unknown> = {}) => ({
+  window: lim(200000), max_output: lim(64000), fallback_window: null,
+  ceiling: { tokens: 195904, binding: ["saltmarch", "vendor/m"], reason: "" }, ...over,
+});
+
+test("a known window shows after the rate", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles, fast: card({ limits: limits() }),
+  } }));
+  await openSummary();
+  const line = row("Fast").getByText(/would be priced at/);
+  expect(line).toHaveTextContent(/\(provider\) · 200k window$/);
+  expect(row("Fast").getByText("200k window")).toHaveAttribute("title", "200,000 tokens");
+  expect(row("Fast").queryByRole("link", { name: "Set" })).toBeNull();
+});
+
+test("an unknown window offers Set, to the model's size form", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    fast: card({ limits: limits({ window: lim(null), max_output: lim(null),
+                                  ceiling: { tokens: null, binding: null, reason: "" } }) }),
+  } }));
+  await openSummary();
+  expect(row("Fast").getByText(/window unknown/)).toBeInTheDocument();
+  expect(row("Fast").getByRole("link", { name: "Set" }))
+    .toHaveAttribute("href", "/providers/saltmarch/models/vendor/m?edit=limits");
+});
+
+test("the fallback line shows the riding fallback's window", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    fast: card({ fallback: sel("realm", "local/small"),
+                 limits: limits({ fallback_window: lim(8192, "user"),
+                                  ceiling: { tokens: 6144, binding: ["realm", "local/small"],
+                                             reason: "" } }) }),
+  } }));
+  await openSummary();
+  const fallback = row("Fast").getByText(/Fallback:/);
+  expect(fallback).toHaveTextContent(/local\/small · no preset · 8k window$/);
+});
+
+test("a ceiling reason shows under the row", async () => {
+  const reason = "The preset asks for 32,000 reply tokens; vendor/m's window is 8,192.";
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    fast: card({ limits: limits({ window: lim(8192),
+                                  ceiling: { tokens: 0, binding: ["saltmarch", "vendor/m"],
+                                             reason } }) }),
+  } }));
+  await openSummary();
+  expect(row("Fast").getByText(reason)).toHaveClass("problem");
+});
+
+test("no window where limits is null", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    decision: card({ decision_mode: "native", rate: { source: "native" }, limits: null,
+                     stored: sel("saltmarch", "vendor/decider") }),
+  } }));
+  await openSummary();
+  expect(row("Decision").queryByText(/window/)).toBeNull();
+  expect(row("Decision").queryByRole("link", { name: "Set" })).toBeNull();
+});
+
 test("a role naming a deleted provider keeps it on screen", async () => {
   (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
     ...settings().roles,
