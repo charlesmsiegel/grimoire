@@ -1,6 +1,6 @@
 # 02. Decision integration: what slices F–H left, and the play-facing uses
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 02 in `ROADMAP-CHECKLIST.md`. Lane: Decision (01a, 01b → 01c,
 01d → **02** → 11; 13 and 12 consume it too).
@@ -70,9 +70,10 @@ directly.
 ## 1. Current state (reconciled against main) — 02-C1
 
 This section is contract 02-C1. It records what the bundle draft asked for,
-what 01's slices F–H landed in its place, and what is still open. Every
-"landed" row is held by an existing guard or suite (named in the row), so
-the record cannot drift silently.
+what 01's slices F–H landed in its place, and what is still open. Where a
+guard or suite holds a landed behaviour, the row names it. Nothing checks
+the `file:line` citations themselves except review, so a PR that moves a
+landed decide site updates 1.2 in the same change.
 
 ### 1.1 The draft in one paragraph
 
@@ -92,12 +93,12 @@ converting.
 
 | Draft item | Landed as | Where | How it differs from the draft |
 |---|---|---|---|
-| Provider-neutral `decide()` | `inference.decide` over a chain of stages; `run_stages` | `inference.py:684`, `:595`, `stages` at `:147` | One meter per structured chunk or native item (`inference.py:349`). The chain moves on only on a **failed call**, never on an answer (`run_stages` docstring, `inference.py:602-605`). |
+| Provider-neutral `decide()` | `inference.decide` over a chain of stages; `run_stages` | `inference.py:684`, `:595`, `stages` at `:147` | One meter per facade **call**: a structured chunk, each prompt-only re-send of a chunk whose attempt refused the schema (`_once`, `inference.py:259-286`; `_ask`, `:289-318`), or a native item. The chain moves on only on a **failed call**, never on an answer (`run_stages` docstring, `inference.py:602-605`). |
 | Question vocabulary | `Predicate`, `Choice(allow_none)`, `Score(levels 2–10)`; several questions per `Item` | `decisions.py:181`, `:189`, `:200`, `:212`; level bounds `:94` | **No `Rank`.** That is now 01e-C1. |
 | Normalised result | `Decision` → `ItemResult` → `Answer` with `reason`, `detail`, `probability`, `distribution` | `decisions.py:221`, `:258`, `:277` | No `profile_id`. What answered is `provider`, `model` and `served` (`decisions.py:284-297`). `backend` is per item. |
 | No fabricated probabilities | `Answer.probability` and `.distribution` are only what a backend reported | `decisions.py:227-229`; native reading `native_answer` at `:866` | Only native reports any. A structured answer carries none. |
 | Native adapters | OpenRouter `/api/alpha/decisions`, OpenAI `{base_url}/decisions` | `openrouter.py:40`, `:342`; `openai_compatible.py:426`; adapters `adapters.py:149`, `:195` | Native serves **only a model that cannot generate** (`resolve.native_only`, `store/inference/resolve.py:922`; `decision_mode` at `:931`). A model that generates stays structured until native wins on evals (01 section 16). |
-| Structured fallback | `generate(schema=)`, the schema always in the prompt, provider structured mode per attempt | `inference.py:119`; `_flag_structured` at `resolve.py:955` | Chunks of eight items (`decisions.MAX_ITEMS_PER_CALL`, `decisions.py:101`). |
+| Structured fallback | `_once` sends `client.complete(..., schema=)` over `structured_messages`, with the schema always in the prompt and provider structured mode on each attempt flagged for it | `_once` at `inference.py:259-286`; `structured_messages` at `:119`; `_flag_structured` at `resolve.py:955` | Chunks of eight items (`decisions.MAX_ITEMS_PER_CALL`, `decisions.py:101`). Not `generate(schema=)`: a generate resolution's targets are never flagged structured, so that path sends no structured mode (01f). |
 | Absorb continuity identity on Decision | `continuity-identity` decides one item per examined row | `routes/scenes.py:2105` (`_resolve_identity`), call at `:2136`; builder `store/continuity/identity.py:729` | **No shadow mode.** It switched by default in slice G, behind the offline gate (below), on the `continuity` route with `default_role="decision"` (`store/routing.py:101-105`). A row the reply never reached stays `unchecked`; there is no generative resolver left to fall back to. A native distribution split across `existing:<id>` options is regrouped before reading (`identity.py:769`, `decisions.regrouped` at `decisions.py:952`). |
 | Reconcile on Decision | `continuity-reconcile` decides one item per candidate | `routes/continuity.py:651` (`_adjudicate`), call at `:685` | Shipped with identity in slice G, not left as a benchmark. An unreached candidate is `unanswered` and asked again next sweep. |
 | Speaker pick | `response-selector` decides one `Choice` over the round's eligible refs and `grimoire`, null allowed | `routes/character_turns.py:728` (`_select`), call at `:752`; item `store/response_protocol.py:102`; mapping `:125` | On its own `speaker` route (`routing.py:88-91`), Decision role. Answer taken as given: **argmax, never sampled.** |
@@ -132,8 +133,10 @@ play-facing design below is checked against them.
 
 1. **One generation per contribution.** A contribution is one streamed
    `generate` on the scene route (`_round_frames`, `character_turns.py:1014`;
-   the meter at `:1053-1060`). No decision text is ever shown, stored in the
-   transcript, or parsed out of prose.
+   the meter at `:1053-1060`). No decision's output is ever shown or stored
+   in the transcript, and no decide call is read out of a contribution's
+   prose. The handoff block (rule 2) is the generation's own control output,
+   parsed by the watcher; it is not a decision.
 2. **The handoff decides later speakers.** In Directed mode a contribution's
    hidden `handoff` block names the successor, validated by
    `response_protocol.validate_handoff` (`response_protocol.py:31`) against
@@ -167,11 +170,16 @@ play-facing design below is checked against them.
    - A resumed round (a retry, a roll resume, a recovery) is never re-picked.
      The round record already holds `actor_ref` (`_first_actor`,
      `character_turns.py:882-893`).
-4. **Frozen snapshots.** `_prepare` composes the prompt under the campaign
-   lock and stores `messages.snapshot()` on the response record
-   (`character_turns.py:476-520`). A reroll replays that snapshot and never
-   recomposes from live state (character-turns spec, "Reviewed implementation
-   decisions").
+4. **Frozen snapshots, with one recompose.** `_prepare` composes the prompt
+   under the campaign lock and stores `messages.snapshot()` on the response
+   record (`character_turns.py:476-520`). A retry of an interrupted
+   contribution and a reroll replay that snapshot and never recompose from
+   live state (character-turns spec, "Reviewed implementation decisions").
+   **A roll resume is the exception:** `_prepare`'s `pending and appended`
+   branch recomposes with the roll result appended and stores the result as
+   the response's `resume_snapshot` (`character_turns.py:497-509`). Keep
+   writing on a reply split by a roll continues from that resume snapshot
+   (`ExtendPlan`, `character_turns.py:1770-1785`).
 5. **Every decision on the turn path runs off the loop.** The resolution, the
    scene read, the regex view and the item's templates run in the threadpool,
    and `decide` renders in a worker thread (`_select` docstring,
@@ -250,9 +258,14 @@ Action choice and 12's tool use cite this section rather than restating it.
 4. **Every speaker-pick invariant in 1.4 rule 3 holds**, with sampling layered
    *after* the answer is read (section 5). The pick stays the only decision
    that may raise `incapable` before a write.
-5. **Frozen snapshots hold.** A section a decision adds is part of the
-   composed prompt, so it is part of the snapshot. A reroll, a Keep writing,
-   a retry and a roll resume reuse it and **ask nothing again**.
+5. **A decision is asked once per contribution, and every later prompt of
+   that contribution carries it.** A section a decision adds is part of the
+   composed prompt, so it is in the snapshot, and a retry and a reroll reuse
+   it. A roll resume recomposes (1.4 rule 4), so `_prepare`'s resume branch
+   reads the pending response record first and passes its stored plan,
+   `plan=record.get("intent")`, into `_compose`. The resume snapshot then
+   carries the same section, and Keep writing inherits it from there. None
+   of these asks again.
 6. **Off is byte-identical.** With a feature off, nothing is resolved,
    nothing is called, no record key is written, and the composed prompt is
    identical to `main`'s. This is the same discipline as
@@ -268,7 +281,9 @@ A new play decision resolves through `_soft_resolved`
 Decision model or a route with no connection skips the feature **for that
 contribution**. The skip is recorded on the record it would have written
 (`"skipped": "<kind>"`) and the contribution proceeds as if the feature were
-off. Only the speaker pick keeps its 409 before `post_chat` writes, because
+off. `_soft_resolved` returns `(None, why, kind)` in that case, and the call
+site tests for `None` and never calls `decide` with it (`decide` would raise
+on `resolved.task`). Only the speaker pick keeps its 409 before `post_chat` writes, because
 only the pick is required for a round to have a speaker.
 
 **Why:** a turn the player sent is the request. A feature that can make it
@@ -285,30 +300,83 @@ contribution then composes without the section. A decision that answered
 `abstained` or `refused` is an answer of "no intent", not a failure, and is
 not retried elsewhere (1.2: the chain moves on only on a failed call).
 
-### 3.4 A ceiling on every pre-generation decision
+The whole optional pre-generation step is wrapped in `except Exception`:
+the soft resolution, reading the actor's card, rendering the templates,
+clipping the brief, `decide` itself (which raises `ValueError` for a
+resolution with no stage, `inference.py:703-710`) and the mapping. It never
+catches `BaseException`, so cancellation and Stop pass through as today. An
+exception is recorded `skipped: "error:<ClassName>"`, logged at ERROR with
+the class name only, and the contribution proceeds.
+
+**Why so wide:** anything that escapes reaches `_frames`'
+`except BaseException` (`character_turns.py:1002-1008`). That goes to
+`_rescue`, which leaves the round `incomplete`. Retry then re-runs
+`_round_frames`, asks again and fails again, so the scene stays unplayable
+until the switch is turned off.
+
+### 3.4 A deadline on every pre-generation decision
 
 `_select` today runs with no `around`, so the facade's idle timeout is its
-only bound. Every new pre-generation decision runs under
-`around=lambda call, holder: _bounded_call(call, ceiling=plan_ceiling(),
-on_timeout=_noting(client, resolved, holder))` (`routes/common.py:544`):
+only bound. Every pre-generation decision 02 adds (intent, plan, tool
+decision) runs under **one deadline for the whole decision**, not a ceiling
+per call. `around` wraps each facade call (`inference._once`, and `_native`
+per item), and one decision can make several calls in a row:
+
+- the primary;
+- a prompt-only re-send for each attempt that refused the schema (`_ask`,
+  `inference.py:289-318`);
+- a fallback stage when either attempt is native (`stages`, `:147-182`).
+
+A per-call ceiling would therefore allow several times the stated wait.
 
 ```python
-#: Seconds a pre-generation decision may hold the contribution it shapes.
-#: Argued structurally: the player is waiting on a stream that has not
-#: started, and an optional decision must cost less waiting than the reply it
-#: shapes. Well under `llm_call_budget` (default 300 s, `store/config.py:159`),
-#: which bounds a whole non-streaming generation. To be tuned against 01a's
-#: latency reports, never against a real library.
+#: Seconds one pre-generation decision may hold the contribution it shapes,
+#: across every call it makes. Argued structurally: the player is waiting on
+#: a stream that has not started, and an optional decision must cost less
+#: waiting than the reply it shapes. Well under `llm_call_budget` (default
+#: 300 s, `store/config.py:159`), which bounds one whole non-streaming
+#: generation. To be tuned against 01a's latency reports, never against a
+#: real library.
 PLAN_CEILING_S = 20.0
 
 def plan_ceiling() -> float:
     budget = store.config.llm_call_budget()
     return PLAN_CEILING_S if budget <= 0 else min(PLAN_CEILING_S, budget)
+
+def plan_deadline() -> inference.Around:
+    """One monotonic deadline for one decision. Each call is bounded by
+    what is left (`_bounded_call(call, ceiling=remaining)`,
+    `routes/common.py:544`). A call that would start with nothing left is
+    refused unsent with `DeadlineRefused`, an `LLMError` whose
+    `NOT_A_FAILURE` is False, like absorb's `BudgetRefused`
+    (`routes/scenes.py:1899`). So `inference._refused_unsent`
+    (`inference.py:430`) ends the chain rather than trying a later stage."""
 ```
 
-On timeout the call is filed `error/timeout` by its meter and the
-contribution proceeds without it. The pick keeps today's behaviour, with no
-ceiling (an open question, section 16).
+**No `on_timeout=_noting(...)`.** `_noting` files an overrun against the
+connection through `client.note_outcome` (`routes/common.py:619`). This
+deadline is the app's own constant, not the user's `llm_call_budget`, so a
+slow but healthy reasoning model would show as failing on the Models page
+because of 02. An overrun is still the call's own `error/timeout` row,
+filed by its meter.
+
+**Worst-case added wait before the first token**, per contribution:
+
+- the speaker pick, when the round needs one: unbounded but for the facade's
+  idle timeout, as today (open question 1);
+- plus `PLAN_CEILING_S` for the intent or plan;
+- plus the 01b capture write. That write is awaited inside `decide` before
+  it returns, and `_record_prompt` takes the campaign lock (M16 in the
+  review record), so the play gate counts it in "added pre-generation time".
+
+**Scope for other specs (02-C6).** 3.4 binds the decisions 02 adds. For
+every other turn-path decide (09's rerank, 11's Decision stage, 13's NPC
+Action choice), 02-C6 requires a **total deadline per decision, named by the
+owning spec**, never `llm_call_budget` alone. The owning spec may choose a
+lower number than `PLAN_CEILING_S`, or a higher one with its own argument.
+09's `RERANK_CEILING` meets this. **Edge note for the coordinator:** 11
+section 5.4 runs its turn-path stage under `llm_call_budget`, which this rule
+does not allow.
 
 ### 3.5 Attribution
 
@@ -342,7 +410,12 @@ global):
 | `decide_play_tool` | `off` \| `on` | `off` | C4 |
 
 All three keys join `config._CONFIG_KEYS` (`store/config.py:219-250`), or
-`read_config` silently drops them. They are read through one module,
+`read_config` silently drops them. They also join `ConfigUpdate`
+(`routes/models.py:26-66`), which lists its fields explicitly. The campaign
+override gets its own body and route, modelled on the tracker's:
+`CampaignPlayDecisions` (`{speaker_sampling, turn_plan, play_tool}`, each `""`
+to follow the global) at `PUT /campaigns/{cid}/play-decisions`, beside
+`CampaignTracker` (`routes/models.py:289`). They are read through one module,
 `store/play_decisions.py` (pure apart from the config read), with
 `speaker_sampling(cid)`, `turn_plan_mode(cid)` and `play_tool(cid)`.
 
@@ -357,9 +430,12 @@ route, and, for sampling, whether the current Decision model reports
 distributions (5.6).
 
 The new routes (`turn_plan`, `epistemic`, `history_check`) need no page
-of their own. The Models page lists every route the server reports, and
-01s's "Advanced" toggle hides rarely used ones
-(`2026-10-09-inference-settings-group-design.md`, section 3).
+of their own. The Models page lists every route the server reports, in
+01s's Advanced section (`2026-10-09-inference-settings-group-design.md`,
+section 3.3). 01s has no toggle that hides a route, so from 02-B on the
+`turn_plan` row is listed while no UI can switch the feature on (the **dark
+period**, until 02-F). The route's hint says so: "Off unless Play decisions
+are switched on".
 
 Turning a switch on starts no call. CLAUDE.md's "settings surface never
 spends unasked" rule covers a call the settings page starts, and this one
@@ -367,8 +443,11 @@ starts none. The switch's text is the disclosure.
 
 ### 3.7 Privacy
 
-A decision item is built from the same campaign text the turn already sends
-to a model. It is never written to a log line. `logs.record` rows carry
+A decision item is built from campaign text the turn already sends to a
+model. One thing is new: the actor's card brief (6.2) now also goes to the
+**Decision-role provider**, which may be a different provider from the scene
+route's. The switch's text says so. A decision item is never written to a
+log line. `logs.record` rows carry
 counts, kinds and ids only, as the continuity identity line does
 (`routes/scenes.py:2167-2180`). Captures go through 01b-C1 under the prompt
 log's existing Settings disclosure. Eval fixtures (section 4) are synthetic
@@ -411,11 +490,39 @@ runs fixed synthetic play fixtures (`evals/play.py`). Each fixture is a
 seeded throwaway store holding a scene, its cast and a player post. The run
 produces the full contribution for every **configuration** in the feature's
 matrix. A configuration is a scene-route selection, a Decision selection and
-a feature setting. Each selection is applied per run through the same seam
-`--provider/--model` use (`override_inference`), so nothing is written to
-settings. With `--repeat N` (default 5) every fixture runs N times per
-configuration, because one live run is an anecdote (`evals/README.md`,
-"`turn-taking` and issue #82").
+a feature setting.
+
+**How a configuration reaches the turn path.** `override_inference` returns
+one resolution for one task. The turn path resolves internally: `_select`
+calls `require_inference("response-selector", ...)`
+(`character_turns.py:748-749`), and the intent call resolves through
+`_soft_resolved`. A live eval resolves in the real store and runs in a
+throwaway home (`evals/run.py:35-45`). A fixture that only overrode one
+task would find no connection in its throwaway home: the pick would raise
+409 and the intent would be skipped as `missing_key`, and the gate would
+measure "off" under an "on" label. So the play harness **seeds the throwaway
+store**:
+
+- it copies into the isolate only the providers each configuration selects,
+  with their keys (deleted with the temp directory);
+- it writes the format-2 role selections (Primary, Decision) and the
+  feature's switch into the isolate's `config.md`;
+- it writes nothing to the real store.
+
+The configuration's identity is declared as 01a-C3's open `axes`
+(01a section 8): `{"feature": "off|intent|plan|on", "scene_selection":
+"<provider>/<model>/<preset>", "decision_selection": "<provider>/<model>"}`,
+plus `"sampling": "on|off"` for C2a and `"floor": "0|1/(2n)"` where open
+question 9 is measured.
+
+**Repeats and drain.** With `--repeat N` (this mode's own default is 5)
+every fixture runs N times per configuration, because one live run is an
+anecdote (`evals/README.md`, "`turn-taking` and issue #82"). A play case runs
+through the app, and a landed turn schedules detached follow-ups. So the
+harness follows 01a's drain contract (01a section 6): the last request
+returns, `runs.runs_in_flight(app)` empties (under `DRAIN_CEILING_S`), the
+lifespan exits, the tripwire is re-checked, and only then are the rows
+harvested and the environment restored.
 
 It reports, through 01a-C3's comparison table, per configuration:
 
@@ -428,7 +535,9 @@ It reports, through 01a-C3's comparison table, per configuration:
   `scene-length`, `owned-lore`);
 - the feature's own graders (5.7, 6.6, 7.5, 8.6, 9.3).
 
-Rows are filed under 01a-C2's eval scope, never against a campaign.
+Rows are filed under 01a-C2's eval scope, never against a **real**
+campaign. They carry the fixture campaign's id, because the turn path
+attributes every call to its campaign and post (3.5).
 
 One play fixture is several calls under several tasks (`turn-plan`, then
 `chat`). 01a-C1 sums a play case across its tasks, per money column and never
@@ -450,6 +559,9 @@ case.
    alone, and it is to be tuned once 01a's numbers exist.
 4. **Off is free:** with the feature off, a configuration files no row
    under the feature's task.
+5. **On is really on:** a configuration labelled with the feature on fails
+   if any repeat records `skipped` for that feature, or files no row under
+   its task. This catches a harness that failed to seed a selection.
 
 **Reported, for the user to judge:** added latency per contribution (median
 and maximum over the fixture set), extra tokens and money per post by

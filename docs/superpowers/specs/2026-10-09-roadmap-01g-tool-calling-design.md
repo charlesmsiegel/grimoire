@@ -977,15 +977,20 @@ Decision role rather than settling it in prose. The Primary keeps the prose.
 
 **The route.** `Route("tool_decision", "Decisions asked by a model", ...,
 tasks, True, operation="decide", default_role="decision",
-legacy=routing.NO_LEGACY)`. `routing.NO_LEGACY` is the shared sentinel for a
-route born at format 2 (`ROADMAP-CHECKLIST.md`, "Shared structures"): 01g,
-09, 10 and 02 may each be the first to add it. It tells the planner and the
-legacy route list that no format-1 key exists to read. **The task names come
-from callers**, such as 02's `turn-tool-decision`. A consumer may instead put
-its decide tool on a decide route of its own (12 proposes
-`investigation_decide`), and the shim accepts either. The route lands in the
-slice of its first consumer, because `test_routing_guard.py` fails a route
-whose tasks nothing uses.
+legacy=routing.NO_LEGACY)`.
+
+- The route **key** is `tool_decision`, the house spelling (`scene_break`,
+  `voice_drift`). The checklist's "`tool-decision` route" is this route.
+- `routing.NO_LEGACY` is the shared sentinel for a route born at format 2
+  (`ROADMAP-CHECKLIST.md`, "Shared structures"). 01g, 09, 10 and 02 may each
+  be the first to add it. It tells the planner and the legacy route list
+  that no format-1 key exists to read.
+- **The task names come from callers.** 12 puts its task,
+  `investigation-decide`, on this route. 02-C4 asks its question as
+  `turn-tool-decision` on its own `turn_plan` route. The shim accepts a task
+  on any decide route.
+- The route lands in the slice of its first consumer, because
+  `test_routing_guard.py` fails a route whose tasks nothing uses.
 
 **The builder** (`routes/tool_decision.py`). The caller names the task and
 resolves it at its own call site, so the literal sits where the guards read
@@ -993,22 +998,77 @@ it:
 
 ```python
 resolved, why, kind = _soft_resolved(
-    lambda: require_inference("turn-tool-decision", cid, operation="decide"))
+    lambda: require_inference("investigation-decide", cid, operation="decide"))
 
 def decision_tool(task: str, resolved: UsableInference | None, client: LLMClient, *,
-                  cid: str, scene: str = "", context: str = "",
-                  spend_ceiling: bool = False, why: str = ""
+                  cid: str, scene: str = "", round_id: str = "",
+                  response_id: str = "", why: str = "",
+                  shape: ToolShape = ToolShape(),
+                  context: Callable[[dict], str] | str = "",
+                  select: Callable[[decisions.ItemResult], dict] | None = None,
+                  capture: inference.Capture | None = None,
+                  spend: tool_calls.SpendGuard | None = None,
+                  max_tokens: int = DECIDE_MAX_TOKENS
                   ) -> tuple[tool_calls.ToolSpec | None, str]:
     """The `decide` tool for one loop, metered under `task`, or (None, why)
-    when it cannot be offered: no resolution (the caller's soft refusal,
-    never a 409 for the whole run), a resolution of another task, or with
-    `spend_ceiling`, one that would answer on a native stage (3.9)."""
+    when it cannot be offered."""
 ```
 
-The handler is async and calls `operations.decide(resolved.task, [item],
-client=client, resolved=resolved, campaign=cid, scene=scene,
-run_id=ctx.run_id, around=<the run's remaining wall clock>)`. `decide`
-itself refuses a resolution of any other task.
+It returns `(None, why)` in three cases:
+
+- no resolution (the caller's soft refusal; never a 409 for the whole run);
+- a resolution of another task;
+- under a spend guard, any stage attempt that is native, unpriceable
+  (section 3.9's price order) or uncapped (`cap_sent` is False).
+
+**What a consumer can shape**, within fixed bounds, because 02-C4 and 12
+want different tools:
+
+- `ToolShape` sets:
+  - the tool's `name` (02: `decide_choice`);
+  - whether the model supplies a `context` parameter (02: no);
+  - `max_question_chars` (02: 300; at most 1000);
+  - an options range inside `2..MAX_TOOL_OPTIONS`, where
+    `MAX_TOOL_OPTIONS = 16` (02: 2..6);
+  - `result`, either `"full"` or `"selection"`;
+  - `on_cap`, either `"error"` or `"result"`.
+
+  Sixteen options is structural: past a dozen, a model is enumerating
+  rather than choosing, and an unbounded list would let one call carry a
+  chunk's worth of enum values.
+- `context` is a fixed string, or a callable building the item's context
+  from the model's arguments. 02 renders its `turn_plan/tool_item.j2` there.
+  It is capped at `MAX_DECIDE_CONTEXT = 4000` characters, with the model's
+  part truncated first.
+- `select` maps the answered `ItemResult` to what the model is sent. 02 uses
+  it to apply its own sampling rule through 01c. 01g never samples.
+
+**The handler** is async. It is still subject to the read-only rule of 3.6,
+with the accounting carve-out stated there. Before sending it runs these
+checks:
+
+1. the per-run decision cap;
+2. `decisions.validate` on the one `Item` it built (a single
+   `Choice(id="choice", instructions=question, options, allow_none)`);
+3. the decide spend check (section 3.9), through `spend`.
+
+Then it calls:
+
+```python
+operations.decide(resolved.task, [item], client=client, resolved=resolved,
+                  campaign=cid, scene=scene, round_id=round_id,
+                  response_id=response_id, run_id=ctx.run_id,
+                  loop_turn=ctx.turn, capture=capture,
+                  max_tokens=max_tokens, around=<the run's remaining wall clock>)
+```
+
+- `decide` itself refuses a resolution of any other task.
+- `capture` is passed straight through to the inner `decide`, so 01b-C1's
+  capture covers this site like every other decide site.
+- `decide` gains `max_tokens=` (applied to its structured stage targets via
+  01f's `with_output_cap`) and `response_id=` (02's shared structure).
+- Every row in the returned `Decision.usage` is added to the run's "spent so
+  far".
 
 **Guard change.** `test_operation_guard.py` needs two changes:
 
@@ -1020,7 +1080,8 @@ itself refuses a resolution of any other task.
   `routes/tool_decision.py`, where the task is read off the resolution rather
   than spelled.
 
-**The tool's parameters** (inside the 01f-C3 subset):
+**The default parameters** (inside the 01f-C3 subset). `context` is dropped
+when `ToolShape.context` is False:
 
 ```json
 {"type": "object", "additionalProperties": false,
@@ -1035,56 +1096,54 @@ itself refuses a resolution of any other task.
        "properties": {"id": {"type": "string"}, "description": {"type": "string"}}}}}}
 ```
 
-The handler builds one `decisions.Item`:
-
-- **context**: the builder's bound `context` (what the caller wants every
-  decision to see, such as the scene state), then the model's `context`,
-  capped at `MAX_DECIDE_CONTEXT = 4000` characters with the model's part
-  truncated first;
-- **one `Choice`**: `id="choice"`, `instructions=question`, the options, and
-  `allow_none`.
-
-`decisions.validate` runs first. A `DecideRequestError` (two options that
-normalise alike, an empty question, more than `MAX_TOOL_OPTIONS = 16`
-options) is an error result to the model, naming the problem, and counts.
-Sixteen is structural: past a dozen options a model is enumerating rather
-than choosing, and an unbounded list would let one call carry a chunk's
-worth of enum values.
+A refused request is a result for the model, never an exception. A
+`DecideRequestError` covers options that collide once normalised, an
+`offerable` refusal, an empty or over-long question, and an option count out
+of range. It is an error result naming the problem, or, with
+`result="selection"`, `{"selected": null, "reason": "invalid_request"}`. It
+counts.
 
 **What the model gets back:**
 
-```json
-{"answer": "<option id>" | null,
- "status": "answered" | "abstained" | "refused" | "unanswered",
- "probability": 0.73,                 // only when the backend reported one
- "distribution": {"<id>": 0.73, ...}} // only when the backend reported one (01c)
-```
+- `result="full"` (12):
+  `{"answer": id | null, "status": "answered" | "abstained" | "refused" |
+  "unanswered", "probability"?, "distribution"?}`. The probability and
+  distribution are present only when the backend reported them.
+- `result="selection"` (02): `{"selected": id}` or `{"selected": null,
+  "reason": "abstained" | "unanswered" | "cap" | "invalid_request"}`. It
+  never carries a distribution.
+- **At the cap:** `on_cap="error"` sends an error result, and
+  `on_cap="result"` sends `{"selected": null, "reason": "cap"}`. Either way
+  the stream does not fail.
 
 Nothing is fabricated: a structured answer carries no probability, because
-none was reported. A failed call (`LLMError`, no item answered) is an error
-result, `"the decision could not be made: <kind>"`, and the loop continues;
-the turn that asked decides what to do. The answer's rationale is not
-returned. The tool exists so the model does not reason the choice itself in
-prose.
+none was reported. A failed call (`LLMError`, no item answered) is
+`"the decision could not be made: <kind>"`, or `reason: "unanswered"`, and
+the loop continues. The rationale is never returned, because the tool exists
+so the model does not reason the choice in prose.
 
 **Bounds, and no recursion:**
 
 - `max_decisions` caps decide calls per run, and each also counts as a tool
   call.
-- Each decide call is a single item, so one chunk. Its meters (one per
-  stage reached) file under the run's `run_id`.
-- **No recursion by construction.** `decide` takes no tools and cannot reach
-  `run_tools`. `run_tools` refuses to start inside a running loop: a
-  `contextvars.ContextVar` set for the loop's duration and checked at entry
-  raises `ValueError("a tool loop cannot start inside another")`. A tool, the
-  decide tool included, therefore cannot start an agent, and a Decision call
-  cannot create one, which is the 12 draft's rule.
-- **Capture.** The handler passes `decide(capture=)` the caller's decide
-  capture if one was given. When 01b-C1 lands, the tool's site uses 01b's
-  capture like every other decide site. The trace records
-  `kind="decide"` with the answer's `status` and option id. An option id is
-  a label the model wrote, not store content, but it is still kept out of
-  the logs.
+- Each decide call is a single item, so one chunk. Its meters (one per stage
+  reached, and one per prompt-only re-send) file under the run's `run_id`.
+- **No recursion, by the guard and an entry check.**
+  - `decide` takes no tools and cannot reach `run_tools`.
+  - `run_tools` refuses to start while the current asyncio task is already
+    running a loop. A module-level `WeakSet` of tasks, keyed by
+    `asyncio.current_task()`, is checked at entry. This is used rather than
+    a `ContextVar`, because the loop is an async generator: a var set inside
+    it would leak to the consumer between yields, and resetting its token
+    from `aclose` in another context raises.
+  - A sync tool that reached the app portal (`runs.run_*`,
+    `start_detached`) would start a task outside the set. That is why
+    `test_tool_guard.py` (section 3.6) also fails such a call. "By
+    construction" overstated it: the guarantee is the guard plus the entry
+    check.
+- **The trace** records `kind="decide"` with the answer's `status` and
+  option id. An option id is a label the model wrote, not store content, but
+  it is still kept out of the logs.
 
 ### 3.13 The Claude Agent SDK (01g-C2b)
 
@@ -1092,36 +1151,50 @@ The SDK cannot be driven the way the HTTP adapters are. It runs its own
 loop, executes tools itself, and reports usage per query. C2b fits it to
 section 3's contract without letting it own the loop:
 
-- **One `query()` per loop turn**, with:
-  - `tools=[]` (no built-ins);
+- **One `query()` per loop turn, isolated from the host's Claude setup.**
+  - `setting_sources=[]`. Otherwise the SDK loads every filesystem settings
+    source (`claude_agent_sdk/types.py:2273-2283`): the user's
+    `~/.claude/settings.json` hooks and `permissions.allow` rules, a
+    project's `.claude/settings.json`, and the working directory's
+    `CLAUDE.md`.
+  - `strict_mcp_config=True`, so user, project and plugin MCP servers are
+    not loaded.
+  - `tools=[]` (no built-ins).
   - `mcp_servers={"grimoire": create_sdk_mcp_server(tools=[...])}`, one
-    `@tool` per `ToolSpec` with the same schema;
-  - `allowed_tools` naming exactly those MCP tools;
-  - a `PreToolUse` hook that answers `"defer"` for each of them.
+    `@tool` per `ToolSpec` with the same schema.
+  - `allowed_tools` naming exactly those MCP tools.
+  - A `PreToolUse` hook with matcher `"*"`. It answers `"defer"` for a
+    Grimoire tool and `"deny"` for anything else, so a tool that slipped in
+    through any configuration path is never executed.
 
-  The run stops at the model's first tool call and reports it in
-  `ResultMessage.deferred_tool_use`. **The SDK never executes a Grimoire
-  tool.** The `@tool` handlers exist only to declare schemas, and each
-  raises if it is ever reached.
+  The run stops at the model's first Grimoire tool call and reports it in
+  `ResultMessage.deferred_tool_use`. **The SDK never executes a tool.** The
+  `@tool` handlers exist only to declare schemas, and each raises if it is
+  ever reached.
+- **Names.** The SDK exposes MCP tools as `mcp__grimoire__<name>`.
+  `deferred_tool_use.name` is mapped back by stripping that prefix, and an
+  unknown remainder is an error result. So that the prefixed name fits the
+  64-character tool-name limit, a `Toolset` used on this kind refuses a name
+  longer than 64 - `len("mcp__grimoire__")` = 49 characters. `ToolSpec`'s
+  general limit stays 64.
 - **The history is re-sent flattened**, as `claude_agent._flatten` already
   does for every call. Assistant tool turns and tool results render into the
   transcript as labelled blocks (`[assistant -> tool <name> <id>]`,
   `[tool <id>]`). There is no session resume: resuming would make the SDK's
   session store the source of the conversation rather than the loop.
 - **One call per turn.** `deferred_tool_use` carries one call, so a turn on
-  this kind yields at most one call. The loop is unchanged; the model simply
-  calls tools one turn at a time.
+  this kind yields at most one call. Any other `tool_use` blocks in the same
+  `AssistantMessage` are recorded in the trace as `not_run`, and they are
+  not answered because they are not in the re-sent history. The loop is
+  unchanged; the model calls tools one turn at a time.
 - **Metering** comes from the turn's `ResultMessage`, as today. It is
   subscription-billed (`cost_basis: equivalent`), so a turn's figure lands
   in `estimated_usd`.
-- **Spend ceiling.** The guard's arithmetic needs the user's rates for the
-  model, which a `claude` provider's model facts may or may not hold.
-  Unpriced means `RunRefused`, as for any kind. The SDK's own
+- **Spend ceiling.** A `claude` attempt has no catalog and its preset
+  `reports_price`, so by section 3.9's price order it is unpriceable, and
+  its cap is never sent (`cap_sent` is False). A spend ceiling on a `claude`
+  chain is therefore `RunRefused("unpriceable")`. The SDK's own
   `max_budget_usd` is not used, because it measures a different column.
-- **The output cap** cannot be sent (the SDK takes no sampling). So on this
-  kind the projection's `C` is 01i-C1's maximum output where known. Without
-  it, a spend ceiling on a `claude` chain is refused as unpriceable: the
-  ceiling could not be honest.
 - **Version floor.** This needs `tools=`, in-process MCP servers and the
   `"defer"` decision. The plan reads the SDK changelog, sets the `claude`
   extra's floor to the first version with all three, and keeps the import
@@ -1137,8 +1210,10 @@ an honest `incapable` sentence, and such a fallback never rides.
 - **Vocabulary.** `tools` joins `capabilities.NAMES`,
   `providers.CAPABILITIES`, `capabilities.CANNOT` (`"call tools"`) and
   `_GERUND` (`"calling tools"`). The frontend reads capability names from the
-  API types (`api/types.ts:168-170`), the provider page lists capabilities and the testable ones (`routes/ProvidersView.tsx:31-40`; `tools` joins `TESTABLE` with its probe), and the
-  `selection.ts` phrase table), and each gains the entry.
+  API types (`api/types.ts:168-170`). The provider page lists capabilities,
+  the testable ones and the overridable ones (`routes/ProvidersView.tsx:31-41`):
+  `tools` joins `TESTABLE` with its probe and `OVERRIDABLE` for the user
+  override. The `selection.ts` phrase table gains the entry too.
 - **Sources** (the resolver's order, unchanged):
   - **adapter**: the `claude` preset's `never` lists `tools` until C2b; no
     other preset does. A test holds the presets' `never` equal to the

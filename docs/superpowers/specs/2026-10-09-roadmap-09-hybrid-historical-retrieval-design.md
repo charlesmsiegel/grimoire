@@ -25,11 +25,11 @@ Edges as `ROADMAP-CHECKLIST.md` lists them for 09.
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | 08-C1 bounded `SceneDocument` (no transcript text), keyed by per-scene slices | 08 | The unit every lexical and semantic signal scores, and its metadata (scene identity, date, location, cast) | Hard |
-| 08-C2a lazy build plus batch lookup; 08-C2b document vectors; 08-C2c hot rebuild for 05 | 08 | Building the live set on demand, bounded per turn; loading document vectors by `vectors.load(space, texts)` | Hard |
-| 08-C3a `history-index` embed task; 08-C3b `expand(...)`, where the caller names the phase | 08 | The document-side embed task, and turning a selected scene into bounded excerpts, with 09 naming `phase="prompt"` (section 8) | Hard |
+| 08-C2a lazy build plus batch lookup; 08-C2b document vectors under `space["space"]` and `record_embedded`; 08-C2c hot rebuild for 05 | 08 | The live set; loading and saving document vectors under the one shared key; recording what the turn warm embedded so 05 keeps it current | Hard |
+| 08-C3a `history-index` for out-of-turn embedding only; 08-C3b `expand(...)`, where the caller names the phase, with prefixed post keys | 08 | The rule that a turn's warm is 09's `history-recall`, and turning a selected scene into bounded excerpts whose posts carry `r-<response_id>` / `p-<post_id>` keys and `part` (sections 6.3, 8) | Hard |
 | 03-C6 batch lookup over a live key set, index ranking only within it | 03 | Looking up documents and any lexical index only for keys computed from the filesystem this turn (section 6.4) | Hard |
 | 03-C7 vectors keyed by text, never `BUILD` | 03 | An upgrade costs embeddings only where document text moved | Hard |
-| 01h-C4a no embedding on the event loop (a guard degrades); 01h-C4b native async `embed()` with `AsyncEmbeddingsClient` from `routes.get_embeddings` | 01h | The query embedding on the turn path is async and cancellable; the document warm (08's sync `vectors_for`) runs in a worker (section 6.3, 10) | Hard for the turn path |
+| 01h-C4a no embedding on the event loop (a guard degrades); 01h-C4b native async `embed()` with `AsyncEmbeddingsClient` from `routes.get_embeddings` | 01h | The turn's one embed call (query plus warm) is async and cancellable (sections 6.3, 10) | Hard for the turn path |
 | 01a-C1 eval cost, latency and token reporting | 01a | The long-history suite reports wall time, tokens and the three money columns per arm (section 12) | Hard for live evals; offline needs nothing |
 | 07-C2 inverse membership | 07 | The `group` structural relation (section 5.2) | Soft: the relation is absent until it lands |
 | 07-C3c retrieval projections (`scene_groups`, `co_affiliates`, `prompt_visible`) | 07 | Group seeds and the group relation read through 07's projections rather than re-deriving them | Soft |
@@ -202,8 +202,8 @@ Concretely:
  |   -> live set (08-C1 keys, 03-C6)    SearchDocuments for scenes that   |
  |                                      precede this one                  |
  |   -> lexical.score(pool | live set)  pure python, per-doc term stats   |
- |   -> semantic.score(pool | live set) query: 01h-C4b, `history-recall`  |
- |                                      docs: 08-C2b `vectors_for`        |
+ |   -> semantic.score(pool | live set) one `history-recall` call: query |
+ |                                      + warm; then 08 `record_embedded`  |
  |   -> merge.order(...)                admission per signal, RRF order   |
  |   -> [rerank]                        optional decide, 01e Rank/Score   |
  |   -> coverage + widening             tier 1 -> tier 2 (09-C2)          |
@@ -426,50 +426,53 @@ inspector).
 
 ### 6.3 Semantic
 
-09 embeds **only the query**. Document vectors are 08's: built and warmed only
-through 08-C2b's `embedded.vectors_for` under 08-C3a's `history-index` task,
-read and saved under the document space key, with 03's `materialized` rows
-(08 section 8.2). A document vector 09 saved itself would bypass that key
-and those rows: with a provider in `prefix` or `param` mode it would file a
-document-typed vector where lore recall reads untyped ones, and 05's
-"re-embeds only text already embedded" could not see it (review B1).
+**Who embeds what** (08 section 8.4, the rule 08 and 09 now share): a turn's
+embedding is 09's, under 09's `history-recall` task; 08's `history-index` is
+only out-of-turn re-embedding by 05's sync. Document vectors have **one key**
+for every producer, `(space["space"], text)` (08 section 8.1; 01h puts any
+stated options into the space id and a document is the default side, 01h
+sections 3.4 and 5.1-5.3), so what 09 warms on a turn is what 08's hook loads
+and keeps current, and the reverse. The earlier draft's separate document key
+and its "two embeddings under one key" risk (review B1) do not arise.
 
-`semantic.score(texts, docs, *, space, embed_client, doc_client, deadline,
-campaign, scene, rotate) -> SemanticResult`:
+`semantic.score(texts, docs, *, space, embed_client, deadline, campaign,
+scene) -> SemanticResult`:
 
 - **The space is resolved once per retrieval**, from `embed_space.endpoint()`
   (`store/embed_space.py:62`), in a worker (it reads `config.md`), and handed
-  to both calls below, the rule `embed.py`'s docstring states ("embedding with
-  one model and saving under another space's key is how vectors from two
-  models end up in one cache").
-- **The document warm**: one `vectors_for(cid, docs, space=space,
-  client=doc_client, warm_limit=..., rotate=texts[0], deadline=deadline,
-  scene=sid)` call (08-C2b), in a worker thread, because it takes 08's
-  synchronous `EmbeddingsClient` and does disk I/O. Pool documents are passed
-  first so tier 1 converges first; `warm_limit` is 08's `WARM_LIMIT` unless the
-  eval suite says otherwise. It returns the cached vectors plus whatever it
-  warmed, and never raises (08-C2b).
-- **The query**: one `await embed.embed("history-recall", texts,
-  queries=len(texts), space=space, client=embed_client, deadline=deadline,
-  campaign=cid, scene=sid)` call through 01h-C4b's native async door, with the
-  app's `AsyncEmbeddingsClient` from `routes.get_embeddings`. `texts` is one
-  string on an ordinary turn and up to four once 10 adds questions. The query
-  vectors are never cached and are compared only with document vectors read
-  under the same `space` (01h-C1).
-- **Two requests, two rows.** The query and the warm are separate calls under
-  separate tasks (08 section 8.4: "a query and a set of documents are two
-  requests once input types differ"), so a turn files up to **two** embed
-  rows: `history-recall` for the query, `history-index` for the warm when it
-  sent anything. They run concurrently under the one deadline, the query on
-  the loop and the warm in its worker. In 01h's `param` mode the query call is
-  itself one request per type, which here is one; nothing in this design
-  depends on a single round trip. There is no query-only retry: the query is
-  already alone, and a `bad_response` on it is that turn's semantic failure.
+  to every load, save and embed, the rule `embed.py`'s docstring states
+  ("embedding with one model and saving under another space's key is how
+  vectors from two models end up in one cache").
+- **One embed call per retrieval**: `await embed.embed("history-recall",
+  [*texts, *missing], queries=len(texts), space=space, client=embed_client,
+  deadline=deadline, campaign=cid, scene=sid, cached=..., uncached=...)`
+  through 01h-C4b's native async door with the app's `AsyncEmbeddingsClient`
+  (`routes.get_embeddings`). `texts` is one string on an ordinary turn and up
+  to four once 10 adds questions; `missing` is a bounded warm of uncached
+  documents, `embeddings.BATCH - len(texts)` at most, on
+  `embed_space.warm_window(uncached, texts[0], limit)`, pool documents first so
+  tier 1 converges first. The call is **one ledger row and one capture line**
+  under `history-recall`; in 01h's `param` mode the client splits it at the
+  query/document boundary into two requests under that one meter (01h section
+  3.4), so nothing here depends on a single round trip (review M4).
+- **Saving**: each returned document vector is saved with
+  `vectors.save(space["space"], text, vector)`, and then, in a worker,
+  `searchdocs.embedded.record_embedded(cid, warmed_docs, space=space)` (08-C2b)
+  writes the `materialized` row `vector:searchdocs.scene:<space-digest>`, the
+  digest spelled only by 03's `compiled.space_digest(space)`. Without that row
+  05's hot rebuild could not see the vector and would never keep it current
+  (review B1). Query vectors are never saved (01h-C1).
+- **Retry**: on a `bad_response` with documents in the batch, the query alone
+  is retried once under the same deadline, the `semantic._embed` rule
+  (`semantic.py:315`-`381`), so a document the provider refuses costs this
+  turn's warming, not its recall. That retry files a second row; nothing else
+  does.
 - **Scoring**: a document's semantic signal is its best cosine over the query
-  texts, recording which text it was.
+  texts, recording which text it was. The query vectors are compared only with
+  document vectors read under the same `space["space"]` (01h-C1).
 - **Checks**, all inherited: a wrong-width document vector is evicted with
-  `vectors.forget(document space key, text)` (08 section 8.2 leaves this to
-  the scorer) and scores nothing; a score outside `[-1 - SCORE_SLACK,
+  `vectors.forget(space["space"], text)` (08 section 8.4 leaves this to the
+  scorer) and scores nothing; a score outside `[-1 - SCORE_SLACK,
   1 + SCORE_SLACK]` is evicted; CRC integrity is `vectors.load`'s
   (`store/vectors.py:150`).
 - **Admission**: cosine at or above `history_recall_threshold`.
@@ -478,7 +481,7 @@ campaign, scene, rotate) -> SemanticResult`:
   measurement (about 97 ms per 500 vectors at dimension 1536), roughly 200 ms
   on a desktop. Android is slower, and the eval suite's latency column is where
   this is tuned. A campaign past the limit is the case for an ANN index or
-  batch-loaded vectors, which 08 section 8.3 leaves to 09 and which is out of
+  batch-loaded vectors, which 08 section 8.5 leaves to 09 and which is out of
   scope here (section 16).
 
 `SemanticSignal(cosine: float, text: int)`, and a `SemanticResult.status` for
@@ -486,9 +489,9 @@ the coverage: `ok`, `off` (no Embedding role, or `embed_space.problem` names a
 known `no`), `failed:<kind>`, `backoff`, `skipped:<why>` (preview, locked,
 deadline spent).
 
-**The outage memo, shared with lore recall.** A connection-wide failure of the
-query call (`auth`, `network`, `rate_limit`, `timeout`) sets a per-process memo
-keyed by the space id, held in `embed_space` (`embed_space.outage(space_id)`,
+**The outage memo, shared with lore recall.** A connection-wide failure
+(`auth`, `network`, `rate_limit`, `timeout`) sets a per-process memo keyed by
+the space id, held in `embed_space` (`embed_space.outage(space_id)`,
 `embed_space.note_outage(...)`, `embed_space.clear_outage(...)`); for
 `OUTAGE_BACKOFF` (60 s) retrieval skips the semantic stage and says
 `backoff`. Lore recall (`context/semantic.py`) consults and sets the same memo
@@ -509,8 +512,8 @@ fails a `store/history/` read API that does not take the caller's keys.
 
 08-C2a builds every missing document on each call, so there is no document
 build limit (an earlier draft's `BUILD_LIMIT` described a state 08 never
-produces; review S10). What can be missing is a document's **vector**: 08-C2b
-warms at most `warm_limit` per call on a rotating window, so switching
+produces; review S10). What can be missing is a document's **vector**: a turn
+warms at most `embeddings.BATCH - len(texts)` on a rotating window (6.3), so switching
 retrieval on over a long campaign makes semantic coverage grow a little per
 turn rather than in one stall. A document with no vector yet is still reachable
 structurally and lexically.
@@ -665,7 +668,8 @@ classifies actor knowledge per post, so the post is the unit 09-C1 promises:
 @dataclass(frozen=True)
 class EvidencePost:
     index: int          # absolute transcript index at retrieval time (08-C3b)
-    key: str            # post_id, else response_id, else ""
+    key: str            # 08-C3b: "r-<response_id>", else "p-<post_id>", else ""
+    part: int | None    # response_part, for a reply split across posts
     speaker: str        # the stored speaker label
     text: str           # prompt-view text, as rendered
 
@@ -675,13 +679,12 @@ class Excerpt:
     text: str           # what renders: the posts joined as history lines
 ```
 
-**The post key needs one field from 08-C3b** (review B3): 08's post dicts are
-`{index, role, speaker, content}`, with no key. Stored messages already carry
-`post_id` and `response_id` (`store/scenes/serialize.py:430`-`431`), so 08-C3b
-adds `key` to each post dict (`post_id`, else `response_id`, else `""`). This
-is a cross-spec request routed to 08. Until it lands, `EvidencePost.key` is
-`""`, and a consumer names a post by `(SceneRef.key, index)`, which is stable
-within the turn but not across a later cut.
+**The post key is 08-C3b's** (review B3; 08's revision): each post carries
+`key` as `r-<response_id>` (every part of one reply shares it, `part` tells
+them apart), else `p-<post_id>`, else `""` for a legacy post, the spelling 11
+and the tracker use (`tracker/paths.py:50`). 09 copies it unchanged; a
+consumer names a legacy post by `(SceneRef.key, index)`, stable within the
+turn only.
 
 ## 9. The history prompt section (09-C3)
 
@@ -870,7 +873,6 @@ its breakdown (`routes/common.py:406`, `_record_prompt`).
 ```python
 async def retrieve(cid: str, sid: str, query: Query, *, ceiling: int,
                    embed_client: embeddings.AsyncEmbeddingsClient,
-                   doc_client: embeddings.EmbeddingsClient,
                    deadline: float, rerank: Reranker | None = None,
                    origin: str = "turn") -> Evidence
 
@@ -878,17 +880,17 @@ def retrieve_preview(cid: str, sid: str, query: Query, ceiling: int) -> Evidence
 ```
 
 File and CPU stages run in `anyio.to_thread.run_sync`; the query embedding
-goes through 01h-C4b's async door with `embed_client` (the app's
-`AsyncEmbeddingsClient`, `routes.get_embeddings`, touched only from the
-loop); the document warm runs 08-C2b's `vectors_for` in a worker with
-`doc_client`, 08's synchronous client (review S9). The rerank (a `Reranker`,
+and the document warm go through one call to 01h-C4b's async door with
+`embed_client` (the app's `AsyncEmbeddingsClient`, `routes.get_embeddings`,
+touched only from the loop); `vectors.load`, `vectors.save` and
+`record_embedded` are disk work and run in a worker (review S9). The rerank (a `Reranker`,
 the callable the route layer builds around `operations.decide`) is async.
 Nothing in `retrieve` takes a campaign lock: its reads are the context
 builder's fail-soft reads (verified: pins, chronicle, effective, involvement
 and relationship history take none), and it writes nothing to a campaign.
 
 `routes/history_recall.gather(app, cid, sid, *, seed, resolved, llm_client,
-embed_client, doc_client, deadline)` is the async turn-path wrapper. It
+embed_client, deadline)` is the async turn-path wrapper. It
 returns an empty `Evidence` at once when settings are off or the section is
 switched off in the layout (no reads, no tasks), resolves the embedding space
 and the optional rerank **in a worker** (`run_in_threadpool`, as
@@ -917,8 +919,7 @@ wired, so an exception here would strand it.
 | `context_breakdown` (live inspector) | worker | `retrieve_preview`, inline | breakdown only |
 
 The turn routes gain `embed_client: AsyncEmbeddingsClient =
-Depends(get_embeddings)` beside their LLM client, and pass the module's sync
-client for the document warm.
+Depends(get_embeddings)` beside their LLM client.
 
 **The round path** (review S3). `_round_frames` calls `_prepare` once per
 contribution (`character_turns.py:1043`-`1045`), and only some contributions
@@ -986,9 +987,8 @@ inside the detached run's driver, so a dropped connection drops a subscriber,
 not the retrieval. On the `post_chat` path it runs in the request before the
 run is started, as `compose_turn` does today; moving composition into the run
 is a separate change (open question 7). A cancelled run cancels the
-`retrieve` task: the async query embed files `aborted` (01h-C4b), and the
-document warm in its worker finishes and files an ordinary row (01h section
-6.2: a sync embed in a worker cannot be cancelled).
+`retrieve` task: the async embed call files `aborted` (01h-C4b), and vectors
+already returned are not saved.
 
 ## 11. Tiers, widening and fallbacks (09-C2)
 
@@ -1138,8 +1138,7 @@ user's library.
 
 ### 09-C1: retrieval over a query, returning bounded evidence with signals
 
-**Inputs.** `retrieve(cid, sid, query, *, ceiling, embed_client, doc_client,
-deadline, rerank=None, origin="turn")` (async; `retrieve_preview` is its
+**Inputs.** `retrieve(cid, sid, query, *, ceiling, embed_client, deadline, rerank=None, origin="turn")` (async; `retrieve_preview` is its
 synchronous, network-free core), where `Query` is:
 
 ```python
@@ -1161,7 +1160,7 @@ tuple[Candidate, ...], coverage: Coverage, ceiling: int, query_digest: str)`:
 `SceneRef` (the **scene identity**, `None` for a legacy scene, the sid at
 retrieval, and `key`, section 7.2), header fields, an optional summary, its
 excerpts with **every included post's transcript index, post key and text**
-(`EvidencePost`, section 8; the key is `""` until 08-C3b carries it), and its
+(`EvidencePost`, section 8: 08-C3b's `r-`/`p-` key and `part`), and its
 token cost; `candidates` are every admitted candidate in merged order (bounded
 by `POOL_MAX + WIDEN_LIMIT`), so a caller can see what was found and not
 selected. `Evidence.detail()` is the JSON-safe projection of section 9.5.
@@ -1192,12 +1191,13 @@ branch group, or is a closed sibling. Every lookup is over keys computed this
 call. Signals are never combined into one stored or returned number. Every
 merge, dedupe and shed compares `SceneRef.key`, never a nullable identity. The
 output text has passed the regex prompt view. The call writes nothing to a
-campaign and takes no campaign lock, and never mints a scene identity. 09
-embeds only its query: one `history-recall` row (campaign and scene) per call
-that sent it. Document vectors are warmed only through 08-C2b, whose
-`history-index` row and `materialized` rows are 08's. A turn therefore files at
-most two embed rows. Embed rows carry the player post only once 01h's doors
-take `post=` (open question 9); the rerank's decide rows carry it now.
+campaign and takes no campaign lock, and never mints a scene identity. A
+turn's embedding is one `history-recall` call (query plus bounded warm,
+campaign and scene), plus one query-only retry on a `bad_response`; warmed
+document vectors are saved under `space["space"]` and recorded through 08's
+`record_embedded`. `history-index` is never used on a turn. Embed rows carry
+the player post only once 01h's doors take `post=` (open question 9); the
+rerank's decide rows carry it now.
 
 **Failure.** Never raises for a provider, cache or ledger problem: degraded
 signals are absent and `coverage` says why. Raises `ValueError` only for a
@@ -1247,7 +1247,7 @@ metered under the eval scope.
   `test_operation_guard.py`'s embed half: the door is 01h-C4b's async `embed`,
   the `space=` traces back to `embed_space.endpoint`.
   `test_inference_embedding.py`'s pinned tuple and `MIN_EMBED_CALLS` move with
-  it, as 08 section 8.1 does for `history-index`. The rerank's decide task
+  it, as 08 section 8.2 does for `history-index`. The rerank's decide task
   lands with its call site, on 02-C5b's decide route (`test_routing_guard.py`),
   resolved through `require_inference(..., operation="decide")` in a worker.
 - **The frozen inference baselines** (review S11). `tests/inference_baseline.py:418`-`420`
@@ -1324,10 +1324,12 @@ Settings:
   excluded in every signal.
 - Lexical: one common word admits nothing; a resolved name admits; scores
   identical with and without the cached per-document statistics.
-- Semantic: 09 calls the embed door once, with `queries=len(texts)`, under
-  `history-recall`, and never saves a vector; document vectors come only from
-  `vectors_for` (a spy on `vectors.save` sees no call from `store/history/`);
-  width mismatch and out-of-range scores evict; a `rate_limit` sets the shared
+- Semantic: one `history-recall` call carries the query texts and the warm,
+  with `queries=len(texts)`; warmed vectors are saved under `space["space"]`
+  and `record_embedded` writes their `materialized` rows (a test reads them
+  back through 03); no query vector is ever saved; `history-index` is never
+  called on a turn; a `bad_response` retries the query alone once; width
+  mismatch and out-of-range scores evict; a `rate_limit` sets the shared
   memo, and both history and lore recall then send nothing; a success clears
   it.
 - Merge: RRF over admitted-only lists; no number on `Evidence` other than
@@ -1450,14 +1452,12 @@ Settings:
    the player post. *Recommendation:* 01h adds `post: int | None` to both
    doors, filed by the meter, and CLAUDE.md's embedding paragraph names it;
    09 then passes `turn_index`. Until then 09-C1 does not promise it.
-10. **The post key in 08-C3b's post dicts (cross-spec, routed to 08).**
-    *Recommendation:* 08 adds `key` (`post_id`, else `response_id`, else
-    `""`) to each post dict; 11's per-post classification needs a name that
-    survives a cut. Until then `EvidencePost.key` is `""`.
-11. **12's `search_history` names the same split (cross-spec, routed to
-    12).** A tool call that embeds a query files `history-recall` for the
-    query and lets 08-C2b's `vectors_for` file `history-index` for any warm;
-    12 should say so rather than "embeds through `history-index`".
+10. **The post key (resolved).** 08-C3b carries `r-<response_id>` /
+    `p-<post_id>` / `""` and `part`; 09 adopts it.
+11. **12's `search_history` meters through 09 (cross-spec, routed to 12).**
+    A tool call that embeds a query goes through 09, so it files
+    `history-recall`, never `history-index` (08 section 8.4); 12 should say
+    so.
 
 ## 18. Review record
 
@@ -1465,9 +1465,9 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 
 | Item | Disposition |
 |---|---|
-| B1 document warm contradicts 08/01h | Fixed: 09 embeds only the query (`history-recall`, `queries=`, async door); documents only through 08-C2b `vectors_for` (6.3); 09-C1 says up to two rows; 12 routed (OQ 11) |
+| B1 document warm contradicts 08/01h | Fixed, per 08's revision: one key for every producer, `space["space"]`; the turn's query plus warm is one `history-recall` call with `queries=` through the async door; 09 calls `record_embedded` so `materialized` rows exist; `history-index` only out of turn (6.3); 12 routed (OQ 11) |
 | B2 nullable identity in merge and shed | Fixed: `SceneRef.key` (7.2), used by merge, dedupe and shed units; no `ensure_identity`; frozen-campaign test |
-| B3 post keys and embed `post` not supplied | Fixed as requests: post key to 08-C3b (OQ 10), `post=` to 01h (OQ 9); 09-C1 no longer promises either before they land |
+| B3 post keys and embed `post` not supplied | Post key: 08-C3b now supplies `r-`/`p-` keys and `part`, adopted (8). Embed `post=`: routed to 01h (OQ 9); 09-C1 does not promise it before it lands |
 | S1 RECALLED shared with lore | Fixed: own `HISTORY_RECALL` tier, first in `DROP_ORDER`; `pack` and `layout` docstrings change (9.1) |
 | S2 lock self-check on the wrong thread | Fixed: `gather_sync` checks in the calling worker before the portal (10.1) |
 | S3 round path retrieves for NPCs, replays, continuations | Fixed: gated to narrator contributions, no `appended`, no pending replay; once per round (10.1) |
@@ -1476,13 +1476,13 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 | S6 merge underspecified | Fixed: per-round `Signals`, `(round, signal)` ranks, admitted-only RRF lists, `expand` callback (7.1, 7.2, 09-C1) |
 | S7 layout off must stop spend | Fixed: `_section_on` gate in `gather`; archive omission only when the archive is on (9.1, 9.4) |
 | S8 header and terms bypass gates | Fixed: header location through the setting's gate; excluded and gm-only names removed from terms (4, 9.1) |
-| S9 client/thread contract vs 01h-C4b | Fixed: `embed_client` (async) and `doc_client` (08's sync) named; `Depends(get_embeddings)`; resolution in a worker (10.1) |
+| S9 client/thread contract vs 01h-C4b | Fixed: `embed_client` (async, `Depends(get_embeddings)`); disk work and resolution in a worker (10.1) |
 | S10 BUILD_LIMIT and ref forms vs 08 | Fixed: limit dropped (08 builds all misses); `refs.norm` (5.3, 6.5) |
 | S11 frozen inference baselines | Fixed: the `NO_LEGACY_TASKS` mechanism, specified in 10 section 13 and shared (14) |
 | M1 counter and what the ceiling measures | Fixed (9.3) |
 | M2 string compare vs `parse_sid` | Fixed (5.3) |
 | M3 rerank kit, native cost, constant values | Fixed: 02-C5b kit inputs, `pointwise` per 01e, native cost, `RERANK_CEILING` 4 s, `STRUCTURAL_PLAIN_CAP` 12 (5.4, 7.3) |
-| M4 "one request" false | Fixed: up to two rows, no single-round-trip claim (6.3) |
+| M4 "one request" false | Fixed: one row per call, two requests in `param` mode, a second row only for the query-only retry (6.3) |
 | M5 preview bridge; reasons test markers | Fixed: synchronous `retrieve_preview`; hand-built evidence and distinctive markers (9.5) |
 | M6 header-only archive item | Fixed: skipped at selection (8) |
 | M7 portal raise strands the post | Fixed: `gather_sync` wraps the call (10.1) |
@@ -1493,4 +1493,7 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 Coordinator inputs applied in the same pass: 01i-C2 `prompt_ceiling` as the
 only ceiling derivation (9.2); 01e-C1 `pointwise` on any `Rank` and no reliance
 on a native abstain (7.3); 07's accessor `groups_for`, leaders counted as
-members (5.1, 5.2).
+members (5.1, 5.2); 08's revision (turn warm under `history-recall` with
+`record_embedded`, prefixed post keys, `compiled.space_digest`). The
+coordinator's first instruction ("09 must not embed documents itself") was
+superseded by that revision, and 6.3 follows the revision.

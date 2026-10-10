@@ -320,6 +320,20 @@ That makes one place list everything that persists and what each key covers.
 | `instance` | which instance of a collection-keyed kind the path feeds (for example, the campaign that reads a world entry). Canonical JSON, or `""` |
 | `last_used` | as for artifacts, and touched when an artifact or vector built from this path is hit (batched, at most daily) |
 
+**Each row also carries `built_from`**: the content hash of that path's bytes
+when the work the row describes was built. 05's scoped sync uses it to prove a
+hot file current without reading it. A file is current when its stamp matches
+its `sources` row and every one of its rows was built from that row's hash.
+Without the column, every file that has rows would be a sync candidate (05
+section 7.3). A row written without a known hash, such as a rename copy, has
+`built_from` empty, and an empty value is never current.
+
+**`copy_materialized(old, new)`** writes rows for `new` that name the same
+kinds as `old`'s rows, multi-unit vector rows included, with an empty
+`instance` and an empty `built_from`. It copies nothing else: no artifact and
+no vector. 05's `--renamed OLD=NEW` uses it so that a stated rename warms the
+new path (05 section 7.5).
+
 **The key is `(path, kind, instance)`.** A world entry read by two campaigns
 therefore has two rows, and 05 re-embeds and attributes each one for its own
 campaign.

@@ -731,7 +731,8 @@ class DocVectors:
 ```python
 def record_embedded(cid: str, docs: list[LiveDocument], *, space: dict) -> None:
     """For each doc whose text now has a vector under space["space"], write
-    (campaigns/<cid>/scenes/<sid>.md, vector_kind(space)) with instance
+    a row on EVERY input path the document read (the scene file and each
+    shared ledger file its slices came from), kind vector_kind(space), with instance
     {"campaign": cid, "identity": <identity>}. No network; never raises."""
 ```
 

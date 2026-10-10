@@ -626,7 +626,9 @@ def attribute(claims: Iterable[tuple[str, str]]) -> list[EmbedGroup]
 def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
                       deadline=None, budgeted=False, run_id: str = "",
                       cached: int | None = None,
-                      uncached: int | None = None) -> list[GroupResult]
+                      uncached: int | None = None,
+                      on_group: Callable[[EmbedGroup, GroupResult], None] | None = None
+                      ) -> list[GroupResult]
 # GroupResult: vectors (in the group's text order) or None, and error kind or ""
 ```
 
@@ -658,6 +660,12 @@ def embed_groups_sync(task, groups: Sequence[EmbedGroup], *, space, client,
   This is the same split `semantic._embed` makes (`semantic.py:363-370`). The
   caller saves what landed, as `similarity.embed_missing` does per chunk
   (`similarity.py:546-566`).
+- **`on_group`** (optional) is called once per group, in order, as soon as that
+  group's result lands and before the next group is sent. 05 saves each
+  group's vectors there, so a run cut short keeps what landed without one call
+  per chunk (05 section 6.6). A callback that raises stops the run: later
+  groups come back `not_sent` and file nothing. The result list is returned as
+  before.
 - **`run_id`** (optional, default `""`). 01g asked for it: embeds made
   inside a tool loop are attributed to that loop's run. `embed_sync` and
   `embed` take the same keyword. When it is set, each row the call files
