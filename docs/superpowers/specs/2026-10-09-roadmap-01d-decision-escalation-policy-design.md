@@ -31,6 +31,7 @@ what a backend actually reports". It leaves both rules unchanged.
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
 | 01d-C1 `routing.TaskPolicy` | 02 (H for 02-C5a), 01g (S), 10 (S), 11 (S) | Policies for 02's play and kit tasks; the `tool-decision` route's policy (01g-C5); `fallback="none"` and escalation on 10's `history_check` and `history_plan` tasks; 11's capped Decision pass |
+| 01d-C1 `routing.TaskPolicy` (shared structure) | 01c (coordination) | 01c adds `samples` and `native_first` to the same structure; whichever spec lands first creates it |
 | 01d-C2a trigger evaluation | 02 (H for 02-C5a), 10 (S), 11 (S), 12 (S) | Deciding which items are unsure, with the answer filter (`escalate_answers`) 02 asked for; 10's sufficiency verdict; 11's epistemic classes; 12 deciding, with no decide hop, that cheap judgments were unsure enough to start an investigation |
 | 01d-C2b one escalation hop | 02 (H for 02-C5a), 10 (S), 11 (S), 12 (H for RP mode) | A second opinion from a stronger role (02's continuity and epistemic kit); 10's repair hop escalation; 12 supplies a tool-loop resolver as the next hop after 10's repair hop |
 | 01d-C3 thresholds | 02 (H for 02-C5a) | Where the margin lies, per task and per native endpoint kind |

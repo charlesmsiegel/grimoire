@@ -41,6 +41,7 @@ roadmap bundle of 2026-10-06 (specs 04–09).
 | 03-C5 artifacts storable at write time | 04, 05 | No stale overview after Grimoire's own write |
 | 03-C6 batch lookups over a live key set; index ranking restricted to it | 08, 09 | Metadata prefilters and lexical ranking |
 | 03-C7 vectors keyed by text, never `BUILD` | 08, 09 | Upgrades re-embed only changed text |
+| 03-C1, 03-C2, 03-C3 | 07 (S) | The optional persistent tier of the inverse membership index (07-C2), and its eager rebuild via 05 |
 | 03-C8 a callable purge for a world or campaign delete | 05 | Sync performs the purge when it finds a world or campaign root gone (05 section 7.6) |
 | 03-C9 a synthetic-library generator | 04 (extends it for 04-C3b) | Benchmarks and equivalence tests on a library no user owns |
 

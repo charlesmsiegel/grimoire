@@ -29,6 +29,7 @@ section 3.1).
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
 | 01i-C1 `wire.Limits` on every target and resolved attempt | 01g (S) | Sizing a loop turn's context and its per-turn output cap (01g-C4) where the window is known |
+| 01i-C1 | 01f (S) | `generate(max_tokens=)` never asks for more than the model's known max output (01f section 3.9) |
 | 01i-C1 | 09 (S) | The history section's budget (09-C3), through 01i-C2; without it 09 uses its own cap |
 | 01i-C1 | 12 (H) | Bounding each investigation turn's accumulated context (12-C2), through 01i-C2 |
 | 01i-C2 `prompt_ceiling(resolved)` | 09, 12 (within their 01i-C1 edge) | The one helper they call: smallest window minus the reply reserve, `None` when unknown |

@@ -26,6 +26,7 @@ first for a model that also generates.
 | 01b-C1 capture at every decide site | 01b | Lets a reader see, in the prompt log, the distribution a draw was made from | Soft. The replay record (C3) is persisted by the caller, not by capture |
 | `routing.TaskPolicy` (shared structure) | 01d-C1 or this spec, whichever lands first | Holds `samples` and `native_first` | Shared structure (section 4.1) |
 | `ItemResult.served` (shared structure) | 01d | The record's `provider` and `model` per item (section 6) | Shared structure. Until it lands, the caller passes `served=` |
+| 01e-C4 `Answer.marginals`, kept apart from `distribution` | 01e | C4's rule that marginals from `Rank` and `MultiSelect` are never sampled (section 5) | Soft: until 01e lands there are no marginals to refuse |
 
 ## Required by
 
