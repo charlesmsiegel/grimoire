@@ -34,6 +34,7 @@ from .common import (
     _require_scene,
     _turn_override,
     get_llm,
+    model_window,
     override_inference,
     require_inference,
 )
@@ -656,6 +657,11 @@ def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
+    # The window of the attempt this names (01i), here as well as in
+    # `_record_prompt`, which is handed no `conn` for a native decision or an
+    # unvouched variant.
+    breakdown = {**breakdown, "model_window": model_window(
+        sent if isinstance(sent, wire.Target) else sent.primary)}
     if isinstance(sent, wire.Target):
         # One attempt: a decision, or a fallback variant (below), whose
         # messages are a plain list -- there is no variant of it to hook.

@@ -80,3 +80,39 @@ test("a decision's outcome is its own row: never sent, so no token count", () =>
   // A prompt section keeps its count.
   expect(screen.getByText("World info").closest("summary")).toHaveTextContent("100 · 50%");
 });
+
+// ---- 01i: the breakdown's own model window ----
+const NATIVE = { tokenizer: "cl100k_base", native: true };
+
+test("the breakdown's own model window is preferred over the catalog", () => {
+  render(<ContextBreakdown models={models} ctx={ctx({
+    token_count: NATIVE, model_window: { value: 400, source: "user" } })} />);
+  expect(screen.getByText("100 / 400 tok")).toBeInTheDocument();
+});
+
+test("a window the backend resolved needs no catalog at all", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({
+    token_count: NATIVE, model_window: { value: 1000, source: "catalog" } })} />);
+  expect(screen.getByText("100 / 1,000 tok")).toBeInTheDocument();
+});
+
+test("an older snapshot falls back to the catalog lookup", () => {
+  render(<ContextBreakdown models={models} ctx={ctx({ token_count: NATIVE })} />);
+  expect(screen.getByText("100 / 200 tok")).toBeInTheDocument();
+});
+
+test("a window the backend says is unknown is not looked up", () => {
+  render(<ContextBreakdown models={models} ctx={ctx({
+    token_count: NATIVE, model_window: { value: null, source: "unknown" } })} />);
+  expect(screen.getByText("100 tok")).toBeInTheDocument();
+});
+
+test("the smaller of budget and window still bounds the bar", () => {
+  const { unmount } = render(<ContextBreakdown models={models} ctx={ctx({
+    token_count: NATIVE, budget_tokens: 250, model_window: { value: 4000, source: "catalog" } })} />);
+  expect(screen.getByText("100 / 250 tok")).toBeInTheDocument();
+  unmount();
+  render(<ContextBreakdown models={models} ctx={ctx({
+    token_count: NATIVE, budget_tokens: 8000, model_window: { value: 500, source: "user" } })} />);
+  expect(screen.getByText("100 / 500 tok")).toBeInTheDocument();
+});

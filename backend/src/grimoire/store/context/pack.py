@@ -69,8 +69,11 @@ cut instead of quietly disagreeing with what was sent.
 Budget: `context_budget` in config.md, in tokens. 0 (the default, and every
 pre-existing install) means unbounded — nothing is counted and nothing is
 dropped, so the packed prompt is byte-identical to the unpacked one. The
-backend cannot infer the number: only the frontend sees the model list that
-carries each model's window size.
+backend does know the model's window now (01i: `wire.Target.limits`, and
+`store.inference.limits.prompt_ceiling` for what a prompt may hold), and
+deliberately does not default the budget to it: that would change the prompt
+on every install whose model has a known window, so it is a separate
+decision (the 01i spec's Open question 1).
 """
 
 from __future__ import annotations

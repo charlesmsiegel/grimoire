@@ -308,7 +308,10 @@ def test_both_sides_report_the_budget_they_were_packed_to(client):
     body = _diff(client, cid, sid, eid).json()
     for side in (body["base"], body["head"]):
         assert set(side) == {"id", "task", "ts", "model", "total_tokens",
-                             "dropped_tokens", "budget_tokens", "token_count"}
+                             "dropped_tokens", "budget_tokens", "token_count", "model_window"}
+        # And the window that model was measured against (01i), as the
+        # Context panel names it.
+        assert set(side["model_window"]) == {"value", "source"}
     # The live end names its counter as the Context panel does, so a diff of a
     # length-counted capture against a tiktoken preview can say why it moved.
     assert body["head"]["token_count"]["tokenizer"] in ("cl100k_base", "heuristic")

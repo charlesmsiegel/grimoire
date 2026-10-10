@@ -34,6 +34,7 @@ from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from ..store.inference import cascade as inference_cascade
 from ..store.inference import facts as inference_facts
+from ..store.inference import limits as inference_limits
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
@@ -430,6 +431,16 @@ def _sampling_report(target: wire.Target | None) -> dict | None:
     return report
 
 
+def model_window(target: wire.Target | None) -> dict:
+    """The window of the model a breakdown names (01i), `{value, source}`:
+    the target's own resolved limit (`wire.Target.limits`), unknown when
+    nothing resolved. What every breakdown that names a `model` carries, so
+    the inspector measures it against the window the backend knows rather
+    than looking the model up in a catalog it may not have."""
+    return inference_limits.limit_body(
+        target.limits.window if target is not None else wire.UNKNOWN_LIMIT)
+
+
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
                    messages: list[dict] | None = None,
@@ -457,7 +468,9 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     attempt's target -- and what the snapshot records about its sampler
     preset is its first attempt's (`llm_sampling.report`, the same split the
     facade sends), so a past turn says what it was sent WITH, and what its
-    backend could not take.
+    backend could not take. Its window rides along too (`model_window`, the
+    same target's), so a past turn is measured against the window it was sent
+    into.
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -485,7 +498,10 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     if breakdown is None:
         return
     chain = conn if isinstance(conn, wire.Chain) else None
-    report = _sampling_report(conn.primary if isinstance(conn, wire.Chain) else conn)
+    sent = conn.primary if isinstance(conn, wire.Chain) else conn
+    if sent is not None:
+        breakdown = {**breakdown, "model_window": model_window(sent)}
+    report = _sampling_report(sent)
     if report is not None:
         breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):
