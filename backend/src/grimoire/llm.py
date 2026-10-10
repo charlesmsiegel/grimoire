@@ -820,12 +820,13 @@ def _preset_refusal(exc: LLMError, target: wire.Target) -> PresetRefusalError | 
 
 
 def _call_capped(target: wire.Target) -> bool:
-    """Whether the `max_tokens` `target` carries is the cap its CALL asked
-    for (`Sampling.call_cap`) rather than its preset's own: the value sent is
-    the call's cap. A preset cap below the call's is the preset's, and keeps
-    the preset's wording."""
-    cap = target.sampling.call_cap
-    return cap is not None and target.sampling.params.get("max_tokens") == cap
+    """Whether a refused `max_tokens` is the cap the CALL added rather than
+    its preset's: the call capped its output (`Sampling.call_cap`) and the
+    preset itself sent no `max_tokens` (`Sampling.preset_cap`; 01f 3.9). A
+    preset that carried one keeps the preset's wording -- whatever the call
+    or the model's maximum held it down to, the user's preset sent the
+    field, and it is the user's to fix."""
+    return target.sampling.call_cap is not None and target.sampling.preset_cap is None
 
 
 class SchemaRefusalError(LLMError):

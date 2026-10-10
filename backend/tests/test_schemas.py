@@ -257,6 +257,15 @@ SERAPHINE = Option("seraphine", "Seraphine")
     [Item("ctx", (Score("drift", "How far?", ("none", "some", "far")),))],
     [Item("ctx", (Predicate("a", "?"), Choice("b", "?", (MARA, SERAPHINE), allow_none=True),
                   Score("c", "?", ("x", "y")))) for _ in range(decisions.MAX_ITEMS_PER_CALL)],
+    # 01e's kinds: a ranking's array of tiers (five deep), a selection's array,
+    # and a joint's flattened choice.
+    [Item("ctx", (decisions.Rank("r", "Order them", (MARA, SERAPHINE)),
+                  decisions.Rank("t", "Top one", (MARA, SERAPHINE), top=1, allow_none=True)))],
+    [Item("ctx", (decisions.MultiSelect("s", "Who?", (MARA, SERAPHINE), min=1, max=2),
+                  decisions.MultiSelect("n", "Who?", (MARA,), allow_none=True)))],
+    [Item("ctx", (decisions.Joint("j", "Act", (Option("greet", "Greet"),
+                                               Option("wait", "Wait")),
+                                  (("greet", (MARA, SERAPHINE)),), allow_none=True),))],
 ])
 @pytest.mark.parametrize("explain", [True, False])
 def test_every_decision_schema_passes(items, explain):
