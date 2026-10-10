@@ -274,6 +274,32 @@ class ItemResult:
 
 
 @dataclass(frozen=True)
+class CallRecord:
+    """One metered request a decide chain made: one structured call (a
+    schema-refusal re-send is a record of its own) or one native item.
+
+    `stage` is the call's index in the chain `run_stages` was handed, `mode`
+    its backend (one of `BACKENDS`), and `items` the BATCH indices it carried.
+    `row` is the ledger row its meter filed, or None when nothing was sent (a
+    call refused unsent files no row). A failed call keeps its `LLMError`'s
+    kind and HTTP status only, never its detail: the detail is the provider's
+    own text, which no persisted store keeps. `hop` is "" for a call of the
+    chain itself; it is reserved for an escalation hop, which sets
+    "escalation".
+
+    A row is what costs money, so this counts requests; nothing in production
+    reads it (the eval runner does)."""
+
+    stage: int
+    mode: str
+    items: tuple[int, ...]
+    row: dict[str, Any] | None
+    error_kind: str = ""
+    error_status: int | None = None
+    hop: str = ""
+
+
+@dataclass(frozen=True)
 class Decision:
     """What `decide` returns: one `ItemResult` per item, in input order, the
     backend that answered (one of `BACKENDS`, or `""` when stages with
@@ -314,6 +340,10 @@ class Decision:
     #: module imports nothing from the package. Empty when every item
     #: answered.
     errors: tuple[Exception, ...] = ()
+    #: Every metered request the chain made (`CallRecord`), in the order the
+    #: calls settled. `usage` is these records' rows alone; nothing in
+    #: production reads this field.
+    calls: tuple[CallRecord, ...] = ()
 
     def __post_init__(self) -> None:
         if self.backend and self.backend not in BACKENDS:
