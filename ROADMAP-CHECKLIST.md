@@ -49,7 +49,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [x] |
 | 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [x] |
 | 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [x] |
-| 01c | Decision distributions and seeded sampling | now (01a has landed: a task is switched on with its evidence) | [x] | [~] substitute | 3 | [ ] |
+| 01c | Decision distributions and seeded sampling | now (01a has landed: a task is switched on with its evidence) | [x] | [~] substitute | 3 | [x] |
 | 01d | Decision escalation and per-task policy | now (01a has landed: escalation is enabled with its evidence) | [x] | [~] substitute | 5 | [ ] |
 | 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
 | 01f | Structured generation | now | [x] | [~] substitute | 4 | [x] |
@@ -71,7 +71,7 @@ all of them have landed. `check` holds both to the slice checklist.
 
 ## Parallel lanes
 
-- **Landed:** 01s, 01a, 01b, 01e, 01f, 01i. 01s was ticked after the fact:
+- **Landed:** 01s, 01a, 01b, 01c, 01e, 01f, 01i. 01s was ticked after the fact:
   every task of its plan is in the tree and its tests pass, but the history
   that would show its Codex review gates was not available to check.
 - **Now:** 01c, 01d, 01g, 01h, 02 (from 02-S1), 03, 07, 13 (II-A to II-D).
@@ -122,18 +122,22 @@ These are headlines. The owning spec's Contract section is authoritative.
   four specs' seams; the Codex gates are still owed.
 
 ### 01c: Distributions and seeded sampling
-- [ ] **01c-C1** Recorded policy:
+- [x] **01c-C1** Recorded policy:
   - verbalised probabilities are rejected;
   - native-first is opt-in per task (`TaskPolicy.native_first`) and needs
     01a evidence;
   - every task is off at landing;
   - there is a `reports_distribution(resolved)` predicate.
-- [ ] **01c-C2** `draws.py`: SHA-256 inverse-CDF draw, stable across Python
+- [x] **01c-C2** `draws.py`: SHA-256 inverse-CDF draw, stable across Python
   versions, Android and a browser.
-- [ ] **01c-C3** A replay record, stored with the outcome under the same lock
+- [x] **01c-C3** A replay record, stored with the outcome under the same lock
   and never re-drawn.
-- [ ] **01c-C4** Abstain, refuse, unreadable, error or no usable
+- [x] **01c-C4** Abstain, refuse, unreadable, error or no usable
   distribution: never sampled. Rank or MultiSelect marginals: never sampled.
+- **Landed:** S1-S3. No task samples or goes native-first: the live
+  evidence §4.3 asks for (`evals/README.md`, "Decision distributions") is
+  owed for both native kinds, and switching a task on waits for it. S3
+  onward landed in speed mode: no review round, Codex gates owed.
 - **Departures from C1's text (01c-S2):** a failure on the isolated
   native-first stage is not composed into the error of an item a later stage
   answered, and a clock refusal at that stage ends the chain rather than
@@ -411,7 +415,7 @@ alone. This table is generated: after a spec's slices change, run
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 01c-S1 | The sampler, the record and replay | M | 1 | 01d-S2 (S), 01e-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01c-S2 | Native-first in the decide chain (mechanism, all tasks off) | M | 1 | 01d-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01c-S3 | The recorded evidence and the distribution grader | S | 4 | 01a-S3, 01a-S4, 01c-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01c-S3 | The recorded evidence and the distribution grader | S | 4 | 01a-S3, 01a-S4, 01c-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01d
 
