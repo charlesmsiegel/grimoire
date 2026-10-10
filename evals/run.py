@@ -238,6 +238,18 @@ def run_embed(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return _embed_live(ap, args, corpus, graded)
 
 
+def _option_spaces(base: dict, sets: list) -> list[dict]:
+    """The spaces `--live --embed` ranks: the configured one first, the
+    control every option set is ranked beside, then each set's own -- a set
+    that names a space already listed (the control's own options) once."""
+    spaces = [base]
+    for options in sets:
+        space = embed_harness.with_options(base, options)
+        if all(space["space"] != s["space"] for s in spaces):
+            spaces.append(space)
+    return spaces
+
+
 def _embed_live(ap: argparse.ArgumentParser, args: argparse.Namespace,
                 corpus: embed_corpus.Corpus, graded: list) -> int:
     """`--live --embed`: the space resolved in the REAL store before any
@@ -252,7 +264,7 @@ def _embed_live(ap: argparse.ArgumentParser, args: argparse.Namespace,
     except RuntimeError as exc:
         print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
         return 1
-    spaces = [embed_harness.with_options(base, o) for o in sets] or [base]
+    spaces = _option_spaces(base, sets)
     size, tokens = embed_harness.estimate(corpus)
     print(runner.ascii_safe(
         f"live: embedding through {base['provider_name']} / {base['model']}: "

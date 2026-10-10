@@ -227,6 +227,21 @@ def test_a_live_run_files_its_rows_in_the_isolate_only(monkeypatch, capsys, _hom
     assert list(usage.calls(days=1)) == []           # nothing in the real ledger
 
 
+def test_an_option_set_is_ranked_beside_the_configured_space(monkeypatch, capsys, _home):
+    """`--embed-options` adds a set: the Embedding role's own space still runs
+    as the control, and a set naming that same space runs once."""
+    monkeypatch.setattr(harness, "resolve_live", harness.bow_space)
+    monkeypatch.setattr(harness, "live_client", harness.bow_client)
+    code = eval_run.main(["--live", "--embed", "--embed-options", '{"dimensions": 16}'])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "(x2)" in out and out.count("calls 3") == 2
+    assert "bow-1-none" in out and f"bow-1-{wire.EmbedOptions(dimensions=16).digest()}" in out
+    code = eval_run.main(["--live", "--embed", "--embed-options", "{}"])
+    out = capsys.readouterr().out
+    assert code == 0 and "(x1)" in out and out.count("calls 3") == 1, out
+
+
 def test_a_live_run_whose_isolate_is_the_real_home_is_refused(monkeypatch, capsys):
     monkeypatch.setattr(harness, "resolve_live", harness.bow_space)
     sent: list[dict] = []

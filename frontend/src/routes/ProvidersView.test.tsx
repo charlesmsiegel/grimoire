@@ -1122,6 +1122,28 @@ test("a save that leaves the options alone does not send them", async () => {
   expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", { model: "vendor/m", prefill: true });
 });
 
+test.each([
+  ["an unknown input type", { input: "bogus" }, {}],
+  ["a block that is not an object", "prefix", {}],
+  ["a request field with no name", { input: "param" },
+   { input: "param", param_field: "", query_value: "", document_value: "" }],
+])("a save over an invalid block (%s) sends the form, so it is repaired",
+   async (_label, stored, sent) => {
+  (api.readModelFacts as any).mockResolvedValue(facts({
+    capabilities: EMBEDS, embedding: stored, embedding_invalid: true,
+    embedding_invalid_reason: "the embedding options are not valid" }));
+  (api.putModelFacts as any).mockImplementation((_id: string, body: Record<string, unknown>) =>
+    Promise.resolve(facts({ ...body, capabilities: EMBEDS })));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.click(await main().findByRole("checkbox", { name: /Continue replies by prefill/ }));
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch",
+    { model: "vendor/m", prefill: true, embedding: sent });
+});
+
 test("an invalid block and a width the endpoint ignored are both said", async () => {
   (api.readModelFacts as any).mockResolvedValue(facts({
     capabilities: EMBEDS, embedding: { input: "param" }, embedding_invalid: true,
