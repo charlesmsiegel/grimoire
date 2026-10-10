@@ -2,7 +2,7 @@
 
 A **scope** is what a decide site wraps -- one speaker pick, one scene-break
 check, one voice-drift phase (every anchored NPC of one review), one identity
-check -- and `capturing` opens it:
+check, one reconcile pass -- and `capturing` opens it:
 
     async with decision_capture.capturing(cid, sid, "scene-break") as scope:
         decision = await operations.decide(..., capture=scope.hook())
@@ -31,7 +31,10 @@ Four rules, each costing the capture and never the decision:
   on entry and again inside the hold that covers the write, plus the site's
   own `fence`: a scene deleted and recreated under the same id never inherits
   a decision, and an identity-less scene captures nothing (no identity is
-  minted: a debug capture never writes a scene file).
+  minted: a debug capture never writes a scene file). A campaign-level scope
+  (`sid=NO_SCENE`: the reconcile sweep, which has no scene) has no identity
+  to read, so it must pass the site's `fence`, and is filed through
+  `common._record_campaign_prompt`, which proves the campaign exists.
 - **Never raises, never waits.** A contended lock, a gone scene, an
   `OSError`, a serialisation error or a failed fence costs the capture; a
   failure is one `warning` naming the task and the exception type, with no
@@ -68,6 +71,15 @@ OUTCOME_SECTION_ID = "decision"
 
 #: The `operation` every decision capture is filed under.
 DECIDE = store.prompt_log.DECIDE
+
+#: The `sid` of a campaign-level scope (the reconcile sweep): filed with no
+#: scene, through `common._record_campaign_prompt`, and fenced on the site's
+#: own `fence`, which such a scope must pass.
+NO_SCENE = store.prompt_log.NO_SCENE
+
+#: What a campaign-level scope is "fenced on" in place of a scene identity:
+#: there is nothing to read, so it only says the scope is open.
+_CAMPAIGN = "campaign"
 
 #: The speaker pick's task: its entries filed before 01b carry no
 #: `operation`, and are decisions all the same (`is_decision`).
@@ -239,19 +251,26 @@ def _file(scope: Scope, cid: str, sid: str, still: Callable[[], bool]) -> None:
     out = next((h for h in scope.calls if h.sent), None)
     conn = (out.target if out is not None
             and out.record.get("mode") != decisions.NATIVE_BACKEND else None)
-    common._record_prompt(cid, sid, scope.task, _breakdown(scope),
-                          model=named.target.model if named else "",
-                          kind=named.target.kind if named else "",
+    model = named.target.model if named else ""
+    kind = named.target.kind if named else ""
+    if sid == NO_SCENE:
+        common._record_campaign_prompt(cid, scope.task, _breakdown(scope), model=model,
+                                       kind=kind, conn=conn, operation=DECIDE, still=still)
+        return
+    common._record_prompt(cid, sid, scope.task, _breakdown(scope), model=model, kind=kind,
                           conn=conn, operation=DECIDE, still=still)
 
 
 def _opening(cid: str, sid: str, task: str) -> str | None:
     """The scene's identity when this scope should capture, else None:
     capture off, a scene that predates identities or is gone, or a read that
-    raised (that one is the warning)."""
+    raised (that one is the warning). A campaign-level scope has no identity
+    to read, and answers `_CAMPAIGN` while capture is on."""
     try:
         if not store.prompt_log.capturing():
             return None
+        if sid == NO_SCENE:
+            return _CAMPAIGN
         return store.scenes.scene_identity_strict(cid, sid)
     except Exception as exc:  # noqa: BLE001 - a debug capture never fails a decision
         log.warning("could not capture a %s decision: %s", task, type(exc).__name__)
@@ -273,7 +292,8 @@ async def _close(scope: Scope, cid: str, sid: str, identity: str | None,
         def still() -> bool:
             if fence is not None and not fence():
                 return False
-            return store.scenes.scene_identity_strict(cid, sid) == identity
+            return (sid == NO_SCENE
+                    or store.scenes.scene_identity_strict(cid, sid) == identity)
 
         await run_in_threadpool(_file, scope, cid, sid, still)
     except Exception as exc:  # noqa: BLE001 - see the module docstring
@@ -285,11 +305,15 @@ async def capturing(cid: str, sid: str, task: str, *,
                     fence: Callable[[], bool] | None = None,
                     abandoned: Callable[[], Awaitable[bool]] | None = None,
                     ) -> AsyncIterator[Scope]:
-    """Open one decision scope over scene `sid` of campaign `cid`, filed
-    under `task` (see the module docstring). `fence` is asked inside the
-    hold that covers the write, and a False answer drops the capture;
-    `abandoned` is the review's own check, asked before filing, for a site
-    whose loop swallows `Abandoned` (voice drift)."""
+    """Open one decision scope over scene `sid` of campaign `cid` -- or over
+    the campaign itself, `sid=NO_SCENE` -- filed under `task` (see the module
+    docstring). `fence` is asked inside the hold that covers the write, and a
+    False answer drops the capture; a campaign-level scope has nothing else
+    to be fenced on, so it must pass one (`ValueError`, before anything is
+    read). `abandoned` is the review's own check, asked before filing, for a
+    site whose loop swallows `Abandoned` (voice drift)."""
+    if sid == NO_SCENE and fence is None:
+        raise ValueError(f"a campaign-level {task} capture needs its site's fence")
     identity = await run_in_threadpool(_opening, cid, sid, task)
     scope = Scope(task, identity is not None)
     try:

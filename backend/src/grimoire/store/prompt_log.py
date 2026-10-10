@@ -73,6 +73,12 @@ from .paths import safe_id
 #: captured included.
 DECIDE = "decide"
 
+#: The `scene` a campaign-level capture is filed under: a decision asked with
+#: no scene (the continuity reconcile sweep). No scene id is empty, so no
+#: scene's routes, `repoint_scenes` or `forget_scene` ever reach one; it
+#: leaves with its campaign. `list_entries(cid, NO_SCENE)` lists them.
+NO_SCENE = ""
+
 
 def depth() -> int:
     """How many snapshots to keep; 0 disables capture entirely.

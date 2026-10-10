@@ -2907,6 +2907,14 @@ export const api = {
   getScenePrompt: (cid: string, sid: string, eid: string) =>
     request<PromptSnapshot>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}`),
+  // The campaign-level captures (roadmap 01b): decisions asked with no scene,
+  // today the continuity reconcile sweep's. The list is `fresh` and an entry
+  // is not, for the scene routes' reasons above.
+  listCampaignPrompts: (cid: string) =>
+    request<{ entries: PromptEntry[] }>(
+      "GET", `/api/campaigns/${cid}/prompts`, undefined, { fresh: true }),
+  getCampaignPrompt: (cid: string, eid: string) =>
+    request<PromptSnapshot>("GET", `/api/campaigns/${cid}/prompts/${eid}`),
   // `against` is another entry id, or "live" for the composition as it stands
   // now — the comparison the feature is named for (#130). `fresh`, unlike
   // `getScenePrompt` above and for the reason that route is not: against "live"

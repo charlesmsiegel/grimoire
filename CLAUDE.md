@@ -984,11 +984,21 @@ would answer neither question.
   and its error; an adapter's `missing_key` is raised after the attempt is
   stamped, so it is captured with the request it would have sent and files an
   `error` row; a cancelled call, and a chunk or item held back
-  after a connection-wide failure, are not captured at all. The outcome is
+  after a connection-wide failure, are not captured at all. Every decide site
+  captures through one helper, `routes/decision_capture.py` (roadmap 01b): a
+  scope -- one speaker pick, scene-break check, voice-drift phase, duplicate
+  check or reconcile pass -- holds each settled call in memory and files ONE
+  prompt-log entry when it exits, under `operation: "decide"` and in a
+  retention pool of its own, so decisions never evict a turn. It is fenced on
+  the scene's strict identity, or -- the reconcile sweep, filed at campaign
+  level with no scene and read through `GET /campaigns/{cid}/prompts` -- on
+  the run's own `stillborn`. A failed call is kept as its error kind, status
+  and code, never the provider's text, and `test_decision_capture.py` holds
+  every `decide` call in the package to the helper. The outcome envelope is
   filed as a zero-token section whose id is
-  `routes/character_turns.OUTCOME_SECTION_ID` (`"decision"`), which the prompt
-  viewer draws as "outcome · not sent" rather than as a prompt section; the
-  scene-break, voice-drift and continuity decisions capture nothing. The
+  `routes/decision_capture.OUTCOME_SECTION_ID` (`"decision"`), which the
+  prompt viewer draws as "outcome · not sent" rather than as a prompt
+  section. The
   settings view carries `decision_mode` and `decides_natively` (`yes`, `no` or
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
