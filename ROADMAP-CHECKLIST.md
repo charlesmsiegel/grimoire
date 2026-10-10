@@ -145,6 +145,13 @@ These are headlines. The owning spec's Contract section is authoritative.
   `hop: escalation`.
 - [ ] **01d-C3** Thresholds per task and native endpoint kind, capped at 0.5,
   starting at 0.2. All existing tasks are off.
+- **Erratum (01d-S2):** `low_margin` fires on `margin < threshold - MASS_TIE`,
+  not the bare `margin < margins[kind]` that §5.1, C2a and §9 write. With the
+  bare `<`, a probability of exactly 0.6 computes a margin of
+  0.19999999999999996 and fires against the starting 0.2. 01d-S5's sweep
+  counts through `decisions.triggers`, so it agrees at the boundary.
+- S1 and S2 landed with substitute reviews (independent reviewer agents, no
+  Codex CLI), recorded in each plan; the Codex gates are still owed.
 
 ### 01e: Decision vocabulary
 - [x] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
@@ -395,7 +402,7 @@ alone. This table is generated: after a spec's slices change, run
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 01d-S1 | The task policy and `fallback="none"` | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01d-S2 | Per-item provenance and trigger evaluation | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S2 | Per-item provenance and trigger evaluation | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01d-S3 | The escalation hop in `decide` | L | 2 | 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01d-S4 | The escalation seam in `routes/` | M | 3 | 01d-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01d-S5 | Threshold tooling in evals | M | 4 | 01a-S2, 01a-S3, 01a-S4, 01d-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
