@@ -158,6 +158,16 @@ These are headlines. The owning spec's Contract section is authoritative.
   counts through `decisions.triggers`, so it agrees at the boundary.
 - S1 and S2 landed with substitute reviews (independent reviewer agents, no
   Codex CLI), recorded in each plan; the Codex gates are still owed.
+- **Errata (01d-S3):** §5.3's merge rule ("unless the hop's `was_read`")
+  contradicts its own example, since `was_read` is true for a garbled
+  answer: the hop replaces an answer only with a value (or a decline on a
+  `reads_declines` task). New detail words: `no_result`,
+  `unreadable[: <detail>]`, `dead_connection` (a hop to a connection the
+  base found dead is skipped), `unresolved: <kind>` (an escalator that
+  raised). The "an escalation is not a stage" CLAUDE.md sentence landed in
+  S3, per §8, not S4. The §5.2 resolver `TypeError` can only precede the
+  hop's meters. S4's call sites note skipped escalations in their capture
+  scope. S3 onward landed in speed mode: no review round, no Codex gate.
 
 ### 01e: Decision vocabulary
 - [x] **01e-C1** `Rank` returns a `Ranking`: tied groups, plus unranked.
@@ -409,7 +419,7 @@ alone. This table is generated: after a spec's slices change, run
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 01d-S1 | The task policy and `fallback="none"` | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01d-S2 | Per-item provenance and trigger evaluation | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
-| 01d-S3 | The escalation hop in `decide` | L | 2 | 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S3 | The escalation hop in `decide` | L | 2 | 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
 | 01d-S4 | The escalation seam in `routes/` | M | 3 | 01d-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 01d-S5 | Threshold tooling in evals | M | 4 | 01a-S2, 01a-S3, 01a-S4, 01d-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
