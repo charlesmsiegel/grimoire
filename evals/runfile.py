@@ -181,10 +181,8 @@ def _escalated(entries: list[dict], index: int | None = None) -> str:
 def _money(buckets: list[dict], missing: int) -> list[str]:
     """Tokens and money summed across repeats, or `-` when nothing was
     costed; `(N not costed)` when some repeats could not be."""
-    if not buckets:
-        return ["- / -", "-"]
-    merged = costs.merge(buckets)
-    out = [_tokens(merged), costs.cost_text(merged)]
+    out = (["- / -", "-"] if not buckets
+           else [_tokens(merged := costs.merge(buckets)), costs.cost_text(merged)])
     if missing:
         out.append(f"({missing} not costed)")
     return out
@@ -203,17 +201,22 @@ def _item_cell(entries: list[dict], index: int) -> str:
     are never apportioned to its items: `(chunk)`, on the case's row."""
     buckets: list[dict] = []
     chunked = False
+    missing = 0
     for entry in entries:
         item = next((i for i in entry.get("items", []) if i.get("index") == index), None)
         call = item.get("call") if item is not None else None
         calls = entry.get("calls", [])
         if not isinstance(call, int) or not 0 <= call < len(calls):
             continue
-        if calls[call].get("mode") == "native" and _costed(calls[call].get("bucket")):
+        if calls[call].get("mode") != "native":
+            chunked = True
+        elif _costed(calls[call].get("bucket")):
             buckets.append(calls[call]["bucket"])
         else:
-            chunked = True
-    money = ["(chunk)"] if chunked else _money(buckets, 0)
+            # A native call refused before it was sent filed no row: not
+            # costed, and never a chunk.
+            missing += 1
+    money = ["(chunk)"] if chunked else _money(buckets, missing)
     parts = [_passes(entries), _wall(entries), _escalated(entries, index), *money]
     return "  ".join(p for p in parts if p)
 
@@ -233,6 +236,18 @@ def _totals(entries: list[dict]) -> str:
     return text
 
 
+def _header(name: str, conf: dict) -> str:
+    """A column's header: `<file>:<config id> <label>`, then every axis as
+    `name=value` -- two configs that share a label and differ only in an axis
+    (a feature switch, an escalation threshold) must not read alike."""
+    axes = conf.get("axes")
+    shown = (" ".join(f"{key}={value}" for key, value in axes.items())
+             if isinstance(axes, dict) else "")
+    return " ".join(part for part in (f"{name}:{conf.get('id', '')}",
+                                      str(conf.get("label", "")), f"({shown})" if shown else "")
+                    if part)
+
+
 def _columns(docs: Sequence[tuple[str, dict]]) -> list[tuple[str, list[dict]]]:
     """Every config of every file: its header and the case entries it stands
     for. A file named twice gets `#2`, so no two columns merge."""
@@ -244,7 +259,7 @@ def _columns(docs: Sequence[tuple[str, dict]]) -> list[tuple[str, list[dict]]]:
         for conf in doc.get("configs", []):
             cid = conf.get("id", "")
             entries = [e for e in doc.get("cases", []) if cid in e.get("configs", [])]
-            out.append((f"{name}:{cid} {conf.get('label', '')}".rstrip(), entries))
+            out.append((_header(name, conf), entries))
     return out
 
 

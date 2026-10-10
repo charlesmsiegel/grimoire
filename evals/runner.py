@@ -453,14 +453,16 @@ def harvest(run_day: str, run_id: str, case_id: str) -> tuple[dict, ...]:
 
 
 def _settle(case: Case, ctx: dict, output: str, *, real_home: Path | None, run_day: str,
-            run_id: str, rates: usage.Rates | None) -> tuple[tuple[dict, ...], str, int] | None:
+            run_id: str, rates: usage.Rates | None,
+            asked: int) -> tuple[tuple[dict, ...], str, int] | None:
     """After a case's model work: drain it (`FollowUpsRunningError` past the
     ceiling), check the tripwire again (None when it trips), then harvest:
     its rows, why the ledger could not be read when it could not, and how
     long the drain took (ms), which is part of the case's wall time."""
     started = time.monotonic()
     if not drain(ctx):
-        raise _still_running(case, output, run_day, run_id, rates)
+        raise _still_running(case, output, run_day, run_id, rates,
+                             asked + _since(started))
     drained = int((time.monotonic() - started) * 1000)
     if _is_real_home(real_home):
         return None
@@ -487,17 +489,45 @@ def _harvested(run_day: str, run_id: str, case_id: str) -> tuple[tuple[dict, ...
         return (), str(exc)
 
 
+def _since(started: float) -> int:
+    """Milliseconds since `started` (`time.monotonic()`)."""
+    return int((time.monotonic() - started) * 1000)
+
+
 def _still_running(case: Case, output: str, run_day: str, run_id: str,
-                   rates: usage.Rates | None) -> FollowUpsRunningError:
+                   rates: usage.Rates | None, wall_ms: int) -> FollowUpsRunningError:
     """The failure of a case whose follow-ups outlived the drain. What its
     ledger holds so far is still read (reading writes nothing), so the spend
-    it already made is reported, marked partial, rather than dropped."""
+    it already made is reported, marked partial, rather than dropped -- and
+    so is the time it took, the whole drain ceiling included, so the slowest
+    run is never the one left out of a median."""
     rows, ledger_error = _harvested(run_day, run_id, case.id)
     return FollowUpsRunningError(Result(
         case, BASELINE, [], output,
         f"follow-ups still running past {DRAIN_CEILING_S}s; "
         f"its isolate is kept at {paths.home()}",
-        error_kind="follow_ups", partial=True, **_metered(rows, ledger_error, rates)))
+        error_kind="follow_ups", partial=True, wall_ms=wall_ms,
+        **_metered(rows, ledger_error, rates)))
+
+
+def _crashed(case: Case, ctx: dict, exc: Exception, started: float, *,
+             real_home: Path | None, run_day: str, run_id: str,
+             rates: usage.Rates | None) -> Result:
+    """A case whose model work raised something other than a provider's
+    error. Drained first (`FollowUpsRunningError` past the ceiling), since a
+    follow-up left running would file its row in the real library once the
+    isolate restores; then harvested like any case, so a call that went out
+    before the failure -- paid, and filed by its meter -- is still in the
+    report and the run file. The case fails with the exception's type."""
+    if not drain(ctx):
+        raise _still_running(case, "", run_day, run_id, rates, _since(started)) from exc
+    wall = _since(started)
+    if _is_real_home(real_home):
+        return Result(case, BASELINE, [], "", ISOLATE_ERROR, error_kind="isolate")
+    rows, ledger_error = _harvested(run_day, run_id, case.id)
+    return Result(case, BASELINE, [], "", f"{type(exc).__name__}: {exc}",
+                  error_kind=type(exc).__name__, wall_ms=wall,
+                  **_metered(rows, ledger_error, rates))
 
 
 async def _ask(case: Case, ctx: dict, target: ResolvedInference,
@@ -597,20 +627,17 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
         return Result(case, BASELINE, [], "", ISOLATE_ERROR, error_kind="isolate")
     run_day = run_day or usage._today()
     ctx = prepare(case)
+    started = time.monotonic()
     try:
         stages = chain(target, backend) if case.schema is not None else None
         output, decision, failure, asked = _model_work(case, ctx, target, stages, client)
-    except Exception as exc:
-        # Anything but a provider's error: still drained before it passes
-        # through the isolate, which restores the environment -- a follow-up
-        # left running would then file its row in the real library.
-        if not drain(ctx):
-            raise _still_running(case, "", run_day, run_id, rates) from exc
-        raise
+    except Exception as exc:  # noqa: BLE001 - anything but a provider's error
+        return _crashed(case, ctx, exc, started, real_home=real_home, run_day=run_day,
+                        run_id=run_id, rates=rates)
     note = backend_note(decision) if decision is not None else ""
     error = f"{failure.kind}: {failure.detail}" if failure is not None else ""
     settled = _settle(case, ctx, output, real_home=real_home, run_day=run_day,
-                      run_id=run_id, rates=rates)
+                      run_id=run_id, rates=rates, asked=asked)
     if settled is None:
         return Result(case, BASELINE, [], output, ISOLATE_ERROR, error_kind="isolate")
     rows, ledger_error, drained = settled

@@ -1089,6 +1089,8 @@ def test_a_follow_up_past_the_ceiling_keeps_the_isolate(monkeypatch, tmp_path):
         holder["app"].thread.join(5)
     first, second = results
     assert "follow-ups still running" in first.error and not first.passed
+    # Its time is kept, the whole ceiling included: never left out of a median.
+    assert first.wall_ms is not None and first.wall_ms >= 100
     assert second.error == runner.NOT_RUN
     assert not (real / "usage").exists()
 
@@ -1454,6 +1456,7 @@ def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
     """Review: an exception that is not a provider's error fails its own
     case; the cases after it still run and the run is still reported. Each
     line names its config and repeat when the run had several."""
+    from grimoire.store import usage
     from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
@@ -1465,6 +1468,9 @@ def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
     def flaky(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
+            # A call went out and was metered before the adapter broke.
+            usage.record(task="chat", prompt_tokens=7, completion_tokens=1,
+                         cost_usd=0.003, status="error", error="RuntimeError")
             raise RuntimeError("an adapter broke")
         return original(*args, **kwargs)
 
@@ -1474,6 +1480,9 @@ def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
                               repeat=2, real_home=real)
     first, second = results
     assert (first.error_kind, first.passed) == ("RuntimeError", False)
+    # Its paid call is harvested, not lost with the crash.
+    assert len(first.rows) == 1 and first.bucket["cost_usd"] == 0.003
+    assert first.wall_ms is not None
     assert second.passed and second.repeat == 1
     text = runner.report(results)
     assert "scene-length.compliant [#1]" in text and "scene-length.compliant [#2]" in text
