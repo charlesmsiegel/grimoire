@@ -31,7 +31,7 @@ import { EDIT_LIMITS, EDIT_RATES, modelPath, providerPath } from "../providerPat
 const LISTABLE: LLMConnectionKind[] = ["openrouter", "openai_compatible", "anthropic"];
 
 /** The capabilities a test call has a probe for, in the order it runs them. */
-const TESTABLE: TestableCapability[] = ["generate", "vision", "embed", "decide_native"];
+const TESTABLE: TestableCapability[] = ["generate", "vision", "embed", "decide_native", "tools"];
 
 /** The capabilities a user may assert over what discovery says (spec 4.2). */
 const OVERRIDABLE: { name: CapabilityName; label: string }[] = [
@@ -41,6 +41,7 @@ const OVERRIDABLE: { name: CapabilityName; label: string }[] = [
   { name: "decide_native", label: "Decide natively" },
   { name: "structured_output", label: "Structured output" },
   { name: "prefill", label: "Prefill" },
+  { name: "tools", label: "Tool calling" },
 ];
 
 const ROLE_LABEL: Record<string, string> = {

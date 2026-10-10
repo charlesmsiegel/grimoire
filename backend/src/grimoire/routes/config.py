@@ -25,6 +25,7 @@ from .. import (
     llm_sampling,
     llm_usage,
     store,
+    tool_calls,
     wire,
 )
 from ..llm import LLMClient
@@ -1163,6 +1164,16 @@ def _probe_target(raw: dict, model: str) -> wire.Target:
                                 model_facts=inference.facts_for(raw, model))
 
 
+def _tools_choice(raw: dict, target: wire.Target) -> str:
+    """The `tool_choice` the tools probe asks of `target` (`probes.tool_choice`),
+    from the provider's preset, the model's catalog features and the thinking
+    the probe's body really sends -- one answer for the preview and the run,
+    so the confirmation describes the call that goes out."""
+    sent = llm_sampling.effective(target)["effective"].get("thinking")
+    return store.inference.probes.tool_choice(providers.infer(raw).id, target.kind,
+                                              target.model_features, sent, target.model)
+
+
 def _embed_endpoint(raw: dict) -> str:
     """Where the `embed` probe goes: the endpoint the Embedding path resolves
     for this provider -- OpenRouter's fixed URL (its adapter ignores a stored
@@ -1304,6 +1315,12 @@ async def _probe(client: LLMClient, cap: str, raw: dict, target: wire.Target,
     says so."""
     probes = store.inference.probes
     probe = probes.PROBES[cap]
+    offer = probes.offer(cap, _tools_choice(raw, target)) if cap == "tools" else {}
+    # Checked BEFORE the meter opens, so a refused offer never reaches one.
+    # A holder carrying only the collector is not a sent call either
+    # (`store.usage.sent`: `tool_calls.KEY` is a pre-send key), so a refusal
+    # after it is installed would file no row; this keeps the order plain.
+    tool_calls.check(offer.get("tools"), offer.get("tool_choice"))
     try:
         if probe.operation == "embed":
             _known, options, why = await asyncio.to_thread(
@@ -1326,15 +1343,37 @@ async def _probe(client: LLMClient, cap: str, raw: dict, target: wire.Target,
                                         decision_mode=decisions.NATIVE_BACKEND),
                     m.usage, retries=0), ceiling=MODEL_TEST_CEILING)
             else:
+                calls = _collecting(m.usage) if offer else None
                 await _bounded_call(client.single(
                     probes.messages(cap),
                     target.with_account(operation=probe.operation),
-                    m.usage), ceiling=MODEL_TEST_CEILING)
+                    m.usage, **offer), ceiling=MODEL_TEST_CEILING)
+                if calls is not None and not calls.called:
+                    return _missed_call(calls)
     except LLMError as exc:
         return _Outcome({"ok": False, "kind": exc.kind,
                          "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},
                         _records(exc, native=probe.operation == "decide"), _halts(exc))
     return _Outcome({"ok": True}, True, False)
+
+
+def _collecting(usage: dict) -> tool_calls.Collector:
+    """A fresh collector in `usage`, which the facade keeps across its stamp,
+    for the tools probe to read the reply's calls from."""
+    calls = tool_calls.Collector()
+    usage[tool_calls.KEY] = calls
+    return calls
+
+
+def _missed_call(calls: tool_calls.Collector) -> _Outcome:
+    """The tools probe's outcome when the reply called nothing. Cut by the
+    cap first (`length`), it says nothing about the model: reported, never
+    filed (`_records`' rule). Otherwise the model answered without calling,
+    which is a failed test -- filed, and read as `unknown`, never `no`."""
+    probes = store.inference.probes
+    if calls.finish_reason == "length":
+        return _Outcome({"ok": False, "kind": "capped", "error": probes.CAPPED}, False, False)
+    return _Outcome({"ok": False, "kind": "no_tool_call", "error": probes.NO_CALL}, True, False)
 
 
 async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict,
@@ -1403,7 +1442,9 @@ def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
     test is "cost unknown"."""
     raw, model, caps = _test_plan(conn_id, body)
     probes = store.inference.probes
-    capped = "max_tokens" in llm_sampling.sent_names(_probe_target(raw, model))
+    target = _probe_target(raw, model)
+    capped = "max_tokens" in llm_sampling.sent_names(target)
+    choice = _tools_choice(raw, target) if "tools" in caps else "required"
     # A missing or mangled sidecar is "no price known" (`cached_row` never
     # raises), not a failed preview.
     estimate = probes.estimate_usd(store.llm_connections.cached_row(conn_id, model), caps)
@@ -1415,7 +1456,7 @@ def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
         estimate = probes.estimate_from_rates(entry, caps)
         basis = "rates" if estimate is not None else None
     return {"provider": raw.get("name") or conn_id, "provider_id": conn_id, "model": model,
-            "sends": [{"capability": c, "description": probes.describe(c, capped)}
+            "sends": [{"capability": c, "description": probes.describe(c, capped, choice)}
                       for c in caps],
             "estimated_cost_usd": estimate, "estimate_basis": basis}
 
@@ -1628,7 +1669,7 @@ class InferenceControlsBody(BaseModel):
 
 @router.get("/llm-connections/{conn_id}/capabilities")
 def get_connection_capabilities(
-        conn_id: str, need: Literal["generate", "vision", "embed", "decide"] = "generate",
+        conn_id: str, need: Literal["generate", "vision", "embed", "decide", "tools"] = "generate",
         model: str = ""):
     """The connection's models grouped for a role that needs `need`
     (`capabilities.grouped`): every catalog row, embedding-only ones included

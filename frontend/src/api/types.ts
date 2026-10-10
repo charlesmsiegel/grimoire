@@ -163,11 +163,13 @@ export type SamplingReport = {
    *  everything and cannot say whether the model takes it. */
   verified: boolean;
 };
-/** What a role needs of a model (`capabilities.NEEDS`). */
-export type CapabilityNeed = "generate" | "vision" | "embed" | "decide";
+/** What a role or route needs of a model (`capabilities.NEEDS`): `tools` is
+ *  a route's (`requires`), asked of a pin picker. */
+export type CapabilityNeed = "generate" | "vision" | "embed" | "decide" | "tools";
+/** Every capability (`capabilities.NAMES`, held equal by a backend test). */
 export type CapabilityName =
   | "generate" | "stream" | "vision" | "embed" | "decide_native"
-  | "structured_output" | "prefill";
+  | "structured_output" | "prefill" | "tools";
 /** `adapter` outranks a passed `test`, then `user`, then a failed `test` (`unknown`, with its `error`), then `catalog`, `preset`, `name`. */
 export type CapabilitySource =
   | "adapter" | "test" | "user" | "catalog" | "preset" | "name" | "unknown";
@@ -511,7 +513,7 @@ export type ModelFactsUpdate = {
   max_output?: number;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
-export type TestableCapability = "generate" | "vision" | "embed" | "decide_native";
+export type TestableCapability = "generate" | "vision" | "embed" | "decide_native" | "tools";
 /** `POST /api/llm-connections/{id}/test/preview`: what a test would send.
  *  `estimated_cost_usd` is `null` when no source (catalog, rates) states a price; 0 is only
  *  ever a stated free model. */
@@ -524,7 +526,9 @@ export type ModelTestPreview = {
   estimate_basis: "catalog" | "rates" | null;
 };
 /** One probe's outcome. `kind` is `not_sent` for a probe skipped after an
- *  earlier failure that answered for it too. */
+ *  earlier failure that answered for it too. The `tools` probe adds two:
+ *  `no_tool_call` (the model answered without calling -- filed, read as
+ *  unverified) and `capped` (the reply reached the cap first -- not filed). */
 export type ModelTestProbe = { ok: boolean; kind?: string; error?: string; dims?: number };
 /** What a landed test run holds. `recorded` is whether any verdict was filed
  *  -- none is when nothing answered for the model, or the provider was edited

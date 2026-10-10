@@ -56,7 +56,7 @@ export function routePinNeeds(row: RouteRow): CapabilityNeed[] {
 const CANNOT: Record<CapabilityName, string> = {
   generate: "generate text", vision: "read images", embed: "make embeddings",
   structured_output: "return structured output", prefill: "continue a prefilled reply",
-  decide_native: "make native decisions", stream: "stream",
+  decide_native: "make native decisions", stream: "stream", tools: "call tools",
 };
 
 /** The server's `fallback_problem` for a task whose code policy sends no

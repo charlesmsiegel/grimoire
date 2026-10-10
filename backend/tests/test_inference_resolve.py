@@ -1411,3 +1411,77 @@ def test_for_task_between_siblings_keeps_the_policys_fallback(at_state, tmp_path
         assert [a.target for a in handed.attempts] == [a.target for a in own.attempts]
         assert len(own.attempts) == 1
         assert handed.fallback_problem == own.fallback_problem == inf.NO_FALLBACK_POLICY
+
+
+# ---- a route that requires tools (01g-S1) ----
+#: No route requires `tools` yet (`test_routing_guard.py` fails a route whose
+#: tasks nothing uses), so the seam's refusal is proven on one planted here.
+PLANTED = routing.Route("planted_tools", "Planted tool runs", "", ("planted-tools",), True,
+                        requires=("tools",))
+
+
+@pytest.fixture
+def planted(monkeypatch):
+    monkeypatch.setitem(routing.TASK_ROUTE, "planted-tools", PLANTED.key)
+    monkeypatch.setitem(routing._BY_KEY, PLANTED.key, PLANTED)
+
+
+def test_a_tools_route_refuses_a_primary_the_catalog_says_cannot_call_tools(at_state, planted):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["temperature"]}])
+    resolved = inf.resolve("planted-tools")
+    assert resolved.attempts[0].capabilities["tools"] == Cap("no", "catalog")
+    assert resolved.missing == ("tools",)
+    exc = _refused(lambda: routes.common.require_inference("planted-tools"))
+    assert exc.detail == {
+        "detail": "The Planted tool runs route runs on the Primary role (vendor/active on "
+                  "OpenRouter), which cannot call tools — choose another Primary model "
+                  "or pin this route.",
+        "kind": "incapable"}
+    # A route that requires nothing is not held to it.
+    assert inf.resolve("chat").missing == ()
+
+
+def test_a_tools_route_runs_on_an_unknown_primary(at_state, planted):
+    at_state("fresh")
+    resolved = inf.resolve("planted-tools")
+    assert resolved.attempts[0].capabilities["tools"] == Cap("unknown", "unknown")
+    assert resolved.missing == ()
+    assert routes.common.require_inference(
+        "planted-tools").chain.primary.provider_id == "openrouter"
+
+
+def test_a_tools_route_refuses_a_users_no(at_state, planted):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["tools"]}])
+    assert inf.resolve("planted-tools").missing == ()
+    inference_facts.set_overrides("openrouter", "vendor/active", {"tools": "no"})
+    assert inf.resolve("planted-tools").missing == ("tools",)
+    exc = _refused(lambda: routes.common.require_inference("planted-tools"))
+    assert exc.detail["kind"] == "incapable"
+    assert "which cannot call tools" in exc.detail["detail"]
+
+
+def test_a_tools_route_refuses_a_claude_subscription(at_state, planted):
+    at_state("claude_active")
+    resolved = inf.resolve("planted-tools")
+    assert resolved.attempts[0].capabilities["tools"] == Cap("no", "adapter")
+    exc = _refused(lambda: routes.common.require_inference("planted-tools"))
+    assert exc.detail["kind"] == "incapable"
+    assert "which cannot call tools" in exc.detail["detail"]
+    # Everything else on the same connection still runs.
+    assert routes.common.require_inference("chat").chain.primary.provider_id == "claude"
+
+
+def test_a_tools_fallback_known_unable_is_dropped(at_state, planted):
+    at_state("routed")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["tools"]}])
+    _catalog("spare", [{"id": "vendor/spare", "params": ["temperature"]}])
+    resolved = inf.resolve("planted-tools")
+    assert _primary(resolved).provider_id == "openrouter"
+    assert _second(resolved).provider_id == "spare"
+    assert resolved.missing == () and resolved.fallback_missing == ("tools",)
+    sent = routes.common.build_llm()._routes(resolved.chain)
+    assert [route.target.provider_id for route in sent] == ["openrouter"]
+    assert routes.common.require_inference(
+        "planted-tools").chain.primary.provider_id == "openrouter"

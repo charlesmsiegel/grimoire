@@ -1582,3 +1582,48 @@ async def test_single_raises_a_provider_error_as_stream_does():
     with pytest.raises(LLMError) as exc:
         await client.single([], _conn("openrouter"))
     assert (exc.value.kind, exc.value.detail) == ("bad_response", "attempt 1")
+
+
+
+# ---- `single` offering tools, and the collector across a stamp (01g-S1) ----
+from grimoire import tool_calls  # noqa: E402 - deliberate late import; see the lines above
+
+PING = {"name": "ping", "description": "Says the caller is here.",
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False}}
+
+
+async def test_single_hands_the_client_tools_only_when_offered():
+    provider = FakeProvider("or")
+    client = LLMClient(openrouter=provider, retries=0)
+    assert await client.single([], _conn("openrouter")) == "or"
+    assert await client.single([], _conn("openrouter"), tools=(PING,),
+                               tool_choice="required") == "or"
+    plain, offered = (kwargs for _args, kwargs in provider.calls)
+    assert "tools" not in plain and "tool_choice" not in plain
+    assert offered["tools"] == (PING,) and offered["tool_choice"] == "required"
+    assert {k: v for k, v in offered.items() if k not in ("tools", "tool_choice")} == plain
+
+
+@pytest.mark.parametrize("tools, choice", [((), "auto"), ((PING,), "any"), (None, "auto")])
+async def test_single_refuses_a_malformed_offer_before_sending(tools, choice):
+    provider = FakeProvider("or")
+    client = LLMClient(openrouter=provider, retries=0)
+    usage: dict = {}
+    with pytest.raises(ValueError):
+        await client.single([], _conn("openrouter"), usage, tools=tools, tool_choice=choice)
+    assert provider.calls == [] and usage == {}
+
+
+def test_the_stamp_keeps_and_empties_a_callers_collector():
+    collector = tool_calls.Collector()
+    collector.note("call_1", "ping")
+    usage = {tool_calls.KEY: collector, "prompt_tokens": 9}
+    llm._stamp(usage, _conn("openrouter"), 2)
+    assert usage[tool_calls.KEY] is collector
+    assert not collector.called
+    assert "prompt_tokens" not in usage
+    # None is added to a holder that had none.
+    bare: dict = {}
+    llm._stamp(bare, _conn("openrouter"), 1)
+    assert tool_calls.KEY not in bare

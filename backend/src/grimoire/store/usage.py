@@ -174,10 +174,12 @@ RUN_KEY = "_run_id"
 #: The display reasoning buffer's key, restated from `llm_reasoning.KEY`: a
 #: streaming caller installs the buffer before the facade call.
 REASONING_KEY = "_reasoning_display"
+#: The tool-call collector's key, restated from `tool_calls.KEY` (01g-S1): a
+#: caller offering tools installs it before the facade call.
+TOOL_CALLS_KEY = "_tool_calls"
 #: Holder keys a caller may place BEFORE the facade is called, which say
-#: nothing about whether a request went out (`sent`). 01g-S1's
-#: `tool_calls.KEY` (the loop's collector) joins this tuple when it lands.
-PRE_SEND_KEYS = (RUN_KEY, REASONING_KEY)
+#: nothing about whether a request went out (`sent`).
+PRE_SEND_KEYS = (RUN_KEY, REASONING_KEY, TOOL_CALLS_KEY)
 
 
 def sent(holder: dict | None) -> bool:
@@ -186,7 +188,7 @@ def sent(holder: dict | None) -> bool:
 
     The one emptiness test in the package (`test_usage_guard.py` refuses the
     shapes it can see): a holder seeded with a run id, or carrying a
-    reasoning buffer, is not a sent call, and no holder at all (None) is not
+    reasoning buffer or a tool-call collector, is not a sent call, and no holder at all (None) is not
     one either. Guarded: a holder whose keys cannot be iterated counts as
     sent, which is what plain truthiness answered for it before."""
     if holder is None:
