@@ -252,7 +252,7 @@ These are headlines. The owning spec's Contract section is authoritative.
 ### 10: Retrieval query planning
 - [ ] **10-C1** `history_plan` route on Fast, taking a perspective.
 - [ ] **10-C2** One repair hop, at most three calls per turn, a phase
-  deadline.
+  deadline, and a `PlanTrace` that 12's trigger reads.
 - [ ] **10-C3** An evidence-sufficiency predicate on `history_check`, which
   12 reuses.
 
@@ -309,8 +309,9 @@ sub-feature. Edges come from each spec's Depends-on table.
   01d-C1/C2, 01a-C3, 02-C5b, 01b-C1 (S)
 - [ ] 11 ← 09-C1, 09-C3 (H); 02-C5a (H for the Decision stage); 07-C1 (H for
   group overrides); 07-C3c, 10-C1, 08-C3b, 01b-C1, 01d-C1/C2, 01c-C4 (S)
-- [ ] 12 ← 01g-C1..C5, 01i-C1/C2, 08-C3, 09-C1, 01a-C1/C2 (H); 01d-C2b,
-  10-C2/C3, 11-C1/C2 (H for RP mode); 11-C4 (S)
+- [ ] 12 ← 01g-C1..C5, 01i-C1/C2, 08-C3, 09-C1, 01a-C1/C2 (H); 10-C2 (its
+  `PlanTrace`) and 10-C3, 11-C1/C2 (H for RP mode); 11-C4 (S). The RP trigger
+  reads 10's `PlanTrace`, not 01d escalation.
 - [ ] 13 ← (nothing for II-A to II-D); 01c-C2/C3/C4 (H for C3); 01e-C3a (H for
   multi-target actions: action first, then a MultiSelect over targets);
   02-C3 (S: the NPC Action question rides the turn plan's `extra` slot when

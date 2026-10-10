@@ -30,6 +30,7 @@ Decision stage); 07-C1 (H for group overrides); 07-C3c, 10-C1, 08-C3b,
 | 09-C1 `history.retrieve(Query) -> Evidence`, with a `perspective` seam; evidence carries scene identity, post indices, keys and texts | 09 | The units this spec classifies (section 3.2). 11 adds no retrieval of its own | Hard |
 | 09-C3 `history_recall` section, none in NPC prompts until 11 | 09 | 11-C2 splits that section by perspective and by class, inside 09's budget | Hard |
 | 02-C5a epistemic access kit (`epistemic` route, `epistemic-access` task, `build_items`, `access_of`, fail-closed mapping, 01d-C1 policy row) | 02 | The Decision stage of 11-C1 (section 5) | Hard for the Decision stage only. The deterministic stage and 11-C2 ship without it |
+| 02-C6 shared play-decision rules (soft resolution, failure, once per contribution, one named total deadline, attribution, play gate) | 02 | Every rule the Decision stage keeps (5.2, 5.4, 5.5). Not in the checklist's edge list for 11; 02 states that 02-C6 has no edge of its own, and 11 cites it | Hard for the Decision stage only |
 | 07-C1 `members` on the group record, with overlay semantics | 07 | Expanding a group-audience override, through 07's `affiliated` (members and leader, section 7.3) | Hard for group overrides only |
 | 07-C3c retrieval projections (`scene_groups`, `co_affiliates`, `prompt_visible`) | 07 | Naming a group audience in the narrator annotation only where the group is prompt-visible | Soft |
 | 10-C1 `history_plan` route on Fast, taking a perspective | 10 | An actor call's planner input is actor-visible (section 6.4) | Soft: 11 classifies whatever 09 returns, planned or not |
@@ -180,7 +181,8 @@ Concretely:
    there, an actor was not recorded there, the user said so) need no model.
 2. A bounded Decision stage refines only cases the classifier cannot settle
    *and* for which a structural channel exists. It never runs for the
-   narrator, never upgrades anything to "was there", and never persists.
+   narrator, never upgrades anything to "was there", and is never stored as
+   knowledge.
 3. The prompt separates narrator and actor views. An actor-scoped prompt holds
    no evidence outside the actor's access, by construction, not by
    instruction.
@@ -560,14 +562,19 @@ the actor cannot see apart from the one being asked about, because the item
 is itself a prompt that a capture shows.
 
 ```python
-decision = await common._bounded_call(            # one outer ceiling, 5.4
-    operations.decide(
-        "epistemic-access", items, client=client, resolved=resolved,
-        campaign=cid, scene=sid, post=post, round_id=round_id,
-        capture=<01b-C1 helper>,
-        escalation=lambda: run_in_threadpool(
-            lambda: escalation_inference("epistemic-access", cid))),
-    ceiling=<the stage ceiling>)
+resolved, why, kind = await run_in_threadpool(          # 02-C6 3.2: soft, never raises
+    lambda: _soft_resolved(lambda: require_inference(
+        "epistemic-access", cid, operation="decide")))
+if resolved is None:
+    ...                                                   # skipped: "<kind>", 5.4
+decision = await operations.decide(
+    "epistemic-access", items, client=client, resolved=resolved,
+    campaign=cid, scene=sid, post=post, round_id=round_id,
+    response_id=<responses.mint_id(), 02-C6 3.5>,
+    capture=<01b-C1 helper>,
+    around=play_decisions.deadline(EPISTEMIC_CEILING_S),  # one total deadline, 02-C6 3.4
+    escalation=lambda: run_in_threadpool(
+        lambda: escalation_inference("epistemic-access", cid)))
 access = epistemic_access.access_of(questions, decision.items)
 ```
 
@@ -593,7 +600,8 @@ access = epistemic_access.access_of(questions, decision.items)
 | `suspected` | `suspected` | `decision` |
 | `narrator_only` | stays `unknown` (withheld) | `decision` |
 | `unknown` (abstained, refused, unreadable, `NOT_AN_OPTION`, an error, an item never reached; 02-C5a's fail-closed mapping, including a failed or skipped escalation hop) | stays `unknown` | `decision_abstained` |
-| the call failed or overran (`LLMError`, `BudgetRefused`, `DecideRequestError`, the stage ceiling, 409 `incapable` at resolution) | every eligible part stays `unknown` | `decision_failed` |
+| the call failed or overran (`LLMError`, `DeadlineRefused`, `DecideRequestError`, any other exception, 02-C6 3.3) | every eligible part stays `unknown` | `decision_failed` |
+| the route did not resolve (`_soft_resolved` returned `None`) | every eligible part stays `unknown` | `decision_skipped` |
 
 - **A model never produces `witnessed` or `narrator_only`.** Presence is a
   structural fact, and `narrator_only` is the user's word.
@@ -606,15 +614,36 @@ access = epistemic_access.access_of(questions, decision.items)
 
 ### 5.4 Time, cost and when it does not run
 
-- **One outer ceiling for the whole stage.** `decide`'s `around` wraps each
-  facade call, not the stage, so eight native items, an escalation hop and a
-  fallback stage could take several ceilings (CLAUDE.md works out the same
-  arithmetic for the continuity sweep). So the whole `decide` call, escalation
-  included, is wrapped in one `common._bounded_call` with
-  `config.llm_call_budget()` (`routes/common.py:555-600`). An overrun is
-  `decision_failed`. The abandoned call unwinds on its own and may still
-  file its ledger rows: that is `_bounded_call`'s documented behaviour, and
-  the ceiling bounds the wait, not the spend.
+- **One total deadline per decision, named here (02-C6, 02 section 3.4).**
+  02-C6 requires every turn-path decide outside 02 to run under a total
+  deadline its owning spec names, never `llm_call_budget` alone. 11's is:
+
+  ```python
+  #: Seconds the epistemic Decision pass may hold one actor step before its
+  #: stream starts, across every call it makes (chunks, a schema re-send, a
+  #: fallback stage, the 01d escalation hop, the 01b capture write). Argued
+  #: structurally: it is optional, it sits before the first token beside 09's
+  #: rerank and 10's planning phase, and a step should not wait longer for it
+  #: than for 02's own pre-generation decision. Below `PLAN_CEILING_S` (20 s)
+  #: for that reason. To be tuned against 01a's latency reports.
+  EPISTEMIC_CEILING_S = 10.0
+  ```
+
+  It is 02's monotonic deadline, built with 02's helper (02-A's
+  `plan_deadline()`, parameterised by the ceiling as
+  `play_decisions.deadline(seconds)`), and passed as `decide`'s `around`.
+  Every call, the escalation hop included, is bounded by what is left
+  (`min(EPISTEMIC_CEILING_S, llm_call_budget)` when the budget is positive).
+  A call that would start with nothing left is refused unsent with 02's
+  `DeadlineRefused`, which ends the chain. There is **no
+  `on_timeout=_noting(...)`**, so a slow but healthy Decision model is not
+  marked failing on the Models page because of 11. An overrun is the call's
+  own `error/timeout` row and maps to `decision_failed`. The earlier draft of
+  this spec wrapped the stage in `_bounded_call` with `llm_call_budget`; 02-C6
+  forbids that, and its review note on 11 is resolved by this paragraph.
+- **Worst-case added wait** before an actor step's first token, from 11:
+  `EPISTEMIC_CEILING_S`, once per step. 02's play gate reports it as "added
+  pre-generation time" (02 section 4.2).
 - **Caps.** At most `EPISTEMIC_DECIDE_ITEMS = 8` parts per actor step (one
   structured chunk, `decisions.MAX_ITEMS_PER_CALL`), and at most
   `EPISTEMIC_ROUND_ITEMS = 16` across a round (two chunks), shared first come
@@ -630,31 +659,58 @@ access = epistemic_access.access_of(questions, decision.items)
   outside the lock first and skips retrieval, `classify` and `refine`, so a
   replay pays for nothing it would throw away. `_prepare` re-checks it under
   the lock as today.
-- **Off by default.** The stage runs only when the `epistemic_decide` config
-  key is `on`, following the shape of `perception_rider`
-  (`store/config.py:89`, `:493`). The default stays `off` until 02-C5a's
-  `decide-epistemic-access` gate case passes its recorded bar (8.2).
+- **Soft resolution, failure and off (02-C6, 02 sections 3.1-3.3).** The
+  route resolves through `_soft_resolved` (`routes/common.py:1519`), never by
+  raising: a missing key, an `incapable` Decision model or a route with no
+  connection skips the pass for that step. The whole pass (resolution, item
+  building, `decide`, the mapping) is wrapped in `except Exception`, never
+  `BaseException`, so cancellation and Stop pass through. A skip or an error
+  is recorded as `skipped: "<kind>"` or `skipped: "error:<ClassName>"` on the
+  step's history record (5.5) and in the capture, logged at ERROR with the
+  class name only, and every eligible part stays `unknown`. With the switch
+  off nothing is resolved or called and the prompt is byte-identical (02
+  section 3.1 rule 6).
+- **Gating (02-C6, 02 sections 3.6, 4).** `epistemic_decide` (`off` | `on`,
+  default `off`) joins `config._CONFIG_KEYS` and `ConfigUpdate`, and is read
+  through 02's `store/play_decisions.py`. It is **shown in the UI only after
+  its play gate is ratified** (02 section 4.3); until then it exists for
+  evals and tests, and the backend honours a hand edit. The gate has three
+  parts, all required: 02-C5a's offline `decide-epistemic-access` case; 02's
+  live play gate (`evals/run.py --live --play epistemic`), whose hard criteria
+  (legality, no sampled abstention, no consistent turn-grader regression, off
+  is free, on is really on) apply unchanged; and 11's own leakage line, the
+  false-`known` rate with its bar set in advance (8.2). Ratification is the
+  user's explicit yes on the PR that exposes the switch. The switch's text
+  states the extra call per actor step, the Decision route it runs on, and
+  that recalled excerpts and the actor's own state go to the Decision-role
+  provider (02 section 3.7).
 - Every call is metered by `decide`'s own meter under the task. Spend counts
   against the campaign like any other.
 
-### 5.5 Nothing derived is persisted
+### 5.5 Nothing derived is authoritative
 
-A Decision answer is used for the turn being composed and nothing else. It
-lands in three places, none of them authoritative:
+A Decision answer is used for the contribution being composed and nothing
+else. It is asked **once per contribution** (02-C6, 02 section 3.1 rule 5) and
+lands in four places, none of them authoritative:
 
 - the **frozen prompt snapshot** of the reply (`responses.prepare`). A reroll
-  replays the snapshot rather than recomposing, so it neither re-classifies
-  nor pays again;
+  and a retry replay the snapshot, so they neither re-classify nor pay again;
+- the **response record**, as `history_view`: the item keys, each slice's
+  class and basis, and the Decision answers, written beside 02's intent. A
+  roll resume recomposes rather than replaying (02 section 1.4 rule 4), so
+  `_prepare`'s resume branch passes the stored view back into `_compose`, and
+  the resume snapshot, and Keep writing after it, carry the same history
+  without asking again. It is a record of what one contribution was shown,
+  never read as what a character knows;
 - the **prompt-log capture**, through 01b-C1's capture helper, whose outcome
   section is 01b's envelope (the convention the speaker capture now uses,
-  01b section 3.4). It records the parts asked, the answers, and the
-  `access_of` mapping;
-- the turn's capture view, from which the user may **accept** an answer as
-  an override (7.4).
+  01b section 3.4): the parts asked, the answers, and the `access_of` mapping;
+- the turn's capture view, from which the user may **accept** an answer as an
+  override (7.4). That is the only way an answer becomes durable knowledge.
 
-No cache of answers is kept across turns. A cache keyed on inputs would hold
-a model's output as though the inputs determined it, which is the thing 03
-refuses to cache.
+No cache of answers is kept across contributions. A cache keyed on inputs
+would hold a model's output as though the inputs determined it, which is the
+thing 03 refuses to cache.
 
 ## 6. Retrieval for a perspective, and prompt separation (11-C2)
 
@@ -1037,9 +1093,14 @@ evidence set, a perspective, and two sets of needles: propositions the actor
   - a model never produces `witnessed` or `narrator_only`;
   - the Decision stage runs only for actor perspectives, only on eligible
     parts with a structural channel, within 8 items per step and 16 per
-    round, under one stage ceiling, behind `epistemic_decide`, never on a
-    replay, and passes `escalation=` as 02-C5a's policy requires;
-  - nothing derived is persisted.
+    round, never on a replay, and passes `escalation=` as 02-C5a's policy
+    requires;
+  - it keeps every 02-C6 rule: soft resolution, failure never fails the
+    turn, asked once per contribution, off byte-identical, one total named
+    deadline (`EPISTEMIC_CEILING_S`) with no `_noting`, `response_id`
+    attribution, and a switch hidden until its play gate is ratified;
+  - nothing derived is authoritative: the per-response `history_view` is a
+    record of what was shown, never of what a character knows.
 - *Failure*: the table in 4.1. A Decision failure leaves eligible parts
   `unknown`. Neither fails the turn.
 
@@ -1182,7 +1243,9 @@ evidence set, a perspective, and two sets of needles: propositions the actor
 - both caps and `decision_skipped`, with the round cap surviving a resumed
   round;
 - each answer row of 5.3, including `experienced` → `known`;
-- a failed call, an overrun of the stage ceiling, and a 409 `incapable` each
+- a failed call, a deadline overrun (patched clock, including a second call
+  refused unsent as `DeadlineRefused`), no `_noting` on the overrun, a soft
+  resolution failure, and an exception in item building each
   leave the parts withheld and the turn completes;
 - a round with a pending incomplete response runs no retrieval, classify or
   refine; a reroll replays the snapshot and makes no call.
@@ -1305,7 +1368,8 @@ minor) was checked against the code and folded in as follows.
 | B3(c) slug reuse | Fixed. `forget_audience` beside the actor delete (`store/overlay.py:1618`), `audience_name` backstop, group name check (7.3, 7.5) |
 | S1 alignment, hidden-post re-check, `responses.json` failure | Fixed. One scene read, re-matching by key and digest, `moved` basis, failure table (4.1). Verified `responses._read` raises |
 | S2 perspective interface to 09/10 | Fixed. String form (3.1), per-step `gather`, actor query and seeds, classify per round, `history_view` replaces `history=` (6.1) |
-| S3 escalation, ceiling, replay | Fixed. `escalation=` passed; one outer `_bounded_call`; round cap; skip on a pending replay (5.2, 5.4) |
+| S3 escalation, ceiling, replay | Fixed. `escalation=` passed; one total deadline (now 02-C6's, below); round cap; skip on a pending replay (5.2, 5.4) |
+| 02 addendum: 11's `llm_call_budget` ceiling breaks 02-C6 | Fixed. 5.4 adopts 02-C6 whole: named `EPISTEMIC_CEILING_S` on 02's monotonic deadline (no `_noting`), `_soft_resolved`, `except Exception`, once per contribution with the view stored on the response record for a roll resume, `response_id`, and the switch hidden until 02's play gate plus 11's leakage bar are met. 02-C6 needs no change |
 | S4 eligibility and gate | Fixed. 3(b) dropped; 3(c) is a roster pass; gate seeded with channel-present negatives, false-`known` rate as the leakage line (5.1, 8.2) |
 | S5 precedence and `*` | Fixed. Subject before audience; `*` excludes the author (7.2) |
 | S6 accept flow | Fixed. Accept from the capture view; `unkeyed` refusal; live inspector runs `classify` only (6.4, 7.4) |

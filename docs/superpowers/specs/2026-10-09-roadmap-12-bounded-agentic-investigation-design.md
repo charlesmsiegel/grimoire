@@ -21,7 +21,7 @@ decision on unpriced models under a spend ceiling (section 7.2).
 
 The checklist edge reads `12 ← 01g-C1..C5, 01i-C1, 08-C3, 09-C1, 01a-C1/C2
 (H); 01d-C2b, 10-C2/C3, 11-C1/C2 (H for RP mode); 11-C4 (S)`. **This spec
-drops `01d-C2b`** (review B1, section 16): a 01d resolver must return
+drops `01d-C2b`** (review B1, section 17): a 01d resolver must return
 `ItemResult`s that replace an answer, and E1 returns evidence, so E1 is
 triggered from 10's `PlanTrace` instead (section 3.2). The checklist edge
 should read `10-C2/C3, 11-C1/C2 (H for RP mode)` without it, and gain
@@ -627,19 +627,27 @@ Each entry point hands `run_tools` a 01g `RunBudget`:
 | `max_turns` | 3 | 6 | 5 |
 | `max_tool_calls` | 4 | 12 | 10 |
 | `max_decisions` | 0 | 2 | 1 |
-| `wall_seconds` | `config.llm_call_budget()`, for the whole loop | 3 × `llm_call_budget()` | 2 × `llm_call_budget()` |
+| `wall_seconds` | `E1_WALL_S = 20.0` for the whole loop, capped by `llm_call_budget` when positive (02-C6) | 3 × `llm_call_budget()` | 2 × `llm_call_budget()` |
 | `spend_ceiling_usd` | `investigation_spend_ceiling` | same | same |
 | `max_output_tokens` | 512 | 2048 | 2048 |
 | `max_result_chars_total` | 12_000 | 48_000 | 36_000 |
 
 - **E1's three turns** are search, read, then select. Its output cap is small
   because it writes a selection, not prose.
-- **E1's wall clock is one turn-path ceiling** for the whole loop. 01g's rule
-  is `elapsed + MIN_TURN_SECONDS > wall_seconds` refuses the next turn, and
-  each turn is bounded by `min(llm_call_budget, remaining)` (01g section 3.9),
-  so three short turns fit inside one ceiling and a slow first turn leaves no
-  room for a third. `llm_call_budget <= 0` (no ceiling) is honoured as no
-  ceiling, as everywhere else, and the turn count still bounds the run.
+- **E1's wall clock is one named total deadline** for the whole loop, because
+  E1 is a pre-generation step a player waits on, and 02-C6 (02 section 3.4)
+  requires such a step to name its own total deadline rather than lean on
+  `llm_call_budget` alone. `E1_WALL_S` is 02's `PLAN_CEILING_S` (20 s),
+  argued the same way: an optional step must cost less waiting than the reply
+  it shapes. It is capped by `llm_call_budget` when that is positive. 01g's
+  rule is that `elapsed + MIN_TURN_SECONDS > wall_seconds` refuses the next
+  turn, and each turn is bounded by what remains (01g section 3.9), so three
+  short turns fit and a slow first turn leaves no room for a third. No
+  `_noting` is attached to an overrun, per 02-C6. E1 also keeps 02-C6's other
+  play-decision rules: its resolution is soft (`_soft_resolved`), the whole
+  stage is wrapped in `except Exception` and recorded as `skipped`, and with
+  `investigation_rp` off nothing is resolved and the prompt is byte-identical
+  (02 sections 3.1-3.3). To be tuned against 01a's latency reports.
 - **E1's result characters** are a small multiple of what it may select,
   which 09-C3's ceiling bounds.
 - **E2 and E3** are runs a reader started and waits on behind a 202, so they
@@ -1203,4 +1211,5 @@ The substitute spec-gate review (`reviews/12.md`: 1 blocking, 11 should-fix,
 | M4 query mapping onto `expand` | Fixed (4.3) |
 | M5 letters, not refs | Fixed (4.3, 6.2) |
 | M6 `api.streamDraft` | Fixed (9.1) |
+| 02 addendum (02-C6) | E1 takes a named total deadline (`E1_WALL_S`), soft resolution, `except Exception` and off-is-identical from 02-C6 (7.1) |
 | Coordinator and cross-spec inputs | 01i: `prompt_ceiling`, never `max_output` as the reserve (7.3); unpriced under a ceiling refused (7.2); 08's revision: `search_history` embeds under 09's `history-recall`, posts carry `r-`/`p-` keys and `part` (Depends on, 4.3, 6.1) |
