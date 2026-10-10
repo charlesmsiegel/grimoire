@@ -296,7 +296,8 @@ def _embedding_card(cfg: dict, lookup: llm_connections.Lookup,
     # One resolution per card: whether it is on, and why not, are read from
     # the same answer (spec 12, one decision).
     got = embed_space.resolution(cfg)
-    on = embed_space.endpoint_of(got) is not None
+    endpoint = embed_space.endpoint_of(got)
+    on = endpoint is not None
     # What embeds, or nothing: a provider with no model, or one that cannot
     # embed, resolves to no embedding at all, and the card must not say both.
     raw = lookup(provider) if provider and on else None
@@ -308,8 +309,12 @@ def _embedding_card(cfg: dict, lookup: llm_connections.Lookup,
     # embedding resolver's account of itself rather than `_problem`'s.
     # Its size, only while it embeds, and with nothing reserved: an embedding
     # has no reply, so what an input may hold is the window itself.
+    # The options its requests are built from, while it embeds (01h §4.4): the
+    # very object its space id was computed from, in its stored shape.
+    options = facts.options_block(endpoint.get("options")) if endpoint else None
     return {"stored": {"provider": provider, "model": model}, "resolves": resolves,
             "on": on, "problem": None if on else _embedding_problem(cfg, got),
+            "options": options,
             "rate": _rate(resolves, prices),
             "limits": _limits(got if resolves is not None else None, reserve=0)}
 

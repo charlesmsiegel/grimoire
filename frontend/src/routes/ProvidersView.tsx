@@ -16,6 +16,11 @@ import { InferenceBanner } from "../components/inference/InferenceBanner";
 import { migrationBanner, migrationLine } from "../components/inference/migration";
 import { TestCallDialog, useModelTests } from "../components/inference/TestCallDialog";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
+import { EmbeddingOptionsFields } from "../components/models/EmbeddingOptionsFields";
+import {
+  blockOf, dimensionsTyped, embeddingForm, mismatchLine, optionsSummary, sameBlock,
+  type EmbeddingForm,
+} from "../components/models/embeddingOptions";
 import { taskHash } from "../components/models/taskHash";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { perThousand } from "../components/cost";
@@ -873,6 +878,8 @@ type FactsForm = {
   rates: RateForm;
   /** The model's stated size (01i), as typed: "" is not stated. */
   context_window: string; max_output: string;
+  /** The model's embedding options (01h), as typed. */
+  embedding: EmbeddingForm;
 };
 
 /** The two size facts the form states, in the order it shows them. */
@@ -898,6 +905,7 @@ function factsForm(f: ModelFacts): FactsForm {
     rates: formOf(f.rates),
     context_window: f.context_window ? String(f.context_window) : "",
     max_output: f.max_output ? String(f.max_output) : "",
+    embedding: embeddingForm(f.embedding),
   };
 }
 
@@ -1008,6 +1016,11 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
     </div>
   );
   const stated = OVERRIDABLE.filter(({ name }) => facts.overrides[name]);
+  // Embedding options for a model that may embed: a known `no` has nothing
+  // to send them to (01h §4.4).
+  const embeds = facts.capabilities.embed?.value !== "no";
+  const optionsLine = optionsSummary(
+    facts.embedding && !facts.embedding_invalid ? facts.embedding : null);
   // A rate the entry carries, zero included: a stated $0 is a price.
   const statedRates = RATE_FIELDS.flatMap(({ key, label }) => {
     const value = facts.rates?.[key];
@@ -1051,6 +1064,10 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
       const now = form[key].trim();
       if (now !== was[key].trim()) body[key] = now === "" ? 0 : Number(now);
     }
+    // The options only when they send something else: a block the store
+    // replaces whole (`{}` removes it).
+    const options = blockOf(form.embedding);
+    if (!sameBlock(options, blockOf(was.embedding))) body.embedding = options;
     if (confirm) body.confirm_embedding = true;
     setSaving(true);
     setError(null);
@@ -1152,6 +1169,10 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
           </Field>
         ))}
         {badSize && <div className="field-hint error">Sizes are whole numbers of tokens.</div>}
+        {embeds && (
+          <EmbeddingOptionsFields model={model} value={form.embedding} disabled={saving}
+                                  onChange={(embedding) => set({ embedding })} />
+        )}
         {asking !== null && (
           <div className="banner" role="group" aria-label="Confirm the embedding">
             {asking}{" "}
@@ -1168,7 +1189,7 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
           </button>
           <button className="primary" onClick={() => { void save(); }}
                   disabled={factsBlocked || saving || unreadable || halfRated || badSize
-                            || asking !== null}>
+                            || !dimensionsTyped(form.embedding) || asking !== null}>
             Save facts
           </button>
         </div>
@@ -1193,7 +1214,8 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
             <ul>
               {verified.map(([cap, r]) => (
                 <li key={cap}>
-                  {cap}: {r.ok ? "works" : `failed — ${r.error ?? "no reason given"}`}
+                  {cap}: {r.ok ? "works"
+                    : `failed — ${mismatchLine(r) ?? r.error ?? "no reason given"}`}
                   {r.at ? ` · ${new Date(r.at).toLocaleString()}` : ""}
                 </li>
               ))}
@@ -1245,6 +1267,20 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
                       limit={key === "context_window" ? facts.limits?.window : facts.limits?.max_output} />
           ))}
         </div>
+        {embeds && (
+          <div className="side-section">
+            <h4>Embedding options</h4>
+            {facts.embedding_invalid ? (
+              <span className="field-hint error">
+                {`Invalid — embedding is off with this model: ${facts.embedding_invalid_reason ?? ""}`}
+              </span>
+            ) : optionsLine ? (
+              <span className="chip on">{optionsLine}</span>
+            ) : (
+              <span className="field-hint">None — texts are sent as they are.</span>
+            )}
+          </div>
+        )}
         <div className="side-section">
           <h4>Capability overrides</h4>
           {stated.length === 0 ? <span className="field-hint">None — discovery decides.</span> : (
