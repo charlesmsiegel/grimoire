@@ -1,10 +1,16 @@
 {#- The user message of every structured decision (`grimoire.inference.structured_messages`).
     Vars:
       items   — [decisions.Item]: each its `context` (text) and its ordered
-                `questions`. A question is a Predicate (`id`, `instructions`),
-                a Choice (also `options`, each `id` and `description`, and
-                `allow_none`) or a Score (also `levels`, ordered descriptions).
-                Option `aliases` are the parser's and are never shown.
+                `questions`. Each question's `KIND` says which it is: a
+                Predicate ("predicate": `id`, `instructions`), a Choice
+                ("choice": also `options`, each `id` and `description`, and
+                `allow_none`), a Score ("score": also `levels`, ordered
+                descriptions) or a Rank ("rank": also `candidates`, shown as
+                options are, `top` and `allow_none`; its `pointwise` is the
+                native lowering's and is never shown). Branching on `KIND`
+                rather than on which fields are defined keeps a new type with
+                `options` from rendering as a choice. Option `aliases` are the
+                parser's and are never shown.
       explain — str: the rationale instruction ("" when none is asked for). -#}
 {%- for item in items %}
 {%- if not loop.first %}
@@ -16,12 +22,17 @@ Item {{ loop.index0 }}
 
 Questions:
 {%- for q in item.questions %}
-{%- if q.options is defined %}
+{%- if q.KIND == "choice" %}
 - {{ q.id }} (choice{% if q.allow_none %}, or null for none of these{% endif %}): {{ q.instructions }}
 {%- for opt in q.options %}
   - {{ opt.id }}: {{ opt.description }}
 {%- endfor %}
-{%- elif q.levels is defined %}
+{%- elif q.KIND == "rank" %}
+- {{ q.id }} (ranking, best first{% if q.top %}, at least the top {{ q.top }}{% endif %}{% if q.allow_none %}, or null if they cannot be ordered{% endif %}): {{ q.instructions }}
+{%- for opt in q.candidates %}
+  - {{ opt.id }}: {{ opt.description }}
+{%- endfor %}
+{%- elif q.KIND == "score" %}
 - {{ q.id }} (scale): {{ q.instructions }}
 {%- for level in q.levels %}
   - {{ loop.index0 }}: {{ level }}

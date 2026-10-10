@@ -237,6 +237,8 @@ def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
             return decisions.Answer(None, "unreadable", distribution=reported.distribution)
         chosen = decisions.native_key(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
         return decisions.native_answer(q, chosen=chosen, distribution=probabilities)
+    if not isinstance(q, decisions.Score):
+        raise TypeError(f"a decisions endpoint asks no {q.KIND}; lower it first")
     return decisions.native_answer(q, distribution=_score_distribution(q, raw.get("probabilities")))
 
 

@@ -1217,18 +1217,66 @@ _DECIDE_ITEMS = [
                    (dec.Option("drift", "Drifted from the anchor"),
                     dec.Option("in_voice", "In voice"))),)),
 ]
+#: Each kind 01e adds: the start of its `decide/system.j2` bullet, and the
+#: question line `decide/user.j2` opens it with.
+_DECIDE_NEW_KINDS = {
+    "rank": ("- a ranking is answered with", "(ranking, best first"),
+}
+_DECIDE_NEW_ITEMS = {
+    "rank": dec.Rank("order", "Which scene matters most to Mara's question?",
+                     (dec.Option("scenes:pier", "The debt at the pier"),
+                      dec.Option("scenes:ledger", "The ledger changes hands"),
+                      dec.Option("scenes:tide", "The tide comes in")),
+                     top=2, allow_none=True, pointwise="Does this scene bear on it?"),
+}
 for _explain in ("", "Say in one sentence what settled it."):
     for _n in (1, 2):
         _items = _DECIDE_ITEMS[:_n]
         _label = f"{_n} item(s), explain={bool(_explain)}"
+        _sent = inference.structured_messages(_items, explain=_explain)
         check_messages(f"decide ({_label})",
                        [{"role": "system",
                          "content": render("decide/system.j2",
                                            schema=dec.schema(_items, explain=bool(_explain)),
-                                           explain=bool(_explain))},
+                                           explain=bool(_explain), kinds=dec.kinds(_items))},
                         {"role": "user",
                          "content": render("decide/user.j2", items=_items, explain=_explain)}],
-                       inference.structured_messages(_items, explain=_explain))
+                       _sent)
+        # 01e: a kind past the first three is explained only beside a question
+        # of that kind, so the prompt of every call site that asks predicates,
+        # choices and scores is the one it had before those kinds existed.
+        for _bullet, _line in _DECIDE_NEW_KINDS.values():
+            REPORT.require(f"decide ({_label}) holds no new kind's bullet",
+                           _bullet not in _sent[0]["content"],
+                           f"{_bullet!r} rendered for a batch that asks no such question")
+            REPORT.require(f"decide ({_label}) holds no new kind's question line",
+                           _line not in _sent[1]["content"],
+                           f"{_line!r} rendered for a batch that asks no such question")
+
+# The new kinds (01e), each in a batch beside the old ones: its bullet in the
+# system message, its question line in the user message, and every other
+# kind's bullet absent.
+for _kind, _question in _DECIDE_NEW_ITEMS.items():
+    _items = [dec.Item(_DECIDE_ITEMS[0].context, (*_DECIDE_ITEMS[0].questions, _question)),
+              _DECIDE_ITEMS[1]]
+    for _explain in ("", "Say in one sentence what settled it."):
+        _label = f"{_kind}, explain={bool(_explain)}"
+        _sent = inference.structured_messages(_items, explain=_explain)
+        check_messages(f"decide ({_label})",
+                       [{"role": "system",
+                         "content": render("decide/system.j2",
+                                           schema=dec.schema(_items, explain=bool(_explain)),
+                                           explain=bool(_explain), kinds=dec.kinds(_items))},
+                        {"role": "user",
+                         "content": render("decide/user.j2", items=_items, explain=_explain)}],
+                       _sent)
+        for _other, (_bullet, _line) in _DECIDE_NEW_KINDS.items():
+            REPORT.require(f"decide ({_label}) bullet for {_other}",
+                           (_bullet in _sent[0]["content"]) == (_other == _kind),
+                           f"{_bullet!r} is {'missing' if _other == _kind else 'present'}")
+            REPORT.require(f"decide ({_label}) question line for {_other}",
+                           (_line in _sent[1]["content"]) == (_other == _kind),
+                           f"{_line!r} is {'missing' if _other == _kind else 'present'}")
 
 # ------------------------------------------------------------- store fixture
 

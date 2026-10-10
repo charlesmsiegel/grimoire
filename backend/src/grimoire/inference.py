@@ -127,7 +127,7 @@ def structured_messages(items: Sequence[decisions.Item], *,
         {"role": "system",
          "content": prompts.render("decide/system.j2",
                                    schema=decisions.schema(items, explain=wanted),
-                                   explain=wanted)},
+                                   explain=wanted, kinds=decisions.kinds(items))},
         {"role": "user",
          "content": prompts.render("decide/user.j2", items=items, explain=explain)}]
 

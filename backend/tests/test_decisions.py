@@ -20,6 +20,8 @@ from grimoire.decisions import (
     ItemResult,
     Option,
     Predicate,
+    Rank,
+    Ranking,
     Score,
 )
 from tests.test_llm import _sibling_imports
@@ -1093,3 +1095,180 @@ def test_render_round_trips_answered_values():
     assert json.loads(nullable) == {"0": {"answers": {"over": True, "who": None, "tone": 1}}}
     (back,) = decisions.parse(nullable, items[:1], explain=False)
     assert back.answers["who"] == Answer(None, "abstained")
+
+
+# --- 01e: Rank ----------------------------------------------------------------
+
+
+PIER = Option("scenes:pier", "The debt at the pier", aliases=("the pier",))
+LEDGER = Option("scenes:ledger", "The ledger changes hands")
+TIDE = Option("scenes:tide", "The tide comes in")
+
+
+def _rank(**kw) -> Rank:
+    return Rank("order", "Which scene matters most?", (PIER, LEDGER, TIDE), **kw)
+
+
+def _rank_item(**kw) -> Item:
+    return Item("ctx", (_rank(**kw),))
+
+
+def _read_rank(value, **kw) -> Answer:
+    item = _rank_item(**kw)
+    (result,) = decisions.parse(json.dumps({"0": {"answers": {"order": value}}}), [item],
+                                explain=False)
+    return result.answers["order"]
+
+
+def test_question_kinds_are_class_constants():
+    assert [q.KIND for q in (PRED, WHO, TONE, _rank())] == [
+        "predicate", "choice", "score", "rank"]
+    # Neither a constructor field nor an equality field.
+    assert "KIND" not in {f.name for f in dataclasses.fields(Rank)}
+    assert _rank() == _rank()
+    assert decisions.kinds([_item(), _rank_item()]) == {"predicate", "choice", "score", "rank"}
+
+
+def test_validate_rank_bounds():
+    decisions.validate([_rank_item()])
+    decisions.validate([Item("c", (Rank("r", "i", _options(decisions.MAX_RANK_CANDIDATES)),))])
+    for n in (0, 1, decisions.MAX_RANK_CANDIDATES + 1):
+        with pytest.raises(DecideRequestError, match="candidates"):
+            decisions.validate([Item("c", (Rank("r", "i", _options(n)),))])
+    for top in (1, 3):
+        decisions.validate([_rank_item(top=top)])
+    for top in (0, 4, -1, True, 1.5):
+        with pytest.raises(DecideRequestError, match="top"):
+            decisions.validate([_rank_item(top=top)])
+
+
+def test_validate_rank_candidates_follow_the_choice_rules():
+    with pytest.raises(DecideRequestError, match="collides"):
+        decisions.validate([Item("c", (Rank("r", "i", (PIER, Option("Scenes:Pier", ""))),))])
+    with pytest.raises(DecideRequestError, match="collides"):
+        decisions.validate([Item("c", (Rank("r", "i", (PIER, Option("the_pier", ""))),))])
+    with pytest.raises(DecideRequestError, match="reserved"):
+        decisions.validate([Item("c", (Rank("r", "i", (PIER, Option(NONE_KEY, ""))),))])
+    with pytest.raises(DecideRequestError, match="not an Option"):
+        decisions.validate([Item("c", (Rank("r", "i", (PIER, "scenes:tide")),))])
+
+
+def test_rank_schema_is_an_array_of_an_enum():
+    ids = ["scenes:pier", "scenes:ledger", "scenes:tide"]
+    listed = {"type": "array", "items": {"type": "string", "enum": ids}}
+    answers = decisions.schema([_rank_item()], explain=False)["properties"]["0"][
+        "properties"]["answers"]["properties"]
+    assert answers["order"] == listed
+    nullable = decisions.schema([_rank_item(allow_none=True)], explain=False)["properties"][
+        "0"]["properties"]["answers"]["properties"]["order"]
+    assert nullable == {"anyOf": [listed, {"type": "null"}]}
+    text = json.dumps(decisions.schema([_rank_item(top=1, allow_none=True)], explain=True))
+    for keyword in ("minItems", "maxItems", "uniqueItems"):
+        assert keyword not in text
+
+
+def test_rank_counts_its_enum_values_and_strings():
+    assert decisions.enum_values(_rank_item()) == 3
+    assert decisions.enum_values(Item("c", (PRED, _rank(), TONE))) == 6
+    base = decisions.schema_chars([Item("c", (PRED,))])
+    with_rank = decisions.schema_chars([Item("c", (PRED, _rank()))])
+    assert with_rank - base == len("order") + sum(len(o.id) for o in (PIER, LEDGER, TIDE))
+
+
+def test_parse_rank_exact_aliased_and_normalised():
+    answer = _read_rank(["scenes:ledger", "The Pier", "SCENES:TIDE"])
+    assert answer == Answer(Ranking(tiers=(("scenes:ledger",), ("scenes:pier",),
+                                           ("scenes:tide",))))
+    assert answer.distribution is None and answer.marginals is None and answer.expected is None
+
+
+def test_parse_rank_unknown_entry_is_not_an_option_and_not_dropped():
+    answer = _read_rank(["scenes:ledger", "scenes:harbour", "scenes:pier", "scenes:tide"])
+    assert _unreadable(answer, decisions.NOT_AN_OPTION)
+    assert answer.stated == ""
+    assert decisions.was_read(answer)
+    assert _unreadable(_read_rank(["scenes:ledger", 3, "scenes:pier", "scenes:tide"]),
+                       decisions.NOT_AN_OPTION)
+
+
+def test_parse_rank_duplicate_is_unreadable_and_read():
+    answer = _read_rank(["scenes:ledger", "the pier", "scenes:pier", "scenes:tide"])
+    assert _unreadable(answer)
+    assert decisions.was_read(answer)
+
+
+def test_parse_rank_too_short_is_unreadable():
+    assert _unreadable(_read_rank(["scenes:ledger", "scenes:pier"]))
+    assert _unreadable(_read_rank([]))
+    assert _unreadable(_read_rank(["scenes:ledger"], top=2))
+
+
+def test_parse_rank_top_leaves_the_rest_unranked_in_input_order():
+    assert _read_rank(["scenes:tide"], top=1) == Answer(
+        Ranking(tiers=(("scenes:tide",),), rest=("scenes:pier", "scenes:ledger")))
+    # Ranking past `top` is allowed; the rest shrinks.
+    assert _read_rank(["scenes:tide", "scenes:pier"], top=1) == Answer(
+        Ranking(tiers=(("scenes:tide",), ("scenes:pier",)), rest=("scenes:ledger",)))
+
+
+def test_parse_rank_null_and_wrong_types():
+    assert _read_rank(None, allow_none=True) == Answer(None, "abstained")
+    assert _unreadable(_read_rank(None))
+    for value in ("scenes:pier", {"0": "scenes:pier"}, True, 2):
+        assert _unreadable(_read_rank(value))
+
+
+def test_ranking_flat_never_breaks_a_tie_silently():
+    strict = Ranking(tiers=(("a",), ("b",)), rest=("c", "d"))
+    assert strict.flat() == ("a", "b")
+    with pytest.raises(ValueError, match="tie-break"):
+        strict.flat(rest=True)
+    assert strict.flat(lambda c: c, rest=True) == ("a", "b", "c", "d")
+    tied = Ranking(tiers=(("a",), ("c", "b")))
+    with pytest.raises(ValueError, match="tie-break"):
+        tied.flat()
+    assert tied.flat(lambda c: c) == ("a", "b", "c")
+    assert tied.flat({"c": 0, "b": 1}.__getitem__) == ("a", "c", "b")
+
+
+def test_ranking_position_and_validation():
+    ranking = Ranking(tiers=(("a",), ("c", "b")), rest=("d",))
+    assert [ranking.position(c) for c in "abcde"] == [0, 1, 1, None, None]
+    with pytest.raises(ValueError):
+        Ranking(tiers=(("a",), ("a",)))
+    with pytest.raises(ValueError):
+        Ranking(tiers=(("a",),), rest=("a",))
+    with pytest.raises(ValueError):
+        Ranking(tiers=((),))
+
+
+def test_outcome_and_render_spell_a_ranking():
+    items = [_rank_item(top=1)]
+    strict = Ranking(tiers=(("scenes:tide",), ("scenes:pier",)), rest=("scenes:ledger",))
+    results = (ItemResult({"order": Answer(strict)}, backend="structured"),)
+    assert decisions.outcome("structured", "p", "m", results)["items"][0]["answers"] == {
+        "order": {"answer": {"tiers": [["scenes:tide"], ["scenes:pier"]],
+                             "rest": ["scenes:ledger"]}}}
+    text = decisions.render(results, items, explain=False)
+    assert json.loads(text) == {"0": {"answers": {"order": ["scenes:tide", "scenes:pier"]}}}
+    (back,) = decisions.parse(text, items, explain=False)
+    assert back.answers["order"] == Answer(strict)
+    tied = (ItemResult({"order": Answer(Ranking(tiers=(("scenes:tide", "scenes:pier"),),
+                                                rest=("scenes:ledger",)),
+                                        marginals={"scenes:tide": 0.7, "scenes:pier": 0.7,
+                                                   "scenes:ledger": 0.1})}, backend="native"),)
+    assert json.loads(decisions.render(tied, items, explain=False)) == {
+        "0": {"answers": {"order": None}}}
+    json.dumps(decisions.outcome("native", "p", "m", tied))
+
+
+def test_chunks_count_a_ranks_candidates():
+    big = Item("c", (Rank("r", "i", _options(decisions.MAX_RANK_CANDIDATES)),))
+    assert [len(c) for _, c in decisions.chunks([big] * 9)] == [8, 1]
+    assert [len(c) for _, c in decisions.chunks([big] * 4, budget=100)] == [3, 1]
+
+
+def test_native_gap_refuses_every_rank_until_its_lowering_lands():
+    gap = decisions.native_gap(Item("c", (PRED, _rank(pointwise="Does it bear on this?"))))
+    assert "order" in gap and "ranks" in gap
+    assert decisions.native_gap(Item("c", (PRED, TONE))) == ""

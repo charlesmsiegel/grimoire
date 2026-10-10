@@ -1643,6 +1643,136 @@ def grade_decide_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
                                               native=ctx.get("native_results"))]
 
 
+# ------------------------------------------- cases 15-17: the decide vocabulary
+#
+# The kinds 01e adds to `decide` -- a ranking, a selection, a joint choice --
+# on synthetic material, one question per case. No call site asks them yet, so
+# there is no production builder to call: each case's prompt is
+# `inference.structured_messages` over its own item, which is exactly what any
+# future call site's structured stage will send. They meter under
+# `scene-break`, a decide route on the Decision role, because a live run must
+# resolve some decide task and these have none of their own; what a live run
+# measures is the Decision model answering the kind, under either
+# `--decide-backend`.
+
+
+def _question_block(q: decisions.Question) -> str:
+    """`q`'s lines as `decide/user.j2` renders them: its question line and
+    every option under it, rendered from the template so a reword moves both
+    sides together."""
+    text = prompts.render("decide/user.j2", items=[decisions.Item("", (q,))], explain="")
+    return text.split("Questions:\n", 1)[1]
+
+
+def _kind_bullet(kind: str, items) -> str:
+    """The `decide/system.j2` bullet `kind` adds: the line its render holds
+    and the render without that kind does not."""
+    schema = decisions.schema(items, explain=False)
+    present = prompts.render("decide/system.j2", schema=schema, explain=False,
+                             kinds=frozenset({kind})).splitlines()
+    absent = set(prompts.render("decide/system.j2", schema=schema, explain=False,
+                                kinds=frozenset()).splitlines())
+    return "\n".join(line for line in present if line not in absent)
+
+
+def _vocabulary_prompt(ctx: dict) -> list[dict]:
+    return inference.structured_messages(ctx["items"], explain="")
+
+
+def _vocabulary_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=False)
+
+
+def grade_decide_vocabulary(ctx: dict, output: str) -> list[Check]:
+    """A vocabulary case: its prompt carries the question's lines, its kind's
+    bullet and the schema; its reply decodes, names only offered ids, is an
+    answer at all (`decide.answered`: not None for any reason), and is the
+    right one (`decide.answer`, the case's own `judge`). An item a native
+    endpoint answered is graded on what it answered (`native_results`), since
+    `decisions.render` writes a tie or a refusal as the null a structured
+    reply would send."""
+    messages = ctx["messages"]
+    (item,) = ctx["items"]
+    (q,) = item.questions
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_vocabulary_schema(ctx))
+    bullet = _kind_bullet(q.KIND, ctx["items"])
+    checks = [
+        Check("prompt.question", _question_block(q) in messages[1]["content"],
+              f"{q.id}'s question and options are not in the user message"),
+        Check("prompt.bullet", bool(bullet) and bullet in messages[0]["content"],
+              f"decide/system.j2 explains no {q.KIND} to a batch that asks one"),
+        Check("prompt.schema", schema in messages[0]["content"],
+              "the reply's JSON Schema is not in the system message"),
+        Check("prompt.context", item.context in messages[1]["content"],
+              "the item's context is not in the user message")]
+    native = ctx.get("native_results", {})
+    if 0 in native:
+        answer = native[0].answers[q.id]
+        checks.append(Check("decide.json", True, "n/a: answered natively"))
+    else:
+        if decisions.find_object(output) is None:
+            return [*checks, Check("decide.json", False,
+                                   "no JSON object recoverable from the reply")]
+        (result,) = decisions.parse(output, ctx["items"], explain=False)
+        answer = result.answers[q.id]
+        checks.append(Check("decide.json", True))
+    ok, why = ctx["judge"](answer) if answer.answer is not None else (False, "no answer")
+    return [*checks,
+            Check("decide.known_ids", answer.detail != decisions.NOT_AN_OPTION,
+                  f"{q.id} named an id it was not offered"),
+            Check("decide.answered", answer.answer is not None,
+                  f"{q.id} answered nothing ({answer.reason}"
+                  f"{', ' + answer.detail if answer.detail else ''})"),
+            Check("decide.answer", ok, f"{q.id}: {why}")]
+
+
+#: The rank case's scenes: two hold what a turn about Mara's settled debt must
+#: stay consistent with, three do not.
+RANK_RELEVANT = ("scenes:the-debt-at-the-pier", "scenes:the-ledger-changes-hands")
+RANK_SCENES = (
+    decisions.Option("scenes:the-storm-closes-the-harbour",
+                     "A storm closes the Saltmarch harbour for three days."),
+    decisions.Option("scenes:the-debt-at-the-pier",
+                     "Seraphine pays Mara's debt in full at the pier; they are square."),
+    decisions.Option("scenes:the-market-stalls",
+                     "Winifred counts the market stalls for the harbourmaster."),
+    decisions.Option("scenes:the-ledger-changes-hands",
+                     "Mara slides her debt ledger across the crate to Seraphine."),
+    decisions.Option("scenes:the-lamplighters-round",
+                     "The lamplighter makes his round of the sea wall."),
+)
+
+
+def build_decide_rank() -> dict:
+    """A rerank of five Saltmarch scenes for a turn about Mara's debt: the
+    two scenes the turn must stay consistent with should come first."""
+    rank = decisions.Rank(
+        "relevance",
+        "Order the scenes by how much the current turn needs to stay consistent "
+        "with what happened in them, most first.",
+        RANK_SCENES, top=2,
+        pointwise="Does this scene hold something the current turn needs to stay "
+                  "consistent with?")
+    item = decisions.Item(
+        "Current turn: Winifred asks Mara, in front of the harbourmaster, whether "
+        "she still owes Seraphine anything.", (rank,))
+
+    def judge(answer: decisions.Answer) -> tuple[bool, str]:
+        ranking = answer.answer
+        if not isinstance(ranking, decisions.Ranking):
+            return False, f"answered {ranking!r}, not a ranking"
+        # Each relevant scene ranked, and strictly ahead of every other ranked
+        # scene; an unranked one (`rest`) is behind them all.
+        relevant = [ranking.position(c) for c in RANK_RELEVANT]
+        others = [ranking.position(o.id) for o in RANK_SCENES if o.id not in RANK_RELEVANT]
+        ok = None not in relevant and all(
+            p is None or p > max(p for p in relevant if p is not None) for p in others)
+        return ok, f"ranked {ranking.tiers} (rest {ranking.rest}); expected {RANK_RELEVANT} first"
+
+    return {"items": (item,), "judge": judge}
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1903,6 +2033,30 @@ CASES: tuple[Case, ...] = (
              # is not covered, and its verdict is left out rather than failed.
              Recording("native-refused", ("identity.covers_rows",), "json",
                        native="openai"))),
+    Case(id="decide-rank",
+         task="scene-break",
+         hypothesis="asked through decide() to rank five scenes for a turn about Mara's "
+                    "settled debt, the reply is a list of offered scene ids, each once, "
+                    "that puts the two scenes about the debt ahead of the other three",
+         build=build_decide_rank,
+         prompt=_vocabulary_prompt,
+         grade=grade_decide_vocabulary,
+         schema=_vocabulary_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # A scene listed twice: read, and refused as a ranking, never
+             # repaired by dropping the repeat.
+             Recording("duplicate", ("decide.answered", "decide.answer"), "json"),
+             # A scene nobody offered: not dropped (which would move every
+             # later scene up a place), so the whole ranking is unread.
+             Recording("unknown-id", ("decide.known_ids", "decide.answered",
+                                      "decide.answer"), "json"),
+             # One scene where `top` asked for two.
+             Recording("short", ("decide.answered", "decide.answer"), "json"),
+             # A null, which this rank does not allow.
+             Recording("null", ("decide.answered", "decide.answer"), "json"),
+             # Well formed, and the storm and the market first.
+             Recording("wrong", ("decide.answer",), "json"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "

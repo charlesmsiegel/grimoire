@@ -558,7 +558,9 @@ DECIDE_CASES = [c for c in case_mod.CASES if c.schema is not None]
 def test_every_decide_case_is_counted():
     assert {c.id for c in DECIDE_CASES} == {
         "decide-scene-break", "decide-voice-drift", "decide-speaker",
-        "decide-continuity-identity", "decide-continuity-reconcile"}
+        "decide-continuity-identity", "decide-continuity-reconcile",
+        # 01e's vocabulary, on synthetic material (no call site asks it yet).
+        "decide-rank"}
 
 
 @pytest.mark.parametrize("case", DECIDE_CASES, ids=[c.id for c in DECIDE_CASES])
