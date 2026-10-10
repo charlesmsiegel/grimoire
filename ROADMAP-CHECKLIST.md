@@ -15,7 +15,8 @@ update this file in the same PR.
 ## Lifecycle of a spec
 
 1. `drafted`
-2. `spec gate`: `/codex:adversarial-review`, or a recorded substitute
+2. `spec gate`: `/codex:adversarial-review`, or a recorded substitute. `[~]`
+   means a substitute review is folded in and the Codex gate is still owed.
 3. `plan`
 4. `plan gate`
 5. `implemented`
@@ -33,23 +34,23 @@ below.
 |----|------|----------------|:-:|:-:|:-:|:-:|
 | 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | [x] | [x] |
 | 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | [x] | [ ] |
-| 01a | Eval cost, latency and token reporting | now | [x] | [ ] | [ ] | [ ] |
-| 01b | Decision capture at every decide site | now | [x] | [ ] | [ ] | [ ] |
-| 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [ ] | [ ] | [ ] |
-| 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [ ] | [ ] | [ ] |
-| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [ ] | [ ] | [ ] |
-| 01f | Structured generation | now | [x] | [ ] | [ ] | [ ] |
-| 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [ ] | [ ] | [ ] |
-| 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [ ] | [ ] | [ ] |
-| 01i | Context window as a resolved model fact | now | [x] | [ ] | [ ] | [ ] |
-| 02 | Decision integration (what 01's slices F–H did not land) | 01a, 01b, plus 01c/01d per feature | [x] | [ ] | [ ] | [ ] |
-| 03 | Content-addressed compiled cache | now | [x] | [~] substitute + PR Codex review | [ ] | [ ] |
-| 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [ ] | [ ] | [ ] |
-| 05 | Direct-edit cache sync | 03, 04 | [x] | [ ] | [ ] | [ ] |
-| 06 | Store-editing skill | 05-C2 | [x] | [ ] | [ ] | [ ] |
-| 07 | Explicit group membership | now | [x] | [ ] | [ ] | [ ] |
-| 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [ ] | [ ] | [ ] |
-| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [ ] | [ ] | [ ] |
+| 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | [ ] | [ ] |
+| 01b | Decision capture at every decide site | now | [x] | [~] substitute | [ ] | [ ] |
+| 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | [ ] | [ ] |
+| 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | [ ] | [ ] |
+| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | [ ] | [ ] |
+| 01f | Structured generation | now | [x] | [~] substitute | [ ] | [ ] |
+| 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [~] substitute | [ ] | [ ] |
+| 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [~] substitute | [ ] | [ ] |
+| 01i | Context window as a resolved model fact | now | [x] | [~] substitute | [ ] | [ ] |
+| 02 | Decision integration (what 01's slices F–H did not land) | 01a, 01b, plus 01c/01d per feature | [x] | [~] substitute | [ ] | [ ] |
+| 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | [ ] | [ ] |
+| 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | [ ] | [ ] |
+| 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | [ ] | [ ] |
+| 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | [ ] | [ ] |
+| 07 | Explicit group membership | now | [x] | [~] substitute | [ ] | [ ] |
+| 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [~] substitute | [ ] | [ ] |
+| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | [ ] | [ ] |
 | 10 | Retrieval query planning | 09, 01f | [x] | [ ] | [ ] | [ ] |
 | 11 | Epistemic history retrieval | 09 (the Decision stage waits for 02-C5a) | [x] | [ ] | [ ] | [ ] |
 | 12 | Bounded agentic investigation | 01g, 01i, 08, 09 (RP mode also waits for 10, 11) | [x] | [ ] | [ ] | [ ] |

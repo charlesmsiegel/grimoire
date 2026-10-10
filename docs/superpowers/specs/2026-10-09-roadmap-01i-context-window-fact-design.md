@@ -29,12 +29,13 @@ section 3.1).
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
 | 01i-C1 `wire.Limits` on every target and resolved attempt | 01g (S) | Sizing a loop turn's context against the window where it is known, through 01i-C2 with the run's per-turn output cap (01g-C4) passed as `max_tokens` |
+| 01i-C1 (`max_output`) | 01f (S) | `generate(max_tokens=)` never asks for more than the model's known max output (01f section 3.9) |
 | 01i-C1 + 01i-C2 | 09 (S) | The history section's budget (09-C3): a share of `prompt_ceiling(resolved).tokens`. Without it, 09 uses its own cap |
 | 01i-C1 + 01i-C2 | 12 (H) | Bounding each investigation turn's accumulated context (12-C2): `prompt_ceiling(resolved, max_tokens=<per-turn cap>)`, never `window - max_output` |
 | 01i-C3 user-stated limits, the Models readout, `model_window` | 09, 12 (indirectly) | A local server whose catalog says nothing still gets a ceiling |
 
 **01i-C2 is the stated way a consumer derives a ceiling** (section 5). The
-checklist's edges for 09 and 12 should cite `01i-C1/C2`, not C1 alone.
+checklist's edges for 09 and 12 cite `01i-C1/C2`.
 
 ## 1. Current state (reconciled against main)
 

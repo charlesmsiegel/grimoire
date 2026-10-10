@@ -544,12 +544,33 @@ three stable fields 12 reads (review S4; the coordinator's second addendum):
 @dataclass(frozen=True)
 class PlanTrace:
     terminal: str                    # the table below
-    sufficiency: str                 # last verdict: sufficient | insufficient | unknown | not_asked
+    trigger: str                     # thin | empty | forced | "" (planning did not start)
+    sufficiency: str                 # last 10-C3 verdict: sufficient | insufficient | unknown | not_asked
+    sufficiency_source: str          # answer | escalated | unknown | not_asked
     cheap_retrieval_failed: bool     # the repair hop ran AND a 10-C3 check after it said insufficient
-    tried: tuple[TriedPlan, ...]     # every plan that ran: subjects (refs), questions, terms, scopes,
-                                     # and the scene keys its round selected
+    e0: RoundRecord                  # what 09's first retrieval selected
+    rounds: tuple[RoundRecord, ...]  # one per planned round, in order
     steps: tuple[Step, ...]          # task, outcome, ms, rows filed
+
+@dataclass(frozen=True)
+class RoundRecord:
+    questions: tuple[str, ...]       # () for E0
+    terms: tuple[str, ...]           # () for E0
+    subjects: tuple[str, ...]        # refs; () for E0
+    scene_keys: tuple[str, ...]      # SceneRef.key of each selected item (09 section 7.2)
+    evidence_ids: tuple[str, ...]    # one per rendered unit: "<scene key>" for a header/summary-only
+                                     # item, "<scene key>@<first post key, else index>" per excerpt
 ```
+
+**Stable fields** (12's fold-in). `terminal`, `trigger`, `sufficiency`,
+`sufficiency_source`, `cheap_retrieval_failed`, `e0` and `rounds` are the
+fields 12's RP trigger reads, and they are part of 10-C2: renaming or
+re-meaning one is a contract change, never a refactor. `sufficiency_source`
+says whether the last verdict was the check's own answer, an answer only
+after 01d-C2's escalation hop, or `unknown` (a non-answer that stayed one).
+An evidence id is the same string 02-C5b's rerank kit takes as
+`Candidate.ref` for a scene, extended per excerpt, so 12 can name exactly
+which evidence each round added. `steps` is diagnostic and not stable.
 
 `cheap_retrieval_failed` is the one field that means "planning and its one
 repair could not find enough". It is true only when the repair hop ran
@@ -720,10 +741,13 @@ user's library.
   in section 3; at most once per player post; the returned evidence has at
   most `history_recall_depth` items and the same ceiling as `E0`; the worst
   case returns `E0` unchanged.
-- **The trace 12 reads** (8.1): `PlanTrace.terminal`, `sufficiency`,
-  `cheap_retrieval_failed` (the repair hop ran and the post-repair 10-C3
-  check said insufficient) and `tried` (every plan that ran and the scenes its
-  round selected), stable fields.
+- **The trace 12 reads** (8.1), as stable fields: the terminal state; the
+  trigger that started planning; the last 10-C3 verdict and whether it was an
+  answer, an escalated answer or unknown (`sufficiency`,
+  `sufficiency_source`); `cheap_retrieval_failed` (the repair hop ran and the
+  post-repair 10-C3 check said insufficient); per round, the questions,
+  terms and subjects tried; and the scene keys and evidence ids of `E0` and
+  of each round (`e0`, `rounds`).
 - **Escalation**: only the sufficiency check escalates, through 01d-C2, one
   hop, and only for a non-answer or a reported low margin.
 - **Failure**: never raises into the turn; the trace says where it stopped.
@@ -840,6 +864,12 @@ user's library.
 - `final_check`: after a repair, an `insufficient` check sets
   `cheap_retrieval_failed`; without `final_check`, `sufficiency` is
   `not_asked` and the flag is false.
+- The trace's stable fields: `trigger` for each of `thin`, `empty`, `forced`
+  and not started; `sufficiency_source` is `answer`, `escalated` (an
+  abstention answered on 01d's hop) and `unknown`; `e0` and each `rounds`
+  entry carry the questions and terms tried and the selected scene keys and
+  evidence ids, matching the merged evidence; a snapshot test pins the field
+  names and their JSON projection.
 - Resolution runs in a worker (a spy on the loop thread sees no config read).
 - Unresolvable planner route: skipped with reason; the turn proceeds.
 - Planner timeout: `unusable`, the connection is noted as failing through
@@ -923,7 +953,8 @@ Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 | S1 phase deadline not a bound | Fixed: one turn-phase deadline shared with 09, every step `min(own, remaining)`, worst case stated (3, 8) |
 | S2 call cap counts steps | Fixed: `MAX_PLAN_STEPS` with the escalation hop inside a step; worst-case rows stated (3) |
 | S3 `PLAN_MAX_TOKENS` too small | Fixed: 1024 with a reasoning allowance, non-reasoning preset advised, maximal-plan eval case (5.3, 11) |
-| S4 terminal states insufficient for 12 | Fixed: `sufficiency`, `cheap_retrieval_failed`, `tried`, `unrepaired`, `final_check`, combinations named (8.1) |
+| S4 terminal states insufficient for 12 | Fixed: `sufficiency`, `cheap_retrieval_failed`, `unrepaired`, `final_check`, combinations named (8.1) |
+| 12's fold-in: trace fields for the RP trigger | Fixed: `PlanTrace` gains `trigger`, `sufficiency_source`, `e0` and per-round `RoundRecord`s (questions, terms, scene keys, evidence ids) as stable 10-C2 fields, with a snapshot test (8.1, 10-C2, 14) |
 | S5 resolving on the loop | Fixed: `run_in_threadpool` around `_soft_resolved` (5.3, 7.1) |
 | S6 missing `_noting` and parse placement | Fixed: `draft_completion` pattern (5.3) |
 | S7 two `history_check` definitions; policy row | Fixed: 02-C5b's entry is the definition, 10 appends its task; 01d-C1 row given (4.1) |
