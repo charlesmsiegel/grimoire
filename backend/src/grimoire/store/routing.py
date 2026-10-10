@@ -27,7 +27,9 @@ It also holds each task's POLICY (`TaskPolicy`, `TASK_POLICY`, `policy`; spec
 01d §4): what the code, not the user, says about a task -- whether it may fall
 back, and whether, how and to which role an unsure answer escalates. Every
 value is a literal, and `backend/tests/test_task_policy.py` holds the table to
-its rules. 01c shares the structure (`samples`, `native_first`).
+its rules. 01c shares the structure: whether a task's caller samples a
+decision's distribution (`samples`), and which adapter kinds' decisions
+endpoints it asks first (`native_first`; spec 01c §4).
 """
 
 from __future__ import annotations
@@ -90,9 +92,10 @@ DEFAULT_MARGIN = 0.2
 
 
 class TaskPolicy(NamedTuple):
-    """What the code says about one task (spec 01d §4.1). The defaults are
-    today's behaviour: the role's fallback, and no escalation. 01c appends
-    `samples` and `native_first` after these fields."""
+    """What the code says about one task (spec 01d §4.1, and 01c §4.1 for
+    the last two fields). The defaults are today's behaviour: the role's
+    fallback, no escalation, no sampling, and no decisions endpoint asked
+    first."""
 
     #: "role": the role's fallback, as today. "none": the resolver attaches
     #: none, and says so in `fallback_problem` (`resolve.NO_FALLBACK_POLICY`).
@@ -120,12 +123,22 @@ class TaskPolicy(NamedTuple):
     #: deciding question as answers. Only then may a hop's decline replace a
     #: base answer.
     reads_declines: bool = False
+    #: The task's caller draws from the decision's distribution (01c-C2,
+    #: `draws.draw`); only such a task's caller may (spec 01c §7).
+    samples: bool = False
+    #: The adapter kinds whose decisions endpoint is asked first for this task
+    #: (01c-C1, spec 01c §4.2): ("openai_compatible",), ("openrouter",), both,
+    #: or () for none. Per kind, because the evidence is per kind (§4.3).
+    native_first: tuple[str, ...] = ()
 
 
 #: task -> its policy. Empty at landing: every task falls back as its role
 #: says and escalates nothing. A task's escalation is switched on only by the
 #: change that carries its evidence (`evals/README.md`, "Decision
-#: escalation"); `fallback="none"` must agree across a route's tasks.
+#: escalation"); `fallback="none"` must agree across a route's tasks. A kind
+#: is added to a task's `native_first` only with its spec 01c §4.3 evidence
+#: in `evals/README.md`, "Decision distributions", and the entry's comment
+#: names that section, the kind and the run's date.
 TASK_POLICY: dict[str, TaskPolicy] = {}
 
 _DEFAULT = TaskPolicy()

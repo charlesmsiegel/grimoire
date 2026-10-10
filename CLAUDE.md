@@ -920,18 +920,30 @@ would answer neither question.
   decisions-only model the catalog cannot place (an OpenAI-preset one, whose
   preset says every model generates) with the model-facts override
   `generate: no`, which outranks the preset. A model that can
-  generate stays on structured generation whatever its `decide_native` says:
-  trying native first for one is a later decision, to be made on the
-  same-model comparison `evals/run.py --live --decide-backend` exists to
-  give (it grades a native item's rationale n/a, and refuses `native` before
-  sending for a primary with no native endpoint, a preset that never decides
-  natively, or a known `no`), and the chain does not do it today. A model that can do neither is
+  generate stays on structured generation whatever its `decide_native` says,
+  unless its task's `routing.TaskPolicy.native_first` lists its adapter kind
+  and it is `resolve.native_capable` -- `decide_native` a known `yes`, never
+  `unknown` (a kind with no decisions endpoint never reads `yes`: its preset
+  rules it out, and a test holds every preset to that). Then the chain asks
+  its decisions endpoint first (`resolve.native_first`), in an *isolated*
+  stage on the same model with no retries, and the structured stage after it,
+  unchanged, takes the items that stage failed. An isolated stage never marks
+  its connection dead -- a key a decisions endpoint refuses may serve every
+  chat call -- and its failure is not composed into the error of an item a
+  later stage took; any stage is skipped as dead only when every route it
+  sends is. A kind is listed only on the same-model comparison `evals/run.py
+  --live --decide-backend` exists to give (it grades a native item's
+  rationale n/a, and refuses `native` before sending for a primary with no
+  native endpoint, a preset that never decides natively, or a known `no`),
+  recorded in `evals/README.md`; no task lists one today.
+  `inference.reports_distribution` says whether a resolution's first stage is
+  native. A model that can do neither is
   refused with 409 `incapable`, and for the speaker pick `post_chat` raises
   it before it writes anything (`refuse_an_unanswerable_pick`). **What moves
   an item on to the next stage is a failed call, never an answer**: an
   `LLMError` (a 2xx body that is not the documented envelope, or an envelope
   that answers none of the item's questions, is `bad_response`), or an item
-  refused unsent. A native `refused`, an abstention and a `None` from a
+  refused unsent -- on a native-first stage too. A native `refused`, an abstention and a `None` from a
   well-formed body are answers; re-asking them elsewhere would be asking until
   something agreed. A `llm.PresetRefusalError` ends the chain where it is met,
   as it ends the facade's: the preset is the user's to fix, and a native stage
@@ -940,7 +952,10 @@ would answer neither question.
   never composed with a later stage's, so a phase still reports it skipped.
   A fallback on the primary's own connection AND model is dropped with
   `SAME_PROVIDER` even behind a native primary: that is a second send of
-  the call that failed, whatever stage it sits in (#144).
+  the call that failed, whatever stage it sits in (#144). The same-model
+  structured stage behind a native-first stage is not one: it is the chat
+  endpoint, a different endpoint from the decisions one that failed, so it is
+  no resend.
   `decide_native` is metered per item (`store.usage.meter`, opened in
   `inference._native` with `decision_mode` stamped on a new copy of the
   stage target's account), at most `NATIVE_CONCURRENCY` in flight inside one
@@ -956,7 +971,15 @@ would answer neither question.
   failed call, and with no stage after it the reason reaches the caller and
   the error store. A native 4xx in `llm.NATIVE_REJECTED_STATUSES` does not mark
   the connection failing: the connection answered, and it was that model, key
-  or request the decisions endpoint refused. A native stage starts **no
+  or request the decisions endpoint refused. It still files an error row
+  (`Meter.done` records every failed call), so under native first a key
+  refused by the decisions endpoint logs errors under its task on every
+  decide call -- roughly one per wave of `NATIVE_CONCURRENCY` items, since
+  an `auth` stops the native stage -- even when the structured stage
+  answers. And a 5xx or a timeout from the decisions endpoint is not in that
+  set, so under native first it counts against the connection's health: a
+  working chat endpoint can show "failing" (spec 01c §4.2.3). Both are costs
+  the change that first lists a kind accepts. A native stage starts **no
   further item** after a connection-wide failure -- auth, `missing_key`, a
   `rate_limit` the facade has already retried as far as it will, a spend
   refusal, or absorb's `BudgetRefused` -- and a structured stage sends no
@@ -964,13 +987,15 @@ would answer neither question.
   finish, and those never sent carry the failure that stopped them. A call
   with a fallback behind it is the exception: a bare error from one stops
   nothing, because the facade never tried the fallback, unless the clock refused
-  it unsent. A stage that stopped that way skips a later stage on the same
-  connection. A native stage also stops after `NATIVE_TIMEOUT_STOP` items in a
+  it unsent. A non-isolated stage that stopped that way skips a later stage
+  every route of which is on that connection. A native stage also stops after `NATIVE_TIMEOUT_STOP` items in a
   row time out -- a hung decisions endpoint -- but that stop is its own: a
   generating stage on the same connection still runs.
-  **Who answered is only named when one did.** `Decision.backend`, `provider`
-  and `model` are empty when answers came from more than one backend or route
-  (the fallback took the items the primary failed): `ItemResult.backend` is the
+  **Who answered is only named when one did.** `Decision.backend` is empty
+  when answers came from more than one backend, and `provider` and `model`
+  when they came from more than one route (the fallback took the items the
+  primary failed) -- so a native-first stage and the structured stage behind
+  it, one model, name it with `backend` empty: `ItemResult.backend` is the
   per-item truth, `ItemResult.served` names the `(kind, provider id, model)`
   that answered each item (stamped by its backend, never compared),
   `Decision.served` lists every `(provider, model)` that
