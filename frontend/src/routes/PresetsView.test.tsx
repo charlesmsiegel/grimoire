@@ -113,7 +113,7 @@ test("Edit reveals the form, prefilled, and Save sends only what is set", async 
 
 test("+ New opens the form directly", async () => {
   open("/presets/balanced");
-  fireEvent.click(await column().findByRole("link", { name: "+ New preset" }));
+  fireEvent.click(await column().findByRole("button", { name: "+ New preset" }));
   expect(await screen.findByLabelText("Name")).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Cold" } });
   fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.2" } });
@@ -142,7 +142,7 @@ test("an import shows what mapped and what did not", async () => {
     .mockResolvedValue({ presets: [...PRESETS, { id: "shared", name: "Shared",
       params: { temperature: 0.7 }, notes: "", source: "sillytavern" }], params: TABLE } as never);
   open("/presets/balanced");
-  fireEvent.click(await column().findByRole("link", { name: "Import…" }));
+  fireEvent.click(await column().findByRole("button", { name: "Import…" }));
   const file = new File([JSON.stringify({ temp: 0.7 })], "Shared.json",
                         { type: "application/json" });
   fireEvent.change(await screen.findByLabelText("Preset file"), { target: { files: [file] } });
@@ -212,7 +212,7 @@ test("a read left over from a cancelled import cannot fill the next one", async 
     fireEvent.change(await screen.findByLabelText("Preset file"),
                      { target: { files: [new File(["x"], "Abandoned.json")] } });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(await column().findByRole("link", { name: "Import…" }));
+    fireEvent.click(await column().findByRole("button", { name: "Import…" }));
     await screen.findByLabelText("Preset file");
     readers[0].finish();   // the abandoned read lands in the NEW session
     await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>("Save as").value).toBe(""));
@@ -243,7 +243,7 @@ test("the form offers reasoning effort", async () => {
     name: "Warm", notes: "For **prose**.",
     params: { temperature: 1.1, stop: ["\nYou:"], reasoning_effort: "medium" } }));
   // Blank sends nothing for it.
-  fireEvent.click(await column().findByRole("link", { name: "+ New preset" }));
+  fireEvent.click(await column().findByRole("button", { name: "+ New preset" }));
   fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Cold" } });
   expect(screen.getByLabelText<HTMLSelectElement>("Reasoning effort").value).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -310,9 +310,9 @@ test("a newer store disables editing", async () => {
   vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ newer: true }));
   open("/presets/balanced");
   expect(await screen.findByText(/upgraded by a newer Grimoire/)).toBeInTheDocument();
-  // The write links are absent, not merely disabled (they are addresses).
-  expect(column().queryByRole("link", { name: "+ New preset" })).toBeNull();
-  expect(column().queryByRole("link", { name: "Import…" })).toBeNull();
+  // The write controls stay in view, disabled, as the old editor drew them.
+  await waitFor(() => expect(column().getByRole("button", { name: "+ New preset" })).toBeDisabled());
+  expect(column().getByRole("button", { name: "Import…" })).toBeDisabled();
   await waitFor(() => expect(main().getByRole("button", { name: "Edit" })).toBeDisabled());
   expect(main().getByRole("button", { name: "Delete" })).toBeDisabled();
   // Reading and previewing are not writes.
@@ -326,8 +326,8 @@ test("a preset opens read-only, with everywhere it is used", async () => {
   expect(await main().findByRole("heading", { name: "Balanced" })).toBeInTheDocument();
   expect(main().queryByRole("spinbutton")).toBeNull();
   const used = within(await main().findByRole("list", { name: "Used by" }));
-  expect(used.getByRole("link", { name: "Primary" })).toHaveAttribute("href", "/models");
-  expect(used.getByRole("link", { name: "Fast fallback" })).toHaveAttribute("href", "/models");
+  expect(used.getByRole("link", { name: "Primary" })).toHaveAttribute("href", "/models/edit");
+  expect(used.getByRole("link", { name: "Fast fallback" })).toHaveAttribute("href", "/models/edit");
   expect(used.getByRole("link", { name: "Rolling summary" }))
     .toHaveAttribute("href", "/models/edit#task-summary");
   expect(used.getByRole("link", { name: "Scene break (pinned model)" }))
@@ -349,9 +349,9 @@ test("Edit opens the form; Save returns to the view", async () => {
 
 test("+ New preset goes straight to the form", async () => {
   open("/presets/balanced");
-  const link = await column().findByRole("link", { name: "+ New preset" });
-  expect(link).toHaveAttribute("href", "/presets/new");
-  fireEvent.click(link);
+  fireEvent.click(await column().findByRole("button", { name: "+ New preset" }));
+  // Still an address: the form is /presets/new, so a reload lands back on it.
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/presets\/new$/);
   expect(await main().findByRole("textbox", { name: "Name" })).toHaveValue("");
 });
 
@@ -369,7 +369,7 @@ test("an empty library offers + New preset", async () => {
   vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [], params: TABLE } as never);
   open("/presets");
   expect(await main().findByText("No presets yet.")).toBeInTheDocument();
-  expect(column().getByRole("link", { name: "+ New preset" })).toBeInTheDocument();
+  expect(column().getByRole("button", { name: "+ New preset" })).toBeEnabled();
 });
 
 test("Delete asks, deletes, and leaves for the list", async () => {
@@ -389,4 +389,43 @@ test("the column is the Inference group, Presets current", async () => {
   open("/presets/balanced");
   const nav = within(await screen.findByRole("complementary", { name: "Presets" }));
   expect(nav.getByRole("link", { name: "Presets" })).toHaveAttribute("aria-current", "page");
+});
+
+test("Used by makes no claim while the settings are still being read", async () => {
+  vi.mocked(api.getInferenceSettings).mockReturnValue(new Promise(() => {}));
+  open("/presets/tight");
+  expect(await main().findByRole("heading", { name: "Tight" })).toBeInTheDocument();
+  expect(main().queryByText("Nothing uses this preset yet.")).toBeNull();
+  expect(main().getByText("Reading…")).toBeInTheDocument();
+});
+
+test("Used by makes no claim when the settings could not be read", async () => {
+  vi.mocked(api.getInferenceSettings).mockRejectedValue(new Error("offline"));
+  open("/presets/tight");
+  expect(await main().findByRole("heading", { name: "Tight" })).toBeInTheDocument();
+  expect(main().queryByText("Nothing uses this preset yet.")).toBeNull();
+  expect(main().queryByText("Reading…")).toBeNull();
+});
+
+test("a read from an import left through the column cannot fail onto a preset", async () => {
+  const readers: { fail: () => void }[] = [];
+  class HeldReader {
+    result = "";
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    readAsText(f: File) { void f.name; readers.push({ fail: () => { this.onerror?.(); } }); }
+  }
+  vi.stubGlobal("FileReader", HeldReader);
+  try {
+    open("/presets/import");
+    fireEvent.change(await screen.findByLabelText("Preset file"),
+                     { target: { files: [new File(["x"], "Abandoned.json")] } });
+    fireEvent.click(column().getByRole("link", { name: "Balanced" }));
+    await main().findByRole("heading", { name: "Balanced" });
+    readers[0].fail();   // the abandoned read fails while Balanced is open
+    await waitFor(() => expect(main().getByRole("heading", { name: "Balanced" })).toBeInTheDocument());
+    expect(screen.queryByText(/Could not read Abandoned.json/)).toBeNull();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

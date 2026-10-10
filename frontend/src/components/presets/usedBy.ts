@@ -11,8 +11,8 @@ export function presetUses(settings: InferenceSettings, id: string): { label: st
   const out: { label: string; to: string }[] = [];
   for (const role of GENERATIVE) {
     const card = settings.roles[role];
-    if (card.stored.preset === id) out.push({ label: ROLE_LABEL[role], to: "/models" });
-    if (card.fallback.preset === id) out.push({ label: `${ROLE_LABEL[role]} fallback`, to: "/models" });
+    if (card.stored.preset === id) out.push({ label: ROLE_LABEL[role], to: "/models/edit" });
+    if (card.fallback.preset === id) out.push({ label: `${ROLE_LABEL[role]} fallback`, to: "/models/edit" });
   }
   for (const r of settings.routes) {
     const to = `/models/edit${taskHash(r.key)}`;

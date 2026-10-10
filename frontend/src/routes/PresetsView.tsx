@@ -21,13 +21,14 @@ const presetPath = (id: string) => `/presets/${encodeURIComponent(id)}`;
  *  owns the screen -- the presets are the column's records, the open one is
  *  main's, read-only until Edit; `+ New preset` and `Import…` are addresses.
  *  Each preset says where it is used. Writes are refused only by a newer
- *  build's store, so only that gates them here. */
+ *  build's store, so only that gates them here: + New preset and Import… stay
+ *  in view, disabled, while it does. */
 export default function PresetsView() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const isNew = useMatch("/presets/new") !== null;
   const isImport = useMatch("/presets/import") !== null;
-  const { settings } = useInferenceSettings();
+  const { settings, error: settingsError } = useInferenceSettings();
   const [presets, setPresets] = useState<SamplerPreset[] | null>(null);
   const [table, setTable] = useState<SamplerParamSpec[]>([]);
   const [mode, setMode] = useState<"view" | "edit">("view");
@@ -110,12 +111,14 @@ export default function PresetsView() {
     <>
       <InferenceNav current="presets" />
       <ColumnSection label="Presets" count={presets?.length}>
-        {!newer && (
-          <div className="column-actions">
-            <Link className="column-primary" to="/presets/new">+ New preset</Link>
-            <Link className="subtle" to="/presets/import">Import…</Link>
-          </div>
-        )}
+        {/* Buttons rather than links so a newer build's store can show them
+            disabled -- present, and plainly not available -- as before. */}
+        <div className="column-actions">
+          <button type="button" className="column-primary" disabled={newer}
+                  onClick={() => navigate("/presets/new")}>+ New preset</button>
+          <button type="button" className="subtle" disabled={newer}
+                  onClick={() => navigate("/presets/import")}>Import…</button>
+        </div>
         {presets?.length === 0 && <p className="column-empty">None yet.</p>}
         {presets?.map((p) => (
           <Link key={p.id} to={presetPath(p.id)}
@@ -148,7 +151,8 @@ export default function PresetsView() {
                        newer={newer} busy={busy}
                        onEdit={() => { setDraft(toDraft(current)); setMode("edit"); }}
                        onDelete={() => void remove()}
-                       usedBy={settings ? presetUses(settings, current.id) : []} />;
+                       usedBy={settings ? presetUses(settings, current.id) : null}
+                       usedByReading={!settings && settingsError == null} />;
   }
 
   return (

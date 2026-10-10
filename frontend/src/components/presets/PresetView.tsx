@@ -13,7 +13,7 @@ import { shown } from "./presetDraft";
  *  one model, and a sidebar with its source, where it is used, Edit and Delete. */
 export function PresetView(
   { preset: current, table, report, settings, previewOn, onPreviewOn, newer, busy,
-    onEdit, onDelete, usedBy }: {
+    onEdit, onDelete, usedBy, usedByReading }: {
     preset: SamplerPreset;
     table: SamplerParamSpec[];
     report: SamplerImportReport | null;
@@ -24,7 +24,10 @@ export function PresetView(
     busy: boolean;
     onEdit: () => void;
     onDelete: () => void;
-    usedBy: { label: string; to: string }[];
+    /** Null while the settings are not in hand: no claim is made either way. */
+    usedBy: { label: string; to: string }[] | null;
+    /** The settings read is still in flight (false once it failed). */
+    usedByReading: boolean;
   },
 ) {
   return (
@@ -76,7 +79,9 @@ export function PresetView(
               </div>
               <div className="side-section">
                 <h4>Used by</h4>
-                {usedBy.length === 0 ? (
+                {usedBy === null ? (
+                  usedByReading && <span className="field-hint">Reading…</span>
+                ) : usedBy.length === 0 ? (
                   <span className="field-hint">Nothing uses this preset yet.</span>
                 ) : (
                   <ul className="chips" aria-label="Used by">
