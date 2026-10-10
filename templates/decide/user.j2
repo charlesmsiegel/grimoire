@@ -4,9 +4,11 @@
                 `questions`. A question's `KIND` says what it is: a Predicate
                 ("predicate": `id`, `instructions`), a Choice ("choice": also
                 `options`, each `id` and `description`, and `allow_none`), a
-                Score ("score": also `levels`, ordered descriptions) or a Rank
+                Score ("score": also `levels`, ordered descriptions), a Rank
                 ("rank": also `candidates`, each `id` and `description`, `top`
-                and `allow_none`). The branches test `KIND`, never which
+                and `allow_none`) or a MultiSelect ("select": also `options`,
+                `min`, `max` and `allow_none`; a bound renders only when it is
+                set, `max` of 0 included). The branches test `KIND`, never which
                 attributes a question has. Option `aliases` are the parser's
                 and are never shown, nor is a rank's `pointwise` (a native
                 stage's alone).
@@ -34,6 +36,11 @@ Questions:
 {%- elif q.KIND == "rank" %}
 - {{ q.id }} (ranking, best first{% if q.top is not none %}, at least the top {{ q.top }}{% endif %}{% if q.allow_none %}, or null if they cannot be ordered{% endif %}): {{ q.instructions }}
 {%- for opt in q.candidates %}
+  - {{ opt.id }}: {{ opt.description }}
+{%- endfor %}
+{%- elif q.KIND == "select" %}
+- {{ q.id }} (selection{% if q.min %}, at least {{ q.min }}{% endif %}{% if q.max is not none %}, at most {{ q.max }}{% endif %}{% if q.allow_none %}, or null if it cannot be said{% endif %}): {{ q.instructions }}
+{%- for opt in q.options %}
   - {{ opt.id }}: {{ opt.description }}
 {%- endfor %}
 {%- else %}

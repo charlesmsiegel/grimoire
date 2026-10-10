@@ -1229,6 +1229,7 @@ _DECIDE_ITEMS = [
 #: byte-identical -- and `_DECIDE_NEW_ITEMS` must carry its own.
 _DECIDE_BULLETS = {
     "rank": "- a ranking is answered with a list of candidate ids, best first",
+    "select": "- a selection is answered with a list of option ids",
 }
 _DECIDE_NEW_ITEMS = [
     dec.Item("Mara asks the harbourmaster about the Saltmarch ledger.", (
@@ -1238,6 +1239,13 @@ _DECIDE_NEW_ITEMS = [
                   dec.Option("scene:storm", "Seraphine waits out the storm")),
                  top=2, allow_none=True, pointwise="Does this scene bear on the ledger?"),
         dec.Predicate("over", "Is the scene over?"))),
+    dec.Item("Seraphine palms the harbour key while Mara watches.", (
+        dec.MultiSelect("saw", "Who saw it happen?",
+                        (dec.Option("characters:mara", "Mara"),
+                         dec.Option("characters:winifred", "Winifred")),
+                        min=1, max=1, allow_none=True),
+        dec.MultiSelect("helped", "Who helped?", (dec.Option("characters:mara", "Mara"),),
+                        max=0))),
 ]
 for _set, _items_all in (("decide", _DECIDE_ITEMS), ("decide 01e", _DECIDE_NEW_ITEMS)):
     for _explain in ("", "Say in one sentence what settled it."):
