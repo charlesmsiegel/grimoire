@@ -230,9 +230,9 @@ in the ledger's own words:
 ```
 
 - **Wall time** is measured once around the case's model work. A call's own
-  `duration_ms` is summed only where it is labelled `call time` (per
-  escalation hop): native items run several at once, so their durations can
-  add up to more than the case took.
+  `duration_ms` is summed only where it is labelled `call time` (each
+  route / backend / hop row of the aggregate): native items run several at
+  once, so their durations can add up to more than the case took.
 - **The three money columns** -- `billed` (what a provider charged),
   `sub-equiv` (a subscription's per-token equivalent) and `modelled` (your
   rates times the counts, for a call no provider priced) -- are each under

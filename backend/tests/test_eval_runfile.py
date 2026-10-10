@@ -184,4 +184,43 @@ def test_a_native_call_refused_unsent_is_not_a_chunk(tmp_path, capsys):
     assert run.main(["--compare", str(_write(tmp_path / "n.json", doc))]) == 0
     item_row = capsys.readouterr().out.splitlines()[2]
     assert item_row.startswith("decide-speaker.0")
-    assert "(chunk)" not in item_row and "(1 not costed)" in item_row
+    assert "(chunk)" not in item_row and "(1 not fully costed)" in item_row
+
+
+def test_an_item_native_in_one_repeat_and_chunked_in_another_keeps_both(tmp_path, capsys):
+    """Review: a repeat the fallback chunk carried shows `(chunk)` beside the
+    native repeats' own figures, never in place of them."""
+    native = {"index": 0, "backend": "native", "stage": 0, "reasons": [],
+              "distribution": False, "escalated": False, "call": 0}
+    chunked = {**native, "backend": "structured", "stage": 1}
+    structured = {**_native_call(0.0009), "mode": "structured", "stage": 1}
+    doc = _doc([runfile.config("c1", "x", {"backend": "chain"})],
+               [_entry("decide-speaker", ["c1"], bucket=_bucket(0.0006), items=[native],
+                       calls=[_native_call(0.0006)], repeat=0),
+                _entry("decide-speaker", ["c1"], bucket=_bucket(0.0009), items=[chunked],
+                       calls=[structured], repeat=1)])
+    assert run.main(["--compare", str(_write(tmp_path / "m.json", doc))]) == 0
+    item_row = capsys.readouterr().out.splitlines()[2]
+    assert "$0.0006" in item_row and "(chunk)" in item_row
+
+
+def test_a_partial_case_cell_says_it_is_not_fully_costed(tmp_path, capsys):
+    partial = {**_entry("scene-length", ["c1"], bucket=_bucket(0.002, prompt=8)),
+               "partial": True}
+    doc = _doc([runfile.config("c1", "x", {})], [partial])
+    assert run.main(["--compare", str(_write(tmp_path / "p.json", doc))]) == 0
+    _header, row, totals = capsys.readouterr().out.splitlines()
+    assert "billed $0.0020" in row and "(1 not fully costed)" in row
+    assert "incomplete: 1 case(s) not fully costed" in totals
+
+
+def test_totals_of_unreadable_ledgers_say_incomplete_not_just_a_dash(tmp_path, capsys):
+    unread = {**_entry("scene-length", ["c1"]), "ledger_unreadable": True}
+    replayed = _entry("scene-length", ["c2"], wall=None)
+    doc = _doc([runfile.config("c1", "live", {}), runfile.config("c2", "replay", {})],
+               [unread, replayed])
+    assert run.main(["--compare", str(_write(tmp_path / "u.json", doc))]) == 0
+    totals = capsys.readouterr().out.splitlines()[-1]
+    live, replay = (cell.strip() for cell in totals.split("|")[1:])
+    assert live.startswith("-") and "incomplete: 1 case(s) not fully costed" in live
+    assert replay == "-"
