@@ -88,7 +88,7 @@ MAX_RESULT_CHARS = 8000
 #: read; one that has not answered in this long has hit a cold library or a
 #: sync stall, and the run is better told so than held. A tool that is not a
 #: read sets its own (`ToolSpec.timeout`): the decide tool asks a model, and
-#: waits as long as the run's wall allows (`routes.tool_decision`).
+#: bounds each of its calls itself (`routes.tool_decision`).
 TOOL_TIMEOUT_S = 10.0
 
 #: The `LLMError.code` of tools refused -- by a provider's 400 naming them, or
@@ -143,7 +143,10 @@ class RunView(Protocol):
 class ToolContext:
     """What a tool may know: ids, its deadline, the pinned store root, the
     loop turn that asked, and a view of the run's budget -- and nothing it
-    could write with."""
+    could write with. A tool that makes model calls of its own (the decide
+    tool) holds each to `call_budget`, the run's per-call ceiling
+    (`llm_call_budget`; `<= 0` is none), and to the wall left less
+    `reserve`, the seconds a reserved finalize turn still needs."""
     campaign: str
     scene_identity: str
     run_id: str
@@ -151,6 +154,8 @@ class ToolContext:
     root: str
     turn: int = 0
     run: RunView | None = None
+    call_budget: float = 0.0
+    reserve: float = 0.0
 
 
 class ToolError(Exception):

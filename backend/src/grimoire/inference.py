@@ -1795,11 +1795,12 @@ def tool_run_refusal(task: str, resolved: ResolvedInference, budget: tool_calls.
     side knows (`price_for`) or whose output cap is not sent (`cap_sent`:
     without it the completion has no bound). The same check `run_tools`
     makes at entry, as a preflight a `def` route runs BEFORE it reserves, so
-    an unpriceable run is a 409 rather than a 202 that fails. `prices`, when
-    not given, are read from the store."""
+    an unpriceable run is a 409 rather than a 202 that fails. A fallback the
+    loop never sends (`_tool_chain`) is not priced. `prices`, when not given,
+    are read from the store."""
     if budget.spend_ceiling_usd is None:
         return None
-    chain = call_chain(resolved, max_tokens=budget.max_output_tokens)
+    chain, _ = _tool_chain(resolved, call_chain(resolved, max_tokens=budget.max_output_tokens))
     known = prices if prices is not None else prices_for(resolved)
     for target in chain.attempts:
         name = f"{target.model} on {target.label}"
@@ -1812,6 +1813,18 @@ def tool_run_refusal(task: str, resolved: ResolvedInference, budget: tool_calls.
                 "unpriceable", f"{task}: {name} cannot be sent an output cap, so a turn "
                                "has no price bound -- run without a spend ceiling")
     return None
+
+
+def _tool_chain(resolved: ResolvedInference, chain: wire.Chain
+                ) -> tuple[wire.Chain, wire.Target | None]:
+    """`chain` as a tool run sends it, and the fallback left out: one known
+    (`no`) unable to call tools never rides (the resolver drops one only on a
+    route that requires them). The loop's `_chain` and the spend preflight
+    (`tool_run_refusal`) share it, so a run is never refused over a model it
+    would not send."""
+    if chain.fallback is not None and resolve.known_lacks(resolved, "tools", fallback=True):
+        return wire.Chain(chain.primary), chain.fallback
+    return chain, None
 
 
 class _WallSpentError(LLMError):
@@ -1981,8 +1994,8 @@ class _Loop:
         self.decisions_used = 0
         self.decisions_capped = False
         self.charged = 0.0
-        #: A fallback known (`no`) unable to call tools, which no turn sends.
-        self.fallback_lacks_tools = resolve.known_lacks(resolved, "tools", fallback=True)
+        #: Calls a finalize turn made anyway (R2-2): declined, never run.
+        self.final_declined: tuple[tool_calls.ToolCall, ...] = ()
 
     # ---- the run ----
     async def events(self) -> AsyncGenerator[tool_calls.LoopEvent, None]:
@@ -2203,16 +2216,25 @@ class _Loop:
                             sending: list[dict], started: float) -> _Turn:
         target = holder.get(llm.ATTEMPTED)
         target = target if isinstance(target, wire.Target) else None
-        calls = tuple(self._named(c) for c in collector.calls()) if not final else ()
+        made = tuple(self._named(c) for c in collector.calls())
+        calls = made if not final else ()
         # A joined turn's text is shown whole below, so it is visible text too.
         self.shown = self.shown or (bool(text) and not self.streaming)
         turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target,
                      self.shown)
-        self.text = text
+        if text or not (final and made):
+            # A finalize turn that only called (a chain sent `none` as
+            # `auto`) leaves the text the run already had.
+            self.text = text
         if target is not None and self._switched_to(target):
             notes.append("fell back")
         self._trace(k, "model", target.model if target else "", chars=len(text),
                     note=", ".join(notes), started=started)
+        if final and made:
+            # Declined, as a finalize turn's calls are on every target.
+            self.final_declined = made
+            for call in made:
+                self._trace(k, "tool", call.name, call.id, ok=False, note="declined: final")
         await self._captured(sending, turn)
         if text and not self.streaming:
             self.emit(tool_calls.LoopEvent("text", turn=k, delta=text))
@@ -2388,9 +2410,10 @@ class _Loop:
                           max_tokens=self.budget.max_output_tokens)
         if self.fallen and full.fallback is not None:
             full = wire.Chain(full.fallback)
-        elif full.fallback is not None and self.fallback_lacks_tools:
-            notes.append(f"fallback {full.fallback.model} cannot call tools: not sent")
-            full = wire.Chain(full.primary)
+        else:
+            full, dropped = _tool_chain(self.resolved, full)
+            if dropped is not None:
+                notes.append(f"fallback {dropped.model} cannot call tools: not sent")
         sent = [self._inheriting(t, notes, droppable=n > 0)
                 for n, t in enumerate(full.attempts)]
         kept = [t for t in sent if t is not None]
@@ -2584,13 +2607,18 @@ class _Loop:
         `ToolError` reaches the model as itself; anything else as a generic
         failure, logged by type only (a message can quote record text)."""
         end = self.t0 + self.wall if self.wall > 0 else float("inf")
+        reserve = (tool_calls.MIN_TURN_SECONDS
+                   if self.wall > 0 and self.budget.reserve_final and not self.finalized
+                   else 0.0)
         ctx = tool_calls.ToolContext(campaign=self.attribution["campaign"],
                                      scene_identity=self.scene_identity, run_id=self.run_id,
                                      deadline=end, root=self.root, turn=self.turns,
-                                     run=_RunView(self))
+                                     run=_RunView(self), call_budget=self.call_budget,
+                                     reserve=reserve)
         seconds: float | None = min(spec.timeout, end - time.monotonic())
         if seconds == math.inf:
-            # No bound on either side (the decide tool, in a run with no wall).
+            # No wait on either side: the decide tool, in a run with no wall,
+            # which bounds each of its calls by `ctx.call_budget` itself.
             seconds = None
 
         async def marked() -> tool_calls.ToolOutput:
@@ -2638,7 +2666,7 @@ class _Loop:
         self._trace(self.turns, "stop", limit, note=status)
         return tool_calls.LoopResult(
             status=status, limit=limit, text=self.text, final=final, final_call=final_call,
-            declined=declined,
+            declined=declined or self.final_declined,
             proposals=tuple(self.proposals), messages=tuple(self.appended),
             trace=tuple(self.trace), rows=tuple(self.rows), error=error, run_id=self.run_id)
 
