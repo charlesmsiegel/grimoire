@@ -4,7 +4,7 @@ import { api, type InferenceSettings } from "../api/client";
 import { ErrorNote } from "../components/ErrorNote";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
 import { InferenceNav } from "../components/inference/InferenceNav";
-import { migrationBanner } from "../components/inference/migration";
+import { migrationBanner, migrationLine } from "../components/inference/migration";
 import { RetiredNotes } from "../components/inference/RetiredNotes";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 import { useProviderHealth } from "../components/models/health";
@@ -37,6 +37,7 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
   // Gated on the layout, not on the migration finishing (unchanged rule).
   const blocked = !!settings && (settings.newer || settings.format !== "2");
   const banner = migrationBanner(settings);
+  const line = migrationLine(settings);
   const add = addedModel(location.search);
 
   // `#rates` scrolls the rate table in once the page is drawn.
@@ -45,9 +46,15 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
     document.getElementById("rates")?.scrollIntoView?.({ block: "start" });
   }, [location.hash, settings]);
 
+  /** Out of the rate editor, either way: drop `?add` so a reload does not
+   *  reopen it, and keep `#rates` so the page stays on the table. */
+  function leaveRates() {
+    if (add) navigate({ pathname: "/models", hash: "#rates" }, { replace: true });
+  }
+
   function ratesSaved() {
     api.getInferenceSettings().then(install).catch(() => {});
-    if (add) navigate({ pathname: "/models", hash: "#rates" }, { replace: true });
+    leaveRates();
   }
 
   let body;
@@ -76,12 +83,13 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
           <button className="primary" disabled={blocked} onClick={() => navigate("/models/edit")}>
             Edit models
           </button>
-          <Link className="button subtle" to="/providers/new" state={{ returnTo: "/models" }}>
+          <Link className="button subtle" to="/providers/new"
+                state={{ returnTo: location.pathname + location.search + location.hash }}>
             + Add provider
           </Link>
           <Link to="/providers">Provider status →</Link>
         </div>
-        <TokenRates addModel={add || undefined} onSaved={ratesSaved} />
+        <TokenRates addModel={add || undefined} onSaved={ratesSaved} onCancel={leaveRates} />
       </>
     );
   }
@@ -91,6 +99,7 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
       <div className="page view-anim">
         <div className="page-head"><h1 className="page-h1">Models</h1></div>
         <InferenceBanner status={banner} />
+        {line && <p className="field-hint">{line}</p>}
         {settings && (
           <RetiredNotes
             notes={(settings.retirement_notes ?? []).filter((n) => !dismissed.has(n.id))}

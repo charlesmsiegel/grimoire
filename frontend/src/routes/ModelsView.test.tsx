@@ -286,6 +286,42 @@ test("Set rate lands in the rate editor with the model filled in, slashes and al
   expect(await main().findByDisplayValue("vendor/odd#1")).toBeInTheDocument();
 });
 
+test("Cancel on a Set rate drops the address and keeps the table in view", async () => {
+  await openSummary("/models?add=vendor%2Fodd%231#rates");
+  await main().findByDisplayValue("vendor/odd#1");
+  fireEvent.click(main().getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/models#rates$/));
+  expect(await main().findByRole("button", { name: "Edit rates" })).toBeInTheDocument();
+  expect(api.setPricing).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["pending", { state: "pending", reason: "", skipped: [] }, /not finished upgrading yet/],
+  ["skipped", { state: "done", reason: "", skipped: ["campaign saltmarch-run: unreadable"] },
+   /The upgrade left 1 thing for later/],
+])("the upgrade's quiet line shows at format 2 (%s)", async (_name, migration, line) => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ migration }));
+  await openSummary();
+  expect(main().getByText(line)).toHaveClass("field-hint");
+});
+
+test("+ Add provider comes back to the exact address it left", async () => {
+  function Back() {
+    const { state } = useLocation();
+    return <div>back to {(state as { returnTo?: string } | null)?.returnTo}</div>;
+  }
+  render(
+    <MemoryRouter initialEntries={["/models?add=vendor%2Fm#rates"]}>
+      <Routes>
+        <Route path="/models" element={<ModelsView />} />
+        <Route path="/providers/new" element={<Back />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(await screen.findByRole("link", { name: "+ Add provider" }));
+  expect(await screen.findByText("back to /models?add=vendor%2Fm#rates")).toBeInTheDocument();
+});
+
 test("what was not carried over sits under the heading until dismissed", async () => {
   (api.getInferenceSettings as any).mockResolvedValue(settings({ retirement_notes: [{
     id: "a1", scope: "global", scope_name: "", subject: "summary", provider_id: "glm",
