@@ -1297,7 +1297,8 @@ def test_a_rank_renders_its_line_candidates_and_bullet():
     plain = decisions.Rank("relevant", "Order them.", SCENES)
     (_, user) = (m["content"] for m in inference.structured_messages(
         [Item("ctx", (plain,))]))
-    assert "- relevant (ranking, best first): Order them." in user
+    # With no `top` the parser wants every candidate, so the line says so.
+    assert "- relevant (ranking, best first, every candidate): Order them." in user
 
 
 def test_a_select_renders_its_line_bounds_options_and_bullet():

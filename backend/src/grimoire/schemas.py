@@ -164,8 +164,9 @@ def _type(node: dict, path: str) -> str:
 
 def _any_of(node: dict, path: str, level: int) -> int:
     branches = node["anyOf"]
-    if "enum" in node:
-        raise SchemaError(f"{path}: 'enum' belongs on a typed schema, not an anyOf")
+    for key in ("enum", *sorted(_OBJECT | _ARRAY)):
+        if key in node:
+            raise SchemaError(f"{path}: {key!r} belongs on a typed schema, not an anyOf")
     if not isinstance(branches, list) or not branches:
         raise SchemaError(f"{path}: 'anyOf' is a non-empty list of schemas")
     # An alternative at its parent's depth, not a level of its own.
@@ -193,6 +194,8 @@ def _enum(node: dict, path: str, kind: str) -> int:
             raise SchemaError(f"{path}: an integer 'enum' holds integers only")
     else:
         raise SchemaError(f"{path}: 'enum' is for strings or integers, not a {kind}")
+    if len(set(values)) != len(values):
+        raise SchemaError(f"{path}: an 'enum' lists each value once")
     return len(values)
 
 

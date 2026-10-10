@@ -138,6 +138,28 @@ def test_object_and_array_keywords_stay_on_their_own_types():
         schemas.check(_obj(x={"type": "string", "properties": {}}))
 
 
+@pytest.mark.parametrize("key, value", [
+    ("required", [{}]), ("properties", {}), ("additionalProperties", False),
+    ("items", {"type": "string"}), ("enum", ["a"]),
+])
+def test_an_any_of_carries_no_typed_keyword(key, value):
+    """A typed keyword beside `anyOf` is checked by nothing below it, so it is
+    refused rather than sent unchecked."""
+    with pytest.raises(SchemaError, match=key):
+        schemas.check(_obj(x={"anyOf": [{"type": "string"}], key: value}))
+
+
+@pytest.mark.parametrize("node", [
+    {"type": "string", "enum": ["a", "a"]},
+    {"type": "integer", "enum": [1, 2, 1]},
+])
+def test_a_duplicate_enum_value_is_refused(node):
+    """JSON Schema requires enum members to be unique; a strict provider would
+    refuse the request after it was sent."""
+    with pytest.raises(SchemaError, match="once"):
+        schemas.check(_obj(x=node))
+
+
 def test_an_empty_enum_is_refused():
     """Strict mode answers `enum: []` with a 400 naming `response_format`,
     which would read as the mode refused (spec 3.1)."""

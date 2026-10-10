@@ -36,7 +36,7 @@ Questions:
   - {{ loop.index0 }}: {{ level }}
 {%- endfor %}
 {%- elif q.KIND == "rank" %}
-- {{ q.id }} (ranking, best first{% if q.top is not none %}, at least the top {{ q.top }}{% endif %}{% if q.allow_none %}, or null if they cannot be ordered{% endif %}): {{ q.instructions }}
+- {{ q.id }} (ranking, best first{% if q.top is none %}, every candidate{% else %}, at least the top {{ q.top }}{% endif %}{% if q.allow_none %}, or null if they cannot be ordered{% endif %}): {{ q.instructions }}
 {%- for opt in q.candidates %}
   - {{ opt.id }}: {{ opt.description }}
 {%- endfor %}
