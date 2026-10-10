@@ -1511,3 +1511,22 @@ def test_a_grader_crash_keeps_what_the_case_cost(monkeypatch, tmp_path):
     assert len(result.rows) == 1 and result.bucket["cost_usd"] == 0.0042
     assert result.wall_ms is not None
     assert "call time" in runner.report([result])
+
+
+def test_a_baseline_that_cannot_be_written_keeps_the_cases_cost(monkeypatch, tmp_path):
+    """Review: `--record` into a directory it cannot write fails the case
+    for that, and the case keeps its harvested rows and bucket."""
+    from tests.llm_fakes import FakeLLM
+
+    real = tmp_path / "real"
+    case, target = _generate_store(monkeypatch, real)
+    fake = FakeLLM([[_compliant(case)]], usage=BILLED)    # read before the folder moves
+    blocked = tmp_path / "recordings"
+    blocked.write_text("a file where the recordings folder should be", encoding="utf-8")
+    monkeypatch.setattr(case_mod, "RECORDINGS", blocked)
+    isolate, _made = _isolates(monkeypatch, tmp_path, real)
+    (result,) = runner.live_all((case,), {runner.conn_key(case): target}, isolate, record=True,
+                                client=fake, real_home=real)
+    assert not result.passed and result.error_kind == "record"
+    assert "could not record its baseline" in result.error
+    assert len(result.rows) == 1 and result.bucket["cost_usd"] == 0.0042

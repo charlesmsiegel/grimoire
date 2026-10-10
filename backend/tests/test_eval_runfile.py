@@ -224,3 +224,24 @@ def test_totals_of_unreadable_ledgers_say_incomplete_not_just_a_dash(tmp_path, c
     live, replay = (cell.strip() for cell in totals.split("|")[1:])
     assert live.startswith("-") and "incomplete: 1 case(s) not fully costed" in live
     assert replay == "-"
+
+
+def test_a_config_that_never_had_an_item_leaves_its_cell_blank(tmp_path, capsys):
+    """Review: an older run whose case had fewer items is blank on the
+    newer item's row, not a cell for an item nobody evaluated there."""
+    item = {"index": 0, "backend": "native", "stage": 0, "reasons": [],
+            "distribution": False, "escalated": False, "call": 0}
+    newer = {**item, "index": 1}
+    old = _doc([runfile.config("c1", "x", {})],
+               [_entry("decide-speaker", ["c1"], bucket=_bucket(0.0006), items=[item],
+                       calls=[_native_call(0.0006)])])
+    new = _doc([runfile.config("c1", "x", {})],
+               [_entry("decide-speaker", ["c1"], bucket=_bucket(0.0012),
+                       items=[item, {**newer, "call": 1}],
+                       calls=[_native_call(0.0006), {**_native_call(0.0006), "items": [1]}])])
+    a, b = _write(tmp_path / "old.json", old), _write(tmp_path / "new.json", new)
+    assert run.main(["--compare", str(a), str(b)]) == 0
+    (row,) = [line for line in capsys.readouterr().out.splitlines()
+              if line.startswith("decide-speaker.1")]
+    old_cell, new_cell = (cell.strip() for cell in row.split("|")[1:])
+    assert old_cell == "" and "1/1 ok" in new_cell

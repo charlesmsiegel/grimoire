@@ -295,6 +295,12 @@ def compare(docs: Sequence[tuple[str, dict]]) -> str:
         cells = []
         for _header, entries in columns:
             mine = [e for e in entries if _row_key(e) == key]
+            if index is not None:
+                # Only the runs that had this item: a config whose case ran
+                # without it (an older item set) is blank, not a cell for an
+                # item nobody evaluated.
+                mine = [e for e in mine if any(i.get("index") == index
+                                               for i in e.get("items", []))]
             if not mine:
                 cells.append(BLANK)
             elif index is None:
