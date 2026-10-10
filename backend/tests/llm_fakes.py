@@ -811,6 +811,16 @@ class ModelessHolder(FakeLLM):
             yield delta
 
 
+class UnstampedHolder(FakeLLM):
+    """Answers like `FakeLLM` but never stamps the usage holder: no model, no
+    route, no `llm.ATTEMPTED` target. The real facade cannot produce this --
+    `llm._stamp` runs before every attempt -- so it exists only to pin that a
+    reader of the stamp (`inference._server`, a call's per-item provenance)
+    degrades to "nothing named" rather than failing an answered decision."""
+
+    _stamp = staticmethod(lambda usage, attempt: None)
+
+
 class HeldOpenRouter(FakeLLM):
     """A provider that stops after its first delta until the test releases it.
 

@@ -357,6 +357,21 @@ def _served_by(holder: dict) -> tuple[str, str]:
     return "", ""
 
 
+def _server(target: object) -> tuple[()] | tuple[str, str, str]:
+    """`(kind, provider id, model)` of `target`: the `ItemResult.served` of an
+    item it answered (01d §5.6), read as `_served_by` reads a call's. `()`
+    for anything that is not a `wire.Target` -- a holder nothing stamped --
+    and for one whose three fields are not all strings, so provenance, which
+    nothing in the chain reads, can never fail an answered decision."""
+    if not isinstance(target, wire.Target):
+        return ()
+    kind, provider_id, model = target.kind, target.provider_id, target.model
+    if not (isinstance(kind, str) and isinstance(provider_id, str)
+            and isinstance(model, str)):
+        return ()
+    return (kind, provider_id, model)
+
+
 def _record(call: _Call, mode: str, unit: Sequence[int], row: dict | None,
             error: LLMError | None) -> decisions.CallRecord:
     """One settled request's `decisions.CallRecord`: its error's kind and
@@ -504,7 +519,11 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
                                                records=records, unit=unit)
         answered: list[decisions.ItemResult] = []
         if holder is not None:
-            answered = [replace(result, backend=STRUCTURED)
+            # Each item names the server that answered its chunk: the
+            # attempt the facade sent (`llm.ATTEMPTED`), a fallback or a
+            # re-send without the mode included.
+            server = _server(holder.get(llm.ATTEMPTED))
+            answered = [replace(result, backend=STRUCTURED, served=server)
                         for result in decisions.parse(text, chunk, explain=explain)]
             for index, result in enumerate(answered):
                 results[offset + index] = result
@@ -624,8 +643,10 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
                 with m:
                     pending = client.decide_native(item, named, m.usage,
                                                    retries=call.retries)
-                    results[index] = await (call.around(pending, m.usage) if call.around
-                                            else pending)
+                    got = await (call.around(pending, m.usage) if call.around else pending)
+                    # The server is the stage's one target as sent, whatever
+                    # the adapter's result claimed.
+                    results[index] = replace(got, served=_server(named))
                     holders[index] = m.usage
                 timeouts[0] = 0
             except LLMError as exc:

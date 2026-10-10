@@ -696,6 +696,52 @@ def test_item_result_backend_defaults_empty_and_parse_leaves_it():
         assert result.backend == ""
 
 
+# --- per-item provenance (01d-S2, spec 01d §5.6) -----------------------------
+
+DECIDER = ("openrouter", "openrouter", "vendor/decider")
+
+
+def test_item_result_served_defaults_empty_and_parse_and_unanswered_leave_it():
+    assert ItemResult({}).served == ()
+    for result in decisions.parse(REPLY, [_item()], explain=True):
+        assert result.served == ()
+    for result in decisions.unanswered([_item()], "error"):
+        assert result.served == ()
+
+
+def test_item_result_served_is_three_strings_or_nothing():
+    assert ItemResult({}, served=DECIDER).served == DECIDER
+    for bad in (("openrouter", "vendor/active"),
+                ("openrouter", "spare", "vendor/spare", "extra"),
+                ("openrouter", "spare", None)):
+        with pytest.raises(ValueError):
+            ItemResult({}, served=bad)  # type: ignore[arg-type]
+
+
+def test_item_result_served_is_not_compared():
+    """Two results that read alike are equal whoever answered them, so every
+    equality assertion written before `served` existed still holds."""
+    stamped = ItemResult({"over": Answer(True)}, backend="native", served=DECIDER)
+    assert stamped == ItemResult({"over": Answer(True)}, backend="native")
+    assert (decisions.Decision(items=(stamped,), backend="native")
+            == decisions.Decision(items=(ItemResult({"over": Answer(True)}, backend="native"),),
+                                  backend="native"))
+
+
+def test_native_lift_keeps_the_lowered_results_server():
+    rank = Rank("order", "i", (MARA, WINIFRED), pointwise="Should this one go first?")
+    item = Item("ctx", (rank, Choice("who", "i", (MARA, GRIMOIRE))))
+    lowered, lift = decisions.native_form(item)
+    server = ("openai_compatible", "local", "local-model")
+    answered = ItemResult({"order#0": Answer(True, probability=0.75),
+                           "order#1": Answer(False, probability=0.25),
+                           "who": Answer("grimoire")},
+                          backend="native", served=server)
+    assert [q.id for q in lowered.questions] == list(answered.answers)
+    got = decisions.native_lift(item, answered, lift)
+    assert got.served == server and got.backend == "native"
+
+
 def test_none_key_is_refused_as_an_option():
     assert decisions.NONE_KEY == "<none>"
     with pytest.raises(DecideRequestError):

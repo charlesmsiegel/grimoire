@@ -1384,3 +1384,70 @@ def test_a_fallback_stages_capture_names_batch_indices(client):
     assert first == [[0], [1], [2], [3]]
     (last,) = [o for _m, o, _c in captured if o["stage"] == 1]
     assert last["mode"] == STRUCTURED and last["at"] == [0, 4, 5, 6, 7, 8, 9]
+
+
+# ---- per-item provenance (01d-S2, spec 01d §5.6) ----
+def _named(target: wire.Target) -> tuple[str, str, str]:
+    return (target.kind, target.provider_id, target.model)
+
+
+def test_each_native_item_names_its_server(client):
+    resolved = _native_resolution(client, fallback=False)
+    items = _items(2)
+    got = _decide(_Endpoint([["unused"]], {i.context: _yes() for i in items}), items,
+                  resolved=resolved)
+    named = _named(resolved.chain.primary)
+    assert named[1:] == DECIDER
+    assert [r.served for r in got.items] == [named, named]
+
+
+def test_a_native_items_scripted_server_is_overwritten(client):
+    resolved = _native_resolution(client, fallback=False)
+    fake = FakeLLM([["unused"]], decisions=[ItemResult(
+        {"over": Answer(True)}, served=("anthropic", "elsewhere", "vendor/other"))])
+    got = _decide(fake, [_item()], resolved=resolved)
+    assert got.items[0].served == _named(resolved.chain.primary)
+
+
+def test_items_a_mixed_chain_answered_name_each_stage(client):
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(2)
+    got = _decide(_Endpoint([[decision_reply({"over": False})]],
+                            {items[0].context: _yes(),
+                             items[1].context: LLMError("network", "connection reset")}),
+                  items, resolved=resolved)
+    primary, fallback = resolved.attempts[0].target, resolved.attempts[1].target
+    assert [r.served for r in got.items] == [_named(primary), _named(fallback)]
+    assert [r.served[1:] for r in got.items] == [DECIDER, SPARE]
+    # The decision's own field keeps its two-part shape.
+    assert got.served == (DECIDER, SPARE)
+
+
+def test_an_item_a_native_fallback_stage_answered_names_the_fallback(client):
+    """A structured primary fails; the native fallback stage answers on its
+    own target (`named`), which the item names."""
+    resolved = _structured_resolution(client, fallback_mode=NATIVE)
+    wire = _Wire(streams=[LLMError("bad_response", "upstream exploded", status=500)],
+                 decides=[_yes()])
+    got = _decide(_real(wire, retries=0), [_item()], resolved=resolved)
+    assert got.items[0].answers["over"] == Answer(True) and wire.decided == [SPARE[1]]
+    assert got.items[0].served == _named(resolved.attempts[1].target)
+    assert got.items[0].served[1:] == SPARE
+
+
+def test_triggers_read_the_kind_decide_stamped(client):
+    """01d-C2a end to end: `triggers` finds the low margin through the kind
+    `decide` stamped on the item, and finds nothing for another kind."""
+    resolved = _native_resolution(client, fallback=False)
+    fake = FakeLLM([["unused"]], decisions=[
+        ItemResult({"over": Answer(True, probability=0.55)}),
+        ItemResult({"over": Answer(True, probability=0.95)})])
+    got = _decide(fake, _items(2), resolved=resolved)
+    kind = resolved.chain.primary.kind
+    (found,) = decisions.triggers(got.items, question="over", escalate_on=("low_margin",),
+                                  margins={kind: 0.2})
+    assert (found.index, found.trigger, found.margin) == (0, "low_margin",
+                                                          pytest.approx(0.1))
+    assert decisions.triggers(got.items, question="over", escalate_on=("low_margin",),
+                              margins={"openai_compatible": 0.2}) == ()
+    assert len(fake.native_requests) == 2 and fake.calls == 0

@@ -971,7 +971,9 @@ would answer neither question.
   **Who answered is only named when one did.** `Decision.backend`, `provider`
   and `model` are empty when answers came from more than one backend or route
   (the fallback took the items the primary failed): `ItemResult.backend` is the
-  per-item truth, `Decision.served` lists every `(provider, model)` that
+  per-item truth, `ItemResult.served` names the `(kind, provider id, model)`
+  that answered each item (stamped by its backend, never compared),
+  `Decision.served` lists every `(provider, model)` that
   answered across the stages, and `Decision.errors` holds each failed unit's
   final error -- a chunk on a structured stage, an item on a native one -- with
   an item that answered on a later stage contributing none.
