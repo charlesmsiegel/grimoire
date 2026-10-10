@@ -1,0 +1,3 @@
+[
+  {"model": "gpt-6-luna", "answers": [{"type": "choice", "name": "next", "choice": "characters:winifred", "confidence": 0.6, "probabilities": [{"value": "characters:mara", "probability": 0.1}, {"value": "characters:winifred", "probability": 0.4}]}], "usage": {"input_tokens": 260, "output_tokens": 0, "total_tokens": 260}}
+]

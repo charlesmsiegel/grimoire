@@ -1543,7 +1543,11 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
                   "the reply's JSON Schema is not in the system message"),
             *graders.grade_decision(output, ctx["items"], explain=False,
                                     question=response_protocol.SELECTOR_QUESTION,
-                                    expected="characters:winifred")]
+                                    expected="characters:winifred"),
+            # Spec 01c section 4.3's bar: a native answer carries a usable
+            # distribution; a structured one is not applicable.
+            *graders.grade_distribution(ctx["items"][0], response_protocol.SELECTOR_QUESTION,
+                                        ctx.get("native_results", {}).get(0))]
 
 
 # ------------------------------------- case 13: decide, continuity identity
@@ -2118,7 +2122,18 @@ CASES: tuple[Case, ...] = (
              Recording("off-roster", ("decide.answer",), "json"),
              # Well formed, and a null: control handed back to the player
              # when the player had asked someone a question.
-             Recording("abstained", ("decide.answer",), "json"))),
+             Recording("abstained", ("decide.answer",), "json"),
+             # The compliant pick from each kind's decisions endpoint, with
+             # a distribution the sampler would draw from (spec 01c 4.3).
+             Recording("native", (), "json", native="openai"),
+             Recording("native-openrouter", (), "json", native="openrouter"),
+             # The right pick, reported over half the mass: not drawn from.
+             Recording("native-partial", ("decide.distribution",), "json",
+                       native="openai"),
+             # The right pick chosen explicitly, beside a report that gives
+             # it no weight: the answer stands, the report is no draw of it.
+             Recording("native-inconsistent", ("decide.distribution",), "json",
+                       native="openrouter"))),
     Case(id="decide-rank",
          task="continuity-reconcile",
          hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "
