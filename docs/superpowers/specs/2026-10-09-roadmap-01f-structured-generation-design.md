@@ -1,6 +1,6 @@
 # 01f. Structured generation: a provider's schema mode on `generate`
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01f in `ROADMAP-CHECKLIST.md`. Lane: Now (minor spec under 01;
 feeds the retrieval lane through 10 and the tool-calling spec 01g).
@@ -31,7 +31,7 @@ Rebuilt from the edges in `ROADMAP-CHECKLIST.md` (01g ← 01f-C1/C2/C3 H;
 |---|---|---|
 | 01f-C1 | 01g (hard; 01g-C2a's finalize turn) | A tool loop asks for its final record with a schema, tools off, under the turn's output cap. |
 | 01f-C2 | 01g (hard) | The finalize turn inherits the refusal re-send. |
-| 01f-C3 | 01g (hard) | Every tool's parameter schema passes `schemas.check`; arguments and the final record are read with `schemas.find_object`. |
+| 01f-C3 | 01g (hard) | Every tool's parameter schema passes `schemas.check`; arguments and the final record are read with `schemas.find_value`. |
 | 01f-C1 | 10 (hard; 10-C1, the `history_plan` route on Fast) | The query plan is generated with a schema and the per-call `max_tokens` cap, held to the schema where the provider can. |
 | 01f-C2 | 10 (soft) | A provider that refuses the field still answers the plan from the prompt. |
 
@@ -138,8 +138,8 @@ Not the goal:
 
 ### 3.1 The portable schema subset (`grimoire/schemas.py`, new)
 
-A new gateway leaf, **standard library only** (the same rule `wire.py` keeps,
-held by an AST test), so that `decisions`, `inference` and `store` code can
+A new gateway leaf, **standard library only**. `test_schemas.py` holds that by
+the AST, the way `test_wire.py` holds `wire.py`. The leaf exists so that `decisions`, `inference` and `store` code can
 all import it. It holds one rule: what a schema may contain if it is to be
 sent to both OpenAI strict mode and Anthropic's `output_config.format`.
 
@@ -150,13 +150,18 @@ def check(schema: dict) -> None
     """Raise SchemaError unless `schema` is inside the portable subset."""
 
 def render(schema: dict) -> str
-    """The one spelling of `schema` a prompt carries: json.dumps with
-    indent=2 and sort_keys=False, the same text Jinja's `tojson(indent=2)`
-    produces for it (a test holds the two equal on the corpus in section 7)."""
+    """The one spelling of `schema` a prompt carries:
+    json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=False).
+    No HTML escaping: the model should read "the character's", not
+    "\u0027". Registered in the prompts environment as the Jinja filter
+    `schema_json`, so a template and the check use the SAME function."""
 
-def find_object(text: str) -> dict | list | None
-    """The reply's top-level JSON value, tolerant of a fence or prose
-    around it. Lifted from `decisions.find_object`, which delegates to it."""
+def find_value(text: str) -> dict | list | None
+    """The reply's top-level JSON value (object or array), tolerant of a
+    fence or prose around it. `decisions.find_object` keeps its own
+    dict-only contract: it calls this and maps a list to None, so a bare
+    `[...]` still reads NO_OBJECT and `test_decide_chain_golden.py` does not
+    move."""
 ```
 
 The subset (the decisions subset, widened by exactly what generations need):
@@ -173,12 +178,24 @@ The subset (the decisions subset, widened by exactly what generations need):
 - **Refused:**
   - numeric bounds (`minimum`, `maximum`, `exclusive*`, `multipleOf`), which
     Anthropic refuses (`decisions.py:36`);
-  - `minItems` and `maxItems`, `pattern`, `format`;
+  - `minItems` and `maxItems`, `minLength` and `maxLength`, `pattern`,
+    `format`;
   - `$ref` and `$defs`, `oneOf`, `allOf`, `not`, `const`;
   - any key not listed above.
 
   A bound the caller needs is enforced by the caller's parser, after the
-  reply arrives.
+  reply arrives. **The subset stays strict on purpose.** A consumer whose
+  natural schema has bounds drops them from the schema it sends and
+  enforces them in its tolerant parser. 10 does exactly that for its
+  `history_plan` schema, dropping `maxItems`, `maxLength`, `minimum` and
+  `maximum` (resolved on 10's side in the spec gate). There is no
+  bound-stripping helper here: one would let a schema in the prompt promise
+  a bound the wire never enforced.
+- **An empty `enum` is refused.** Strict mode answers `enum: []` with a 400
+  naming `response_format`, which `_schema_refusal` would misread as the mode
+  refused, re-sending and pointing the user at a `structured_output: no`
+  override that is the wrong remedy. A caller with nothing to offer sends
+  that field as a plain string (or array of strings) instead (section 3.8).
 - The strict-mode budgets are the decisions constants, imported rather than
   restated: `MAX_ENUM_VALUES`, `MAX_SCHEMA_STRING_CHARS` and
   `MAX_SCHEMA_PROPERTIES` (`decisions.py:109-133`). They move into
@@ -187,8 +204,8 @@ The subset (the decisions subset, widened by exactly what generations need):
   nesting limit, read from the same "Supported schemas" page that
   `decisions.py:104-133` cites, when the plan is written. This spec does not
   restate the figure, because the page has changed it before. A decision
-  batch nests three deep (batch, item, answers), far inside any published
-  limit.
+  batch nests four deep (batch, item, answers, a question's value;
+  `decisions.py:128-133`), far inside any published limit.
 
 `decisions.schema(...)`'s output must pass `check`, and a test holds that.
 The widening adds nothing a decision batch uses, so a decision is unaffected.
@@ -242,11 +259,17 @@ rather than a convention:
 The check is a substring test over strings already in memory. It costs
 nothing next to the call.
 
-Templates render the schema the way `decide/system.j2` does,
-`{{ schema | tojson(indent=2) }}`. A test (section 7) holds Jinja's output
-equal to `schemas.render` for every schema in the test corpus. A template
-that spells it differently fails the check loudly at the first call in tests,
-rather than silently in production.
+**One renderer on both sides.** The prompts environment (`prompts._env`,
+`prompts.py:30-33`) uses Jinja's default `tojson` policy, which sorts keys
+and HTML-escapes `<`, `>`, `&` and `'`, so its output is not a plain
+`json.dumps`. 01f does not try to imitate it. `prompts._env` registers
+`schemas.render` as the filter `schema_json`, and every template that carries
+a `generate` schema renders it as `{{ schema | schema_json }}`. The check
+calls the same function, so the two cannot drift. `decide/system.j2` keeps
+`{{ schema | tojson(indent=2) }}` unchanged, because `decide` does not go
+through this check and its golden bytes must not move. A template that
+spells the schema any other way fails the check loudly at its first call in
+tests, rather than silently in production.
 
 `generate(schema=...)` also refuses (`ValueError`, before any call):
 
@@ -279,7 +302,20 @@ async def _without_refused_mode(error: llm.SchemaRefusalError,
     once more, alone and without the mode, in order; the first that answers
     wins. Should every re-send fail, raise `llm.routes_failed(words)` with
     each re-sent route's word replaced by its re-send's failure."""
+
+def _stream_without_refused_mode(error: llm.SchemaRefusalError,
+                                 open_stream: Callable[[wire.Chain], AsyncIterator[str]]
+                                 ) -> AsyncIterator[str]:
+    """The streamed twin: the same order and the same composed error, but a
+    re-send's failure is discovered while iterating, so this is an async
+    generator rather than an awaitable. Both share the attempt-selection and
+    error-composition code."""
 ```
+
+Both `send` / `open_stream` closures are **nested inside `generate`**, so
+`test_usage_guard.FORWARDERS` (`test_usage_guard.py:123-138`), which clears
+facade calls made inside a top-level `def generate` that forwards its `usage`
+parameter, still covers them. `decide`'s re-sends stay inside `_ask`.
 
 - **`decide`** keeps its behaviour exactly. `_ask` calls the helper with a
   `send` that opens its own meter per re-send, as today.
@@ -315,7 +351,7 @@ async def _without_refused_mode(error: llm.SchemaRefusalError,
 Structured mode makes a conforming reply likely. It does not make one
 certain, and the prompt-only attempts guarantee nothing. So `generate`
 returns **text** exactly as before, and the caller parses it. `schemas`
-gives callers one tolerant reader, `find_object` (section 3.1). Semantic
+gives callers one tolerant reader, `find_value` (section 3.1). Semantic
 validation (ids that exist, dates that parse) stays with each caller, as
 `suggest.parse_output` and `absorb.parse_output` do today. A reply that does
 not parse is the caller's "no JSON" outcome, never an exception from the
@@ -323,10 +359,20 @@ operation.
 
 ### 3.7 The ledger and the capture
 
-- No new ledger field. Whether the mode was sent is visible on the target the
-  holder names (`llm.ATTEMPTED`), which a prompt capture already records
-  (`routes.common._record_prompt`'s `conn`). Section 9 lists this as an open
-  question in case 01a's comparisons want it in the row.
+- **The chain a call sends is a pure function a capture can be handed.**
+  `inference.call_chain(resolved, *, schema=None, max_tokens=None) ->
+  wire.Chain` builds the per-call chain (structured flags of 3.2, the cap of
+  3.9). `generate` sends exactly what it returns. A caller that records the
+  prompt hands the same chain to `routes.common._record_prompt(conn=...)`, so
+  the prompt log reports the cap and the structured flag the call was sent
+  with, not the preset's. Today `_record_prompt` records only
+  `llm_sampling.report(conn.primary)` for the chain it is handed, before the
+  call (`routes/common.py:406-450`), and `generate` exposes nothing, so the
+  earlier claim that "the capture already shows whether the mode was sent"
+  was not true. This makes it true.
+- No new ledger field. A re-send without the mode is visible in the
+  incoming-response capture as its own `call_id`. Section 9 keeps the
+  ledger question open for 01a.
 - The incoming-response capture (`llm_capture`) records each attempt and
   each re-send as its own `call_id`, as the facade already does per call.
 
@@ -337,7 +383,7 @@ its own change, behind its own evidence.
 
 | Task | Parser today | Schema shape | Notes |
 |---|---|---|---|
-| `intent` (**pilot**) | `suggest._extract_json` → `parse_intent` | `{title: string, date: string, location: enum of location ids or "", cast: array of enum tokens}` | Small and closed. The enums are what the mode buys: the model cannot invent an id where the provider enforces them. Enum sizes are bounded by `MAX_ENUM_VALUES`; a campaign past it sends the schema with plain strings for that field (`parse_intent` already drops unknown ids). |
+| `intent` (**pilot**) | `suggest._extract_json` → `parse_intent` | `{title: string, date: string, location: enum of location ids or "", cast: array of enum tokens}` | Small and closed. The enums are what the mode buys: the model cannot invent an id where the provider enforces them. Enum sizes are bounded by `MAX_ENUM_VALUES`. A campaign past that bound, or one with **nothing to offer** (no locations, no available cast), sends that field as a plain string or string array, because an empty `enum` is refused (3.1). `parse_intent` already drops unknown ids. The pilot runs through `common.draft_completion`, which gains `schema=` and `max_tokens=` keywords passed to `generate` only when given, so the other fourteen draft routes send exactly what they send today. |
 | `suggestions` | `suggest._extract_json` | array of suggestion objects | Variant prompts (`scene_suggestions/instruction/*`). Convert after the pilot. |
 | `scenario`, `character-from-passage` | `absorb.parse.extract_object` | `{characters: [...], entries: [...]}` | Card import paths, with no campaign. |
 | `tracker-update` | its own | per-character state | On every post, so its cassettes are the most numerous. |
@@ -365,11 +411,18 @@ preset's `max_tokens`, chosen per route rather than per call.
 def with_output_cap(self, n: int) -> Target:
     """A NEW target whose sampling `max_tokens` is min(the preset's, n), or
     n when the preset sets none. The preset's id, name and scope are kept, so
-    the ledger still names the preset the call was sent with."""
+    the ledger still names the preset the call was sent with. The new
+    `Sampling.call_cap` field records n, so a refusal can tell a cap the CALL
+    added from one the user's preset carried."""
 
 # inference.py
 generate(task, messages, *, client, resolved, usage=None, schema=None,
          max_tokens: int | None = None, stream=True)
+
+def cap_sent(target: wire.Target) -> bool:
+    """Whether this attempt's adapter will put `max_tokens` (or its
+    translation) on the wire: `"max_tokens" in llm_sampling.sent_names(target)`.
+    Pure. 01g's spend guard asks it."""
 ```
 
 - With `max_tokens`, `generate` sends a per-call chain whose every target is
@@ -379,14 +432,30 @@ generate(task, messages, *, client, resolved, usage=None, schema=None,
 - `llm_sampling.effective` translates the cap per adapter exactly as it does a
   preset's: `max_completion_tokens` on the OpenAI API, and the required
   `max_tokens` on the Anthropic API, where adaptive thinking's budget is
-  already held to half of it. The Claude Agent SDK takes no sampling, so the
-  cap is not sent there. That is stated in the capture's controls report
-  (`llm_sampling.report`), not hidden.
+  already held to half of it.
+- **The cap is sent only where the attempt's adapter sends `max_tokens`.**
+  The Claude Agent SDK takes no sampling. An OpenRouter model whose cached
+  catalog `supported_parameters` omits `max_tokens` has it dropped as
+  `UNSUPPORTED` (`llm_sampling.py:298-316`), logged at debug. In both cases
+  the cap is silently not a bound. `cap_sent(target)` says so before the
+  call, and the capture's controls report (through `call_chain`, 3.7) shows
+  it after. A caller that needs the cap to be a bound (01g under a spend
+  ceiling) must ask `cap_sent`; 10's cap is a cost preference and can live
+  without it.
 - Where 01i-C1 knows the model's maximum output, the sent cap is also capped
   at it.
-- A refusal naming `max_tokens` is a preset refusal (`llm._preset_refusal`)
-  as today, because the cap travels as a sampler field. That is right: it is
-  a control this request sent.
+- **A refused call cap is worded as the call's, not the user's preset's.**
+  The cap travels as a sampler field, so a 400 naming `max_tokens` is still
+  read by `llm._preset_refusal`, and the fallback is still skipped. The
+  fallback would be sent the same cap, and the call carries no preset of the
+  user's that could be blamed or fixed. But when `sampling.call_cap` is set
+  and the preset itself sent no `max_tokens`, the error is
+  `CapRefusalError` (a `PresetRefusalError` subclass, same kind and status),
+  reading "this call's output cap (max_tokens) was refused", not 'carried
+  sampler preset "?"' (`llm.py:774`). It is never re-sent without the cap:
+  01g under a ceiling cannot use an uncapped call, and 10 treats the failure
+  as its skip. An endpoint that refuses `max_tokens` is the user's to fix
+  with a provider setting (`sampler_support`).
 - A cap that cuts a structured reply short leaves unparseable JSON. That is
   the caller's "no JSON" outcome (section 3.6), so a caller sizes the cap to
   its schema.
@@ -412,9 +481,15 @@ attempt, with the schema still in the prompt, and takes a per-call
   resolution is never mutated.
 - `max_tokens` (section 3.9), with or without a schema, caps each attempt's
   output at `min(preset's cap, max_tokens, 01i-C1's max output where known)`
-  through `wire.Target.with_output_cap`, on new per-call targets. It is not
-  sent on the Claude Agent SDK, which takes no sampling. A value that is not
-  a positive int is a `ValueError` before any call.
+  through `wire.Target.with_output_cap`, on new per-call targets, **where
+  that attempt's adapter sends `max_tokens`** (`inference.cap_sent`). It is
+  not sent on the Claude Agent SDK, nor to an OpenRouter model whose catalog
+  omits the parameter. A refused call cap is `CapRefusalError`, worded as
+  the call's. A value that is not a positive int is a `ValueError` before
+  any call.
+- `inference.call_chain(resolved, *, schema, max_tokens)` is the pure
+  function that builds the chain a call sends, for a caller's prompt
+  capture.
 - Output: the reply text, as today. Nothing about the reply is guaranteed to
   conform.
 
@@ -438,10 +513,15 @@ health failure.**
 
 - `schemas.check(schema)` is the subset in section 3.1, raising
   `SchemaError(ValueError)`. `decisions.schema` output always passes it.
-- `schemas.render(schema)` is the prompt spelling. It equals Jinja's
-  `tojson(indent=2)` for every schema `check` accepts.
-- `schemas.find_object(text)` never raises. It returns None when the reply
-  holds no JSON value.
+- `schemas.render(schema)` is the prompt spelling,
+  `json.dumps(indent=2, sort_keys=True, ensure_ascii=False)`.
+- `schemas.render(schema)` is also the prompts filter `schema_json`.
+  Templates for `generate` schemas use it, and `decide/system.j2` keeps
+  `tojson`.
+- `check` refuses bounds (`min*`, `max*`, `pattern`, `format`) and an empty
+  `enum`. A consumer enforces bounds in its parser.
+- `schemas.find_value(text)` never raises. It returns None when the reply
+  holds no JSON value. `decisions.find_object` keeps its dict-only contract.
 
 ## 5. Interaction with repo rules
 
@@ -465,7 +545,11 @@ health failure.**
 - **Privacy.** The warning on a refusal names a connection label and the
   provider's error text, as today. Schemas are code, not store content.
   The adopter enums (location ids, cast tokens) go to the provider inside the
-  schema, as they already go inside the prompt. Nothing new reaches a log.
+  schema, as they already go inside the prompt. The refusal warning quotes
+  the provider's sentence, and a strict-mode 400 can echo enum values, which
+  for an adopter are store ids (location slugs, cast tokens). That is within
+  CLAUDE.md's logging allowance ("ids, occasionally a name"), and no prose
+  reaches a log.
 - **The cost rule.** Unchanged. A re-send is a call like any other, and its
   price lands in whichever column `cost_basis` decides.
 
@@ -485,10 +569,15 @@ spec.
     that omits a property, depth past `MAX_DEPTH`, and each budget past its
     constant;
   - every `decisions.schema(...)` the decide tests build passes;
-  - `render` equals `prompts` Jinja `tojson(indent=2)` for a corpus covering
-    every allowed keyword;
-  - `find_object` behaves as `decisions.find_object` did on that function's
-    existing cases, which move here.
+  - an empty `enum` and each bound keyword (`maxItems`, `maxLength`,
+    `minimum`, ...) are refused;
+  - the `schema_json` filter renders exactly `schemas.render`'s text, for
+    keys out of order and a description holding `'`, `<` and `&` (the
+    case `tojson` would have escaped);
+  - `decide/system.j2`'s rendered bytes are unchanged;
+  - `find_value` reads an object or an array; `decisions.find_object`
+    still answers None for a bare array, and its existing cases pass;
+  - the leaf imports only the standard library (an AST check).
 - `test_inference_generate.py` (extended):
   - a call with a schema flags exactly the attempts whose
     `structured_output` is `yes`, and leaves an `unknown` and a `no`
@@ -496,7 +585,13 @@ spec.
   - the resolution's targets are identical before and after the call;
   - a call without a schema sends no envelope even on a capable model;
   - each refusal in 01f-C1 raises before any client call, which a
-    `RecordingProvider` that saw nothing proves.
+    `RecordingProvider` that saw nothing proves;
+  - `max_tokens` sends the cap on every attempt that `cap_sent` answers True
+    for, leaves the resolution unchanged, and is absent on the Claude SDK and
+    on an OpenRouter model whose catalog omits `max_tokens`;
+  - a 400 naming `max_tokens` on a call cap (no preset cap) raises
+    `CapRefusalError` worded as the call's;
+  - `call_chain` returns exactly the chain the facade was sent.
 - Re-send tests, using `RefusingProvider` from `backend/tests/llm_fakes.py`:
   - a primary that refuses the field is answered by its re-send;
   - a fallback that refuses after the primary failed is re-sent;
@@ -528,6 +623,13 @@ without a schema is byte-for-byte the request it was at the baseline.
 - Validating a reply against the schema inside the operation.
 - Tool calling (01g), and a forced-tool emulation of structured output.
 - Converting adopters beyond the pilot.
+- Structured output on the Claude Agent SDK. The installed SDK (0.2.159) has
+  `ClaudeAgentOptions.output_format` (json_schema) and
+  `ResultMessage.structured_output`, so the preset's `never` is a choice
+  about this adapter today, not a fact about the SDK. Revisit with 01g-C2b,
+  which raises the SDK floor anyway.
+- A bound-stripping helper. A consumer drops bounds from the schema it
+  sends (3.1).
 
 ## 9. Open questions
 
@@ -539,7 +641,7 @@ without a schema is byte-for-byte the request it was at the baseline.
 2. **Should the ledger row say whether the mode was sent?** For example a
    `structured` field: `sent`, `dropped` (re-sent without), or absent.
    *Recommendation:* defer to 01a. If its comparison tables need it, add it
-   there. The data is reachable from the capture today.
+   there. The capture shows it through `call_chain` (3.7).
 3. **Which pilot?** *Recommendation:* `intent`. It is the smallest closed
    schema, its enums are where the mode adds the most, and nothing else
    reads its output. `suggestions` is the higher-value second, once the
@@ -551,3 +653,24 @@ without a schema is byte-for-byte the request it was at the baseline.
    ignores the field, and requiring parameter support could turn an answer
    into a "no endpoint" 404. Revisit with 01a's numbers if parse failures
    show up on OpenRouter.
+
+## 10. Review record
+
+**Substitute spec gate, 2026-10-09** (adversarial review: 2 blocking, 6
+should-fix, 4 minor). Each item was checked against the code. Each was then
+fixed as noted, or rejected with a reason.
+
+| Item | Verdict | Where |
+|---|---|---|
+| B1 `render` cannot equal Jinja `tojson` (which sorts keys and HTML-escapes) | Fixed. One renderer, `schemas.render` (`sort_keys=True`, no escaping), registered as the `schema_json` filter and used by both the templates and the check. `decide/system.j2` keeps `tojson`. Confirmed against `prompts.py:30-33`. | 3.1, 3.3, C3, 7 |
+| B2 10's schema uses bounds the subset refuses | Fixed on 10's side, per the coordinator: 10 drops the bounds from the schema it sends and enforces them in its parser. 01f keeps the subset strict and says so, with no stripping helper. | 3.1, 8 |
+| S1 the cap is not always sent | Fixed. `cap_sent(target)`, and C1 says "where the adapter sends `max_tokens`". Confirmed at `llm_sampling.py:298-316`. | 3.9, C1 |
+| S2 a refused call cap reads as the user's preset | Fixed. `Sampling.call_cap` and `CapRefusalError` worded as the call's, never re-sent without the cap. | 3.9, C1 |
+| S3 the capture does not show the mode or the cap | Fixed. `inference.call_chain`, handed to `_record_prompt`. The earlier claim is withdrawn. | 3.7, C1 |
+| S4 empty `enum` | Fixed. `check` refuses it, and the pilot sends a plain string field instead. | 3.1, 3.8 |
+| S5 `find_object` widening would change `decide` | Fixed. `find_value` is new, and `decisions.find_object` keeps its dict-only contract. | 3.1, C3 |
+| S6 plumbing (`draft_completion`, `FORWARDERS`, the streamed re-send shape) | Fixed. `draft_completion` keywords, closures nested in `generate`, and a streamed twin helper. | 3.5, 3.8 |
+| M1 nesting depth | Fixed (four deep). | 3.1 |
+| M2 the stdlib-only check needs its own test | Fixed (`test_schemas.py`). | 3.1, 7 |
+| M3 the SDK has `output_format` | Noted under non-goals. | 8 |
+| M4 refusal warnings can echo enum ids | Stated in the privacy bullet. | 5 |

@@ -994,8 +994,12 @@ Chosen over MII's single `mechanics_transactions.json` for three reasons:
 
 1. **A status change rewrites one small file**, never the history. A crash
    mid-write damages at most the transaction being written.
-2. **Two devices sharing a synced store write two files**, not two conflicting
-   versions of one (`docs/store-guarantees.md`, "Conflicted copies").
+2. **Two devices sharing a synced store produce two files** rather than two
+   conflicting versions of one (`docs/store-guarantees.md`, "Conflicted
+   copies"). That is about conflict files only. It is not a concurrency
+   promise: two devices playing one campaign at once is unsupported
+   ("Two devices through a synced folder: no"), and 11.3 says what recovery
+   does about another device's records.
 3. **"Is anything unfinished?" costs the size of `open/`**, which is almost
    always empty, rather than the campaign's age. Startup recovery, the revert
    guard and a Todo count can afford it (the chores module refuses any count
@@ -1005,6 +1009,16 @@ A transaction is **always written to `open/` first** and moved to `done/` as
 the last step of its lifecycle, which includes the proposal handoff (11.1
 step 8). "A transaction names this proposal and its lifecycle is unfinished" is
 therefore always answerable from `open/` alone.
+
+Readers that need more than one record (the History, the audit's
+transaction lines, the cut warning, the reversal flag) do not open every file
+in `done/`. Closing a transaction appends one line to
+`<campaign>/mechanics/transactions/index.jsonl` through `atomic.append_line`:
+`{id, seq, kind, status, committed, scene_identity, refs}`, where `refs` are
+the sheets and fields it touched. Readers filter the index and open only the
+records they need. The index is derived: a missing, torn or short index is
+rebuilt from `done/` (a torn line is skipped, as every `append_line` reader
+does), so it can be wrong only by being incomplete, and a rebuild fixes that.
 
 `id` is `mt-<uuid4 hex>`, minted like a proposal id so that a rebuilt directory
 can never re-mint an old one (`proposals.py:7-9`). `seq` orders the History: it
@@ -1020,6 +1034,7 @@ same `seq` produce two transactions that sort by `(seq, created, id)`.
  "status": "prepared",
  "scene": "012--the-bridge", "scene_identity": "c8f2...",
  "proposal": "pr-77d0...", "post": 17,
+ "device": "5e1a...",
  "module": {"id": "d20-basic", "stamp": "e3b0..."},
  "action": "strike", "actor": "characters:mara", "targets": ["characters:seraphine"],
  "params": {"difficulty": 14, "modifier": 0},
@@ -1027,7 +1042,7 @@ same `seq` produce two transactions that sort by `(seq, created, id)`.
  "branch": "success", "values": {"damage": 3},
  "ops": [Op, ...], "units": [Unit, ...],
  "landed": [],
- "rejection": null, "conflicts": [],
+ "rejection": null, "conflicts": [], "orphaned": null,
  "resolution": {"...": "section 9, built once at prepare"},
  "selection": null,
  "undoes": null, "undone_by": null,
@@ -1036,7 +1051,11 @@ same `seq` produce two transactions that sort by `(seq, created, id)`.
 
 `resolution` is built at prepare and stored, so the proposal handoff after a
 crash writes exactly what the uninterrupted run would have written; nothing is
-recomputed from the pack, which may have changed. The record holds ids,
+recomputed from the pack, which may have changed. The hand-off stamps only the
+fields the record decides after prepare: `status` and each effect's `landed`
+mark (9). `device` is `maintenance_reports.device_key(root)`, the per-device
+key image collection already uses, so recovery can tell its own records from
+another device's (11.3). The record holds ids,
 labels already in the campaign, and integers. It holds no prose and is never
 logged (26).
 
@@ -1044,14 +1063,17 @@ logged (26).
 
 | Status | Directory | Meaning |
 |---|---|---|
-| `prepared` | `open/` | Roll, branch and units recorded; units may be partly applied |
-| `committed` | `open/` then `done/` | Every unit landed; in `open/` until the proposal handoff is done |
-| `rejected` | `open/` then `done/` | The roll stands; the outcome could not be applied (7.5); no unit was written |
-| `stalled` | `open/` | Recovery found a unit changed by someone else; some units landed (`landed`) and the rest did not (`conflicts`) |
+| `prepared` | `open/` | Roll, branch and units recorded; units may be partly applied. A record whose outcome was rejected is `prepared` too, with `rejection` set and the costs as its only units |
+| `committed` | `open/` then `done/` | Every unit landed and the outcome stood; in `open/` until the proposal hand-off is done |
+| `rejected` | `open/` then `done/` | Every unit landed; the outcome could not be applied (7.5), so the units are the costs alone (7.4). The roll stands |
+| `stalled` | `open/` | Recovery could not apply a unit: another writer changed it, or the module or sheet can no longer take it. `landed` and `conflicts` say which |
 | `partial` | `done/` | A stalled transaction the player settled (11.5) |
 
-`kind` is `action` or `undo` (12); II-B adds `manual` (a hand edit of
-conditions or clocks routed through the ledger, 20.4).
+`orphaned` is not a status but a note on a terminal record: the transaction's
+units landed, but its scene or proposal was gone by the time it could be handed
+off, so nothing was projected (11.3). `kind` is `action` or `undo` (12); II-B
+adds `manual` (a hand edit of conditions or clocks routed through the ledger,
+20.4).
 
 ---
 
@@ -1070,28 +1092,36 @@ route (`_roll_proposal_run`), for a pending action proposal being accepted:
 2. **Roll**, for a checked Action: `checks.resolve_check(cid, check, actor,
    difficulty, modifier)`. In memory only.
 3. **Plan**: `effects.plan(...)` (7.6) selects the branch and produces ops and
-   units, or a rejection.
-4. **Record.** Write `open/<id>.json`, status `prepared` (or `rejected`, with no
-   units), carrying the roll, the tier, the plan and the resolution. **This is
-   the write that makes the roll exist.** Bump `head.seq`.
+   units. A rejected outcome is a plan with `rejection` set and the costs as
+   its only units.
+4. **Record.** Write `open/<id>.json`, status `prepared`, carrying the roll,
+   the tier, the plan and the resolution. **This is the write that makes the
+   roll exist.** Bump `head.seq`.
 5. **Apply** each unit through the sheet unit writer (11.2), appending its
-   index to `landed` (a rewrite of the open file) after each one lands. A
-   rejected transaction skips this step.
-6. **Commit** (a `prepared` record only): rewrite the open file with status
-   `committed` and the `committed` timestamp set.
-7. **Hand off**: `proposals.transition(resolving -> resolved, resolution)`.
-8. **Close**: write `done/<id>.json` (the committed or rejected record), then
-   unlink `open/<id>.json`.
+   index to `landed` (a rewrite of the open file) after each one lands.
+6. **Commit**: rewrite the open file with status `committed`, or `rejected` when
+   the plan carried a rejection, and the `committed` timestamp.
+7. **Hand off**: `proposals.transition(resolving -> resolved, resolution)`, the
+   resolution stamped with the record's status (10.2).
+8. **Close**: write `done/<id>.json`, append the index line (10.1), then unlink
+   `open/<id>.json`. Close comes **after** the hand-off and never before, so
+   the revert guard (11.4) can see the record for as long as the proposal can
+   still be `resolving`: there is no window in which an empty `open/` meets a
+   `resolving` chip whose re-accept would roll a second time.
 9. **Project**: `proposals.project` writes the roll entry (checked Actions
-   only) and the transcript line (13), idempotently.
+   only) and the transcript line (13), idempotently. A crash between 8 and 9
+   leaves a `resolved` record whose resolution is projectable, which every
+   existing heal path already projects.
 
 Then, outside the lock, the continuation streams as today (unless `narrate:
-false`).
+false`, 8.4).
 
 Nothing is written between steps 1 and 4 except the claim, so a crash in that
 window leaves a `resolving` record and no transaction, and nobody ever saw the
-roll: the Phase 4 path (revert or supersede, and a fresh accept rolls fresh)
-stays sound. **From step 4 on, the recorded roll is the only roll.**
+roll. No route reverts such a record: the chip answers 409 "adjudication in
+progress" until the next send supersedes it (Phase 4's behaviour, unchanged),
+and a later proposal rolls fresh. **From step 4 on, the recorded roll is the
+only roll.**
 
 `revision.bump(cid)` runs in a `finally` from step 4 onward, for the reason
 `proposals.project` gives (`proposals.py:278-301`): durable writes that do not
@@ -1120,13 +1150,115 @@ canonical live value (schema defaults merged, as `set_field_locked` does):
   -> `"applied"`;
 - anything else -> `SheetConflict("changed since the action was recorded")`.
 
+A touched key the sheet type no longer defines, a field no longer `resource` or
+`track`, or a module that no longer resolves raises `SheetError`; the callers
+in 11.3 and 12 turn both exceptions into a stall or a 409, never a 500.
+`apply_unit_locked` takes `cid` and writes under a lock it does not take
+itself, like `set_field_locked` and `write_locked`, so it gets the same
+treatment from `test_lock_domain_guard.py` as they do (the existing `_locked`
+convention, or a reasoned marker under the cap).
+
 This is the corrected form of MII's `expected_gen`/`result_gen` (1.9 item 1):
 the values are the version; `gen` and `sheet_type` say whether it is still the
 same sheet.
 
 ### 11.3 Recovery
 
+The layering is fixed by the import guard. `store/mechanics/txn.py` owns the
+ledger and the units and **never imports `proposals`**; `store/mechanics/resolve.py`
+owns everything that touches a proposal and may import both:
+
 ```python
+# store/mechanics/txn.py  (no proposals import)
+def open_for_proposal(cid: str, pid: str) -> dict | None
+def complete(cid: str, tid: str) -> dict
+    """Apply every unit not yet landed, then commit (or reject, or stall).
+    Returns the resolution to hand off, stamped. Never closes. Never raises on
+    store content: SheetConflict, SheetError, a missing module or a failed
+    validation becomes `stalled` with a conflict code."""
+def close(cid: str, tid: str) -> None
+    """Write done/, append the index line, unlink open/. Idempotent."""
+
+# store/mechanics/resolve.py  (imports proposals and txn)
+def finish(cid: str, tid: str, *, may_project: bool = True) -> FinishResult
+    """complete -> fence -> hand off -> close -> project, in that order."""
+def recover(cid: str, *, may_project: Callable[[str], bool] = lambda sid: True) -> list[FinishResult]
+```
+
+`finish` on one open record, under the campaign lock:
+
+1. **Another device's record**: if `record.device` is not this device's key and
+   the record is younger than `FOREIGN_GRACE = 10 minutes`, do nothing and
+   report it as `stalled_elsewhere` in the History. Its writes may not have
+   synced yet, and acting now could re-apply units and append a second line.
+   After the grace period it is recovered like any other. (Two devices playing
+   one campaign at once is unsupported; this only keeps a sync lag from
+   becoming a duplicate. The constant is structural, longer than any
+   adjudication's lock hold, and will be tuned later.)
+2. **`txn.complete`**: a `prepared` record applies its remaining units (a unit
+   that landed after the last `landed` write answers `"already"`). All land:
+   `committed`, or `rejected` for a rejected outcome. Any unit that cannot
+   land: `stalled` (11.5). A record already `committed` or `rejected` returns
+   its resolution unchanged.
+3. **The scene fence.** Before any hand-off or projection, require
+   `scenes.identity.scene_identity(cid, record.scene) ==
+   record.scene_identity` (resolving the sid through its current id if a
+   rename moved it, 16) **and** that the scene's proposal record carries
+   `record.proposal`. If either fails, the scene or proposal this transaction
+   belonged to is gone: a deleted scene whose sid has since been reused, a
+   proposal superseded by an older build that knows nothing of transactions.
+   The record is closed with `orphaned: {code}` (its units have landed, the
+   roll is kept in the record), **nothing is projected**, and a log line
+   carries the campaign id, the transaction id and the code. This is the
+   identity fence the rest of the app applies to work that outlives its
+   request (CLAUDE.md, "Detached runs"); without it, recovery would append
+   "Mara — Strike → Seraphine" into a stranger's transcript.
+4. **Hand off**: if the proposal is `resolving`, `transition(resolving ->
+   resolved, resolution)`; if it already holds this resolution (`resolved`,
+   `narrated` or `superseded`), nothing.
+5. **Close** (`txn.close`), and only now (11.1 step 8).
+6. **Project** (`proposals.project`) when `may_project(sid)`; otherwise leave
+   it, since a `resolved` record with a projectable resolution is projected by
+   the next heal or adjudication.
+
+A `stalled` record is handed off with `status: "stalled"` (so the proposal can
+leave `resolving`) and stays in `open/` until settled (11.5).
+
+**Recovery never calls `resolve_check`.** The roll, tier and units come from
+the record. A store test asserts it with a resolver fake that fails if called.
+
+Where recovery runs, and whether it may project:
+
+- at startup, as one more step of `main._lifespan`'s guarded startup loop,
+  beside `module_edit.recover` (`main.py:307-314`), and again after a data-dir
+  move, for every campaign whose `open/` is non-empty (the directory check is
+  the whole cost for every other campaign), skipped with a warning on
+  `StoreBusy` like its neighbours. No run holds a scene at startup, so it may
+  project;
+- at the head of the adjudication route and inside `proposals.heal` (11.4),
+  which run in the scene's own turn or are themselves the scene change, so
+  they may project;
+- at the head of every other route that writes campaign mechanics state: undo
+  and settle, every sheet write (`PUT/DELETE .../sheets/...`, creation,
+  advancement, bulk create), the absorb save that applies audit deltas, and the
+  module rebind routes (`PUT /campaigns/{cid}/module` and the world-module
+  rebind). These apply and commit units, but project only into a scene that
+  `runs.require_scene_free` would let them change; a scene held by a detached
+  turn is left for its own heal, since a shape change under a held scene is
+  what CLAUDE.md's scene-freeze rule forbids;
+- inside the module-edit `pre_swap`, the module delete and the module import
+  (which can stop a user pack shadowing a built-in), for every campaign bound to
+  the module, with no projection (17);
+- in the scene-delete route, for records naming the scene being deleted, before
+  the delete, so they close as `orphaned` at once rather than at the next
+  startup.
+
+A sheet write therefore always finishes an interrupted Action before it
+writes, so a stall needs a crash *and* a foreign write (another device, a hand
+edit) before the next request. Recovery bumps the revision for every campaign
+where it wrote anything, since no request covers a startup pass (the
+module-edit migration's precedent, `module_edit/migrate.py:368-391`).
+
 # store/mechanics/txn.py
 def recover(cid: str) -> list[RecoveryResult]       # every record in open/
 def complete(cid: str, tid: str) -> dict             # one record; returns the resolution to hand off
@@ -1173,33 +1305,44 @@ checked under the lock it already takes:
 1. **The revert is refused for a proposal an open transaction names.**
    `transition` refuses `resolving -> pending` (returns `False`) when
    `txn.open_for_proposal(cid, pid)` finds a record. Taking that edge would hand
-   back a chip whose re-accept rolls again (MII 13.1, kept).
+   back a chip whose re-accept rolls again (MII 13.1, kept). Because a record
+   leaves `open/` only after its hand-off (11.1 step 8), the guard holds for
+   the whole time the chip can be `resolving`.
 2. **`heal` completes an open transaction before it retires a record.** For a
-   `resolving` record named by an open transaction, `heal` calls
-   `txn.complete`, transitions `resolving -> resolved` with the returned
-   resolution, and then projects as it does today. Its projectability test
-   widens from `"result" in resolution` to `projectable(resolution)`, which is
-   also true for an action resolution with a `transaction` and no roll (a
-   no-roll Action still owes its transcript line).
+   `resolving` record named by an open transaction, `heal` runs, in this order:
+   `txn.complete`, the scene fence of 11.3 step 3 (the record is the scene's
+   own, since `heal` is called with this scene's record in hand),
+   `transition(resolving -> resolved, resolution)`, `txn.close`, then
+   `project` as it does today. `heal` lives in `proposals` and calls only
+   `txn`, so the import direction holds. Its projectability test widens from
+   `"result" in resolution` to `projectable(resolution)`, which is also true
+   for an action resolution with a `transaction` and no roll (a no-roll Action
+   still owes its transcript line). `txn.complete` never raises on store
+   content (11.3), so a rebound or broken module stalls the transaction rather
+   than making every later send in the scene answer 500.
 
 `project` branches on `resolution.get("kind") == "action"`: the roll entry is
 appended only when there is a `result` (label `"{actor_label} — {action_label}"`,
 proposal tag `pid`, tier as today), and the line is
-`mechanics.lines.format_action(res)` (13) instead of `checks.format_check_roll`.
-`update_resolution`'s `result` guard is unchanged.
+`mechanics.lines.format_line(res)` (13), which formats a check resolution with
+`checks.format_check_roll` and an action resolution with the action format.
+Every other place that rebuilds a roll line to match it uses `format_line` too:
+`_paused_response_round`'s crash-window match (`routes/mechanics.py:194`),
+which would otherwise raise on a no-roll resolution and never match a checked
+one. `update_resolution`'s `result` guard is unchanged.
 
 The adjudication route, finding a record `resolving`:
 
-- named by an open transaction -> `txn.complete` (finish, not refuse), hand off,
-  project, and continue to the continuation as an accept would. This replaces
-  the 409 "adjudication in progress" for that case only;
-- named by no open transaction -> 409 "adjudication in progress", as today
-  (another request is between steps 1 and 4).
+- named by an open transaction -> `resolve.finish` (finish, not refuse), then
+  continue to the continuation as an accept would. This replaces the 409
+  "adjudication in progress" for that case only;
+- named by no open transaction -> 409 "adjudication in progress", as today.
 
 Import direction: `proposals` imports `mechanics.txn`; `mechanics.txn` imports
-`sheets`, `atomic`, `locks`, `revision` and `campaigns.paths`, never
-`proposals`; `mechanics.resolve` (the sequence above) imports both. The graph
-stays acyclic (`test_import_guard.py`).
+`sheets`, `atomic`, `locks`, `revision`, `campaigns.paths` and
+`scenes.identity`, never `proposals`; `mechanics.resolve` imports both;
+`module_edit`, `routes` and `main` reach recovery through `mechanics.resolve`.
+The graph stays acyclic (`test_import_guard.py`).
 
 ### 11.5 Stalls and settling
 
@@ -1207,8 +1350,9 @@ A stall is the only state where formal history and sheets disagree, and it
 requires a crash plus a foreign write before recovery (11.3). The engine never
 resolves it by writing over the foreign value:
 
-- the record moves to `stalled` with `conflicts: [{unit, live, before,
-  after}]`; `heal` and the adjudication route hand off a resolution with
+- the record moves to `stalled` with `conflicts: [{unit, code, live, before,
+  after}]`, where `code` is `changed`, `sheet_replaced`, `field_gone` or
+  `no_module`; `heal` and the adjudication route hand off a resolution with
   `status: "stalled"` and each effect marked `landed` (9), and project its line,
   so the roll stands and the proposal can leave `resolving`;
 - the History shows it with one action, **Settle**: `POST
@@ -1225,15 +1369,20 @@ resolves it by writing over the foreign value:
 |---|---|
 | Double accept (two clients) | `reserve_turn` already adopts the second into the first's run (`routes/mechanics.py:151-160`); one claim, one roll, one transaction |
 | Lost response, then retry with the same attempt id | The run record replays; or, after it expired, the record is `resolved`/`narrated` and the route takes the existing paths. One transaction |
-| Crash after claim, before record | `resolving`, no transaction; revert or supersede; a fresh accept rolls fresh |
-| Crash after record, before first unit | Retry, heal or startup: recovery applies every unit once with the recorded roll |
+| Crash after claim, before record | `resolving`, no transaction; the route answers 409 until the next send supersedes it; nothing was rolled that anyone saw |
+| Crash after record, before first unit | Adjudication retry, heal or startup: recovery applies every unit once with the recorded roll |
 | Crash after some units | Recovery: landed units answer `"already"`, the rest apply |
-| Crash after commit, before hand-off | Recovery: hand off the stored resolution, close, project |
-| Crash after hand-off, before close | Recovery: proposal already carries the resolution; close and project |
-| Rejected outcome after the roll | `rejected` transaction with the roll; the proposal resolves carrying the rejection; re-accepting is impossible (the record is `resolved`) |
+| Crash after commit, before hand-off | Recovery: fence, hand off the stored resolution, close, project |
+| Crash after hand-off, before close | Recovery: the proposal already holds the resolution; close and project |
+| Crash after close, before project | `resolved` with a projectable resolution; the next heal or adjudication projects it |
+| Rejected outcome after the roll | `rejected` transaction with the roll and the costs applied; the proposal resolves carrying the rejection; re-accepting is impossible (the record is `resolved`) |
 | Supersede (a new send) while `resolving` with an open transaction | `heal` completes first; the roll is projected as history; no continuation (Phase 4's superseded rule) |
+| Proposal superseded before resolution | `pending` was never claimed: no roll, no transaction, no effects |
+| Scene deleted, sid reused, before recovery | The scene fence fails: units land, the record closes `orphaned`, nothing is projected into the new scene |
 | Foreign sheet write between crash and recovery | `stalled`; never overwritten |
-| Module edited between crash and recovery | The module-edit `pre_swap` runs recovery first and refuses the edit while a stalled transaction remains in a bound campaign (17) |
+| Another device's open record, within the grace period | Left alone, shown as `stalled_elsewhere` |
+| Module edited, rebound, deleted or re-imported between crash and recovery | That route runs recovery first and refuses while a stalled transaction remains in a bound campaign (11.3, 17); a module that changed anyway (a hand edit of the pack) stalls the transaction with `field_gone` or `no_module` rather than raising |
+| Module edited between proposal and accept | Accept re-runs `check_proposal` against the live pack inside the lock (11.1 step 1); a proposal the new pack makes illegal is refused before any roll |
 
 ---
 
@@ -1243,16 +1392,29 @@ resolves it by writing over the foreign value:
 POST /campaigns/{cid}/mechanics/transactions/{tid}/undo
 ```
 
-- Only a `committed` or `partial` transaction with no `undone_by` may be undone
-  (`409 not_undoable` otherwise, with the reason).
+- Only a `committed`, `rejected` or `partial` transaction with no `undone_by`
+  may be undone (`409 not_undoable` otherwise, with the reason). For a
+  `rejected` one this reverses its costs.
+- **The whole undo is checked before anything is written.** Every unit of the
+  reversal is first compared, dry, against the live sheet with 11.2's rules
+  (the original's `after` must still be what is there, under the same
+  `sheet_type` and `gen`). Any mismatch refuses the whole undo with
+  `409 undo_conflict`, naming the field; nothing is recorded and nothing
+  moves. Only then is the undo recorded and applied, all inside the same lock
+  hold, so no writer can move a field between the dry check and the write.
+- **A module change since the original refuses the undo.** If the module
+  stamp's sheet schema differs from the live one (a field, sheet-type or
+  content rename re-mints `gen` and may rename keys, 1.2), the undo answers
+  `409 not_undoable` ("the module changed since this action"). Any
+  `SheetError` from a unit maps to the same 409, never a 500.
 - Undo is **a new transaction**, `kind: "undo"`, `undoes: tid`, whose units
   swap each landed unit's `before` and `after`. It runs 11.1 steps 4-6 and 8
   (there is no roll, no proposal and no hand-off) and then rewrites the
   original's `done` record with `undone_by`. Recovery completes that last write
   if a crash interrupts it, since the undo's own record names `undoes`.
-- The CAS is the same as any unit's (11.2): a field that has moved since the
-  original transaction refuses the **whole** undo with `409 undo_conflict`,
-  naming the field. Undo never overwrites later play.
+- It carries **no scene**: `scene` and `scene_identity` are empty. An undo is
+  made from the History, not from a scene, and the audit finds it by time and
+  by the sheets it touched, not by scene (15).
 - Undoing an undo is a redo, by the same rule.
 - Undo appends **no transcript line** and touches no roll entry or proposal:
   the roll happened and the prose said what it said. The History shows the
@@ -1331,8 +1493,11 @@ characters:mara (Mara): strike (Strike: attack someone within reach; 1 target; c
   prompt anybody is playing with.
 - **Only available Actions**, without reasons. Offering the play model an
   Action it may not take invites a proposal that will open in Modify.
-- **Bounded**: at most `MAX_PROMPT_ACTIONS = 12` per actor, in file order,
-  descriptions cut to one line. The figure is structural (a palette-sized list,
+- **Bounded**: at most `MAX_PROMPT_ACTIONS = 12` per actor and
+  `MAX_PROMPT_ACTIONS_TOTAL = 48` across the section, in pool order then file
+  order, descriptions cut to one line. The total cap matters because the
+  section is `LOCK_IN` and is never shed (`store/context/pack.py`); a cast of
+  many sheeted actors must not grow it without limit. The figure is structural (a palette-sized list,
   well inside one section's LOCK_IN budget) and will be tuned against real
   prompts later.
 - Effect maps, values and branch tables are never in the turn prompt. They
@@ -1347,26 +1512,38 @@ characters:mara (Mara): strike (Strike: attack someone within reach; 1 target; c
 
 ## 15. II-A: audit
 
-The audit stays the exception path (MII 4.7, 21). Two changes:
+The audit stays the exception path (MII 4.7, 21). Sheets are campaign state,
+while the audit reads one scene against the baseline taken when that scene was
+created (`audit/baselines.py:65-70`). So a transaction from another scene, or
+an undo from the History, can move a sheet between this scene's baseline and
+its absorb. The audit therefore reads transactions **by time and by sheet, not
+by scene**:
 
-1. **The prompt lists the scene's transactions.** `audit/prompt.py` gains
-   `transaction_lines(cid, sid)` (committed, partial and undo transactions whose
-   `scene_identity` is this scene's, in `seq` order), rendered after the roll
-   log in `audit/user.j2`: `- Mara — Strike → Seraphine: success · Seraphine hp
-   5→2 (mt-4be1)`. `audit/system.j2` says a field change explained by a listed
-   transaction needs no delta; narration that contradicts a transaction, or a
-   transaction the prose never mentions, is a warning, not a delta.
-2. **A deterministic guard against reversing one.** `audit.apply.materialize`
-   drops a delta that would put a field back to the `before` of the latest
-   committed transaction touching it in this scene, with the reason "would
-   reverse a recorded action; undo it from the mechanics History instead". The
-   audit sees narration that skipped a formal effect and is tempted to "fix"
-   the sheet to match the prose; the formal state is the authority, and the
-   reversal belongs to the undo path that checks for later play.
+1. **The prompt lists every transaction that moved an in-scope sheet since
+   the scene began.** `audit/prompt.py` gains `transaction_lines(cid, sid)`:
+   every committed, rejected, partial or undo transaction (any scene, undo
+   included) committed after the scene's `created` time whose `refs` touch a
+   sheet in `sheet_scope(cid, sid)`, read from the index (10.1), in `seq` order.
+   It renders after the roll log in `audit/user.j2`: `- Mara — Strike →
+   Seraphine: success · Seraphine hp 5→2 (mt-4be1, this scene)` or `(... ,
+   another scene)` or `(undo of mt-4be1)`. `audit/system.j2` says a field
+   change explained by a listed transaction needs no delta; narration that
+   contradicts a transaction, or a transaction this scene's prose never
+   mentions, is a warning, not a delta.
+2. **A flag, not a drop, on a delta that would reverse one.** In
+   `audit.apply.materialize`, a delta that would put a field back to the
+   `before` of the latest listed transaction touching it is still staged, but
+   **unselected and flagged** with the reason "would reverse a recorded action
+   (mt-4be1); undo it from the mechanics History, or accept this if the
+   fiction really changed it back". The audit, seeing prose that skipped a
+   formal effect, is tempted to "fix" the sheet to match; the formal state is
+   the default authority. A silent drop would be wrong the other way: hp 5→2
+   by a `strike` and then narrated healing back to 5 is a real change the
+   player must be able to accept.
 
 The four classes (explained, unformalized, contradiction, unacknowledged) are
 then: no delta; a delta (as today); a warning; a warning. The output schema
-(`warnings`, `sheet_deltas`) does not change.
+(`warnings`, `sheet_deltas`) does not change; the staged edit gains a `flag`.
 
 ---
 
@@ -1391,8 +1568,17 @@ then: no delta; a delta (as today); a warning; a warning. The output schema
   nothing in a transaction names the campaign.
 - **Scene renames**: `mechanics.txn` joins `scene_refs.repoint` (its
   `repoint_scenes` rewrites `scene` in every record whose `scene` is mapped;
-  `scene_identity` is the stable key and never moves), and the module
-  docstring's count of stores grows by one.
+  `scene_identity` is the stable key and never moves). So does `proposals`,
+  which is keyed by sid and today is in no fan-out
+  (`store/scene_refs.py:1-40`): its `repoint_scenes` moves a record to its
+  scene's new key, so recovery's fence (11.3 step 3) finds the proposal after a
+  rename instead of orphaning the hand-off. The module docstring's count of
+  stores grows by two.
+- **Scene deletes** leave the `proposals.json` key behind
+  (`store/scenes/lifecycle.py:210`, which drops other sidecars but not that
+  one), and a later scene can reuse the sid. Recovery's identity fence (11.3)
+  is what keeps an interrupted Action from projecting into that scene, and the
+  delete route closes such records first (11.3).
 - **Reclassify**: `mechanics.txn` joins `record_refs.repoint` (actor, targets,
   ops and units carry `<kind>:<id>`), so a recovery or an undo resolves to the
   file the sheet moved to.
@@ -1410,6 +1596,12 @@ then: no delta; a delta (as today); a warning; a warning. The output schema
   `amount`, `value` and `values` (`_rewrite_exprs`); a sheet-type rename rewrites
   `sheet_types` and `targets.sheet_types`; a rule rename rewrites `rules`; an
   Action rename is a new `_RENAME_KINDS` entry.
+- **Recovery first, at every door that can change what a bound campaign's
+  open transactions resolve against**: a module edit's `pre_swap`, module
+  delete, module import (which can stop a user pack shadowing a built-in), and
+  the campaign and world module rebinds. Each runs `resolve.recover` for the
+  affected campaigns without projecting, and refuses with 409
+  `mechanics_open` while a stalled record remains.
 - **Guards**, in the style of `check_proposal_guard`:
   `action_proposal_guard(mid, aid)` refuses an Action rename or delete while a
   non-terminal action proposal names it in a bound campaign; and
@@ -1671,42 +1863,63 @@ a later decision, after the eval gate has data (Open question 8).
 
 ### 24.3 The question
 
-One `decisions.Item` per NPC turn, context bounded and built off the event
-loop: the actor's name, sheet summary (the `mechanics_sheets` line), active
-conditions (II-B, when present), the scene's recent turns through
-`store.regex.view.view` (phase `prompt`, which the regex guard requires of every
-LLM reader of transcript text), and the 02-C2 intent when there is one (24.6).
+Context is bounded and built off the event loop: the actor's name, sheet
+summary (the `mechanics_sheets` line), active conditions (II-B, when present),
+the scene's recent turns through `store.regex.view.view` (phase `prompt`, which
+the regex guard requires of every LLM reader of transcript text), and the 02-C2
+intent when there is one (24.6). The shape of the question follows the legal
+set; option ids for pairs are 01e's `Pair.key`, spelled `head=>tail`
+(`strike=>characters:seraphine`), whichever form carries them:
 
-- **Flat form, available today**: when every option has at most one target and
-  the legal set has at most 254 options, one `Choice` whose options are the
-  legal pairs (`strike→characters:seraphine`, `mend→characters:winifred`, and
-  `none`, `allow_none=True`, meaning "no formal action this turn"). Each
-  option's description is the Action's label and description and the target's
-  name. This needs nothing from 01e.
-- **Joint form, 01e-C3b**: `Joint`, a flattened choice over the legal (action,
-  target) pairs, used when any option is `multi` (6.4) or the flat form would
-  pass 254 options.
-- A legal set the available forms cannot carry (multi-target before 01e-C3b
-  lands) drops the offending options from the question and records that it did;
-  it never fakes a selection for them.
+- **One step, single-target, at most 254 pairs.** One flat `Choice` over the
+  legal pairs plus the reserved none (`allow_none=True`, "no formal action this
+  turn"), which exists today (`decisions.py:189-196`, 255 options with none,
+  `decisions.py:140`). Where 01e-C3b has landed the same question is a
+  `Joint`, which adds the head-level readings (`head_marginal`, `head_first`);
+  that is a convenience, so 01e-C3b is soft. An option's description is the
+  Action's label and description and the target's name. One `draws.draw`,
+  `purpose="action"`.
+- **Two steps, past 254 options.** First a `Choice` of Action (ids are Action
+  ids, plus none); then, for the drawn Action, a `Choice` of its eligible
+  targets. Two decide calls, two draws from one seed with `purpose="action"`
+  and `purpose=f"target:{action}"` (01c's `uniform(seed, purpose)` makes each
+  replayable alone). This needs nothing from 01e.
+- **Multi-target Actions (`targets.max > 1`)**: always two steps, the second a
+  `MultiSelect` of targets (**01e-C3a, hard**). A `MultiSelect` answer has only
+  marginals, which 01c-C4 never samples, so the target set is always taken
+  from the answer (`basis: answer`, `sampled: false` in its record). A set
+  whose size falls outside `targets.min..max` is no usable answer: the Action
+  is dropped and the turn proceeds as prose. Until 01e-C3a lands, multi-target
+  Actions are left out of the question, and the item records that they were.
+
+01e's `Joint` is a single flattened choice that names **one** target, so it
+cannot carry a multi-target Action and cannot exceed the choice cap; the two-step
+forms are how 13 covers both, per the 01e decision recorded in the checklist.
 
 ### 24.4 Selection
 
-- **A distribution was reported** (native, or structured where 01c-C1's policy
-  allows it): restrict it to the legal options, renormalise only if 01c-C2 says
-  so, and draw with 01c-C2's helper and a fresh 53-bit seed
-  (`secrets.randbits(53)`, the dice engine's width, `dice.py:114-118`). The
-  replay record is 01c-C3's `{distribution, seed, selected, backend}`.
-- **No distribution, but an answer**: use the answer as the selection and
-  record `{distribution: null, seed: null, selected, backend, sampled: false}`.
-  This is not a draw and nothing is replayed from it: a recorded cross-spec
-  decision in `ROADMAP-CHECKLIST.md` ("NPC answer with no distribution"), which
-  01c-C4 states.
-- **Abstention, refusal, `none`, or no usable answer**: no Action. The NPC's
-  turn proceeds as prose (01c-C4).
-- **`DecideRequestError` or an `LLMError`**: logged, no Action, the turn
-  proceeds. A failed decision never fails the round, as the speaker pick's
-  refusal returns control rather than failing (`character_turns.py:741-760`).
+Each step's answer goes through 01c's draw, unmodified: `draws.draw(question,
+item_result, seed=seed, purpose=..., served=...)`, with `seed =
+draws.new_seed()` minted **once per NPC decision occasion** (01c 6.1 rule 3),
+shared by both steps. 13 does not restrict, renormalise or otherwise reshape
+the reported distribution (01c 5.3, 7); the none option stays in it and a
+drawn none means no Action. The `Draw`'s own `record` is the replay record.
+Legality is enforced after the draw (24.5), never by editing the distribution.
+
+- **`basis: "sampled"`**: the drawn key is the selection.
+- **`basis: "answer"`** (no usable distribution, but a plain answer): act on
+  the answer. Its record says `sampled: false`; it is not a draw and nothing is
+  replayed from it, the recorded cross-spec decision in `ROADMAP-CHECKLIST.md`
+  ("NPC answer with no distribution"), which 01c-C4 states.
+- **`basis: "none"`**: abstention, refusal, none, unreadable, or an error: no
+  Action. The NPC's turn proceeds as prose (01c-C4).
+- **Errors degrade, never fail the round**: `DecideRequestError`, any
+  `LLMError`, and the seam's `require_inference` refusals (409 `incapable`,
+  `missing_key`, `not_migrated`) are logged with a code and the turn proceeds
+  as prose. This is deliberately more forgiving than the speaker pick, which
+  returns control only on `DecideRequestError` and lets an `LLMError`
+  propagate (`character_turns.py:728-761`): a missing NPC Action loses a
+  flourish, while a missing speaker leaves the round with no one to speak.
 
 ### 24.5 Re-check and record
 
@@ -1715,10 +1928,18 @@ campaign lock, before creating the proposal: recompute the legal set, compare
 digests, and run `check_proposal` on the selection. A mismatch whose selection
 is still legal proceeds; one that is no longer legal records
 `npc_action: {selection, dropped: "no_longer_legal"}` on the round record and
-proceeds as prose. The replay record is stored where the outcome is (01c-C3):
-on the proposal payload's `selection`, on the round record, and copied into the
-transaction (`selection`, 10.2). Mechanical randomness stays separately
-reproducible through the roll's own seed; choice and dice never share one.
+proceeds as prose.
+
+The replay record is stored where the outcome is (01c-C3), in that same hold:
+on the proposal payload's `selection` and on the round record. It is copied
+into the transaction (`selection`, 10.2) if the proposal is accepted. Those
+are the right places because a **declined** NPC proposal has no transaction,
+yet its draw must still be kept. 01c's 6.1 currently names "the
+transaction-ledger entry that commits the Action" as 13's persistence point;
+that sentence should read "the proposal payload and the round record, copied
+into the transaction". This is flagged for the 01c owner (Open question 11).
+Mechanical randomness stays separately reproducible through the roll's own
+seed; choice and dice never share one.
 
 ### 24.6 The 02-C2 soft seam
 
@@ -1729,20 +1950,28 @@ option descriptions carry them, so a model can connect "threaten" to an
 names an Action. Without 02-C2 the item simply has no intent line.
 
 02-C3's per-contribution turn plan carries an `extra` slot for 13-C3: when
-that plan runs, the NPC Action question rides in it as one more item of the
-same batched decide, rather than as a call of its own, and its answer is
-handled exactly as 24.4 and 24.5 say. Without 02-C3 the question is its own
-`npc-action` call (24.7).
+that plan runs, the first step of the NPC Action question (24.3) rides in it as
+one more question of the plan's item, rather than as a call of its own, and its
+answer is handled exactly as 24.4 and 24.5 say. It is then routed, metered and
+seeded as the plan is (24.7). Without 02-C3 the question is its own
+`npc-action` call.
 
 ### 24.7 Route, metering, capture, eval gate
 
 - A new route, `Route("npc_action", "NPC actions", ..., ("npc-action",), True,
-  operation="decide", default_role="decision", legacy="scene")`, added in the
-  same change as its call site, which is `test_operation_guard.py`'s rule; it
-  appears on the Models page because that page reads `routing.ROUTES`
+  operation="decide", default_role="decision", legacy=routing.NO_LEGACY)`,
+  added in the same change as its call site, which is
+  `test_operation_guard.py`'s rule. `NO_LEGACY` because the route is born at
+  format 2 with no legacy key to read; `legacy=""` would make it a legacy route
+  and add a key to `LEGACY_ROUTES` and `CONFIG_KEYS` (the checklist's shared
+  structure, added by whichever spec lands first). It appears on the Models
+  page because that page reads `routing.ROUTES`
   (`store/inference/settings.py:305`).
 - Metered by `decide`'s own meter, attributed `campaign`, `scene`, `post` and
-  `round_id` (`inference.py:684-688`). A native-only Decision model files
+  `round_id` (`inference.py:684-688`). When the question rides in 02-C3's turn
+  plan instead (24.6), it is metered as `turn-plan` on the `turn_plan` route,
+  under the plan's seed and meter, not as `npc-action`; only a second step
+  (24.3) is then its own `npc-action` call. A native-only Decision model files
   native rows with no `modelled_usd`, per CLAUDE.md's native decision rule.
 - Captured through 01b-C1 when it lands.
 - **Eval gate** (`evals/run.py --gate`): a synthetic corpus of NPC situations

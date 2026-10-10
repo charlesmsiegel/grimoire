@@ -294,7 +294,7 @@ builder (a garbled file costs its signal, never the turn):
 | Current location | `scenes.read.get_location_history(cid, sid)[-1]` unless excluded | `locations:<id>` |
 | Mentioned records | Location, item and group names matched whole-word in the window, through the overlay | `<kind>:<id>` |
 | Live threads and commitments | `continuity.effective.threads/commitments` rows whose title terms occur in the window, or whose involvement includes a present actor (`involvement.of`) | `thread:<id>`, `commitment:<id>` |
-| Groups | 07-C2 `groups_for_actor(ref)` for each present actor | `groups:<id>` |
+| Groups | 07-C2 `groups_for(ref)` for each present actor | `groups:<id>` |
 | Planner subjects | `Query.subjects` from 10, validated against the same catalogs | any of the above |
 
 An excluded ref (`pins.active(...)["excluded"]`) seeds nothing: the reader's
@@ -314,11 +314,22 @@ Each relation turns seeds into candidate scenes and records *why*:
 | `location` | Scenes set at the current or a mentioned location | the chronicle's `location`, then the scene head's location history |
 | `thread` | Scenes a seeded thread or commitment touched, over its merged alias group | `involvement.group_touched(cid, kind)` (`involvement.py:61`) |
 | `relationship` | Scenes that moved a feeling or bond between two present actors | `relationship_history.for_pair(cid, a, b)` (`store/relationship_history.py:153`), rows without `scene_gone` |
-| `group` | Scenes where two or more members of a seeded group stood | 07-C2 inverse membership plus `scene_actors` |
+| `group` | Scenes where two or more members of a seeded group stood; a group's leader counts as a member (07's recommendation) | 07-C2 `groups_for` and 07-C3c's projections, plus `scene_actors` |
 
-The draft's "event/time anchors" relation is deferred: `events.json` records
-no scene (`store/events.py` docstring), so tying an event to scenes would mean
-matching in-fiction dates, which is 11's or a later spec's question.
+Deferred from the draft, each for a stated reason (review M9):
+
+- **Event and time anchors**: `events.json` records no scene
+  (`store/events.py` docstring), so tying an event to scenes would mean
+  matching in-fiction dates, which is 11's or a later spec's question.
+- **Reviewed continuity links** (`continuity.json` links between threads and
+  commitments): reachable today through the `thread` relation over each
+  record's merged group; a link-walk relation waits for evidence from the
+  eval suite that it adds recall.
+- **"Recent scenes"** as a relation: recency is already the recap's job and
+  every list's tie-break; as a relation it would admit by recency alone,
+  which `STRUCTURAL_PLAIN_CAP` exists to stop.
+- **Lexical shingles**: whole-phrase matching of quoted phrases and resolved
+  names covers the multi-word case; shingles wait for the eval suite.
 
 ### 5.3 Eligibility, applied to every signal
 
@@ -854,50 +865,110 @@ its breakdown (`routes/common.py:406`, `_record_prompt`).
 
 ## 10. Where retrieval runs: the turn phase
 
-### 10.1 One async entry, three callers
+### 10.1 One async entry, its bridge, and who calls it
 
 ```python
 async def retrieve(cid: str, sid: str, query: Query, *, ceiling: int,
-                   client: embeddings.EmbeddingsClient, deadline: float,
-                   rerank: Reranker | None = None,
+                   embed_client: embeddings.AsyncEmbeddingsClient,
+                   doc_client: embeddings.EmbeddingsClient,
+                   deadline: float, rerank: Reranker | None = None,
                    origin: str = "turn") -> Evidence
+
+def retrieve_preview(cid: str, sid: str, query: Query, ceiling: int) -> Evidence  # sync, no network
 ```
 
 File and CPU stages run in `anyio.to_thread.run_sync`; the query embedding
-goes through 01h-C4b's async path; the rerank (a `Reranker`, the callable the
-route layer builds around `operations.decide`) is already async. Nothing in
-`retrieve` takes a campaign lock: its reads are the context builder's
-fail-soft reads, and it writes nothing to a campaign (vectors go to the
-global cache, documents to the compiled cache).
+goes through 01h-C4b's async door with `embed_client` (the app's
+`AsyncEmbeddingsClient`, `routes.get_embeddings`, touched only from the
+loop); the document warm runs 08-C2b's `vectors_for` in a worker with
+`doc_client`, 08's synchronous client (review S9). The rerank (a `Reranker`,
+the callable the route layer builds around `operations.decide`) is async.
+Nothing in `retrieve` takes a campaign lock: its reads are the context
+builder's fail-soft reads (verified: pins, chronicle, effective, involvement
+and relationship history take none), and it writes nothing to a campaign.
 
-`routes/history_recall.gather(app, cid, sid, *, seed, resolved, client)` is
-the turn-path wrapper: it returns an empty `Evidence` immediately when
-settings are off (no reads, no tasks), builds the query, computes the ceiling
-from `resolved.chain` (9.2), resolves the optional rerank softly, and awaits
-`retrieve` under `RETRIEVAL_DEADLINE`.
+`routes/history_recall.gather(app, cid, sid, *, seed, resolved, llm_client,
+embed_client, doc_client, deadline)` is the async turn-path wrapper. It
+returns an empty `Evidence` at once when settings are off or the section is
+switched off in the layout (no reads, no tasks), resolves the embedding space
+and the optional rerank **in a worker** (`run_in_threadpool`, as
+`character_turns.py:748`-`749` does; resolution reads `config.md` and the
+connections), builds the query, computes the ceiling from `resolved`
+(01i-C2), and awaits `retrieve` under the turn-phase deadline (10.2).
 
-| Caller | Thread | How it reaches `gather` | Where the evidence goes |
+`routes/history_recall.gather_sync(app, cid, sid, ...)` is the bridge for a
+`def` handler. **In the calling worker, before the portal call**, it checks
+whether that worker holds the campaign's lock (`_ProcessScopedLock` is an
+`RLock`, so ownership is per thread, `store/locks.py:731`-`734`); if it does,
+it returns `Evidence` with `skipped:locked` and does not call the portal
+(review S2: the loop thread a portal call lands on owns nothing, so the check
+inside `gather` could never see the worker's hold). Otherwise it calls
+`app.state.run_portal.call(gather, ...)` (`main.py:330`-`331`) and **wraps the
+call**: any exception, the portal being closed at shutdown included, returns
+an empty `Evidence` with `coverage.verdict = "error"` (review M7), because on
+`post_chat` the player's post is already appended and the undo is not yet
+wired, so an exception here would strand it.
+
+| Caller | Thread | How it reaches retrieval | Where the evidence goes |
 |---|---|---|---|
-| `post_chat` and the director branch (`routes/scenes.py:1050`-`1088`), `post_retry`, `post_regenerate` | threadpool worker (`def`) | `app.state` lifespan portal: `portal.call(gather, ...)`, the house bridge for a `def` route (`CLAUDE.md`, detached runs) | `compose_turn(..., history=evidence)` |
-| A group round's narrator compose (`character_turns._prepare`) | async driver, then a worker under `campaign_lock` | `await gather(...)` in the driver **before** `run_in_threadpool(_prepare, ...)` | passed into `_prepare` and on to `_compose` |
-| `context_breakdown` (live inspector) | worker | inline, preview mode | breakdown only |
+| `post_chat` (`routes/scenes.py:1085`), `post_retry` (`:1205`), `post_regenerate` (`:1475`) | threadpool worker (`def`) | `gather_sync` | `compose_turn(..., history=evidence)` |
+| The director branch (`routes/scenes.py:1057`) | same | `gather_sync`, with the note as `seed` | `compose_director_turn(..., history=evidence)`, which gains the parameter too (review M10) |
+| A group round (`character_turns._round_frames` -> `_prepare`) | async driver, then a worker under `campaign_lock` | `await gather(...)` in the driver, **only for a narrator contribution** that will compose (below) | passed into `_prepare` and on to `_compose` |
+| `context_breakdown` (live inspector) | worker | `retrieve_preview`, inline | breakdown only |
 
-A guard test fails a `history.retrieve` or `gather` call lexically inside a
-`with ... campaign_lock(...)` block in `routes/`, and `retrieve` itself checks
-that the calling thread does not hold the campaign's lock (the lock is
-reentrant, so it knows its owner); if it does, the network stages are skipped
-with `skipped:locked` rather than holding every other writer of the campaign
-behind an HTTP call. The opener, mechanics continuations and replay are not
-callers in this spec (open question 5).
+The turn routes gain `embed_client: AsyncEmbeddingsClient =
+Depends(get_embeddings)` beside their LLM client, and pass the module's sync
+client for the document warm.
 
-### 10.2 The deadline
+**The round path** (review S3). `_round_frames` calls `_prepare` once per
+contribution (`character_turns.py:1043`-`1045`), and only some contributions
+compose with the section. The driver calls `gather` only when **all** hold:
 
-`RETRIEVAL_DEADLINE` bounds the whole phase, embed and rerank included. It
-defaults to `embeddings.TIMEOUT` plus `RERANK_CEILING`, so a healthy turn
-waits for at most one embed round trip and one decide chunk, and an outage
-costs one embed deadline and then nothing for `OUTAGE_BACKOFF`. A phase that
-runs out returns what it has: structural and lexical are computed first and
-are never waited out, and `coverage.semantic` says `skipped:deadline`.
+- the contribution's actor is `grimoire` (an NPC's prompt blanks the
+  section, 9.1);
+- `turn.appended` is empty (a roll continuation composes mid-turn and is not
+  a caller, open question 5);
+- the round has no pending response whose snapshot `_prepare` will replay
+  (`character_turns.py:479`-`497`). The driver reads that once, outside the
+  lock; a stale answer only wastes a retrieval, since `_prepare` decides under
+  the lock and ignores the evidence when it replays.
+
+The evidence is computed **once per round** and reused by every narrator
+contribution of that round: it is keyed by the round's id and held on the
+driver's state for the round's life. A round is one player post, so retrieval
+is per player post on both paths.
+
+A guard test fails a `history.retrieve`, `gather` or `gather_sync` call
+lexically inside a `with ... campaign_lock(...)` block in `routes/`. The
+opener, mechanics continuations and replay are not callers in this spec (open
+question 5).
+
+### 10.2 The turn-phase deadline
+
+One deadline bounds the whole phase, and 10's planning draws from the same
+one (review S4):
+
+- `HISTORY_PHASE_SECONDS` (4 s) when planning is off: one embed round trip on
+  a healthy hosted endpoint plus one decide chunk, with room. It is a turn-path
+  budget, deliberately far below `embeddings.TIMEOUT` (30 s,
+  `embeddings.py:74`), which is a provider timeout, not a wait a player should
+  sit through before the first frame.
+- `HISTORY_PHASE_PLANNED_SECONDS` (12 s) when 10's `history_plan` is `auto`,
+  the phase 10 section 8 spends from.
+- Every step takes `min(its own ceiling, remaining)`: the query embed's
+  `deadline`, the warm's `deadline`, the rerank's `around`, and 10's calls.
+  A step that would start with nothing remaining does not start, and
+  `coverage.semantic` (or 10's trace) says `skipped:deadline`.
+- **The file stages** (the scene listing, 08-C2a's slicing and digesting, the
+  structural reads, lexical over the live set) run in a worker and cannot be
+  cancelled mid-read. They run first; if they finish past the deadline, no
+  network stage starts. Their cost is a listing, a stat and a digest per scene
+  and arithmetic over cached term statistics; the eval suite's latency column
+  measures it on long synthetic campaigns, and 09-C4's gate includes it.
+- **Worst case before the first frame** on `post_chat`: the file stages plus
+  the phase deadline (4 s, or 12 s with planning), plus lore recall's own
+  embed in compose, which the shared outage memo (6.3) caps at one deadline
+  per `OUTAGE_BACKOFF` during an outage.
 
 ### 10.3 Freezing and replay
 
@@ -905,7 +976,8 @@ Evidence is computed once per compose and rendered into the frozen prompt
 (`_prepare`), so every guidance variant and every fallback attempt reads the
 same evidence. A reroll of a pending response replays the snapshot
 (`PreparedMessages.from_snapshot`, `character_turns.py:483`) and retrieves
-nothing. A fresh `post_regenerate` composes, and so retrieves, again.
+nothing (10.1's gate). A fresh `post_regenerate` composes, and so retrieves,
+again.
 
 ### 10.4 Detached runs
 
@@ -914,9 +986,9 @@ inside the detached run's driver, so a dropped connection drops a subscriber,
 not the retrieval. On the `post_chat` path it runs in the request before the
 run is started, as `compose_turn` does today; moving composition into the run
 is a separate change (open question 7). A cancelled run cancels the
-`retrieve` task; its embed request is abandoned the way `_bounded_call`
-abandons an overrun call, and its meter files what it files (an embed that
-went out is a row).
+`retrieve` task: the async query embed files `aborted` (01h-C4b), and the
+document warm in its worker finishes and files an ordinary row (01h section
+6.2: a sync embed in a worker cannot be cancelled).
 
 ## 11. Tiers, widening and fallbacks (09-C2)
 
@@ -934,24 +1006,30 @@ Tier 2 widens only the semantic signal, the one that costs per document.
 
 ### 11.2 The coverage verdict
 
-`coverage.verdict(candidates, depth) -> Coverage`, deterministic and free:
+`coverage.verdict(candidates, depth, eligible) -> Coverage`, deterministic and
+free. `eligible` is the number of scenes that passed section 5.3, so coverage
+can tell "retrieval missed" from "nothing else exists" (review S5):
 
-- `empty`: no candidate admitted.
-- `sufficient`: at least `depth` candidates admitted **and** at least
-  `MIN_AGREEMENT` (1) of them admitted by two or more signals.
+- `exhausted`: every eligible scene is already admitted, or there is no
+  eligible scene at all (a campaign's first scene). Nothing more can be found,
+  so nothing should be spent looking: tier 2 does not run and 10 treats it as
+  `sufficient`.
+- `empty`: no candidate admitted, and eligible scenes exist.
+- `sufficient`: at least `min(depth, eligible)` candidates admitted **and** at
+  least `MIN_AGREEMENT` (1) of them admitted by two or more signals.
 - `thin`: anything else.
+- `error`: `gather` caught a failure (11.3). 10 never plans on it.
 
 Agreement is the structural meaning of "more than one independent reason to
 think this scene matters", which is why it is counted rather than scored. With
 the semantic signal off, agreement can still come from structure plus words.
 
 Tier 2 runs when tier 1 says `empty` or `thin` *and* the semantic signal is
-available and has budget left. Without semantic, tier 2 adds nothing tier 1
+available and has time left. Without semantic, tier 2 adds nothing tier 1
 did not already score, so it is skipped and coverage records why.
 
-`Coverage` is what 10 consumes: it carries the verdict, the tiers tried, the
-semantic status, the admitted count and the agreement count. 10's planner is
-gated on it (`thin` or `empty`, 10 section 4).
+`Coverage(verdict, tiers, semantic, admitted, agreement, eligible)` is what 10
+consumes. 10's planner is gated on `thin` or `empty` only (10 section 3).
 
 ### 11.3 Fallbacks
 
@@ -961,7 +1039,7 @@ gated on it (`thin` or `empty`, 10 section 4).
 | No Embedding role, or a known `no` for `embed` (`embed_space.problem`) | Structural plus lexical, tier 1 only; `semantic: off` |
 | Embed failure this turn | Structural plus lexical; `semantic: failed:<kind>`; the meter has already recorded the failure (`CLAUDE.md`, "Instrument LLM failures at `usage.Meter.done`"); this module writes no line of its own |
 | Outage memo set | As above, with `backoff`, and no request |
-| Compiled cache missing or deleted | SearchDocuments rebuild lazily (08-C2), `BUILD_LIMIT` per turn; unbuilt scenes are structural-only this turn |
+| Compiled cache missing or deleted | 08-C2a rebuilds every document on the call (08 section 6); vectors refill through 08-C2b's warm, `warm_limit` per turn, and a document with no vector is structural and lexical only meanwhile |
 | A ledger file unreadable (chronicle, plot, appearances, relationship history) | Its relations contribute nothing; the others answer. The `involvement.scene_actors(unreadable=...)` pattern says which |
 | Rerank unresolvable, failed, or abstained | RRF order stands; the row says why |
 | Deadline spent | What was computed is used; `skipped:deadline` |
@@ -1000,12 +1078,18 @@ planted fact token. The draft's five shapes are the minimum:
 4. The query is semantically generic ("You knew the whole time, didn't you?").
 5. The answer is one short transcript excerpt inside a long scene.
 
-Plus three 09 adds:
+Plus five 09 adds:
 
 6. The relevant scene is a closed branch sibling (it must **not** be recalled).
 7. The relevant scene is *later* than the one being played (must not be
    recalled: the `before` rule).
-8. The relevant actor is excluded by a reader's pin (must seed nothing).
+8. The relevant actor is excluded by a reader's pin: they seed nothing, their
+   name is not a lexical term, and a gm-only or excluded location is not named
+   in any header.
+9. A young campaign with fewer earlier scenes than `depth`, and a first
+   scene: coverage must be `exhausted`, tier 2 must not run.
+10. Legacy scenes with no identity (the frozen campaign's shape): two of them
+    remain two candidates and shed one at a time.
 
 ### 12.3 Arms and metrics
 
@@ -1019,9 +1103,10 @@ Plus three 09 adds:
 | `hybrid+rerank` | All three plus the 01e rerank (live only) |
 
 Per arm and aggregate: scene recall at 1, 3 and 5; excerpt recall (a gold
-range inside a rendered excerpt); rule cases 6 to 8 as hard pass/fail; added
-tokens (the section after packing); retrieval wall time; embed requests and
-decide calls. Live mode adds downstream consistency: the reply names the
+range inside a rendered excerpt); rule cases 6 to 10 as hard pass/fail; added
+tokens (the section after packing); retrieval wall time, the file stages
+reported apart from the network stages; embed rows per task and decide
+calls. Live mode adds downstream consistency: the reply names the
 planted fact token and does not contradict it, a deterministic grader in the
 `evals/graders.py` style (no human judgement, `evals/README.md`'s rule).
 Wall time, tokens and cost are reported per item and per arm through 01a-C1,
@@ -1034,7 +1119,7 @@ in the three money columns never added together, and the arms compare in
   backend`: the `context-only`, `lexical` and `structural+lexical` arms over a
   small recipe, plus `semantic` and `hybrid` replayed from recorded vectors
   (`evals/recordings/history/vectors-<space digest>.bin`, synthetic text
-  only). Rule cases 6 to 8 must pass in every arm.
+  only). Rule cases 6 to 10 must pass in every arm.
 - **Long** (`--history --long`): the same cases over long recipes, opt-in,
   offline where vectors are recorded.
 - **Live** (`--history --live`): embeds with the configured Embedding role,
@@ -1053,8 +1138,9 @@ user's library.
 
 ### 09-C1: retrieval over a query, returning bounded evidence with signals
 
-**Inputs.** `retrieve(cid, sid, query, *, ceiling, client, deadline, rerank=None,
-origin="turn")`, where `Query` is:
+**Inputs.** `retrieve(cid, sid, query, *, ceiling, embed_client, doc_client,
+deadline, rerank=None, origin="turn")` (async; `retrieve_preview` is its
+synchronous, network-free core), where `Query` is:
 
 ```python
 @dataclass(frozen=True)
@@ -1066,31 +1152,52 @@ class Query:
     max_scenes: int | None = None          # <= history_recall_depth; None = the setting
     perspective: str = "narrator"          # 11's seam; anything else is ValueError until 11-C1
     tier_limit: int = 2                    # 3 only with origin != "turn"
-    turn_index: int | None = None          # ledger attribution
+    turn_index: int | None = None          # the rerank's ledger `post`
 ```
 
 **Outputs.** `Evidence(items: tuple[EvidenceItem, ...], candidates:
 tuple[Candidate, ...], coverage: Coverage, ceiling: int, query_digest: str)`:
 `items` are the selected scenes, fitted to `ceiling`, each carrying its
-**scene identity** (and the sid at retrieval), header fields, an optional
-summary, its excerpts with **every included post's transcript index, post
-key and text** (`EvidencePost`, section 8), and its token cost; `candidates` are every
-admitted candidate in merged order (bounded by `POOL_MAX + WIDEN_LIMIT`), so a
-caller can see what was found and not selected. `Evidence.detail()` is the
-JSON-safe projection of section 9.5. `history.merge(a, b, *, ceiling,
-rerank=None) -> Evidence` merges two evidences by scene identity, keeping every
-signal from both, re-ordering by RRF over the union, optionally reranking the
-merged top once (section 7.3), and re-fitting to `ceiling`; 10 retrieves its
-rounds with `rerank=None` and reranks only the final merge, so a planned turn
-pays for one rerank, not one per round. The selection never exceeds
-`history_recall_depth` and the ceiling never grows, whatever a round asked for.
+`SceneRef` (the **scene identity**, `None` for a legacy scene, the sid at
+retrieval, and `key`, section 7.2), header fields, an optional summary, its
+excerpts with **every included post's transcript index, post key and text**
+(`EvidencePost`, section 8; the key is `""` until 08-C3b carries it), and its
+token cost; `candidates` are every admitted candidate in merged order (bounded
+by `POOL_MAX + WIDEN_LIMIT`), so a caller can see what was found and not
+selected. `Evidence.detail()` is the JSON-safe projection of section 9.5.
+
+`history.merge(a, b, *, ceiling, expand, rerank=None) -> Evidence` (review
+S6) merges two evidences **by `SceneRef.key`**:
+
+- a candidate in both keeps both rounds' `Signals` (`Candidate.rounds`), and
+  its ranks are keyed `(round, signal)`, so two rounds that both ranked it
+  lexically are two lists, not a collision;
+- the merged order is RRF over every round's ranked lists, each list ranking
+  only what its signal admitted (7.1);
+- the top `history_recall_depth` are selected; an item already expanded in a
+  round keeps its excerpts, and a newly selected candidate that no round
+  expanded is expanded through `expand` (the caller's bound
+  `expand.excerpts`, run in a worker), so the merge pays at most `depth` new
+  transcript reads;
+- the optional rerank runs once on the merged top (7.3), and the result is
+  re-fitted to `ceiling`.
+
+10 retrieves its rounds with `rerank=None` and reranks only the final merge, so
+a planned turn pays for one rerank, not one per round. The selection never
+exceeds `history_recall_depth` and the ceiling never grows, whatever a round
+asked for.
 
 **Guarantees.** No candidate orders at or after the played scene, is in its
 branch group, or is a closed sibling. Every lookup is over keys computed this
-call. Signals are never combined into one stored or returned number. The
+call. Signals are never combined into one stored or returned number. Every
+merge, dedupe and shed compares `SceneRef.key`, never a nullable identity. The
 output text has passed the regex prompt view. The call writes nothing to a
-campaign and takes no campaign lock. Every embed request is one ledger row
-under `history-recall`, with campaign, scene and post.
+campaign and takes no campaign lock, and never mints a scene identity. 09
+embeds only its query: one `history-recall` row (campaign and scene) per call
+that sent it. Document vectors are warmed only through 08-C2b, whose
+`history-index` row and `materialized` rows are 08's. A turn therefore files at
+most two embed rows. Embed rows carry the player post only once 01h's doors
+take `post=` (open question 9); the rerank's decide rows carry it now.
 
 **Failure.** Never raises for a provider, cache or ledger problem: degraded
 signals are absent and `coverage` says why. Raises `ValueError` only for a
@@ -1099,21 +1206,27 @@ programming error: tier 3 from a turn, an unknown perspective, a scope outside
 
 ### 09-C2: tiered widening and fallbacks
 
-`coverage.verdict` as section 11.2, and the tier rule and fallback table of
+`coverage.verdict` as section 11.2 (`exhausted | sufficient | thin | empty |
+error`, with `eligible` counted), and the tier rule and fallback table of
 sections 11.1 and 11.3. **Guarantees**: tier 3 is unreachable from a turn;
-with no embeddings, retrieval still returns structural and lexical evidence;
-an outage costs at most one embed deadline per `OUTAGE_BACKOFF`; `Coverage` is
+`exhausted` spends nothing further; with no embeddings, retrieval still returns
+structural and lexical evidence; an outage costs at most one embed deadline per
+`OUTAGE_BACKOFF`, shared with lore recall; the phase never exceeds its
+turn-phase deadline once its file stages are done (10.2); `Coverage` is
 deterministic for the same files, query and semantic status.
 
 ### 09-C3: the history prompt section with a strict budget
 
-The `history_recall` section of section 9: RECALLED tier, the ceiling of 9.2
-(01i-C1 when present), the fit and the per-scene `shed` hook of 9.3, the
-no-repeat rule of 9.4, the inspector row of 9.5, actor-scoped blanking.
-**Guarantees**: off is byte-identical (`test_lore_golden.py` unchanged);
-nothing in the row reaches the prompt; the section never exceeds its ceiling
-when it leaves `budget.fit`, and under packer pressure it sheds lowest-ordered
-first.
+The `history_recall` section of section 9: its own `HISTORY_RECALL` tier,
+first in `DROP_ORDER`; the ceiling of 9.2 through 01i-C2 `prompt_ceiling`;
+the fit and the per-scene `shed` hook of 9.3; the no-repeat rule of 9.4; the
+inspector row of 9.5; actor-scoped blanking (NPC prompts get none of it until
+11-C2). **Guarantees**: off (unset, or switched off in the layout) is
+byte-identical and spends nothing (`test_lore_golden.py` unchanged); nothing in
+the row reaches the prompt; the rendered section never exceeds its ceiling
+when it leaves `budget.fit`; under packer pressure it is the first content to
+give way, one scene at a time, lowest-ordered first; no gm-only or excluded
+location is named in a header.
 
 ### 09-C4: the long-history eval suite
 
@@ -1130,17 +1243,31 @@ metered under the eval scope.
   synthetic evidence so a template edit is a reviewed change.
 - **Reasons never reach the prompt.** Extended to the history row (9.5).
 - **Routing and operation guards.** `history-recall` joins `EMBED_TASKS`
-  (`routing.py:174`) and is held by `test_operation_guard.py`'s embed half:
-  the door is `embed` (or 01h-C4b's async door), the `space=` traces back to
-  `embed_space.endpoint`. The rerank's decide task lands with its call site,
-  on a decide route (`test_routing_guard.py`), resolved through
-  `require_inference(..., operation="decide")` in `routes/`.
+  (`routing.py:174`) with its one call site, the query embed, and is held by
+  `test_operation_guard.py`'s embed half: the door is 01h-C4b's async `embed`,
+  the `space=` traces back to `embed_space.endpoint`.
+  `test_inference_embedding.py`'s pinned tuple and `MIN_EMBED_CALLS` move with
+  it, as 08 section 8.1 does for `history-index`. The rerank's decide task
+  lands with its call site, on 02-C5b's decide route (`test_routing_guard.py`),
+  resolved through `require_inference(..., operation="decide")` in a worker.
+- **The frozen inference baselines** (review S11). `tests/inference_baseline.py:418`-`420`
+  and `test_inference_resolve.py:44`-`49` observe every task in
+  `sorted(routing.TASK_ROUTE)` against JSON that is never regenerated, and a
+  new task must be in `test_inference_equivalence.NEW_TASKS` with a sibling
+  it resolves identically to. A task on a `routing.NO_LEGACY` route has no
+  such sibling (it resolves to its route's default role even where a legacy
+  route pin exists). The rerank slice therefore uses the mechanism 10 section
+  13 specifies for every `NO_LEGACY` task (a `NO_LEGACY_TASKS` set dropped
+  from both cells, with its own assertion that each such task resolves to its
+  route's `default_role` in every baseline state), whichever spec lands it
+  first; it is part of the checklist's shared `NO_LEGACY` structure.
 - **Metering.** Every embed is metered at the one door; every rerank chunk by
   `decide`. An unpriced embedding endpoint files unpriced rows, as recall does
   today (`CLAUDE.md`, embedding cost), so turning history recall on with a
   local endpoint makes the Costs totals read incomplete until rates are set.
   The settings copy says so.
-- **Locks.** No campaign lock; never called under one (10.1). `store/history/`
+- **Locks.** No campaign lock; never called under one: a lexical guard in
+  `routes/`, plus `gather_sync`'s check in the calling worker (10.1). `store/history/`
   writes nothing campaign-scoped, so it is in none of `locks.DOMAIN_MODULES`,
   `OUTSIDE_DOMAIN` or `UNREVIEWED`, the position `continuity/graph.py`
   documents for a read-only projection.
@@ -1185,49 +1312,74 @@ Settings:
 **Unit (store):**
 
 - `query.build` reads the prompt view; a hidden post and a director note never
-  contribute terms; the seed is appended.
+  contribute terms; the seed is appended; an excluded or gm-only name is not a
+  term, weighted or plain.
 - Structural: each relation from a hand-built campaign; an excluded actor and a
   gm-only record seed nothing; `shared_cast` above `STRUCTURAL_PLAIN_CAP` ranks
-  without admitting; an unreadable chronicle leaves appearances answering.
-- Eligibility: later scene, current branch group, closed sibling, all
+  without admitting; a group leader counts as a member; an unreadable
+  chronicle leaves appearances answering; `locations/<id>` from 08 and
+  `locations:<id>` from seeds join after `refs.norm`.
+- Eligibility: later scene (by the archive's string compare, with a mix of
+  `001--` and date-form ids), current branch group, closed sibling, all
   excluded in every signal.
 - Lexical: one common word admits nothing; a resolved name admits; scores
   identical with and without the cached per-document statistics.
-- Semantic: one request carries query and warm run; width mismatch and
-  out-of-range scores evict; a `rate_limit` sets the memo and the next call
-  sends nothing; a success clears it; deadline shared across the retry.
-- Merge: RRF order; no number on `Evidence` other than per-signal raw values;
-  `merge(a, b)` keeps both rounds' signals and dedupes by identity across a
-  rename.
-- Coverage: each verdict; tier 2 skipped without semantic.
-- Expansion: windows, padding, merging, far-edge trim; no anchor -> header and
-  summary only; the regex rule a test installs is applied.
-- Budget: the chain minimum; unknown windows ignored; `context_budget` share
-  only when set; no item below `MIN_ITEM_TOKENS`.
-- Live set: a SearchDocument superseded by an edit is unreachable (03-C2), with
-  its old row still in the cache.
+- Semantic: 09 calls the embed door once, with `queries=len(texts)`, under
+  `history-recall`, and never saves a vector; document vectors come only from
+  `vectors_for` (a spy on `vectors.save` sees no call from `store/history/`);
+  width mismatch and out-of-range scores evict; a `rate_limit` sets the shared
+  memo, and both history and lore recall then send nothing; a success clears
+  it.
+- Merge: RRF over admitted-only lists; no number on `Evidence` other than
+  per-signal raw values; `merge(a, b)` keeps both rounds' signals under
+  `(round, signal)` ranks, dedupes by `SceneRef.key`, and expands a newly
+  selected candidate through the callback.
+- Legacy identity: on the frozen campaign's shape (scenes with no identity
+  line), two scenes stay two candidates and shed one at a time.
+- Coverage: each verdict, `exhausted` for a first scene and a young campaign;
+  tier 2 skipped without semantic and on `exhausted`.
+- Expansion: the adapter passes `phase="prompt"` and the bounds of section 8;
+  no anchor gives header and summary only; an archive scene with no anchor is
+  skipped at selection.
+- Budget: `prompt_ceiling(resolved).tokens` share; `tokens is None` uses the
+  absolute cap; `context_budget` share only when set; the rendered section,
+  heading included, never exceeds the ceiling.
+- Live set: a document superseded by an edit is unreachable (03-C2), with its
+  old row still in the cache.
 
 **Context:**
 
 - Golden: `test_lore_golden.py` scenarios with the new code and the key unset
   are byte-identical; no embed client is constructed and no compiled-cache
-  read happens (a spy on both).
+  read happens (a spy on both). The same with the key set and the section
+  switched off in the layout.
 - The section renders, packs, sheds lowest-ordered first under a budget,
   re-renders without re-drawing a macro, and drops whole when its last unit
-  sheds.
-- No repeated summary for an archive scene or a full-recap scene.
+  sheds; with Recalled lore also present, history sheds before lore drops.
+- No repeated summary for an archive scene (archive on) or a full-recap scene;
+  the summary renders when the archive section is off.
+- A gm-only or excluded location is not named in a header.
 - Actor-scoped compose: empty, in the narrator's round as well as the NPC's.
-- `test_reasons_never_reach_the_prompt` extended.
+- `test_reasons_never_reach_the_prompt` extended, from a hand-built `Evidence`
+  with distinctive markers.
 
 **Routes:**
 
-- `post_chat` with retrieval on composes with evidence, retrieval runs on the
-  portal, and the turn's prompt-log capture carries the history row.
-- A group round retrieves before `_prepare`, and the guard fails a retrieval
-  placed inside its lock.
+- `post_chat`, `post_retry`, `post_regenerate` and the director branch compose
+  with evidence through `gather_sync`, and the turn's prompt-log capture
+  carries the history row.
+- `gather_sync` in a worker holding the campaign lock returns `skipped:locked`
+  without calling the portal; a portal that raises returns empty evidence and
+  the post is not stranded.
+- A group round retrieves once per round, only for narrator contributions, not
+  for an NPC contribution, a pending-snapshot replay or a roll continuation;
+  the guard fails a retrieval placed inside the lock.
 - The live inspector sends no embed and no decide request.
-- Rerank: an abstention keeps RRF order; an unresolvable route skips with a
-  reason; a timeout honours `RERANK_CEILING`.
+- The phase respects its deadline: a stalled embed endpoint costs at most the
+  phase seconds before compose, and the next turn hits the outage memo.
+- Rerank: an abstention or an ungraded item keeps RRF order; an unresolvable
+  route skips with a reason; a timeout honours `min(RERANK_CEILING,
+  remaining)`; a `Rank` on a native-only model carries `pointwise`.
 
 **Evals:** the offline history suite passes rule cases in every arm, and
 `hybrid` meets the ordering of 12.5 on the recorded vectors.
@@ -1241,7 +1393,8 @@ Settings:
 3. Retrieval is scene-first and bounded: never more than `depth` items, never
    over the ceiling, never a whole transcript.
 4. No superseded document can surface.
-5. Off is byte-identical; on, the section is the first content to give way.
+5. Off is byte-identical and spends nothing; on, the section is the first
+   content to give way.
 
 ## 16. Non-goals
 

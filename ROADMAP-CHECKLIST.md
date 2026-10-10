@@ -283,7 +283,7 @@ Tick an edge when its provider has landed. **H** is hard: the consuming slice
 cannot start without it. **S** is soft: it degrades, or waits only for one
 sub-feature. Edges come from each spec's Depends-on table.
 
-- [ ] 01c ← 01a-C1/C3 (H to switch a task on), 01b-C1 (S)
+- [ ] 01c ← 01a-C1/C3 (H to switch a task on), 01b-C1 (S), 01e-C4 (S: marginals are never sampled)
 - [ ] 01d ← 01a-C1/C3 (H to enable), 01b-C1 (S)
 - [ ] 01e ← 01a-C1 (S), 01b-C1 (S)
 - [ ] 01f ← 01a-C1 (S), 01i-C1 (S: the `max_tokens` cap respects the model's max output)
@@ -302,17 +302,19 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [ ] 08 ← 03-C1, 03-C2, 03-C6, 03-C7 (H); 03-C3, 05-C3 (H for C2c);
   01h-C3 (H once C1 sends a type); 07-C2, 07-C3c, 01h-C1 (S)
 - [ ] 09 ← 08-C1/C2/C3, 03-C6, 03-C7 (H); 01h-C4 (H for the turn path);
-  01a-C1 (H for live evals); 07-C2, 07-C3c, 01e-C1/C2, 01h-C1, 01i-C1,
+  01a-C1 (H for live evals); 07-C2, 07-C3c, 01e-C1/C2, 01h-C1, 01i-C1/C2,
   02-C5b (S)
 - [ ] 10 ← 09-C1/C2/C3, 01f-C1 (H); 01a-C1 (H for live evals); 01f-C2,
   01d-C1/C2, 01a-C3, 02-C5b, 01b-C1 (S)
 - [ ] 11 ← 09-C1, 09-C3 (H); 02-C5a (H for the Decision stage); 07-C1 (H for
   group overrides); 07-C3c, 10-C1, 08-C3b, 01b-C1, 01d-C1/C2, 01c-C4 (S)
-- [ ] 12 ← 01g-C1..C5, 01i-C1, 08-C3, 09-C1, 01a-C1/C2 (H); 01d-C2b,
+- [ ] 12 ← 01g-C1..C5, 01i-C1/C2, 08-C3, 09-C1, 01a-C1/C2 (H); 01d-C2b,
   10-C2/C3, 11-C1/C2 (H for RP mode); 11-C4 (S)
-- [ ] 13 ← (nothing for II-A to II-D); 01c-C2/C3/C4 (H for C3); 01e-C3b (H for
-  multi-target actions and legal sets over 254 options); 01c-C1, 01b-C1,
-  01a-C1, 02-C2 (S)
+- [ ] 13 ← (nothing for II-A to II-D); 01c-C2/C3/C4 (H for C3); 01e-C3a (H for
+  multi-target actions: action first, then a MultiSelect over targets);
+  01e-C3b (S, single-target joint pairs only); 01c-C1, 01b-C1, 01a-C1, 02-C2
+  (S). Legal sets past 254 options need nothing from 01e: they take two steps,
+  the action and then the target.
 
 ## Shared structures: whichever spec lands first adds them
 

@@ -118,8 +118,9 @@ Not the goal:
 - A confidence score that is comparable across backends, or escalation on a
   structured answer's "confidence". There is none, and none is invented.
 - Voting, ensembles, or more than one hop.
-- Escalating into an agent. 12 may use the trigger evaluation (C2a) to decide
-  to start an investigation, but this spec does not specify that.
+- Specifying an agent. 12 may supply a tool loop as a `CALLER` resolver
+  (C2b), or use the trigger evaluation (C2a) alone to decide to start an
+  investigation; this spec specifies only the hop's contract.
 
 ## 3. Failure-driven fallback and answer-driven escalation are different things
 
@@ -389,37 +390,69 @@ async def decide(task, items, *, client, resolved, explain="", campaign="",
 
 ```text
 base = await run_stages(task, items, stages(resolved), ...)   # unchanged; may raise
-found = triggers(base.items, question=..., escalate_on=..., margins=...)
+found = triggers(base.items, question=..., escalate_on=..., margins=..., answers=...)
 if not found: return base
-take, over = found[:escalate_max], found[escalate_max:]       # `over` -> skipped "cap"
 esc, why = await escalation()                                  # None -> all skipped (why)
-stage = the escalation primary's one stage: mode by decision_mode (native or
-        structured), Chain(primary) ALONE, retries=0, account hop="escalation"
-        (no stage, e.g. it can neither generate nor decide -> skipped "incapable")
-per item in take: same (provider_id, model) as item.served -> skipped "same_model"
-got = await run_stages(task, subset, [stage], same campaign/scene/post/round_id,
-                       capture=hop-marked capture, around=around)
+role hop: stage = the escalation primary's one stage: mode by decision_mode
+          (native or structured), Chain(primary) ALONE, retries=0,
+          account hop="escalation"
+          (no stage, e.g. it can neither generate nor decide -> skipped "incapable")
+          per item: same (provider_id, model) as item.served -> skipped "same_model"
+take = found, in priority order, up to escalate_max items AND, for a
+       structured stage, only as many as one `decisions.chunks` chunk holds;
+       the rest -> skipped "cap"
+got = role hop:   await run_stages(task, take, [stage], same campaign/scene/
+                  post/round_id, capture=hop-marked capture, around=around)
+      caller hop: await resolver(take_items, take_triggers)
       except LLMError (BudgetRefused, PresetRefusalError included) -> each
-      item in the subset "failed", the original stands
-merge: replace an item when its escalated `question` answer is non-None,
-       `abstained` or `refused`; otherwise "failed", the original stands
+      item in `take` "failed", the original stands
+merge, per item (below)
 ```
 
 - **If the base raises, there is no escalation.** When no item answered,
   `run_stages` raises (:671-673). There is nothing to escalate, and the
   caller's error handling is untouched.
-- **The hop is one stage on one attempt.** It has no fallback and no retry
-  budget (`retries=0`, as a fallback stage has), because a lost escalation
-  costs only the second opinion: the original answer stands. Its backend
-  follows `resolve.decision_mode` on the escalation primary. A native-only
-  `escalate_to` role is a native stage. Native-first (01c) never applies to
-  the hop.
-- **What replaces the original.** An answer, or a typed non-answer from a
-  reply that reached the item (`abstained`, `refused`), is final. A stronger
-  model's abstention on a low-margin answer is a verdict that the item is
-  unclear, and the caller should see it as such. An `unreadable` (a garbled
-  reply, `NO_OBJECT`, `NO_ITEM`, an off-roster value) or an `error` does not
-  replace a real answer with a worse one: the hop counts as `failed`.
+- **A role hop is one stage on one attempt.** It has no fallback and no
+  retry budget (`retries=0`, as a fallback stage has), because a lost
+  escalation costs only the second opinion: the original answer stands. Its
+  backend follows `resolve.decision_mode` on the escalation primary. A
+  native-only `escalate_to` role is a native stage. Native-first (01c) never
+  applies to the hop.
+- **The cap is per chunk, not per item alone** (review S6).
+  `decisions.chunks` splits on the enum, character and property budgets as
+  well as on `MAX_ITEMS_PER_CALL` (`decisions.py:724-753`), and an identity
+  item carries one `existing:<id>` option per candidate. So the hop takes
+  triggered items in priority order only while they fit the **first** chunk
+  `decisions.chunks` would make of them. A structured hop is then always one
+  call, plus at most one prompt-only re-send. A native hop is at most
+  `escalate_max` (at most 8) items, which is two waves of
+  `NATIVE_CONCURRENCY`.
+- **Merge, per question** (review S2). An item is replaced only when the
+  hop's deciding `question` answer is one of:
+  - a non-`None` answer;
+  - `abstained` or `refused`, and only when the task's policy has
+    `reads_declines=True`.
+
+  Anything else counts as `failed`, and the original item stands whole.
+  This covers an `unreadable` (a garbled reply, `NO_OBJECT`, `NO_ITEM`, an
+  off-roster value), an `error`, or a decline on a task that does not read
+  declines.
+
+  When the item is replaced, the hop's deciding answer and its rationale are
+  taken. Each **other** question keeps the base's answer unless the hop's
+  answer to it `was_read`. A hop that answers `decision` but garbles an
+  evidence question therefore keeps the base's evidence scene. This is
+  consistent with 01's rule that each question of an item stands alone. The
+  merged `ItemResult.backend` and `served` are the hop's, because the
+  deciding answer is.
+- **Why declines are opt-in** (review S1). Continuity's mappings read an
+  `abstained` or `refused` `decision` as not read (`decisions.was_read`):
+  the row stays `unchecked`, and the candidate gets no proposal and is asked
+  again on every sweep. If a hop's decline replaced a read answer, the batch
+  could lose its only read answer. `_decide_error` would then report a
+  sibling's `error` as the phase's failure. A task opts in only when its
+  caller maps a decline to an outcome. For the speaker pick, an abstention
+  hands control back.
 - **One hop, by construction.** `triggers` runs once, on `base` only.
 - **The caller's `explain` is reused**, so a hop to a generating role
   returns a rationale exactly when the call asked for one.
@@ -448,9 +481,10 @@ class Escalation:
     margin: float | None
     before: ItemResult           # the base answer
     outcome: str                 # "answered" | "failed" | "skipped"
-    detail: str = ""             # "cap" | "same_model" | "incapable" | the
-                                 # soft resolution's sentence | "kind: detail"
-    served: tuple[str, str] = () # who answered the hop
+    detail: str = ""             # "cap" | "same_model" | "incapable" |
+                                 # "declined" | the soft resolution's
+                                 # sentence | "kind: detail"
+    served: tuple[str, str, str] = ()  # (kind, provider_id, model) of the hop
 ```
 
 - `items` holds the final results: escalated ones replaced, and the rest as
@@ -459,9 +493,22 @@ class Escalation:
   existing rule (`decisions.py:292-297`): when a hop answered with another
   model, more than one route answered, so they are `""`.
 - **`errors` is the base's, unchanged.** A failed hop is not an unanswered
-  unit. `routes.common._decide_error` (:1565), which reads `errors` and
-  `was_read`, therefore reports exactly what it reported before. A hop
-  cannot turn an absorb phase from `ok` to `failed`.
+  unit.
+- **The guarantee, with its condition.** On a task with
+  `reads_declines=False`, a merged deciding answer is always non-`None`, so
+  it `was_read` whenever the base's was. `routes.common._decide_error`
+  (:1565), which reads `errors` and `was_read`, therefore reports exactly
+  what it reported before, and a hop cannot turn an absorb phase from `ok`
+  to `failed`. A task with `reads_declines=True` declares that it does not
+  rely on `was_read` for its deciding question, and `test_task_policy.py`
+  refuses the flag on the tasks that do.
+- **`Decision.calls`** (01a's `CallRecord`, a shared structure): each hop
+  call is one record, marked `hop="escalation"`, after the base's calls in
+  the order made, and it points back to the item indices it carried. A
+  caller resolver's rows become records the same way. Until 01a lands,
+  `usage` and `escalations` carry the same information.
+- The per-item "did the escalation answer" signal is
+  `Decision.escalations[*].outcome`, not per-item provenance.
 
 ### 5.6 Per-item provenance
 
@@ -496,7 +543,12 @@ same field.
   stands, and the phase reports what it would have reported. Absorb's
   `block["attempted"]` is already true by then, since the base sent first.
   Under `_bounded_call` (reconcile), each hop call gets the full ceiling. The
-  added wall time is bounded in section 6.2.
+  added wall time is bounded in section 6.2. One display-only gap remains:
+  `_noting(client, resolved, holder)` charges an overrun to the *base*
+  resolution when the holder was not yet stamped, so a hop that overruns
+  before its first byte can mark the base's connection in the health
+  registry. That is the same blind spot `_bounded_call` has today
+  (`routes/common.py:544-610`), and it is accepted, not fixed here.
 - **Cancellation** passes through untouched. Open meters file `aborted`, as
   in `_native` and `_once`.
 - **Errors and health.** A hop call that fails files its `error` row at
@@ -507,29 +559,49 @@ same field.
 
 ### 6.1 The margin
 
-For a reported distribution `w` (choice or score) with mass `M = sum(w)`:
+The margin is measured **from the answered key `a`**, not from the top of
+the report (review B1). Both adapters pass an endpoint's explicit `choice`
+as `chosen`, and `native_answer` keeps it "whatever the probability beside
+it says" (`decisions.py:866-901`, `:928-936`; `openrouter.py:166-167`;
+`openai_compatible.py:238-239`). So a reply of `choice: known` with
+`{known: 0.1, narrator_only: 0.9}` is the answer `known`. Measuring the top
+two would give it a margin of 0.8, the most confident reading of the least
+sure answer the report can describe.
+
+For a reported distribution `w` (choice or score) with mass
+`M = math.fsum(w)` (correctly rounded, so the same on every supported
+interpreter; builtin `sum()` over floats changed in 3.12, the finding 01c
+fixes for draws):
 
 ```text
-M >= 1:  p = w / M;  margin = p(1) - p(2)
-M <  1:  margin = w(1) - max(w(2), 1 - M)
+w(a) = the answered key's reported weight (0 when the report omits it)
+r    = max over k != a of w(k)          (0 when no other key was reported)
+M >= 1:  margin = (w(a) - r) / M
+M <  1:  margin = w(a) - max(r, 1 - M)
 ```
 
-Here `(1)` and `(2)` are the largest and second largest weights, and `p(2)`
-is 0 when only one key was reported. For a predicate with probability `p`,
-`margin = |2p - 1|`, the same quantity, since its two weights are `p` and
-`1 - p`.
+For a predicate with probability `p = P(true)`, take `p(a) = p` when the
+answer is True and `1 - p` when it is False: `margin = 2 p(a) - 1`.
 
-The `M < 1` branch is the conservative one. Mass the endpoint left
-unreported could all belong to the runner-up, so the margin may not assume
-otherwise. Normalising a partial report would turn a single 0.6 into a
-certainty. The branch is a bound on what the report proves, and computes no
-confidence of its own.
-
-The margin is computed over the raw keys, not regrouped. For continuity's
-folded options, two `existing:<id>` options splitting the mass is an
-ambiguity about *which* record, and the same holds for a duplicate's two
-directions. That is the kind of ambiguity a second opinion is for. Section
-11 has the grouped alternative as an open question.
+- **The margin is negative when the report ranks a rival above the
+  answer**, and so is always below any threshold. An answer the report
+  itself puts below another always triggers `low_margin` (subject to the
+  answer filter and a threshold for its kind). That is the case 02-C5a's
+  filter exists to catch.
+- **The `M < 1` branch is the conservative one.** Mass the endpoint left
+  unreported could all belong to a rival, so the margin may not assume
+  otherwise. Normalising a partial report would turn a single 0.6 into a
+  certainty. 01c refuses to draw from a partial report for the same reason.
+- **The margin is computed over the raw keys, not regrouped.** For
+  continuity's folded options, two `existing:<id>` options splitting the
+  mass is an ambiguity about *which* record, and the same holds for a
+  duplicate's two directions. That is the kind of ambiguity a second opinion
+  is for. Section 11 has the grouped alternative as an open question.
+- **A score's adjacent levels are rivals, deliberately** (review M6). A
+  2-versus-3 split on a 5-level scale reads as unsure. The margin asks only
+  whether the answered level is clearly the report's choice, and a task
+  that cares only about distance on the scale should not list `low_margin`
+  for a score.
 
 ### 6.2 Structural bounds and starting values
 
@@ -552,11 +624,14 @@ directions. That is the kind of ambiguity a second opinion is for. Section
   smaller than the disagreement two uncalibrated endpoints may show, would
   flip the answer. It is the value a task's first eval starts from. It is
   tuned there and is never taken from a library.
-- **`escalate_max = 8`** (`decisions.MAX_ITEMS_PER_CALL`). A structured hop
-  then answers the whole subset in one chunk: one call, plus at most one
-  prompt-only re-send on a schema refusal (`inference._ask`, :289-318). A
-  native hop answers it in two waves of `NATIVE_CONCURRENCY` (4, :86). So a
-  hop adds at most two of the caller's per-call ceilings to a sweep's time.
+- **`escalate_max = 8`** (`decisions.MAX_ITEMS_PER_CALL`), and a
+  structured hop takes only what fits one chunk (section 5.3). A structured
+  hop is then one call, plus at most one prompt-only re-send on a schema
+  refusal (`inference._ask`, :289-318). A native hop is at most two waves of
+  `NATIVE_CONCURRENCY` (4, :86). So a role hop adds at most two of the
+  caller's per-call ceilings to a sweep's time, whatever the chunk budgets
+  do. A caller resolver is bounded by its own budget (12-C2a), not by this
+  rule.
   The change that enables escalation on a continuity task must add this to
   01's stated bounds (CLAUDE.md's "up to twelve").
 
@@ -571,7 +646,13 @@ directions. That is the kind of ambiguity a second opinion is for. Section
 2. **Live comparison.** `evals/run.py --live --case <decide case>` runs once
    with escalation off and once with the candidate policy (a new
    `--escalation POLICY_JSON` flag overrides the task's `TaskPolicy` for the
-   run only). The output goes through 01a-C3's table: correctness per item,
+   run only). The run needs an `escalation=` for `decide`'s consistency
+   check, so the runner gains `evals/runner.escalator(task, policy)`. It
+   resolves the escalation role inside 01a-C2's throwaway home, through the
+   same `store.inference.resolve` path the runner already uses for a case's
+   resolution (with `role=`), and returns the `Escalator` thunk. It never
+   goes through `routes.common`, and never reaches the real home (01a-C2's
+   tripwire). A test covers it (section 9). The output goes through 01a-C3's table: correctness per item,
    escalation rate, and, from 01a-C1 broken down by `hop`, the added wall
    time, tokens and the three money columns. Escalation costs are kept
    apart from the base call's.
@@ -597,7 +678,7 @@ starting point for each task's own switching change.
 |---|---|---|---|---|
 | `continuity-identity` | `decision` | refused, abstained, low_margin | primary | A wrong merge or a missed duplicate is costly, and absorb already has a budget the hop runs under. 02's first candidate |
 | `continuity-reconcile` | `decision` | refused, abstained, low_margin | primary | A background sweep; latency is cheap and a wrong proposal costs review time. The evidence questions are never triggers |
-| `response-selector` | `next` | refused, low_margin | primary | Not `abstained`: a null hands control back, which is an answer. The hop adds a call before the turn's first token, so recommended off until 02-C2 measures it |
+| `response-selector` | `next` | refused (with `reads_declines=True`) | primary | Not `abstained`: a null hands control back, which is an answer. Not `low_margin` once 02-C2a samples the pick (`samples` with `low_margin` is refused, 4.3). The hop adds a call before the turn's first token, so recommended off until 02-C2 measures it |
 | `scene-break` | `over` | refused, low_margin | primary | Low leverage (02 draft §11). Recommended off |
 | `voice-drift` | `verdict` | refused, low_margin | primary | `not_enough` is a real option, not an abstention. Recommended off until a drift eval shows a gain |
 
@@ -615,21 +696,28 @@ starting point for each task's own switching change.
 - **01d-C2a. Trigger evaluation.** `decisions.margin(answer)` and
   `decisions.triggers(results, question=, escalate_on=, margins=,
   answers=)`: low margin, abstention, native `refused`, with an optional
-  answer filter (`escalate_answers`) that narrows `low_margin`. Pure; reads
+  answer filter (`escalate_answers`, exact or `:`-prefix entries) that
+  narrows `low_margin`. The margin is measured from the answered key and is
+  negative when the report ranks a rival above it (section 6.1). Pure; reads
   only what a backend reported; never triggers on `unreadable` or `error`;
   never triggers `low_margin` for an endpoint kind with no threshold.
   Priority: refused, abstained, then low margin ascending.
 - **01d-C2b. One escalation hop** after the unchanged chain.
   `decide(..., escalation=)` sends at most `escalate_max` triggered items,
   once, to the declared next resolver: the policy's role (primary alone,
-  `retries=0`, a different model from the item's server, under the same
-  `around`, meters and capture), or a caller-supplied `Resolver`
-  (`escalate_to=CALLER`), which meters, captures and budgets itself. Rows
-  carry `hop: escalation`. An answered or typed-declined result replaces the
-  item; a failed, garbled or skipped hop leaves the original. The record is
-  `Decision.escalations`, and `Decision.errors` is untouched. Guarantees:
-  never more than one hop; never the same model on a role hop; never a new
-  failure reported for an item that had an answer.
+  `retries=0`, the role's own preset, the base route's `requires` checked,
+  a different model from the item's server, at most one structured chunk,
+  under the same `around`, meters and capture), or a caller-supplied
+  `Resolver` (`escalate_to=CALLER`) returning a `ResolverReply`, which
+  meters, captures and budgets itself. Rows carry `hop: escalation`, and
+  each hop call is a `Decision.calls` record. A non-`None` hop answer (or a
+  decline, on a `reads_declines` task) replaces the deciding answer, and the
+  item's other questions keep the base's answers unless the hop's were
+  read. A failed, garbled, declined (elsewhere) or skipped hop leaves the
+  original. The record is `Decision.escalations`, and `Decision.errors` is
+  untouched. Guarantees: never more than one hop; never the same model on a
+  role hop; on a task without `reads_declines`, never a read deciding answer
+  turned unread, so never a new failure reported for a batch that had one.
 - **01d-C3. Thresholds.** `TaskPolicy.margins` per task and per native
   endpoint kind, each in `(0, MAX_MARGIN]` with `MAX_MARGIN = 0.5`, starting
   at `DEFAULT_MARGIN = 0.2`, and `escalate_max <= 8`, argued in section 6.2.
@@ -694,15 +782,37 @@ native fake and a structured fake, and a synthetic policy patched in:
   with no entry.
 - `unreadable` and `error` items are never escalated.
 - The margin formula: `M >= 1`, `M < 1` (a partial report of a single 0.6
-  gives margin 0.2), and a predicate.
+  gives margin 0.2), and a predicate answered True and False.
+- **The answer disagrees with the report (review B1):** `choice: known`
+  with `{known: 0.1, narrator_only: 0.9}` gives margin -0.8 and triggers. An
+  answered key absent from the report gives a negative margin and triggers.
+  With `escalate_answers=("known",)` it triggers; with `("narrator_only",)`
+  it does not.
+- The prefix filter: `("existing:",)` triggers on a low-margin
+  `existing:a1` and not on a low-margin `new`.
 - Cap and priority: 10 triggers with `escalate_max=8` escalate the two
   refusals, then the abstentions, then the lowest margins. The rest are
-  `skipped: cap`.
+  `skipped: cap`. Eight identity items whose options overflow one chunk's
+  enum budget: only those fitting the first chunk are sent, and the hop is
+  one structured call.
 - `same_model` skip. Same provider with another model is allowed.
 - The hop answers: the item is replaced, `served` holds both, and
   `Decision.provider` is `""`.
-- The hop returns `abstained`: the item is replaced. The hop returns a
-  garbled reply: the original stands and the outcome is `failed`.
+- The hop returns `abstained`: on a `reads_declines` task the item is
+  replaced; otherwise the outcome is `failed` with `detail: declined` and the
+  original stands. The review's counterexample (item A read, low margin;
+  item B `error`; the hop abstains on A) leaves `_decide_error` returning
+  None, as before the hop. The hop returns a garbled reply: the original
+  stands and the outcome is `failed`.
+- Per-question merge: a reconcile item whose hop answers `decision` but
+  garbles `evidence_scene` keeps the base's evidence scene.
+- A role hop sends the escalation role's own preset, not the route's. A hop
+  primary known to lack the route's `requires` is skipped `incapable`, with
+  a sentence naming the route.
+- A caller `Resolver`: its `ResolverReply.rows` reach `Decision.usage`; its
+  results' `served` reach `Decision.served`; a result with a `backend`
+  outside `BACKENDS` is a `ValueError`; a resolver that raises `LLMError`
+  leaves every original.
 - The hop raises `rate_limit`: the original stands, `errors` is unchanged,
   and `_decide_error` gives the same answer as without the hop.
 - The hop is refused by `around` (`BudgetRefused`): the original stands, no
@@ -723,9 +833,14 @@ drops the fallback with `NO_FALLBACK_POLICY` on a generate task and a decide
 task. The settings view's role card (no task) is unchanged. `for_task`
 between siblings stays correct.
 
-Evals: `--escalation-sweep` output is golden over a fixed recording, and
+Evals: `--escalation-sweep` output is golden over a fixed recording.
 `--escalation POLICY_JSON` is refused for a task whose route is not
-`decide`.
+`decide`. `evals/runner.escalator` resolves inside the throwaway home and is
+refused by 01a-C2's tripwire against the real one.
+
+`backend/tests/test_inference_resolve.py` (extended) also covers
+`fallback="none"` on a role with no fallback configured, which sets no
+`fallback_problem` (review M1).
 
 Acceptance: `make check` passes, `check-pydantic1` included, and no task's
 behaviour changes at landing.
@@ -738,10 +853,10 @@ behaviour changes at landing.
 - Grouped (regrouped) margins for folded options (section 11).
 - Per-model thresholds, or thresholds the user edits in Settings.
 - More than one hop, voting, or asking several models and taking a majority.
-- Escalating into tools or an agent (12 may read C2a's triggers to decide to
-  start one).
-- Changing `run_stages`, `stages` (01c owns the `native_first` branch),
-  `SAME_PROVIDER`, or the failure-driven rule.
+- Building an agent. A `CALLER` resolver may be one (12's tool loop), and
+  12 may read C2a's triggers on their own. Neither is specified here.
+- Changing `run_stages`, `stages` (01c owns the `native_first` branch and
+  the isolated-stage rule), `SAME_PROVIDER`, or the failure-driven rule.
 
 ## 11. Open questions
 
@@ -750,15 +865,19 @@ behaviour changes at landing.
    Splits between candidates or directions are real ambiguity. If the eval
    shows spurious hops, add an optional per-task `group` that the call site
    passes, mirroring `regrouped`.
-2. **Should a hop's `abstained` replace a low-margin answer?**
-   Recommendation: yes. A stronger model's "cannot tell" is a verdict, and
-   continuity reads it as `uncertain`. The alternative, keeping the
-   original, would make the hop able only to agree or change, never to
-   doubt.
+2. **Should a hop's `abstained` replace a low-margin answer?** Decided,
+   per task: only with `reads_declines=True` (section 5.3). The earlier
+   draft said that continuity reads a decline as `uncertain`. That was
+   wrong: it reads one as not read (`was_read`), so continuity keeps
+   `reads_declines=False`. If continuity later wants a hop's "cannot tell"
+   to stand, the change is to map a hop decline to its `uncertain` word in
+   the call site, not to flip the flag.
 3. **Show escalation in Settings (01s)?** Recommendation: once any task
    enables it, the settings view adds a read-only `escalates_to` to each
    affected route row ("Unsure answers go to Primary"), because the hop
-   spends on another role. No toggle: the policy is code, switched on
+   spends on another role. It should also say "has no effect" when the
+   escalation role resolves to the route's own model (a `fast` hop while
+   Decision inherits Fast). No toggle: the policy is code, switched on
    evidence.
 4. **`retries=0` on the hop?** Recommendation: yes. A lost second opinion
    costs nothing that was not already answered, and on absorb's budget a
@@ -768,3 +887,27 @@ behaviour changes at landing.
 6. **The `hop` ledger field.** Recommendation: add it, since without it
    01a cannot report escalation cost apart from the base calls. The checklist
    should record the edge 01a-C1 ← "breakdown by `hop`".
+
+## 12. Review record
+
+Substitute adversarial review, 2026-10-10 (`reviews/01d.md`: 1 blocking,
+7 should-fix, 7 minor). Each finding was checked against the code at
+`35c1fb7`.
+
+| # | Finding | Disposition |
+|---|---|---|
+| B1 | The margin ignores the answered key, so an answer its own report ranks low reads as confident | **Fixed.** Verified (`decisions.py:866-901, 928-936`; both adapters pass `choice` as `chosen`). The margin is measured from the answered key and is negative when a rival leads (6.1, C2a, tests) |
+| S1 | A hop's decline breaks continuity's `was_read` and the `_decide_error` guarantee | **Fixed.** `reads_declines` (opt-in, refused on continuity), the guarantee restated with its condition, open question 2 corrected (5.3, 5.5) |
+| S2 | Whole-item replacement loses the base's other answers | **Fixed.** Per-question merge (5.3) |
+| S3 | A `role=` resolution has no route: unspecified preset, `requires` and wording; `fast` can be a no-op | **Fixed.** Role's own preset, the route's `requires` checked, the route named; the `fast` no-op stated (4.3, 5.2, open question 3) |
+| S4 | A caller resolver's `backend` and `served` are unspecified | **Fixed.** `ResolverReply`, with `backend` in `BACKENDS`, three-part `served`, and rows into `usage` and `calls` (5.2) |
+| S5 | `escalate_answers` cannot express per-row options | **Fixed.** `:`-prefix entries (4.1, 4.3, 5.1) |
+| S6 | The time bound assumes one chunk | **Fixed.** The hop takes only what fits the first chunk (5.3, 6.2) |
+| S7 | Evals cannot meet the `ValueError` rule | **Fixed.** `evals/runner.escalator` inside 01a-C2's throwaway home (6.3, 9) |
+| M1 | `NO_FALLBACK_POLICY` reported with no fallback configured | **Fixed** (4.2) |
+| M2 | Wrong `adapters` citation | **Fixed** (`adapters.py:305`) |
+| M3 | `Decision.calls` not specified | **Fixed** (5.5) |
+| M4 | A third soft-resolution pattern | **Fixed.** Reuses `_soft_resolved` (5.2) |
+| M5 | An early hop overrun is charged to the base connection's health | **Stated** as display-only and accepted (5.7) |
+| M6 | A score's adjacent levels count as rivals | **Stated** as intended (6.1) |
+| M7 | 02 §10 points at the wrong signal | **Not changed here** (02's file). 5.5 now names `Decision.escalations[*].outcome`, and 02 should cite it |

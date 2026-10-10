@@ -28,12 +28,12 @@ where.
 | 03-C4 | 03 | The one validate-and-hash primitive. Sync calls it for every path, and never hashes or stamps on its own (section 4). | Hard |
 | 03-C5 | 03 | Artifacts may be stored at once, inside the racy window, and only the `sources` row waits. Sync runs seconds after an agent's edit and depends on this (section 4.4). | Hard |
 | 03-C1 | 03 | Composite keys, so that a hook can rebuild a collection-keyed kind for the instance a path feeds. | Soft (only composite hooks need it) |
-| 03-C8 | 03 | The callable purge for a world or campaign delete, through a purge marker. Sync performs it when it finds a deleted world or campaign root (section 7.6). | Soft |
+| 03-C8 | 03 | The callable purge for a world or campaign delete, through a purge marker. Sync performs it only for a world or campaign root named in `--deleted` that is gone (section 7.6). | Soft |
 | 04-C2a | 04 | `overview.warm_paths(paths)`, the hook through which sync rebuilds 04's overview kinds (section 6.2). | Soft (without it, overview kinds rebuild lazily) |
 | 04-C2b | 04 | The client's consistency bound. Sync inherits it unchanged and adds no retirement step (section 3.2). | Hard (a property relied on, no call made) |
 | 01h-C5 | 01h | `attribute(claims)` and `embed_groups_sync(task, groups, ...)`: one ledger row per campaign, with no request spanning campaigns. Without it, sync makes one `embed_sync` call per campaign group itself (section 6.6). | Soft (the fallback is complete, only less shared) |
 | 01h-C3 | 01h | Embedding options in the space identity. Sync names a space only through `embed_space.endpoint()["space"]`, so it inherits whatever 01h-C3 adds. | Soft |
-| 01h-C1 | 01h | Input type. Sync only ever embeds documents, so once 01h-C1 lands it passes the document type. | Soft |
+| 01h-C1 | 01h | Input type. Sync only ever embeds documents, which under 01h-C1 means passing no `queries` (section 6.6), so nothing changes when it lands. | Soft |
 | 08-C2c | 08 | 08's hot-rebuild hook (`affected`, `rebuild_documents`, `reembed`), registered into 05's `WarmHook` protocol as the `searchdocs` hook (section 6.2). Without it, SearchDocuments rebuild lazily. | Soft |
 | 01 (landed) | 01 | `inference.embed.embed_sync`, `routing.EMBED_TASKS`, `embed_space.endpoint()` and the metered embed door. | Hard (landed) |
 
@@ -983,8 +983,8 @@ whose status is not `current` or `cold`, and counts the rest.
 
 ### 7.4 Deletes
 
-A deleted path needs no rebuild: 03-C2 already makes everything derived from it
-unreachable. Sync:
+A path named in `--deleted` that is gone needs no rebuild: 03-C2 already
+makes everything derived from it unreachable. Sync:
 
 - bumps the path's campaign's write token, if it is a campaign path
   (section 10);
@@ -1163,9 +1163,11 @@ embeddings error body can echo its input. The report contains:
 - `cache`: `on`, or `off` with 03's reason;
 - per path (every path for explicit paths; only the notable ones for a scope):
   - the path as given;
-  - a `status`: `refreshed`, `current`, `cold`, `deleted`, `refused`, `failed`
-    or `verify_failed`;
-  - a `reason`, for `refused`;
+  - a `status`: `refreshed`, `current`, `cold`, `deleted`, `missing`,
+    `refused`, `failed` or `verify_failed`;
+  - a `reason`, for `refused` (`outside_store`, `link`, `not_syncable`,
+    `temp_file`, `not_a_file`, `not_found`, `not_deleted`, `bad_id`,
+    `too_many`);
   - per kind, an outcome: `built`, `hit`, `lazy`, `deferred`, `skipped` or
     `failed:<ExceptionClass>`;
 - per hook: what it rebuilt, in counts and kind names (04 asks for this, so
@@ -1176,7 +1178,13 @@ embeddings error body can echo its input. The report contains:
   - embedding totals: texts sent, requests made, texts already held,
     `stale_space`, `embedding_off`, `deferred`, and the failure kind of any
     group not sent;
-- `truncated`, when a bound was hit.
+- `truncated`, when a bound was hit, and `stopped` (`cancelled` or
+  `root_moved`) when the batch stopped early.
+
+Every word in that vocabulary is a constant `cache_sync` exports
+(`PATH_STATUSES`, `REFUSAL_REASONS`, `KIND_OUTCOMES` and `BATCH_FIELDS`), and
+the report is built from those tuples alone. 06's drift test checks every
+status word its skill names against them.
 
 Paths and ids are printed because the caller supplied them and needs them to
 act. They are names, and CLAUDE.md's privacy rule about names concerns what
@@ -1194,14 +1202,19 @@ prints only the counts.
 `revision.py:110` names hand edits as something the token cannot see, and calls
 an unmoved token "evidence and not proof". An explicit sync is the first moment
 the app is *told* about a hand edit, so it uses it. Every campaign that a
-non-refused path in the batch belongs to (`campaigns/<cid>/...`) gets
-`revision.bump(cid)` once per batch, whether the path was refreshed, current,
-cold or deleted.
+path in the batch belongs to (`campaigns/<cid>/...`) gets `revision.bump(cid)`
+once per batch, whether the path is hot, cold or an intended delete. Refused
+and `missing` paths bump nothing.
 
-- That over-bumps: a path sync found current still bumps. Over-bumping is the
-  direction the token is deliberately wrong in. It costs someone a re-price,
-  never a lost write (the reasoning on `_CampaignActivityStamp`'s exception
-  path).
+- **It happens right after classification** (section 3.3, step 4), before any
+  rebuild or embedding, in `explicit` mode and at a script's `collecting()`
+  exit alike. A batch whose embedding takes minutes, or that is cancelled or
+  crashes, has still moved the token, so an `/advance` priced against the old
+  state is refused rather than confirmed.
+- That over-bumps: a path sync then finds current still bumps. Over-bumping is
+  the direction the token is deliberately wrong in. It costs someone a
+  re-price, never a lost write (the reasoning on `_CampaignActivityStamp`'s
+  exception path).
 - It never bumps for a world path. The token records writes to the campaign,
   and `revision.py` already declines to fan a world edit out to every
   campaign.
@@ -1215,23 +1228,26 @@ cold or deleted.
 write-through queue.**
 
 - *Inputs:* store-relative paths; `mode` (`explicit` or `write`); `embed`,
-  `dry_run` and `verify`; optional rename and delete lists; a root, which
-  defaults to `paths.home()` read once.
+  `dry_run` and `verify`; optional rename and delete lists; a `stop` callable;
+  a root, which defaults to `paths.home()` read once.
 - *Outputs:* a `SyncReport` (section 9).
 - *Guarantees:*
-  - it writes no record except the campaign write tokens of section 10;
-  - it takes no campaign lock and holds no run exclusion;
+  - it writes no record except the campaign write tokens of section 10, which
+    it bumps before any rebuild;
+  - it takes no campaign lock and holds no run exclusion key;
   - it validates every path (section 8);
   - it stores artifacts through 03, and never a `sources` row inside the
     window (03-C5);
-  - it runs one batch at a time per process (the sync lane);
-  - it is pinned to the root it started on;
+  - it runs one batch at a time per process (the sync lane), and holds a sync
+    hold while running, so `PUT /config/data-dir` is refused mid-batch;
+  - it re-checks the root and its stop signal between paths, hooks and chunks;
   - a network phase never runs on a request path, on the event loop or under a
     lock.
-- *Coverage:* every HTTP request and every detached run hands its write set to
-  the write-through queue (05-C4). The queue runs this primitive in `write`
-  mode once each path has been quiet for `WRITE_QUIET_S`. Scripts reach it
-  through `cache_sync.collecting()`.
+- *Coverage:* every HTTP request and every detached run hands a closed,
+  frozen snapshot of its own write set to the write-through queue (05-C4). The
+  queue keeps only syncable paths, and runs this primitive in `write` mode
+  once each path has been quiet for `WRITE_QUIET_S`. Scripts reach it through
+  `cache_sync.collecting()`.
 - *Failure:* it never raises for a path; a path's failure is a status. The
   write-through queue swallows failures and logs once per failure kind. The
   cache being off is a successful no-op.
@@ -1242,13 +1258,19 @@ write-through queue.**
   `--world`, `--all`, `--renamed OLD=NEW`, `--deleted`, `--no-embed`,
   `--dry-run`, `--verify`, `--json` and `--quiet`. The parser is
   `grimoire.cache.build_parser()`. Exit status is 0, 1, 2 or 3, as section 7.1
-  defines.
+  defines; `1` covers `failed`, `refused`, `missing` and `verify_failed`.
 - *API:* `POST /api/cache/sync` answers 202 with a `background` run
-  (`cache-sync`) on the global subject. The run is single-live, and later
-  requests' paths are pended for the live run. The report is the run's final
-  frame.
+  (`cache-sync`) on the global subject. A request while one is live is
+  refused with 409 `sync_in_flight` naming the live run, except a repeat of
+  the same `attempt_id`. The report is the run's final frame.
+- *Vocabulary:* `cache_sync.PATH_STATUSES`, `REFUSAL_REASONS`,
+  `KIND_OUTCOMES` and `BATCH_FIELDS` are the whole report vocabulary, and are
+  exported for 06's drift test.
+- *Deletes:* a nonexistent path is `missing` unless named in `--deleted`;
+  only `--deleted` naming a world or campaign root purges (03-C8).
 - *Batching:* duplicate paths are coalesced; instances are coalesced within a
-  hook; embeddings are grouped by campaign (01h-C5); 03 batches the cache
+  hook; embeddings go one chunk of at most `embeddings.BATCH` texts per call,
+  grouped by campaign (01h-C5), saved as each lands; 03 batches the cache
   writes.
 - *Summary:* holds no record content (section 9). The log line holds counts
   only.
@@ -1257,73 +1279,92 @@ write-through queue.**
 Re-embeds only text not already cached. No confirmation step.**
 
 - A kind is rebuilt for a path only if `materialized` has `(path, kind)` and a
-  registered hook owns that kind. A path with no rows is cold, and costs
-  nothing.
-- **Hooks** (`WarmHook`) run in the fixed order `files`, `overview` (04-C2a),
-  `searchdocs` (08-C2c), then `vectors`. Every local phase, which touches no
-  network, runs before any network phase.
-- A vector row is re-embedded only:
-  - in the current space;
-  - for projection text the vector cache does not hold;
-  - under the producer's own embed task;
-  - grouped by campaign claim (section 6.6);
+  hook in `cache_sync.HOOKS` owns that kind. A path with no rows for a hook is
+  cold for it, and costs nothing. Composite kinds record a row on every input
+  path.
+- Hooks run in the fixed order `files`, `overview` (04-C2a), `searchdocs`
+  (08-C2c), then `vectors`. Every local phase, which touches no network, runs
+  before any network phase.
+- A vector unit is re-embedded only:
+  - in the batch's space, re-checked against `embed_space.endpoint()` just
+    before sending;
+  - as the replacement of a unit that was embedded;
+  - up to the producer's own lazy limit per path;
+  - for text the vector cache does not hold;
+  - under the producer's own embed task, grouped by campaign claim;
   - with no confirmation (section 6.7).
 
   `--no-embed` defers it, and `--dry-run` reports it.
-- A hook whose `on_write` is `explicit` is skipped by the write-through queue.
-- The three existing vector producers (recall, art and library search) record
-  `materialized` rows with their projection named.
+- The write-through queue embeds only for producers whose next read would
+  embed the same text (recall and art). Query-driven producers (library
+  search, and 08 by default) are `on_write="explicit"`.
+- The three existing vector producers record `materialized` rows with their
+  projection named, and one row per embedded unit for library search.
 
 **05-C4. `store/writeset.py`: a context-variable collector that
 `store.atomic` notes into, with a guard.**
 
-- `store/writeset.py`, a leaf module, provides `collecting()` and
-  `note(path)`.
-- `store.atomic`'s four publishing functions call `note` after a successful
-  publish, and do nothing else new.
+- `store/writeset.py`, a leaf module, provides `Scope`,
+  `collecting(isolated=...)` and `note(path)`.
+- `store.atomic`'s four publishing functions call `note` themselves after a
+  successful publish, and do nothing else new.
+- A scope is closed at handoff and yields a frozen snapshot; `note` skips
+  closed scopes. A detached run and a script open an isolated scope, so a run
+  that outlives its request never writes into the request's set.
 - Scopes are opened by `_WriteSetCollector` (every HTTP request), by
   `runner._guarded` and `runner._guarded_thread` (every detached run), and by
   `cache_sync.collecting()` (scripts).
-- It records absolute paths only. It never reads, stats or imports the cache,
-  and it costs one context-variable read when no scope is open.
-- It does not see deletes, renames, writes in a thread that did not copy its
-  context, or another process's writes.
+- It records paths as `atomic` received them, never reads, stats or imports
+  the cache, and costs one context-variable read when no scope is open.
+- It does not see deletes, renames, writes in a raw thread, or another
+  process's writes.
+- `test_writeset_guard.py` holds that every public callable in `atomic`,
+  except an allowlist of non-publishing ones (`is_write_temp`), calls
+  `writeset.note` in its own body.
 
 ## 12. Interaction with repo rules
 
 - **`store.atomic` and its guard.** `atomic` gains one call per publishing
   function, and no import beyond the leaf `writeset`. `test_atomic_guard.py`
   is unaffected, since nothing new writes a record outside `atomic`. A new
-  guard, `test_writeset_guard.py`, holds that every public function in
-  `atomic` that publishes bytes calls `writeset.note` on its success path, so a
-  fifth writer added later is collected too. It goes in CONTRIBUTING.md's guard
+  guard, `test_writeset_guard.py`, holds that every public callable in
+  `atomic`, except an explicit allowlist of the ones that publish nothing
+  (`is_write_temp` today), calls `writeset.note` in its own body, after its
+  replace or append. So a fifth writer added later is collected too, and a
+  `note` buried in a private helper does not count. It goes in CONTRIBUTING.md's guard
   table (`test_contributing_names_every_guard_test` requires that), and it has
   no marker.
 - **Import graph.** `writeset` imports nothing from `grimoire`, so
   `atomic -> writeset` adds no cycle. `cache_sync` imports 03's module,
   `embed_space`, `vectors`, `inference.embed`, `revision` and `paths`. It binds
   submodules inside `store/`, never names off a package
-  (`test_import_guard.py`). The hooks of 04 and 08 are registered by their own
-  packages at import, so `cache_sync` does not import `overview` or
-  `searchdocs`. The routes import `cache_sync`; the store never imports the
-  routes.
-- **Paths.** Every path is built from `paths.home()` (`test_paths_guard.py`),
-  and ids go through `paths.safe_id` (`test_path_guard_store.py`).
+  (`test_import_guard.py`). `cache_sync.HOOKS` imports the hook modules of 04
+  and 08 explicitly (section 6.2), and those modules do not import
+  `cache_sync`, so the graph stays acyclic. The routes import `cache_sync`;
+  the store never imports the routes.
+- **Paths.** Every path sync builds comes from the pinned root, itself read
+  from `paths.home()` (`test_paths_guard.py`), and ids go through
+  `paths.safe_id` (`test_path_guard_store.py`). The functions it calls resolve
+  `paths.home()` per call, which is why the root is held still (section 4.2).
 - **Locks.** None are taken, and there is no entry in `store/locks.py`
   (section 4.3). `revision.bump` is already classified: `store/locks.py` lists
   `store.revision` outside the domain, with its reason.
 - **Metering and routing.** No embed task is added. Every request goes through
   `embed_groups_sync` (01h-C5) or `embed_sync`, under the producer's
-  registered embed task, with a space from `embed_space.endpoint()`.
-  `test_operation_guard.py` traces that, and `test_usage_guard.py` checks a
-  meter's holder. A failure is recorded at `Meter.done`, with kind and status
+  registered embed task, with the batch's space from `embed_space.endpoint()`.
+  `test_operation_guard.py` cannot trace that space through `WarmContext` and
+  a hook method as it stands, so 05 extends it (section 6.6, "The operation
+  guard"), with planted-fail cases. `test_usage_guard.py` checks a meter's
+  holder. A failure is recorded at `Meter.done`, with kind and status
   only.
 - **Costs.** An endpoint that reports no price files unpriced rows, so the
   Costs totals read incomplete until the user sets rates, exactly as for
   recall today. An OpenRouter embedding reports its cost, which is spend and
   counts against the claiming campaign's budget. Campaign budgets only warn.
 - **Detached runs.** There is one new `background` handler, `post_cache_sync`.
-  The write-through queue is not a run. CLAUDE.md's handler count and its
+  The write-through queue is not a run. Both await their batch shielded and
+  stop it through a cooperative flag, which lifespan shutdown sets beside
+  `runner.stop_maintenance` (section 4.2). CLAUDE.md's handler count and its
   background bullet change with this.
 - **Observability.** There is one writer: the CLI calls `logs.install()`. Sync
   logs a degradation once per kind per process, and one batch line with counts.
@@ -1352,7 +1393,16 @@ turns the queue on.
 - A write in `anyio.to_thread.run_sync`, and one in a `def` route's threadpool
   worker, both land in the request's scope.
 - `test_writeset_guard.py` fails a new publishing function in `atomic` that
-  does not call `note`.
+  does not call `note`, and one whose `note` sits only in a private helper.
+- **A run outlives its request.** A streamed turn whose client disconnects
+  keeps writing from worker threads while the middleware closes and hands
+  off the request's scope. The request's snapshot is unchanged afterwards,
+  nothing raises (no "set changed size during iteration"), and the run's own
+  isolated scope alone carries the paths it wrote after the handoff. The same
+  holds for a background run started from inside the turn (`_fire_follow_up`).
+- A `note` into a closed scope adds nothing, from any thread.
+- The middleware's handoff on an app with no lifespan (no
+  `app.state.cache_warm`) drops the snapshot and raises nothing.
 
 **Write-through (05-C1).**
 
@@ -1365,6 +1415,15 @@ turns the queue on.
   warm-up.
 - A data-dir move clears the queue, and an entry collected under the old root
   is never warmed against the new one.
+- `PUT /config/data-dir` answers 409 `busy` while a write-through batch is
+  running, and succeeds while the queue is merely holding paths.
+- The queue drops `usage/`, `logs/`, `llm_connections/` and top-level files
+  before any lookup, and reports no refusal for them.
+- Lifespan shutdown with a batch mid-embedding sets the stop flag, the batch
+  stops at its next check, and no vector is saved after shutdown returns.
+- A lore edit in a world whose search corpus is hot re-embeds nothing for
+  search under write-through (`on_write="explicit"`), and does re-embed
+  recall's vector.
 - Past `MAX_PENDING`, the queue drops paths with one log line.
 - A warm-up failure is swallowed and logged once.
 - 08's `reembed` (a test hook standing in for it) is never called on a request
@@ -1379,7 +1438,17 @@ turns the queue on.
 - Forty edited entities in Realm reach `overview.warm_paths` in one call.
 - A vector row in a space other than the current one is `stale_space`, and
   sends nothing. With embedding off, it is `embedding_off`.
+- The Embedding role moved between the local and network phases (a test
+  rewrites it in between) sends nothing, and reports `stale_space`.
 - A transcript whose last passage changed embeds one passage.
+- A long transcript with three of its passages embedded, edited throughout,
+  embeds at most replacements for those three, never its unembedded tail.
+- An edit to a campaign ledger that 08's document read reaches the
+  `searchdocs` hook (its row is on the ledger path), and is not reported cold.
+- In a fresh subprocess, every registry kind that can be materialized is
+  claimed by a hook in `cache_sync.HOOKS` (no `lazy` from a missing import).
+- A rate limit on the third chunk leaves the first two chunks' vectors saved,
+  one ledger row per chunk sent.
 - A rename stated with `--renamed` whose text did not change embeds nothing.
 - With two producers' rows on one path (recall and search on a lore entry),
   each hook rebuilds only its own projection.
@@ -1398,8 +1467,14 @@ turns the queue on.
 - `--dry-run` sends nothing, stores nothing and bumps nothing, and reports the
   texts it would send.
 - `--no-embed` defers every vector and sends nothing.
-- A scoped sync reads only hot files whose stamp moved (counted reads on an
+- A scoped sync reads only hot files not proved current (counted reads on an
   instrumented store), and lists only non-current paths.
+- After an agent's edit, a GET that hashes the file (so its `sources` row is
+  current) does not hide it from `--world`: a row whose `built_from` differs
+  still makes it a candidate.
+- A nonexistent path is `missing` (exit 1, no bump); the same path under
+  `--deleted` is `deleted` (exit 0, bump); `--campaign` naming a nonexistent
+  id is `not_found` and purges nothing.
 - Every refusal in section 8 is reported with its reason:
   - a path outside the root;
   - a `..` escape;
@@ -1409,25 +1484,33 @@ turns the queue on.
   - a write temp;
   - an unsafe id;
   - a batch over `MAX_PATHS`.
-- A deleted campaign root triggers 03's purge, once 03 exposes it.
+- A campaign root named in `--deleted` whose directory is gone triggers
+  03-C8's purge; the same root as a plain path or a scope flag does not.
 - `--verify` reports a mismatch for a kind deliberately registered with a key
   that omits an input.
 - The report never contains a body. A test syncs records whose bodies contain a
   sentinel string, including a malformed JSON record and a provider error
   whose body echoes its input. The sentinel must appear in neither the JSON
   report, the text output nor the log file.
-- Two concurrent `POST /api/cache/sync` requests share one run, and the second
-  request's paths are processed.
+- A second `POST /api/cache/sync` while one is live answers 409
+  `sync_in_flight` with the live run id, whatever its options; a dry run sent
+  then spends and stores nothing. A repeat of the first request's
+  `attempt_id` is handed the same run.
+- Cancel on the API run stops it at its next check, and the report says what
+  ran.
 - `PUT /config/data-dir` answers 409 while an API sync run is live.
 - An explicit sync of a campaign path bumps that campaign's token once per
-  batch. A world path bumps none.
+  batch, before its first rebuild (a batch killed during embedding has still
+  bumped). A world path bumps none.
 - The CLI, run in a subprocess against the test root while a test app serves
   the same root, leaves artifacts that the app's next read hits (an
   instrumented counter, 04-C3a).
 
 **Acceptance.** An agent edits a hot lore entry in Realm, changes an image
-description through `image_store.update`, and deletes an obsolete lore file,
-then runs one `cache sync` naming the three paths. Afterwards:
+description through `image_descriptions` (which writes the object through
+`image_store.update`), and deletes an obsolete lore file,
+then runs one `cache sync` naming the two edited paths and the deleted one
+under `--deleted`. Afterwards:
 
 - recall's next turn sends no embedding request for the edited entry;
 - search finds the new description and not the old one;
@@ -1458,6 +1541,8 @@ then runs one `cache sync` naming the three paths. Afterwards:
 
 ## 15. Open questions
 
+Cross-spec requests raised by the spec gate (section 16) are listed first.
+
 1. **Which task do re-embeds file under?** This spec uses the producer's own
    task, as 08 does. The alternative is one `cache-sync` embed task, which
    would make warm-up spend visible as its own line on the Costs page, at the
@@ -1485,3 +1570,68 @@ then runs one `cache sync` naming the three paths. Afterwards:
    are rebuilt when play pauses. 08 may prefer `on_write="explicit"`, and
    rebuild at absorb instead. *Recommendation:* leave the choice to 08; the
    hook field exists so that each owner decides.
+
+6. **Two more 03-C3 operations (cross-spec, 03).** Section 7.3 needs a
+   `built_from` column on each `materialized` row, and section 7.5 needs
+   `copy_materialized(old, new)`. *Recommendation:* add both to 03-C3 in 03's
+   plan. Without `built_from`, scoped syncs read every hot file; without the
+   copy, `--renamed` warms nothing.
+7. **A per-group save callback in 01h-C5 (cross-spec, 01h).**
+   `embed_groups_sync` returns every group's result at the end, so 05 calls it
+   one chunk at a time to save as it goes (section 6.6). *Recommendation:* let
+   01h add an optional `on_group(result)` callback, which would let 05 make one
+   call per batch; until then the per-chunk calls are correct.
+8. **08's write-through policy and per-campaign limit (cross-spec, 08).** 05
+   defaults query-driven producers to `on_write="explicit"` and passes 08's
+   own `limit` to `reembed` (section 6.2). *Recommendation:* 08 confirms both,
+   and records a `materialized` row on every input path its document reads
+   (section 6.1).
+
+## 16. Review record
+
+**Spec gate (substitute review), 2026-10-10.** An adversarial review checked
+this spec against the code (4 blocking, 9 should-fix, 8 minor). Codex was not
+used; the CLI's `/codex:adversarial-review` gate is still pending. Every
+finding below was verified against the code before it was folded in.
+
+- **Blocking, all folded in.**
+  - B1. A detached run inherits the request's context through the run portal
+    (`runner.py:216`, `loop.call_soon_threadsafe` copies the calling thread's
+    context), so it kept writing into the request's set after handoff. Scopes
+    are now objects closed at handoff into a frozen snapshot, `note` skips
+    closed scopes, and runs and scripts open isolated scopes (5.2, 5.3). The
+    false sentence in 1.2 and 5.3 is gone.
+  - B2. A multi-unit producer was partly embedded, and write-through spent
+    where lazy would not. Rows are now per embedded unit; only replacements of
+    embedded units are sent, capped at the producer's lazy limit; library
+    search and query-driven producers are `on_write="explicit"`; 6.7 reason 3
+    is rewritten (6.4, 6.5, 6.7).
+  - B3. Adopting a second API request lost its options (a dry run could
+    spend) and could drop pends. The API now refuses with 409
+    `sync_in_flight` and never merges (7.8).
+  - B4. The operation guard cannot trace `ctx.space` through a hook method.
+    The guard extension is now a deliverable, and every network phase
+    re-reads `endpoint()` and stops on a moved role (6.6, 12).
+- **Should-fix, all folded in.** S1 a sync hold refuses a data-dir move while
+  a batch runs, and the root is re-checked per step (4.1, 4.2). S2 a `stop`
+  flag, shielded awaits, shutdown and Cancel (4.1, 4.2, 7.8). S3 one call per
+  chunk, saved as it lands (6.6; Open question 7). S4 `built_from` for the
+  scoped candidate rule (7.3; Open question 6). S5 `missing` and `not_found`,
+  and a purge only on an explicit `--deleted` root (7.2, 7.3, 7.6). S6 rows on
+  every input path, and explicit adapters for 04 and 08 with 08's `limit`
+  (6.1, 6.2). S7 the token is bumped before any rebuild (3.3, 10). S8 an
+  explicit `HOOKS` tuple, tested in a fresh subprocess (6.2). S9 the queue
+  filters by section 8's syncable set, and refusals are silent in write mode
+  (5.4, 4.1).
+- **Minor, all folded in.** M1 the exit statuses (7.1, 11). M2 the PowerShell
+  form, and `PYTHONPATH` everywhere (7.1). M3 `copy_materialized` named, and
+  the rename spend stated (7.5, 6.7). M4 the writeset guard defined
+  mechanically (11, 12). M5 a handoff with no queue (5.3). M6 what `note`
+  records (5.2). M7 the stale vector-kind text (6.4). M8 no row for sources
+  outside the root (6.4).
+- **From the 01h review.** There is no "document type" to pass: under 01h-C1
+  a document simply omits `queries`. Section 6.6 now says so, and the 01h-C1
+  dependency row is kept only as the property that sync sends documents.
+- **From the 06 review.** The image description door is now
+  `image_descriptions` in both specs (06 M4), and the report vocabulary is
+  exported for 06's drift test (06 S1, S2).

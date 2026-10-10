@@ -278,53 +278,63 @@ statically (03 section 8).
 
 ### 3.2 The kinds
 
-All six are 03 registry entries (03 section 4), registered by a new
-`store/overview/` package (section 11). All may use persisted `sources` (03
-section 5, rule 5): a stale answer from any of them is a stale card line, count
-or badge, which the next edit, the kill switch or deleting
-`.cache/compiled/` repairs.
+Four persisted kinds are 03 registry entries (03 section 4), registered by a
+new `store/overview/` package (section 11). All four may use persisted
+`sources` (03 section 5, rule 5): a stale answer from any of them is a stale
+card line, count or badge, which the next edit, the kill switch or deleting
+`.cache/compiled/` repairs. A fifth projection, `scene_summary`, is
+in-process only in v1 (3.4).
 
-| Kind | One per | Inputs (role -> source) | `params` | Output |
-|---|---|---|---|---|
-| `overview.world_row` | world | `meta` -> `world.md` | none | `{name, created, updated, genre}`, with `name` set to `null` when the key is absent |
-| `overview.campaign_row` | campaign | `meta` -> `campaign.md` | none | `{name, world, created, updated, parent, forked_from_scene, blurb, module}`, with `name` set to `null` when absent |
-| `overview.scene_head` | scene file | `scene` -> `scenes/<sid>.md` | none | `_scene_row`'s dict, with `title` set to `null` when absent and `_identity` kept |
-| `overview.scene_summary` | campaign | `scenes` -> collection `scenes/*.md`, stems passing `safe_id` | none | section 3.4 |
-| `overview.scene_turns` | scene file | `scene` -> `scenes/<sid>.md` | `players`: sorted player display names | `int`, or `null` when the bytes do not decode |
-| `overview.continuity_summary` | campaign | `plot`, `commitments`, `events`, `continuity`, `candidates` -> the five JSON files at the campaign root (`plot.py:19`, `commitments.py:42`, `events.py:65`, `continuity/doc.py:64`, `continuity/candidates.py:91`), each absent-ok | none | section 3.5 |
+| Projection | Persisted | One per | Inputs (role -> source) | `params` | Output |
+|---|---|---|---|---|---|
+| `overview.world_row` | yes | world | `meta` -> `world.md` | none | `{name, created, updated, genre}`, with `name` set to `null` when the key is absent |
+| `overview.campaign_row` | yes | campaign | `meta` -> `campaign.md` | none | `{name, world, created, updated, parent, forked_from_scene, blurb, module}`, with `name` set to `null` when absent |
+| `overview.scene_turns` | yes | scene file | `scene` -> `scenes/<sid>.md` | `players`: sorted player display names | `int`, or `null` when the bytes do not decode |
+| `overview.continuity_summary` | yes | campaign | `plot`, `commitments`, `events`, `continuity`, `candidates` -> the five JSON files at the campaign root (`plot.py:19`, `commitments.py:42`, `events.py:65`, `continuity/doc.py:64`, `continuity/candidates.py:91`), each absent-ok | none | section 3.5 |
+| `overview.scene_summary` | no (v1) | campaign | the `scenes/` listing and each member's head, through `_scene_row` | none | section 3.4 |
 
 **Path-derived fields are applied outside the cache** (03 section 6). The
-name fallbacks are the directory name for a world or campaign
-(`worlds/read.py:35`, `campaigns/read.py:121`) and the stem for a scene title
-(`scenes/read.py:37`). The compute reports `null` when the frontmatter key is
-absent, and the caller substitutes. This keeps `meta.get("name", d.name)`
-exactly: a present-but-empty name stays `""`. Two identical `campaign.md`
-files in two directories then share one artifact and still render two names.
+name fallback is the directory name for a world or campaign
+(`worlds/read.py:35`, `campaigns/read.py:121`). The compute reports `null`
+when the frontmatter key is absent, and the caller substitutes. This keeps
+`meta.get("name", d.name)` exactly: a present-but-empty name stays `""`. Two
+identical `campaign.md` files in two directories then share one artifact and
+still render two names. Scene titles need no such rule, because scene heads
+are not persisted: `_scene_row` already applies the stem fallback
+(`scenes/read.py:37`), including to the title `closed_by` carries.
 
 **`module` is new on the campaign row.** It fixes the dead chip in 1.4. Open
-question 4 decides what value it carries. The store's `list_campaigns` is not
+question 4 decides what value it carries. Whatever is chosen, a campaign
+setting of `"none"` renders no chip. `world_row` and `GET /worlds` change
+only if Open question 4 picks (b). The store's `list_campaigns` is not
 changed, so the frozen campaign's sweep entry for it does not move (section
 12.6).
 
-### 3.3 Byte-fed computes
+### 3.3 Byte-fed computes, and the live path beside each
 
-Each compute receives bytes from 03's API, never a path (03 section 6).
+Each persisted compute receives bytes from 03's API, never a path (03 section
+6). **Each also has a live path**: the existing path-based code, which is what
+runs whenever the compiled layer is off (`GRIMOIRE_COMPILED_CACHE=0`), absent
+(Android until 03 confirms `sqlite3`), busy or locked (03 section 12: a miss,
+never a wait), corrupt, or unable to read an input (03-C4 as amended: the
+derivation is uncacheable for that request and falls back to the live path).
+The live path is today's code, so every one of those cases costs what the
+route costs today, never more.
+
+| Persisted kind | Byte-fed compute | Live path |
+|---|---|---|
+| `world_row` | `parse_frontmatter(text)` | `_world_row` (`worlds/read.py:24-43`) |
+| `campaign_row` | `parse_frontmatter(text)`, `_first_paragraph(body)` | `_campaign_row` (`campaigns/read.py:110-147`), plus `module` |
+| `scene_turns` | `parse_frontmatter`, `serialize._parse_messages(body, frozenset(players))`, `turns._model_blocks` (`turns.py:72-78`) | `read_scene` + `_model_blocks`, as `_scene_turns` does today (`shell.py:112-116`) |
+| `continuity_summary` | the text seam below | `effective.commitments`, `_owed`, `pending.findings` on paths, as today |
 
 - **Decoding** must match the `read_text(encoding="utf-8")` it replaces,
   universal newlines included. `_first_paragraph` splits on `"\n\n"`
   (`campaigns/read.py:102`), and the transcript parser splits on lines. The
   compute decodes UTF-8 and then translates `\r\n` and `\r` to `\n`. The
-  equivalence tests use CRLF and non-UTF-8 fixtures (03 section 14).
-- **`scene_head` parses the head from the full bytes**, where
-  `parse_frontmatter_head(p)` reads only the head from a path. The compiled
-  layer has already read the whole file to hash it whenever the stamp moved.
-  The plan adds `frontmatter.parse_head_text(text)` beside the path form, so
-  the two parsers cannot drift, and an equivalence test holds them together.
-- **`scene_turns`** runs `parse_frontmatter`, then
-  `serialize._parse_messages(body, frozenset(players))`, then
-  `turns._model_blocks` (`store/scenes/turns.py:72-78`). This is exactly what
-  `read_scene` + `_scene_turns` do today (`scenes/read.py:159-166`,
-  `shell.py:112-116`), minus the path.
+  equivalence tests use CRLF and non-UTF-8 fixtures (03 section 14). Every
+  one of these four readers decodes its whole file today, so a strict decode
+  of the whole file changes no behaviour.
 - **`continuity_summary` needs a text seam** in the continuity readers.
   - Today `effective.Ledgers.load(cid)` (`continuity/effective.py:92-114`),
     `doc.read(cid)`, `doc.malformed(cid)` and `candidates.read(cid)` each read
@@ -332,108 +342,149 @@ Each compute receives bytes from 03's API, never a path (03 section 6).
   - The plan adds `*_from_text` twins (or one `Texts` bundle threaded through
     `pending.Current.load` and `effective.records` / `live_canon` / `links`).
     The existing path functions become "read, then call the twin", so there is
-    one parser per file.
+    one parser per file, and the live path and the byte-fed path cannot
+    disagree.
   - The test for "fed, not reading": run the compute under an audit hook
     (`sys.addaudithook`, recording `open`, `os.listdir` and `os.scandir`
     events) and assert it opens nothing.
   - If the call graph turns out to reach a file outside the five, that file
     joins the key, or the kind is not wired. No other option is acceptable.
 
-### 3.4 `scene_summary`: the one collection kind
+**Scene heads are not byte-fed and not persisted.** An earlier draft of this
+spec made `scene_head` a persisted kind parsed from the whole file. That turned
+today's head-only read (`parse_frontmatter_head`, `frontmatter.py:89-107`,
+which reads a few buffered lines) into a whole-transcript read and hash on
+every artifact miss: every first visit, every `BUILD` change (every pull on
+an editable install), and every request with the cache off or busy. Worse,
+`parse_frontmatter_head` decodes lazily, so a scene whose body holds a bad
+byte lists fine today, while a strict whole-file decode would raise. The
+review record (section 15) has the detail. So scene heads stay where they
+are: `_scene_row`, head-only, in its own in-process pool.
 
-The key is 03 section 7's collection digest over the campaign's `scenes/`
-directory.
+### 3.4 `scene_summary`: in-process in v1
 
-**Member filter.** Members are `*.md` whose stem passes `safe_id`. This is
-exactly `list_scenes`' enumeration (`scenes/read.py:77-79`). The same
-directory also holds `<sid>.review.json` sidecars and other per-scene files. A
-digest over the whole directory would move whenever a review was written,
-and would miss for a reason the summary does not depend on. 03-C1's collections take a member
-filter. This kind declares `(scenes/, *.md with a safe_id stem)` as its
-collection, and the filter is part of the kind's declaration and covered by
-its `version`.
+`overview.scene_summary(cid)` folds the campaign's scene heads into the
+summary the card, the shell and Todo share.
+
+**Inputs.** The live listing of `scenes/*.md` whose stem passes `safe_id`,
+exactly `list_scenes`' enumeration (`scenes/read.py:77-79`), and each
+member's head through `_scene_row` (`scenes/read.py:30-69`): head-only, memoised
+in `_SCENE_POOL` by stat signature.
 
 Output:
 
 ```
 {
-  "count":    int,                       # members that parsed
-  "absorbed": int,                       # rows with done
-  "rows":     [ {sid, title|null, updated, done, closed_by|null} ... ],
-                                         # list order (below), one per scene
-  "open":     [ {sid, title|null} ... ], # not done and no closed_by, list order
-  "stamps":   [str ...],                 # distinct scene `updated` values that pass the
+  "count":      int,                     # every listed member, readable or not
+  "unreadable": int,                     # members whose head could not be read or decoded
+  "absorbed":   int,                     # readable rows with done
+  "rows":       [ {sid, title, updated, done, closed_by|null} ... ],
+                                         # readable members, list order (below)
+  "open":       [ {sid, title} ... ],    # not done and no closed_by, list order
+  "stamps":     [str ...],               # distinct `updated` values that pass the
                                          # format round-trip, newest first
 }
 ```
 
+- **One undecodable scene degrades that scene, never the page.** Today a head
+  that raises `UnicodeDecodeError` (or an `OSError` mid-listing) propagates
+  out of `list_scenes`, and `get_campaigns` (`routes/campaigns.py:156-191`),
+  `_Ctx._scenes_or_none` (which catches only `CampaignNotFound` and
+  `OSError`, `todo.py:81-89`) and the shell would 500 or drop the campaign.
+  The fold catches `UnicodeDecodeError` and `OSError` **per member**: the
+  member counts in `count` and `unreadable`, is not absorbed, is not open,
+  and contributes no title or stamp. This is a deliberate change from a 500
+  to a degraded row, listed with the other expected differences in 12.1. A
+  summary with any unreadable member is not memoised, so the next read tries
+  again.
 - **Order** is `updated` descending, then `sid` ascending.
   - Today's `list_scenes` sorts stably over `glob` order (`:81`), and glob
     order is the filesystem's directory order. Two scenes with the same
     `updated` (one-second stamps make that ordinary) can therefore order
     differently on two devices sharing one synced store, and `last_scene` can
     name either.
-  - The projection fixes the tie-break. This is a deliberate change to
+  - The summary fixes the tie-break. This is a deliberate change to
     `GET /campaigns`' `last_scene` and the shell's open order in tie cases
     only (Open question 6).
   - `list_scenes` itself is left alone (3.7).
 - **`closed_by`** is `_resolve_groups`' rule (`:86-112`), computed over the
-  members. It depends only on member content.
-- **`stamps` keeps the clock out of the artifact.** `best_stamp` rejects a
+  readable members. An unreadable sibling cannot close another member, which
+  is what `list_scenes` would say if it could list at all.
+- **`stamps` keeps the clock out of the summary.** `best_stamp` rejects a
   stamp that is implausibly far in the future against *now*
   (`campaigns/read.py:254-286`), so its answer depends on the clock. The
-  projection keeps only the clock-free half: the format round-trip, plus
+  summary keeps only the clock-free half: the format round-trip, plus
   de-duplication. `GET /campaigns` then applies
   `best_stamp(updated, read_activity(cid), *stamps)` live. The answer is
   identical, because an invalid or duplicate candidate can never be
-  `best_stamp`'s answer. The list grows with the number of scenes, which is the
-  same size as the head rows the in-process memo already holds.
-- `rows` carries what Todo's open-scene chore and its items need. The items
-  expansion (`_items_open_scenes`, `todo.py:902-911`) stays on live
-  `list_scenes`: it also renders `date` and `place`, and it is on demand.
+  `best_stamp`'s answer.
+- `rows` carries what Todo's open-scene chore needs. The items expansion
+  (`_items_open_scenes`, `todo.py:902-911`) stays on live `list_scenes`: it
+  also renders `date` and `place`, and it is on demand.
 
-**Miss path.** The compute needs every member's head.
+**Memo.** `statcache.memo_stamped` keyed on
+`("overview.scene_summary", scenes dir)`, in a named pool `_OVERVIEW_POOL`
+sized like `_SCENE_POOL` (a constant justified by "one entry per campaign",
+tuned later). Its compute stamps the directory before listing it and each
+member before reading its head (the contract at `statcache.py:152-163`).
+`memo_stamped` uses `stamp`, which includes `ctime` (`statcache.py:107-127`).
 
-- Members whose `scene_head` artifact exists are batch-looked-up (03-C6) over
-  the live member keys.
-- The rest are parsed from their bytes, and their `scene_head` artifacts are
-  stored in the same batch.
-- So after one scene changes, the miss costs one head parse plus N lookups,
-  not N parses.
-
-**In-process layer** (03 section 13: statcache above, compiled below).
-
-- `statcache.memo_stamped` keyed on `("overview.scene_summary", scenes dir)`.
-- Its compute stamps the directory before listing it and each member before
-  reading it (the contract at `statcache.py:152-163`), then calls the compiled
-  layer.
-- A warm same-process read therefore costs one stat of the directory and one
-  per member, and **no listing**: the directory's stamp vouches for its listing
+- A warm same-process read costs one stat of the directory and one per
+  member, and **no listing**: the directory's stamp vouches for its listing
   in-process, exactly as `characters._build_identity` and the store guarantees
-  (`docs/store-guarantees.md`, "Reads notice external writes") already rely
-  on.
-- The persisted layer never treats a directory stamp as a voucher (03 section
-  7). It lists.
+  (`docs/store-guarantees.md`, "Reads notice external writes") already rely on.
+- After a turn, the turn's atomic write moves `scenes/`'s mtime, so the next
+  read re-lists and re-folds. Every member but the written one hits
+  `_SCENE_POOL`, so the cost is one listing, one head read and the fold.
+- After a restart, the first read lists and reads every head, head-only. That
+  is today's cost, unchanged.
+- The per-member head memo keeps today's residual: `_scene_row` is keyed on
+  `signature` (no ctime), so a same-size in-place rewrite of a head with a
+  restored mtime is believed until restart, exactly as `list_scenes` believes
+  it today. The summary's own stamps carry ctime, so they notice the change.
+  But the recompute then reads that head through the stale member memo. The
+  plan may close this by having the fold re-read a member whose stamp moved
+  while its signature did not. It is not a new residual, and 6.5 states it.
+
+**Persisting the summary is a later slice.** A persisted `scene_summary`
+needs a key over every member's content hash. Building that key on a cold
+`sources` table means hashing whole transcripts, which is the cost the
+review rejected. It becomes worthwhile only once 03-C4 can answer "the hash,
+if known without reading" (from `sources` or the in-process layer), so a
+campaign whose members are not all known simply takes the in-process path.
+That mode is not in 03 today (Open question 11, a soft missing edge). Until
+then, 03-C1's collection member filter is not used by 04.
 
 ### 3.5 `continuity_summary`
 
-Output: `{ledger_open, owed, overlaps, closures, closures_threads}`. Each
-field keeps the failure semantics of the code it replaces:
+Output: `{ledger_open, owed, overlaps, closures, closures_threads}`.
 
-| Field | Today | Failure today -> here |
-|---|---|---|
-| `ledger_open` | `len(effective.commitments(cid))` (`shell.py:221-224`) | any exception -> `null` |
-| `owed` | `len(_owed(cid))`, commitments with a `due` (`todo.py:368-393`) | `OSError`/`ValueError` -> `null`, and the chore is absent |
-| `overlaps`, `closures` | `continuity_pending.findings`, `live` verdicts, by `CHORE_OF` (`todo.py:113-127`, `:396-432`) | `OSError`/`ValueError`/`CampaignNotFound` -> `0` |
-| `closures_threads` | whether any live closure is a `possible_thread_closure` (`todo.py:424-425`) | as above -> `false` |
+| Field | Today | Failure today | Failure here |
+|---|---|---|---|
+| `ledger_open` | `len(effective.commitments(cid))` (`shell.py:221-224`) | any exception -> `null` | any exception -> `null` |
+| `owed` | `len(_owed(cid))`, commitments with a `due` (`todo.py:368-393`) | `OSError`/`ValueError` -> `null`, chore absent; **anything else -> 500** | any exception -> `null`, chore absent |
+| `overlaps`, `closures` | `continuity_pending.findings`, `live` verdicts, by `CHORE_OF` (`todo.py:113-127`, `:396-432`) | `OSError`/`ValueError`/`CampaignNotFound` -> no findings; anything else -> 500 | any exception -> no findings |
+| `closures_threads` | whether any live closure is a `possible_thread_closure` (`todo.py:424-425`) | as above | as above -> `false` |
 
-**Content-determined failures are cached; I/O failures never are.**
+**One deliberate change.** A `commitments.json` that holds `[]` instead of an
+object makes `open_commitments` call `.items()` on a list
+(`store/commitments.py:249`), which raises `AttributeError`. Today the shell
+shows `null` for it, while `GET /todo` (both scopes) returns 500. One cached
+value cannot both raise for `owed` and be `null` for `ledger_open`, and a 500
+on the global to-do page for one garbled ledger is the failure `todo.py`'s
+"no campaign failure" rule exists to prevent. So every field widens to "any
+exception -> unknown". This is listed beside `module` and the tie-break in
+12.1. "Unknown" stays `null` for counts the routes report (never `0`, the
+cost rule) and "no chore" for chores, as today.
 
-- The compute receives bytes, so a `ValueError` from a garbled ledger is a
-  property of those bytes. Caching the `null` under their hash is exactly as
-  true as caching a number.
-- An `OSError` can only happen in 03's read step, before any compute runs. 03
-  section 12 turns it into "compute live, store nothing".
+**Content-determined failures are cached; failed reads never are.**
+
+- The compute receives bytes, so an exception from parsing a garbled ledger
+  is a property of those bytes. Caching the `null` under their hash is
+  exactly as true as caching a number.
+- A failed read of any of the five files is 03-C4's case as amended: the
+  derivation is uncacheable for that request and runs the live path, which
+  maps the failure as the table above says.
 - This is the read-path spec's "only successful derivations are memoised"
   rule (`2026-08-28-...:120-127`), made precise for byte-keyed artifacts.
 
@@ -443,20 +494,40 @@ field keeps the failure semantics of the code it replaces:
 `paths.now_iso` and `time.time` to raise, so a future clock read inside the
 compute fails loudly instead of freezing an answer in the artifact.
 
-### 3.6 Failure and absence, everywhere
+### 3.6 The in-process layer above each persisted kind
 
-- **An absent input is an input.** For absent-ok roles it carries 03's
-  absent sentinel, so creating the file moves the key. A campaign with no
-  `commitments.json` gets a real projection, not a perpetual miss. The
+03 section 13 puts statcache above the compiled layer. For every persisted
+overview kind, that layer is `statcache.memo_stamped`, never `memo`: its key
+is `stamp`, which includes `ctime`, so an in-place same-size rewrite with a
+restored mtime is noticed on POSIX. Todo has no such residual today, because
+it caches nothing, and `memo`'s `signature` would add one.
+
+| Kind | In-process key | Stamps |
+|---|---|---|
+| `world_row`, `campaign_row` | the meta path | the meta file |
+| `scene_turns` | `(scene path, players)` | the scene file |
+| `continuity_summary` | the campaign root | the five files, an absent one vouched for by the campaign root's stamp (`statcache.py:160-163`) |
+
+All live in `_OVERVIEW_POOL` (3.4), never the shared FIFO.
+
+### 3.7 Failure and absence, everywhere
+
+- **An absent input is an input.** 03-C1 as amended keys an absent-ok input
+  as an explicit sentinel, so creating the file moves the key. A campaign with
+  no `commitments.json` gets a real projection, not a perpetual miss. The
   read-path spec found the same trap for appearances (`2026-08-28-...:90-99`).
-- A projection that cannot be computed because the campaign or world is not
-  there raises the same exception the live code raises. Routes keep their
-  current mapping: 404 for `GET /todo?campaign=`, `campaign: null` for the
-  shell, and the row skipped for the shelves.
+- **A failed read of an input** falls back to the live path for that request,
+  and nothing is stored (03-C4 as amended).
+- **A missing campaign or world** raises the same exception the live code
+  raises. Routes keep their current mapping: 404 for `GET /todo?campaign=`,
+  `campaign: null` for the shell, and the row skipped for the shelves.
+- **An unreadable `scenes/` directory** (an `OSError` from the listing) keeps
+  today's Todo mapping: `_Ctx` treats it as "no campaign chores" (4.4).
 - The cache is never the reason a read fails (03 section 12). With the cache
-  off, busy or corrupt, every kind computes live and returns the same value.
+  off, busy or corrupt, every kind takes its live path and returns the same
+  value.
 
-### 3.7 Who may reach an overview kind
+### 3.8 Who may reach an overview kind
 
 **Only the overview read routes:**
 
@@ -466,6 +537,9 @@ compute fails loudly instead of freezing an answer in the artifact.
 - `GET /todo`.
 
 Not `GET /todo/{id}/items` (on demand, live), and not `PUT /todo/{id}/ignored`.
+Where a helper is shared between the list and its items expansion, the two
+take separate sources: the list's chore reads the projection, and the
+expansion stays on the live store function (4.4, `unreviewed`).
 
 **The store functions they replace stay as they are**, in-process only:
 
@@ -478,8 +552,8 @@ This is load-bearing:
 
 - `scenes.read.closed_by` (`:115-132`) is asked on **every turn's
   reservation** and refuses a closed branch. That is a decision. If it read a
-  persisted `scene_head`, 03 section 5's permanent residuals (Windows ctime,
-  FAT) could refuse or admit a turn wrongly for the life of a row.
+  persisted artifact, 03 section 5's permanent residuals (Windows ctime, FAT)
+  could refuse or admit a turn wrongly for the life of a row.
 - `list_campaigns` feeds `put_todo_ignored`'s legacy-ignore migration
   (`todo.py:1349-1351`), which is a write.
 
@@ -519,14 +593,21 @@ world names without counts.
 - live: `read_activity` (one small file, `campaigns/read.py:321-342`),
   `best_stamp` over it, and the cover token.
 
-The payload is byte-identical except for `module` (3.2) and the tie-break
-(3.4).
+The payload is byte-identical except for `module` (3.2), the tie-break and
+an unreadable scene degrading instead of failing the shelf (3.4).
 
-Cost after a restart: one listing of `campaigns/`, then per campaign one
-listing of `scenes/`, one stat per scene plus a batched `sources` lookup, two
-artifact lookups and three small live reads. **No `campaign.md` parse and no
-scene head parse** for anything unchanged. Today a restart re-parses every
-scene head in the library.
+Cost, stated per case:
+
+- **Warm, same process:** one listing of `campaigns/`; per campaign, the
+  memo checks (one stat per scene plus the directory) and three small live
+  reads. No listing of `scenes/` and no parse.
+- **After a restart, cache on:** per campaign, one stat of `campaign.md` and
+  its `sources` lookup (one lookup per path unless 03-C4 offers a batched form;
+  03-C6 batches only the artifact lookups), a `campaign_row` artifact hit,
+  one listing of `scenes/` and one head-only read per scene. That last part
+  is today's cost: scene heads are not persisted (3.3).
+- **Cache off, busy or cold:** today's cost, plus, with the cache on, one hash
+  of each `campaign.md` that has no `sources` row yet.
 
 ### 4.3 `GET /api/shell`
 
@@ -536,8 +617,8 @@ scene head in the library.
 | `_most_recent` | rows + activity read | same, rows from `campaign_row` |
 | `campaign.name`, `world` | `read_campaign` | `campaign_row` |
 | `world_name` | `world_name(wid)` (parses `world.md`) | `world_row` |
-| `scenes`, `open[].sid/title` | `list_scenes` | `scene_summary` |
-| `open[].turns` | `read_scene` per open scene | `scene_turns` per open scene, `players` from `cast.player_names` (live, small reads; read the appearances record once per request, read-path layer 2) |
+| `scenes`, `open[].sid/title` | `list_scenes` | `scene_summary` (in-process; an unreadable scene is counted, not listed as open) |
+| `open[].turns` | `read_scene` per open scene | `scene_turns` per open scene. `players` comes from `cast.player_names` (live, small reads; the appearances record is read once per request, read-path layer 2), inside the same `try` as today: `OSError`, `UnicodeDecodeError`, `CampaignNotFound` or `SceneNotFound` from the player read or the scene read gives `null` (`shell.py:112-115`) |
 | `unreviewed`, `pending` | glob + read sidecars | unchanged (live; normally zero or one small file) |
 | `sheets` | `ctx.coverage()` | unchanged (live, bounded by cast), and `binding.resolve` stops paying world counts (4.5) |
 | `ledger_open` | parse ledgers | `continuity_summary.ledger_open` |
@@ -553,7 +634,12 @@ less than parsing, and the parse was this route's largest cost (read-path spec,
 
 ### 4.4 `GET /todo`: per-scope composition (04-C1c)
 
-**A Todo scope is a composition, not an artifact.** The draft asked for
+**A Todo scope is a composition, not an artifact.** It is assembled from
+projections plus live chores. Six campaign chore ids stay live (`unreviewed`,
+`sheets`, `anchors`, `taglines`, `avatars`, `cover`). Three of them (`sheets`,
+`avatars`, and the `anchors`/`taglines` sidecar pair) are live because they
+*cannot* be projected; the other three are cheap enough not to need it. The
+checklist's "three live chores" headline means those three. The draft asked for
 `todo_campaign_scope_vN(...)` as one materialised artifact per scope. That
 would need a key over every input of every chore in the scope, and three
 campaign chores (`sheets`, `avatars`, the sidecar pair) read inputs that cannot
@@ -583,7 +669,7 @@ classified:
 | `open-scenes` | campaign | `list_scenes` (`todo.py:269-281`) | `scene_summary.open` | grows with play |
 | `owed` | campaign | commitments + continuity ledgers | `continuity_summary.owed` | grows with play |
 | `continuity-overlaps`, `-closures` | campaign | 5 ledger/cache files via `pending.findings` | `continuity_summary` | grows with play |
-| `unreviewed` | campaign | `*.review.json` glob + reads; title map from `list_scenes` | live; title map built **only when a sidecar exists** (1.4), from `scene_summary.rows` | a listing plus usually zero files |
+| `unreviewed` | campaign | `*.review.json` glob + reads; title map from `list_scenes` | live; the chore needs no titles at all (it reads only the proposal counts and the first sid). `_items_unreviewed`, the expansion, keeps `list_scenes` for titles, built **only when a sidecar exists** (1.4). The chore stops calling the items function and walks the glob itself, so the projection never reaches the items route (3.8) | a listing plus usually zero files |
 | `sheets` | campaign | module binding, pack, overlay cast, sheet files | live | inputs not nameable (pack, overlay); bounded by cast |
 | `anchors`, `taglines` | campaign | `overlay.character_sidecars` (stats + roster) | live, roster memoised (4.5) | bounded by roster; stat-based by design (`todo.py:225-232`) |
 | `avatars` | campaign | overlay roster + `avatar_v` (placements, objects) | live, roster memoised | late-bound object inputs |
@@ -608,17 +694,23 @@ classified:
   `continuity_summary` keys hit. Their live chores still run, but those are
   bounded by cast, not history. Being honest about that is part of the
   contract (04-C1c).
-- **`has_campaign`** (`todo.py:95-107`) stops being "`list_scenes` did not
-  raise". It becomes a campaign-existence check: `campaign.md` exists, and an
-  `OSError` reads as no campaign. The gate is unchanged: an unknown or
-  unreadable id gives no campaign chores. It no longer needs a scene listing to
-  say so.
+- **`has_campaign`** (`todo.py:95-107`) keeps its meaning exactly. It is
+  `_Ctx`'s memoised `scene_summary(cid)`, with `CampaignNotFound` and
+  `OSError` from the summary (a missing campaign, or a `scenes/` that cannot
+  be listed) mapped to "no campaign", as `_scenes_or_none` maps them from
+  `list_scenes` today (`todo.py:81-89`). An unknown or unreadable id gives no
+  campaign chores, and `open-scenes` is never reached with a summary that
+  raised. A single undecodable scene is no longer a reason to drop the whole
+  campaign, because the summary degrades that member (3.4).
 - **The docstrings that promise "nothing is cached"** (`routes/todo.py:1-26`,
   `:65-69`, `store/chores.py:5-14`, `TodoView.tsx:11-17`) are amended to the
   precise statement. Every chore is computed for this request. Some of its
-  inputs are reused under a key covering every file they read, so a reused
-  answer can never describe bytes that have moved. 03 section 8 promised this
-  amendment.
+  inputs are reused, under a key covering every file they read. A reused
+  answer describes the bytes as their stamps last showed them, with the
+  residuals stated in `docs/store-guarantees.md` and section 6.5: a rewrite
+  that keeps size, mtime and ctime (Windows, FAT) is believed until restart in
+  process, and for the life of a row in a persisted `sources` row. 03 section
+  8 promised this amendment.
 
 ### 4.5 Live-path fixes that ride with this spec
 
@@ -636,10 +728,14 @@ cost the reconciliation found. None of them persists anything.
    `character.md`, following `_build_identity` (`characters.py:384-`). Same
    walk, same filter, same order; the existing roster-versus-listing test holds
    it.
-3. **`_items_unreviewed` and `_chore_unreviewed` take titles from
-   `scene_summary.rows`**, and only after the glob has found a sidecar.
-4. **Post-mutation refreshes pass `fresh`** in `WorldsView` and
-   `CampaignsView` (1.4). This is required by section 6, not optional.
+3. **`_chore_unreviewed` walks the review glob itself and builds no title
+   map.** `_items_unreviewed`, which the items route also calls, builds its
+   title map from `list_scenes` only after the glob has found a sidecar.
+4. **Post-mutation refreshes go through the page hook's `reload()`** in
+   `WorldsView` (create, rename, delete) and `CampaignsView` (rename, delete,
+   fork-from-now: `:169`, `:175`, `:203`). The plan's inventory greps for
+   `listCampaigns(`/`listWorlds(` after any `await api.*`. This is required by
+   section 6, not optional.
 
 ## 5. Grimoire's own writes, server side (04-C2a)
 
@@ -667,7 +763,7 @@ site where it pays on every turn:
 ```python
 # store/overview/warm.py
 def warm_scene(cid: str, sid: str) -> None:
-    """Store `scene_head` and `scene_turns` for the scene file as it now is.
+    """Store `scene_turns` for the scene file as it now is.
 
     Best effort, and never raises. Reads the file back, so it is keyed on the bytes
     actually on disk (a newline-translating write, or a second writer landing
@@ -684,20 +780,52 @@ def warm_scene(cid: str, sid: str) -> None:
   - It holds no campaign lock and no run exclusion key.
   - The plan confirms that `sid` is in scope there. `_turn_settled` receives
     only `cid`.
-- **What:** `scene_head` from the bytes, and `scene_turns` with `players` from
-  `cast.player_names(cid, sid)`, the same names the shell will ask with.
+- **What:** `scene_turns`, with `players` from `cast.player_names(cid, sid)`,
+  the same names the shell will ask with.
   - If the cast changes before the next shell read, that read misses on
     `players` and computes. It is correct, only not warm.
-- **What not:** `scene_summary` is not warmed here. Its digest needs every
-  member's hash, and the next read builds it from the in-process heads in one
-  fold. The overview package (section 11) exposes `warm_paths(paths)` for 05.
-  This spec calls only `warm_scene`.
+  - A player read that fails warms nothing.
+- **What not:** `scene_summary` is in-process only (3.4), and the next read
+  re-folds it from the head memo.
 
 **Every other writer warms nothing in 04.** A rename of `campaign.md`, an
 absorb's ledger writes, a world edit: each next read rebuilds lazily, which
 costs one small parse or one campaign's ledgers. Generalising the warm to all
-writers, and choosing which kinds to rebuild eagerly from the `materialized`
-record, is 05-C1 and 05-C3.
+writers is 05-C1 and 05-C3.
+
+### 5.3 `warm_paths`: the hook 05 registers
+
+05 registers 04's warm-up as its `overview` `WarmHook` (05 section 6.2), whose
+local phase receives `hot: Mapping[path, kinds]`. 04 provides:
+
+```python
+def warm_paths(paths: Iterable[str]) -> dict[str, str]:
+    """Rebuild and store the overview artifacts derived from `paths` (store-
+    relative, `/`-separated). Returns one outcome per path: "warmed", "none"
+    (no overview kind reads it) or "failed". Never raises; holds no lock."""
+```
+
+**Which kinds each path maps to, and how the instance is found:**
+
+| Path | Kind | Instance |
+|---|---|---|
+| `worlds/<wid>/world.md` | `world_row` | `wid` |
+| `campaigns/<cid>/campaign.md` | `campaign_row` | `cid` |
+| `campaigns/<cid>/scenes/<sid>.md` (a `safe_id` stem) | `scene_turns` | `(cid, sid)`, with `players` read from the cast at warm time (`cast.player_names(cid, sid)`); a failed player read warms nothing for that path |
+| `campaigns/<cid>/{plot,commitments,events,continuity,continuity_candidates}.json` | `continuity_summary` | `cid`, warmed once however many of the five are in the batch |
+| anything else | none | outcome `"none"` |
+
+- Instances are coalesced across the call: five continuity paths for one
+  campaign warm one `continuity_summary`.
+- **Entity, character, greeting, image and PC paths warm nothing.** No overview
+  kind reads them: a world's counts are live listings (03 section 7), and the
+  world row reads only `world.md`. 05's example of "forty entity edits in one
+  world warm that world's card once" (05 section 6.2) therefore warms nothing
+  in 04. 05 should restate that example as forty edits to one campaign's
+  ledgers warming its `continuity_summary` once. This is a correction to
+  request of 05, not a change to 04.
+- `scene_summary` has no persisted artifact to warm. A scene path warms its
+  `scene_turns` only.
 
 ## 6. First paint: render, then revalidate (04-C2b)
 
