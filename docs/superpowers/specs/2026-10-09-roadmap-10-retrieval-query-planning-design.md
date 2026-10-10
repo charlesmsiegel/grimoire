@@ -1,6 +1,6 @@
 # 10. Retrieval query planning
 
-**Status:** Draft -- spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 10 in `ROADMAP-CHECKLIST.md`. Lane: retrieval.
 **Baseline:** `main` at `35c1fb7`.
@@ -18,28 +18,28 @@ routes, roles, `generate` and `decide`.
 
 ## Depends on
 
+Edges as `ROADMAP-CHECKLIST.md` lists them for 10.
+
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 09-C1 `history.retrieve(Query)` -> `Evidence`, and `history.merge` | 09 | Running each planned round through the same retrieval, and merging rounds by scene identity without growing the section | Hard |
-| 09-C2 deterministic `Coverage` verdict | 09 | The free gate: the planner runs only when the first retrieval is `thin` or `empty` | Hard |
-| 09-C3 the history section and its row | 09 | Planned evidence renders through the same section; the plan's trace rides the same inspector row | Hard |
-| 01f-C1 `generate(schema=...)` with provider structured mode per attempt | 01f | The planner's reply is a schema-shaped object where the provider supports it | Hard for the structured path; the tolerant parse (section 5.4) covers a provider without it |
-| 01f-C2 schema refusal retried without the mode | 01f | A provider that refuses the field still yields a plan | Soft (inherited through 01f-C1) |
-| 01d-C2 one-hop escalation helper | 01d | Escalating a sufficiency answer that is an abstention, a native `refused`, or a low margin (section 7.3) | Soft: without it a non-answer is `unknown` and the repair hop does not run |
-| 01d-C1 task-level fallback and escalation policy | 01d | Declaring that `history-sufficiency` may escalate, and to what | Soft, with 01d-C2 |
-| 01a-C1 eval cost, latency and token reporting | 01a | The planning arms report the calls, tokens, time and three money columns they add (section 11) | Hard for the live eval; offline needs nothing |
-| 01a-C3 comparison table across configurations | 01a | Planning arms against 09's hybrid arm in one table | Soft |
-| 02-C5 decide routes and tasks for retrieval relevance | 02 | The decide route `history-sufficiency` lands on (shared with 09's rerank) | Soft; see open question 2 |
+| 09-C1 `history.retrieve(Query) -> Evidence`, `history.merge`, the `perspective` seam | 09 | Running each planned round through the same retrieval, and merging rounds by scene identity without growing the section | Hard |
+| 09-C2 the `Coverage` verdict | 09 | The free gate: the planner runs only when the first retrieval is `thin` or `empty` | Hard |
+| 09-C3 the `history_recall` section and its row | 09 | Planned evidence renders through the same section; the plan's trace rides its inspector row | Hard |
+| 01f-C1 `generate(schema=)` sends structured mode per attempt; per-call `max_tokens` cap | 01f | The planner's reply is schema-shaped where the provider supports it, and its output is hard-capped (section 5.3) | Hard |
+| 01a-C1 eval cost, latency and token reporting | 01a | The planning arms report the calls, tokens, time and three money columns they add (section 11) | Hard for live evals; offline needs nothing |
+| 01f-C2 schema refusal re-sent through the helper shared with decide | 01f | A provider that refuses the field still yields a plan | Soft |
+| 01d-C1 task policy; 01d-C2 one-hop escalation | 01d | Declaring that `history-sufficiency` may escalate, and escalating a non-answer or low margin once (section 7.3) | Soft: without it a non-answer is `unknown` and the repair hop does not run |
+| 01a-C3 comparison table | 01a | Planning arms against 09's hybrid arm in one table | Soft |
+| 02-C5b history relevance kit, the shared `history_check` route | 02 | The decide route `history-sufficiency` lands on, shared with 09's rerank | Soft |
 | 01b-C1 decision capture at every decide site | 01b | Capturing the sufficiency decision to the prompt log | Soft: without it the decision is visible only in the history row |
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 10-C1 `history_plan` route, `Plan`, `plan.build_messages`, `plan.parse` | 11 | A plan carries `perspective`; 11 asks the planner for an actor's history questions once it lifts 09's actor-scoped blanking |
-| 10-C1 | 12 | The investigation's first step is a plan; 12 escalates to tools only when a plan and its repair hop failed |
-| 10-C2 the bounded repair hop and its `PlanTrace` | 12 | "Cheap retrieval failed" is a terminal trace state 12 can read rather than re-derive |
-| 10-C3 the evidence-sufficiency predicate (`history-sufficiency`) | 12 | The same question gates escalation from retrieval to investigation |
+| Contract (provided here) | Consumer | Hard or soft | What the consumer uses it for |
+|---|---|---|---|
+| 10-C1 `history_plan` route, `Plan`, `plan.build_messages`, `plan.parse`, taking a `perspective` | 11 | Soft | Planning an actor's history questions once 11 lifts 09's NPC blanking, with the planner shown only what that actor may know |
+| 10-C2 the bounded repair hop and its `PlanTrace` | 12 | Hard for RP mode | "Cheap retrieval failed" is a terminal trace state 12 reads rather than re-derives |
+| 10-C3 the evidence-sufficiency predicate (`history-sufficiency` on `history_check`) | 12 | Hard for RP mode | The same question gates escalation from retrieval to investigation |
 
 ## 1. Current state (reconciled against main)
 
@@ -170,7 +170,9 @@ existed under the format-1 layout:
   planner: a setting the user made for summaries governing a call that did
   not exist when they made it.
 
-So `routing` gains a sentinel, `NO_LEGACY = None`, for "born at format 2":
+So routes born at format 2 use `routing.NO_LEGACY`, the shared structure
+`ROADMAP-CHECKLIST.md` records for 01g (`tool-decision`), 02-C5, 09 and 10
+(`NO_LEGACY = None`; whichever lands first adds it):
 
 - `_legacy_routes()` skips such a route, so `LEGACY_ROUTES`, `CONFIG_KEYS`,
   `PRESET_CONFIG_KEYS` and the campaign allow-list (`routes_for`,
@@ -190,9 +192,8 @@ So `routing` gains a sentinel, `NO_LEGACY = None`, for "born at format 2":
   (`store/inference/settings.py:305`), so 01s's settings work needs nothing
   route-specific.
 
-Whichever of 09's rerank slice and this spec lands first adds the sentinel.
-`history_check` is shared: 09's rerank adds `history-rerank` to its tasks in
-its own slice (09 open question 3); the route lands with whichever call site
+`history_check` is 02-C5b's shared route: 09's rerank adds `history-rerank`
+and 10-C3 adds `history-sufficiency`; the route lands with whichever call site
 lands first, which is what `test_routing_guard.py` requires.
 
 ### 4.2 Why Fast for the plan and Decision for the check
@@ -272,6 +273,7 @@ with store.usage.meter("history-query-plan", campaign=cid, scene=sid, post=turn_
                             resolved=resolved, usage=m.usage, schema=plan.SCHEMA_FOR(offered),
                             stream=False),
         ceiling=PLAN_CEILING)
+# with 01f-C1's per-call cap: max_tokens=PLAN_MAX_TOKENS (only ever lowers the preset's)
 ```
 
 - `_soft_resolved` (`routes/common.py:1519`): a route that cannot resolve (no
@@ -284,8 +286,10 @@ with store.usage.meter("history-query-plan", campaign=cid, scene=sid, post=turn_
 - The meter is the call site's own (`test_usage_guard.py`), and `post=` puts
   the planner's cost on the post it served, beside the reply's
   (`CLAUDE.md`, attribution per player post).
-- `schema=` reaches the provider's structured mode once 01f-C1 flags the
-  attempt; until then it is the in-prompt schema alone.
+- `schema=` reaches the provider's structured mode through 01f-C1, with the
+  schema also in the prompt (01f-C1's rule), and 01f-C1's per-call
+  `max_tokens` caps the reply at `PLAN_MAX_TOKENS` (256: the schema's own
+  bounds fit well inside it; tuned later), never raising a preset's cap.
 
 ### 5.4 Tolerant parse and validation
 
@@ -472,7 +476,7 @@ The controls, each with what it bounds:
 |---|---|
 | The free gate (09-C2 coverage) | How often planning runs at all |
 | `PLAN_INPUT_BYTES`, the per-part caps in 5.1 | Planner input |
-| Schema `maxItems`/`maxLength`, validation clipping, `PLAN_CEILING` | Planner output and its wall time |
+| Schema `maxItems`/`maxLength`, validation clipping, `PLAN_MAX_TOKENS` (01f-C1), `PLAN_CEILING` | Planner output and its wall time |
 | `CHECK_CEILING`, one item, no rationale | The check |
 | `MAX_PLAN_CALLS`, the novelty rule, no check after repair | Calls per turn |
 | `PLAN_PHASE_DEADLINE` | The whole phase's wall time |
@@ -480,10 +484,8 @@ The controls, each with what it bounds:
 | 09's ceiling and depth | Prompt tokens: planning adds none |
 | Ledger tasks `history-query-plan`, `history-sufficiency` | What it cost, per post, in the three money columns |
 
-A per-call cap on planner *output tokens* is not available: `generate` takes
-no `max_tokens`, and a route's sampler preset is the user's. The schema's
-bounds and the ceiling bound it in practice; a hard cap is a missing seam
-(open question 5).
+Planner output tokens are hard-capped by 01f-C1's per-call `max_tokens`
+(`PLAN_MAX_TOKENS`), beside the schema's bounds and the ceiling.
 
 ## 11. Evals (through 01a)
 
@@ -543,9 +545,16 @@ user's library.
   `plan.schema_for(offered, depth) -> dict`, `plan.parse(text, offered, depth)
   -> Plan | None` (total, never raises), `plan.query_of(Plan, turn_index) ->
   history.Query`.
+- **Perspective**: `PlanInput.perspective` (`narrator` or `actor:<ref>`) is
+  carried into `Plan` and `query_of`'s `Query`. For an actor perspective the
+  planner's input (offered records, threads, evidence found, turn window) is
+  built only from what 11-C1 classifies as known to that actor, so a plan's
+  questions and terms cannot encode a secret: the planner was never shown one,
+  and a handle it was not offered fails validation. Until 11-C1 lands, any
+  perspective but `narrator` is a `ValueError`, matching 09-C1.
 - **Guarantees**: a `Plan` names only offered records; every list is bounded;
-  `perspective` is `narrator` until 11-C1; a provider without structured mode
-  still yields a plan when the reply holds one.
+  output is capped by 01f-C1's `max_tokens`; a provider without structured
+  mode still yields a plan when the reply holds one.
 - **Failure**: unresolvable route, failed call, ceiling, unreadable or empty
   reply each yield no plan and a trace state; never an exception into the
   turn.
@@ -678,12 +687,11 @@ cases do not trigger under the free gate.
    `LEGACY_ROUTES` and its tests exactly as they are and makes the new routes
    resolve to their default role on a format-1 store. *Recommendation:* the
    sentinel; it is one constant and two reader guards, and it is reusable by
-   every route the roadmap adds later (02-C5's, 11's).
-2. **One decide route for rerank and sufficiency, and who lands it.** 02-C5
-   promises retrieval-relevance routes for 09 and 11. *Recommendation:* one
-   route, `history_check`, named in 02-C5's spec, landed by the first call
-   site among 09's rerank and 10's check, the other adding its task. This is a
-   **missing edge** (10 <- 02-C5, soft) not in the checklist.
+   every route the roadmap adds later. Now a recorded shared structure in
+   `ROADMAP-CHECKLIST.md` (01g, 02-C5, 09, 10).
+2. **One decide route for rerank and sufficiency (resolved).** 02-C5b
+   provides `history_check`; 09's rerank and 10-C3 each add their task, and
+   the first call site to land brings the route.
 3. **Skip planning when the campaign is over its budget?** Budgets only warn
    today. *Recommendation:* yes, for planning only (it is optional spend the
    player did not ask for), reading the maintained aggregate the shell already
@@ -692,11 +700,8 @@ cases do not trigger under the free gate.
 4. **Which resolver does 01d escalate the check to?** *Recommendation:*
    Primary, declared in 01d-C1's policy for `history-sufficiency`; 01d owns the
    mechanism, this spec only asks for one hop.
-5. **A hard output cap on `generate`.** The planner's output is bounded by its
-   schema and ceiling, not by a token cap. *Recommendation:* ask 01f to accept
-   a per-call `max_tokens` that overrides the preset downward only; until then
-   accept the schema bound. **Missing edge** (10 <- 01f, soft), not in the
-   checklist.
+5. **A hard output cap on `generate` (resolved).** 01f-C1 adds a per-call
+   `max_tokens`; the planner uses `PLAN_MAX_TOKENS`.
 6. **Capture the planner's request?** 01b captures decide sites only.
    *Recommendation:* not in 10; the parsed plan in the breakdown is what a
    reader needs, and the request would duplicate the turn window in every

@@ -517,6 +517,14 @@ In `backend/tests/test_evals.py` (`FakeLLM`'s `usage=` dict stamps a holder,
     `money(4e-7) == "<$0.0001"`, an all-unpriced bucket prints the
     not-reported sentence, and an absent count prints `not reported`.
 
+14. Aggregation by `hop`: harvested rows with and without `hop:
+    "escalation"` fold into separate `<route>/<backend>/<hop>` buckets, and
+    a row with no `hop` lands under `-`.
+15. A play case: a case whose run files rows under three tasks (a speaker
+    pick, a chat turn and a scene-break check) has one `bucket` equal to
+    folding all three, and a `by_task` entry per task. The report prints the
+    `by task` sub-block.
+
 In `test_usage_guard.py`: `UNMETERED_OUTSIDE` is `{"scripts.ingest_scene":
 ...}` and the cap is 1.
 
