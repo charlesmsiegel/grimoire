@@ -11,52 +11,63 @@ Each spec has two tables: **Depends on** and **Required by**. Both cite
 contract IDs from this file. For example, `01g-C2a` is contract item 2a of
 spec 01g. When a spec gains, drops, splits or renumbers a contract item,
 update this file in the same PR. Each spec also breaks into slices
-(`01g-S4`), and the [slice graph](#slice-graph) says which slices each one
-needs, across specs.
+(`01g-S4`). A slice is roughly one PR, and it is the unit that is planned,
+built and landed: the [slice checklist](#slice-checklist) tracks every slice
+and the slices it needs, across specs.
 
-## Lifecycle of a spec
+## Lifecycle
+
+A **spec** is drafted and passes the spec gate as a whole:
 
 1. `drafted`
 2. `spec gate`: `/codex:adversarial-review`, or a recorded substitute. `[~]`
    means a substitute review is folded in and the Codex gate is still owed.
-3. `plan`
-4. `plan gate`
-5. `implemented`
-6. `/codex:review`
-7. `final gate`: the diff checked against the spec
+
+Each **slice** then goes through the rest on its own, one PR at a time, and
+is tracked in the [slice checklist](#slice-checklist):
+
+3. `plan`: `superpowers:writing-plans`, for that slice alone
+4. `plan gate`: `/codex:adversarial-review` on the plan
+5. `code`
+6. `review`: `/codex:review` on the diff
+7. `final gate`: the diff checked against the spec, for what the slice
+   delivers
 8. `landed`
+
+A spec has landed when every one of its slices has.
 
 ## Status
 
-"Can start when" means the earliest point at which the plan's **first** slice
-can start. Later slices may wait on more, as listed under "Dependency edges"
-below.
+"Can start when" means the earliest point at which the spec's **first** slice
+can start. Later slices may wait on more: the slice checklist names each
+one's needs. "Slices" counts the spec's slices, and "Landed" is ticked when
+all of them have landed. `check` holds both to the slice checklist.
 
-| ID | Spec | Can start when | Drafted | Spec gate | Plan | Landed |
+| ID | Spec | Can start when | Drafted | Spec gate | Slices | Landed |
 |----|------|----------------|:-:|:-:|:-:|:-:|
-| 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | [x] | [x] |
-| 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | [x] | [ ] |
-| 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | [ ] | [ ] |
-| 01b | Decision capture at every decide site | now | [x] | [~] substitute | [ ] | [ ] |
-| 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | [ ] | [ ] |
-| 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | [ ] | [ ] |
-| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | [ ] | [ ] |
-| 01f | Structured generation | now | [x] | [~] substitute | [ ] | [ ] |
-| 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [~] substitute | [ ] | [ ] |
-| 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [~] substitute | [ ] | [ ] |
-| 01i | Context window as a resolved model fact | now | [x] | [~] substitute | [ ] | [ ] |
-| 02 | Decision integration (what 01's slices F–H did not land) | 01a, 01b, plus 01c/01d per feature | [x] | [~] substitute | [ ] | [ ] |
-| 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | [ ] | [ ] |
-| 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | [ ] | [ ] |
-| 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | [ ] | [ ] |
-| 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | [ ] | [ ] |
-| 07 | Explicit group membership | now | [x] | [~] substitute | [ ] | [ ] |
-| 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [~] substitute | [ ] | [ ] |
-| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | [ ] | [ ] |
-| 10 | Retrieval query planning | 09, 01f | [x] | [ ] | [ ] | [ ] |
-| 11 | Epistemic history retrieval | 09 (the Decision stage waits for 02-C5a) | [x] | [ ] | [ ] | [ ] |
-| 12 | Bounded agentic investigation | 01g, 01i, 08, 09 (RP mode also waits for 10, 11) | [x] | [ ] | [ ] | [ ] |
-| 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | now for II-A..II-D; C3 waits for 01c | [x] | [ ] | [ ] | [ ] |
+| 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | — | [x] |
+| 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [ ] |
+| 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [ ] |
+| 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [ ] |
+| 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | 3 | [ ] |
+| 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | 5 | [ ] |
+| 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [ ] |
+| 01f | Structured generation | now | [x] | [~] substitute | 4 | [ ] |
+| 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [~] substitute | 8 | [ ] |
+| 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [~] substitute | 7 | [ ] |
+| 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [ ] |
+| 02 | Decision integration (what 01's slices F–H did not land) | 01a, 01b, plus 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
+| 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | 6 | [ ] |
+| 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | 10 | [ ] |
+| 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | 7 | [ ] |
+| 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | 2 | [ ] |
+| 07 | Explicit group membership | now | [x] | [~] substitute | 8 | [ ] |
+| 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [~] substitute | 6 | [ ] |
+| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
+| 10 | Retrieval query planning | 09, 01f | [x] | [~] substitute | 3 | [ ] |
+| 11 | Epistemic history retrieval | 09 (the Decision stage waits for 02-C5a) | [x] | [~] substitute | 6 | [ ] |
+| 12 | Bounded agentic investigation | 01g, 01i, 08, 09 (RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
+| 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | now for II-A..II-D; C3 waits for 01c | [x] | [~] substitute | 16 | [ ] |
 
 ## Parallel lanes
 
@@ -68,6 +79,10 @@ below.
 - **Generate lane:** 01f → 01g → 12.
 - **Cache lane:** 03 → 04 → 05 → 06. 03 + 05 + 01h → 08.
 - **Retrieval lane:** 08 + 01h-C4 + 01i → 09 → 10 (with 01f) → 11 → 12.
+
+These lanes are spec-level. At slice level a lane is narrower: `python3
+scripts/roadmap_slices.py ready` lists every slice that can start now, and the
+slice checklist's **Wave** column says how deep each one sits.
 
 ## Contracts
 
@@ -323,222 +338,252 @@ sub-feature. Edges come from each spec's Depends-on table.
   (S). Legal sets past 254 options need nothing from 01e: they take two steps,
   the action and then the target.
 
-## Slice graph
+## Slice checklist
 
-Each spec's **Slices** section breaks it into landable units, each roughly
-one PR. A slice names the contract items it delivers and, on its
-**Needs (slices)** line, the exact slices it needs, marked **H** or **S** as
-for edges. A slice can land as soon as its **H** needs have landed, whatever
-spec they sit in, so a path can cut across specs without landing any of them
-whole. A slice lands with its **S** needs missing by doing what its own
-**Needs (other specs)** line says (degrading, staying off, or taking a stub
-path).
+One row per slice, each roughly one PR. **Needs** lists the slices it
+needs directly, marked (S) when soft; `trace` gives the rest. **Wave** is
+how deep it sits behind hard needs: wave 1 needs nothing, and a slice can
+start once every slice it hard-needs has landed, whatever spec that is in.
 
-`scripts/roadmap_slices.py` reads those lines and nothing else:
-
-- `python3 scripts/roadmap_slices.py check`: every contract item is
-  delivered in full by exactly one slice. Every contract-level need is
-  resolved by a listed slice that delivers it, with a hard need kept hard.
-  The graph has no cycle.
-- `python3 scripts/roadmap_slices.py trace 07-S5`: the slices `07-S5` needs,
-  directly or not, in an order they can land. `--soft` adds the soft needs.
-- `python3 scripts/roadmap_slices.py ready`: the slices whose hard needs are
-  all ticked below and which are not ticked themselves.
-
-Tick a slice in the PR that lands it. If a slice changes its needs, change
-its **Needs (slices)** line in that PR, and run `check`. The arrow lists the
-slice's direct needs; `trace` gives the rest.
+Tick each stage in the PR that completes it, in order: the plan written
+(`superpowers:writing-plans`), the plan gate (`/codex:adversarial-review`
+on the plan), the code, `/codex:review` on the diff, the final gate (the
+diff against the spec), and landed. A slice's plan covers that slice
+alone. This table is generated: after a spec's slices change, run
+`python3 scripts/roadmap_slices.py sync`, which keeps the ticks.
 
 ### 01a
 
-- [ ] **01a-S1** [S] Decide call records ← none
-- [ ] **01a-S2** [M] Metered live runs in an eval scope ← none
-- [ ] **01a-S3** [M] Cost, latency and token reporting ← 01a-S1, 01a-S2, 01d-S3 (S)
-- [ ] **01a-S4** [M] Run file and comparison ← 01a-S3
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01a-S1 | Decide call records | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01a-S2 | Metered live runs in an eval scope | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01a-S3 | Cost, latency and token reporting | M | 2 | 01a-S1, 01a-S2, 01d-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01a-S4 | Run file and comparison | M | 3 | 01a-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01b
 
-- [ ] **01b-S1** [S] Stage and batch positions on the decide outcome ← none
-- [ ] **01b-S2** [L] The capture helper, the decision pool and the four scene-level sites ← 01b-S1
-- [ ] **01b-S3** [M] Campaign-level capture for the reconcile sweep, and the guard ← 01b-S2
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01b-S1 | Stage and batch positions on the decide outcome | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01b-S2 | The capture helper, the decision pool and the four scene-level sites | L | 2 | 01b-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01b-S3 | Campaign-level capture for the reconcile sweep, and the guard | M | 3 | 01b-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01c
 
-- [ ] **01c-S1** [M] The sampler, the record and replay ← 01d-S2 (S), 01e-S1 (S)
-- [ ] **01c-S2** [M] Native-first in the decide chain (mechanism, all tasks off) ← 01d-S1 (S)
-- [ ] **01c-S3** [S] The recorded evidence and the distribution grader ← 01a-S3, 01a-S4, 01c-S2
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01c-S1 | The sampler, the record and replay | M | 1 | 01d-S2 (S), 01e-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01c-S2 | Native-first in the decide chain (mechanism, all tasks off) | M | 1 | 01d-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01c-S3 | The recorded evidence and the distribution grader | S | 4 | 01a-S3, 01a-S4, 01c-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01d
 
-- [ ] **01d-S1** [S] The task policy and `fallback="none"` ← none
-- [ ] **01d-S2** [S] Per-item provenance and trigger evaluation ← none
-- [ ] **01d-S3** [L] The escalation hop in `decide` ← 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2
-- [ ] **01d-S4** [M] The escalation seam in `routes/` ← 01d-S3
-- [ ] **01d-S5** [M] Threshold tooling in evals ← 01a-S2, 01a-S3, 01a-S4, 01d-S4
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01d-S1 | The task policy and `fallback="none"` | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S2 | Per-item provenance and trigger evaluation | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S3 | The escalation hop in `decide` | L | 2 | 01a-S1 (S), 01b-S3 (S), 01d-S1, 01d-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S4 | The escalation seam in `routes/` | M | 3 | 01d-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01d-S5 | Threshold tooling in evals | M | 4 | 01a-S2, 01a-S3, 01a-S4, 01d-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01e
 
-- [ ] **01e-S1** [S] Answer fields, `expected` and `tiers` ← none
-- [ ] **01e-S2** [M] `Rank` on the structured path, and the template switch to `KIND` ← 01e-S1
-- [ ] **01e-S3** [S] `MultiSelect` on the structured path ← 01e-S2
-- [ ] **01e-S4** [M] `Joint` on both paths, and the native lowering framework ← 01e-S2
-- [ ] **01e-S5** [M] Native `Rank` and `MultiSelect` through pointwise predicates ← 01a-S3 (S), 01e-S3, 01e-S4
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01e-S1 | Answer fields, `expected` and `tiers` | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01e-S2 | `Rank` on the structured path, and the template switch to `KIND` | M | 2 | 01e-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01e-S3 | `MultiSelect` on the structured path | S | 3 | 01e-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01e-S4 | `Joint` on both paths, and the native lowering framework | M | 3 | 01e-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01e-S5 | Native `Rank` and `MultiSelect` through pointwise predicates | M | 4 | 01a-S3 (S), 01e-S3, 01e-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01f
 
-- [ ] **01f-S1** [S] The portable-schema leaf ← none
-- [ ] **01f-S2** [M] Structured mode on `generate`, and the shared refusal re-send ← 01f-S1
-- [ ] **01f-S3** [S] The per-call output cap ← 01f-S2, 01i-S1 (S)
-- [ ] **01f-S4** [S] The `intent` pilot ← 01f-S2, 01f-S3
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01f-S1 | The portable-schema leaf | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01f-S2 | Structured mode on `generate`, and the shared refusal re-send | M | 2 | 01f-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01f-S3 | The per-call output cap | S | 3 | 01f-S2, 01i-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01f-S4 | The `intent` pilot | S | 4 | 01f-S2, 01f-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01g
 
-- [ ] **01g-S1** [M] The `tools` capability and its seam refusal ← none
-- [ ] **01g-S2** [L] Neutral tool shapes, wire lowering and stream parsing on the HTTP adapters ← 01f-S1
-- [ ] **01g-S3** [S] Run attribution on the ledger and the capture ← none
-- [ ] **01g-S4** [L] The loop primitive (joined) ← 01d-S1 (S), 01f-S1, 01f-S2, 01f-S3, 01g-S2, 01g-S3, 01i-S1 (S)
-- [ ] **01g-S5** [M] The spend ceiling ← 01f-S3, 01g-S4
-- [ ] **01g-S6** [M] Streaming the loop ← 01g-S4
-- [ ] **01g-S7** [M] The decide tool ← 01b-S2 (S), 01c-S1 (S), 01g-S4, 01g-S5
-- [ ] **01g-S8** [M] The Claude Agent SDK adapter ← 01g-S1, 01g-S4
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01g-S1 | The `tools` capability and its seam refusal | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S2 | Neutral tool shapes, wire lowering and stream parsing on the HTTP adapters | L | 2 | 01f-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S3 | Run attribution on the ledger and the capture | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S4 | The loop primitive (joined) | L | 4 | 01d-S1 (S), 01f-S1, 01f-S2, 01f-S3, 01g-S2, 01g-S3, 01i-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S5 | The spend ceiling | M | 5 | 01f-S3, 01g-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S6 | Streaming the loop | M | 5 | 01g-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S7 | The decide tool | M | 6 | 01b-S2 (S), 01c-S1 (S), 01g-S4, 01g-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01g-S8 | The Claude Agent SDK adapter | M | 5 | 01g-S1, 01g-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01h
 
-- [ ] **01h-S1** [S] No embedding on the event loop ← none
-- [ ] **01h-S2** [L] Options in the space identity, the `queries` split and prefix mode ← none
-- [ ] **01h-S3** [M] Request-field input type and requested dimensions ← 01h-S2
-- [ ] **01h-S4** [M] Options in the UI ← 01h-S3
-- [ ] **01h-S5** [M] Native async embed ← 01g-S3 (S), 01h-S3
-- [ ] **01h-S6** [M] Cross-campaign attribution ← 01g-S3 (S), 01h-S3 (S)
-- [ ] **01h-S7** [M] Embedding evals ← 01a-S2, 01a-S3, 01a-S4 (S), 01h-S3
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01h-S1 | No embedding on the event loop | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S2 | Options in the space identity, the `queries` split and prefix mode | L | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S3 | Request-field input type and requested dimensions | M | 2 | 01h-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S4 | Options in the UI | M | 3 | 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S5 | Native async embed | M | 3 | 01g-S3 (S), 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S6 | Cross-campaign attribution | M | 1 | 01g-S3 (S), 01h-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01h-S7 | Embedding evals | M | 3 | 01a-S2, 01a-S3, 01a-S4 (S), 01h-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 01i
 
-- [ ] **01i-S1** [M] The resolved fact and the ceiling ← none
-- [ ] **01i-S2** [M] Stating the limits ← 01i-S1
-- [ ] **01i-S3** [S] `model_window` in context breakdowns ← 01i-S1
-- [ ] **01i-S4** [S] The Models page readout ← 01i-S1, 01i-S2 (S)
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 01i-S1 | The resolved fact and the ceiling | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01i-S2 | Stating the limits | M | 2 | 01i-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01i-S3 | `model_window` in context breakdowns | S | 2 | 01i-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01i-S4 | The Models page readout | S | 2 | 01i-S1, 01i-S2 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 02
 
-- [ ] **02-S1** [M] Record and plumbing ← none
-- [ ] **02-S2** [L] Turn intent, dark (answers only) ← 01b-S2, 02-S1
-- [ ] **02-S3** [M] Sampling (speaker and stance) ← 01c-S1, 01c-S2, 01d-S1, 02-S2
-- [ ] **02-S4** [M] Turn plan, dark ← 01e-S4 (S), 02-S3
-- [ ] **02-S5** [L] Play gate harness ← 01a-S2, 01a-S3, 01a-S4, 02-S2
-- [ ] **02-S6** [M] Exposure of ratified features ← 02-S5
-- [ ] **02-S7** [M] Decide kits for 11 and 09 ← 01d-S3, 01e-S5 (S), 02-S1 (S)
-- [ ] **02-S8** [L] Decision as a tool from play, dark ← 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 02-S1 | Record and plumbing | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S2 | Turn intent, dark (answers only) | L | 3 | 01b-S2, 02-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S3 | Sampling (speaker and stance) | M | 4 | 01c-S1, 01c-S2, 01d-S1, 02-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S4 | Turn plan, dark | M | 5 | 01e-S4 (S), 02-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S5 | Play gate harness | L | 4 | 01a-S2, 01a-S3, 01a-S4, 02-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S6 | Exposure of ratified features | M | 5 | 02-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S7 | Decide kits for 11 and 09 | M | 3 | 01d-S3, 01e-S5 (S), 02-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S8 | Decision as a tool from play, dark | L | 7 | 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 03
 
-- [ ] **03-S1** [L] The cache file, its guards, and failing safe ← none
-- [ ] **03-S2** [L] The trust point and the validate-and-hash primitive ← 03-S1
-- [ ] **03-S3** [M] Collections and live-set lookups ← 03-S2
-- [ ] **03-S4** [M] Write-time artifacts and the `materialized` record ← 03-S2
-- [ ] **03-S5** [M] Bounding, retention and the purge ← 03-S4
-- [ ] **03-S6** [L] Synthetic library and the first consumers ← 03-S3, 03-S4
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 04
 
-- [ ] **04-S1** [S] Request counters and the debug line ← 03-S3 (S)
-- [ ] **04-S2** [M] Client first paint, then revalidate ← none
-- [ ] **04-S3** [S] Live-path fixes ← none
-- [ ] **04-S4** [M] `scene_summary`, in-process, and its consumers ← none
-- [ ] **04-S5** [M] `continuity_summary`, in-process, with the text seam ← none
-- [ ] **04-S6** [S] `scene_turns`, in-process, on the shell ← none
-- [ ] **04-S7** [M] Persisted card rows, and the `module` chip ← 03-S2, 03-S3 (S)
-- [ ] **04-S8** [M] Persisted `scene_turns` and `continuity_summary` ← 03-S2, 03-S3 (S)
-- [ ] **04-S9** [S] Post-turn warm and `warm_paths` ← 03-S4
-- [ ] **04-S10** [M] Overview benchmark on synthetic libraries ← 03-S2, 03-S6 (S)
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S2 | Client first paint, then revalidate | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S3 | Live-path fixes | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S4 | `scene_summary`, in-process, and its consumers | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S6 | `scene_turns`, in-process, on the shell | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 3 | 03-S2, 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S9 | Post-turn warm and `warm_paths` | S | 4 | 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S10 | Overview benchmark on synthetic libraries | M | 3 | 03-S2, 03-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 05
 
-- [ ] **05-S1** [M] The write set ← none
-- [ ] **05-S2** [L] The sync primitive and the `files` hook ← 03-S2, 03-S4
-- [ ] **05-S3** [M] The CLI, scoped modes and scripts ← 03-S2, 03-S4, 03-S5 (S), 05-S2
-- [ ] **05-S4** [M] The write-through queue ← 05-S1, 05-S2
-- [ ] **05-S5** [S] The `overview` hook adapter ← 04-S9, 05-S2
-- [ ] **05-S6** [L] The `vectors` hook and the three producers ← 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S)
-- [ ] **05-S7** [M] The API ← 04-S2 (S), 05-S3, 05-S6 (S)
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 05-S1 | The write set | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S2 | The sync primitive and the `files` hook | L | 4 | 03-S2, 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S3 | The CLI, scoped modes and scripts | M | 5 | 03-S2, 03-S4, 03-S5 (S), 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S4 | The write-through queue | M | 5 | 05-S1, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S5 | The `overview` hook adapter | S | 5 | 04-S9, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S6 | The `vectors` hook and the three producers | L | 5 | 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S7 | The API | M | 6 | 04-S2 (S), 05-S3, 05-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 06
 
-- [ ] **06-S1** [M] The skill, its adapter and the drift test ← 04-S2 (S), 05-S3, 05-S7 (S)
-- [ ] **06-S2** [S] Routing to the skill ← 06-S1
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 06-S1 | The skill, its adapter and the drift test | M | 6 | 04-S2 (S), 05-S3, 05-S7 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 06-S2 | Routing to the skill | S | 7 | 06-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 07
 
-- [ ] **07-S1** [M] The members field, its reader and writer, and the editor ← none
-- [ ] **07-S2** [L] The inverse index, its routes and the actor pages ← 07-S1
-- [ ] **07-S3** [M] Sync shows fields; push and promote refuse strangers ← 07-S1
-- [ ] **07-S4** [S] Structural presence through members ← 07-S2
-- [ ] **07-S5** [L] Absorb membership proposals ← 07-S1, 07-S2
-- [ ] **07-S6** [M] Story Graph group nodes and edges ← 07-S2
-- [ ] **07-S7** [S] Retrieval projections ← 07-S2
-- [ ] **07-S8** [S] Persistent tier of the inverse index ← 03-S2, 03-S3, 03-S4 (S), 07-S2
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 07-S1 | The members field, its reader and writer, and the editor | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S2 | The inverse index, its routes and the actor pages | L | 2 | 07-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S3 | Sync shows fields; push and promote refuse strangers | M | 2 | 07-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S4 | Structural presence through members | S | 3 | 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S5 | Absorb membership proposals | L | 3 | 07-S1, 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S6 | Story Graph group nodes and edges | M | 3 | 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S7 | Retrieval projections | S | 3 | 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S8 | Persistent tier of the inverse index | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 08
 
-- [ ] **08-S1** [S] Extract the rolling-summary intactness test ← none
-- [ ] **08-S2** [L] The scene SearchDocument, in process ← 03-S2, 03-S6 (S), 08-S1
-- [ ] **08-S3** [M] The live set, the compiled cache, and recording embedded vectors ← 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2
-- [ ] **08-S4** [M] Transcript expansion and its guard rule ← none
-- [ ] **08-S5** [M] The `searchdocs` hook, `vectors_for`, and the `history-index` task ← 01h-S2 (S), 03-S4, 05-S6, 08-S3
-- [ ] **08-S6** [S] Group metadata from 07 ← 07-S2, 07-S7, 08-S2
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 09
 
-- [ ] **09-S1** [L] Retrieval core, structural and lexical, no network ← 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4
-- [ ] **09-S2** [M] The history section and its packer tier ← 01i-S1 (S), 09-S1
-- [ ] **09-S3** [M] The turn phase, structural and lexical ← 01i-S1 (S), 09-S2
-- [ ] **09-S4** [M] The semantic signal and tier 2 ← 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3
-- [ ] **09-S5** [M] The rerank ← 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3
-- [ ] **09-S6** [M] The long-history eval suite ← 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S)
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 09-S1 | Retrieval core, structural and lexical, no network | L | 5 | 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 10
 
-- [ ] **10-S1** [L] The planner and one planned round ← 01f-S1, 01f-S2 (S), 01f-S3, 09-S2, 09-S3
-- [ ] **10-S2** [M] The sufficiency check and the repair hop ← 01b-S2 (S), 01d-S1 (S), 01d-S2 (S), 01d-S4 (S), 02-S7 (S), 10-S1
-- [ ] **10-S3** [M] Planning evals ← 01a-S2, 01a-S3, 01a-S4 (S), 09-S6, 10-S2
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 10-S1 | The planner and one planned round | L | 8 | 01f-S1, 01f-S2 (S), 01f-S3, 09-S2, 09-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 10-S2 | The sufficiency check and the repair hop | M | 9 | 01b-S2 (S), 01d-S1 (S), 01d-S2 (S), 01d-S4 (S), 02-S7 (S), 10-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 10-S3 | Planning evals | M | 10 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S6, 10-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 11
 
-- [ ] **11-S1** [M] The knowledge store ← 07-S2 (S)
-- [ ] **11-S2** [L] The deterministic classifier ← 08-S4 (S), 09-S1, 11-S1
-- [ ] **11-S3** [L] Perspective-aware retrieval and prompt separation ← 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2
-- [ ] **11-S4** [M] The Knowledge ledger: routes, UI and accept ← 11-S1, 11-S3 (S)
-- [ ] **11-S5** [S] Live leakage evals ← 01a-S2 (S), 01a-S3 (S), 11-S3
-- [ ] **11-S6** [L] The Decision stage ← 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S)
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 11-S1 | The knowledge store | M | 1 | 07-S2 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S2 | The deterministic classifier | L | 6 | 08-S4 (S), 09-S1, 11-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S3 | Perspective-aware retrieval and prompt separation | L | 7 | 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S5 | Live leakage evals | S | 8 | 01a-S2 (S), 01a-S3 (S), 11-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S6 | The Decision stage | L | 8 | 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 12
 
-- [ ] **12-S1** [L] The narrator-side toolset ← 01g-S2, 08-S4, 09-S4
-- [ ] **12-S2** [M] The loop driver, budgets and trace recorder ← 01g-S4, 01g-S5, 01i-S1, 12-S1
-- [ ] **12-S3** [L] E2, continuity investigation (the pilot) ← 01g-S1, 12-S2
-- [ ] **12-S4** [S] Decision as a tool for maintenance modes ← 01g-S7, 12-S3
-- [ ] **12-S5** [M] E3, history question ← 01g-S1, 12-S2, 12-S4 (S)
-- [ ] **12-S6** [L] E1, RP escalation ← 02-S1, 08-S4 (S), 10-S2, 11-S2, 11-S3, 12-S2
-- [ ] **12-S7** [M] The adoption gate ← 01a-S2, 01a-S3, 11-S5 (S), 12-S3, 12-S5 (S), 12-S6 (S)
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 12-S1 | The narrator-side toolset | L | 9 | 01g-S2, 08-S4, 09-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S2 | The loop driver, budgets and trace recorder | M | 10 | 01g-S4, 01g-S5, 01i-S1, 12-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S3 | E2, continuity investigation (the pilot) | L | 11 | 01g-S1, 12-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S4 | Decision as a tool for maintenance modes | S | 12 | 01g-S7, 12-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S5 | E3, history question | M | 11 | 01g-S1, 12-S2, 12-S4 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S6 | E1, RP escalation | L | 11 | 02-S1, 08-S4 (S), 10-S2, 11-S2, 11-S3, 12-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S7 | The adoption gate | M | 12 | 01a-S2, 01a-S3, 11-S5 (S), 12-S3, 12-S5 (S), 12-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 13
 
-- [ ] **13-S1** [M] The `actions.json` format and pack validation ← none
-- [ ] **13-S2** [M] The Effect engine (pure) ← 13-S1
-- [ ] **13-S3** [M] Availability, pools and the legal set ← 13-S1, 13-S2
-- [ ] **13-S4** [L] The transaction ledger, the unit writer, undo and settle ← 13-S2
-- [ ] **13-S5** [L] Resolving an Action through the proposal path ← 13-S3, 13-S4
-- [ ] **13-S6** [M] Model-proposed Actions: the fence and the prompt section ← 13-S5
-- [ ] **13-S7** [M] Recovery doors and module authoring (backend) ← 13-S5
-- [ ] **13-S8** [S] Audit integration ← 13-S5
-- [ ] **13-S9** [L] II-A frontend ← 13-S4, 13-S5, 13-S7 (S)
-- [ ] **13-S10** [S] List operations (II-A2) ← 13-S4
-- [ ] **13-S11** [M] Conditions: definitions, store and ops ← 13-S5
-- [ ] **13-S12** [M] Conditions: modifiers, gating and display ← 13-S11
-- [ ] **13-S13** [M] Clocks (II-C) ← 13-S11
-- [ ] **13-S14** [M] Contests (II-D) ← 13-S12
-- [ ] **13-S15** [L] The NPC action seam, single-target ← 01a-S3 (S), 01b-S2 (S), 01c-S1, 01c-S2 (S), 01e-S4 (S), 02-S2 (S), 02-S4 (S), 13-S5, 13-S6 (S)
-- [ ] **13-S16** [S] The NPC action seam, multi-target ← 01e-S3, 13-S15
+| Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
+|---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 13-S1 | The `actions.json` format and pack validation | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S2 | The Effect engine (pure) | M | 2 | 13-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S3 | Availability, pools and the legal set | M | 3 | 13-S1, 13-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S4 | The transaction ledger, the unit writer, undo and settle | L | 3 | 13-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S5 | Resolving an Action through the proposal path | L | 4 | 13-S3, 13-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S6 | Model-proposed Actions: the fence and the prompt section | M | 5 | 13-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S7 | Recovery doors and module authoring (backend) | M | 5 | 13-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S8 | Audit integration | S | 5 | 13-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S9 | II-A frontend | L | 5 | 13-S4, 13-S5, 13-S7 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S10 | List operations (II-A2) | S | 4 | 13-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S11 | Conditions: definitions, store and ops | M | 5 | 13-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S12 | Conditions: modifiers, gating and display | M | 6 | 13-S11 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S13 | Clocks (II-C) | M | 6 | 13-S11 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S14 | Contests (II-D) | M | 7 | 13-S12 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S15 | The NPC action seam, single-target | L | 5 | 01a-S3 (S), 01b-S2 (S), 01c-S1, 01c-S2 (S), 01e-S4 (S), 02-S2 (S), 02-S4 (S), 13-S5, 13-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 13-S16 | The NPC action seam, multi-target | S | 6 | 01e-S3, 13-S15 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ## Shared structures: whichever spec lands first adds them
 
