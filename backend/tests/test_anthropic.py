@@ -291,7 +291,7 @@ async def test_a_system_only_prompt_is_sent_as_the_user_turn():
 async def test_an_unknown_role_is_refused_before_sending():
     seen: list = []
     with pytest.raises(AnthropicError) as err:
-        await _drain(_client(_ok(), seen).stream([{"role": "tool", "content": "x"}], "m", KEY))
+        await _drain(_client(_ok(), seen).stream([{"role": "function", "content": "x"}], "m", KEY))
     assert err.value.kind == "bad_response"
     assert seen == []
 

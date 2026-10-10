@@ -156,7 +156,7 @@ def test_strict_empty_list_gets_a_placeholder():
 
 def test_strict_unrecognized_role_raises():
     with pytest.raises(OpenAICompatibleError) as exc:
-        _strict_messages([{"role": "tool", "content": "x"}])
+        _strict_messages([{"role": "function", "content": "x"}])
     assert exc.value.kind == "bad_response"
 
 

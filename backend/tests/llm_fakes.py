@@ -93,10 +93,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import anyio
+import httpx
 
 from grimoire import adapters, decisions, llm_usage, tool_calls, wire
+from grimoire.anthropic import AnthropicClient
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
+from grimoire.openai_compatible import OpenAICompatibleClient
+from grimoire.openrouter import OpenRouterClient
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
 
@@ -739,6 +743,147 @@ class CassetteProvider:
             await asyncio.sleep(entry["stall"])
         for delta in self.cassette.deltas(entry):
             yield delta
+
+
+# ---- tool-call SSE bodies, per kind (01g-S2) ----
+#
+# Hand-authored in the documented wire shapes, like the cassettes: what a
+# well-formed reply that calls tools looks like on each kind's stream, so the
+# adapters' parsers run under the REAL facade (`SSEProvider` serves them to a
+# real client). Evidence that the code reads such a reply, never that a model
+# would send one.
+
+def _data(obj: dict) -> str:
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def openai_tool_sse(calls: Sequence[tuple[str, str, str]] = (), *, text: str = "",
+                    reasoning_details: Sequence[dict] = (), finish: str = "tool_calls",
+                    usage: dict | None = None) -> str:
+    """An OpenAI-style chat completion stream (OpenRouter, OpenAI-compatible):
+    each `reasoning_details` entry, then `text`, then each `(id, name,
+    arguments_json)` call at its own index as three fragments -- the id and
+    name with empty arguments, then the arguments in two halves carrying no
+    id -- and a last chunk with `finish` (and `usage`, when given)."""
+    out = [_data({"choices": [{"delta": {"reasoning_details": [entry]}}]})
+           for entry in reasoning_details]
+    if text:
+        out.append(_data({"choices": [{"delta": {"content": text}}]}))
+    for index, (call_id, name, arguments) in enumerate(calls):
+        half = len(arguments) // 2
+        out.append(_data({"choices": [{"delta": {"tool_calls": [{
+            "index": index, "id": call_id, "type": "function",
+            "function": {"name": name, "arguments": ""}}]}}]}))
+        out.extend(_data({"choices": [{"delta": {"tool_calls": [{
+            "index": index, "function": {"arguments": piece}}]}}]})
+            for piece in (arguments[:half], arguments[half:]))
+    last: dict = {"choices": [{"delta": {}, "finish_reason": finish}]}
+    if usage is not None:
+        last["usage"] = usage
+    out.append(_data(last))
+    out.append("data: [DONE]\n\n")
+    return "".join(out)
+
+
+def _event(obj: dict) -> str:
+    return f"event: {obj['type']}\ndata: {json.dumps(obj)}\n\n"
+
+
+def anthropic_tool_sse(calls: Sequence[tuple[str, str, str]] = (), *, text: str = "",
+                       thinking: tuple[str, str] | None = None, stop: str = "tool_use",
+                       output_tokens: int | None = 7, ended: bool = True) -> str:
+    """An Anthropic Messages stream: a signed `thinking` block (`(text,
+    signature)`, when given), then `text`, then a `tool_use` block per `(id,
+    name, arguments_json)` call with its `input_json_delta`s in two halves,
+    then the `message_delta` with `stop` -- and `message_stop` unless `ended`
+    is False (a body cut short, which the reader fails as `network`)."""
+    out = [_event({"type": "message_start", "message": {
+        "id": "msg_tools", "model": "claude-test-1", "role": "assistant", "content": [],
+        "usage": {"input_tokens": 10}}})]
+    index = 0
+    if thinking is not None:
+        said, signature = thinking
+        out += [_event({"type": "content_block_start", "index": index,
+                        "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+                _event({"type": "content_block_delta", "index": index,
+                        "delta": {"type": "thinking_delta", "thinking": said}}),
+                _event({"type": "content_block_delta", "index": index,
+                        "delta": {"type": "signature_delta", "signature": signature}}),
+                _event({"type": "content_block_stop", "index": index})]
+        index += 1
+    if text:
+        out += [_event({"type": "content_block_start", "index": index,
+                        "content_block": {"type": "text", "text": ""}}),
+                _event({"type": "content_block_delta", "index": index,
+                        "delta": {"type": "text_delta", "text": text}}),
+                _event({"type": "content_block_stop", "index": index})]
+        index += 1
+    for call_id, name, arguments in calls:
+        half = len(arguments) // 2
+        out.append(_event({"type": "content_block_start", "index": index, "content_block": {
+            "type": "tool_use", "id": call_id, "name": name, "input": {}}}))
+        for piece in (arguments[:half], arguments[half:]):
+            out.append(_event({"type": "content_block_delta", "index": index,
+                               "delta": {"type": "input_json_delta", "partial_json": piece}}))
+        out.append(_event({"type": "content_block_stop", "index": index}))
+        index += 1
+    delta: dict = {"type": "message_delta", "delta": {"stop_reason": stop}}
+    if output_tokens is not None:
+        delta["usage"] = {"output_tokens": output_tokens}
+    out.append(_event(delta))
+    if ended:
+        out.append(_event({"type": "message_stop"}))
+    return "".join(out)
+
+
+class Cut:
+    """An `SSEProvider` body that streams `text` and then drops the
+    connection: a read error mid-stream, which a client reports as
+    `network`."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _CutStream(httpx.AsyncByteStream):
+    def __init__(self, text: str):
+        self._text = text
+
+    async def __aiter__(self):
+        yield self._text.encode()
+        raise httpx.ReadError("the connection dropped")
+
+    async def aclose(self) -> None:
+        return None
+
+
+_SSE_CLIENTS = {"openrouter": OpenRouterClient, "openai_compatible": OpenAICompatibleClient,
+                "anthropic": AnthropicClient}
+
+
+class SSEProvider:
+    """A REAL provider client of `kind` over `httpx.MockTransport`, answering
+    its N-th request with `bodies[N]` (the last repeating): an SSE body, a
+    `(status, text)` error response, or a `Cut` body. Each request's JSON
+    body is recorded in `sent`. Hand `client` to `LLMClient` as that kind's
+    client, so a test runs the facade, the adapter and the client's stream
+    parser as they run in the app."""
+
+    def __init__(self, kind: str, bodies: Sequence[object]):
+        self.bodies = list(bodies)
+        self.sent: list[dict] = []
+        http = httpx.AsyncClient(transport=httpx.MockTransport(self._answer))
+        self.client = _SSE_CLIENTS[kind](http=http)
+
+    def _answer(self, request: httpx.Request) -> httpx.Response:
+        self.sent.append(json.loads(request.content))
+        body = self.bodies[min(len(self.sent), len(self.bodies)) - 1]
+        if isinstance(body, tuple):
+            status, text = body
+            return httpx.Response(status, text=text)
+        if isinstance(body, Cut):
+            return httpx.Response(200, stream=_CutStream(body.text))
+        return httpx.Response(200, text=str(body))
 
 
 class RecordingProvider:
