@@ -25,6 +25,7 @@ from ..llm import (
 )
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
+from ..store.inference import limits as inference_limits
 from ..store.inference import providers as inference_providers
 from . import runs, streaming
 from . import tracker as tracker_routes
@@ -676,6 +677,10 @@ def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
         # One attempt: a decision, or a fallback variant (below), whose
         # messages are a plain list -- there is no variant of it to hook.
         native = (outcome or {}).get("mode") == decisions.NATIVE_BACKEND
+        # The window of the target sent, which `conn` is withheld for a
+        # native decision (spec 01i 6.4).
+        breakdown = {**breakdown,
+                     "model_window": inference_limits.limit_body(sent.limits.window)}
         _record_prompt(cid, sid, task, breakdown, model=sent.model, kind=sent.kind,
                        messages=messages, conn=sent if vouched and not native else None)
         return
@@ -704,13 +709,15 @@ def _variant_target(chain: wire.Chain, model: str) -> wire.Target:
     carried them. Falls back to that relabel only when the call carries no
     fallback (a chain built by hand), minus the sampling and the catalog list
     it cannot vouch for -- and its capture files no sampler report
-    (`_capture`'s `vouched`).
+    (`_capture`'s `vouched`) and no known window (another model's would be
+    wrong).
     """
     if chain.fallback is not None:
         return dataclasses.replace(fallback_sampling(chain.primary, chain.fallback),
                                    model=model, requested_model=model)
     return dataclasses.replace(chain.primary, model=model, requested_model=model,
-                               sampling=wire.Sampling(), model_params=None)
+                               sampling=wire.Sampling(), model_params=None,
+                               limits=wire.Limits())
 
 
 def _round_state(cid, sid, round_record, **fields):

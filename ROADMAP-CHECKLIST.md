@@ -186,12 +186,18 @@ These are headlines. The owning spec's Contract section is authoritative.
   baseline.
 
 ### 01i: Context window
-- [ ] **01i-C1** `wire.Limits(window, max_output)` with a source, on every
+- [x] **01i-C1** `wire.Limits(window, max_output)` with a source, on every
   target.
-- [ ] **01i-C2** `prompt_ceiling(resolved)`: the smallest window minus a
+- [x] **01i-C2** `prompt_ceiling(resolved)`: the smallest window minus a
   reserve. Unknown means `None`, never 0.
-- [ ] **01i-C3** User-stated facts, the Models readout, and `model_window` in
+- [x] **01i-C3** User-stated facts, the Models readout, and `model_window` in
   context breakdowns.
+- All four slices are coded in one PR. Their plan, plan gate, review and final
+  gate are substitutes (`[~]`), because Codex was unavailable: each slice's
+  section of the spec served as its plan, and one adversarial review of the
+  diff against the spec stood in for the gates. The Codex gates are still
+  owed, and Landed waits on them and the merge. The deviations are recorded in
+  the spec's section 13.
 
 ### 02: Decision integration
 - [ ] **02-C1** A record of what 01's slices F–H landed.
@@ -349,7 +355,9 @@ Tick each stage in the PR that completes it, in order: the plan written
 (`superpowers:writing-plans`), the plan gate (`/codex:adversarial-review`
 on the plan), the code, `/codex:review` on the diff, the final gate (the
 diff against the spec), and landed. A slice's plan covers that slice
-alone. This table is generated: after a spec's slices change, run
+alone. `[~]` is a stage passed by a substitute review, its Codex gate
+still owed (the Lifecycle's meaning): it counts as passed for the order.
+This table is generated: after a spec's slices change, run
 `python3 scripts/roadmap_slices.py sync`, which keeps the ticks.
 
 ### 01a
@@ -435,10 +443,10 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01i-S1 | The resolved fact and the ceiling | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01i-S2 | Stating the limits | M | 2 | 01i-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01i-S3 | `model_window` in context breakdowns | S | 2 | 01i-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01i-S4 | The Models page readout | S | 2 | 01i-S1, 01i-S2 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01i-S1 | The resolved fact and the ceiling | M | 1 | — | [~] | [~] | [x] | [~] | [~] | [ ] |
+| 01i-S2 | Stating the limits | M | 2 | 01i-S1 | [~] | [~] | [x] | [~] | [~] | [ ] |
+| 01i-S3 | `model_window` in context breakdowns | S | 2 | 01i-S1 | [~] | [~] | [x] | [~] | [~] | [ ] |
+| 01i-S4 | The Models page readout | S | 2 | 01i-S1, 01i-S2 (S) | [~] | [~] | [x] | [~] | [~] | [ ] |
 
 ### 02
 
@@ -670,7 +678,8 @@ These are not specs, and each needs a decision on whether to fix it.
 - [ ] `migrations._backfill_campaign` measures its racy window at record time
   rather than at stamp time (03).
 - [ ] Stale docstrings: `entities.py:420` (ref fields do reach prompts),
-  `embed_space.facts_moved`, and `context/pack.py:69-73`.
+  `embed_space.facts_moved`, and `context/pack.py:69-73` (that one fixed by
+  01i).
 
 ## Final step: delete this file
 

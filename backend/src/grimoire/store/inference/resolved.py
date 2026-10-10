@@ -79,6 +79,13 @@ class Attempt:
     #: on an attempt built by hand.
     target: wire.Target = UNBUILT
 
+    @property
+    def limits(self) -> wire.Limits:
+        """The model's window and output cap: its target's, so there is no
+        second copy to disagree (spec 01i-C1). Unknown on an attempt built by
+        hand."""
+        return self.target.limits
+
 
 @dataclass(frozen=True)
 class ResolvedInference:

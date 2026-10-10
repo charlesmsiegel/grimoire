@@ -41,6 +41,38 @@ def test_a_chat_turn_captures_a_snapshot(client):
     assert entries[0]["total_tokens"] > 0
 
 
+def test_a_chat_turns_breakdown_and_capture_carry_the_sent_models_window(client):
+    """Spec 01i 6.4: every breakdown that names a `model` names its
+    `model_window`, from the target that model was read from -- the live read
+    and the capture alike -- so a frozen turn keeps the window then in force."""
+    cid, sid = _scene(client)
+    before = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    model = before["model"]
+    assert before["model_window"] == {"value": None, "source": "unknown"}
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models("openrouter", [{"id": model, "context": 65536}], rev)
+    live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    assert live["model_window"] == {"value": 65536, "source": "catalog"}
+    # With `context_budget` at 0, a known window changes nothing that is sent:
+    # the packer does not default to it (01i, open question 1).
+    assert live["budget_tokens"] == 0
+    assert live["sections"] == before["sections"]
+    assert live["total_tokens"] == before["total_tokens"]
+
+    _chat(client, cid, sid)
+    eid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"][0]["id"]
+    frozen = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}").json()
+    assert frozen["model"] == model
+    assert frozen["model_window"] == {"value": 65536, "source": "catalog"}
+
+    # The catalog moves on; the snapshot does not.
+    store.llm_connections.set_cached_models("openrouter", [{"id": model, "context": 8192}], rev)
+    again = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}").json()
+    assert again["model_window"] == {"value": 65536, "source": "catalog"}
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()[
+        "model_window"] == {"value": 8192, "source": "catalog"}
+
+
 def test_the_detail_endpoint_matches_the_live_context_shape(client):
     """The point of the shape being identical: the inspector renders a frozen
     turn with the code it already has."""

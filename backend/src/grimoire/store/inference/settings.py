@@ -70,7 +70,7 @@ from .. import inference_retired as retired
 from ..campaigns import lifecycle as campaign_lifecycle
 from ..campaigns import read as campaign_read
 from ..frontmatter import breaks_line
-from . import capabilities, cascade, facts, in_use, migrate, providers, resolve
+from . import capabilities, cascade, facts, in_use, limits, migrate, providers, resolve
 from .resolved import ResolvedInference
 
 SCOPES: tuple[str, ...] = ("global", "campaign")
@@ -195,6 +195,33 @@ def _rate(sel: dict | None, prices: tuple[dict, dict], *, native: bool = False) 
     return {"source": "provider" if own else "table", "entry": entry}
 
 
+def _limits(resolved: ResolvedInference | None, *, reserve: int | None = None) -> dict | None:
+    """What the Models summary row reads of a resolution's size (spec 01i
+    6.3): the resolved primary's `window` and `max_output` (`{value,
+    source}`), the riding fallback's `fallback_window` (absent when none
+    rides), and `ceiling` -- `limits.prompt_ceiling` of this same resolution,
+    `{tokens, binding, reason}`. `model` is the model the limits are OF (the
+    one sent, which its facts are keyed by), so a **Set** link names it.
+
+    None when nothing resolves, and on a native decision, which sends no
+    prompt to pack: the server decides, so the page keeps no rule of its own.
+    Display only -- the facts panel owns the write."""
+    if resolved is None or not resolved.attempts:
+        return None
+    if resolved.decision_mode == decisions.NATIVE_BACKEND:
+        return None
+    first = resolved.attempts[0]
+    ceiling = limits.prompt_ceiling(resolved, reserve=reserve)
+    out = {"model": first.target.model or first.model, **limits.body(first.limits),
+           "ceiling": {"tokens": ceiling.tokens,
+                       "binding": list(ceiling.binding) if ceiling.binding else None,
+                       "reason": ceiling.reason}}
+    chain = resolved.chain
+    if chain is not None and chain.fallback is not None:
+        out["fallback_window"] = limits.limit_body(chain.fallback.limits.window)
+    return out
+
+
 def _role_card(role: str, own: dict, scope: str, cid: str,
                prices: tuple[dict, dict]) -> dict:
     silence = resolve.Silence(scope, frozenset(keys.role_key(role, p) for p in keys.PARTS))
@@ -224,7 +251,8 @@ def _role_card(role: str, own: dict, scope: str, cid: str,
             "decision_mode": resolved.decision_mode or "",
             "decides_natively": _decides_natively(resolved),
             "rate": _rate(sel, prices,
-                          native=resolved.decision_mode == decisions.NATIVE_BACKEND)}
+                          native=resolved.decision_mode == decisions.NATIVE_BACKEND),
+            "limits": _limits(resolved)}
 
 
 def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
@@ -256,7 +284,8 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             # what the Decision card lists, inheriting or not. None for a pin.
             "uses": uses or None,
             "rate": _rate(sel, prices,
-                          native=resolved.decision_mode == decisions.NATIVE_BACKEND)}
+                          native=resolved.decision_mode == decisions.NATIVE_BACKEND),
+            "limits": _limits(resolved)}
 
 
 def _embedding_card(cfg: dict, lookup: llm_connections.Lookup,
@@ -275,9 +304,12 @@ def _embedding_card(cfg: dict, lookup: llm_connections.Lookup,
     # Why it is off, in the card's own words: the Embedding role has no seam
     # refusal to borrow (nothing is refused; recall degrades), so this is the
     # embedding resolver's account of itself rather than `_problem`'s.
+    # An embedding generates nothing, so its ceiling holds no reply back: the
+    # whole window is what one input may hold.
     return {"stored": {"provider": provider, "model": model}, "resolves": resolves,
             "on": on, "problem": None if on else _embedding_problem(cfg, got),
-            "rate": _rate(resolves, prices)}
+            "rate": _rate(resolves, prices),
+            "limits": _limits(got, reserve=0) if resolves is not None else None}
 
 
 def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:

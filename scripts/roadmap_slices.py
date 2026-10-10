@@ -20,6 +20,10 @@ it holds the table to the specs (run `sync` after a spec's slices change),
 and holds the ticks to two rules: a slice's stages are ticked in
 order, and a slice is landed only after every slice it hard-needs. It also
 holds the Status table's "Slices" count and "Landed" box to the table.
+
+A stage box is `[ ]`, `[x]`, or `[~]`: the checklist's Lifecycle meaning, a
+substitute review folded in with the Codex gate still owed. `[~]` counts as
+passed for the ordering rule, and `sync` keeps it as written.
 """
 
 from __future__ import annotations
@@ -43,6 +47,8 @@ SECTION = re.compile(r"^## Slice checklist\n.*?(?=^## )", re.DOTALL | re.MULTILI
 ROW = re.compile(r"^\| (\d\d[a-z]?-S\d+) \|(.*)\|$", re.MULTILINE)
 STATUS_ROW = re.compile(r"^\| (\d\d[a-z]?) \|(.*)\|$", re.MULTILINE)
 STAGES = ("Plan", "Plan gate", "Code", "Review", "Final gate", "Landed")
+#: A stage passed by a substitute review, its Codex gate still owed.
+SUBSTITUTE = "[~]"
 LANDED = len(STAGES) - 1
 
 
@@ -145,14 +151,22 @@ def _checklist() -> str:
         return f.read()
 
 
-def ticks(text: str | None = None) -> dict[str, list[bool]]:
-    """The table's stage boxes: slice -> one bool per stage."""
+def marks(text: str | None = None) -> dict[str, list[str]]:
+    """The table's stage boxes as written: slice -> one of `[ ]`, `[x]` or
+    `[~]` per stage (anything else reads `[ ]`)."""
     m = SECTION.search(text if text is not None else _checklist())
-    out: dict[str, list[bool]] = {}
+    out: dict[str, list[str]] = {}
     for row in ROW.finditer(m.group(0) if m else ""):
         cells = [c.strip() for c in row.group(2).split("|")]
-        out[row.group(1)] = [c == "[x]" for c in cells[-len(STAGES):]]
+        out[row.group(1)] = [c if c in ("[x]", SUBSTITUTE) else "[ ]"
+                             for c in cells[-len(STAGES):]]
     return out
+
+
+def ticks(text: str | None = None) -> dict[str, list[bool]]:
+    """The table's stage boxes: slice -> one bool per stage, a substitute
+    (`[~]`) counting as passed."""
+    return {sid: [c != "[ ]" for c in row] for sid, row in marks(text).items()}
 
 
 def waves(slices: dict[str, dict]) -> dict[str, int]:
@@ -177,8 +191,8 @@ def _specs(slices: dict[str, dict]) -> dict[str, list[str]]:
     return out
 
 
-def render(slices: dict[str, dict], kept: dict[str, list[bool]]) -> str:
-    """The checklist's slice table, with the ticks in `kept`."""
+def render(slices: dict[str, dict], kept: dict[str, list[str]]) -> str:
+    """The checklist's slice table, with the boxes in `kept` (`marks`)."""
     wave = waves(slices)
     lines = ["## Slice checklist", "", *INTRO, ""]
     for spec, sids in sorted(_specs(slices).items(), key=lambda kv: _key(kv[0] + "-S0")):
@@ -188,8 +202,7 @@ def render(slices: dict[str, dict], kept: dict[str, list[bool]]) -> str:
         for sid in sids:
             s = slices[sid]
             needs = ", ".join(t if h == "H" else f"{t} (S)" for t, h in s["needs"]) or "—"
-            boxes = " | ".join("[x]" if b else "[ ]"
-                               for b in kept.get(sid, [False] * len(STAGES)))
+            boxes = " | ".join(kept.get(sid, ["[ ]"] * len(STAGES)))
             lines.append(f"| {sid} | {s['title']} | {s['size']} | {wave[sid]} | {needs} | {boxes} |")
         lines.append("")
     return "\n".join(lines) + "\n"
@@ -205,7 +218,9 @@ INTRO = [
     "(`superpowers:writing-plans`), the plan gate (`/codex:adversarial-review`",
     "on the plan), the code, `/codex:review` on the diff, the final gate (the",
     "diff against the spec), and landed. A slice's plan covers that slice",
-    "alone. This table is generated: after a spec's slices change, run",
+    "alone. `[~]` is a stage passed by a substitute review, its Codex gate",
+    "still owed (the Lifecycle's meaning): it counts as passed for the order.",
+    "This table is generated: after a spec's slices change, run",
     "`python3 scripts/roadmap_slices.py sync`, which keeps the ticks.",
 ]
 
@@ -251,7 +266,7 @@ def _checklist_problems(slices: dict[str, dict]) -> list[str]:
         return ["checklist has no 'Slice checklist' section"]
     boxes = ticks(text)
     problems = [f"checklist lists {sid}, which no spec has" for sid in boxes if sid not in slices]
-    if m.group(0) != render(slices, boxes):
+    if m.group(0) != render(slices, marks(text)):
         problems.append("the slice checklist is out of step with the specs: run `sync`")
     return problems + _tick_problems(slices, boxes) + _status_problems(slices, text, boxes)
 
@@ -347,7 +362,7 @@ def _sync(slices: dict[str, dict], argv: list[str]) -> int:
         print("not syncing; fix the specs first:\n" + "\n".join(problems))
         return 1
     text = _checklist()
-    table = render(slices, ticks(text))
+    table = render(slices, marks(text))
     text = SECTION.sub(lambda _: table, text) if SECTION.search(text) else text + "\n" + table
     with open(CHECKLIST, "w", encoding="utf-8") as f:
         f.write(text)

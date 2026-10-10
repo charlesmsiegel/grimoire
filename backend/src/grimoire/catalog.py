@@ -55,6 +55,14 @@ def entry(raw: dict) -> dict:
     outputs = arch.get("output_modalities") if isinstance(arch, dict) else None
     if isinstance(outputs, list):
         out["outputs"] = [o for o in outputs if isinstance(o, str)]
+    # The most a reply may be asked for, when the provider says (OpenRouter's
+    # `top_provider.max_completion_tokens`; an Anthropic row's `max_tokens`,
+    # read in `_anthropic`). Kept only when stated, as `image` is: an absent
+    # key is "not reported", which the resolved limit reads as unknown.
+    top = raw.get("top_provider")
+    cap = _whole(top.get("max_completion_tokens")) if isinstance(top, dict) else None
+    if cap is not None:
+        out["max_output"] = cap
     if _is_anthropic(raw):
         _anthropic(raw, out)
     return out
@@ -130,6 +138,12 @@ def _anthropic(raw: dict, out: dict) -> None:
     max_tokens = _positive_int(raw.get("max_tokens"))
     if max_tokens is not None:
         features["max_tokens"] = max_tokens
+    # The same field as the row's output cap, under the window's rule (an
+    # integral float counts), so the cap and the window read JSON alike;
+    # `features.max_tokens` keeps its own, stricter rule for what is sent.
+    cap = _whole(raw.get("max_tokens"))
+    if cap is not None:
+        out["max_output"] = cap
     if features:
         out["features"] = features
 
@@ -163,11 +177,20 @@ def _context(raw: dict) -> int | None:
     not distinguish it); anything else is a field that does not say.
     """
     for key in ("context_length", "max_model_len"):
-        value = raw.get(key)
-        if isinstance(value, float) and value.is_integer():
-            value = int(value)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        value = _whole(raw.get(key))
+        if value is not None:
             return value
+    return None
+
+
+def _whole(value: object) -> int | None:
+    """A positive whole number of tokens (`128000.0` included, since JSON does
+    not distinguish it), else None: the rule a window and an output cap are
+    both read by."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
     return None
 
 

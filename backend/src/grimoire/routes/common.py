@@ -34,6 +34,7 @@ from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from ..store.inference import cascade as inference_cascade
 from ..store.inference import facts as inference_facts
+from ..store.inference import limits as inference_limits
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
@@ -430,6 +431,13 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     facade sends), so a past turn says what it was sent WITH, and what its
     backend could not take.
 
+    `model_window` is the window of the target the snapshot names (spec 01i
+    6.4): the breakdown's own when it carries one -- a caller whose `conn` is
+    withheld (a native decision) still knows the target it sent -- else
+    `conn`'s first attempt's.
+    A frozen snapshot is then measured against the window in force when it was
+    captured, as it already is against the budget then in force.
+
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
     their existing breakdown, never recomposes campaign context. It is bound
@@ -448,9 +456,13 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     if breakdown is None:
         return
     chain = conn if isinstance(conn, wire.Chain) else None
-    report = llm_sampling.report(conn.primary if isinstance(conn, wire.Chain) else conn)
+    first = conn.primary if isinstance(conn, wire.Chain) else conn
+    report = llm_sampling.report(first)
     if report is not None:
         breakdown = {**breakdown, "sampling": report}
+    if "model_window" not in breakdown and first is not None:
+        breakdown = {**breakdown,
+                     "model_window": inference_limits.limit_body(first.limits.window)}
     if isinstance(messages, model_guidance.PreparedMessages):
         def on_variant(selected: str, variant: dict | None) -> None:
             # The fallback as the facade sends it: the one this call carries

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,35 @@ class Account:
     role: str = ""
     billing: str = ""
     decision_mode: str = ""
+
+
+#: Where a model's limit came from: the user's own word in its facts, its
+#: provider's cached listing, or nowhere. A value is None exactly when the
+#: source is "unknown".
+LIMIT_SOURCES: tuple[str, ...] = ("user", "catalog", "unknown")
+
+
+class Limit(NamedTuple):
+    """One of a model's limits: a positive token count, or None when unknown."""
+
+    value: int | None
+    source: str
+
+
+#: A limit nothing states.
+UNKNOWN_LIMIT = Limit(None, "unknown")
+
+
+@dataclass(frozen=True)
+class Limits:
+    """What one model on one provider can hold (`store.inference.limits.of`).
+
+    `window` is always read as shared by prompt and reply, whatever the
+    provider names it; `max_output` is the most a reply may be ASKED for --
+    never itself a reservation (`limits.reply_reserve`)."""
+
+    window: Limit = UNKNOWN_LIMIT
+    max_output: Limit = UNKNOWN_LIMIT
 
 
 @dataclass(frozen=True)
@@ -89,6 +119,10 @@ class Target:
     #: their descriptions (#377).
     degrade: bool = False
     account: Account = field(default_factory=Account)
+    #: The model's window and output cap on this provider, with where each
+    #: came from (`store.inference.limits.of`); unknown on a target built by
+    #: hand. A fact about the model: nothing an adapter sends reads it.
+    limits: Limits = field(default_factory=Limits)
 
     @property
     def label(self) -> str:

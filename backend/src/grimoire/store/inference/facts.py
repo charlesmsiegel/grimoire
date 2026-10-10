@@ -5,7 +5,7 @@ THAT model on THAT provider (the preset table in `providers.py` holds what is
 true of every model behind a preset; this holds what is true of one):
 
     {"<model>": {"vision": "on"|"off", "prefill": bool, "post_process": str,
-                 "rates": {...},
+                 "rates": {...}, "context_window": int, "max_output": int,
                  "verified": {"rev": "<connection rev>", "caps": {cap: {...}}},
                  "overrides": {cap: "yes"|"no"}}}
 
@@ -19,8 +19,9 @@ Two kinds of fact, and they age differently:
   connection's own, checked and written under the connection lock every
   connection write holds -- otherwise a run that started on an old rev would
   replace the new rev's results, or recreate a deleted connection's file.
-- **Stated** facts (`overrides`, `vision`, `prefill`, `post_process`, `rates`)
-  are the user's own word about the model and survive a rev change.
+- **Stated** facts (`overrides`, `vision`, `prefill`, `post_process`, `rates`,
+  and the limits `context_window` / `max_output`, spec 01i) are the user's
+  own word about the model and survive a rev change.
 
 Reads never raise: the file is one a sync or a hand can mangle into any JSON,
 and it is read on the path of a turn. No write replaces a file it could not
@@ -51,6 +52,12 @@ from collections.abc import Callable
 from .. import atomic, config, llm_connections, pricing
 from ..paths import now_iso, safe_id
 from .providers import CAPABILITIES
+
+#: The bound a stated limit stays under: `limits.STATED_MAX`, restated because
+#: `limits` reaches this module through `resolved` and `capabilities` (a test
+#: holds the two equal). It refuses only typos no int32 field on any wire
+#: could carry.
+STATED_MAX = 2**31
 
 OVERRIDE_VALUES: tuple[str, ...] = ("yes", "no")
 _VISION = ("", "on", "off")
@@ -182,7 +189,19 @@ def _view(entry: dict, rev: str) -> dict:
         "overrides": ({c: v for c, v in overrides.items()
                        if c in CAPABILITIES and v in OVERRIDE_VALUES}
                       if isinstance(overrides, dict) else {}),
+        # The model's limits as the user stated them (`limits.of` reads them
+        # over its catalog row): a positive token count, else None.
+        "context_window": _stated_tokens(entry.get("context_window")),
+        "max_output": _stated_tokens(entry.get("max_output")),
     }
+
+
+def _stated_tokens(value: object) -> int | None:
+    """A stated limit as the view keeps it: a positive int below
+    `STATED_MAX`, else None -- a hand-mangled value states nothing."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 < value < STATED_MAX:
+        return value
+    return None
 
 
 def _require_safe(provider_id: str) -> None:
@@ -344,9 +363,50 @@ def set_stated(provider_id: str, model: str, *, vision: str | None = None,
     state(provider_id, model, vision=vision, prefill=prefill, post_process=post_process)
 
 
+def _check_limit(name: str, value: object) -> int | None:
+    """A stated limit checked: None leaves it, 0 removes it, a positive int
+    below `STATED_MAX` sets it; anything else (a bool, a float, a string, a
+    negative number) is a `ValueError`. Zero removes because no model has a
+    zero window, so zero cannot be a statement (`catalog._context`'s rule)."""
+    if value is None:
+        return None
+    if (not isinstance(value, int) or isinstance(value, bool)
+            or not 0 <= value < STATED_MAX):
+        raise ValueError(f"{name} must be a whole number of tokens below {STATED_MAX:,} "
+                         f"(0 to remove it), not {value!r}")
+    return value
+
+
+def _check_limits_agree(entry: dict) -> None:
+    """Refuse a merged entry whose stated `max_output` is above its stated
+    `context_window`: a reply cannot be asked for more than the window holds.
+    A statement that only disagrees with the CATALOG is allowed -- the user's
+    word may be the correction."""
+    window = _stated_tokens(entry.get("context_window"))
+    cap = _stated_tokens(entry.get("max_output"))
+    if window is not None and cap is not None and cap > window:
+        raise ValueError(f"the stated max output ({cap:,} tokens) is above the stated "
+                         f"context window ({window:,} tokens)")
+
+
+def _apply_limits(entry: dict, sized: dict[str, int]) -> None:
+    """Lay the checked limits `sized` over `entry` (0 removes one), then hold
+    the merged entry to `_check_limits_agree` -- inside the write's hold, so
+    a value already on file is judged with the one this write states."""
+    if not sized:
+        return
+    for name, tokens in sized.items():
+        if tokens:
+            entry[name] = tokens
+        else:
+            entry.pop(name, None)
+    _check_limits_agree(entry)
+
+
 def state(provider_id: str, model: str, *, vision: object = None, prefill: object = None,
           post_process: object = None, overrides: object = None,
-          rates: object = None, guard: Guard | None = None) -> None:
+          rates: object = None, context_window: object = None,
+          max_output: object = None, guard: Guard | None = None) -> None:
     """The facts panel's write: `set_stated`'s fields, and `overrides` MERGED
     per capability -- `{cap: "yes"|"no"}` sets one, `{cap: ""}` removes it,
     and a capability the dict does not name is left as it is. Everything is
@@ -358,6 +418,13 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
     removes it, and anything else replaces it after `pricing.check_entry` --
     both base rates, no unknown field -- so a partial entry is refused rather
     than half-stored. A stated fact like the rest: it survives a `rev` change.
+
+    `context_window` and `max_output` are the model's own limits on this
+    provider (spec 01i): `None` leaves one, `0` removes it, a positive int
+    below `STATED_MAX` sets it. A write that would leave a stated `max_output`
+    above a stated `context_window` is refused (`ValueError`), judged on the
+    MERGED entry inside the write's hold, since a request may state one while
+    the other is already on file -- and nothing is stored.
     """
     _require_safe(provider_id)
     stated = _check_stated(vision, prefill, post_process)
@@ -365,11 +432,15 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
     priced = (None if rates is None
               else {} if isinstance(rates, dict) and not rates
               else pricing.check_entry(rates))
-    if not stated and not changed and priced is None:
+    sized = {name: checked for name, checked in (
+        ("context_window", _check_limit("context_window", context_window)),
+        ("max_output", _check_limit("max_output", max_output))) if checked is not None}
+    if not stated and not changed and priced is None and not sized:
         return
 
     def change(entry: dict) -> None:
         entry.update(stated)
+        _apply_limits(entry, sized)
         if priced is not None:
             if priced:
                 entry["rates"] = priced

@@ -135,7 +135,9 @@ class FactsUpdate(BaseModel):
     bool by one pydantic version and not the other. `overrides` is
     `{capability: "" | "yes" | "no"}`, merged per capability ("" removes).
     `rates` is the model's own per-token price (`pricing.FIELDS`): both base
-    rates or a 400, `{}` removing them, null leaving them."""
+    rates or a 400, `{}` removing them, null leaving them. `context_window`
+    and `max_output` are the model's own limits on the provider (spec 01i):
+    a positive whole number of tokens, `0` removing one, null leaving it."""
 
     model: str = ""
     vision: Any = None
@@ -145,6 +147,8 @@ class FactsUpdate(BaseModel):
     #: Only `true` confirms a write that turns the Embedding role on.
     confirm_embedding: Any = None
     rates: Any = None
+    context_window: Any = None
+    max_output: Any = None
 
 
 class HealthCheck(BaseModel):

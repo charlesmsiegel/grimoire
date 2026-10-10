@@ -30,8 +30,9 @@ DEFAULT_RECAP_DEPTH = "5"
 # (context/archive.py). 0 disables it.
 DEFAULT_ARCHIVE_DEPTH = "3"
 # Token ceiling the context packer fits the prompt into (context/pack.py).
-# "0" = unbounded, which is what every install gets until the user sets one:
-# the backend cannot see the model's window size, only the frontend can.
+# "0" = unbounded, which is what every install gets until the user sets one.
+# The backend knows the model's window (`store.inference.limits`, spec 01i) and
+# deliberately does not default to it, which would change every such prompt.
 DEFAULT_CONTEXT_BUDGET = "0"
 # How many characters tier 3 of the off-scene cast directory may name — the
 # "Known to exist" one-liners for characters the campaign can see but has never

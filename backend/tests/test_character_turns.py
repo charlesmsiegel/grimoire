@@ -8,6 +8,7 @@ from grimoire import routes, store
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from grimoire.store.inference import facts as inference_facts
 from tests import wire_kit
 from tests.inference_fixtures import (
     SAME_PROVIDER,
@@ -710,6 +711,19 @@ def test_a_native_pick_captures_no_sampler_preset(client, model, mode):
         assert "sampling" not in captured
     else:
         assert captured["sampling"]["preset_id"] == pid
+    # Either way the capture names the window of the target it was sent on
+    # (spec 01i 6.4), though a native one withholds its sampling report.
+    assert captured["model_window"] == {"value": None, "source": "unknown"}
+
+
+def test_a_pick_capture_names_the_sent_models_window(client):
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    inference_facts.state("openrouter", "vendor/decider", context_window=4096)
+    fake = FakeLLM([[MARA_ANSWERS]], decisions=[NATIVE_MARA])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    assert _pick_capture(client, cid, sid)["model_window"] == {"value": 4096, "source": "user"}
 
 #: What a native endpoint answers for a model it has no decisions for.
 NO_ENDPOINT = LLMError("bad_response", "no decisions endpoint for this model", status=404)

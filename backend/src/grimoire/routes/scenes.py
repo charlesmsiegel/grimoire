@@ -31,6 +31,7 @@ from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
 from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
+from ..store.inference import limits as inference_limits
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
 from . import character_turns, runs, streaming
@@ -5424,9 +5425,18 @@ def get_scene_context(cid: str, sid: str):
     breakdown = store.context.context_breakdown(
         cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)))
     return {"model": model, **breakdown,
+            "model_window": _model_window(resolved.chain),
             "token_count": store.tokens.counting(model, _target_kind(resolved.chain),
                                                  breakdown.get("counted_with", "")),
             "sampling": llm_sampling.report(_primary(resolved.chain))}
+
+
+def _model_window(chain: wire.Chain | None) -> dict:
+    """The window of the target a breakdown's `model` was read from (spec
+    01i 6.4), `{value, source}`; unknown when nothing resolved."""
+    primary = _primary(chain)
+    return inference_limits.limit_body(primary.limits.window if primary is not None
+                                       else wire.UNKNOWN_LIMIT)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts")

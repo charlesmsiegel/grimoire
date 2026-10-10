@@ -768,3 +768,33 @@ blocking findings. Each finding was checked against the code at `35c1fb7`.
   C2 land together in 01i-S1 because every consumer needs both, and C2 is a
   pure helper over C1. 01i-C3 is delivered in three parts: S2 writes the
   limits, S3 adds them to breakdowns, and S4 shows them on the Models page.
+
+## 13. Implementation record
+
+All four slices landed together (2026-10-10). Codex was unavailable, so the
+plan, review and final gates are substitutes (`[~]` in the checklist): each
+slice's own section above served as its plan, and one adversarial review of
+the whole diff against this spec stood in for `/codex:review` and the final
+gate. The Codex gates are still owed. The review found nothing blocking. It
+raised six small findings, all fixed: limit boxes now refuse text that is not
+a number instead of reading it as "not stated"; a `reason` now says what was
+asked before the `max_output` cap, and names the fallback when the fallback
+binds the ceiling; the readout rounds a window down; `prompt_ceiling` takes
+its argument as `resolved`; and dead code was removed. It also confirmed
+three small deviations from the text above:
+
+- **The Embedding card's ceiling holds no reply back** (`reserve=0`): an
+  embedding generates nothing, so `prompt_ceiling(resolved)`'s default reply
+  reserve would understate what one input may hold.
+- **The facts body's `limits` also carries `listed: {window, max_output}`**:
+  what the catalog alone says. Section 6.2 shows the catalog's figure beside
+  a stated one, and once the user's word wins `limits` no longer has it.
+- **A settings card's `limits` also carries `model`**: the model the limits
+  are of (the one sent, which its facts are keyed by). The **Set** link needs
+  it, because an unset Claude model's `resolves.model` is `""` while its facts
+  live under the default model.
+
+Two further details. `_capture` puts `model_window` into a decision
+capture's breakdown itself, because a native decision withholds `conn` from
+`_record_prompt`. And a riding fallback that the role row draws no line for
+(an inherited one) has its window said on the window line instead.

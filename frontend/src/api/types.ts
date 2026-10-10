@@ -299,6 +299,24 @@ export type RateInfo = {
   source: "provider" | "table" | "none" | "native";
   entry?: PricingEntry;
 };
+/** One of a model's limits (spec 01i): a positive token count and where it
+ *  came from -- the user's word (`user`), the provider's listing (`catalog`) --
+ *  or `null` with `unknown`. Never 0. */
+export type ModelLimit = { value: number | null; source: "user" | "catalog" | "unknown" };
+/** A model's limits as the facts route resolves them. `window` is shared by
+ *  prompt and reply; `max_output` is the most a reply may be asked for. */
+export type ModelLimits = { window: ModelLimit; max_output: ModelLimit };
+/** What the Models summary reads of a card's size (spec 01i 6.3): the
+ *  resolved primary's limits, `model` being the one they are OF (the model a
+ *  **Set** link opens), the riding fallback's window (absent when none rides),
+ *  and the prompt ceiling over both. `reason` is set when the reply reserve
+ *  leaves no room (`tokens` 0). A card carries `null` when nothing resolves
+ *  and on a native decision, which packs no prompt. */
+export type CardLimits = ModelLimits & {
+  model: string;
+  fallback_window?: ModelLimit;
+  ceiling: { tokens: number | null; binding: [string, string] | null; reason: string };
+};
 /** One generative role card. `inherits` is what this scope would run on with
  *  its own choice for the role cleared -- what "Same as ..." shows -- and
  *  `problem` is the seam's own refusal of `resolves` (no key, a known
@@ -328,6 +346,9 @@ export type RoleCard = {
   decides_natively: DecidesNatively;
   /** What would price this role's calls; null when nothing resolves. */
   rate: RateInfo | null;
+  /** The resolved model's window and the prompt ceiling; null when nothing
+   *  resolves or on a native decision. Older servers send none. */
+  limits?: CardLimits | null;
 };
 /** Which backend answers a decision (`RoleCard.decision_mode`). */
 export type DecisionMode = "native" | "structured" | "";
@@ -344,6 +365,8 @@ export type EmbeddingCard = {
   problem: string | null;
   /** As on `RoleCard`; null while the role is off. */
   rate: RateInfo | null;
+  /** As on `RoleCard`; null while the role is off. */
+  limits?: CardLimits | null;
 };
 /** What a route's `use` says: inherit (`""`), a generative role, or the
  *  route's own pin (`"model"`). */
@@ -380,6 +403,8 @@ export type RouteRow = {
   uses: GenerativeRole | null;
   /** As on `RoleCard`. */
   rate: RateInfo | null;
+  /** As on `RoleCard`. */
+  limits?: CardLimits | null;
 };
 /** A provider as the settings view lists it, with whether it can send at all. */
 export type InferenceProvider = {
@@ -451,6 +476,14 @@ export type ModelFacts = {
   rates: PricingEntry | null;
   verified: Partial<Record<CapabilityName, VerifiedResult>>;
   overrides: Partial<Record<CapabilityName, "yes" | "no">>;
+  /** The limits the USER stated (spec 01i): what the form edits; null when
+   *  not stated. */
+  context_window?: number | null;
+  max_output?: number | null;
+  /** The limits a call would use -- the stated value, else the provider's
+   *  listing, else unknown: what the view shows -- and `listed`, what the
+   *  listing alone says of each (null for nothing). */
+  limits?: ModelLimits & { listed: { window: number | null; max_output: number | null } };
   capabilities: Record<CapabilityName, CapabilityValue>;
   /** The facts file exists and could not be read: nothing above is what the
    *  user said, and a save is refused, so none is offered. */
@@ -474,6 +507,10 @@ export type ModelFactsUpdate = {
   /** The model's own rates: both base rates, no unknown field, and an unset
    *  rate LEFT OUT (a present `null` is refused); `{}` clears them. */
   rates?: PricingEntry | Record<string, never>;
+  /** The model's own limits on this provider, in tokens: a positive whole
+   *  number sets one, `0` removes it, left out leaves it. */
+  context_window?: number;
+  max_output?: number;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
 export type TestableCapability = "generate" | "vision" | "embed" | "decide_native";
@@ -1928,6 +1965,10 @@ export type SceneContext = {
   /** The sampler preset this turn is (or was) sent with. Absent on a snapshot
    *  frozen before presets existed. */
   sampling?: SamplingReport | null;
+  /** The window of the target `model` was read from (spec 01i), its value
+   *  null when unknown. Absent on a snapshot frozen before it existed, which
+   *  is the one case the catalog lookup still answers. */
+  model_window?: ModelLimit;
 };
 /** One user pin or exclude (#129) as the panel sees it: the rule, the target it
  *  names resolved to something displayable, and how many posts it has left.

@@ -20,3 +20,10 @@ export const EDIT_RATES = "rates";
 /** A model's facts on its provider, opened on the rates form. */
 export const modelRatesPath = (id: string, model: string) =>
   `${modelPath(id, model)}?edit=${EDIT_RATES}`;
+
+/** The `?edit=…` value that opens a model's facts on its limits. */
+export const EDIT_LIMITS = "limits";
+
+/** A model's facts on its provider, opened on the limits form. */
+export const modelLimitsPath = (id: string, model: string) =>
+  `${modelPath(id, model)}?edit=${EDIT_LIMITS}`;

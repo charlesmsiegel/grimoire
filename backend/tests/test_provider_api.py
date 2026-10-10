@@ -406,6 +406,97 @@ def _embedding_off_by_the_catalog(client) -> str:
     return pid
 
 
+def _limits_url(client) -> tuple[str, str]:
+    _format("2")
+    pid = _spare(client)
+    return pid, f"/api/llm-connections/{pid}/facts"
+
+
+def test_a_stated_limit_is_set_left_and_removed(client):
+    """Spec 01i 6.1: a positive int sets, null (or absent) leaves, 0 removes;
+    GET answers the resolved limits with their sources."""
+    pid, url = _limits_url(client)
+    model = "vendor/mara-7b"
+    store.llm_connections.set_cached_models(
+        pid, [{"id": model, "context": 131072, "max_output": 16000}], _raw(pid)["rev"])
+    got = client.put(url, json={"model": model, "context_window": 8192})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert (body["context_window"], body["max_output"]) == (8192, None)
+    assert body["limits"] == {"window": {"value": 8192, "source": "user"},
+                              "max_output": {"value": 16000, "source": "catalog"},
+                              "listed": {"window": 131072, "max_output": 16000}}
+    assert client.get(url, params={"model": model}).json() == body
+
+    left = client.put(url, json={"model": model, "max_output": None, "prefill": True}).json()
+    assert left["context_window"] == 8192
+    gone = client.put(url, json={"model": model, "context_window": 0}).json()
+    assert gone["context_window"] is None
+    assert gone["limits"]["window"] == {"value": 131072, "source": "catalog"}
+    assert "context_window" not in facts.read(pid)[model]
+
+
+@pytest.mark.parametrize("bad", ["8192", True, -1, 2**31, 8192.5, [8192]])
+def test_a_stated_limit_that_is_not_a_token_count_is_400(client, bad):
+    pid, url = _limits_url(client)
+    for field in ("context_window", "max_output"):
+        got = client.put(url, json={"model": "m", field: bad})
+        assert got.status_code == 400, (field, bad, got.text)
+    assert facts.read(pid) == {}
+
+
+def test_an_output_above_the_window_is_refused_across_two_requests(client):
+    """Judged on the merged entry inside the write's hold: a request may state
+    one value while the other is already on file. Either order; nothing
+    stored."""
+    pid, url = _limits_url(client)
+    assert client.put(url, json={"model": "m", "context_window": 8192,
+                                 "max_output": 16000}).status_code == 400
+    assert facts.read(pid) == {}
+    assert client.put(url, json={"model": "m", "context_window": 8192}).status_code == 200
+    before = store.llm_connections.facts_path(pid).read_text(encoding="utf-8")
+    got = client.put(url, json={"model": "m", "max_output": 16000})
+    assert got.status_code == 400 and "above the stated context window" in got.json()["detail"]
+    assert store.llm_connections.facts_path(pid).read_text(encoding="utf-8") == before
+
+    assert client.put(url, json={"model": "n", "max_output": 16000}).status_code == 200
+    before = store.llm_connections.facts_path(pid).read_text(encoding="utf-8")
+    assert client.put(url, json={"model": "n", "context_window": 8192}).status_code == 400
+    assert store.llm_connections.facts_path(pid).read_text(encoding="utf-8") == before
+    # Equal is not above; and an output only the CATALOG disagrees with is allowed.
+    assert client.put(url, json={"model": "n", "context_window": 16000}).status_code == 200
+
+
+def test_a_stated_limit_survives_a_rev_change(client):
+    pid, url = _limits_url(client)
+    assert client.put(url, json={"model": "m", "context_window": 8192}).status_code == 200
+    old = _raw(pid)["rev"]
+    assert client.put(f"/api/llm-connections/{pid}", json={"api_key": "sk-new"}).status_code == 200
+    assert _raw(pid)["rev"] != old
+    got = client.get(url, params={"model": "m"}).json()
+    assert got["limits"]["window"] == {"value": 8192, "source": "user"}
+
+
+def test_a_stated_limit_before_the_switch_is_409_not_migrated(client):
+    pid = _spare(client)
+    got = client.put(f"/api/llm-connections/{pid}/facts",
+                     json={"model": "m", "context_window": 8192})
+    assert got.status_code == 409 and got.json()["kind"] == "not_migrated"
+    assert not store.llm_connections.facts_path(pid).exists()
+
+
+def test_a_stated_limit_asks_no_confirm_embedding(client):
+    """Stating a window spends nothing and moves no vector space -- not even
+    on the model the Embedding role embeds with."""
+    on = _spare(client)
+    _format("2")
+    store.write_config(**{keys.role_key("embedding", "provider"): on,
+                          keys.role_key("embedding", "model"): "vendor/embed-small"})
+    got = client.put(f"/api/llm-connections/{on}/facts",
+                     json={"model": "vendor/embed-small", "context_window": 8192})
+    assert got.status_code == 200, got.text
+
+
 def test_a_facts_override_that_turns_embedding_on_needs_confirm(client):
     """The user's `embed: yes` outranks the catalog's `no`, so the role starts
     embedding the library from scratch: a settings write that moves the

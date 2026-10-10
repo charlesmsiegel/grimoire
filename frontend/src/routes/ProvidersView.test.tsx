@@ -518,6 +518,102 @@ test("?edit=rates is cleared on Save and on Cancel", async () => {
   expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
 });
 
+/** The facts route's `limits`: the window stated (`user`) over a listing
+ *  that says otherwise, and the listing's own max output. */
+const SIZED = {
+  context_window: 8192, max_output: null,
+  limits: { window: { value: 8192, source: "user" },
+            max_output: { value: 16000, source: "catalog" },
+            listed: { window: 131072, max_output: 16000 } },
+};
+
+test("a model's size shows read-only in its sidebar, with the catalog's figure beside a stated one", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+
+  const sidebar = sidebarOf("vendor/m");
+  expect(sidebar.getByRole("heading", { name: "Size" })).toBeInTheDocument();
+  expect(sidebar.getByText("Window 8,192 tokens (you)")).toHaveClass("chip", "on");
+  expect(sidebar.getByText("Max output 16,000 tokens (catalog)")).toBeInTheDocument();
+  // A stale statement after a server relaunch is visible.
+  expect(sidebar.getByText(/Catalog says 131,072/)).toHaveClass("field-hint");
+  // A catalog value nobody contradicted draws no second figure.
+  expect(sidebar.queryByText(/Catalog says 16,000/)).not.toBeInTheDocument();
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
+});
+
+test("a model nothing sizes says unknown", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({
+    limits: { window: { value: null, source: "unknown" },
+              max_output: { value: null, source: "unknown" },
+              listed: { window: null, max_output: null } } }));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+
+  expect(sidebarOf("vendor/m").getByText("Window unknown")).toBeInTheDocument();
+  expect(sidebarOf("vendor/m").getByText("Max output unknown")).toBeInTheDocument();
+});
+
+test("Edit reveals the two limit boxes, and Save sends only what changed", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Window (tokens)"), { target: { value: "8192" } });
+  expect(main().getByLabelText("Max output (tokens)")).toHaveValue("");
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", {
+    model: "vendor/m", context_window: 8192 });
+  // The save's answer is what the view shows.
+  expect(api.putModelFacts).toHaveBeenCalledTimes(1);
+});
+
+test("clearing a stated limit sends 0, which removes it", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  const box = await main().findByLabelText("Window (tokens)");
+  expect(box).toHaveValue("8192");
+  fireEvent.change(box, { target: { value: "" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", {
+    model: "vendor/m", context_window: 0 });
+});
+
+test("a limit typed with separators is read whole; one that is not a number holds Save", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  const box = await main().findByLabelText("Window (tokens)");
+  // Never read as "not stated": that would remove the window on Save.
+  fireEvent.change(box, { target: { value: "131k" } });
+  expect(main().getByText("A limit is a whole number of tokens, or empty.")).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeDisabled();
+
+  fireEvent.change(box, { target: { value: "131,072" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", {
+    model: "vendor/m", context_window: 131072 });
+});
+
+test("?edit=limits opens the form once, with the caret in the window box", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m?edit=limits");
+
+  const box = await main().findByLabelText("Window (tokens)");
+  expect(box).toHaveFocus();
+  fireEvent.click(main().getByRole("button", { name: "Cancel" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(screen.getByTestId("search")).toBeEmptyDOMElement();
+  // Once per arrival: the view stays the view after the param is gone.
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
+});
+
 test("a model id with a slash opens its facts", async () => {
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();

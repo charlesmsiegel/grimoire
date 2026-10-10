@@ -26,6 +26,7 @@ from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import capabilities, migrate
 from grimoire.store.inference import facts as inference_facts
+from grimoire.store.inference import limits as inference_limits
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.cascade import Selection
@@ -828,6 +829,57 @@ def test_the_target_carries_the_catalog_rows_features(at_state):
     assert _primary(resolved).model_features == {"structured_output": True}
     assert _primary(resolved).model_params == ("temperature",)
     assert resolved.attempts[0].capabilities["structured_output"] == Cap("yes", "catalog")
+
+
+def test_an_attempts_limits_are_limits_of_its_row_and_facts(at_state):
+    """Spec 01i-C1: resolved from the reads `_attempt` already makes -- the
+    user's word over the catalog, each value alone -- and on the target, so
+    `Attempt.limits` has no second copy to disagree."""
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "context": 131072, "max_output": 16000}])
+    inference_facts.state("openrouter", "vendor/active", context_window=8192)
+    first = inf.resolve("chat").attempts[0]
+    row = store.llm_connections.cached_row("openrouter", "vendor/active")
+    assert first.limits == inference_limits.of(row, first.facts)
+    assert first.limits is first.target.limits
+    assert first.limits == wire.Limits(window=wire.Limit(8192, "user"),
+                                       max_output=wire.Limit(16000, "catalog"))
+    assert inf.resolve("chat").chain.primary.limits == first.limits
+
+
+def test_a_model_nothing_sizes_reads_unknown(at_state):
+    at_state("fresh")
+    assert inf.resolve("chat").attempts[0].limits == wire.Limits()
+
+
+def test_a_reroll_override_resolves_its_own_limits(at_state):
+    ctx = at_state("routed")
+    _catalog("spare", [{"id": "vendor/spare", "context": 4096}])
+    _catalog("local", [{"id": "local-model", "context": 32768}])
+    rerolled = inf.resolve("regenerate", ctx["cid"],
+                           override=Selection("spare", "vendor/spare", ""))
+    assert _primary(rerolled).provider_id == "spare"
+    assert _primary(rerolled).limits.window == wire.Limit(4096, "catalog")
+
+
+def test_a_catalog_cached_under_an_old_rev_sizes_nothing(at_state):
+    at_state("fresh")
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active", "context": 131072}], "an-old-rev")
+    assert inf.resolve("chat").attempts[0].limits.window == wire.UNKNOWN_LIMIT
+
+
+def test_an_embedding_attempt_judged_without_the_catalog_reads_only_stated_limits(at_state):
+    """`catalog=False` (a record whose rev the write will restamp): the cached
+    row is the old rev's and says nothing, so only the user's word sizes it."""
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/embed", "context": 8192, "max_output": 1}])
+    inference_facts.state("openrouter", "vendor/embed", max_output=512)
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    judged = inf.embed_attempt("openrouter", "vendor/embed", raw, catalog=False).attempt
+    assert judged.limits == wire.Limits(max_output=wire.Limit(512, "user"))
+    read = inf.embed_attempt("openrouter", "vendor/embed", raw).attempt
+    assert read.limits.window == wire.Limit(8192, "catalog")
 
 
 def test_a_row_without_features_attaches_none(at_state):

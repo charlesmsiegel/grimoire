@@ -80,3 +80,28 @@ test("a decision's outcome is its own row: never sent, so no token count", () =>
   // A prompt section keeps its count.
   expect(screen.getByText("World info").closest("summary")).toHaveTextContent("100 · 50%");
 });
+
+test("the server's model_window is preferred over the catalog lookup", () => {
+  // The catalog says 200; the resolved window (the user's word) says 400.
+  render(<ContextBreakdown models={models}
+                           ctx={ctx({ model_window: { value: 400, source: "user" } })} />);
+  expect(screen.getByText(/100 \/ 400 tok/)).toBeInTheDocument();
+});
+
+test("a window the server knows nothing of is not looked up in the catalog", () => {
+  render(<ContextBreakdown models={models}
+                           ctx={ctx({ model_window: { value: null, source: "unknown" } })} />);
+  expect(screen.queryByText(/\/ 200 tok/)).not.toBeInTheDocument();
+  expect(screen.getByText(/100 tok/)).toBeInTheDocument();
+});
+
+test("a snapshot frozen before model_window existed falls back to the catalog", () => {
+  render(<ContextBreakdown models={models} ctx={ctx()} />);
+  expect(screen.getByText(/100 \/ 200 tok/)).toBeInTheDocument();
+});
+
+test("the smaller of budget and window still bounds the bar", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({
+    budget_tokens: 300, model_window: { value: 1000, source: "catalog" } })} />);
+  expect(screen.getByText(/100 \/ 300 tok/)).toBeInTheDocument();
+});

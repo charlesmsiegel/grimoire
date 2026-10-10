@@ -230,6 +230,77 @@ test("a native Decision says why it has no figure", async () => {
   expect(row("Decision").queryByRole("link", { name: "Set rate" })).toBeNull();
 });
 
+const limit = (value: number | null, source = value == null ? "unknown" : "catalog") =>
+  ({ value, source });
+const limits = (over: Record<string, unknown> = {}) => ({
+  model: "vendor/m", window: limit(200000), max_output: limit(null),
+  ceiling: { tokens: 195904, binding: ["saltmarch", "vendor/m"], reason: "" }, ...over,
+});
+
+test("a known window reads after the rate, and an unknown one offers Set", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    primary: card({ stored: sel("saltmarch", "vendor/m"), inherits: null, limits: limits() }),
+    fast: card({ limits: limits({ window: limit(null),
+                                  ceiling: { tokens: null, binding: null, reason: "" } }) }),
+  } }));
+  await openSummary();
+  expect(row("Primary").getByText("200k window")).toBeInTheDocument();
+  expect(row("Primary").queryByRole("link", { name: "Set" })).toBeNull();
+  expect(row("Fast").getByText(/window unknown/)).toBeInTheDocument();
+  // The model's facts on its provider, the model's own slash kept a path.
+  expect(row("Fast").getByRole("link", { name: "Set" }))
+    .toHaveAttribute("href", "/providers/saltmarch/models/vendor/m?edit=limits");
+});
+
+test("the fallback line carries the riding fallback's window", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    primary: card({ stored: sel("saltmarch", "vendor/m"), fallback: sel("realm", "realm/small"),
+                    inherits: null,
+                    limits: limits({ fallback_window: limit(8192),
+                                     ceiling: { tokens: 6144, binding: ["realm", "realm/small"],
+                                                reason: "" } }) }),
+  } }));
+  await openSummary();
+  const fallback = main().getByText(/Fallback:/);
+  expect(within(fallback).getByText(/8k window/)).toBeInTheDocument();
+});
+
+test("an inherited riding fallback's window is said on the window line", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    // Fast stores no fallback of its own, yet one rides (inherited).
+    fast: card({ limits: limits({ fallback_window: limit(8192) }) }),
+  } }));
+  await openSummary();
+  expect(row("Fast").getByText(/200k window · fallback 8k window/)).toBeInTheDocument();
+});
+
+test("a ceiling the reply reserve fills says why, in the warning style", async () => {
+  const reason = "The preset asks for 32,000 reply tokens; this model's window is 8,192, "
+    + "which leaves no room for a prompt.";
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    fast: card({ limits: limits({ window: limit(8192),
+                                  ceiling: { tokens: 0, binding: ["saltmarch", "vendor/m"],
+                                             reason } }) }),
+  } }));
+  await openSummary();
+  expect(row("Fast").getByText(reason)).toHaveClass("field-warning");
+});
+
+test("a card whose limits are null shows no window at all", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    decision: card({ decision_mode: "native", rate: { source: "native" }, limits: null,
+                     stored: sel("saltmarch", "vendor/decider") }),
+  } }));
+  await openSummary();
+  expect(row("Decision").queryByText(/window/)).toBeNull();
+  expect(row("Decision").queryByRole("link", { name: "Set" })).toBeNull();
+});
+
 test("a role naming a deleted provider keeps it on screen", async () => {
   (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
     ...settings().roles,

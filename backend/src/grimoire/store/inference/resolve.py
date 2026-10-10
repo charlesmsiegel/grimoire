@@ -84,7 +84,7 @@ from .. import (
 )
 from .. import inference_keys as keys
 from .. import inference_retired as retired
-from . import capabilities, cascade, facts, legacy_plan, providers
+from . import capabilities, cascade, facts, legacy_plan, limits, providers
 from .cascade import Selection
 from .resolved import Attempt, ResolvedInference
 
@@ -420,7 +420,8 @@ def _sent_model(raw: dict, model: str) -> str:
 
 
 def _target(raw: dict, model: str, sampling: dict, row: dict | None,
-            caps: dict[str, capabilities.Cap], model_facts: dict) -> wire.Target:
+            caps: dict[str, capabilities.Cap], model_facts: dict,
+            model_limits: wire.Limits) -> wire.Target:
     """The `wire.Target` an adapter sends for record `raw` serving `model`
     with `sampling` (`_sampling`'s shape): built from the record, the
     catalog row read for this model (`row`, or None), the attempt's resolved
@@ -438,8 +439,10 @@ def _target(raw: dict, model: str, sampling: dict, row: dict | None,
     (`_stated`); `reads_images` is `post_images.capability`'s rule
     (`capabilities.post_image_reach`, a kind left off is OpenRouter's) over
     that preference and the attempt's own `vision` capability, so the store
-    is not read again. The account is the billing alone, and the target is
-    never flagged structured: those are a resolution's stamps (`_stamp`)."""
+    is not read again. `model_limits` is the model's window and output cap
+    (`limits.of` over the same row and facts). The account is the billing
+    alone, and the target is never flagged structured: those are a
+    resolution's stamps (`_stamp`)."""
     sent = _sent_model(raw, model)
     params = _params_of(raw, row)
     features = row.get("features") if row is not None else None
@@ -458,7 +461,8 @@ def _target(raw: dict, model: str, sampling: dict, row: dict | None,
         reads_images=capabilities.post_image_reach(
             str(raw.get("kind", "openrouter")), vision,
             caps.get("vision", _UNKNOWN_CAP)),
-        account=wire.Account(billing=providers.billing(raw)))
+        account=wire.Account(billing=providers.billing(raw)),
+        limits=model_limits)
 
 
 #: A capability nothing has said anything about.
@@ -511,9 +515,11 @@ def _typed(raw: dict, model: str, sampling: dict, row: dict | None,
     """`raw` at `model` made an attempt's: its capabilities resolved from the
     catalog row and its model's facts -- never by `capabilities.caps_for`,
     which would read the same sidecar again -- and its target built from
-    both. The one builder `_attempt` and `target_for` share."""
+    both, its limits too (`limits.of`, from the same two reads). The one
+    builder `_attempt` and `target_for` share."""
     caps = capabilities.resolve_caps(preset, model, catalog_row=row, facts=model_facts)
-    return caps, _target(raw, model, sampling, row, caps, model_facts)
+    return caps, _target(raw, model, sampling, row, caps, model_facts,
+                         limits.of(row, model_facts))
 
 
 def target_for(raw: dict, model: str, sampling: dict, *, model_facts: dict) -> wire.Target:

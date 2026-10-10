@@ -155,10 +155,16 @@ function LoreEntries({ section }: { section: ContextSection }) {
  *
  *  A frozen snapshot carries the budget that was in force when it was
  *  captured, so a past turn is measured against the ceiling it was actually
- *  packed to rather than today's.
+ *  packed to rather than today's -- and, since 01i, the window too
+ *  (`model_window`).
  */
 function contextLimit(ctx: SceneContext, models: Model[]): number {
-  const modelLen = models.find((m) => m.id === ctx.model)?.context ?? 0;
+  // The server's resolved window (spec 01i), stated or listed, is preferred;
+  // the catalog lookup answers only for a snapshot frozen before the field
+  // existed, so such a turn is still measured against a window.
+  const modelLen = ctx.model_window
+    ? ctx.model_window.value ?? 0
+    : models.find((m) => m.id === ctx.model)?.context ?? 0;
   const limits = [ctx.budget_tokens ?? 0, modelLen].filter((n) => n > 0);
   return limits.length ? Math.min(...limits) : 0;
 }

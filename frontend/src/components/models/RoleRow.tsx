@@ -1,12 +1,13 @@
 import { Link } from "react-router-dom";
 import type {
-  EmbeddingCard, GenerativeRole, InferenceSettings, ProviderHealth, RateInfo, RouteRow,
+  CardLimits, EmbeddingCard, GenerativeRole, InferenceSettings, ProviderHealth, RateInfo, RouteRow,
 } from "../../api/client";
-import { providerPath } from "../../providerPaths";
+import { modelLimitsPath, providerPath } from "../../providerPaths";
 import { WhatItSends } from "../inference/ControlsReadout";
 import { describe, droppedFallbackWords, ROLE_LABEL, ROLE_NEEDS } from "../inference/selection";
 import { HealthDot } from "./health";
 import { DecideNote, Problem, useWarning, Warning } from "./notes";
+import { windowWords } from "./limits";
 import { rateWords, setRateHref } from "./rates";
 import { taskHash } from "./taskHash";
 
@@ -58,6 +59,33 @@ function RateLine({ rate, model, promptOnly = false }:
         <> · <Link to={setRateHref(model)}>Set rate</Link></>
       )}
     </p>
+  );
+}
+
+/** The window readout after the rate (spec 01i 6.3): the resolved model's
+ *  window, or `window unknown` with **Set**, which opens that model's facts on
+ *  its limits; and the ceiling's `reason` when the reply reserve leaves no
+ *  room. Display only -- the facts panel owns the write. A card whose
+ *  `limits` is null (nothing resolves, a native decision) shows nothing. */
+function WindowLine({ limits, provider, fallbackShown = false }:
+  { limits: CardLimits | null | undefined; provider: string; fallbackShown?: boolean }) {
+  if (!limits) return null;
+  const known = limits.window.value != null;
+  // A riding fallback the row draws no line for (one the role inherits) still
+  // shares the prompt, so its window is said here rather than nowhere.
+  const fallback = !fallbackShown && limits.fallback_window?.value != null
+    ? limits.fallback_window : null;
+  return (
+    <>
+      <p className="field-hint">
+        {windowWords(limits.window)}
+        {!known && provider && limits.model && (
+          <> · <Link to={modelLimitsPath(provider, limits.model)}>Set</Link></>
+        )}
+        {fallback && <>{" · fallback "}{windowWords(fallback)}</>}
+      </p>
+      <Warning text={limits.ceiling.reason || null} />
+    </>
   );
 }
 
@@ -124,9 +152,14 @@ export function RoleRow({ role, settings, health }:
             <SelectionLine provider={fb.provider} providerName={fbName} model={fb.model}
                            preset={fb.preset} presetName={presetName(settings, fb.preset)}
                            health={health} />
+            {card.limits?.fallback_window?.value != null && (
+              <>{" · "}{windowWords(card.limits.fallback_window)}</>
+            )}
           </p>
         )}
         <RateLine rate={card.rate} model={sel?.model ?? ""} />
+        <WindowLine limits={card.limits} provider={sel?.provider ?? ""}
+                    fallbackShown={!!fb.provider} />
         <Problem text={card.problem} />
         <Warning text={warning} />
         {decision && <DecideNote mode={card.decision_mode} decidesNatively={card.decides_natively} />}
@@ -159,6 +192,7 @@ export function EmbeddingRow({ card, settings, health }:
                                 ?? card.resolves.provider_name}
                               model={card.resolves.model} health={health} withPreset={false} /></p>
             <RateLine rate={card.rate} model={card.resolves.model} promptOnly />
+            <WindowLine limits={card.limits} provider={card.resolves.provider} />
           </>
         ) : (
           <>

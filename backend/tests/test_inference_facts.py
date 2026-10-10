@@ -32,7 +32,7 @@ def test_an_unknown_model_has_the_empty_shape(conn):
     cid, rev = conn
     assert facts.of(cid, "mara-7b", rev) == {
         "vision": "", "prefill": None, "post_process": "", "rates": None,
-        "verified": {}, "overrides": {},
+        "verified": {}, "overrides": {}, "context_window": None, "max_output": None,
     }
     assert facts.read(cid) == {}
 
@@ -159,7 +159,7 @@ def test_a_mangled_file_reads_as_empty_and_never_raises(conn, raw):
     assert facts.read(cid).get("m", {}) == {}
     assert facts.of(cid, "m", rev) == {
         "vision": "", "prefill": None, "post_process": "", "rates": None,
-        "verified": {}, "overrides": {},
+        "verified": {}, "overrides": {}, "context_window": None, "max_output": None,
     }
 
 
@@ -171,10 +171,12 @@ def test_mangled_fields_inside_a_model_read_as_empty(conn):
         "vision": 7, "prefill": "yes", "post_process": 3, "rates": [1],
         "verified": {"rev": rev, "caps": {"vision": 5, "embed": _ok(), "telepathy": _ok()}},
         "overrides": {"vision": "maybe", "embed": "no", "telepathy": "yes"},
+        "context_window": "8192", "max_output": True,
     }}), encoding="utf-8")
     got = facts.of(cid, "m", rev)
     assert got == {"vision": "", "prefill": None, "post_process": "", "rates": None,
-                   "verified": {"embed": _ok()}, "overrides": {"embed": "no"}}
+                   "verified": {"embed": _ok()}, "overrides": {"embed": "no"},
+                   "context_window": None, "max_output": None}
 
 
 @pytest.mark.parametrize("raw", [

@@ -3,7 +3,7 @@ import { Link, useLocation, useMatch, useNavigate, useParams, useSearchParams } 
 import {
   ApiError, api, type CapabilityName, type CapabilityValue, type HealthCheckResult,
   type InferenceSettings, type LLMConnection, type LLMConnectionDetail,
-  type LLMConnectionDraft, type LLMConnectionKind, type ModelCapabilities, type ModelFacts,
+  type LLMConnectionDraft, type LLMConnectionKind, type ModelCapabilities, type ModelFacts, type ModelLimit,
   type ModelFactsUpdate, type ProviderBilling, type ProviderHealth, type ProviderPresetOption,
   type ProviderUse, type TestableCapability, type VisionOverride,
 } from "../api/client";
@@ -22,7 +22,7 @@ import { RATE_FIELDS, RateFields, entryOf, filled, formOf, hasBase,
          type RateForm } from "../components/RateFields";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { errorText } from "../api/errors";
-import { EDIT_RATES, modelPath, providerPath } from "../providerPaths";
+import { EDIT_LIMITS, EDIT_RATES, modelPath, providerPath } from "../providerPaths";
 
 /** Adapters whose provider can be asked for a catalog. Mirrors
  *  `llm.LISTABLE_KINDS`: the Claude subscription's models are SDK aliases with
@@ -869,6 +869,19 @@ type FactsForm = {
   vision: VisionOverride; prefill: boolean; post_process: "none" | "strict";
   overrides: Partial<Record<CapabilityName, "" | "yes" | "no">>;
   rates: RateForm;
+  /** The stated limits as typed: "" is "not stated". */
+  context_window: string; max_output: string;
+};
+
+/** The two limits a model's facts state, each a form box and a Size line. */
+const LIMIT_FIELDS = [
+  { key: "context_window", limit: "window", label: "Window" },
+  { key: "max_output", limit: "max_output", label: "Max output" },
+] as const;
+
+/** Whose word a resolved limit is, as the Size section says it. */
+const LIMIT_SOURCE_WORDS: Record<ModelLimit["source"], string> = {
+  user: "you", catalog: "catalog", unknown: "unknown",
 };
 
 function factsForm(f: ModelFacts): FactsForm {
@@ -876,8 +889,24 @@ function factsForm(f: ModelFacts): FactsForm {
     vision: f.vision, prefill: !!f.prefill, post_process: f.post_process || "none",
     overrides: Object.fromEntries(OVERRIDABLE.map(({ name }) => [name, f.overrides[name] ?? ""])),
     rates: formOf(f.rates),
+    context_window: f.context_window != null ? String(f.context_window) : "",
+    max_output: f.max_output != null ? String(f.max_output) : "",
   };
 }
+
+/** A limit box as typed, read: "" (not stated), a whole number of tokens
+ *  (thousands separators and spaces allowed), or null for anything else --
+ *  which the form refuses rather than sending as a removal. */
+function limitTyped(typed: string): number | "" | null {
+  const bare = typed.replace(/[\s,_]/g, "");
+  if (bare === "") return "";
+  return /^\d+$/.test(bare) && Number.isSafeInteger(Number(bare)) ? Number(bare) : null;
+}
+
+/** The `?edit=…` values that open the form, and the box each puts the caret in. */
+type EditFocus = typeof EDIT_RATES | typeof EDIT_LIMITS;
+const editFocus = (value: string | null): EditFocus | null =>
+  value === EDIT_RATES || value === EDIT_LIMITS ? value : null;
 
 /** What is known of one model on one provider: the user's statements, what a
  *  test found, and every capability as it resolves (spec 4.2). Read-only until
@@ -901,32 +930,34 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
   const [asking, setAsking] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
   const ratesId = useId();
-  /** `?edit=rates` opens the form once the facts are read and the store is
-   *  known to take writes, and puts the caret in the Input box. A store that
-   *  is locked (or not yet known) keeps the view, as its disabled Edit does.
-   *  Once per arrival: a later reload (a landed test) must not throw a reader
-   *  back into a form, and leaving the form clears the param, which re-arms
-   *  it for the next link that carries one. */
-  const askedRates = params.get("edit") === EDIT_RATES;
+  /** `?edit=rates` (or `?edit=limits`) opens the form once the facts are read
+   *  and the store is known to take writes, and puts the caret in the Input
+   *  box (or the Window box). A store that is locked (or not yet known) keeps
+   *  the view, as its disabled Edit does. Once per arrival: a later reload (a
+   *  landed test) must not throw a reader back into a form, and leaving the
+   *  form clears the param, which re-arms it for the next link that carries
+   *  one. */
+  const asked = editFocus(params.get("edit"));
   const openedFromUrl = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [focusRates, setFocusRates] = useState(false);
+  const windowRef = useRef<HTMLInputElement>(null);
+  const [focus, setFocus] = useState<EditFocus | null>(null);
 
   const load = useCallback(() => api.readModelFacts(provider.id, model).then(setFacts), [provider.id, model]);
   useEffect(() => { load().catch(setError); }, [load]);
   useEffect(() => {
-    if (!askedRates) { openedFromUrl.current = false; return; }
+    if (!asked) { openedFromUrl.current = false; return; }
     if (!facts || factsBlocked || openedFromUrl.current) return;
     openedFromUrl.current = true;
     setForm(factsForm(facts));
     setMode("edit");
-    setFocusRates(true);
-  }, [facts, askedRates, factsBlocked]);
+    setFocus(asked);
+  }, [facts, asked, factsBlocked]);
   useEffect(() => {
-    if (mode !== "edit" || !focusRates) return;
-    inputRef.current?.focus();
-    setFocusRates(false);
-  }, [mode, focusRates]);
+    if (mode !== "edit" || !focus) return;
+    (focus === EDIT_LIMITS ? windowRef : inputRef).current?.focus();
+    setFocus(null);
+  }, [mode, focus]);
   // A landed test moves this model's facts and its badges -- whichever page
   // started it (the runs are shared, so a test begun from the /models picker
   // is the one Test… rejoins here).
@@ -1000,6 +1031,13 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
     if (RATE_FIELDS.some(({ key }) => form.rates[key].trim() !== was.rates[key].trim())) {
       body.rates = filled(form.rates) ? entryOf(form.rates) : {};
     }
+    // A limit only when its box changed. Emptied, it was stated before, so it
+    // is removed (`0`); otherwise the number typed, which the store checks.
+    for (const { key } of LIMIT_FIELDS) {
+      const typed = limitTyped(form[key]);
+      if (typed === null) return;
+      if (typed !== limitTyped(was[key])) body[key] = typed === "" ? 0 : typed;
+    }
     if (confirm) body.confirm_embedding = true;
     setSaving(true);
     setError(null);
@@ -1027,6 +1065,9 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
     // A filled box whose value the store refuses (a negative) is not this: it
     // is sent, and the store's own reason is shown.
     const halfRated = filled(form.rates) && !hasBase(form.rates);
+    // A limit box holding something that is not a whole number of tokens: an
+    // empty box means "not stated", so this must never be read as one.
+    const badLimit = LIMIT_FIELDS.some(({ key }) => limitTyped(form[key]) === null);
     return (
       <div className="form">
         {back}
@@ -1084,6 +1125,24 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
                     idPrefix={ratesId} subject={model} disabled={saving}
                     inputRef={inputRef} />
         {halfRated && <div className="field-hint error">Input and output are both needed.</div>}
+        <h4>Size</h4>
+        <div className="field-hint">
+          The model&apos;s own limits on this provider, when its listing does not say or says
+          wrong. To pack prompts smaller than the model allows, set the context budget instead.
+        </div>
+        {LIMIT_FIELDS.map(({ key, label }) => (
+          <Field key={key} label={`${label} (tokens)`}>
+            <input type="text" inputMode="numeric"
+                   value={form[key]} disabled={saving}
+                   ref={key === "context_window" ? windowRef : undefined}
+                   placeholder={String(facts.limits?.listed[key === "context_window"
+                     ? "window" : "max_output"] ?? "Not stated")}
+                   onChange={(e) => set({ [key]: e.target.value })} />
+          </Field>
+        ))}
+        {badLimit && (
+          <div className="field-hint error">A limit is a whole number of tokens, or empty.</div>
+        )}
         {asking !== null && (
           <div className="banner" role="group" aria-label="Confirm the embedding">
             {asking}{" "}
@@ -1099,7 +1158,8 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
             Cancel
           </button>
           <button className="primary" onClick={() => { void save(); }}
-                  disabled={factsBlocked || saving || unreadable || halfRated || asking !== null}>
+                  disabled={factsBlocked || saving || unreadable || halfRated || badLimit
+                            || asking !== null}>
             Save facts
           </button>
         </div>
@@ -1168,6 +1228,27 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
               ))}
             </div>
           )}
+        </div>
+        <div className="side-section">
+          <h4>Size</h4>
+          {LIMIT_FIELDS.map(({ limit, label }) => {
+            const resolved = facts.limits?.[limit];
+            const listed = facts.limits?.listed[limit] ?? null;
+            return (
+              <div key={limit}>
+                {resolved?.value != null ? (
+                  <span className="chip on">
+                    {`${label} ${resolved.value.toLocaleString()} tokens (${LIMIT_SOURCE_WORDS[resolved.source]})`}
+                  </span>
+                ) : (
+                  <span className="field-hint">{`${label} unknown`}</span>
+                )}
+                {resolved?.source === "user" && listed != null && listed !== resolved.value && (
+                  <span className="field-hint">{` Catalog says ${listed.toLocaleString()}.`}</span>
+                )}
+              </div>
+            );
+          })}
         </div>
         <div className="side-section">
           <h4>Capability overrides</h4>

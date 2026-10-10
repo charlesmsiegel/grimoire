@@ -65,6 +65,39 @@ def test_a_context_field_that_is_not_a_positive_integer_is_unknown(value):
     assert catalog.entry({"id": "m", "context_length": value})["context"] is None
 
 
+def test_the_output_cap_is_read_from_openrouters_top_provider():
+    """`top_provider.max_completion_tokens` is the most a reply may be asked
+    for (spec 01i 3.3); a row that states none has no `max_output` key."""
+    row = {"id": "a/m", "context_length": 131072,
+           "top_provider": {"max_completion_tokens": 16000, "context_length": 65536}}
+    got = catalog.entry(row)
+    assert (got["context"], got["max_output"]) == (131072, 16000)
+    assert "max_output" not in catalog.entry({"id": "a/m", "top_provider": {}})
+    assert "max_output" not in catalog.entry({"id": "a/m", "top_provider": None})
+    # A limit on the key is not a fact about the model.
+    assert "max_output" not in catalog.entry(
+        {"id": "a/m", "per_request_limits": {"completion_tokens": 100}})
+
+
+def test_the_output_cap_reads_json_as_the_window_does():
+    """An integral float counts, as for `context`: JSON cannot tell them apart."""
+    got = catalog.entry({"id": "a/m", "top_provider": {"max_completion_tokens": 16000.0}})
+    assert got["max_output"] == 16000 and isinstance(got["max_output"], int)
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, "16000", True, 1.5])
+def test_an_output_cap_that_is_not_a_positive_integer_is_absent(value):
+    assert "max_output" not in catalog.entry(
+        {"id": "a/m", "top_provider": {"max_completion_tokens": value}})
+    assert "max_output" not in catalog.entry(_anthropic_row(max_tokens=value))
+
+
+def test_a_vllm_or_ollama_row_states_no_output_cap():
+    assert "max_output" not in catalog.entry({"id": "m", "max_model_len": 32768})
+    assert "max_output" not in catalog.entry({"id": "llama3:8b", "object": "model",
+                                              "owned_by": "library"})
+
+
 def test_llama_cpps_training_length_is_not_the_window():
     """`n_ctx_train` is what the weights were trained to, not what `-c` gave
     the server; drawing the bar against it would hide an overflow."""
@@ -242,6 +275,16 @@ def test_an_anthropic_row_is_read_for_what_it_states():
     assert got["features"] == {
         "structured_output": True, "adaptive_thinking": True, "enabled_thinking": False,
         "disabled_thinking": True, "effort": ["low", "medium", "high", "max"], "max_tokens": 64000}
+    # The same field is the row's output cap; `features.max_tokens` is kept.
+    assert got["max_output"] == 64000
+
+
+def test_an_anthropic_whole_float_cap_is_an_output_cap_but_not_a_sent_one():
+    """`max_output` takes `_context`'s rule; `features.max_tokens`, which caps
+    what that API is sent, keeps its stricter one unchanged."""
+    got = catalog.entry(_anthropic_row(max_tokens=64000.0))
+    assert got["max_output"] == 64000
+    assert "max_tokens" not in got.get("features", {})
 
 
 def test_an_anthropic_row_maps_only_the_keys_it_states():
