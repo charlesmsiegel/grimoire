@@ -1945,7 +1945,13 @@ export type PinRule = {
 export type PromptEntry = {
   id: string; scene: string; ts: string; model: string;
   task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener"
-      | "replay" | "extend";
+      | "replay" | "extend" | "response-selector" | "scene-break" | "voice-drift"
+      | "continuity-identity" | "continuity-reconcile";
+  /** `decide` on a decision's capture (roadmap 01b): one entry per decision,
+   *  kept in a retention pool of its own and listed apart from turns
+   *  (`isDecision`). Absent on a generation, and on a speaker pick captured
+   *  before decisions had a pool. */
+  operation?: "decide";
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
 };
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which

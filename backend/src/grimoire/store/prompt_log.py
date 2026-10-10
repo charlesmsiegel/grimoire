@@ -52,6 +52,15 @@ store whose whole premise is that a human can read it. The cost of the campaign
 window, stated rather than hidden: playing one scene long enough evicts
 another's snapshots. This is a rolling debug window; #150 is where a durable
 ledger belongs.
+
+Decisions are kept apart (roadmap 01b §3.5). An entry `record`ed with
+`operation="decide"` -- one per decision scope, `routes.decision_capture` --
+is counted in a pool of its own, so a turn's snapshot is never evicted by the
+checks around it (a speaker pick, a scene-break check, an absorb's voice
+checks), nor a decision by a long run of turns. Each pool keeps `depth()`
+entries: one setting governs both, and 0 still turns all capture off. A row
+written before this has no `operation` and counts as a generation until it
+ages out.
 """
 
 from __future__ import annotations
@@ -197,6 +206,23 @@ _META_TYPES = {"task": str, "ts": str, "model": str,
                "total_tokens": int, "dropped_tokens": int, "budget_tokens": int}
 
 
+#: The `operation` an entry is `record`ed with when it is a decision's capture,
+#: and the only value that moves an entry out of the generation pool.
+DECIDE = "decide"
+
+
+def _optional_str(data: dict, key: str) -> bool:
+    """Whether `key` is absent or a string: `operation` is optional, since
+    nothing wrote it before decisions were captured."""
+    return key not in data or isinstance(data[key], str)
+
+
+def _pool(row: dict) -> str:
+    """Which retention pool a row counts in (module docstring): a decision's,
+    or a generation's."""
+    return DECIDE if row.get("operation") == DECIDE else ""
+
+
 def _valid_id(eid: object) -> bool:
     """Path-safe (it names a file), numeric and short -- `next` is derived from
     it, and `int()` refuses a string over 4300 digits. See `_read_index`."""
@@ -208,6 +234,7 @@ def _well_formed_row(e: object) -> bool:
     top of the shared metadata, because the index is the field's only owner."""
     return (isinstance(e, dict) and _valid_id(e.get("id"))
             and isinstance(e.get("scene"), str)
+            and _optional_str(e, "operation")
             and all(isinstance(e.get(k), t) for k, t in _META_TYPES.items()))
 
 
@@ -227,7 +254,7 @@ def _unlink(cid: str, eid: str) -> None:
 
 
 def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
-           kind: str = "") -> str | None:
+           kind: str = "", operation: str = "") -> str | None:
     """Freeze one turn's composition. Returns the new entry id, or None when
     nothing was recorded.
 
@@ -249,6 +276,10 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
     simply goes unrecorded, which is what the retention window makes survivable.
     Reentrant acquisition still succeeds: the underlying RLock grants a
     non-blocking request to a thread that already owns it.
+
+    `operation` is written into the row and the payload when non-empty, and
+    eviction counts within the new entry's pool (`_pool`): a decision evicts
+    only older decisions, a generation only older generations.
     """
     keep = depth()
     if keep <= 0:
@@ -263,6 +294,8 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
            "total_tokens": breakdown.get("total_tokens", 0),
            "dropped_tokens": breakdown.get("dropped_tokens", 0),
            "budget_tokens": breakdown.get("budget_tokens", 0)}
+    if operation:
+        row["operation"] = operation
     try:
         with locks.campaign_lock_nowait(cid) as got:
             if not got:
@@ -290,8 +323,11 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
             payload["token_count"] = counted
             atomic.write_text(_entry_path(cid, eid),
                               json.dumps({"id": eid, **payload, **breakdown}, indent=2) + "\n")
-            evicted = index["entries"][:max(0, len(index["entries"]) - keep)]
-            index["entries"] = index["entries"][len(evicted):]
+            # Within the new entry's pool only, oldest first.
+            pool = [e for e in index["entries"] if _pool(e) == _pool(row)]
+            evicted = pool[:max(0, len(pool) - keep)]
+            gone = {e["id"] for e in evicted}
+            index["entries"] = [e for e in index["entries"] if e["id"] not in gone]
             _write_index(cid, index)
             for old in evicted:
                 _unlink(cid, old["id"])
@@ -328,7 +364,7 @@ def _well_formed(data: object) -> bool:
     """
     if not isinstance(data, dict):
         return False
-    if not (isinstance(data.get("id"), str)
+    if not (isinstance(data.get("id"), str) and _optional_str(data, "operation")
             and all(isinstance(data.get(k), t) for k, t in _META_TYPES.items())):
         return False
     rows = data.get("sections")

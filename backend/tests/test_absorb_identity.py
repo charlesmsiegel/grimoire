@@ -1047,6 +1047,49 @@ def test_identity_meters_one_row_per_chunk(client, scene, monkeypatch):
     assert body["identity"]["status"] == "ok"
 
 
+def _identity_capture(cid, sid):
+    """The duplicate check's one prompt-log entry (roadmap 01b)."""
+    (row,) = [e for e in store.prompt_log.list_entries(cid, sid)
+              if e["task"] == "continuity-identity"]
+    assert row["operation"] == "decide"
+    entry = store.prompt_log.read_entry(cid, row["id"], scene=sid)
+    assert entry is not None and entry["sections"][-1]["id"] == "decision"
+    return entry, json.loads(entry["sections"][-1]["text"])
+
+
+def test_a_two_chunk_check_is_one_capture(client, scene, monkeypatch):
+    """Roadmap 01b, test 1: one scope around the chunked check files one
+    entry, each chunk's messages numbered by call and each call's `at` the
+    batch positions it carried."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    fake = _llm(client, _two_rows(), decision_reply(_row("new")))
+    _absorb(client, cid, sid)
+    entry, envelope = _identity_capture(cid, sid)
+    assert envelope["task"] == "continuity-identity"
+    assert [(c["stage"], c["at"], c["part"]) for c in envelope["calls"]] == [
+        (0, [0], ""), (0, [1], "")]
+    ids = [s["id"] for s in entry["sections"]]
+    assert ids == ["c0_message_0", "c0_message_1", "c1_message_0", "c1_message_1",
+                   "decision"]
+    sent = [m["content"] for r in identity_requests(fake) for m in r["messages"]]
+    assert sorted(s["text"] for s in entry["sections"][:-1]) == sorted(sent)
+
+
+def test_a_failed_check_is_captured_with_its_kind_and_not_its_text(client, scene):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _llm(client, _extraction(plot=[RECOVER_THE_LEDGER]),
+         error={"kind": "network", "message": "connection reset at sk-...abcd"})
+    body = _absorb(client, cid, sid)
+    assert body["identity"]["status"] == "failed"
+    entry, envelope = _identity_capture(cid, sid)
+    (call,) = envelope["calls"]
+    assert call["error_kind"] == "network" and "error" not in call
+    assert "sk-...abcd" not in json.dumps(entry)
+
+
 def test_a_failed_second_chunk_leaves_the_first_chunks_rows_decided(
         client, scene, monkeypatch):
     cid, s0, sid = scene

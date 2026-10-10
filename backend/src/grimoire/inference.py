@@ -118,6 +118,24 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 Capture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
 
 
+class Recorder:
+    """A `Capture` that is also handed the settled call's `LLMError` (None
+    when it answered): `settled` is called in place of `__call__`
+    (`_captured`). The outcome records a failure as `"kind: detail"` text,
+    and `detail` is the provider's own words, which can echo the input or a
+    key; a recorder that keeps the failure as its kind, status and code
+    alone needs the error itself (roadmap 01b §3.3,
+    `routes.decision_capture`)."""
+
+    async def __call__(self, messages: list[dict], outcome: dict,
+                       target: wire.Target) -> None:
+        await self.settled(messages, outcome, target, None)
+
+    async def settled(self, messages: list[dict], outcome: dict, target: wire.Target,
+                      error: LLMError | None) -> None:
+        raise NotImplementedError
+
+
 def structured_messages(items: Sequence[decisions.Item], *,
                         explain: str = "") -> list[dict]:
     """The structured backend's prompt for one chunk: the system message
@@ -350,17 +368,21 @@ def _outcome(mode: str, target: wire.Target, holder: dict | None,
 
 
 async def _captured(call: _Call, messages: list[dict] | Callable[[], list[dict]],
-                    outcome: Callable[[], dict], target: wire.Target) -> None:
+                    outcome: Callable[[], dict], target: wire.Target,
+                    error: LLMError | None) -> None:
     """Hand one settled call to `call.capture` (spec 9.4): `messages` as
     they are, or -- a callable -- built in a worker thread; `outcome` built
-    here. Called outside the call's meter, and guarded as `llm._observe` is:
+    here; `error`, the call's failure, to a `Recorder` alone. Called outside the call's meter, and guarded as `llm._observe` is:
     a capture that raises costs the capture and nothing else (I4), never an
     answered decision, and never turns its `ok` row into an error."""
     if call.capture is None:
         return
     try:
         sent = await asyncio.to_thread(messages) if callable(messages) else messages
-        await call.capture(sent, outcome(), target)
+        if isinstance(call.capture, Recorder):
+            await call.capture.settled(sent, outcome(), target, error)
+        else:
+            await call.capture(sent, outcome(), target)
     except Exception as exc:  # noqa: BLE001 - see the docstring
         log.warning("could not capture a %s decision: %s", call.task, exc)
 
@@ -410,7 +432,7 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
         await _captured(call, messages if sent else [],
                         partial(_outcome, STRUCTURED, chain.primary, holder, answered, error,
                                 stage=call.stage, at=_at(call, unit)),
-                        ran if isinstance(ran, wire.Target) else chain.primary)
+                        ran if isinstance(ran, wire.Target) else chain.primary, error)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
             failed.append((unit, error))
@@ -535,7 +557,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
             partial(_outcome, NATIVE, named, holders[index],
                     () if answered is None else (answered,), errors[index],
                     stage=call.stage, at=_at(call, (index,))),
-            named)
+            named, errors[index])
 
     try:
         async with asyncio.TaskGroup() as group:

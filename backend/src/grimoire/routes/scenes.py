@@ -33,7 +33,7 @@ from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
-from . import character_turns, runs, streaming
+from . import character_turns, decision_capture, runs, streaming
 from . import continuity as continuity_routes
 from . import tracker as tracker_routes
 from .common import (
@@ -2133,12 +2133,16 @@ async def _resolve_identity(cid: str, sid: str, client: LLMClient,
     # `_noting` reads the live holder, so a fallback that had taken over is the
     # connection told. The attempt is recorded by `run`, which alone can decide
     # it atomically with the deadline.
-    decision = await operations.decide(
-        "continuity-identity", items, client=client, resolved=resolved, explain=explain,
-        campaign=cid, scene=sid,
-        around=lambda call, holder: budget.run(
-            call, lambda: block.__setitem__("attempted", True),
-            on_timeout=_noting(client, resolved, holder)))
+    #
+    # One capture scope around the whole chunked check (roadmap 01b): one
+    # prompt-log entry for the absorbed scene, whatever the chunk count.
+    async with decision_capture.capturing(cid, sid, "continuity-identity") as scope:
+        decision = await operations.decide(
+            "continuity-identity", items, client=client, resolved=resolved,
+            explain=explain, campaign=cid, scene=sid, capture=scope.hook(),
+            around=lambda call, holder: budget.run(
+                call, lambda: block.__setitem__("attempted", True),
+                on_timeout=_noting(client, resolved, holder)))
     if error := _decide_error(decision, continuity_identity.DECISION_ID):
         # A chunk failed and no chunk was read: the failure is the phase's
         # (M12), by the failing chunk's own kind -- never the unreadable reply
@@ -2515,9 +2519,14 @@ def _voice_item(name: str, record: dict, transcript: str,
 
 async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMClient,
                              resolved: UsableInference | None, budget: _Budget,
-                             unroutable: str = "") -> tuple[list[dict], dict]:
+                             unroutable: str = "", abandoned=None,
+                             ) -> tuple[list[dict], dict]:
     """Judge every present NPC's dialogue in this scene against their voice
     anchor, proposing a drift flag (or a clear) for each.
+
+    `abandoned` is the review's own "is anyone still waiting" check
+    (`_review_abandoned`), asked only by the phase's capture scope: answering
+    True files no capture of a review nobody is waiting for.
 
     Runs ONLY for NPCs that actually have an anchor (#59). That is the cost
     control for the whole feature: a library with no anchors makes no extra LLM
@@ -2641,81 +2650,87 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
         out["skipped"] = [b for b, _, _ in todo[i:]]
         out["budget_exhausted"] = True
 
-    for i, (aid, name, record) in enumerate(todo):
-        if budget.spent():
-            drop_tail(i)
-            break
-        try:
-            # Read ONCE, before the await -- dossiers' rule: re-reading after it
-            # would record a flag another review wrote while this call was in
-            # flight, and the conflict guard would then pass on stale output.
-            # One snapshot, so the note and the provenance staged as `before`
-            # always describe the same committed flag (voice_drift.read_record).
-            flag = store.voice_drift.read_record(croot, aid)
-            # The item is built over the EFFECTIVE anchor (all the generator
-            # ever saw: a rule past the cap is enforced against neither) and
-            # the stored correction only while it is STILL IN FORCE -- the test
-            # `context/cast.py` applies before putting a note in the scene
-            # prompt. A note fingerprinted to a REPLACED anchor, handed to the
-            # judge as current, would mint a fresh flag against the anchor that
-            # replaced it (`voice_drift.judge_item`, `live_correction`).
-            # Off the loop, as the scene-break check's item is (CODE-M1): the
-            # item and the rationale instruction render templates, and absorb
-            # runs on the lifespan loop a detached turn shares.
-            item, explain = await run_in_threadpool(_voice_item, name, record,
-                                                    transcript, flag)
-            # The absorb budget runs INSIDE `decide()`'s meter (`around`), as
-            # it ran inside this phase's own meter before: an overrun is that
-            # meter's `error/timeout` row, and `_noting` reads the live holder,
-            # so a fallback that had taken over is the connection told. The
-            # attempt is recorded by `run`, which alone can decide it
-            # atomically with the deadline.
-            decision = await operations.decide(
-                "voice-drift", [item], client=client, resolved=resolved,
-                explain=explain, campaign=cid, scene=sid,
-                around=lambda call, holder: budget.run(
-                    call, lambda: out.__setitem__("attempted", True),
-                    on_timeout=_noting(client, resolved, holder)))
-            finding = store.voice_drift.finding_of(decision.items[0])
-            # An unreadable verdict is a FAILED call, not a quiet pass, and a
-            # drift is only usable with a corrective that fits in front of
-            # every later turn (`check_failure` has the three checks and their
-            # words).
-            reason = store.voice_drift.check_failure(finding)
-            if reason:
-                out["failed"].append({"id": aid, "reason": reason})
-                continue
-            # `before` is that snapshot, never a re-read (the rule above).
-            edit = store.voice_drift.stage_edit(aid, name, flag["note"], finding,
-                                                record["text"], record["id"], flag["anchor"])
-        except BudgetRefused:
-            # Refused, not failed: nothing was sent, so this NPC is one more the
-            # clock never reached — and so is everyone after them.
-            drop_tail(i)
-            break
-        except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
-            detail = str(exc).strip()
-            out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
-            out["failed"].append({
-                "id": aid,
-                "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
-        else:
-            out["checked"].append(aid)
-            if finding["verdict"] == store.voice_drift.DRIFT:
-                out["flagged"].append(aid)
-                if not finding["note"].strip():
-                    # Only a native drift reaches here with no note
-                    # (`check_failure`). Shown, and `stage_edit` proposes
-                    # nothing for it: a standing flag is neither replaced nor
-                    # cleared by a verdict that has no corrective to store.
-                    out["noteless"].append(aid)
-            elif finding["verdict"] == store.voice_drift.NOT_ENOUGH:
-                # A real judgment that produces no edit -- like a dossier that
-                # came back unchanged. Named so "checked, not flagged" does not
-                # read as "confirmed in voice" when nobody actually heard them.
-                out["unjudged"].append(aid)
-            if edit:
-                edits.append(edit)
+    # The whole phase is one capture scope (roadmap 01b): one prompt-log
+    # entry per review, each NPC's call a record under its anchored record id
+    # (`part`), never a name. The loop swallows `Abandoned` per NPC, so the
+    # review's own check is what keeps a closed review from filing.
+    async with decision_capture.capturing(cid, sid, "voice-drift",
+                                          abandoned=abandoned) as scope:
+        for i, (aid, name, record) in enumerate(todo):
+            if budget.spent():
+                drop_tail(i)
+                break
+            try:
+                # Read ONCE, before the await -- dossiers' rule: re-reading after it
+                # would record a flag another review wrote while this call was in
+                # flight, and the conflict guard would then pass on stale output.
+                # One snapshot, so the note and the provenance staged as `before`
+                # always describe the same committed flag (voice_drift.read_record).
+                flag = store.voice_drift.read_record(croot, aid)
+                # The item is built over the EFFECTIVE anchor (all the generator
+                # ever saw: a rule past the cap is enforced against neither) and
+                # the stored correction only while it is STILL IN FORCE -- the test
+                # `context/cast.py` applies before putting a note in the scene
+                # prompt. A note fingerprinted to a REPLACED anchor, handed to the
+                # judge as current, would mint a fresh flag against the anchor that
+                # replaced it (`voice_drift.judge_item`, `live_correction`).
+                # Off the loop, as the scene-break check's item is (CODE-M1): the
+                # item and the rationale instruction render templates, and absorb
+                # runs on the lifespan loop a detached turn shares.
+                item, explain = await run_in_threadpool(_voice_item, name, record,
+                                                        transcript, flag)
+                # The absorb budget runs INSIDE `decide()`'s meter (`around`), as
+                # it ran inside this phase's own meter before: an overrun is that
+                # meter's `error/timeout` row, and `_noting` reads the live holder,
+                # so a fallback that had taken over is the connection told. The
+                # attempt is recorded by `run`, which alone can decide it
+                # atomically with the deadline.
+                decision = await operations.decide(
+                    "voice-drift", [item], client=client, resolved=resolved,
+                    explain=explain, campaign=cid, scene=sid, capture=scope.hook(aid),
+                    around=lambda call, holder: budget.run(
+                        call, lambda: out.__setitem__("attempted", True),
+                        on_timeout=_noting(client, resolved, holder)))
+                finding = store.voice_drift.finding_of(decision.items[0])
+                # An unreadable verdict is a FAILED call, not a quiet pass, and a
+                # drift is only usable with a corrective that fits in front of
+                # every later turn (`check_failure` has the three checks and their
+                # words).
+                reason = store.voice_drift.check_failure(finding)
+                if reason:
+                    out["failed"].append({"id": aid, "reason": reason})
+                    continue
+                # `before` is that snapshot, never a re-read (the rule above).
+                edit = store.voice_drift.stage_edit(aid, name, flag["note"], finding,
+                                                    record["text"], record["id"], flag["anchor"])
+            except BudgetRefused:
+                # Refused, not failed: nothing was sent, so this NPC is one more the
+                # clock never reached — and so is everyone after them.
+                drop_tail(i)
+                break
+            except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+                detail = str(exc).strip()
+                out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
+                out["failed"].append({
+                    "id": aid,
+                    "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
+            else:
+                out["checked"].append(aid)
+                if finding["verdict"] == store.voice_drift.DRIFT:
+                    out["flagged"].append(aid)
+                    if not finding["note"].strip():
+                        # Only a native drift reaches here with no note
+                        # (`check_failure`). Shown, and `stage_edit` proposes
+                        # nothing for it: a standing flag is neither replaced nor
+                        # cleared by a verdict that has no corrective to store.
+                        out["noteless"].append(aid)
+                elif finding["verdict"] == store.voice_drift.NOT_ENOUGH:
+                    # A real judgment that produces no edit -- like a dossier that
+                    # came back unchanged. Named so "checked, not flagged" does not
+                    # read as "confirmed in voice" when nobody actually heard them.
+                    out["unjudged"].append(aid)
+                if edit:
+                    edits.append(edit)
     if not out["checked"] and not out["failed"] and not out["skipped"]:
         return edits, {**out, "reason": "no anchored npcs present"}
     if not out["checked"]:
@@ -3170,7 +3185,7 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, resolved: UsableIn
                 _stage_dossiers(cid, sid, prepared.transcript, client, dossier_resolved,
                                 budget, unroutable=dossier_why),
                 _stage_voice_drift(cid, sid, prepared.transcript, client, voice_resolved,
-                                   budget, unroutable=voice_why),
+                                   budget, unroutable=voice_why, abandoned=abandoned),
                 _run_audit(cid, sid, client, audit_resolved, budget, unroutable=audit_why),
                 limit=store.config.absorb_concurrency()), abandoned)
         extraction, dossier_result, voice_result, audit_result = results
@@ -4214,9 +4229,13 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
 
     facts, transcript, item, explanation = await run_in_threadpool(prepare)
     try:
-        decision = await operations.decide(
-            "scene-break", [item], client=client, resolved=resolved,
-            explain=explanation, campaign=cid, scene=sid)
+        # One capture scope (roadmap 01b): fenced on the scene's identity, so a
+        # follow-up whose scene was deleted and recreated under this id files
+        # nothing into the replacement.
+        async with decision_capture.capturing(cid, sid, "scene-break") as scope:
+            decision = await operations.decide(
+                "scene-break", [item], client=client, resolved=resolved,
+                explain=explanation, campaign=cid, scene=sid, capture=scope.hook())
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     # The title is "" here: it is drafted below, and only for a YES that lands.
@@ -5500,11 +5519,19 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
     over an unchanged store. Against a preview, a handful of such lines can show
     as changed when nothing in the campaign moved. Two frozen entries do not
     have this: both were recorded, so the comparison is exact.
+
+    A decision's entry (`decision_capture.is_decision`) is never compared
+    against the live side, which is the chat composition: 409
+    `not_comparable`. Against another frozen entry it is.
     """
     _require_scene(cid, sid)
     base = store.prompt_log.read_entry(cid, eid, scene=sid)
     if base is None:
         raise HTTPException(status_code=404, detail="prompt snapshot not found")
+    if against == LIVE_SIDE and decision_capture.is_decision(base):
+        raise HTTPException(status_code=409, detail={
+            "kind": "not_comparable",
+            "detail": "a decision's prompt cannot be compared with the live chat prompt"})
     if against == LIVE_SIDE:
         # Composed here rather than read: `context_breakdown` runs the same
         # assemble/pack pass `GET .../context` does, so the side this diff calls

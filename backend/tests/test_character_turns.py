@@ -643,8 +643,10 @@ def test_the_selector_capture_is_the_decide_prompt(client):
 
 def test_the_selector_capture_records_the_decision(client):
     """The pick's prompt-log entry ends with what the call decided (spec
-    9.4): a `decision` section holding the capture's outcome -- its mode and
-    normalised answer -- that costs no tokens, since it was never sent."""
+    9.4): a `decision` section holding the capture scope's envelope (roadmap
+    01b §3.4) -- one call record, its mode and normalised answer, its stage
+    and batch position -- that costs no tokens, since it was never sent. The
+    entry is in the decision pool."""
     cid, sid = seed(client)
     fake = FakeLLM([[decision_reply({"next": "characters:winifred"})],
                     ['Winifred answers.\n```handoff\n{"next":null}\n```']])
@@ -665,11 +667,14 @@ def test_the_selector_capture_records_the_decision(client):
         "dropped": False}
     pick = fake.requests[0]["target"]
     assert json.loads(decision["text"]) == {
-        "mode": "structured", "provider": pick.provider_id, "model": pick.model,
-        "stage": 0, "at": [0],
-        "items": [{"backend": "structured",
-                   "answers": {"next": {"answer": "characters:winifred"}}}]}
+        "task": "response-selector",
+        "calls": [{"part": "", "mode": "structured", "provider": pick.provider_id,
+                   "model": pick.model, "stage": 0, "at": [0],
+                   "items": [{"backend": "structured",
+                              "answers": {"next": {"answer": "characters:winifred"}}}]}],
+        "notes": {}, "elided_calls": 0, "truncated": False}
     assert captured["total_tokens"] == sum(row["tokens"] for row in sent) > 0
+    assert entry["operation"] == captured["operation"] == "decide"
 
 
 #: A native endpoint's pick: Mara, with no rationale.
@@ -706,7 +711,8 @@ def test_a_native_pick_captures_no_sampler_preset(client, model, mode):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
     captured = _pick_capture(client, cid, sid)
-    assert json.loads(captured["sections"][-1]["text"])["mode"] == mode
+    (call,) = json.loads(captured["sections"][-1]["text"])["calls"]
+    assert call["mode"] == mode
     if mode == "native":
         assert "sampling" not in captured
     else:

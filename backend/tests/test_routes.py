@@ -7596,6 +7596,23 @@ def test_voice_drift_runs_on_decide_and_meters_under_its_task(client):
     assert (row["operation"], row["decision_mode"]) == ("decide", "structured")
 
 
+def test_the_voice_drift_phase_is_one_capture_keyed_by_record_id(client):
+    """Roadmap 01b: the phase is one capture scope, filed in the decision
+    pool, each NPC's call a record under its anchored record id (`part`)."""
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(
+        _EXTRACTION, _DOSSIER, _verdict("drift", "She rambled again."))
+    review_runs.absorb(client, cid, sid)
+    (row,) = [e for e in store.prompt_log.list_entries(cid, sid)
+              if e["task"] == "voice-drift"]
+    assert row["operation"] == "decide"
+    entry = store.prompt_log.read_entry(cid, row["id"], scene=sid)
+    envelope = json.loads(entry["sections"][-1]["text"])
+    (call,) = envelope["calls"]
+    assert (call["part"], call["stage"], call["at"]) == ("aese", 0, [0])
+    assert call["items"][0]["rationale"] == "She rambled again."
+
+
 def test_the_voice_item_renders_off_the_event_loop(client, monkeypatch):
     """Brutal-1 nit, CODE-M1's rule for the voice check: the judge's item and
     its rationale instruction render templates, and absorb runs on the

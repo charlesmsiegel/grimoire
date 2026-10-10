@@ -499,6 +499,25 @@ test("draws the last prompt against the budget, and names whose it is", async ()
   expect(screen.getByText("NOTHING DROPPED")).toBeInTheDocument();
 });
 
+test("the bar is drawn from the last turn, never a decision filed after it", async () => {
+  // Roadmap 01b: a scene-break check captured after the last turn is the newest
+  // entry, but it is not the prompt the model last saw for a turn.
+  withLastPrompt();
+  (api.listScenePrompts as any).mockResolvedValue({
+    entries: [
+      { id: "e10", scene: "s11", ts: "", model: "m", task: "scene-break", operation: "decide",
+        total_tokens: 400, dropped_tokens: 0, budget_tokens: 32_000 },
+      { id: "e9", scene: "s11", ts: "", model: "m", task: "chat", total_tokens: 13_180,
+        dropped_tokens: 0, budget_tokens: 32_000 },
+    ],
+  });
+  renderView();
+  await open(/^Context/);
+  expect(await screen.findByText("≈ 13,180 / 32,000 · 41%")).toBeInTheDocument();
+  expect(api.getScenePrompt).toHaveBeenCalledWith("saltmarch", "s11", "e9");
+  expect(api.getScenePrompt).not.toHaveBeenCalledWith("saltmarch", "s11", "e10");
+});
+
 test("the bar is only fetched by the section that shows it", async () => {
   withLastPrompt();
   renderView();

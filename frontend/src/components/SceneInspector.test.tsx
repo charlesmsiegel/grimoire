@@ -2509,6 +2509,65 @@ const DIFF = {
   }],
 };
 
+// ---- decisions: the checks around a turn, listed apart (roadmap 01b) ----
+
+const DECISIONS = [
+  { id: "000005", scene: "s", ts: "2026-08-06T14:00:00Z", task: "scene-break",
+    operation: "decide", model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0 },
+  { id: "000004", scene: "s", ts: "2026-08-06T13:30:00Z", task: "scene-break",
+    operation: "decide", model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0 },
+  { id: "000003", scene: "s", ts: "2026-08-06T13:00:00Z", task: "voice-drift",
+    operation: "decide", model: "m", total_tokens: 30, dropped_tokens: 0, budget_tokens: 0 },
+  // A speaker pick captured before decisions had a pool: no `operation`.
+  { id: "000000", scene: "s", ts: "2026-08-06T10:00:00Z", task: "response-selector",
+    model: "m", total_tokens: 20, dropped_tokens: 0, budget_tokens: 0 },
+];
+
+const FROZEN_CHECK = {
+  id: "000004", ts: "2026-08-06T13:30:00Z", task: "scene-break", operation: "decide",
+  model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0,
+  sections: [
+    { id: "message_0", label: "user", text: "Is the scene over?", tokens: 40,
+      tier: "lock-in", dropped: false, trimmed: 0 },
+    { id: "decision", label: "decision", text: '{"task": "scene-break", "calls": []}',
+      tokens: 0, tier: "lock-in", dropped: false, trimmed: 0 },
+  ],
+};
+
+async function openDecisions() {
+  fireEvent.click(await screen.findByRole("button", { name: /Decisions/ }));
+}
+
+test("decisions are listed apart from turns, collapsed by default", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [...DECISIONS, ...TURNS] });
+  renderInspector();
+  await screen.findByText("Regenerate");
+  // Turn history holds the turns alone; the checks wait, shut, below it.
+  expect(screen.queryByText("Scene-break check")).toBeNull();
+  expect(screen.queryByText("Speaker pick")).toBeNull();
+  expect(screen.getByRole("button", { name: /Decisions/ }))
+    .toHaveAttribute("aria-expanded", "false");
+  await openDecisions();
+  expect(await screen.findAllByText("Scene-break check")).toHaveLength(2);
+  await screen.findByText("Voice check");
+  await screen.findByText("Speaker pick");        // the legacy row too
+});
+
+test("a decision opens read-only, never against the live preview", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [...DECISIONS, ...TURNS] });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN_CHECK);
+  renderInspector();
+  await openDecisions();
+  fireEvent.click((await screen.findAllByRole("button", { name: /^Scene-break check/ }))[1]);
+  await waitFor(() => expect(api.getScenePrompt).toHaveBeenCalledWith("c", "s", "000004"));
+  await screen.findByText("outcome · not sent");
+  expect(screen.queryByRole("textbox")).toBeNull();
+  const picker = await screen.findByLabelText<HTMLSelectElement>("Compare with");
+  const values = Array.from(picker.options).map((o) => o.value);
+  // Only another capture of the same check: no live side, no turn, no other check.
+  expect(values).toEqual(["", "000005"]);
+});
+
 async function openTurnAndCompare(value: string) {
   (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
   (api.getScenePrompt as any).mockResolvedValue(FROZEN);

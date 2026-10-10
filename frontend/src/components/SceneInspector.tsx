@@ -27,7 +27,7 @@ import { CampaignModels } from "./inference/CampaignModels";
 import { NoticeBanner } from "./NoticeBanner";
 import { ResponseTargetsPicker } from "./ResponseTargetsPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
-import { taskLabel, whenLabel } from "./turnLabels";
+import { isDecision, taskLabel, whenLabel } from "./turnLabels";
 import { SuggestedCast } from "./SuggestedCast";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
@@ -837,7 +837,7 @@ export const SceneInspector = memo(function SceneInspector({
     setCompare("");
   }, [cid, sid]);
 
-  const showTurn = useCallback(async (eid: string) => {
+  const showTurn = useCallback(async (eid: string, decision = false) => {
     setError(null);
     // The scene guard alone is not enough WITHIN a scene: click turn A then
     // turn B, and if A resolves second it overwrites B — the panel showing the
@@ -849,8 +849,9 @@ export const SceneInspector = memo(function SceneInspector({
     // and clearing the comparison at every step would make the reader re-pick
     // it each time. Comparing against a specific turn does not, because the
     // turn just clicked can BE that one, and a diff of an entry against itself
-    // is a panel that has quietly stopped answering.
-    setCompare((c) => (c === LIVE_SIDE ? c : ""));
+    // is a panel that has quietly stopped answering. Nor into a decision's
+    // capture, which is never compared with the live preview (roadmap 01b).
+    setCompare((c) => (c === LIVE_SIDE && !decision ? c : ""));
     const current = () => liveScene.current === `${cid}/${sid}` && wantedTurn.current === eid;
     try {
       const snapshot = await api.getScenePrompt(cid, sid, eid);
@@ -983,6 +984,21 @@ export const SceneInspector = memo(function SceneInspector({
   const shownTurns = useMemo(
     () => (turns && turns.cid === cid && turns.sid === sid ? turns.rows : []),
     [turns, cid, sid]);
+  // The same rows, split (roadmap 01b): a decision's capture is not a turn, so
+  // Turn history lists the turns and the Decisions section the checks around
+  // them. One read, two lists -- the prompt log keeps them in separate pools.
+  const turnRows = useMemo(() => shownTurns.filter((t) => !isDecision(t)), [shownTurns]);
+  const decisionRows = useMemo(() => shownTurns.filter(isDecision), [shownTurns]);
+  // What a selected entry may be compared with: a decision only with another
+  // capture of the same check, never the live preview -- the live side is the
+  // chat composition, and a decide prompt beside it is noise (the server
+  // refuses it, 409 `not_comparable`); a turn with the other turns.
+  const seenDecision = !!seen && isDecision(seen);
+  const comparable = useMemo(
+    () => (seen && isDecision(seen)
+      ? decisionRows.filter((t) => t.task === seen.task)
+      : turnRows).filter((t) => t.id !== seen?.id),
+    [seen, turnRows, decisionRows]);
   // The comparison itself (#130). An effect rather than a fetch in the picker's
   // `onChange`, because only ONE end of it is frozen: against the live preview
   // the answer moves with the store, and `refreshKey` is bumped by the very
@@ -1758,8 +1774,8 @@ export const SceneInspector = memo(function SceneInspector({
               <select value={compare}
                       onChange={(e) => { setError(null); setCompare(e.target.value); }}>
                 <option value="">Nothing — show this turn</option>
-                <option value={LIVE_SIDE}>The live preview</option>
-                {shownTurns.filter((t) => t.id !== seen.id).map((t) => (
+                {!seenDecision && <option value={LIVE_SIDE}>The live preview</option>}
+                {comparable.map((t) => (
                   <option key={t.id} value={t.id}>
                     {taskLabel(t.task) + " · " + whenLabel(t.ts)}
                   </option>
@@ -1820,10 +1836,10 @@ export const SceneInspector = memo(function SceneInspector({
             stands NOW, which is not what any past turn was sent: chronicle,
             state, cast and world-info activation have all moved since. These
             are the frozen ones (#157). */}
-        {shownTurns.length === 0 && (
+        {turnRows.length === 0 && (
           <div className="field-hint">No captured turns yet.</div>
         )}
-        {shownTurns.map((t) => (
+        {turnRows.map((t) => (
           <button key={t.id}
                   className={"inspector-row" + (seen?.id === t.id ? " on" : "")}
                   onClick={() => showTurn(t.id)}>
@@ -1868,6 +1884,27 @@ export const SceneInspector = memo(function SceneInspector({
             </div>
           );
         })}
+      </SideSection>
+
+      {/* The checks around a turn (roadmap 01b): a speaker pick, a scene-break
+          check, an absorb's voice and duplicate checks. Each is one capture of
+          what that decision was asked and answered, opened read-only in the
+          Context section above like a past turn. Collapsed by default: these
+          are what a reader comes looking for when a check went wrong, not
+          what the rail should lead with. */}
+      <SideSection id="decisions" title="Decisions" collapsed={collapsed.decisions ?? true}
+                   onToggle={toggleSection}>
+        {decisionRows.length === 0 && (
+          <div className="field-hint">No captured decisions yet.</div>
+        )}
+        {decisionRows.map((t) => (
+          <button key={t.id}
+                  className={"inspector-row" + (seen?.id === t.id ? " on" : "")}
+                  onClick={() => { void showTurn(t.id, true); }}>
+            <span className="inspector-name">{taskLabel(t.task)}</span>
+            <span className="ctx-meta">{whenLabel(t.ts)}</span>
+          </button>
+        ))}
       </SideSection>
 
       {drawer && <RecordDrawer cid={cid} sid={sid} target={drawer} onClose={() => setDrawer(null)} />}

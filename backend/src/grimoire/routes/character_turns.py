@@ -15,7 +15,7 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import content_parts, decisions, llm_reasoning, prompts, store, wire
+from .. import decisions, llm_reasoning, prompts, store, wire
 from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
@@ -26,7 +26,7 @@ from ..llm import (
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from ..store.inference import providers as inference_providers
-from . import runs, streaming
+from . import decision_capture, runs, streaming
 from . import tracker as tracker_routes
 from .common import (
     _dump,
@@ -615,11 +615,10 @@ def _normalise(cid, sid, record, text, connection=""):
     return (stored.strip(), issue, (text, fired)) if fired else (text, issue, None)
 
 
-#: The prompt-log section a decision's outcome is filed under. The frontend
-#: draws a section with this id as the outcome, "not sent", rather than as a
-#: prompt section (`frontend/src/components/ContextBreakdown.tsx`,
-#: `OUTCOME_ID`): change both together, which `test_character_turns` pins.
-OUTCOME_SECTION_ID = "decision"
+#: The prompt-log section a decision's outcome is filed under; it lives in
+#: `decision_capture` now (roadmap 01b), and is named here too for the pin in
+#: `test_character_turns`.
+OUTCOME_SECTION_ID = decision_capture.OUTCOME_SECTION_ID
 
 
 def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
@@ -643,29 +642,14 @@ def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
     # messages are plain), so only the plain branch below files a decision.
     breakdown = getattr(messages, "breakdown", None)
     if breakdown is None:
-        rows = [
-            {
-                "id": f"message_{i}",
-                "label": m["role"],
-                # A message may hold image references (#377): the record keeps
-                # the text and charges each reference what the packer does.
-                "text": content_parts.text_of(m["content"]),
-                "tier": "lock-in",
-                "dropped": False,
-                "pinned": False,
-                "trimmed": 0,
-                "tokens": (store.tokens.count_tokens(content_parts.text_of(m["content"]))
-                           + store.context.pack.IMAGE_TOKENS
-                           * len(content_parts.image_refs(m["content"]))),
-            }
-            for i, m in enumerate(messages)
-        ]
+        # A message may hold image references (#377): the record keeps the
+        # text and charges each reference what the packer does.
+        rows = [decision_capture.message_row(f"message_{i}", m["role"], m["content"])
+                for i, m in enumerate(messages)]
         total = sum(row["tokens"] for row in rows)
         if outcome is not None:
-            rows.append({"id": OUTCOME_SECTION_ID, "label": "decision",
-                         "text": json.dumps(outcome, indent=2, ensure_ascii=False),
-                         "tier": "lock-in", "dropped": False, "pinned": False,
-                         "trimmed": 0, "tokens": 0})
+            rows.append(decision_capture.outcome_row(
+                json.dumps(outcome, indent=2, ensure_ascii=False)))
         breakdown = {
             "sections": rows,
             "total_tokens": total,
@@ -731,12 +715,13 @@ async def _select(cid, sid, client, round_record):
     of one or none needs no question. The seam's 409 comes first, as before;
     an `LLMError` propagates as before, filed by the meter `decide` opens.
 
-    The capture records each call once it settles (spec 9.4): the decide
-    prompt as it was sent, the attempt it ran on, and what it decided. Nothing
-    here reads a file on the event loop: the resolution, the scene read, the
-    regex view and the item's own templates run in the threadpool, `decide`
-    renders its prompt in a worker thread, and the capture is handed back to
-    the threadpool.
+    The pick is one capture scope (`decision_capture`, roadmap 01b): one
+    prompt-log entry in the decision pool, holding the decide prompt as it
+    was sent, the attempt it ran on, and what it decided. Nothing here reads
+    a file on the event loop: the resolution, the scene read, the regex view
+    and the item's own templates run in the threadpool, `decide` renders its
+    prompt in a worker thread, and the scope reads and files in the
+    threadpool.
 
     A request `decide` refuses before sending (two eligible refs that read as
     one once normalised, or more than 254 of them, which with `grimoire` is
@@ -749,11 +734,11 @@ async def _select(cid, sid, client, round_record):
         lambda: require_inference("response-selector", cid, operation="decide"))
     item = await run_in_threadpool(_selector_item, cid, sid, round_record)
     try:
-        decision = await operations.decide(
-            "response-selector", [item], client=client, resolved=resolved,
-            campaign=cid, scene=sid, post=round_record["post"], round_id=round_record["id"],
-            capture=lambda msgs, outcome, conn: run_in_threadpool(
-                _capture, cid, sid, "response-selector", msgs, conn, outcome))
+        async with decision_capture.capturing(cid, sid, "response-selector") as scope:
+            decision = await operations.decide(
+                "response-selector", [item], client=client, resolved=resolved,
+                campaign=cid, scene=sid, post=round_record["post"],
+                round_id=round_record["id"], capture=scope.hook())
     except decisions.DecideRequestError as exc:
         _log.warning("speaker pick refused for %s/%s, control returns to the player: %s",
                      cid, sid, exc)
