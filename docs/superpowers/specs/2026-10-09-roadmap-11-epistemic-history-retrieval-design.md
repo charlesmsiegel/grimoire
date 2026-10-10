@@ -875,7 +875,7 @@ The required cases come from the draft, plus three this spec's rules create:
 
 ## 9. Contract
 
-**11-C1: Actor-knowledge classifications, deterministic first, Decision second.**
+**11-C1: Per-actor classes, deterministic first, with a capped Decision pass that is off by default.**
 
 - *Inputs*: a campaign id; a `Perspective` (narrator, or an NPC ref plus the
   present cast); 09-C1's evidence units carrying the fields of 3.2.
@@ -901,7 +901,7 @@ The required cases come from the draft, plus three this spec's rules create:
   override read must not turn an `unaware` correction back into "was there".
   A Decision failure leaves eligible slices `unknown`. Neither fails the turn.
 
-**11-C2: Narrator and actor prompt separation for retrieved history.**
+**11-C2: Narrator and actor prompt separation, refused on a mismatched perspective.**
 
 - *Inputs*: an `EpistemicView` handed to compose as `history_view`.
 - *Outputs*: for the narrator, `history_recall` (annotated) and
@@ -919,8 +919,7 @@ The required cases come from the draft, plus three this spec's rules create:
 - *Failure*: a render error in one section omits that section, with the same
   per-section policy as `_character_states`, and never the turn.
 
-**11-C3: Authoritative knowledge overrides** (added; the checklist folds this
-into C1).
+**11-C3: `knowledge.json` overrides through `routes/ledger.py`.**
 
 - `<campaign>/knowledge.json` via `store/knowledge.py`.
 - Entries are `{audience, status, subject, note, source, created}`, addressed
@@ -931,7 +930,7 @@ into C1).
   as manual edits, and a guard holds that.
 - Branch copies, rename needs nothing, delete leaves inert entries.
 
-**11-C4: Leakage eval suite** (added; the checklist folds this into C1/C2).
+**11-C4: A leakage eval suite.**
 
 - The cases of 8.1.
 - The offline needle-absence grader runs in `pytest backend`.
