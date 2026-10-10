@@ -140,7 +140,7 @@ _TYPES = {decisions.Predicate: "predicate", decisions.Choice: "choice",
 _REFUSAL = "refusal"
 
 
-def _question(q: decisions.Question) -> dict:
+def _question(q: decisions.NativeQuestion) -> dict:
     asked: dict[str, object] = {"type": _TYPES[type(q)], "name": q.id,
                                 "instructions": q.instructions}
     if isinstance(q, decisions.Choice):
@@ -162,7 +162,7 @@ def decision_body(item: decisions.Item, model: str) -> dict:
     named by its question id. Aliases are the structured parser's and are not
     sent; nothing asks for a rationale, which this endpoint does not return."""
     return {"model": model, "input": item.context,
-            "questions": [_question(q) for q in item.questions]}
+            "questions": [_question(q) for q in decisions.native_questions(item)]}
 
 
 def _choice_distribution(keys: dict[str, str], reported: object) -> dict | None:
@@ -212,7 +212,7 @@ def _score_distribution(q: decisions.Score, reported: object) -> dict | None:
     return out
 
 
-def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
+def _answer(q: decisions.NativeQuestion, raw: object) -> decisions.Answer:
     """One answer object read through `decisions.native_answer`. A refusal is
     `refused`; an answer of any other `type` than the one asked is
     `unreadable`. `confidence` is not carried, and a score's weighted `score`
@@ -265,7 +265,7 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
     result = decisions.native_result(
         item, {q.id: (decisions.Answer(None, "unreadable") if q.id in twice
                       else _answer(q, by_name[q.id]))
-               for q in item.questions if q.id in by_name},
+               for q in decisions.native_questions(item) if q.id in by_name},
         "OpenAI")
     if result is None:
         raise OpenAICompatibleError("bad_response",

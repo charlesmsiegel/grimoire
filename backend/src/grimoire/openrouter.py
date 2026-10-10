@@ -123,7 +123,7 @@ def _criteria(q: decisions.Choice) -> dict[str, str]:
             for wire, key in decisions.native_choice_keys(q)}
 
 
-def _question(q: decisions.Question) -> dict:
+def _question(q: decisions.NativeQuestion) -> dict:
     asked: dict[str, object] = {"type": _TYPES[type(q)], "instructions": q.instructions}
     # A predicate sends no criteria: they are optional, and a Grimoire
     # predicate has no description of either side to put in them.
@@ -139,10 +139,10 @@ def decision_body(item: decisions.Item, model: str) -> dict:
     parser's and are not sent; nothing asks for a rationale, which this
     endpoint does not return."""
     return {"model": model, "state": item.context,
-            "questions": {q.id: _question(q) for q in item.questions}}
+            "questions": {q.id: _question(q) for q in decisions.native_questions(item)}}
 
 
-def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
+def _answer(q: decisions.NativeQuestion, raw: object) -> decisions.Answer:
     """One answer object read through `decisions.native_answer`. An answer of
     another `type` than the one asked is `unreadable`; `confidence` and a
     score's `legend` are not carried, and a score's weighted `score` is never
@@ -180,7 +180,8 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
     if not isinstance(answers, Mapping):
         raise OpenRouterError("bad_response", "the decisions reply held no answers")
     result = decisions.native_result(
-        item, {q.id: _answer(q, answers[q.id]) for q in item.questions if q.id in answers},
+        item, {q.id: _answer(q, answers[q.id]) for q in decisions.native_questions(item)
+               if q.id in answers},
         "OpenRouter")
     if result is None:
         raise OpenRouterError("bad_response", "the decisions reply answered none of the questions")

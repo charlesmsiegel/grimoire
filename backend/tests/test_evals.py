@@ -558,7 +558,37 @@ DECIDE_CASES = [c for c in case_mod.CASES if c.schema is not None]
 def test_every_decide_case_is_counted():
     assert {c.id for c in DECIDE_CASES} == {
         "decide-scene-break", "decide-voice-drift", "decide-speaker",
-        "decide-continuity-identity", "decide-continuity-reconcile"}
+        "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank"}
+
+
+#: 01e's offline cases: each counterexample read through `decisions.parse` as
+#: the contract says it reads -- `(reason, detail)` of the one answer.
+VOCABULARY_READINGS = {
+    "decide-rank": {"duplicate": ("unreadable", ""),
+                    "unknown-id": ("unreadable", "not_an_option"),
+                    "short": ("unreadable", ""),
+                    "null": ("unreadable", "")},
+}
+
+
+@pytest.mark.parametrize("case_id", sorted(VOCABULARY_READINGS))
+def test_each_vocabulary_counterexample_reads_as_the_contract_says(case_id):
+    from grimoire import decisions
+
+    case = case_mod.BY_ID[case_id]
+    ctx = case.build()
+    (question,) = ctx["items"][0].questions
+    readings = {}
+    for recording in case.recordings:
+        text = recording.path(case.id).read_text(encoding="utf-8")
+        (result,) = decisions.parse(text, ctx["items"], explain=False)
+        answer = result.answers[question.id]
+        if recording.variant == case_mod.BASELINE:
+            assert answer.answer is not None, answer
+            continue
+        assert decisions.was_read(answer) or answer.reason == "abstained", answer
+        readings[recording.variant] = (answer.reason, answer.detail)
+    assert readings == VOCABULARY_READINGS[case_id]
 
 
 @pytest.mark.parametrize("case", DECIDE_CASES, ids=[c.id for c in DECIDE_CASES])

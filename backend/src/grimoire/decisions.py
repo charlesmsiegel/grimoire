@@ -34,11 +34,14 @@ Three rules the rest of the module follows:
 - **The schema stays inside what both providers document** (`schemas.check`,
   which every batch schema passes). OpenAI's strict
   mode and Anthropic's `output_config.format` accept different subsets of JSON
-  Schema, so a batch schema uses only `type` (object, string, boolean,
-  integer, null), `enum`, `anyOf`, `required`, `properties` and
+  Schema, so a batch schema uses only `type` (object, array, string, boolean,
+  integer, null), `enum`, `anyOf`, `items`, `required`, `properties` and
   `additionalProperties: false`. Anthropic refuses numeric bounds, so a score
   is an integer `enum`; a nullable choice is `anyOf` with a null branch, never
-  a type array.
+  a type array. Anthropic also refuses array constraints beyond a `minItems`
+  of 0 or 1, and OpenAI documents no `uniqueItems`, so a ranking is an array
+  of an `enum` with no bounds at all, and the parser enforces its count and
+  uniqueness.
 - **The parser never raises.** It answers every item it was handed, so one
   unreadable reply costs the answers it held and nothing more.
 """
@@ -51,7 +54,7 @@ import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from . import schemas
 
@@ -98,6 +101,15 @@ MIN_OPTIONS, MAX_OPTIONS = 2, 255
 MIN_OPTIONS_WITH_NONE = 1
 MIN_LEVELS, MAX_LEVELS = 2, 10
 
+#: Candidates one `Rank` may order (01e §4.1), argued from structure alone:
+#: the structured reply echoes each candidate id, so it grows with the count,
+#: and a long permutation is where duplicates and omissions appear; the native
+#: lowering puts one question per candidate into one request, and neither
+#: endpoint documents a questions-per-request bound (01 Appendix B), so a 413
+#: would be the only sign of one. To be tuned against real prompts with 01a's
+#: reports -- never against a measured library.
+MIN_RANK_CANDIDATES, MAX_RANK_CANDIDATES = 2, 32
+
 #: Items per structured call (ruling 16). Each item carries its own transcript
 #: context, so one call's prompt grows linearly with the batch, and one
 #: unreadable reply loses every item in its chunk; eight bounds both. Argued
@@ -126,8 +138,9 @@ MAX_SCHEMA_STRING_CHARS = schemas.MAX_SCHEMA_STRING_CHARS
 #: `validate` bounds no item's question count, so an item of about 5,000
 #: predicates reaches it; it is held like the string budget
 #: (`schema_properties`, `validate`, `chunks`). The nesting limit
-#: (`schemas.MAX_DEPTH`) cannot be reached: a batch schema is four objects
-#: deep (batch, item, answers, a question's value) whatever it is asked.
+#: (`schemas.MAX_DEPTH`) cannot be reached: a batch schema is at most five
+#: levels deep (batch, item, answers, a question's value, and a ranking's
+#: array item) whatever it is asked.
 MAX_SCHEMA_PROPERTIES = schemas.MAX_SCHEMA_PROPERTIES
 
 #: Options one native `choice` may offer, OpenRouter's documented per-choice
@@ -175,9 +188,16 @@ class Option:
     aliases: tuple[str, ...] = ()
 
 
+#: Each question class names its kind in a `KIND` class constant -- neither a
+#: constructor nor an equality field -- and the decide templates branch on it
+#: (`decide/user.j2`), never on which attributes a question happens to have:
+#: a new type with `options` would otherwise render as a choice.
+
 @dataclass(frozen=True)
 class Predicate:
     """A yes/no question; answered with a `bool`."""
+
+    KIND: ClassVar[str] = "predicate"
 
     id: str
     instructions: str
@@ -187,6 +207,8 @@ class Predicate:
 class Choice:
     """Pick one option; answered with its `id`. With `allow_none`, an explicit
     null is a legitimate answer (`None`, reason `abstained`)."""
+
+    KIND: ClassVar[str] = "choice"
 
     id: str
     instructions: str
@@ -198,12 +220,78 @@ class Choice:
 class Score:
     """Place the text on an ordered scale; answered with a level's index."""
 
+    KIND: ClassVar[str] = "score"
+
     id: str
     instructions: str
     levels: tuple[str, ...]
 
 
-Question = Predicate | Choice | Score
+@dataclass(frozen=True)
+class Rank:
+    """Order the `candidates`, best first; answered with a `Ranking`.
+
+    `top` asks for at least that many ranked (None: all of them); a reply
+    that ranks fewer is unreadable, never padded. With `allow_none`, an
+    explicit null means "cannot order these" (`abstained`). `pointwise` is a
+    yes/no question asked of ONE candidate, which only a native stage uses
+    (01e §4.3): a decisions endpoint has no ranking, and there is no default
+    wording, because only the caller knows what per-candidate question its
+    order stands for. A rank without one is refused unsent on a native stage
+    (`native_gap`) and moves on down the chain."""
+
+    KIND: ClassVar[str] = "rank"
+
+    id: str
+    instructions: str
+    candidates: tuple[Option, ...]
+    top: int | None = None
+    allow_none: bool = False
+    pointwise: str = ""
+
+
+Question = Predicate | Choice | Score | Rank
+
+#: What a decisions endpoint can be asked: the three types both providers
+#: have (01 Appendix B). Every other question is lowered to these
+#: (01e §3.3) or refused unsent (`native_gap`).
+NativeQuestion = Predicate | Choice | Score
+
+
+@dataclass(frozen=True)
+class Ranking:
+    """A `Rank`'s answer: `tiers`, best first, whose members are tied, and
+    `rest`, the candidates the answer did not rank, in input order.
+
+    A ranking with ties and a flat order are different facts, so nothing here
+    flattens silently: `flat` is the only flattening, and it takes the
+    tie-break as an argument. `rest` is not a tier -- it is the explicit
+    unranked bottom group a `top` let the model stop before -- so `flat`
+    leaves it out, and a caller that wants it appends it in an order it
+    names."""
+
+    tiers: tuple[tuple[str, ...], ...]
+    rest: tuple[str, ...] = ()
+
+    def flat(self, tiebreak: Callable[[str], Any] | None = None) -> tuple[str, ...]:
+        """The ranked candidates in one order, best first: each tier sorted by
+        `tiebreak` (a sort key). Raises `ValueError` on a tier of more than
+        one with no tie-break, rather than breaking the tie by position."""
+        out: list[str] = []
+        for tier in self.tiers:
+            if len(tier) > 1:
+                if tiebreak is None:
+                    raise ValueError(f"a tier ties {list(tier)}; flattening it needs a "
+                                     f"tie-break")
+                out.extend(sorted(tier, key=tiebreak))
+            else:
+                out.extend(tier)
+        return tuple(out)
+
+    def position(self, candidate: str) -> int | None:
+        """The index of `candidate`'s tier; None for a candidate in `rest`
+        and for one the ranking does not hold."""
+        return next((n for n, tier in enumerate(self.tiers) if candidate in tier), None)
 
 
 @dataclass(frozen=True)
@@ -213,6 +301,13 @@ class Item:
 
     context: str
     questions: tuple[Question, ...]
+
+
+def kinds(items: Sequence[Item]) -> tuple[str, ...]:
+    """The `KIND`s `items` ask, each once, first asked first: what
+    `decide/system.j2` explains, so a bullet for a kind renders only beside a
+    question of it, and no existing call site's prompt moves."""
+    return tuple(dict.fromkeys(q.KIND for item in items for q in item.questions))
 
 
 @dataclass(frozen=True)
@@ -243,7 +338,7 @@ class Answer:
     `expected` is not compared: it is a reading of `distribution`, which is.
     """
 
-    answer: bool | str | int | None
+    answer: bool | str | int | Ranking | None
     reason: str = ""
     probability: float | None = None
     distribution: dict[str, float] | None = None
@@ -388,27 +483,35 @@ def offerable(spelling: str) -> bool:
     return bool(key) and key != NONE_KEY
 
 
+def _check_offers(noun: str, qid: str, options: Sequence[object]) -> None:
+    """Every one of `options` an `Option` whose id and aliases are
+    `offerable`, and no two of those spellings colliding once normalised: one
+    rule for whatever a question offers (a choice's options, a rank's
+    candidates), so the parser can always tell which one a reply named."""
+    seen: dict[str, str] = {}
+    for opt in options:
+        if not isinstance(opt, Option):
+            raise DecideRequestError(f"{noun} {qid!r} has an option that is not an Option")
+        for spelling in (opt.id, *opt.aliases):
+            if not offerable(spelling):
+                raise DecideRequestError(
+                    f"{noun} {qid!r} cannot offer {spelling!r}: it is empty once "
+                    f"normalised, or reserved")
+            key = normalise(spelling)
+            if key in seen:
+                raise DecideRequestError(
+                    f"{noun} {qid!r}: {spelling!r} collides with {seen[key]!r} "
+                    f"once normalised")
+            seen[key] = spelling
+
+
 def _check_choice(q: Choice) -> None:
     low = MIN_OPTIONS_WITH_NONE if q.allow_none else MIN_OPTIONS
     if not low <= len(q.options) <= MAX_OPTIONS:
         raise DecideRequestError(
             f"choice {q.id!r} offers {len(q.options)} options; "
             f"it needs {low}-{MAX_OPTIONS}")
-    seen: dict[str, str] = {}
-    for opt in q.options:
-        if not isinstance(opt, Option):
-            raise DecideRequestError(f"choice {q.id!r} has an option that is not an Option")
-        for spelling in (opt.id, *opt.aliases):
-            if not offerable(spelling):
-                raise DecideRequestError(
-                    f"choice {q.id!r} cannot offer {spelling!r}: it is empty once "
-                    f"normalised, or reserved")
-            key = normalise(spelling)
-            if key in seen:
-                raise DecideRequestError(
-                    f"choice {q.id!r}: {spelling!r} collides with {seen[key]!r} "
-                    f"once normalised")
-            seen[key] = spelling
+    _check_offers("choice", q.id, q.options)
     chars = sum(len(opt.id) for opt in q.options)
     if len(q.options) > ENUM_STRING_CHARS_ABOVE and chars > MAX_ENUM_STRING_CHARS:
         raise DecideRequestError(
@@ -417,8 +520,22 @@ def _check_choice(q: Choice) -> None:
             f"carries at most {MAX_ENUM_STRING_CHARS}")
 
 
+def _check_rank(q: Rank) -> None:
+    n = len(q.candidates)
+    if not MIN_RANK_CANDIDATES <= n <= MAX_RANK_CANDIDATES:
+        raise DecideRequestError(
+            f"rank {q.id!r} orders {n} candidates; "
+            f"it needs {MIN_RANK_CANDIDATES}-{MAX_RANK_CANDIDATES}")
+    _check_offers("rank", q.id, q.candidates)
+    if q.top is not None and (isinstance(q.top, bool) or not isinstance(q.top, int)
+                              or not 1 <= q.top <= n):
+        raise DecideRequestError(
+            f"rank {q.id!r} asks for the top {q.top!r} of {n} candidates; "
+            f"it needs 1-{n}, or None for all of them")
+
+
 def _check_question(q: object, index: int) -> None:
-    if not isinstance(q, (Predicate, Choice, Score)):
+    if not isinstance(q, (Predicate, Choice, Score, Rank)):
         raise DecideRequestError(f"item {index} has a question of unknown type")
     if not q.id.strip():
         raise DecideRequestError(f"item {index} has a question with an empty id")
@@ -426,19 +543,30 @@ def _check_question(q: object, index: int) -> None:
         raise DecideRequestError(f"question id {q.id!r} is reserved")
     if isinstance(q, Choice):
         _check_choice(q)
+    elif isinstance(q, Rank):
+        _check_rank(q)
     elif isinstance(q, Score) and not MIN_LEVELS <= len(q.levels) <= MAX_LEVELS:
         raise DecideRequestError(
             f"score {q.id!r} has {len(q.levels)} levels; "
             f"it needs {MIN_LEVELS}-{MAX_LEVELS}")
 
 
+def _enum_count(q: Question) -> int:
+    if isinstance(q, Choice):
+        return len(q.options)
+    if isinstance(q, Score):
+        return len(q.levels)
+    if isinstance(q, Rank):
+        return len(q.candidates)
+    return 0
+
+
 def enum_values(item: Item) -> int:
     """How many enum values `item` adds to a batch schema: each choice's
-    options and each score's levels (a predicate is a plain boolean, and a
-    nullable choice's null branch is a type, not a value)."""
-    return sum(len(q.options) if isinstance(q, Choice)
-               else len(q.levels) if isinstance(q, Score) else 0
-               for q in item.questions)
+    options, each score's levels and each rank's candidates (a predicate is a
+    plain boolean, and a nullable question's null branch is a type, not a
+    value)."""
+    return sum(_enum_count(q) for q in item.questions)
 
 
 def validate(items: Sequence[Item]) -> None:
@@ -446,8 +574,10 @@ def validate(items: Sequence[Item]) -> None:
 
     Raises `DecideRequestError` for: no items; an item with no questions; a
     question id that is empty, all digits, reserved or repeated within its item;
-    an option or level count out of bounds; an option id or alias `offerable`
-    refuses; any two option ids or aliases that collide once normalised; a
+    an option, level or candidate count out of bounds; a rank's `top` outside
+    1 to its candidate count; an option or candidate id or alias `offerable`
+    refuses; any two of a question's ids or aliases that collide once
+    normalised; a
     choice of more than `ENUM_STRING_CHARS_ABOVE` options whose ids total more
     than `MAX_ENUM_STRING_CHARS` characters; and an item whose own schema no
     chunk could carry -- more than `MAX_ENUM_VALUES` enum values, more than
@@ -492,12 +622,21 @@ def _obj(properties: dict[str, Any]) -> dict[str, Any]:
             "required": list(properties), "properties": properties}
 
 
+def _nullable(node: dict[str, Any], allow_none: bool) -> dict[str, Any]:
+    return {"anyOf": [node, {"type": "null"}]} if allow_none else node
+
+
 def _question_schema(q: Question) -> dict[str, Any]:
     if isinstance(q, Predicate):
         return {"type": "boolean"}
     if isinstance(q, Choice):
-        ids = {"type": "string", "enum": [opt.id for opt in q.options]}
-        return {"anyOf": [ids, {"type": "null"}]} if q.allow_none else ids
+        return _nullable({"type": "string", "enum": [opt.id for opt in q.options]},
+                         q.allow_none)
+    if isinstance(q, Rank):
+        # No `minItems`, `maxItems` or `uniqueItems`: the parser holds the
+        # count and uniqueness (the module docstring).
+        return _nullable({"type": "array", "items": {
+            "type": "string", "enum": [opt.id for opt in q.candidates]}}, q.allow_none)
     return {"type": "integer", "enum": list(range(len(q.levels)))}
 
 
@@ -651,18 +790,66 @@ def held_no_object(answer: Answer | None) -> bool:
     return answer is not None and answer.detail == NO_OBJECT
 
 
+def _option_named(options: Sequence[Option], value: object) -> str | None:
+    """The id of the option `value` names -- exactly first, then through
+    `normalise` and aliases -- or None when it names none (or is not a
+    string)."""
+    if not isinstance(value, str):
+        return None
+    for opt in options:
+        if value == opt.id:
+            return opt.id
+    key = normalise(value)
+    for opt in options:
+        if key in {normalise(s) for s in (opt.id, *opt.aliases)}:
+            return opt.id
+    return None
+
+
+_NOT_AN_OPTION = Answer(None, "unreadable", detail=NOT_AN_OPTION)
+
+
 def _read_choice(q: Choice, value: object) -> Answer:
     if value is None:
         return Answer(None, "abstained") if q.allow_none else _UNREADABLE
-    if isinstance(value, str):
-        for opt in q.options:
-            if value == opt.id:
-                return Answer(opt.id)
-        key = normalise(value)
-        for opt in q.options:
-            if key in {normalise(s) for s in (opt.id, *opt.aliases)}:
-                return Answer(opt.id)
-    return Answer(None, "unreadable", detail=NOT_AN_OPTION)
+    named = _option_named(q.options, value)
+    return _NOT_AN_OPTION if named is None else Answer(named)
+
+
+def _read_listed(options: Sequence[Option], value: object) -> list[str] | Answer:
+    """The option ids a list-valued answer names, in the order listed; or the
+    `Answer` it reads as when it cannot be one: a value that is not a list
+    is `unreadable`; an entry naming no option is `NOT_AN_OPTION` (with no
+    `stated`, as a structured choice sets none); an entry naming an option
+    already listed is `unreadable` -- the reply gave a value, and which place
+    was meant cannot be told. No entry is dropped: dropping one would move
+    every later one up a place, and an answer left unread is better than one
+    misread (`_foreign_index`'s rule, for entries)."""
+    if not isinstance(value, list):
+        return _UNREADABLE
+    named = [_option_named(options, entry) for entry in value]
+    if any(n is None for n in named):
+        return _NOT_AN_OPTION
+    ids = [n for n in named if n is not None]
+    if len(set(ids)) != len(ids):
+        return _UNREADABLE
+    return ids
+
+
+def _read_rank(q: Rank, value: object) -> Answer:
+    """A ranking, best first: every entry a candidate, each at most once, and
+    at least `top` of them (all, with no `top`) -- else `unreadable`, never
+    repaired. The listed candidates are singleton tiers, and `rest` holds the
+    unlisted ones in input order."""
+    if value is None:
+        return Answer(None, "abstained") if q.allow_none else _UNREADABLE
+    listed = _read_listed(q.candidates, value)
+    if isinstance(listed, Answer):
+        return listed
+    if len(listed) < (len(q.candidates) if q.top is None else q.top):
+        return _UNREADABLE
+    rest = tuple(opt.id for opt in q.candidates if opt.id not in listed)
+    return Answer(Ranking(tiers=tuple((c,) for c in listed), rest=rest))
 
 
 def _read(q: Question, answers: dict[str, Any]) -> Answer:
@@ -673,6 +860,8 @@ def _read(q: Question, answers: dict[str, Any]) -> Answer:
         return Answer(value) if isinstance(value, bool) else _UNREADABLE
     if isinstance(q, Choice):
         return _read_choice(q, value)
+    if isinstance(q, Rank):
+        return _read_rank(q, value)
     if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(q.levels):
         return Answer(value)
     return _UNREADABLE
@@ -768,6 +957,21 @@ def native_choice_keys(q: Choice) -> tuple[tuple[str, str], ...]:
     return (*keys, (wire, NONE_KEY))
 
 
+def native_questions(item: Item) -> tuple[NativeQuestion, ...]:
+    """`item`'s questions as a decisions endpoint is asked them, each one a
+    `NativeQuestion`: what both adapters iterate, so the type system holds
+    that no other kind reaches a wire mapping. A question an endpoint cannot
+    be asked raises `ValueError` -- `native_gap` refuses such an item unsent,
+    before any adapter sees it, so this is a broken invariant, not a reply."""
+    out: list[NativeQuestion] = []
+    for q in item.questions:
+        if not isinstance(q, (Predicate, Choice, Score)):
+            raise ValueError(f"question {q.id!r} is a {q.KIND}, which a decisions "
+                             f"endpoint is never asked")
+        out.append(q)
+    return tuple(out)
+
+
 #: What `native_key` hands over for an unoffered wire key spelled `NONE_KEY`.
 _UNOFFERED: Final = object()
 
@@ -807,11 +1011,16 @@ def native_gap(item: Item) -> str:
     """`""` when a decisions endpoint can carry `item`; otherwise one sentence
     naming what it cannot (ruling 25), which the native call refuses unsent.
     Today that is a choice whose options, with the reserved none, pass
-    `NATIVE_MAX_OPTIONS`. A limit is named here, never met by truncating."""
+    `NATIVE_MAX_OPTIONS`, and any rank: neither endpoint has one, and the
+    pointwise lowering lands with 01e-S5. A limit is named here, never met by
+    truncating."""
     for q in item.questions:
         if isinstance(q, Choice) and (n := len(native_choice_keys(q))) > NATIVE_MAX_OPTIONS:
             return (f"Question {q.id} offers {n} options including none; "
                     f"a decisions endpoint takes at most {NATIVE_MAX_OPTIONS}.")
+        if isinstance(q, Rank):
+            return (f"Question {q.id} ranks its candidates; a decisions endpoint has no "
+                    f"ranking, and the native lowering for one has not landed.")
     return ""
 
 
@@ -838,7 +1047,7 @@ def _finite(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _legal_keys(q: Question) -> set[str]:
+def _legal_keys(q: NativeQuestion) -> set[str]:
     if isinstance(q, Choice):
         return {opt.id for opt in q.options} | ({NONE_KEY} if q.allow_none else set())
     if isinstance(q, Score):
@@ -846,7 +1055,7 @@ def _legal_keys(q: Question) -> set[str]:
     return set()
 
 
-def _distribution(q: Question, value: object) -> dict[str, float] | None:
+def _distribution(q: NativeQuestion, value: object) -> dict[str, float] | None:
     """`value` as `q`'s distribution, or None: a non-empty mapping whose every
     key is legal for `q` and whose every value is a probability. An invalid
     report is dropped whole, never repaired."""
@@ -869,7 +1078,7 @@ def _argmax(distribution: dict[str, float]) -> str | None:
     return winners[0] if len(winners) == 1 else None
 
 
-def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object = None,
+def native_answer(q: NativeQuestion, *, chosen: object = UNSTATED, probability: object = None,
                   distribution: object = None, refused: bool = False) -> Answer:
     """A native endpoint's report for `q` as an `Answer`.
 
@@ -1046,21 +1255,40 @@ def _present(record: dict[str, Any]) -> dict[str, Any]:
             if value is not None and value != "" and value != {} and value != []}
 
 
+def _recorded(value: object) -> object:
+    """An answer value as the capture writes it: JSON, and never ambiguous
+    between two answer shapes."""
+    if isinstance(value, Ranking):
+        return {"tiers": [list(tier) for tier in value.tiers], "rest": list(value.rest)}
+    return value
+
+
+def _rendered(value: object) -> object:
+    """An answer value as a structured reply would have spelled it, or None
+    where no reply could."""
+    if isinstance(value, Ranking):
+        if any(len(tier) != 1 for tier in value.tiers):
+            return None
+        return [tier[0] for tier in value.tiers]
+    return value
+
+
 def outcome(mode: str, provider: str, model: str,
             results: Sequence[ItemResult] | None = None, error: str = "") -> dict[str, Any]:
     """The capture's record of one call (spec §9.4): its mode and what served
     it, then each item's backend, normalised answers -- `answer`, always
-    present (None as null), with its `reason`, `detail`, `probability`,
-    `distribution`, `marginals` and `expected` -- and rationale; or, on a
-    failure, the `error`. A key whose value is empty or None is left out (an
-    answer's own `answer` excepted)."""
+    present (None as null; a `Ranking` as `{"tiers": [[...]], "rest": [...]}`),
+    with its `reason`, `detail`, `probability`, `distribution`, `marginals`
+    and `expected` -- and rationale; or, on a failure, the `error`. A key
+    whose value is empty or None is left out (an answer's own `answer`
+    excepted)."""
     head = _present({"mode": mode, "provider": provider, "model": model})
     if error:
         return {**head, "error": error}
     items = []
     for result in results or ():
         answers = {
-            qid: {"answer": a.answer, **_present({
+            qid: {"answer": _recorded(a.answer), **_present({
                 "reason": a.reason, "detail": a.detail, "probability": a.probability,
                 "distribution": dict(a.distribution) if a.distribution else None,
                 "marginals": dict(a.marginals) if a.marginals else None,
@@ -1075,11 +1303,15 @@ def render(results: Sequence[ItemResult], items: Sequence[Item], *, explain: boo
     """`results` written as the structured backend's reply to `items` --
     `{"0": {"answers": {qid: value}, "rationale": ...}}`, a None answer as
     JSON null and `rationale` only when `explain` -- so the structured
-    graders can read a native `Decision` (`evals/run.py --live`)."""
+    graders can read a native `Decision` (`evals/run.py --live`). A ranking
+    of singleton tiers is its list of ids, which `parse` reads back to it; one
+    with a tie is null, since no structured reply can say a tie (graders read
+    the native result itself, so that null is never scored as an answer)."""
     out: dict[str, Any] = {}
     for index, (result, item) in enumerate(zip(results, items, strict=True)):
         entry: dict[str, Any] = {"answers": {
-            q.id: (result.answers[q.id].answer if q.id in result.answers else None)
+            q.id: (_rendered(result.answers[q.id].answer) if q.id in result.answers
+                   else None)
             for q in item.questions}}
         if explain:
             entry["rationale"] = result.rationale

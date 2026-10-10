@@ -5,7 +5,11 @@
                 sent its provider's structured mode (ruling 3), so a fallback
                 without the mode answers from the same prompt.
       explain — bool: whether each item's entry carries a "rationale". The
-                instruction for it is the user message's (`user.j2`). -#}
+                instruction for it is the user message's (`user.j2`).
+      kinds   — [str], `decisions.kinds(items)`: the question kinds the batch
+                asks. A bullet for a kind beyond yes/no, choice and scale
+                renders only when the batch asks one, so a prompt that asks
+                none of them is the prompt it always was. -#}
 You answer closed questions about material you are given. Every question comes with the answers it may have, and you pick one of those; you never write prose in place of an answer.
 
 Reply with ONLY a JSON object matching this JSON Schema, no prose around it and no code fence:
@@ -16,6 +20,9 @@ The object has one entry per item, keyed by the item's number ("0", "1", and so 
 
 - a yes/no question is answered true or false;
 - a choice is answered with the id of one of its options, exactly as listed, or null where the schema allows it;
+{%- if "rank" in kinds %}
+- a ranking is answered with a list of candidate ids, best first, each at most once, exactly as listed, or null where the schema allows it;
+{%- endif %}
 - a scale is answered with the number of one of its levels.
 
 Do not guess: when the material does not settle a choice that allows none, answer null.
