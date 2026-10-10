@@ -1,8 +1,8 @@
 # Content-addressed compiled cache: the files stay the database, SQLite caches what is compiled from them
 
-**Status:** Draft — cross-linked. A substitute reviewer and the PR's Codex
-review are both folded in (section 15). The `/codex:adversarial-review` spec
-gate is still pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
+Three reviews are folded in (section 15): a substitute adversarial review, the
+PR's Codex review, and a substitute gate review of the cross-linked text.
 **Date:** 2026-10-09
 **Series:** 03. Depends on 01, the inference refactor
 (`2026-10-07-inference-backend-refactor-design.md`, landed as slices A
@@ -35,11 +35,11 @@ roadmap bundle of 2026-10-06 (specs 04–09).
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
 | 03-C1 composite keys over collection digests and non-file inputs | 04, 08 | Card, Todo and shell projections; SearchDocument keys |
-| 03-C2 liveness by construction | 04, 05, 09 | No superseded version is reachable; 05's sync is a warm-up |
+| 03-C2 liveness by construction | 04, 05, 08, 09 | No superseded version is reachable; 05's sync is a warm-up |
 | 03-C3 `materialized` record | 05, 08 | Rebuilding what was hot after an edit |
-| 03-C4 one validation primitive | 05 | Write-through and `cache sync` without a second invalidation system |
-| 03-C5 artifacts storable at write time | 04, 05 | No stale overview after Grimoire's own write |
-| 03-C6 batch lookups over a live key set; index ranking restricted to it | 08, 09 | Metadata prefilters and lexical ranking |
+| 03-C4 one validation primitive (with a batch form over listed paths) | 04, 05 | Every key 04 computes; write-through and `cache sync` without a second invalidation system |
+| 03-C5 artifacts storable at write time | 04, 05 | 04 warms the scene it just wrote after a turn; 05's write-through |
+| 03-C6 batch lookups over a live key set; index ranking restricted to it | 04 (S), 08, 09 | Metadata prefilters and lexical ranking |
 | 03-C7 vectors keyed by text, never `BUILD` | 08, 09 | Upgrades re-embed only changed text |
 | 03-C1, 03-C2, 03-C3 | 07 (S) | The optional persistent tier of the inverse membership index (07-C2), and its eager rebuild via 05 |
 | 03-C8 a callable purge for a world or campaign delete | 05 | Sync performs the purge when it finds a world or campaign root gone (05 section 7.6) |
@@ -140,13 +140,21 @@ spec.
 
 1. **Composite keys over collections and over inputs that are not files (04,
    08).**
-   - 04's world card, campaign card, per-scope Todo and shell projections are
-     keyed by the hashes and collection digests of what each one renders.
+   - 04's card, scene and continuity projections are keyed by the hashes and
+     collection digests of what each one renders. A Todo scope is assembled
+     from those projections plus live chores, rather than stored as one
+     artifact (04 section 4.4).
    - 08's SearchDocument is keyed by the digest of its inputs plus
      `search_document_version`.
    - Section 6 has to carry these keys, including inputs that are not a file's
-     bytes: a chore's ignore set, a config value, a continuity cache's hash.
-   - It must not force one whole-library hash, which 04 section 4 rules out.
+     bytes (player names, a continuity cache's hash) and inputs that may be
+     absent.
+   - It must not force one whole-library hash. The bundle draft of 04
+     (section 4) ruled that out.
+   - **Dependent inputs are not supported.** A dependent input is one whose
+     identity is known only by reading another input, such as an image object
+     named inside a placement file. A kind whose inputs work that way stays
+     live. Supporting it would be a new 03 contract.
 2. **Liveness by construction (05, 09).** 05's core invariant is that *after
    sync, no live query may return content derived from a superseded source
    version*. 03 makes that true at every read, not only after a sync.
@@ -309,8 +317,22 @@ That makes one place list everything that persists and what each key covers.
 |---|---|
 | `path` | a source the artifact read, relative to the store root |
 | `kind` | the registry kind built from it, or `vector:<projection>:<space-digest>` for an embedding of a projection of it |
-| `instance` | optional: which instance of a collection-keyed kind the path feeds (for example, the campaign a scene summary belongs to) |
-| `last_used` | as for artifacts |
+| `instance` | which instance of a collection-keyed kind the path feeds (for example, the campaign that reads a world entry). Canonical JSON, or `""` |
+| `last_used` | as for artifacts, and touched when an artifact or vector built from this path is hit (batched, at most daily) |
+
+**The key is `(path, kind, instance)`.** A world entry read by two campaigns
+therefore has two rows, and 05 re-embeds and attributes each one for its own
+campaign.
+
+**A row may have no artifact.** Vector rows (05, 08) and 05's rename copies
+describe work that lives outside `artifacts`. Nothing links a row to an
+artifact row. Instead, a row is touched when what it describes is hit:
+
+- an artifact lookup touches the rows for the paths its reader used;
+- a `vectors.load` hit touches its vector row.
+
+Without that, least-recently-used eviction would age out the rows for the
+hottest content first, and 05's "what was hot" would quietly empty.
 
 **The vector kind names the projection and a digest of the space**, never the
 raw space id:
@@ -326,7 +348,7 @@ raw space id:
 needs it to keep a hot SearchDocument and its vector current (section 2a,
 item 3).
 
-- It is written beside the artifact, in the same batch.
+- It is written beside the artifact or vector it describes, in the same batch.
 - It is read only by path, for a path the caller already holds, so it never
   answers which paths exist (section 9).
 - Losing it costs 05 its eager warm-up and nothing else: the next read
@@ -449,6 +471,26 @@ key_digest = SHA-256( kind
                     ‖ inputs )      -- ordered (role, content_hash) pairs
 ```
 
+**Absent-ok inputs.** A kind may declare an input role *absent-ok*.
+
+- A missing file then contributes `(role, ABSENT)`. `ABSENT` is a constant that
+  can never equal a hash, so creating the file moves the key.
+- Absence is established by a live `stat` on every read, in-process and
+  persisted alike. It is never recorded in `sources`, and never vouched for by
+  a directory stamp (section 7).
+- A role that is not absent-ok and is missing makes the derivation uncacheable.
+  The caller's existing reader decides what "missing" means for that record,
+  exactly as it does today.
+
+**Read failures.** Once the key phase has begun, a stat or read can fail: a
+permission error, a placeholder that will not hydrate, or a collection member
+that vanishes between the listing and the read.
+
+- The primitive (03-C4) then raises a typed `InputUnavailable`.
+- The caller falls back to its existing path-based reader, uncached, and
+  nothing is stored. A byte-fed compute never runs without its bytes.
+- A vanished collection member voids that collection's digest for the request.
+
 **`BUILD` fingerprints everything that can change a derivation without
 changing the bytes it reads.**
 
@@ -565,8 +607,11 @@ relative path, declared by the kind in the registry and applied after the
 listing. Without it, a file that sits in the directory but is not an input
 would move the digest for nothing. 04's scene summary is the case: review
 files live in `scenes/`, and they are not scenes. The filter is part of the
-key's identity, so changing it changes the key. It never hides a member from
-any reader other than the kind that declared it. A collection-keyed artifact saves the compute and
+key's identity: it is registry code, so `BUILD` and the kind's `version`
+both cover it, and changing it changes the key. It never hides a member from
+any reader other than the kind that declared it.
+
+A collection-keyed artifact saves the compute and
 the read for each member. It does not save the listing.
 
 The draft hoped that counts which currently need directory sweeps could come
@@ -581,9 +626,10 @@ from collection digests. Two kinds of "count" need telling apart:
   - Member counts stay live reads, which costs a listing per directory.
 - **A predicate over members' content** (which characters lack an avatar or
   an anchor, coverage, a gap probe) has to read every member. That is
-  expensive, and it is exactly what a collection digest can key. 04 section
-  7's *"invalid/missing-record probes that require directory sweeps"* are
-  this kind, and they belong in the cache.
+  expensive. A collection digest can key it, but only when every input can be
+  named before the read. A predicate whose inputs are discovered by reading
+  another file (dependent inputs, section 2a item 1) stays live. 04 keeps
+  several image-gap chores live for exactly this reason (04 open question 1).
 
 ## 8. What to cache first
 
@@ -659,14 +705,15 @@ prompts later, in conversation, and commits no figures.
   `routes/todo.py`'s contract is that *"nothing here is a cache that can
   outlive the read it was computed for"*. A content-keyed projection keeps
   that contract, because its key is recomputed from the current inputs on
-  every request and cannot answer for inputs that have moved. 04's per-scope
-  Todo projections are this kind, and 03 allows them.
+  every request and cannot answer for inputs that have moved. 04's Todo
+  scope is assembled from such projections plus live chores (04 section 4.4),
+  and 03 allows that.
   - What 03 forbids is a projection keyed on *less* than the chore reads.
     Chores read more than record files: the ignore set
     (`store/chores.py`), routing and config, the usage ledger, the continuity
     candidate cache. A chore whose inputs cannot all be named in its key
     stays live.
-  - Todo stays derived and self-healing (04 section 10). 04 amends the
+  - Todo stays derived and self-healing (04 section 4.4). 04 amends the
     `routes/todo.py` docstring when it lands.
 - **Anything that reads `config.md`, routing or the clock** without naming that
   input in `params`.
@@ -692,8 +739,20 @@ and the cache's tables, and the guard fails both of these:
 - an import of `sqlite3` anywhere else.
 
 **Lookups report what they found.** Every batch lookup returns hit and miss
-counts beside the rows, for 04-C3a's per-request counters and the benchmark.
-This is a count, never a list of keys. No API answers "what is cached".
+counts **per kind**, beside the rows, for 04-C3a's per-request counters and the
+benchmark. This is a count, never a list of keys. No API answers "what is
+cached".
+
+**03-C4 has a batch form.** It takes the paths the caller has just listed and
+returns each one's content hash:
+
+- it reads their `sources` rows in one query;
+- it hashes only the files whose stamps moved;
+- it also returns the `materialized` rows for those paths, which 05 section
+  7.3 uses.
+
+It is still a lookup by paths the caller already holds, so it never answers
+which paths exist.
 
 An index may *rank* within a live set. 09's lexical candidates might come from
 SQLite FTS5, if the Android build has it, but every such query is restricted
@@ -830,6 +889,19 @@ SQLite's free pages. So:
      another backend on this machine, at its next batch, and another device,
      whose marker arrives by sync, at its next open.
 
+  **A batch prepared before a purge commits nothing after it.**
+
+  - Each write batch captures the purge generation when its first read
+    starts. The generation is the marker's token plus the token the file
+    records.
+  - At commit, under the connection lock, the batch reads both again and drops
+    itself entirely if either has moved.
+
+  Without this, a `GET /campaigns` that is computing when a delete lands could
+  commit the deleted campaign's name and blurb into a freshly purged file. 04's
+  post-turn warm and 05's write-through queue have the same window, and the
+  same rule covers them.
+
   A purge that cannot get the write lock right away is retried at the next
   batch. The marker makes the purge happen eventually, and it never makes a
   delete wait or fail. Before a process purges, the deleted record's rows are
@@ -837,11 +909,27 @@ SQLite's free pages. So:
   removes is data at rest. This is a whole-cache purge at the delete route,
   not a hook on record writes, and every device then starts cold.
 
-  **03-C8: the purge is one callable**, `compiled.purge_for_delete(root)`. It
-  writes the marker and purges this device's file. The world and campaign
-  delete routes call it. So does 05's sync when it finds that a world or
-  campaign root has gone because someone deleted it outside Grimoire. It is
-  idempotent, never raises into its caller, and logs one line on failure.
+  **03-C8: the purge is one callable, `compiled.purge_for_delete()`.** It acts
+  on the store root `home()` resolves at call time. It is a whole-cache purge,
+  so it takes no record root. It writes the marker and purges this device's
+  file.
+
+  It is called from two places:
+
+  - the world and campaign delete routes, after the delete has landed and
+    outside `maintenance_excluded` (a delete that is refused calls nothing);
+  - 05's sync, when it finds that a world or campaign root has gone because
+    someone deleted it outside Grimoire.
+
+  It is idempotent, never raises into its caller, and logs one line on
+  failure. When the cache is off because `.cache` or `.cache/compiled` is a
+  link (section 3), it writes no marker and logs once.
+- **A dormant device is a stated residual.** Another device purges its own
+  synced file at its next open. Until then, a device that is retired or rarely
+  opened keeps the deleted record's derived text in a file that every other
+  device still receives through the sync client. Lease retention
+  (section 10) removes that file eventually. The Settings text says so,
+  beside the vectors residual below.
 - **Vectors are a stated residual.** `.cache/embeddings/*.vec` files are keyed
   by space and text, never by campaign (section 4). So a campaign's vectors
   cannot be told apart from another's, and they cannot be purged selectively.
@@ -915,6 +1003,12 @@ codebase's placeholder names.
 - **Degradation.** Each of these degrades to a computed answer and one log
   line: a truncated file, a garbage file, a locked database, a corrupted
   payload, and a damaged `sources` row. A locked database is never renamed.
+- **Inputs.** A missing absent-ok input keys as `ABSENT`, and creating the
+  file moves the key. A read failure, or a collection member that vanishes
+  mid-read, stores nothing and falls back to the live reader.
+- **Purge race.** A write batch prepared before a purge commits nothing after it.
+- **`materialized`.** Rows are unique per `(path, kind, instance)`. A hit
+  touches the rows for the paths it used.
 - **Deletes.** After a world or campaign is deleted, this device's file holds no
   rows. A second open connection, standing in for another backend, purges
   at its next batch. No file under `.cache/compiled/` is unlinked to do this.
@@ -944,20 +1038,29 @@ codebase's placeholder names.
 the difference. The generator is committed. No figure from any real store is
 committed.
 
-**03-C9: the synthetic-library generator is owned here.**
-
-- It lives with the cache's tests and is built by 03's plan.
-- It writes a marked store, holding placeholder names only (Realm, Saltmarch,
-  Seraphine, Mara, Winifred), with sizes set by flags.
-- It refuses to write into a directory that already holds a store that is not
-  marked synthetic.
-- 04-C3b extends it with the page shapes 04's benchmark needs. It does not fork
-  a second generator. Measure four cases:
+Measure four cases:
 
 - the cold first-ever load;
 - a warm load in the same process, which must not regress against today;
 - a warm load after a restart, which is the case this spec exists for;
 - a load after one file changes.
+
+**03-C9: the synthetic-library generator is owned here.**
+
+- It is `backend/scripts/synth_library.py`, run as
+  `python -m scripts.synth_library`. 03's plan builds it.
+- It writes a marked store, holding placeholder names only (Realm, Saltmarch,
+  Seraphine, Mara, Winifred), with sizes set by flags.
+- It refuses any target directory that is not empty. That is 04's rule. It is
+  stricter than refusing only an unmarked store, because a planted marker
+  cannot open a real directory to it.
+- **The injectable clock is a public test seam.** It follows the
+  `migrations._clock` precedent, and the racy-window tests already need it.
+  ctime cannot be backdated on POSIX, so freshly written files never qualify
+  for `sources` within `PERSIST_WINDOW`. The generator's callers and 04's
+  counter tests advance the clock rather than depend on timing.
+- 04-C3b extends it with the page shapes 04's benchmark needs. It does not
+  fork a second generator.
 
 Measure them on these pages: the world shelf, the campaign shelf, Todo, search,
 and a campaign hub. Every kind the plan wires must show its warm-after-restart
@@ -1017,6 +1120,21 @@ reading the specs that consume this one. Several decisions were reversed:
   within a live key set.
 - Vectors were not addressed. They are now stated to be independent of
   `BUILD`.
+
+**Gate review of the cross-linked text.** This review found 2 blocking, 6
+should-fix and 5 minor issues, and all of them are folded in:
+
+- absent-ok inputs and a typed `InputUnavailable` (section 6);
+- a purge generation is checked at commit (section 12);
+- Required-by rows for 04 and 08;
+- `materialized` is keyed by `(path, kind, instance)`, with rows allowed to have
+  no artifact, and hits touching the rows;
+- sections 2a, 7 and 8 are aligned with 04, and dependent inputs are stated as
+  unsupported;
+- C9's location, refusal rule and clock seam;
+- C8's interface and the dormant-device residual;
+- a batch form of C4;
+- lookup counts per kind.
 
 The PR's Codex review is not the CLI's `/codex:adversarial-review`. That
 gate should still be run against this spec before the plan, if it can be.
