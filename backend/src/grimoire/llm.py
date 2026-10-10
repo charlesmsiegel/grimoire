@@ -1011,6 +1011,11 @@ def _schema_refusal(exc: LLMError, target: wire.Target) -> bool:
 #: found that support tool use") -- never `tool_use`, a block type a 400 about
 #: the history's shape names.
 _TOOLS_NAMED = re.compile(r"\b(?:tools|tool[_ ]choice|tool use|functions)\b")
+#: How a context overflow is worded -- OpenAI's counts the `functions` it
+#: measured, and Anthropic's can name the tools -- which is the request too
+#: long, never tools refused.
+_CONTEXT_OVERFLOW = re.compile(r"context[_ ]length|maximum context|context window"
+                               r"|prompt is too long|reduce the length")
 
 
 def _tools_refusal(exc: LLMError, offered: bool) -> bool:
@@ -1020,16 +1025,18 @@ def _tools_refusal(exc: LLMError, offered: bool) -> bool:
     status, not an account limit, whose message names `tools`, `tool_choice`,
     `functions` or "tool use" as words (`tool_call_id`, `tool_calls` and
     `tool_use` are not: a 400 about the history's shape is a malformed
-    request, not tools refused).
+    request, not tools refused), and is not a context overflow
+    (`_CONTEXT_OVERFLOW`, `context_length_exceeded`) that counts them.
 
     Modelled on `_schema_refusal`, but the decision is not the target's:
     whether this call offered tools is not on a `wire.Target`."""
     if exc.code == tool_calls.REFUSED:
         return True
     if (not offered or exc.status not in PRESET_REFUSAL_STATUSES
-            or llm_errors.account_limit(exc)):
+            or llm_errors.account_limit(exc) or exc.code == "context_length_exceeded"):
         return False
-    return bool(_TOOLS_NAMED.search(_said(exc).lower()))
+    said = _said(exc).lower()
+    return bool(_TOOLS_NAMED.search(said)) and not _CONTEXT_OVERFLOW.search(said)
 
 
 async def _resilient(open_stream, routes: list[_Route], timeout: float,

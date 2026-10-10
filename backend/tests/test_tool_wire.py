@@ -279,6 +279,12 @@ async def test_a_400_naming_tools_without_an_offer_is_an_ordinary_failure():
     ("messages.2: `tool_use` ids were found without `tool_result` blocks", False),
     ("Invalid 'messages[3].tool_call_id'", False),
     ("context length exceeded", False),
+    # Brutal review F8: OpenAI's context overflow names the `functions` it
+    # counted, and is no refusal of tools.
+    (("This model's maximum context length is 8192 tokens. However, you requested 9000 "
+      "tokens (8400 in the messages, 344 in the functions, and 256 in the completion). "
+      "Please reduce the length of the messages or functions."), False),
+    ("prompt is too long: 210000 tokens > 200000 maximum; the tools take 900", False),
 ])
 def test_what_reads_as_tools_refused(said, refused):
     error = llm.LLMError("bad_response", said, status=400)

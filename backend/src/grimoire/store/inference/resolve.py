@@ -628,14 +628,17 @@ def _missing(attempt: Attempt, needs: tuple[frozenset[str], ...]) -> tuple[str, 
     return tuple(cap for cap in capabilities.NAMES if cap in unmet)
 
 
-def known_lacks(resolved: ResolvedInference, cap: str) -> bool:
-    """Whether `resolved`'s primary is KNOWN (`no`, never a guess) unable to
-    do `cap` -- the seam's own `_missing` test, for a caller that may offer a
-    capability its route does not require (01g's `routing.TOOLS_OPTIONAL`).
-    A resolution of nothing lacks nothing it could be asked for."""
-    if not resolved.attempts:
+def known_lacks(resolved: ResolvedInference, cap: str, *, fallback: bool = False) -> bool:
+    """Whether `resolved`'s primary -- or, with `fallback`, its fallback
+    attempt -- is KNOWN (`no`, never a guess) unable to do `cap`: the seam's
+    own `_missing` test, for a caller that may offer a capability its route
+    does not require (01g's `routing.TOOLS_OPTIONAL`), which the resolver's
+    `fallback_missing` therefore never names. A resolution of nothing (or
+    with no fallback) lacks nothing it could be asked for."""
+    index = 1 if fallback else 0
+    if len(resolved.attempts) <= index:
         return False
-    return cap in _missing(resolved.attempts[0], (frozenset({cap}),))
+    return cap in _missing(resolved.attempts[index], (frozenset({cap}),))
 
 
 def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple[str, str]]:
