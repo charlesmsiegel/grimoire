@@ -28,6 +28,7 @@ from . import (
     llm_sampling,
     llm_usage,
     model_guidance,
+    tool_calls,
     wire,
 )
 from .anthropic import AnthropicClient
@@ -559,6 +560,12 @@ async def _guard(agen, timeout: float, tick: float | None = None, pending=None) 
             await _aclose(it)
 
 
+def _offer(tools: tuple[dict, ...] | None, tool_choice: str | None) -> dict:
+    """The keywords an offer of tools (01g) travels as: both, only when there
+    are tools, so a call without them reaches the adapter as it always did."""
+    return {} if tools is None else {"tools": tools, "tool_choice": tool_choice}
+
+
 def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> None:
     """Start one attempt's accounting: which route is about to run, and how many
     have been tried (#152).
@@ -601,6 +608,7 @@ def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> No
     target = route.target
     reasoning = usage.get(llm_reasoning.KEY)
     run = llm_capture.run_id(usage)
+    calls = usage.get(tool_calls.KEY)
     usage.clear()
     if isinstance(reasoning, llm_reasoning.Buffer):
         reasoning.begin()
@@ -609,6 +617,12 @@ def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> No
         # The caller's run (01g-C3) is the call's, not the attempt's: every
         # attempt's capture names it.
         usage[llm_capture.RUN_KEY] = run
+    # A caller's tool-call collector (01g) rides every attempt like the
+    # reasoning buffer, emptied so a retry starts with no calls of the
+    # attempt that failed. Only one the caller installed: none is added.
+    if isinstance(calls, tool_calls.Collector):
+        calls.begin()
+        usage[tool_calls.KEY] = calls
     usage.update({"model": target.model, "connection": _label(target),
                   "provider": target.kind, "attempts": attempts,
                   # Which attempt is live, for the route that may have to
@@ -1349,7 +1363,8 @@ class LLMClient:
         return _with_degrades(routes) if _may_send_refs(messages) else routes
 
     def _dispatch(self, messages: list[dict], route: _Route, usage: dict | None = None,
-                  schema: dict | None = None):
+                  schema: dict | None = None, *, tools: tuple[dict, ...] | None = None,
+                  tool_choice: str | None = None):
         # Read before selecting: `for_model` returns a plain list.
         campaign = getattr(messages, "campaign", "")
         target = route.target
@@ -1367,12 +1382,14 @@ class LLMClient:
             usage["images"] = 0
         # After `_stamp` cleared the holder, so each attempt counts only itself.
         llm_usage.note_prompt(usage, messages)
+        offered = _offer(tools, tool_choice)
         if not content_parts.needs_lowering(messages):
-            return self._generate(messages, target, usage, schema)
-        return self._parts_lowered(messages, route, usage, campaign, schema)
+            return self._generate(messages, target, usage, schema, **offered)
+        return self._parts_lowered(messages, route, usage, campaign, schema, **offered)
 
     def _generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
-                  schema: dict | None):
+                  schema: dict | None, *, tools: tuple[dict, ...] | None = None,
+                  tool_choice: str | None = None):
         """One attempt's provider stream, through its kind's adapter.
 
         Structured output is decided per ATTEMPT like the preset (spec 7.2):
@@ -1382,12 +1399,16 @@ class LLMClient:
         slice F. The prompt carries the schema either way; this adds the
         provider's mode. The adapter decides the sampler controls against
         that attempt's own target (`llm_sampling.effective`), so a fallback
-        of another kind is held to what ITS backend takes."""
+        of another kind is held to what ITS backend takes. Tools (01g) reach
+        the adapter only when offered."""
         return self._adapter(target.kind).generate(
-            messages, target, usage, schema=schema if target.structured else None)
+            messages, target, usage, schema=schema if target.structured else None,
+            **_offer(tools, tool_choice))
 
     async def _parts_lowered(self, messages: list[dict], route: _Route, usage: dict | None,
-                             campaign: str, schema: dict | None = None):
+                             campaign: str, schema: dict | None = None, *,
+                             tools: tuple[dict, ...] | None = None,
+                             tool_choice: str | None = None):
         """`messages` lowered for `route`, then streamed (#377).
 
         Lowering resolves the image budget (a catalog sidecar read) and loads
@@ -1403,7 +1424,8 @@ class LLMClient:
             usage["images"] = sent
         # What was sent, not what was asked: text lowering drops carriers (M10).
         llm_usage.note_prompt(usage, lowered)
-        inner = self._generate(lowered, route.target, usage, schema)
+        inner = self._generate(lowered, route.target, usage, schema,
+                               **_offer(tools, tool_choice))
         try:
             async for chunk in inner:
                 yield chunk
@@ -1504,7 +1526,8 @@ class LLMClient:
                                                                 schema, retries)])
 
     async def single(self, messages: list[dict], target: wire.Target,
-                     usage: dict | None = None) -> str:
+                     usage: dict | None = None, *, tools: tuple[dict, ...] | None = None,
+                     tool_choice: str | None = None) -> str:
         """Exactly one attempt on `target`, joined: the model test call's way in.
 
         No retry, no fallback route and no degrade sibling -- the route list is
@@ -1526,7 +1549,15 @@ class LLMClient:
         model (this one reads no images), not about whether the connection
         serves, and a status dot turned red by a vision probe would send the
         reader to fix a connection that works.
+
+        `tools` and `tool_choice` (01g) offer tool definitions, for the
+        `tools` probe: checked (`tool_calls.check`) before anything is
+        stamped, and sent in the attempt's kind's spelling. Whether the reply
+        called one is read from a `tool_calls.Collector` the caller put in
+        `usage` (`_stamp` keeps it). Absent, the call is what it always was.
         """
+        if tools is not None or tool_choice is not None:
+            tool_calls.check(tools, tool_choice)
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
@@ -1534,7 +1565,9 @@ class LLMClient:
         # Never a schema, so never a flag (01f 3.4).
         sent = _unflagged(_target_of(target))
         assert isinstance(sent, wire.Target)
-        agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
+        offered = _offer(tools, tool_choice)
+        agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder,
+                                                               **offered),
                           [_Route(sent, 0)],
                           self._timeout_seconds(),
                           usage=usage, capture=sink, counter=self._count_tokens)

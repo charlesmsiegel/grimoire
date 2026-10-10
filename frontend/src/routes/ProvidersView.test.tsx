@@ -66,6 +66,7 @@ const CAPS = {
   vision: { value: "unknown", source: "unknown" },
   embed: { value: "no", source: "catalog" },
   decide_native: { value: "no", source: "adapter" },
+  tools: { value: "unknown", source: "unknown" },
 };
 
 function answer(need: CapabilityNeed) {
@@ -326,7 +327,7 @@ test("a catalog's no is offered to a test; only the adapter's rules a probe out"
   fireEvent.click(main().getByRole("button", { name: "Test…" }));
   expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
   expect(api.previewModelTest).toHaveBeenCalledWith(
-    "saltmarch", { model: "vendor/m", capabilities: ["vision", "embed"] });
+    "saltmarch", { model: "vendor/m", capabilities: ["vision", "embed", "tools"] });
 });
 
 test("Test… lists decide_native for a model whose native decisions are unknown", async () => {
@@ -338,13 +339,38 @@ test("Test… lists decide_native for a model whose native decisions are unknown
   fireEvent.click(main().getByRole("button", { name: "Test…" }));
   expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
   expect(api.previewModelTest).toHaveBeenCalledWith(
-    "saltmarch", { model: "vendor/m", capabilities: ["generate", "vision", "embed", "decide_native"] });
+    "saltmarch", { model: "vendor/m",
+                   capabilities: ["generate", "vision", "embed", "decide_native", "tools"] });
+});
+
+test("an adapter's no on tools leaves the tools probe out of Test…", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+    ...CAPS, tools: { value: "no", source: "adapter" } } }));
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Test…" }));
+  expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "vendor/m", capabilities: ["generate", "vision", "embed"] });
+});
+
+test("the facts form overrides tool calling", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByRole("combobox", { name: "Tool calling: override" }),
+                   { target: { value: "no" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", {
+    model: "vendor/m", overrides: { tools: "no" },
+  });
 });
 
 test("a model the adapter rules out of every probe has nothing to test", async () => {
   const never = { value: "no", source: "adapter" };
   (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
-    ...CAPS, generate: never, vision: never, embed: never } }));
+    ...CAPS, generate: never, vision: never, embed: never, tools: never } }));
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
   expect(main().getByRole("button", { name: "Test…" })).toBeDisabled();

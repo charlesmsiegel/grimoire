@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 
-from grimoire import content_parts, llm, llm_capture, llm_reasoning, llm_usage, wire
+from grimoire import content_parts, llm, llm_capture, llm_reasoning, llm_usage, tool_calls, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
@@ -603,3 +603,4 @@ def test_estimate_keys_are_one_spelling():
     assert usage.ESTIMATED == llm_usage.ESTIMATED == "tokens_estimated"
     assert usage.RUN_KEY == llm_capture.RUN_KEY == "_run_id"
     assert usage.REASONING_KEY == llm_reasoning.KEY
+    assert usage.TOOL_CALLS_KEY == tool_calls.KEY

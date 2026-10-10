@@ -314,14 +314,15 @@ def test_facts_round_trip_and_validate(client):
     pid = _spare(client)
     put = client.put(f"/api/llm-connections/{pid}/facts", json={
         "model": "vendor/mara-7b", "vision": "on", "prefill": True,
-        "post_process": "strict", "overrides": {"structured_output": "yes"}})
+        "post_process": "strict", "overrides": {"structured_output": "yes", "tools": "no"}})
     assert put.status_code == 200, put.text
 
     got = client.get(f"/api/llm-connections/{pid}/facts",
                      params={"model": "vendor/mara-7b"}).json()
     assert got["model"] == "vendor/mara-7b"
     assert (got["vision"], got["prefill"], got["post_process"]) == ("on", True, "strict")
-    assert got["overrides"] == {"structured_output": "yes"}
+    assert got["overrides"] == {"structured_output": "yes", "tools": "no"}
+    assert got["capabilities"]["tools"] == {"value": "no", "source": "user"}
     assert got["capabilities"]["vision"] == {"value": "yes", "source": "user"}
     assert got["capabilities"]["structured_output"] == {"value": "yes", "source": "user"}
     assert set(got["capabilities"]) == set(capabilities.NAMES)

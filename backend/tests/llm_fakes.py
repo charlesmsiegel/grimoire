@@ -6,7 +6,7 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
     async def stream(messages, chain, usage=None, *, schema=None) -> AsyncIterator[str]
     async def complete(messages, chain, usage=None, *, schema=None, retries=None) -> str
-    async def single(messages, target, usage=None) -> str
+    async def single(messages, target, usage=None, *, tools=None, tool_choice=None) -> str
     async def decide_native(item, target, usage=None, *, retries=None) -> ItemResult
     async def list_models(target) -> list[dict]
     async def check(target) -> None
@@ -94,7 +94,7 @@ from pathlib import Path
 
 import anyio
 
-from grimoire import adapters, decisions, llm_usage, wire
+from grimoire import adapters, decisions, llm_usage, tool_calls, wire
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
 
@@ -261,7 +261,8 @@ class FakeLLM:
                  models: list[dict] | None = None,
                  models_error: LLMError | None = None,
                  health_error: LLMError | None = None,
-                 decisions: list[decisions.ItemResult | LLMError] | None = None):
+                 decisions: list[decisions.ItemResult | LLMError] | None = None,
+                 tool_calls: Sequence[str] = ()):
         if (turns is None) == (cassette is None):
             raise ValueError("FakeLLM takes exactly one of `turns` or `cassette`")
         if turns is not None and not turns:
@@ -311,6 +312,10 @@ class FakeLLM:
         #: `(item, target, retries)`. Not counted in `calls`: no generation ran.
         self.decisions = None if decisions is None else list(decisions)
         self.native_requests: list[tuple] = []
+        #: The tool names every `single` that offers tools reports calling
+        #: (01g's `tools` probe), through the holder's `tool_calls.Collector`
+        #: as an adapter's stream reader would; none reports a plain answer.
+        self.tool_calls = tuple(tool_calls)
 
     # ---- the LLMClient surface ----
     async def stream(self, messages, conn, usage=None, *, schema=None):
@@ -375,14 +380,30 @@ class FakeLLM:
         # still recorded, because `stream` records exactly once.
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
-    async def single(self, messages, target, usage=None) -> str:
+    async def single(self, messages, target, usage=None, *, tools=None,
+                     tool_choice=None) -> str:
         """The model test call's one attempt. A fake has no retries or fallback
         to skip, so this is `complete` -- consuming `stream` for the same reason
         `complete` does. That `single` itself skips both is held by the facade's
         own tests and the route's wire tests, not by this double. No `schema=`,
-        exactly as the facade's `single` takes none."""
-        return "".join([delta async for delta in self.stream(messages, _target_of(target),
+        exactly as the facade's `single` takes none.
+
+        `tools`/`tool_choice` (01g) are checked as the facade checks them,
+        recorded on the request, and answered from `tool_calls`: each name is
+        noted on the holder's `Collector`, and the reply ends `tool_calls`
+        when there were any, `stop` when not."""
+        if tools is not None or tool_choice is not None:
+            tool_calls.check(tools, tool_choice)
+        text = "".join([delta async for delta in self.stream(messages, _target_of(target),
                                                              usage)])
+        if tools is not None:
+            self.requests[-1].update({"tools": tools, "tool_choice": tool_choice})
+            found = usage.get(tool_calls.KEY) if usage is not None else None
+            if isinstance(found, tool_calls.Collector):
+                for n, name in enumerate(self.tool_calls):
+                    found.note(f"fake_call_{n}", name)
+                found.finish("tool_calls" if self.tool_calls else "stop")
+        return text
 
     async def list_models(self, target) -> list[dict]:
         """The catalog half of the facade's surface (#149).
@@ -587,10 +608,12 @@ class StallingGateway(FakeCatalog):
             await asyncio.sleep(self.seconds)
         return await super().complete(messages, conn, usage, schema=schema, retries=retries)
 
-    async def single(self, messages, target, usage=None) -> str:
+    async def single(self, messages, target, usage=None, *, tools=None,
+                     tool_choice=None) -> str:
         if self.where == "single":
             await asyncio.sleep(self.seconds)
-        return await super().single(messages, target, usage)
+        return await super().single(messages, target, usage, tools=tools,
+                                    tool_choice=tool_choice)
 
 
 # ---- provider doubles ----
