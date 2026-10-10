@@ -1274,7 +1274,9 @@ SCENES = (Option("scene:ledger", "Mara loses the ledger at the pier"),
 RANK = decisions.Rank("relevant", "Which scenes matter most to this turn?", SCENES,
                       top=2, allow_none=True, pointwise="Does this scene bear on the ledger?")
 #: Each 01e kind's system-prompt bullet, as it opens.
-NEW_BULLETS = {"rank": "- a ranking is answered with a list of candidate ids"}
+NEW_BULLETS = {"rank": "- a ranking is answered with a list of candidate ids",
+               "select": "- a selection is answered with a list of option ids"}
+WITNESSES = (Option("characters:mara", "Mara"), Option("characters:winifred", "Winifred"))
 
 
 def test_a_rank_renders_its_line_candidates_and_bullet():
@@ -1291,6 +1293,23 @@ def test_a_rank_renders_its_line_candidates_and_bullet():
     (_, user) = (m["content"] for m in inference.structured_messages(
         [Item("ctx", (plain,))]))
     assert "- relevant (ranking, best first): Order them." in user
+
+
+def test_a_select_renders_its_line_bounds_options_and_bullet():
+    select = decisions.MultiSelect("saw", "Who saw Seraphine take the key?", WITNESSES,
+                                   min=1, max=2, allow_none=True)
+    zero = decisions.MultiSelect("helped", "Who helped her?", WITNESSES, max=0)
+    plain = decisions.MultiSelect("heard", "Who heard it?", WITNESSES)
+    system, user = (m["content"] for m in inference.structured_messages(
+        [Item("Seraphine palms the harbour key.", (select, zero, plain))]))
+    assert ("- saw (selection, at least 1, at most 2, or null if it cannot be said): "
+            "Who saw Seraphine take the key?") in user
+    # A max of 0 is a bound, and is said; an unset min and max say nothing.
+    assert "- helped (selection, at most 0): Who helped her?" in user
+    assert "- heard (selection): Who heard it?" in user
+    assert "\n  - characters:winifred: Winifred" in user
+    assert NEW_BULLETS["select"] in system and "an empty list means none of them apply" in system
+    assert NEW_BULLETS["rank"] not in system
 
 
 def test_an_old_kind_batch_carries_no_new_bullet():
@@ -1318,3 +1337,15 @@ def test_decide_answers_a_rank_on_a_structured_stage(client):
     assert got.items[0].backend == "structured"
     assert fake.schemas[-1]["properties"]["0"]["properties"]["answers"]["properties"][
         "relevant"]["anyOf"][0]["type"] == "array"
+
+
+def test_decide_answers_a_select_on_a_structured_stage(client):
+    _store(client, fallback=False)
+    select = decisions.MultiSelect("saw", "Who saw it?", WITNESSES)
+    fake = FakeLLM([[decision_reply({"saw": ["characters:winifred", "characters:mara"]},
+                                    {"saw": []})]])
+    got = _decide(fake, [Item("Seraphine palms the key.", (select,)),
+                         Item("Nobody is on the pier.", (select,))])
+    assert got.items[0].answers["saw"] == decisions.Answer(
+        ("characters:mara", "characters:winifred"))
+    assert got.items[1].answers["saw"] == decisions.Answer(())

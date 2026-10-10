@@ -558,7 +558,8 @@ DECIDE_CASES = [c for c in case_mod.CASES if c.schema is not None]
 def test_every_decide_case_is_counted():
     assert {c.id for c in DECIDE_CASES} == {
         "decide-scene-break", "decide-voice-drift", "decide-speaker",
-        "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank"}
+        "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank",
+        "decide-select"}
 
 
 #: 01e's offline cases: each counterexample read through `decisions.parse` as
@@ -568,6 +569,10 @@ VOCABULARY_READINGS = {
                     "unknown-id": ("unreadable", "not_an_option"),
                     "short": ("unreadable", ""),
                     "null": ("unreadable", "")},
+    "decide-select": {"duplicate": ("unreadable", ""),
+                      "unknown-id": ("unreadable", "not_an_option"),
+                      "short": ("unreadable", ""),
+                      "null": ("unreadable", "")},
 }
 
 

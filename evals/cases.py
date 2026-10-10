@@ -1750,6 +1750,49 @@ def grade_decide_rank(ctx: dict, output: str) -> list[Check]:
                                     "best first, each at most once")
 
 
+# ------------------------------------------- case 16: decide, multi-select
+
+#: Who is on the pier, and what each of them is doing when Seraphine takes the
+#: key: one watches, one has her back turned, one is asleep.
+DECIDE_SELECT_EVENT = (
+    "The Saltmarch counting house, after dark. Seraphine Vale lifts the harbour key "
+    "from the counting table and slips it into her coat. Mara, sitting across the "
+    "table, watches her do it and says nothing. Winifred stands at the window with her "
+    "back to the room, arguing with the tide clerk. Rowan is asleep on a coil of rope "
+    "by the door, snoring.")
+DECIDE_SELECT_CAST = (
+    decisions.Option("characters:mara", "Mara, at the counting table"),
+    decisions.Option("characters:winifred", "Winifred, at the window"),
+    decisions.Option("characters:rowan", "Rowan, by the door"),
+)
+DECIDE_SELECT_WITNESSES = ("characters:mara",)
+
+
+def build_decide_select() -> dict:
+    """The characters present, besides the one who acted, offered as the
+    witnesses of what she did: at least one did. No store: the item is the
+    whole fixture."""
+    select = decisions.MultiSelect(
+        "witnesses", "Which of these characters saw Seraphine take the harbour key?",
+        DECIDE_SELECT_CAST, min=1)
+    return {"items": (decisions.Item(DECIDE_SELECT_EVENT, (select,)),), "explain": ""}
+
+
+def _grade_select_answer(answer: decisions.Answer) -> tuple[bool, str]:
+    how = answer.reason + (f"/{answer.detail}" if answer.detail else "") or "read"
+    return (answer.answer == DECIDE_SELECT_WITNESSES,
+            f"selected {answer.answer!r} ({how}), wanted {DECIDE_SELECT_WITNESSES!r}")
+
+
+def grade_decide_select(ctx: dict, output: str) -> list[Check]:
+    (select,) = ctx["items"][0].questions
+    lines = [f"- {select.id} (selection, at least {select.min}): {select.instructions}",
+             *(f"  - {opt.id}: {opt.description}" for opt in select.options)]
+    return _grade_vocabulary(ctx, output, lines=lines, answer=_grade_select_answer,
+                             bullet="- a selection is answered with a list of option ids, "
+                                    "each at most once")
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -2050,6 +2093,26 @@ CASES: tuple[Case, ...] = (
              # Two ranked where at least three were asked for.
              Recording("short", ("decide.answer",), "json"),
              # A null, which this rank does not allow.
+             Recording("null", ("decide.answer",), "json"))),
+    Case(id="decide-select",
+         task="continuity-identity",
+         hypothesis="asked through decide() which of three characters present saw "
+                    "Seraphine take a key -- one watching, one with her back turned, one "
+                    "asleep -- the reply is a list of option ids naming the watcher alone",
+         build=build_decide_select,
+         prompt=_vocabulary_prompt,
+         grade=grade_decide_select,
+         schema=_vocabulary_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # A witness listed twice: unreadable, never deduplicated.
+             Recording("duplicate", ("decide.answer",), "json"),
+             # An id no option has: `not_an_option`, never dropped.
+             Recording("unknown-id", ("decide.answer",), "json"),
+             # The empty selection where at least one was asked for: below
+             # `min`, so unreadable -- never padded.
+             Recording("short", ("decide.answer",), "json"),
+             # A null, which this select does not allow.
              Recording("null", ("decide.answer",), "json"))),
 )
 

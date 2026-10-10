@@ -17,6 +17,7 @@ from grimoire.decisions import (
     DecideRequestError,
     Item,
     ItemResult,
+    MultiSelect,
     Option,
     Predicate,
     Rank,
@@ -199,6 +200,8 @@ def test_schema_uses_only_the_shared_subset():
         Item("ctx", (Score("s", "i", ("a",) * decisions.MAX_LEVELS),)),
         Item("ctx", (Rank("r", "i", (MARA, WINIFRED, GRIMOIRE)),
                      Rank("n", "i", (MARA, WINIFRED), top=1, allow_none=True))),
+        Item("ctx", (MultiSelect("s", "i", (MARA, WINIFRED), min=1, max=1),
+                     MultiSelect("n", "i", (MARA,), allow_none=True))),
     ]
     for explain in (True, False):
         _walk(decisions.schema(items, explain=explain))
@@ -1120,9 +1123,9 @@ def _rank_answer(value, rank: Rank | None = None) -> Answer:
 
 def test_question_kinds_are_class_constants():
     import dataclasses
-    assert [cls.KIND for cls in (Predicate, Choice, Score, Rank)] == [
-        "predicate", "choice", "score", "rank"]
-    for cls in (Predicate, Choice, Score, Rank):
+    assert [cls.KIND for cls in (Predicate, Choice, Score, Rank, MultiSelect)] == [
+        "predicate", "choice", "score", "rank", "select"]
+    for cls in (Predicate, Choice, Score, Rank, MultiSelect):
         assert "KIND" not in {f.name for f in dataclasses.fields(cls)}
     assert _rank().KIND == "rank"
     assert decisions.kinds([_item(), Item("c", (_rank(), Predicate("p", "i")))]) == (
@@ -1254,6 +1257,102 @@ def test_outcome_and_render_spell_a_ranking():
 def test_native_gap_names_a_rank():
     gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _rank(pointwise="Relevant?"))))
     assert "relevant" in gap and "rank" in gap
+
+
+# --- 01e: MultiSelect, on the structured path ---------------------------------
+
+CAST = (MARA, WINIFRED, Option("characters:seraphine", "Seraphine", aliases=("Sera",)))
+
+
+def _select(**kw) -> MultiSelect:
+    return MultiSelect("saw", "Who saw it?", kw.pop("options", CAST), **kw)
+
+
+def _select_answer(value, select: MultiSelect | None = None) -> Answer:
+    select = select or _select()
+    (result,) = decisions.parse(json.dumps({"0": {"answers": {select.id: value}}}),
+                                [Item("ctx", (select,))], explain=False)
+    return result.answers[select.id]
+
+
+def test_validate_select_bounds():
+    options = tuple(Option(f"o{i}", "") for i in range(decisions.MAX_SELECT_OPTIONS + 1))
+    assert decisions.MAX_SELECT_OPTIONS == 32
+    for n in (1, decisions.MAX_SELECT_OPTIONS):
+        decisions.validate([Item("c", (MultiSelect("s", "i", options[:n]),))])
+    for n in (0, decisions.MAX_SELECT_OPTIONS + 1):
+        with pytest.raises(DecideRequestError, match="options"):
+            decisions.validate([Item("c", (MultiSelect("s", "i", options[:n]),))])
+    for kw in ({}, {"min": 3}, {"max": 0}, {"min": 1, "max": 1}, {"min": 0, "max": 3}):
+        decisions.validate([Item("c", (_select(**kw),))])
+    for kw in ({"min": 4}, {"max": 4}, {"min": 2, "max": 1}, {"min": -1}, {"max": -1},
+               {"min": True}, {"max": False}, {"min": 1.0}):
+        with pytest.raises(DecideRequestError, match="min"):
+            decisions.validate([Item("c", (_select(**kw),))])
+    with pytest.raises(DecideRequestError, match="collides"):
+        clash = Option("x", "", aliases=("Characters:Mara",))
+        decisions.validate([Item("c", (_select(options=(MARA, clash)),))])
+
+
+def test_select_schema_is_an_array_of_its_ids():
+    out = decisions.schema([Item("c", (_select(), MultiSelect(
+        "maybe", "i", CAST[:2], allow_none=True)))], explain=False)
+    props = out["properties"]["0"]["properties"]["answers"]["properties"]
+    ids = ["characters:mara", "characters:winifred", "characters:seraphine"]
+    assert props["saw"] == {"type": "array", "items": {"type": "string", "enum": ids}}
+    assert props["maybe"] == {"anyOf": [
+        {"type": "array", "items": {"type": "string", "enum": ids[:2]}}, {"type": "null"}]}
+    assert decisions.enum_values(Item("c", (_select(), Predicate("p", "i")))) == 3
+
+
+def test_parse_select_answers_in_option_order():
+    assert _select_answer(["Sera", "characters:mara"]) == Answer(
+        ("characters:mara", "characters:seraphine"))
+    assert _select_answer([" Characters:Winifred "]) == Answer(("characters:winifred",))
+    answer = _select_answer(["characters:mara"])
+    assert answer.marginals is None and answer.expected is None
+
+
+def test_the_empty_selection_is_an_answer_not_an_abstention():
+    empty = _select_answer([])
+    assert empty == Answer(()) and empty.answer is not None and empty.reason == ""
+    assert _select_answer([], _select(max=0)) == Answer(())
+    assert _unreadable(_select_answer(["characters:mara"], _select(max=0)))
+    assert _select_answer(None, _select(allow_none=True)) == Answer(None, "abstained")
+    assert _unreadable(_select_answer(None))
+
+
+def test_parse_select_out_of_bounds_is_unreadable_never_repaired():
+    assert _unreadable(_select_answer([], _select(min=1)))
+    two = ["characters:mara", "characters:winifred"]
+    assert _unreadable(_select_answer(two, _select(max=1)))
+    assert _select_answer(two, _select(min=2, max=2)) == Answer(tuple(two))
+
+
+def test_parse_select_duplicate_unknown_and_non_list():
+    dup = _select_answer(["characters:mara", "Characters:Mara"])
+    assert _unreadable(dup) and decisions.was_read(dup)
+    unknown = _select_answer(["characters:rowan"])
+    assert _unreadable(unknown, decisions.NOT_AN_OPTION) and unknown.stated == ""
+    for value in ("characters:mara", {"characters:mara": True}, True, 0):
+        assert _unreadable(_select_answer(value))
+
+
+def test_outcome_and_render_spell_a_selection():
+    items = [Item("ctx", (_select(),))]
+    for chosen in (("characters:mara", "characters:seraphine"), ()):
+        results = (ItemResult({"saw": Answer(chosen)}, backend="native"),)
+        out = decisions.outcome("native", "p", "m", results)
+        assert out["items"][0]["answers"]["saw"] == {"answer": list(chosen)}
+        text = decisions.render(results, items, explain=False)
+        assert json.loads(text) == {"0": {"answers": {"saw": list(chosen)}}}
+        (back,) = decisions.parse(text, items, explain=False)
+        assert back.answers["saw"] == Answer(chosen)
+
+
+def test_native_gap_names_a_select():
+    gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _select())))
+    assert "saw" in gap and "multi-select" in gap
 
 
 def test_native_questions_are_the_three_an_endpoint_has():
