@@ -1223,18 +1223,46 @@ _DECIDE_ITEMS = [
                    (dec.Option("drift", "Drifted from the anchor"),
                     dec.Option("in_voice", "In voice"))),)),
 ]
-for _explain in ("", "Say in one sentence what settled it."):
-    for _n in (1, 2):
-        _items = _DECIDE_ITEMS[:_n]
-        _label = f"{_n} item(s), explain={bool(_explain)}"
-        check_messages(f"decide ({_label})",
-                       [{"role": "system",
-                         "content": render("decide/system.j2",
-                                           schema=dec.schema(_items, explain=bool(_explain)),
-                                           explain=bool(_explain))},
-                        {"role": "user",
-                         "content": render("decide/user.j2", items=_items, explain=_explain)}],
-                       inference.structured_messages(_items, explain=_explain))
+#: 01e's kinds, each with the system-prompt bullet that explains it. A bullet
+#: renders only beside a question of its kind, so `_DECIDE_ITEMS` (today's
+#: call sites' kinds) must carry none of them -- their prompts stay
+#: byte-identical -- and `_DECIDE_NEW_ITEMS` must carry its own.
+_DECIDE_BULLETS = {
+    "rank": "- a ranking is answered with a list of candidate ids, best first",
+}
+_DECIDE_NEW_ITEMS = [
+    dec.Item("Mara asks the harbourmaster about the Saltmarch ledger.", (
+        dec.Rank("relevant", "Which scenes matter most to this turn?",
+                 (dec.Option("scene:ledger", "Mara loses the ledger at the pier"),
+                  dec.Option("scene:market", "Winifred counts the stalls"),
+                  dec.Option("scene:storm", "Seraphine waits out the storm")),
+                 top=2, allow_none=True, pointwise="Does this scene bear on the ledger?"),
+        dec.Predicate("over", "Is the scene over?"))),
+]
+for _set, _items_all in (("decide", _DECIDE_ITEMS), ("decide 01e", _DECIDE_NEW_ITEMS)):
+    for _explain in ("", "Say in one sentence what settled it."):
+        for _n in (1, 2):
+            _items = _items_all[:_n]
+            if len(_items) < _n:
+                continue
+            _label = f"{_n} item(s), explain={bool(_explain)}"
+            _messages = inference.structured_messages(_items, explain=_explain)
+            check_messages(f"{_set} ({_label})",
+                           [{"role": "system",
+                             "content": render("decide/system.j2",
+                                               schema=dec.schema(_items,
+                                                                 explain=bool(_explain)),
+                                               explain=bool(_explain),
+                                               kinds=dec.kinds(_items))},
+                            {"role": "user",
+                             "content": render("decide/user.j2", items=_items,
+                                               explain=_explain)}],
+                           _messages)
+            for _kind, _bullet in _DECIDE_BULLETS.items():
+                _asked = _kind in dec.kinds(_items)
+                REPORT.require(f"{_set} ({_label}): the {_kind} bullet only beside a {_kind}",
+                               (_bullet in _messages[0]["content"]) == _asked,
+                               f"the {_kind} bullet is {'missing' if _asked else 'present'}")
 
 # ------------------------------------------------------------- store fixture
 

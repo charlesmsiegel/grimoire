@@ -1643,6 +1643,113 @@ def grade_decide_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
                                               native=ctx.get("native_results"))]
 
 
+# ------------------------------------------- cases 15-17: 01e's vocabulary
+#
+# Rank, MultiSelect and Joint convert no call site (01e §2), so these cases ask
+# synthetic items built here rather than through a store helper. What they
+# hold: the real templates carry each new kind's question line, its options and
+# its system-prompt bullet, the schema reaches the system message, and a
+# hand-written reply of each shape -- valid, duplicated, naming an unknown id,
+# too short, null -- reads through `decisions.parse` as the contract says.
+# Each is metered under an existing decide task: a live run has to resolve a
+# Decision route, and no route is added for an eval (`test_routing_guard.py`),
+# so the task names only where the call is filed.
+
+def _vocabulary_prompt(ctx: dict) -> list[dict]:
+    return inference.structured_messages(ctx["items"], explain=ctx["explain"])
+
+
+def _vocabulary_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=bool(ctx["explain"]))
+
+
+def _grade_vocabulary(ctx: dict, output: str, *, lines: list[str], bullet: str,
+                      answer: Callable[[decisions.Answer], tuple[bool, str]]
+                      ) -> list[Check]:
+    """The prompt checks every 01e case shares, then `answer` on the one
+    question's answer -- read from the native result itself where a native
+    endpoint answered (`native_results`), since `decisions.render` writes
+    what no structured reply could say (a tie) as null."""
+    messages = ctx["messages"]
+    system, user = messages[0]["content"], messages[1]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_vocabulary_schema(ctx))
+    missing = [line for line in lines if line not in user]
+    checks = [Check("prompt.question", not missing,
+                    f"question or option lines missing from the user message: {missing}"),
+              Check("prompt.kind", bullet in system,
+                    "the system message does not explain this kind of answer"),
+              Check("prompt.context", ctx["items"][0].context in user,
+                    "the item's context is not in the user message"),
+              Check("prompt.schema", schema in system,
+                    "the reply's JSON Schema is not in the system message")]
+    if decisions.find_object(output) is None:
+        return [*checks, Check("decide.json", False, "no JSON object recoverable from the reply")]
+    (parsed,) = decisions.parse(output, ctx["items"], explain=bool(ctx["explain"]))
+    result = (ctx.get("native_results") or {}).get(0, parsed)
+    (question,) = ctx["items"][0].questions
+    ok, detail = answer(result.answers[question.id])
+    return [*checks, Check("decide.json", True), Check("decide.answer", ok, detail)]
+
+
+# ------------------------------------------- case 15: decide, rank
+
+#: The turn the scenes are ranked for: Mara asking after a ledger she lost.
+DECIDE_RANK_TURN = ("Mara asks Winifred, on the Saltmarch pier, whether the harbour ledger "
+                    "she lost there last spring was ever found.")
+DECIDE_RANK_SCENES = (
+    decisions.Option("scene:lost-ledger", "Mara drops the harbour ledger off the Saltmarch "
+                                          "pier in a squall, and it sinks."),
+    decisions.Option("scene:market-day", "Winifred counts the market stalls of Saltmarch "
+                                         "on a quiet morning."),
+    decisions.Option("scene:ledger-search", "Winifred has the harbour dredged for Mara's "
+                                            "ledger, and the divers come up empty."),
+    decisions.Option("scene:storm-watch", "Seraphine Vale waits out a storm in a hill fort "
+                                          "far inland, alone."),
+    decisions.Option("scene:new-boat", "Mara buys a second-hand fishing boat and names it "
+                                       "after her mother."),
+)
+#: The two scenes the turn cannot be played consistently without, in either
+#: order, and the one it has least to do with.
+DECIDE_RANK_NEEDED = frozenset({"scene:lost-ledger", "scene:ledger-search"})
+DECIDE_RANK_UNRELATED = "scene:storm-watch"
+
+
+def build_decide_rank() -> dict:
+    """Five earlier Saltmarch scenes, ranked for one turn about Mara: the top
+    three at least. No store: the item is the whole fixture."""
+    rank = decisions.Rank(
+        "relevant", "Order these earlier scenes by how much the current turn needs them "
+                    "to stay consistent, the most needed first.",
+        DECIDE_RANK_SCENES, top=3,
+        pointwise="Does this earlier scene hold something the current turn needs to stay "
+                  "consistent with?")
+    return {"items": (decisions.Item(f"Current turn: {DECIDE_RANK_TURN}", (rank,)),),
+            "explain": ""}
+
+
+def _grade_rank_answer(answer: decisions.Answer) -> tuple[bool, str]:
+    ranking = answer.answer
+    if not isinstance(ranking, decisions.Ranking):
+        return False, f"no ranking ({answer.reason}{'/' + answer.detail if answer.detail else ''})"
+    # The tiers in order, a tie's members together in candidate order: the
+    # grade is which candidates come first, not the order inside the top two.
+    ordered = [c for tier in ranking.tiers for c in tier]
+    ok = (set(ordered[:2]) == DECIDE_RANK_NEEDED
+          and DECIDE_RANK_UNRELATED not in ordered[:3])
+    return ok, f"ranked {[list(t) for t in ranking.tiers]}"
+
+
+def grade_decide_rank(ctx: dict, output: str) -> list[Check]:
+    (rank,) = ctx["items"][0].questions
+    lines = [(f"- {rank.id} (ranking, best first, at least the top {rank.top}): "
+              f"{rank.instructions}"),
+             *(f"  - {opt.id}: {opt.description}" for opt in rank.candidates)]
+    return _grade_vocabulary(ctx, output, lines=lines, answer=_grade_rank_answer,
+                             bullet="- a ranking is answered with a list of candidate ids, "
+                                    "best first, each at most once")
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1923,6 +2030,27 @@ CASES: tuple[Case, ...] = (
              # Well formed, and a null: control handed back to the player
              # when the player had asked someone a question.
              Recording("abstained", ("decide.answer",), "json"))),
+    Case(id="decide-rank",
+         task="continuity-reconcile",
+         hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "
+                    "turn about Mara's lost ledger, at least the top three, the reply is a "
+                    "list of candidate ids, each once, putting the two ledger scenes first "
+                    "and the unrelated inland one outside the top three",
+         build=build_decide_rank,
+         prompt=_vocabulary_prompt,
+         grade=grade_decide_rank,
+         schema=_vocabulary_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # A candidate listed twice: which place was meant cannot be
+             # told, so the ranking is unreadable rather than repaired.
+             Recording("duplicate", ("decide.answer",), "json"),
+             # An id no candidate has: `not_an_option`, never dropped.
+             Recording("unknown-id", ("decide.answer",), "json"),
+             # Two ranked where at least three were asked for.
+             Recording("short", ("decide.answer",), "json"),
+             # A null, which this rank does not allow.
+             Recording("null", ("decide.answer",), "json"))),
 )
 
 BY_ID = {c.id: c for c in CASES}

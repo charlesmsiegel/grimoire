@@ -19,6 +19,8 @@ from grimoire.decisions import (
     ItemResult,
     Option,
     Predicate,
+    Rank,
+    Ranking,
     Score,
 )
 from tests.test_llm import _sibling_imports
@@ -162,14 +164,22 @@ def test_schema_keys_items_by_index():
 #: The JSON Schema keywords both OpenAI strict mode and Anthropic's
 #: `output_config.format` document. Anything else (numeric bounds, `pattern`,
 #: `description`, `$ref`, a type array) is a schema one provider may refuse.
-SHARED_SUBSET = {"type", "enum", "anyOf", "required", "properties", "additionalProperties"}
+#: An array (01e) carries `items` and nothing else: no `minItems`, `maxItems`
+#: or `uniqueItems`, which one provider or the other refuses or never
+#: documents -- the parser holds a list's count and uniqueness.
+SHARED_SUBSET = {"type", "enum", "anyOf", "items", "required", "properties",
+                 "additionalProperties"}
 
 
 def _walk(node, path="$"):
     assert isinstance(node, dict), path
     assert set(node) <= SHARED_SUBSET, (path, set(node) - SHARED_SUBSET)
     assert not isinstance(node.get("type"), list), path
-    assert node.get("type") in {"object", "string", "boolean", "integer", "null", None}, path
+    assert node.get("type") in {"object", "array", "string", "boolean", "integer", "null",
+                                None}, path
+    assert ("items" in node) == (node.get("type") == "array"), path
+    if "items" in node:
+        _walk(node["items"], f"{path}[]")
     if "enum" in node:
         assert all(isinstance(v, (str, int)) for v in node["enum"]), path
     if node.get("type") == "object":
@@ -187,6 +197,8 @@ def test_schema_uses_only_the_shared_subset():
         _item(allow_none=False),
         _choice_item(_options(decisions.MAX_OPTIONS)),
         Item("ctx", (Score("s", "i", ("a",) * decisions.MAX_LEVELS),)),
+        Item("ctx", (Rank("r", "i", (MARA, WINIFRED, GRIMOIRE)),
+                     Rank("n", "i", (MARA, WINIFRED), top=1, allow_none=True))),
     ]
     for explain in (True, False):
         _walk(decisions.schema(items, explain=explain))
@@ -1087,3 +1099,164 @@ def test_outcome_writes_marginals_and_expected():
     assert answers["rank"] == {"answer": None, "reason": "unreadable",
                                "marginals": {"a": 0.25}}
     json.dumps(out)
+
+
+# --- 01e: Rank, on the structured path ----------------------------------------
+
+SCENES = tuple(Option(f"scene:{name}", f"The {name} scene") for name in
+               ("pier", "market", "storm", "ledger", "tide"))
+
+
+def _rank(n: int = 3, **kw) -> Rank:
+    return Rank("relevant", "Order them", SCENES[:n], **kw)
+
+
+def _rank_answer(value, rank: Rank | None = None) -> Answer:
+    rank = rank or _rank()
+    (result,) = decisions.parse(json.dumps({"0": {"answers": {rank.id: value}}}),
+                                [Item("ctx", (rank,))], explain=False)
+    return result.answers[rank.id]
+
+
+def test_question_kinds_are_class_constants():
+    import dataclasses
+    assert [cls.KIND for cls in (Predicate, Choice, Score, Rank)] == [
+        "predicate", "choice", "score", "rank"]
+    for cls in (Predicate, Choice, Score, Rank):
+        assert "KIND" not in {f.name for f in dataclasses.fields(cls)}
+    assert _rank().KIND == "rank"
+    assert decisions.kinds([_item(), Item("c", (_rank(), Predicate("p", "i")))]) == (
+        "predicate", "choice", "score", "rank")
+
+
+def test_validate_rank_bounds():
+    candidates = tuple(Option(f"c{i}", "") for i in range(decisions.MAX_RANK_CANDIDATES + 1))
+    assert decisions.MAX_RANK_CANDIDATES == 32
+    for n in (2, decisions.MAX_RANK_CANDIDATES):
+        decisions.validate([Item("c", (Rank("r", "i", candidates[:n]),))])
+    for n in (1, decisions.MAX_RANK_CANDIDATES + 1):
+        with pytest.raises(DecideRequestError, match="candidates"):
+            decisions.validate([Item("c", (Rank("r", "i", candidates[:n]),))])
+    for top in (1, 3):
+        decisions.validate([Item("c", (_rank(top=top),))])
+    for top in (0, 4, True, -1, 1.0):
+        with pytest.raises(DecideRequestError, match="top"):
+            decisions.validate([Item("c", (_rank(top=top),))])
+    collide = (Option("scene:pier", "", aliases=("the pier",)),
+               Option("the_pier", ""))
+    with pytest.raises(DecideRequestError, match="collides"):
+        decisions.validate([Item("c", (Rank("r", "i", collide),))])
+    with pytest.raises(DecideRequestError, match="reserved"):
+        decisions.validate([Item("c", (Rank("r", "i", (MARA, Option(NONE_KEY, ""))),))])
+    with pytest.raises(DecideRequestError, match="not an Option"):
+        decisions.validate([Item("c", (Rank("r", "i", (MARA, "characters:winifred")),))])
+
+
+def test_rank_schema_is_an_array_of_its_ids():
+    answers = decisions.schema([Item("c", (
+        _rank(), Rank("maybe", "i", SCENES[:2], allow_none=True)))], explain=False)
+    props = answers["properties"]["0"]["properties"]["answers"]["properties"]
+    assert props["relevant"] == {"type": "array", "items": {
+        "type": "string", "enum": ["scene:pier", "scene:market", "scene:storm"]}}
+    assert props["maybe"] == {"anyOf": [
+        {"type": "array", "items": {"type": "string",
+                                    "enum": ["scene:pier", "scene:market"]}},
+        {"type": "null"}]}
+
+
+def test_enum_values_and_schema_chars_count_rank_candidates():
+    item = Item("c", (_rank(5), Predicate("p", "i")))
+    assert decisions.enum_values(item) == 5
+    plain = Item("c", (Predicate("p", "i"),))
+    assert decisions.schema_chars([item]) - decisions.schema_chars([plain]) == (
+        len("relevant") + sum(len(opt.id) for opt in SCENES))
+
+
+def test_parse_rank_reads_exact_aliased_and_normalised_entries():
+    aliased = Rank("relevant", "i", (Option("scene:pier", "", aliases=("The Pier",)),
+                                     Option("scene:market", ""), Option("scene:storm", "")))
+    answer = _rank_answer(["the-pier", "Scene:Storm", "scene:market"], aliased)
+    assert answer == Answer(Ranking((("scene:pier",), ("scene:storm",), ("scene:market",))))
+    assert answer.marginals is None and answer.expected is None and answer.stated == ""
+
+
+def test_parse_rank_unknown_entry_is_not_an_option_and_is_never_dropped():
+    answer = _rank_answer(["scene:pier", "scene:moon", "scene:storm", "scene:market"])
+    assert _unreadable(answer, decisions.NOT_AN_OPTION)
+    assert answer.stated == "" and decisions.was_read(answer)
+    assert _unreadable(_rank_answer(["scene:pier", 3, "scene:storm"]), decisions.NOT_AN_OPTION)
+    # An unknown entry beside a duplicate: a value naming nothing was given.
+    assert _unreadable(_rank_answer(["scene:pier", "scene:pier", "scene:moon"]),
+                       decisions.NOT_AN_OPTION)
+
+
+def test_parse_rank_duplicate_is_unreadable_and_was_read():
+    answer = _rank_answer(["scene:pier", "scene:storm", "Scene:Pier"])
+    assert _unreadable(answer) and decisions.was_read(answer)
+
+
+def test_parse_rank_too_short_is_unreadable():
+    assert _unreadable(_rank_answer(["scene:pier", "scene:storm"]))
+    assert _unreadable(_rank_answer([]))
+    assert _unreadable(_rank_answer(["scene:pier"], _rank(top=2)))
+    top2 = _rank_answer(["scene:storm", "scene:pier"], _rank(top=2))
+    assert top2 == Answer(Ranking((("scene:storm",), ("scene:pier",)), rest=("scene:market",)))
+    # Ranking past `top` is an answer, not an error: rest is what was left out.
+    assert _rank_answer(["scene:storm", "scene:pier", "scene:market"], _rank(top=1)) == Answer(
+        Ranking((("scene:storm",), ("scene:pier",), ("scene:market",))))
+    rest_order = _rank_answer(["scene:ledger"], _rank(5, top=1))
+    assert rest_order.answer.rest == ("scene:pier", "scene:market", "scene:storm", "scene:tide")
+
+
+def test_parse_rank_null_and_wrong_types():
+    assert _rank_answer(None, _rank(allow_none=True)) == Answer(None, "abstained")
+    assert _unreadable(_rank_answer(None))
+    for value in ("scene:pier, scene:storm", {"0": "scene:pier"}, 1, True):
+        assert _unreadable(_rank_answer(value))
+
+
+def test_ranking_flat_and_position():
+    strict = Ranking((("a",), ("b",)), rest=("c", "d"))
+    assert strict.flat() == ("a", "b")         # rest is not ranked, so not flattened
+    assert strict.position("b") == 1
+    assert strict.position("c") is None and strict.position("zz") is None
+    tied = Ranking((("a",), ("c", "b"), ("d",)))
+    with pytest.raises(ValueError, match="tie-break"):
+        tied.flat()
+    assert tied.flat(tiebreak=lambda c: c) == ("a", "b", "c", "d")
+    assert tied.flat(tiebreak=["c", "b"].index) == ("a", "c", "b", "d")
+    assert tied.position("b") == tied.position("c") == 1
+
+
+def test_outcome_and_render_spell_a_ranking():
+    rank = _rank()
+    items = [Item("ctx", (rank,))]
+    strict = Ranking((("scene:storm",), ("scene:pier",), ("scene:market",)))
+    tied = Ranking((("scene:storm", "scene:pier"), ("scene:market",)))
+    results = (ItemResult({"relevant": Answer(strict)}, backend="native"),)
+    assert decisions.outcome("native", "p", "m", results)["items"][0]["answers"] == {
+        "relevant": {"answer": {"tiers": [["scene:storm"], ["scene:pier"], ["scene:market"]],
+                                "rest": []}}}
+    text = decisions.render(results, items, explain=False)
+    assert json.loads(text) == {"0": {"answers": {
+        "relevant": ["scene:storm", "scene:pier", "scene:market"]}}}
+    (back,) = decisions.parse(text, items, explain=False)
+    assert back.answers["relevant"] == Answer(strict)
+    tied_text = decisions.render((ItemResult({"relevant": Answer(tied)}),), items,
+                                 explain=False)
+    assert json.loads(tied_text) == {"0": {"answers": {"relevant": None}}}
+    out = decisions.outcome("native", "p", "m", (ItemResult({"relevant": Answer(tied)}),))
+    assert out["items"][0]["answers"]["relevant"]["answer"]["tiers"] == [
+        ["scene:storm", "scene:pier"], ["scene:market"]]
+    json.dumps(out)
+
+
+def test_native_gap_names_a_rank():
+    gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _rank(pointwise="Relevant?"))))
+    assert "relevant" in gap and "rank" in gap
+
+
+def test_native_questions_are_the_three_an_endpoint_has():
+    assert decisions.native_questions(_item()) == _item().questions
+    with pytest.raises(ValueError, match="relevant"):
+        decisions.native_questions(Item("c", (Predicate("p", "i"), _rank())))

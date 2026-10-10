@@ -1264,3 +1264,57 @@ def test_a_failed_call_record_carries_kind_and_status_but_no_detail(client):
     assert ok.error_kind == "" and failed.items == (8,)
     assert (failed.error_kind, failed.error_status) == ("network", None)
     assert "connection reset" not in repr(dataclasses.asdict(failed))
+
+
+# --- 01e: the new kinds' prompts -------------------------------------------------
+
+SCENES = (Option("scene:ledger", "Mara loses the ledger at the pier"),
+          Option("scene:market", "Winifred counts the stalls"),
+          Option("scene:storm", "Seraphine waits out the storm"))
+RANK = decisions.Rank("relevant", "Which scenes matter most to this turn?", SCENES,
+                      top=2, allow_none=True, pointwise="Does this scene bear on the ledger?")
+#: Each 01e kind's system-prompt bullet, as it opens.
+NEW_BULLETS = {"rank": "- a ranking is answered with a list of candidate ids"}
+
+
+def test_a_rank_renders_its_line_candidates_and_bullet():
+    system, user = (m["content"] for m in inference.structured_messages(
+        [Item("Mara asks after the ledger.", (RANK,))]))
+    assert ("- relevant (ranking, best first, at least the top 2, or null if they cannot "
+            "be ordered): Which scenes matter most to this turn?") in user
+    for opt in SCENES:
+        assert f"\n  - {opt.id}: {opt.description}" in user
+    # The pointwise question is a native stage's alone.
+    assert RANK.pointwise not in user and RANK.pointwise not in system
+    assert NEW_BULLETS["rank"] in system
+    plain = decisions.Rank("relevant", "Order them.", SCENES)
+    (_, user) = (m["content"] for m in inference.structured_messages(
+        [Item("ctx", (plain,))]))
+    assert "- relevant (ranking, best first): Order them." in user
+
+
+def test_an_old_kind_batch_carries_no_new_bullet():
+    """Today's call sites ask predicates, choices and scores: the bullets 01e
+    adds render only beside their own kind, so those prompts do not move."""
+    old = [Item("Mara closes the door.", (
+        Predicate("over", "Is the scene over?"),
+        Choice("next", "Who speaks next?", (Option("mara", "Mara"), Option("winifred", "W")),
+               allow_none=True),
+        Score("tone", "How tense?", ("calm", "tense"))))]
+    system = inference.structured_messages(old, explain="Why?")[0]["content"]
+    for bullet in NEW_BULLETS.values():
+        assert bullet not in system
+    assert ("- a choice is answered with the id of one of its options, exactly as listed, "
+            "or null where the schema allows it;\n- a scale is answered") in system
+
+
+def test_decide_answers_a_rank_on_a_structured_stage(client):
+    _store(client, fallback=False)
+    fake = FakeLLM([[decision_reply({"relevant": ["scene:storm", "scene:ledger"]})]])
+    got = _decide(fake, [Item("Mara asks after the ledger.", (RANK,))])
+    answer = got.items[0].answers["relevant"]
+    assert answer == decisions.Answer(decisions.Ranking(
+        (("scene:storm",), ("scene:ledger",)), rest=("scene:market",)))
+    assert got.items[0].backend == "structured"
+    assert fake.schemas[-1]["properties"]["0"]["properties"]["answers"]["properties"][
+        "relevant"]["anyOf"][0]["type"] == "array"
