@@ -19,6 +19,7 @@ structured backend uses it").
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | `generate` / `decide` operations, `wire.Target.structured`, `llm.SchemaRefusalError`, the `structured_output` capability with provenance | 01 (landed, slices F and I) | Everything here is an extension of those four. | Hard |
+| 01i-C1 (`wire.Limits`, max output) | 01i | The `max_tokens` cap is also held to the model's known maximum output (section 3.9). Without it the caller's cap alone applies. | Soft |
 | 01a-C1 (eval cost, latency, tokens) | 01a | Optional: comparing an adopter's parse-failure rate with and without the mode. Not needed to land the mechanism. | Soft |
 
 ## Required by
@@ -342,7 +343,7 @@ its own change, behind its own evidence.
 | `tracker-update` | its own | per-character state | On every post, so its cassettes are the most numerous. |
 | `absorb`, `dossier`, `audit` | `absorb.parse` | large | The absorb contract is guarded by the evals (`evals/run.py`). Convert only behind them. |
 | `tagline` | first line of text | — | Not JSON. Not an adopter. |
-| `history-query-plan` (10-C1) | new | 10's plan | Born structured. |
+| `history_plan` (10-C1) | new | 10's plan | Born structured. |
 | 12's final record, 01g's finalize turn | new | consumer's | Born structured. |
 
 The pilot changes `templates/scene_intent/system.j2` to render the schema
@@ -352,14 +353,53 @@ The pilot changes `templates/scene_intent/system.j2` to render the schema
 are part of `make check`, which is the point: a reworded prompt fails
 loudly.
 
+### 3.9 A per-call output cap: `generate(max_tokens=)`
+
+10's query plan (10-C1) is a short structured reply on Fast, and must not
+inherit a role-play preset's long cap. 01g's turns need the same thing (its
+run budget sends a per-turn cap). Today the only output cap is a sampler
+preset's `max_tokens`, chosen per route rather than per call.
+
+```python
+# wire.py
+def with_output_cap(self, n: int) -> Target:
+    """A NEW target whose sampling `max_tokens` is min(the preset's, n), or
+    n when the preset sets none. The preset's id, name and scope are kept, so
+    the ledger still names the preset the call was sent with."""
+
+# inference.py
+generate(task, messages, *, client, resolved, usage=None, schema=None,
+         max_tokens: int | None = None, stream=True)
+```
+
+- With `max_tokens`, `generate` sends a per-call chain whose every target is
+  `with_output_cap(max_tokens)`. This is the same per-call, new-target rule as
+  section 3.2, so the resolution is never mutated. A positive int is
+  required; anything else is a `ValueError` before any call.
+- `llm_sampling.effective` translates the cap per adapter exactly as it does a
+  preset's: `max_completion_tokens` on the OpenAI API, and the required
+  `max_tokens` on the Anthropic API, where adaptive thinking's budget is
+  already held to half of it. The Claude Agent SDK takes no sampling, so the
+  cap is not sent there. That is stated in the capture's controls report
+  (`llm_sampling.report`), not hidden.
+- Where 01i-C1 knows the model's maximum output, the sent cap is also capped
+  at it.
+- A refusal naming `max_tokens` is a preset refusal (`llm._preset_refusal`)
+  as today, because the cap travels as a sampler field. That is right: it is
+  a control this request sent.
+- A cap that cuts a structured reply short leaves unparseable JSON. That is
+  the caller's "no JSON" outcome (section 3.6), so a caller sizes the cap to
+  its schema.
+
 ## 4. Contract
 
 **01f-C1 — `generate(schema=...)` requests a provider's structured mode per
-attempt, with the schema still in the prompt.**
+attempt, with the schema still in the prompt, and takes a per-call
+`max_tokens` cap.**
 
 - Input: `inference.generate(task, messages, *, client, resolved, usage,
-  schema: dict, stream)`. The `resolved`, `usage` and `stream` rules are
-  unchanged.
+  schema: dict, max_tokens: int | None, stream)`. The `resolved`, `usage`
+  and `stream` rules are unchanged.
 - Refused before any client call (`ValueError`, so no holder is stamped and
   no row is filed):
   - a schema that fails `schemas.check`;
@@ -370,6 +410,11 @@ attempt, with the schema still in the prompt.**
   when its model's `structured_output` resolves `yes`. Every other attempt is
   sent the request it would have been sent without the schema. The
   resolution is never mutated.
+- `max_tokens` (section 3.9), with or without a schema, caps each attempt's
+  output at `min(preset's cap, max_tokens, 01i-C1's max output where known)`
+  through `wire.Target.with_output_cap`, on new per-call targets. It is not
+  sent on the Claude Agent SDK, which takes no sampling. A value that is not
+  a positive int is a `ValueError` before any call.
 - Output: the reply text, as today. Nothing about the reply is guaranteed to
   conform.
 
@@ -389,7 +434,7 @@ health failure.**
 - On the streamed path, a re-send happens only before any text has reached
   the caller, which `_resilient` guarantees.
 
-**01f-C3 (new) — one portable-schema rule and one tolerant reader.**
+**01f-C3 — one portable-schema rule and one tolerant reader.**
 
 - `schemas.check(schema)` is the subset in section 3.1, raising
   `SchemaError(ValueError)`. `decisions.schema` output always passes it.

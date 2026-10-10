@@ -1,6 +1,6 @@
 # 01a. Eval cost, latency and token reporting
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01a in `ROADMAP-CHECKLIST.md`. Lane: Decision (01a, 01b → 01c,
 01d → 02); it also feeds the retrieval lane (01h, 09, 10, 12).
@@ -25,15 +25,25 @@ double-charge ordinary users merely to collect telemetry"), against the landed
 
 ## Required by
 
-| Contract (provided here) | Consumer | What the consumer uses it for |
-|---|---|---|
-| 01a-C1 | 01c | the cost and latency side of the native-vs-structured distribution policy (01c-C1) |
-| 01a-C1 | 01d | escalation rate, per-hop cost and latency, per backend (01d-C3 tunes thresholds through it) |
-| 01a-C1 | 01h | embedding eval rows (01h-C6) reported with the same columns |
-| 01a-C1 | 02, 09, 10 | eval gates that state what a gated feature costs per turn |
-| 01a-C1 | 12 | the eval gate before broad use reads a multi-call case's totals |
-| 01a-C2 | 01c, 01d, 01h, 02, 09, 10, 12 | every live eval is metered without touching the library's spend |
-| 01a-C3 | 01c, 01d, 02 | one table comparing backends and configurations |
+Rebuilt from the "Dependency edges" list in `ROADMAP-CHECKLIST.md`.
+
+| Contract (provided here) | Consumer | Edge | What the consumer uses it for |
+|---|---|---|---|
+| 01a-C1, 01a-C3 | 01c | H to switch a task on | the evidence `TaskPolicy.native_first` needs (01c-C1): native and structured on one model, compared on cost, latency and answers |
+| 01a-C1, 01a-C3 | 01d | H to enable escalation | escalation rate and per-hop cost and latency, aggregated by `hop` (rows carry `hop: escalation`, 01d-C2b), and per backend for tuning the thresholds (01d-C3) |
+| 01a-C1 | 01e | S | cost and latency of `Rank`, a finer `Score` and multi-select against what they replace |
+| 01a-C1 | 01f | S | cost of structured generation against prose plus parsing |
+| 01a-C1, 01a-C2 | 01h | H for C6 | embedding eval rows (recall at k) metered and reported with the same columns |
+| 01a-C3 | 01h | S | comparing embedding spaces and options in one table |
+| 01a-C1, 01a-C2, 01a-C3 | 02 | H for every play gate | each play gate states what the gated feature costs per turn. A play case is summed across every task it ran (§8) |
+| 01a-C1 | 09 | H for live evals | the long-history eval suite's latency and cost (09-C4) |
+| 01a-C1 | 10 | H for live evals | the query-planning eval's cost per turn, the repair hop included |
+| 01a-C3 | 10 | S | comparing planning configurations |
+| 01a-C1, 01a-C2 | 12 | H | the eval gate before broad use reads a multi-call case's totals |
+| 01a-C1 | 13 | S | cost and latency of Decision-chosen NPC actions |
+
+11 cites no 01a contract. 01g reaches 01a only through 01h-C6, and through
+12's gate.
 
 ## 1. Current state (reconciled against main)
 
@@ -286,15 +296,33 @@ per case:
            wall 4.21s  calls 5 (stage 0: native 3/3; stage 1: structured 2)  tokens 8,112 / 1,040  billed $0.0091  modelled ~$0.0012  incomplete: 3 unpriced
 ```
 
-After the case lines comes an aggregate block per backend and per route.
-`route` is `store.routing.route(row["task"]).key`, or `embed` for a task in
-`routing.EMBED_TASKS`. `backend` is the row's `decision_mode` for a decide
-row, and the operation name otherwise:
+**A case that runs several tasks** (02's play gates: a speaker pick, a turn
+plan, the turn itself and its follow-ups) is summed across all of them. The
+case's `bucket` folds every harvested row whatever its task. Under the case
+line, a `by task` sub-block shows the same columns per task, so a reader can
+see what each part of one played turn cost. Several decide invocations in one
+case need nothing more. `Decision.calls` is per invocation, and the runner
+keeps one list per invocation.
+
+After the case lines comes an aggregate block keyed by route, backend and
+`hop`:
+
+- `route` is `store.routing.route(row["task"]).key`, or `embed` for a task in
+  `routing.EMBED_TASKS`.
+- `backend` is the row's `decision_mode` for a decide row, and the operation
+  name otherwise.
+- `hop` is the row's `hop` field: `escalation` for a call 01d's escalation
+  sent (01d-C2b), and `-` for a row that has none, which is every call of the
+  unchanged chain.
+
+`hop` is read off the copy of the row in the run file. It is not inferred from
+the stage, because an escalation hop runs after the whole chain, not as a
+later stage of it. 01a adds no `hop` field to any row; 01d adds it.
 
 ```
-by route / backend          calls  wall      tokens in/out   billed     sub-equiv   modelled   unpriced
-continuity / native             3  -         2,904 / -       $0.0060    -           -          0
-continuity / structured         2  -         5,208 / 1,040   $0.0031    -           ~$0.0012   0
+by route / backend / hop    calls  wall      tokens in/out   billed     sub-equiv   modelled   unpriced
+continuity / native / -         3  -         2,904 / -       $0.0060    -           -          0
+continuity / structured / -     2  -         5,208 / 1,040   $0.0031    -           ~$0.0012   0
 ```
 
 The `wall` column is per case, so it is `-` on route/backend rows that split a
@@ -317,7 +345,7 @@ details, which grade placeholder-only fixtures (`evals/README.md:459-461`):
             "calls": [{"stage": 0, "mode": "native", "items": [0], "row": {"...": "ledger row + scope/eval_run/case"}, "error": ""}],
             "rows": ["<every harvested row, including embeds and non-decide calls>"],
             "bucket": {"...": "usage._rounded bucket"}}],
- "aggregates": {"by_route_backend": {"<route>/<backend>": {"...": "bucket"}}}}
+ "aggregates": {"by_route_backend_hop": {"<route>/<backend>/<hop>": {"...": "bucket"}}}}
 ```
 
 `label` is `<connection kind> / <model> [<backend>]`, which is what
@@ -367,22 +395,25 @@ real store data" (01a-C3), and its test runs on synthetic run files.
 **01a-C1. Reporting.** For every live run, `runner.Result` gains `wall_ms:
 int`, `rows: tuple[dict, ...]` (harvested, §6), `calls: tuple[CallRecord,
 ...]` (decide only), `items: tuple[dict, ...]` (decide only) and `bucket:
-dict` (a `usage._rounded` bucket over `rows`). `runner.report` prints the
-metrics line per case and the per-route/backend aggregate block (§8).
+dict` (a `usage._rounded` bucket over `rows`, every task of the case folded in).
+It also gains `by_task: dict[str, dict]`, one bucket per task. `runner.report`
+prints the metrics line per case, a `by task` sub-block for a case that ran
+more than one task, and the aggregate block keyed by route, backend and `hop`
+(§8). The run file's `aggregates` key is `by_route_backend_hop`.
 Guarantees:
 
 - The three money columns are never added together, in any output.
 - An absent price or count is never printed as zero (§7).
 - A structured chunk's figures are never apportioned to items.
 - Wall time and summed call durations are never conflated.
+- A row with no `hop` aggregates under `-`, never under `escalation`.
 
 Failure behaviour: a harvest that cannot read the isolate's ledger (an
 `OSError`) reports `cost: not reported (ledger unreadable)` for that case and
 still grades it. Metrics never turn a passing case into a failing one, or the
 reverse.
 
-**01a-C2. Metering in an eval scope** (refined from the checklist wording
-"file ledger rows under a marked eval scope"):
+**01a-C2. Metering in an eval scope.**
 
 - Every call a live case sends is metered by the production door
   (`store.usage.meter`, directly or through `run_stages`/`embed_sync`).
@@ -404,9 +435,13 @@ reverse.
 - An unknown format or version is refused with one sentence and exit 2.
 - Missing cells are blank, never zero.
 
-**Shared with 01b:** `_Call.stage` and `_Call.positions` (§5) are defined
-identically in 01b-C1. Whichever spec's plan lands first adds them, and the
-other reuses them.
+**Shared structures** (`ROADMAP-CHECKLIST.md`, "Shared structures"):
+
+- `inference._Call.stage` and `positions` (§5) belong to 01a and 01b, and are
+  defined identically in 01b-C1. Whichever plan lands first adds them.
+- `decisions.CallRecord` and `Decision.calls` (§5) belong to 01a. 01d uses
+  them for its escalation hop. 01d decides how an escalation call appears
+  in `Decision.calls`. 01a reads only the row's `hop` field to aggregate it.
 
 ## 10. Interaction with repo rules
 

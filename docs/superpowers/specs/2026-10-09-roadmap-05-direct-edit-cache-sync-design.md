@@ -1,6 +1,6 @@
 # 05. Direct-edit cache sync
 
-**Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
+**Status:** Draft — cross-linked; spec gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 05 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06, and 05 + 07 + 01h -> 08).
 **Baseline:** `main` at `35c1fb7`.
@@ -24,30 +24,30 @@ where.
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
 | 03-C2 | 03 | Liveness by construction. It is the reason sync is a warm-up and never a correctness step (section 3). | Hard |
-| 03-C3 | 03 | The `materialized` record: which kinds were built from a path. It is the whole of "what was hot" (section 6). Section 6.4 asks for one refinement: a projection-qualified vector kind, and an optional `instance` column. | Hard (refinement soft) |
+| 03-C3 | 03 | The `materialized` record: which kinds were built from a path, with the vector kind form `vector:<projection>:<space-digest>` and an optional `instance` column (a recorded cross-spec decision). It is the whole of "what was hot" (section 6). | Hard |
 | 03-C4 | 03 | The one validate-and-hash primitive. Sync calls it for every path, and never hashes or stamps on its own (section 4). | Hard |
 | 03-C5 | 03 | Artifacts may be stored at once, inside the racy window, and only the `sources` row waits. Sync runs seconds after an agent's edit and depends on this (section 4.4). | Hard |
 | 03-C1 | 03 | Composite keys, so that a hook can rebuild a collection-keyed kind for the instance a path feeds. | Soft (only composite hooks need it) |
-| 03 section 12 | 03 | The cache purge on a world or campaign delete. Sync performs it when it finds a deleted world or campaign root (section 7.6). No numbered contract states this today: see Open question 2. | Soft (missing edge) |
+| 03-C8 | 03 | The callable purge for a world or campaign delete, through a purge marker. Sync performs it when it finds a deleted world or campaign root (section 7.6). | Soft |
 | 04-C2a | 04 | `overview.warm_paths(paths)`, the hook through which sync rebuilds 04's overview kinds (section 6.2). | Soft (without it, overview kinds rebuild lazily) |
 | 04-C2b | 04 | The client's consistency bound. Sync inherits it unchanged and adds no retirement step (section 3.2). | Hard (a property relied on, no call made) |
 | 01h-C5 | 01h | `attribute(claims)` and `embed_groups_sync(task, groups, ...)`: one ledger row per campaign, with no request spanning campaigns. Without it, sync makes one `embed_sync` call per campaign group itself (section 6.6). | Soft (the fallback is complete, only less shared) |
 | 01h-C3 | 01h | Embedding options in the space identity. Sync names a space only through `embed_space.endpoint()["space"]`, so it inherits whatever 01h-C3 adds. | Soft |
 | 01h-C1 | 01h | Input type. Sync only ever embeds documents, so once 01h-C1 lands it passes the document type. | Soft |
+| 08-C2c | 08 | 08's hot-rebuild hook (`affected`, `rebuild_documents`, `reembed`), registered into 05's `WarmHook` protocol as the `searchdocs` hook (section 6.2). Without it, SearchDocuments rebuild lazily. | Soft |
 | 01 (landed) | 01 | `inference.embed.embed_sync`, `routing.EMBED_TASKS`, `embed_space.endpoint()` and the metered embed door. | Hard (landed) |
 
-08-C2c (08's rebuild hook) is not a dependency. 05 defines the hook protocol
-(section 6.2), and 08 registers into it.
+05 defines the hook protocol (section 6.2), and 08 registers into it, so the
+edge to 08-C2c is soft in both senses: 05 runs without it, and 08's C2c is
+the only part of 08 that waits for 05-C3.
 
 ## Required by
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 05-C1 | 08 | The vehicle that runs 08's `reembed` after the response, in a worker thread, outside every lock, with failures swallowed: 08's Open question 8 asks for exactly this. |
-| 05-C2 | 06 | The command the store-editing skill tells an agent to run after a batch of direct edits, and the flags it names. |
-| 05-C2 | 08 | `--campaign` and `--world` as the explicit way to bring a scope's hot SearchDocuments current after a bulk change. |
-| 05-C3 | 08 | The hook protocol 08-C2c implements, and the policy 08's vectors follow: re-embed only what was embedded, only in the current space, only text the vector cache does not hold. |
-| 05-C4 (new) | 04 (optional), 05-C1 | The write set: which record paths a request or a run wrote. 04-C2a could use it to generalise `warm_scene` beyond the turn path. It can land before everything else here. |
+| 05-C2 | 06 (hard) | The command the store-editing skill tells an agent to run after a batch of direct edits, and the flags its drift test checks against the parser. |
+| 05-C1, 05-C4 | 06 (soft) | `cache_sync.collecting()`, the in-process form for an agent writing through `grimoire.store` from Python. |
+| 05-C3 | 08 (hard for 08-C2c) | The `WarmHook` protocol 08-C2c implements, run after the response by the write-through queue (05-C1), and the policy 08's vectors follow: re-embed only what was embedded, only in the current space, only text the vector cache does not hold. |
 
 ## 1. Current state (reconciled against main)
 
@@ -566,15 +566,15 @@ file is embedded, and in this repository more than one usually is:
 
 Under a bare `vector:<space>`, 08's hook would read a search-passage row as
 proof that the scene's document was embedded, and the reverse. So this spec
-asks for two refinements of 03-C3, and degrades without them:
+relies on the vector kind form that 03-C3 now carries, a recorded cross-spec
+decision that 03, 05 and 08 all use:
 
 1. **The kind names the projection**: `vector:<projection>:<space-digest>`.
    `<projection>` is a registry kind whose compute produces the embedded text
    from the path's bytes. `<space-digest>` is a short hash of
    `embed_space.endpoint()["space"]`. The raw space id joins provider, rev and
    model with NUL bytes, which do not belong in a kind name. 08 adopts the same
-   form for its scene documents (Open question 4). Without this refinement, no
-   vector kind can be warmed, and the network half of 05-C3 waits.
+   form for its scene documents.
 2. **An optional `instance` column**: small, opaque JSON recorded beside the
    row, for example `{"campaign": "saltmarch", "entity": ["lore", "pact"]}`.
    It lets a hook rebuild an overlaid entry for the campaign that read it, and
@@ -637,7 +637,7 @@ by the size of whatever surrounds the edit.
   task is added. The task is the axis the error store and the Costs page
   aggregate a feature's spend on, and recall's cost is recall's whether it is
   paid on a turn or ahead of one. 08 already embeds its rebuilds under its own
-  task. What sync itself spent is in its report (section 9). Open question 3
+  task. What sync itself spent is in its report (section 9). Open question 1
   records the alternative.
 - **Door.** With 01h-C5, the `vectors` hook calls
   `embed_groups_sync(task, attribute(claims), space=..., client=...)`. A text
@@ -701,7 +701,7 @@ What replaces a confirmation is visibility and an opt-out. `--dry-run` reports
 how many texts would be sent before anything is sent. `--no-embed` (or
 `embed: false`) rebuilds everything else and leaves the vectors to lazy. The
 report counts the texts and requests sent, and every request files a ledger
-row. Open question 5 asks whether a very large explicit batch should still
+row. Open question 2 asks whether a very large explicit batch should still
 want a yes.
 
 ## 7. The CLI and the API (05-C2)
@@ -726,7 +726,7 @@ PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync .
   `main()` and an argparse parser built by `build_parser()`. 06's drift test
   reads that parser. `sync` is a subcommand, so that a later admin surface can
   add `status` or `doctor` without renaming anything. No console script is
-  added (Open question 7).
+  added (Open question 4).
 - **Arguments.** At least one of `PATH`, `--campaign`, `--world` or `--all` is
   required, and they combine: the batch is their union. A `PATH` may be
   store-relative or absolute. An absolute path must be inside the store root
@@ -833,12 +833,12 @@ That is the draft's rule, and it is right. The caller may state one:
 An argument may be a world or campaign root (`worlds/<wid>` or
 `campaigns/<cid>`, from a path or a scope flag) whose directory no longer
 exists. In that case the store has lost a whole world or campaign outside the
-app. When the app deletes one, 03 section 12 purges the cache, so that derived
+app. When the app deletes one, 03-C8 purges the cache, so that derived
 private text does not outlive it, either in this device's file or in other
 devices' synced copies. A delete made by hand deserves the same. So sync runs
 03's purge (the marker, plus this device's purge) and reports `purged`. That
-needs 03 to expose the purge as a callable (Open question 2). Until it does,
-sync reports the root as deleted and says the purge did not run.
+is 03-C8, the callable purge through a purge marker. If 03-C8 has not
+landed, sync reports the root as deleted and says the purge did not run.
 
 ### 7.7 Verify
 
@@ -907,7 +907,7 @@ except `scripts/grimoire_sync.py` over adb. So on Android:
   reports `cache: off` and does nothing else, successfully.
 - `POST /api/cache/sync` is the explicit door. A PC-side tool could reach it
   through `adb forward`. Nothing does today, and lazy rebuilding covers a file
-  `grimoire_sync.py` pushed (Open question 6).
+  `grimoire_sync.py` pushed (Open question 3).
 
 ## 8. Path validation
 
@@ -1257,47 +1257,29 @@ then runs one `cache sync` naming the three paths. Afterwards:
 
 ## 15. Open questions
 
-1. **Does 04-C2's split change the checklist edge?** The checklist has
-   05 depending on 04-C2. 04 split C2 into C2a (`warm_paths`, which 05 calls)
-   and C2b (the client bound, which 05 inherits and does not call), and 04
-   provides no server-side retirement. *Recommendation:* rewrite the edge as
-   "05 <- 04-C2a (soft), 04-C2b (property)", and drop the bundle draft's
-   retirement step, as this spec does.
-2. **03's purge as a callable (missing edge).** Section 7.6 needs 03 section
-   12's world and campaign purge exposed as a function, which no numbered 03
-   contract says. *Recommendation:* add it to 03-C3, or to a new 03 contract.
-   Until then, sync reports a deleted root without purging.
-3. **Which task do re-embeds file under?** This spec uses the producer's own
+1. **Which task do re-embeds file under?** This spec uses the producer's own
    task, as 08 does. The alternative is one `cache-sync` embed task, which
    would make warm-up spend visible as its own line on the Costs page, at the
    cost of splitting a feature's spend across two tasks and making 08's
    `reembed` take a task argument. *Recommendation:* the producer's own task.
    The sync report is where "what did sync spend" is answered.
-4. **The 03-C3 refinements, and 08's vector kind (cross-spec).** A
-   projection-qualified vector kind is needed as soon as two producers embed
-   one file, which is already the case for lore entries and transcripts.
-   08's draft writes a bare `vector:<space key>` on scene paths, which would
-   collide with library search's passages on the same transcript.
-   *Recommendation:* fold `vector:<projection>:<space-digest>` and the
-   `instance` column into 03's plan now, since 03's table is new and has no
-   migration to protect, and have 08 adopt the form.
-5. **Should a large explicit batch ask before embedding?** Section 6.7 argues
+2. **Should a large explicit batch ask before embedding?** Section 6.7 argues
    that no confirmation is needed. A bulk external change could still send many
    requests in one go: for example, a store restored from an old copy and then
    synced with `--all`. *Recommendation:* no confirmation in the first version.
    `--dry-run` shows the number first, and 06's skill tells agents to run it
    before an `--all`. Revisit with a threshold of one `embeddings.BATCH` if the
    dry runs surprise anyone.
-6. **`grimoire_sync.py` after an adb pull.** The adb script writes PC files
+3. **`grimoire_sync.py` after an adb pull.** The adb script writes PC files
    when it pulls a phone's edits, and it never imports `grimoire`. It could
    print the changed paths as a `cache sync` command, or run one.
    *Recommendation:* print the command, and leave the script import-free. Lazy
    rebuilding covers anyone who ignores it.
-7. **A console script.** `grimoire cache sync` reads better than
+4. **A console script.** `grimoire cache sync` reads better than
    `python -m grimoire.cache sync`. *Recommendation:* no console script. The
    house form is `python -m` (`grimoire.where`), and an entry point adds one
    more thing the installers, the venv and the APK must agree on.
-8. **Write-through for 08's scene documents.** A played scene's transcript
+5. **Write-through for 08's scene documents.** A played scene's transcript
    changes every turn. With the quiet period, its SearchDocument and vector
    are rebuilt when play pauses. 08 may prefer `on_write="explicit"`, and
    rebuild at absorb instead. *Recommendation:* leave the choice to 08; the
