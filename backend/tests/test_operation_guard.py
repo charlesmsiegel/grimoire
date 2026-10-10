@@ -172,6 +172,11 @@ def _walk() -> Iterator[tuple[str, ast.Module, bool]]:
 EMBED_MODULE = "grimoire.store.inference.embed"
 EMBED_SYNC = "embed_sync"
 EMBED = "embed"
+#: The run that embeds several campaigns' documents, one call per group
+#: (01h-C5): an operation call like the other two.
+EMBED_GROUPS = "embed_groups_sync"
+#: The operation's names that no other callable in the package shares.
+_OPERATION_NAMES = (EMBED_SYNC, EMBED_GROUPS)
 #: The embeddings client's own module, outside the client rules.
 CLIENT_MODULE = "grimoire.embeddings"
 #: The only modules that call the client: the operation, and the model test's
@@ -196,10 +201,10 @@ def _is_embed_module(node: ast.AST, modules: set[str]) -> bool:
 def _names_operation(node: ast.AST, modules: set[str], names: dict[str, str]) -> bool:
     """Whether a loaded `Name` or `Attribute` names the embed operation."""
     if isinstance(node, ast.Name):
-        return node.id == EMBED_SYNC or names.get(node.id) in (EMBED_SYNC, EMBED)
+        return node.id in _OPERATION_NAMES or names.get(node.id) in (*_OPERATION_NAMES, EMBED)
     if isinstance(node, ast.Attribute):
-        return node.attr == EMBED_SYNC or (node.attr == EMBED
-                                           and _is_embed_module(node.value, modules))
+        return node.attr in _OPERATION_NAMES or (node.attr == EMBED
+                                                 and _is_embed_module(node.value, modules))
     return False
 
 
@@ -748,6 +753,9 @@ _PRELUDE = ("from .. import embed_space\n"
      "    if conn:\n"
      "        space = conn\n"
      "    embed.embed_sync('semantic-recall', t, space=space, client=c)\n"),
+    # The group door, with a space built by hand (01h-C5).
+    ("def f(conn):\n"
+     "    embed.embed_groups_sync('semantic-search', g, space={'space': 's'}, client=c)\n"),
     # A helper returning a hand-built space.
     ("def made():\n"
      "    return {'model': 'm', 'key': 'k', 'base_url': 'u', 'space': 's'}\n"
@@ -781,6 +789,10 @@ def test_the_provenance_guard_flags_planted_cases(src):
     ("def f():\n"
      "    space = embed_space.endpoint()\n"
      "    embed.embed_sync('semantic-recall', t, space=space, client=c)\n"),
+    # The group door, with the role's space (01h-C5).
+    ("def f():\n"
+     "    space = embed_space.endpoint()\n"
+     "    embed.embed_groups_sync('semantic-search', g, space=space, client=c)\n"),
     # Through a parameter, a spread with keys of its own, a fallback, and a
     # helper that may answer None.
     ("def settings():\n"
@@ -867,6 +879,13 @@ def _planted_embed_problems(src: str, modname: str = _EMBED_PLANTED_IN) -> list[
       "asyncio.to_thread(embed.embed_sync, task, t)\n"), _EMBED_PLANTED_IN),
     (("from ..inference.embed import embed_sync\n"
       "asyncio.to_thread(embed_sync, task, t)\n"), _EMBED_PLANTED_IN),
+    # The group door (01h-C5): not an embed task, and not a literal.
+    (("from ..inference import embed\n"
+      "embed.embed_groups_sync('chat', g, space=s, client=c)\n"), _EMBED_PLANTED_IN),
+    (("from ..inference.embed import embed_groups_sync as run\n"
+      "run(task, g, space=s, client=c)\n"), _EMBED_PLANTED_IN),
+    (("from ..inference import embed\n"
+      "asyncio.to_thread(embed.embed_groups_sync, task, g)\n"), _EMBED_PLANTED_IN),
     # The client, called directly from a store module.
     (("_CLIENT = embeddings.EmbeddingsClient()\n"
       "_CLIENT.embed(t, m, k, u)\n"), "grimoire.store.semsearch"),
@@ -889,6 +908,10 @@ def test_the_embed_guard_flags_planted_cases(src, modname):
     (("from .. import store\n"
       "store.inference.embed.embed('semantic-search', t, space=s, client=c)\n"),
      "grimoire.routes.scenes"),
+    # The group door, with an embed task.
+    (("from ..inference import embed\n"
+      "embed.embed_groups_sync('semantic-search', g, space=s, client=c)\n"),
+     _EMBED_PLANTED_IN),
     # The module itself, reached through a chain, as the model test reaches
     # `record_failure`.
     (("from .. import store\n"
