@@ -17,8 +17,10 @@ from grimoire.decisions import (
     DecideRequestError,
     Item,
     ItemResult,
+    Joint,
     MultiSelect,
     Option,
+    Pair,
     Predicate,
     Rank,
     Ranking,
@@ -1353,6 +1355,207 @@ def test_outcome_and_render_spell_a_selection():
 def test_native_gap_names_a_select():
     gap = decisions.native_gap(Item("c", (Predicate("p", "i"), _select())))
     assert "saw" in gap and "multi-select" in gap
+
+
+# --- 01e: Joint, and the native lowering ----------------------------------------
+
+STRIKE = Option("strike", "Strike")
+HEAL = Option("heal", "Tend a wound")
+WITHDRAW = Option("withdraw", "Withdraw along the pier")
+SENTINEL = Option("creatures:sentinel", "The sentinel")
+GULLS = Option("creatures:gulls", "The gull swarm")
+MARA_HURT = Option("characters:mara", "Mara, bleeding")
+
+
+def _joint(**kw) -> Joint:
+    return Joint("act", "What does Seraphine do?", kw.pop("heads", (STRIKE, HEAL, WITHDRAW)),
+                 kw.pop("tails", (("strike", (SENTINEL, GULLS)), ("heal", (MARA_HURT,)))),
+                 **kw)
+
+
+def _joint_answer(value, joint: Joint | None = None) -> Answer:
+    joint = joint or _joint()
+    (result,) = decisions.parse(json.dumps({"0": {"answers": {joint.id: value}}}),
+                                [Item("ctx", (joint,))], explain=False)
+    return result.answers[joint.id]
+
+
+def _wide_joint(pairs: int, *, allow_none: bool = False, qid: str = "act") -> Joint:
+    """One head with `pairs` targets."""
+    return Joint(qid, "i", (STRIKE,),
+                 (("strike", tuple(Option(f"t{i:03d}", "") for i in range(pairs))),),
+                 allow_none=allow_none)
+
+
+def test_joint_key_and_split_joint_are_inverse():
+    assert decisions.JOINT_SEP == "=>"
+    for pair in (Pair("strike", "creatures:sentinel"), Pair("withdraw", None)):
+        assert decisions.split_joint(pair.key) == pair
+    assert Pair("strike", "creatures:sentinel").key == "strike=>creatures:sentinel"
+    assert Pair("withdraw", None).key == decisions.joint_key("withdraw", None) == "withdraw"
+    for bad in ("", "=>creatures:sentinel", "strike=>"):
+        with pytest.raises(ValueError):
+            decisions.split_joint(bad)
+
+
+def test_a_joint_flattens_to_one_choice_over_its_legal_pairs():
+    choice = _joint().choice
+    assert choice == decisions.joint_choice(_joint())
+    assert (choice.id, choice.instructions, choice.allow_none) == (
+        "act", "What does Seraphine do?", False)
+    assert [(o.id, o.description) for o in choice.options] == [
+        ("strike=>creatures:sentinel", "Strike -> The sentinel"),
+        ("strike=>creatures:gulls", "Strike -> The gull swarm"),
+        ("heal=>characters:mara", "Tend a wound -> Mara, bleeding"),
+        ("withdraw", "Withdraw along the pier")]
+    # A head mapped to no targets takes no tail, as one missing from tails does.
+    empty = _joint(tails=(("strike", (SENTINEL,)), ("heal", ())))
+    assert [o.id for o in empty.choice.options] == [
+        "strike=>creatures:sentinel", "heal", "withdraw"]
+    assert _joint().KIND == "joint"
+
+
+def test_validate_joint_refuses_its_own_cases():
+    decisions.validate([Item("c", (_joint(),))])
+    cases = {
+        "holds": [_joint(heads=(Option("strike=>x", ""), HEAL)),
+                  _joint(tails=(("strike", (Option("a=>b", ""),)),))],
+        "alias": [_joint(heads=(Option("strike", "", ("hit",)), HEAL)),
+                  _joint(tails=(("strike", (Option("creatures:sentinel", "", ("it",)),)),))],
+        "not one of its heads": [_joint(tails=(("flee", (SENTINEL,)),))],
+        "twice": [_joint(tails=(("strike", (SENTINEL,)), ("strike", (GULLS,))))],
+        "pairs": [_joint(tails=("strike",)), _joint(tails=(("strike", [SENTINEL]),))],
+        "not an Option": [_joint(heads=(STRIKE, "heal"))],
+    }
+    for match, joints in cases.items():
+        for joint in joints:
+            with pytest.raises(DecideRequestError, match=match):
+                decisions.validate([Item("c", (joint,))])
+
+
+def test_validate_joint_holds_the_flattened_choice_bounds():
+    decisions.validate([Item("c", (_wide_joint(decisions.MAX_OPTIONS),))])
+    decisions.validate([Item("c", (_wide_joint(1, allow_none=True),))])
+    for joint in (_wide_joint(decisions.MAX_OPTIONS + 1), _wide_joint(1),
+                  Joint("act", "i", (), ())):
+        with pytest.raises(DecideRequestError, match="joint 'act' offers"):
+            decisions.validate([Item("c", (joint,))])
+    # Two pairs that collide once normalised are one pair to the parser.
+    clash = Joint("act", "i", (STRIKE,), (("strike", (Option("a b", ""), Option("a_b", ""))),))
+    with pytest.raises(DecideRequestError, match="collides"):
+        decisions.validate([Item("c", (clash,))])
+
+
+def test_joint_schema_is_a_flat_enum_of_pair_keys():
+    maybe = Joint("maybe", "i", (STRIKE, WITHDRAW), (("strike", (SENTINEL,)),),
+                  allow_none=True)
+    out = decisions.schema([Item("c", (_joint(), maybe))], explain=False)
+    props = out["properties"]["0"]["properties"]["answers"]["properties"]
+    assert props["act"] == {"type": "string", "enum": [
+        "strike=>creatures:sentinel", "strike=>creatures:gulls", "heal=>characters:mara",
+        "withdraw"]}
+    assert props["maybe"] == {"anyOf": [
+        {"type": "string", "enum": ["strike=>creatures:sentinel", "withdraw"]},
+        {"type": "null"}]}
+    assert decisions.enum_values(Item("c", (_joint(),))) == 4
+
+
+def test_parse_joint_splits_into_a_pair():
+    assert _joint_answer("heal=>characters:mara") == Answer(Pair("heal", "characters:mara"))
+    assert _joint_answer(" Strike=>Creatures:Gulls ") == Answer(Pair("strike", "creatures:gulls"))
+    assert _joint_answer("withdraw") == Answer(Pair("withdraw", None))
+    pair = _joint_answer("strike=>creatures:sentinel").answer
+    assert decisions.split_joint(pair.key) == pair
+    # A head alone, where the head takes a target, names no legal pair.
+    for value in ("heal", "heal=>creatures:sentinel", ["strike", "creatures:sentinel"]):
+        unread = _joint_answer(value)
+        assert _unreadable(unread, decisions.NOT_AN_OPTION) and unread.stated == ""
+    assert _joint_answer(None, _joint(allow_none=True)) == Answer(None, "abstained")
+    assert _unreadable(_joint_answer(None))
+
+
+def test_chunks_hold_three_full_joints():
+    """At 255 pairs each, three joints are 765 enum values; a fourth would
+    pass 1000, so `chunks` opens the next chunk there."""
+    items = [Item("c", (_wide_joint(decisions.MAX_OPTIONS, qid=f"act{i}"),))
+             for i in range(4)]
+    for item in items:
+        assert decisions.enum_values(item) == 255
+    decisions.validate(items)
+    assert [(start, len(chunk)) for start, chunk in decisions.chunks(items)] == [(0, 3), (3, 1)]
+
+
+def test_outcome_and_render_spell_a_pair_as_its_key():
+    items = [Item("ctx", (_joint(),))]
+    for pair in (Pair("strike", "creatures:gulls"), Pair("withdraw", None)):
+        results = (ItemResult({"act": Answer(pair)}, backend="native"),)
+        out = decisions.outcome("native", "p", "m", results)
+        assert out["items"][0]["answers"]["act"] == {"answer": pair.key}
+        text = decisions.render(results, items, explain=False)
+        assert json.loads(text) == {"0": {"answers": {"act": pair.key}}}
+        (back,) = decisions.parse(text, items, explain=False)
+        assert back.answers["act"] == Answer(pair)
+
+
+def _native_joint(distribution, chosen=decisions.UNSTATED, joint: Joint | None = None):
+    """A native joint answer, as an adapter's lift produces it."""
+    joint = joint or _joint(allow_none=True)
+    lowered, lift = decisions.native_form(Item("ctx", (joint,)))
+    (choice,) = lowered.questions
+    answered = ItemResult({joint.id: decisions.native_answer(
+        choice, chosen=chosen, distribution=distribution)}, backend="native")
+    return decisions.native_lift(Item("ctx", (joint,)), answered, lift).answers[joint.id]
+
+
+def test_head_marginal_and_head_first():
+    """0.3 on each of two strikes and 0.4 on one heal: the argmax pair is a
+    heal, and the action most mass favours is a strike."""
+    dist = {"strike=>creatures:sentinel": 0.3, "strike=>creatures:gulls": 0.3,
+            "heal=>characters:mara": 0.4}
+    answer = _native_joint(dist)
+    assert answer.answer == Pair("heal", "characters:mara")
+    assert answer.distribution == dist          # kept by the pair's key
+    joint = _joint(allow_none=True)
+    assert decisions.head_marginal(answer, joint) == pytest.approx({"strike": 0.6, "heal": 0.4})
+    assert decisions.head_first(answer, joint) == "strike"
+    # The chosen pair's head is the head most mass favours: nothing to say.
+    agreed = _native_joint({"strike=>creatures:sentinel": 0.5, "heal=>characters:mara": 0.2})
+    assert decisions.head_first(agreed, joint) is None
+
+
+def test_head_first_excludes_the_reserved_none():
+    dist = {"strike=>creatures:sentinel": 0.15, "strike=>creatures:gulls": 0.15,
+            "heal=>characters:mara": 0.25, NONE_KEY: 0.45}
+    joint = _joint(allow_none=True)
+    chosen = _native_joint(dist, chosen="heal=>characters:mara")
+    assert chosen.answer == Pair("heal", "characters:mara")
+    assert decisions.head_marginal(chosen, joint) == pytest.approx({"strike": 0.3, "heal": 0.25})
+    assert decisions.head_first(chosen, joint) == "strike"
+    # The none's mass wins the argmax: abstained, no pair, nothing to regroup.
+    abstained = _native_joint(dist)
+    assert abstained.reason == "abstained" and decisions.head_first(abstained, joint) is None
+    assert decisions.head_marginal(abstained, joint) == pytest.approx(
+        {"strike": 0.3, "heal": 0.25})
+    # A structured answer reports nothing.
+    assert decisions.head_marginal(Answer(Pair("strike", "creatures:gulls")), joint) is None
+    assert decisions.head_first(Answer(Pair("strike", "creatures:gulls")), joint) is None
+
+
+def test_native_form_passes_old_items_through():
+    item = _item()
+    lowered, lift = decisions.native_form(item)
+    assert lowered == item
+    assert lift == decisions.Lift((("over", ("over",)), ("who", ("who",)), ("tone", ("tone",))))
+    mixed = Item("ctx", (Predicate("over", "i"), _joint()))
+    lowered, lift = decisions.native_form(mixed)
+    assert lowered.questions == (Predicate("over", "i"), _joint().choice)
+    assert lift.lowered[1] == ("act", ("act",))
+
+
+def test_native_gap_counts_a_joints_pairs_with_none():
+    assert decisions.native_gap(Item("c", (_wide_joint(255),))) == ""
+    gap = decisions.native_gap(Item("c", (_wide_joint(255, allow_none=True),)))
+    assert "act" in gap and "256" in gap
 
 
 def test_native_questions_are_the_three_an_endpoint_has():

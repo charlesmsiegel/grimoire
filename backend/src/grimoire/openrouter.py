@@ -135,11 +135,13 @@ def _question(q: decisions.NativeQuestion) -> dict:
 
 
 def decision_body(item: decisions.Item, model: str) -> dict:
-    """The request body asking `item` of `model`. Aliases are the structured
+    """The request body asking `item` of `model`, lowered to the types the
+    endpoint has (`decisions.native_form`). Aliases are the structured
     parser's and are not sent; nothing asks for a rationale, which this
     endpoint does not return."""
-    return {"model": model, "state": item.context,
-            "questions": {q.id: _question(q) for q in decisions.native_questions(item)}}
+    lowered, _ = decisions.native_form(item)
+    return {"model": model, "state": lowered.context,
+            "questions": {q.id: _question(q) for q in decisions.native_questions(lowered)}}
 
 
 def _answer(q: decisions.NativeQuestion, raw: object) -> decisions.Answer:
@@ -175,17 +177,20 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
     Raises `bad_response` when `body` is not the documented envelope, and when
     it is but answers none of `item`'s questions: that is not an answer, and the
     item falls through. A question missing beside answered ones is
-    `unreadable`, with one warning per call."""
+    `unreadable`, with one warning per call. The reply is read against the
+    lowered item it answered, then lifted back to `item`'s questions
+    (`decisions.native_lift`)."""
     answers = body.get("answers") if isinstance(body, Mapping) else None
     if not isinstance(answers, Mapping):
         raise OpenRouterError("bad_response", "the decisions reply held no answers")
+    lowered, lift = decisions.native_form(item)
     result = decisions.native_result(
-        item, {q.id: _answer(q, answers[q.id]) for q in decisions.native_questions(item)
-               if q.id in answers},
+        lowered, {q.id: _answer(q, answers[q.id]) for q in decisions.native_questions(lowered)
+                  if q.id in answers},
         "OpenRouter")
     if result is None:
         raise OpenRouterError("bad_response", "the decisions reply answered none of the questions")
-    return result
+    return decisions.native_lift(item, result, lift)
 
 
 def _decision_usage(body: object, usage: dict | None) -> None:

@@ -1140,3 +1140,102 @@ def test_a_value_naming_no_option_keeps_what_it_named(provider):
     assert named.answers["speaker"].stated == ""
     with pytest.raises(ValueError, match="stated value"):
         Answer("characters:mara", stated="characters:rowan")
+
+
+# ---- 01e: the native lowering ----------------------------------------------
+#
+# Neither endpoint has a joint: it is lowered to one flattened choice whose
+# options are the legal pairs, keyed by `Pair.key`, and read back as a `Pair`.
+
+SENTINEL = Option("creatures:sentinel", "The sentinel.")
+GULLS = Option("creatures:gulls", "The gull swarm.")
+ACT = decisions.Joint("act", "What does Seraphine do?",
+                      (Option("strike", "Strike."), Option("heal", "Tend a wound."),
+                       Option("withdraw", "Withdraw.")),
+                      (("strike", (SENTINEL, GULLS)), ("heal", (MARA,))), allow_none=True)
+ACT_ITEM = Item(CONTEXT, (OVER, ACT))
+PAIRS = ["strike=>creatures:sentinel", "strike=>creatures:gulls", "heal=>characters:mara",
+         "withdraw"]
+
+
+def _joint_reply(provider: str, chosen: str, weights: dict[str, float]) -> dict:
+    """A reply to `ACT_ITEM`: the predicate, and the joint's flattened choice
+    answered by its wire keys (the reserved none as `none`)."""
+    if provider == "openrouter":
+        return {"answers": {"over": {"type": "noul", "noul": 0.2},
+                            "act": {"type": "choice", "choice": chosen,
+                                    "probabilities": dict(weights)}}}
+    return {"answers": [{"type": "predicate", "name": "over", "probability": 0.2},
+                        {"type": "choice", "name": "act", "choice": chosen,
+                         "probabilities": choice_probabilities(provider, weights)}]}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_joint_is_sent_as_one_flattened_choice(provider):
+    if provider == "openrouter":
+        sent = decision_body(ACT_ITEM, MODEL)["questions"]
+        assert list(sent) == ["over", "act"]
+        assert sent["act"] == {"type": "choice", "instructions": "What does Seraphine do?",
+                               "criteria": {
+                                   "strike=>creatures:sentinel": "Strike. -> The sentinel.",
+                                   "strike=>creatures:gulls": "Strike. -> The gull swarm.",
+                                   "heal=>characters:mara": "Tend a wound. -> Mara, the "
+                                                            "cartographer.",
+                                   "withdraw": "Withdraw.",
+                                   "none": decisions.NATIVE_NONE_TEXT}}
+        assert sent["over"] == decision_body(Item(CONTEXT, (OVER,)), MODEL)["questions"]["over"]
+    else:
+        sent = openai_compatible.decision_body(ACT_ITEM, OPENAI_MODEL)["questions"]
+        assert [q["name"] for q in sent] == ["over", "act"]
+        assert sent[1]["type"] == "choice"
+        assert [c["value"] for c in sent[1]["choices"]] == [*PAIRS, "none"]
+        assert sent[1]["choices"][2]["description"] == "Tend a wound. -> Mara, the cartographer."
+    # The capture records the lowered body: what was actually sent.
+    target = CONN if provider == "openrouter" else OPENAI_CONN
+    body = llm.native_body(ACT_ITEM, target)
+    assert "strike=>creatures:gulls" in json.dumps(body)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_joint_answer_is_a_pair_with_its_distribution_by_key(provider):
+    weights = {"strike=>creatures:sentinel": 0.3, "strike=>creatures:gulls": 0.3,
+               "heal=>characters:mara": 0.35, "none": 0.05}
+    result = read(provider)(_joint_reply(provider, "heal=>characters:mara", weights), ACT_ITEM)
+    assert list(result.answers) == ["over", "act"] and result.backend == "native"
+    assert result.answers["over"] == Answer(False, probability=0.2)
+    answer = result.answers["act"]
+    assert answer.answer == decisions.Pair("heal", "characters:mara")
+    assert answer.distribution == {"strike=>creatures:sentinel": 0.3,
+                                   "strike=>creatures:gulls": 0.3,
+                                   "heal=>characters:mara": 0.35, decisions.NONE_KEY: 0.05}
+    # The argmax pair is a heal; the action most mass favours is a strike,
+    # with the reserved none's mass left out of every head.
+    assert decisions.head_marginal(answer, ACT) == pytest.approx({"strike": 0.6, "heal": 0.35})
+    assert decisions.head_first(answer, ACT) == "strike"
+    # The reserved none chosen is an abstention; a pair nobody offered is not
+    # an option, kept as it was named.
+    none = read(provider)(_joint_reply(provider, "none", weights), ACT_ITEM).answers["act"]
+    assert (none.answer, none.reason) == (None, "abstained")
+    stray = read(provider)(_joint_reply(provider, "heal=>creatures:sentinel", weights),
+                           ACT_ITEM).answers["act"]
+    assert (stray.detail, stray.stated) == (decisions.NOT_AN_OPTION, "heal=>creatures:sentinel")
+    tailless = read(provider)(_joint_reply(provider, "withdraw", {"withdraw": 0.9}),
+                              ACT_ITEM).answers["act"]
+    assert tailless.answer == decisions.Pair("withdraw", None)
+    # Rendered for the structured graders by its key, and parsed back.
+    text = decisions.render((result,), (ACT_ITEM,), explain=False)
+    assert json.loads(text)["0"]["answers"]["act"] == "heal=>characters:mara"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_a_native_joint_past_the_option_limit_is_refused_unsent(provider):
+    wide = decisions.Joint("act", "i", (Option("strike", "Strike."),),
+                           (("strike", tuple(Option(f"t{i:03d}", "") for i in range(255))),),
+                           allow_none=True)
+    sent = Wire((200, {"answers": {}}))
+    client = facade(sent) if provider == "openrouter" else openai_facade(sent)
+    target = CONN if provider == "openrouter" else OPENAI_CONN
+    with pytest.raises(LLMError) as exc:
+        await client.decide_native(Item(CONTEXT, (wide,)), target)
+    assert exc.value.code == "native_unrepresentable" and "act" in exc.value.detail
+    assert sent.requests == []
