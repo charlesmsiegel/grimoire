@@ -426,12 +426,17 @@ def post_scene_intent(cid: str, body: SceneIntent, request: Request,
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty scene description")
     resolved = require_inference("intent", cid)
-    messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
+    # The pilot of structured generation (01f-S4): the reply is asked for in
+    # the schema the prompt carries, so a provider that enforces it cannot
+    # invent a location id or a cast token. `parse_intent` still drops one.
+    messages, schema = store.suggest.build_intent_request(cid, body.text,
+                                                          offscreen=body.offscreen)
 
     async def work():
         return await draft_completion(
             client, resolved, messages, "intent",
-            lambda text: _intent_payload(cid, text, body.offscreen), cid=cid)
+            lambda text: _intent_payload(cid, text, body.offscreen), cid=cid,
+            schema=schema)
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "intent",
                           x_grimoire_attempt, work)

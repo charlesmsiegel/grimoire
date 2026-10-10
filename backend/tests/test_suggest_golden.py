@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from grimoire import prompts
+from grimoire import prompts, schemas
 from grimoire.store import suggest
 from tests import suggest_golden
 
@@ -27,11 +27,21 @@ def test_the_instruction_section_is_pinned():
 
 
 def test_the_intent_prompt_is_pinned(monkeypatch, tmp_path):
+    """Byte for byte, but for the one change made on purpose since the golden
+    was recorded: 01f-S4's schema paragraph at the end of the system message
+    (the pilot of structured generation). The golden is not regenerated for
+    it; the paragraph is named here, so any OTHER change still fails."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     golden = _golden()
     for label, (cid, offscreen) in suggest_golden.intent_campaigns().items():
-        got = suggest.build_intent_prompt(cid, suggest_golden.TYPED, offscreen=offscreen)
-        assert got == golden[f"intent/{label}"], label
+        got, schema = suggest.build_intent_request(cid, suggest_golden.TYPED,
+                                                   offscreen=offscreen)
+        assert got == suggest.build_intent_prompt(cid, suggest_golden.TYPED,
+                                                  offscreen=offscreen), label
+        pinned = golden[f"intent/{label}"]
+        assert got[1] == pinned[1], label
+        paragraph = f"\n\nThe reply's JSON Schema:\n\n{schemas.render(schema)}"
+        assert got[0] == {**pinned[0], "content": pinned[0]["content"] + paragraph}, label
 
 
 def test_the_golden_file_has_every_variant(monkeypatch, tmp_path):
