@@ -291,7 +291,8 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [ ] 01h ← 01a-C1/C2 (H for C6), 01a-C3 (S), 01s (S); 01g-C3 run id (S)
 - [ ] 01i ← 01s (S)
 - [ ] 02 ← 01a-C1/C2/C3 (H for every play gate), 01b-C1/C2 (H for
-  C2b/C3/C4/C5), 01c-C1..C4 (H for C2 sampling), 01d-C1..C3 (H for C5a);
+  C2b/C3/C4; S for the C5 kits, which make no call themselves), 01c-C1..C4 (H
+  for C2 sampling), 01d-C1..C3 (H for C5a);
   01g-C1..C6 (H for C4 only); 01e-C1..C3 (S)
 - [ ] 03 ← 01h-C3 (S)
 - [ ] 04 ← 03-C1, 03-C2, 03-C4 (H); 03-C5 (H for C2a); 03-C6, 03-C9 (S)
@@ -312,6 +313,8 @@ sub-feature. Edges come from each spec's Depends-on table.
   10-C2/C3, 11-C1/C2 (H for RP mode); 11-C4 (S)
 - [ ] 13 ← (nothing for II-A to II-D); 01c-C2/C3/C4 (H for C3); 01e-C3a (H for
   multi-target actions: action first, then a MultiSelect over targets);
+  02-C3 (S: the NPC Action question rides the turn plan's `extra` slot when
+  the plan runs);
   01e-C3b (S, single-target joint pairs only); 01c-C1, 01b-C1, 01a-C1, 02-C2
   (S). Legal sets past 254 options need nothing from 01e: they take two steps,
   the action and then the target.

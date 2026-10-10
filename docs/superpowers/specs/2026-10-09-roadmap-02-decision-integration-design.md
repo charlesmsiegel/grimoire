@@ -53,7 +53,7 @@ Rebuilt from the checklist's edges.
 | Contract (provided here) | Consumer | Edge | What the consumer uses it for |
 |---|---|---|---|
 | 02-C2 (C2a, C2b) | 13 (13-C3) | S | The pattern for a sampled choice among legal options in play (eligibility decided by code, the answer sampled by Grimoire, the record kept with the outcome), and a Decision-chosen intent an NPC Action choice can be conditioned on. |
-| 02-C3 | 13 (13-C3) | S (via the 02-C2 seam) | The plan item's `extra` slot, so a legal-Action question rides the same call rather than adding one. |
+| 02-C3 | 13 (13-C3) | S (via the 02-C2 seam) | The plan's `extra` slot, so a legal-Action item rides the same `decide()` call rather than adding one (7.3). |
 | 02-C5a | 11 (11-C1, Decision stage) | H for the Decision stage | The `epistemic` route, its task, item builder, mapping and fail-closed rule. |
 | 02-C5b | 09 | S | The `history_check` route and the `history-rerank` task, item builder and mapping, with ungraded kept distinct from irrelevant. |
 | 02-C5b | 10 (10-C3) | S | The `history_check` route, to which 10 adds its `history-sufficiency` task. |
@@ -246,7 +246,7 @@ Action choice and 12's tool use cite this section rather than restating it.
 
 1. **The contribution is still one streamed `generate` call**, on the scene
    route's resolution, under its own `chat` or `continuation` meter
-   (`character_turns.py:1050-1063`). A decision may add a *section* to the
+   (`character_turns.py:1050-1063`). A decision may add a *block* to the
    prompt that call is sent. It never adds a second generation, never joins
    or edits generated text, and never makes the stream non-streamed.
    C4's loop is the one exception, and it is bounded (section 8).
@@ -264,7 +264,7 @@ Action choice and 12's tool use cite this section rather than restating it.
    it. A roll resume recomposes (1.4 rule 4), so `_prepare`'s resume branch
    reads the pending response record first and passes its stored plan,
    `plan=record.get("intent")`, into `_compose`. The resume snapshot then
-   carries the same section, and Keep writing inherits it from there. None
+   carries the same block, and Keep writing inherits it from there. None
    of these asks again.
 6. **Off is byte-identical.** With a feature off, nothing is resolved,
    nothing is called, no record key is written, and the composed prompt is
@@ -296,7 +296,7 @@ absorb's secondary phases (`routes/common.py:1545-1556`).
 A failed, timed-out or unreadable play decision (other than the pick) is
 recorded and dropped. The meter has already filed the call's `error` row
 (CLAUDE.md, "Instrument LLM failures at `usage.Meter.done`"). The
-contribution then composes without the section. A decision that answered
+contribution then composes without the block. A decision that answered
 `abstained` or `refused` is an answer of "no intent", not a failure, and is
 not retried elsewhere (1.2: the chain moves on only on a failed call).
 
@@ -769,7 +769,7 @@ STANCES: tuple[str, ...] = (
 
 Each option's description is a template, `templates/turn_plan/stance.j2`,
 so the wording is editable like every other prompt. `allow_none=True`: "no
-particular stance" is a real answer, and an abstention renders no section.
+particular stance" is a real answer, and an abstention renders no block.
 The set is closed and small on purpose. A stance is a way of answering,
 not a script. It never says *what* the character says. The vocabulary is a
 starting point, to be revised against the play gate's adherence grader
@@ -876,7 +876,7 @@ a checklist shared structure: 01g, 09, 10 and 02-C5 need it, and whichever
 lands first adds it. The `epistemic` and `history_check` routes (9.2, 9.3)
 carry it too.
 
-### 6.5 Sampling, the record and the section
+### 6.5 Sampling, the record and the block
 
 **Sampling.** It follows the same "whether by argmax, which by sample" rule
 as 5.2:
@@ -951,7 +951,7 @@ rules. No new page.
   - *stance diversity*: distinct stances across repeats and fixtures. A
     deterministic argmax that always says `engage` is visible here;
   - *leak check*: the generated text never contains a stance id or the
-    section's wording. A regex check, offline on recordings as well.
+    block's wording. A regex check, offline on recordings as well.
 - **Added latency** is the intent call's wall time, all of it before the
   first token.
 
@@ -1212,17 +1212,32 @@ The cost report separates the two-turn input from the one-turn input.
 A route cannot land before a call site decides its task
 (`test_operation_guard.py:996`; `test_routing_guard.py:659`; 01 section 14's safety
 rule). The call sites are 09's and 11's. So 02-C5 delivers a **kit** per
-task, and the consumer's first slice lands the route entry together with its
-call site, exactly as specified here:
+task. Exactly what lands where:
+
+**In 02 (slice 02-G):**
+
+- the item builder and the mapping (pure modules with tests). A pure
+  builder names no task in a `decide()` call;
+- the templates, with their `verify_templates.py` entries;
+- the recordings, and a `Case` definition held **outside `CASES`**
+  (`evals/cases.py`, as an unregistered constant).
+  `backend/tests/test_evals.py:67-74` fails any registered case whose task
+  no route claims, so the case cannot be registered yet. The recordings are
+  replayed by the kit's own unit test against that unregistered case, so
+  they are not orphaned.
+
+**In the consumer's first slice, together with its call site:**
 
 - the route entry;
-- the item builder and the mapping (pure modules with tests);
-- the templates;
-- the `decide-*` eval case and recordings;
-- the 01d-C1 policy row.
+- the `Case` registration in `CASES`;
+- the 01d-C1 policy row (01d's `test_task_policy.py` requires every
+  `TASK_POLICY` key to be in `TASK_ROUTE`, 01d section 4.3);
+- the 01b-C1 capture, which belongs to the call site. The checklist lists
+  01b as hard for C5, but that applies to the consumer's call, not to the
+  kit (an edge note for the coordinator).
 
-The kit modules can land in 02 because a pure builder names no task in a
-`decide()` call.
+The case is an `evals/cases.py` replay case, gated live by 4.3. It is not
+a `gate.py` `Conversion`, because a new site has no legacy parse (4.1).
 
 ### 9.2 C5a: epistemic access (for 11-C1)
 
@@ -1249,7 +1264,11 @@ class AccessQuestion:
     basis: tuple[str, ...] # 11's deterministic signals, e.g. ("present", "not_addressed")
 
 def build_items(questions: Sequence[AccessQuestion]) -> tuple[decisions.Item, ...]
-def access_of(questions, results: Sequence[decisions.ItemResult]) -> dict[tuple[str, str], str]
+def access_of(questions: Sequence[AccessQuestion],
+              decision: decisions.Decision) -> dict[tuple[str, str], str]
+    """(actor_ref, evidence_ref) -> class. Reads `decision.items` and
+    `decision.escalations`: any index with an `Escalation` whose `outcome`
+    is not "answered" maps to UNKNOWN, whatever `items[i]` holds."""
 ```
 
 **Rules:**
@@ -1265,9 +1284,16 @@ def access_of(questions, results: Sequence[decisions.ItemResult]) -> dict[tuple[
   `TaskPolicy(escalate_to="primary", escalate_on=("refused", "low_margin"),
   question="access", margins=<01d-C3's>)` (01d's draft, section 4.1). Not
   `abstained`: an abstention is `UNKNOWN`, which is already the safe side.
-  The hop's answer replaces the first one. If the hop fails, is skipped
-  (`same_model`, the clock) or is unread, the answer is `UNKNOWN`, never the
-  first answer and never `known`.
+  The hop's answer replaces the first one.
+  - **A hop that did not answer.** When the hop fails or is skipped
+    (`same_model`, `cap`, the clock), 01d-C2b leaves the **base** answer in
+    `decision.items[i]`, and reports the hop's fate only in
+    `Decision.escalations[i].outcome` (`"failed" | "skipped"`, 01d section
+    5.5). That is why `access_of` takes the whole `Decision`. Any index whose
+    escalation `outcome != "answered"` maps to `UNKNOWN`, never to the base
+    answer. Concretely: a low-margin `known` whose hop times out is
+    `UNKNOWN`. Reading `items` alone would have returned `known`, and handed
+    the actor history they should not have.
   - **Only permissive answers need the hop.** A low-margin `narrator_only` is
     already safe, so escalating it only spends. 01d's triggers do not read
     which option was chosen without a filter, so 02-C5a uses 01d-C2a's
@@ -1276,8 +1302,8 @@ def access_of(questions, results: Sequence[decisions.ItemResult]) -> dict[tuple[
 - **Derived, never persisted as truth.** The result is per turn (section 9 of the 11 draft). The
   kit writes nothing.
 - **Budget.** Chunked at eight items per structured call. 11 should hand at
-  most one chunk per turn on the turn path, under 3.4's ceiling. 11 owns the
-  number.
+  most one chunk per turn on the turn path, under a total deadline it
+  names (02-C6, 3.4). 11 owns the number.
 
 ### 9.3 C5b: history relevance (for 09-C1/C2)
 
@@ -1337,7 +1363,9 @@ def grades_of(candidates, results) -> dict[str, Grade]
 
 Each kit has:
 
-- builder and mapping tests, including fail-closed and ungraded;
+- builder and mapping tests, including fail-closed and ungraded. For C5a
+  this includes: a low-margin `known` whose `Escalation.outcome` is
+  `"failed"` (and `"skipped"`) maps to `UNKNOWN`;
 - a `decide-*` replay case with compliant, abstained, off-option,
   undecodable, native and native-refused recordings;
 - a `verify_templates.py` entry for its templates.
@@ -1358,7 +1386,7 @@ on in a change of its own.
 
 | Task | `fallback` | Escalation | `samples` | Why |
 |---|---|---|---|---|
-| `response-selector` | `role` (today) | Off. 01d's candidate (`refused`, `low_margin`) stays off; `refused` alone is compatible with sampling, and may be switched on after C2a's gate | Yes, per campaign (C2a) | A flat distribution is the behaviour to sample, not doubt to resolve, and the pick is on the turn path. |
+| `response-selector` | `role` (today) | `escalate_on=("refused",)`, `reads_declines=True`, shipped off until C2a's gate measures it (01d section 6.4). Never `low_margin` | Yes, per campaign (C2a) | A flat distribution is the behaviour to sample, not doubt to resolve, and the pick is on the turn path. `reads_declines=True` because the pick maps a decline to its own outcome (an abstention hands control back). |
 | `turn-intent`, `turn-plan`, `turn-tool-decision` | `role` (one route; they must agree) | Off | Yes (stance; the tool's selection) | As above. The feature is soft, so a failure costs only the intent. |
 | `scene-break` | `role` (today) | Off, as 01d recommends | No | A YES is a proposal the player confirms. |
 | `voice-drift` | `role` (today) | Off, as 01d recommends | No | A verdict feeds the review. |
@@ -1366,6 +1394,7 @@ on in a change of its own.
 | `continuity-reconcile` | `role` (today) | Not switched by 02 | No | Proposals are reviewed. Unanswered candidates are asked again next sweep. |
 | `epistemic-access` | `role` | **On** (9.2) | No | Leakage is the costly error. Fail closed. |
 | `history-rerank` | `role` | Off | No | Turn-path latency. Ungraded falls back to signals. |
+| `history-sufficiency` (10, same `history_check` route) | `role` (agrees with `history-rerank`, as a route's tasks must) | On (10's row; 10-C2's repair hop escalates through 01d-C2b) | No | 10's own argument. Listed here because it shares C5b's route. |
 
 **One rule across the table: a task never both samples and escalates on
 `low_margin`.** Escalation treats a flat distribution as uncertainty to
@@ -1378,11 +1407,10 @@ sampled (01c-C4).
 
 - 01d-C1's `TaskPolicy` refuses a row with `samples=True` and `"low_margin"
   in escalate_on`;
-- a failed or skipped hop leaves the item for the call site to map. For
-  epistemic access, 02-C5a maps it to `UNKNOWN` itself (9.2), so this needs
-  nothing new from 01d beyond a per-item "escalation did not answer" signal,
-  which 01d's per-item provenance already provides (01d's draft, section
-  5.6).
+- a failed or skipped hop leaves the base answer in `items` and says so
+  in `Decision.escalations[*].outcome` (01d section 5.5). 02-C5a reads that
+  signal and maps the item to `UNKNOWN` (9.2). Per-item provenance (01d
+  section 5.6) names who served the item, not whether the hop answered.
 
 ---
 
@@ -1390,58 +1418,75 @@ sampled (01c-C4).
 
 **02-C1 — Reconciled record.** Section 1, as of `35c1fb7`.
 
-- **Guarantees:** every "landed" row cites the code and the guard or suite
-  holding it. Every "not landed" row names the contract or spec that now owns
-  it.
+- **Guarantees:** every "landed" row cites the code, and names the guard or
+  suite holding it where one exists. Every "not landed" row names the
+  contract or spec that now owns it.
 - **Failure behaviour:** a later PR that changes a landed decide site updates
-  section 1.2 in the same PR. The guards cited there fail first if it does
-  not.
+  section 1.2 in the same PR. Nothing checks the citations automatically.
+  Where a row names a guard, that guard fails on a behaviour change; the
+  citation itself is held only by review.
 
 **02-C2a — Sampled next speaker.**
 
-- **Inputs:** the speaker pick's `ItemResult`, the offered refs, the named
-  set, a seed, the switch and the typed-note flag.
-- **Outputs:** `(next, issue)` exactly as `selection_of` returns it, plus a
-  `selection` record on the round.
+- **Inputs:** the speaker pick's `Decision`, the offered refs, the addressed
+  set (from the round's typed note or its newest post) and the switch.
+- **Outputs:** `(next, issue)`. The issue comes from `selection_of`, exactly
+  as today; the speaker comes from 01c's `draws.draw` with
+  `Eligibility(exclude=(NONE_KEY,), only=addressed, floor=1/(2n))`, a seed
+  from `draws.new_seed()`, and `purpose="next"`. 01c's record is stored
+  unchanged as `pick` on the round, in the write that stores the speaker.
 - **Guarantees:**
   - every 1.4 rule 3 invariant holds;
-  - a sampled value is an offered option;
-  - none, abstained, refused, unread and missing-distribution answers are never
-    sampled (01c-C4);
-  - an addressed actor is never sampled away;
-  - a resumed round never resamples;
+  - a drawn value is an offered option and never the none;
+  - abstained, refused, unread and no-usable-report answers are never drawn
+    (01c-C4); the issue mapping is decided before any draw;
+  - an addressed actor is never drawn away, and the narrowing is recorded
+    (`eligibility.only`), not hidden;
+  - "decided" means `pick` is present, so a retry, a recovery or a roll
+    resume never re-draws;
   - off writes nothing and calls nothing.
-- **Failure behaviour:** a sampler error (a defect) leaves the answer
-  standing, records `policy: "answer"` with the error's class name and logs at
-  ERROR. It never fails the round.
+- **Failure behaviour:** a `ValueError` from `draw` (a defect: a bad
+  eligibility or seed) leaves the answer standing, stores no `pick`, and
+  logs at ERROR with the class name. It never fails the round.
 
 **02-C2b — Turn intent.**
 
 - **Inputs:** the assigned actor, the observable window and the actor's own
   brief.
 - **Output:** a `stance` (or none), the `intent` record on the response, and
-  the `turn_intent` section in that contribution's composed prompt.
+  the intent block, after the history, in that contribution's composed prompt.
 - **Guarantees:**
-  - asked only for a freshly composed NPC contribution with no typed note;
-  - frozen in the snapshot;
+  - asked only for a freshly composed NPC contribution with no typed note
+    (a replayed turn composes fresh, and is asked);
+  - frozen in the snapshot, and carried into a roll resume's recompose and
+    so into Keep writing (3.1 rule 5);
   - never asked again by a retry, a resume, a reroll or Keep writing;
-  - soft and bounded (3.2–3.4);
+  - soft and bounded by one deadline per decision (3.2–3.4), with every
+    exception caught (3.3);
+  - placed after the history, so it can neither break prefix caching of
+    the rest nor be switched off by a layout (6.5);
   - attributed with `response_id`.
 - **Failure behaviour:** skipped, recorded with the reason, and the
   contribution proceeds unchanged.
 
 **02-C3 — Turn plan.** C2b's contract with `disclosure` (argmax) and
-`tension` (argmax) added in the same item and the same call, plus an `extra`
-slot whose questions are owned, read and stored by their provider.
+`tension` (argmax) added in the same item and the same `decide()` call, plus
+an `extra` slot of whole **items** that are owned, read and stored by their
+provider (7.3).
 
-- **Guarantees:** one pre-generation call per contribution, never two (the
-  plan replaces the intent call); the plan never changes a preset; disclosure
-  never grants knowledge.
+- **Guarantees:** one pre-generation `decide()` per contribution, never two
+  (the plan replaces the intent call). That is one request on a structured
+  stage, and one request per item on a native one. The plan never changes a
+  preset. Disclosure never grants knowledge. An extra item is never
+  conditioned on the same call's stance.
 
 **02-C4 — Decision as a tool from play.**
 
 - **Guarantees:**
-  - at most one honoured tool call per contribution, before any visible text;
+  - at most one honoured tool call per contribution, before any
+    watcher-visible text;
+  - offered on a fresh contribution and on a reroll, never on a retry, a
+    roll resume or Keep writing; recorded per variant;
   - the model gets the selection, never the distribution;
   - tool turns never reach the transcript or the watcher;
   - every loop turn is metered under one run id;
@@ -1455,23 +1500,32 @@ slot whose questions are owned, read and stored by their provider.
 `epistemic-access`, `build_items` and `access_of`, the templates, the
 `decide-epistemic-access` case and the 01d-C1 row.
 
-- **Guarantees:** deterministic first; fail closed to `UNKNOWN`; escalation
-  only on permissive answers; never sampled; nothing persisted.
+- **Guarantees:** deterministic first; fail closed to `UNKNOWN`, including
+  any item whose escalation did not answer (`access_of` reads
+  `Decision.escalations`); escalation only on permissive answers (01d-C2a's
+  answer filter); never sampled; nothing persisted.
+- **What lands where:** the builder, the mapping, the templates and the
+  recordings land in 02. The route, the `Case` registration, the policy row
+  and the capture land with 11's call site (9.1).
 
 **02-C5b — History relevance kit.** The route entry, the task
 `history-rerank`, `build_items` and `grades_of`, the templates, the
 `decide-history-rerank` case and the 01d-C1 row.
 
 - **Guarantees:** ungraded is `None`, never a level; no escalation, no
-  sampling; a `Rank` variant once 01e-C1 lands.
+  sampling; a `Rank` variant once 01e-C1 lands. What lands where follows
+  9.1, with 09's call site.
 
 **02-C6 — Shared play-decision rules.** Section 3, together with the play
 gate of section 4.
 
 - **Guarantees:** what must not change (3.1); soft resolution and no new
-  pre-write refusal (3.2); failure never fails a turn (3.3); the ceiling
-  (3.4); attribution with `response_id` (3.5); settings off by default and
-  exposed only after ratification (3.6, 4.3); privacy (3.7).
+  pre-write refusal (3.2); failure, including any exception, never fails a
+  turn (3.3); one total deadline per turn-path decision, `PLAN_CEILING_S` for
+  02's own and a named one for every other spec's (3.4); attribution with
+  `response_id` (3.5); settings off by default and exposed only after
+  ratification (3.6, 4.3); privacy (3.7); the play gate with its seeded
+  isolate, 01a's drain and declared `axes` (4.2, 4.3).
 
 ---
 
@@ -1503,10 +1557,23 @@ gate of section 4.
   still stamps the revision token through `streaming._turn_settled`.
 - **Event loop.** Builders render templates, so they run in the threadpool,
   as `_selector_item` does (`character_turns.py:750`).
-- **Prompt sections and goldens.** `turn_intent` is a new catalog section that
-  renders empty when off. `test_lore_golden.py` and every prompt golden stay
-  untouched. A new test pins `compose_turn(plan=None)` to the pre-change
+- **Prompt sections and goldens.** The intent block is a history-placed
+  system message, not a catalog section (6.5), and adds nothing when off.
+  `test_lore_golden.py` and every prompt golden stay untouched. A new test pins `compose_turn(plan=None)` to the pre-change
   bytes. `scripts/verify_templates.py` covers the new templates.
+- **Frozen inference equivalence.** `tests/inference_baseline.py:420`,
+  `inference_baseline_c.py:192` and `test_inference_equivalence.py:378`
+  enumerate every task in `routing.TASK_ROUTE` against JSON fixtures that are
+  never regenerated. `NEW_TASKS` (`test_inference_equivalence.py:53-75`)
+  only admits a task equal to a sibling. A task on a `NO_LEGACY` route
+  equals no sibling on a format-1 store: `response-selector` reads the
+  legacy `route_scene` keys (`store/routing.py:88-91`). The checklist's
+  shared structure for `routing.NO_LEGACY` carries its own test mechanism:
+  a `NO_LEGACY_TASKS` set (every task on a `NO_LEGACY` route) that the
+  frozen inference baselines exclude. Whichever spec lands the first such
+  route (02-B here, or 01g, 09 or 10) adds both. `turn-intent`,
+  `turn-plan`, `turn-tool-decision`, `epistemic-access` and `history-rerank`
+  join the set with their routes.
   `evals/run.py`'s offline cases cover the new decide prompts.
 - **Import guard.** The new store modules (`turn_plan.py`,
   `play_decisions.py`, `epistemic_access.py`, `history_rerank.py`) import
@@ -1514,8 +1581,9 @@ gate of section 4.
   (`response_protocol.py:10`), all at module scope. Cross-package store
   imports bind submodules.
 - **Pydantic and Android.** No new dependency. No pydantic models beyond
-  plain fields. The settings body uses existing `PUT /config` and campaign
-  update shapes, dumped through `_dump`.
+  plain fields: three new `ConfigUpdate` fields, and a new
+  `CampaignPlayDecisions` body for `PUT /campaigns/{cid}/play-decisions`
+  (3.6), dumped through `_dump`.
 - **Privacy (3.7).** No log line carries item text. Eval fixtures are
   synthetic, with placeholder names.
 - **Frontend.** One ConfigView section after ratification. One inspector line
@@ -1531,20 +1599,25 @@ gate of section 4.
 **Speaker sampling (backend, `test_character_turns.py`,
 `test_group_play_turns.py`, new `test_speaker_sampling.py`):**
 
-- Off: the pick's result, the round record and the ledger are unchanged.
-- A native fake with a distribution and a patched `_rng`: the draw is the
-  seeded one. The `selection` record replays to the same key through 01c-C2.
-- Each "not sampled" case of 5.2 rule 1 leaves `selection_of`'s output
-  identical to today's: abstained → `(None, None)`; off-option →
-  `INELIGIBLE`; unread, refused or error → `INVALID_HANDOFF`; typed note →
-  the answer.
-- `NONE_KEY` mass is never selected. A distribution whose argmax is none is
-  abstained, not sampled.
-- Floor: an option under `1/(2n)` is never selected over 1,000 seeds.
-- Addressed: a post naming Mara narrows the support to Mara. Naming both Mara
-  and Winifred narrows it to the two.
-- A retry and a roll resume of a sampled round do not resample (the
-  `_rng`-patched proof the group-play suite already uses for plans).
+- Off: the pick's result, the round record and the ledger are unchanged, and
+  no `pick` is written.
+- A native fake with a distribution and a patched `draws._seed_source`: the
+  selection is the seeded one. The `pick` record is 01c's record, unchanged,
+  and `draws.replay(pick) == pick["selected"]`.
+- The issue mapping is unchanged by a draw: abstained → `(None, None)`;
+  off-option → `INELIGIBLE`; unread, refused or error → `INVALID_HANDOFF`.
+  Each still writes a `pick` (basis `none`).
+- `NONE_KEY` is never selected (excluded). An answered none is abstained and
+  hands back.
+- Floor: the record's `eligibility.floor` is `1/(2n)`, and each eligible
+  actor is selected at a frequency at least near that share over many seeds
+  (01c applies it; 02 tests only that it passes it).
+- Addressed: a post naming Mara gives `only=("…:mara",)`. Naming both Mara
+  and Winifred gives both. A typed note naming Winifred narrows to Winifred.
+  An answer outside `addressed` with no usable report re-draws with
+  `only=None` and keeps the answer.
+- A retry, a recovery and a roll resume of a round with `pick` present do not
+  call `_select` again, including when the pick was none.
 - `DecideRequestError` still becomes `INVALID_HANDOFF`. `LLMError` still
   propagates and rescues.
 
@@ -1553,28 +1626,41 @@ gate of section 4.
 
 - Off: no `turn-intent` or `turn-plan` row, no `intent` key, and
   `compose_turn` bytes equal to `main`'s.
-- On: one decide call before `response_start`. The section is in the
-  generation's prompt and snapshot. The record carries `response_id`, and the
-  ledger row carries the same id.
+- On: one decide call before `response_start`. The block is in the
+  generation's prompt and snapshot, after the history. The record carries
+  `response_id`, and the ledger row carries the same id.
 - Skips: `grimoire`; resume of a pending response; roll continuation; typed
-  note; missing key (soft, `skipped: "missing_key"`); `incapable`; timeout
-  (patched ceiling); `LLMError`; abstained (no section).
-- Reroll and Keep writing reuse the snapshot and make no decide call.
-- Plan: one call carrying three questions. Disclosure and tension are argmax
-  even when a distribution is present. `extra` questions are stored untouched
-  and rendered by nobody.
-- `turn_intent` section: renders empty for `None` and for all-abstained.
-  Placed after `active_speaker` in a saved layout (layout upgrade rule).
+  note; missing key (soft, `skipped: "missing_key"`, and `decide` not
+  called); `incapable`; deadline (patched clock, including a second call
+  refused unsent); `LLMError`; abstained (no block).
+- **Any exception:** a builder that raises `RuntimeError` still produces a
+  reply, records `skipped: "error:RuntimeError"`, and a retry does not loop.
+- **Roll resume:** a reply that pauses for a roll and resumes carries the
+  same intent block in its resume snapshot, with no second decide call. Keep
+  writing on that split reply carries it too.
+- Reroll and retry reuse the snapshot and make no decide call. A replayed
+  turn asks one.
+- No `on_timeout` reaches `client.note_outcome` on a deadline overrun.
+- Plan: one call carrying three questions, plus extra items when given.
+  Disclosure and tension are argmax even when a distribution is present.
+  Extra items are stored under their owner's key and rendered by nobody.
+- A prompt layout that disables every catalog section still carries the
+  intent block (it is not a section).
 
-**Tool (`test_play_tool.py`, after 01g):** offered only under 8.4; one
-honoured call; a call after visible text declined and recorded; cap answers
+**Tool (`test_play_tool.py`, after 01g):** offered only under 8.4,
+including on a reroll and not on a retry; one honoured call; a call after
+watcher-visible text declined and recorded, while a call after a hidden
+perception fence is honoured; the record stored per variant and unchanged by
+a later reroll; cap answers
 `cap`; the selection is returned without the distribution; tool turns absent
 from the transcript and from the watcher's input; one meter per loop turn
 under one run id.
 
 **Kits (`test_epistemic_access.py`, `test_history_rerank.py`):**
-fail-closed mapping for every reason and detail; escalation only on
-permissive answers (with 01d's helper faked); ungraded is `None`; builders
+fail-closed mapping for every reason and detail; a low-margin `known` whose
+escalation `outcome` is `"failed"` or `"skipped"` maps to `UNKNOWN`;
+escalation only on permissive answers (with 01d's helper faked); the
+unregistered case's recordings replay; ungraded is `None`; builders
 refuse nothing a caller could legally pass; `decide-*` replay cases green.
 
 **Guards:** the routing and operation guards pass at each slice. A planted
@@ -1583,8 +1669,10 @@ the kit-not-route rule.
 
 **Evals:** the new `decide-*` cases replay in `make check`. `decide-speaker`
 has a native recording with a distribution. `evals/run.py --live --play
-<feature>` refuses without `--live`, writes no settings, and files rows only
-under 01a-C2's scope.
+<feature>` refuses without `--live`, writes nothing to the real store, seeds
+each isolate with exactly the configuration's selections, drains before it
+harvests (01a section 6), and files rows only under 01a-C2's scope, carrying
+the fixture campaign's id.
 
 **Acceptance for the spec as a whole:**
 
@@ -1600,14 +1688,14 @@ under 01a-C2's scope.
 
 | Slice | Lands | Waits on |
 |---|---|---|
-| **02-A — Record and plumbing** | Section 1 confirmed. `decide(response_id=)`. `responses.mint_id()`. `store/play_decisions.py` (settings readers, keys in `_CONFIG_KEYS`, no UI). The `turn_intent` section, rendering empty. The byte-identical golden. | 01 only |
-| **02-B — Turn intent, dark** | `turn_plan.py` (intent), the `turn_plan` route with `turn-intent`, the call site, the record, the `decide-turn-intent` case. Argmax only. | 02-A, 01b-C1 |
+| **02-A — Record and plumbing** | Section 1 confirmed. `decide(response_id=)`. `responses.mint_id()`. `store/play_decisions.py` (settings readers, keys in `_CONFIG_KEYS` and `ConfigUpdate`, no UI). `plan_deadline()`. The `plan=` path in `compose_turn`, adding nothing for `None`. The byte-identical golden. | 01 only |
+| **02-B — Turn intent, dark** | `turn_plan.py` (intent), the `turn_plan` route with `turn-intent` (and `routing.NO_LEGACY` with its `NO_LEGACY_TASKS` baseline exclusion, if no other spec landed them), the call site, the roll-resume carry, the record, the `decide-turn-intent` case. Answers only, no draw. | 02-A, 01b-C1 |
 | **02-C — Plan, dark** | `turn-plan` task, the plan item with the `extra` slot, the `decide-turn-plan` case. | 02-B |
 | **02-D — Sampling** | C2a in `_select`. Stance sampling in B and C. The `decide-speaker` native recording with a distribution. | 01c-C1..C4 |
 | **02-E — Play gate** | `evals/play.py`, `--live --play`, fixtures, feature graders. | 01a-C1..C3 |
 | **02-F — Exposure** | The "Play decisions" ConfigView section and campaign overrides, one switch per ratified feature, and the inspector line. | 02-E reports, the user's yes |
-| **02-G — Kits** | `epistemic_access.py`, `history_rerank.py`, templates, `decide-*` cases. No routes (9.1). | 01d-C1..C3 for the policy rows |
-| **02-H — Tool** | C4. | 01g-C1..C5, 02-E |
+| **02-G — Kits** | `epistemic_access.py`, `history_rerank.py`, templates, recordings and unregistered `Case` definitions. No routes, no registered cases, no policy rows (9.1). | 01d-C2b's `Escalation` shape for `access_of` |
+| **02-H — Tool** | C4. | 01g-C1..C6, 02-E |
 
 B and C land dark: the backend honours the key and there is no UI. 02-E can
 run B and C before 02-D lands; argmax is a valid configuration.
@@ -1623,6 +1711,10 @@ run B and C before 02-D lands; argmax is a valid configuration.
 - **Switching on escalation for continuity identity or reconcile.** 01d's
   candidate table names identity first. Its switch is one policy row in a
   change of its own, under 01d's bar (section 10).
+- **Mechanics-driven speaker eligibility** (the draft's "incapacitated where
+  mechanics says so → ineligible"). It needs 13-C2a's conditions. 13's open
+  question 9 defers it to a later 02 revision, and 02 agrees: until then
+  eligibility is presence and sitting out, as today.
 - **Faction and offscreen behaviour.** It follows 13's Actions and a later
   spec. An offscreen scene keeps today's director-turn path.
 - **NPC Action choice itself.** That is 13-C3. 02 provides the pattern
@@ -1639,19 +1731,19 @@ run B and C before 02-D lands; argmax is a valid configuration.
 
 ## 16. Open questions
 
-1. **Should the speaker pick get 3.4's ceiling too?** Today a stalled Decision
-   model holds the turn until the facade's idle timeout. *Recommendation:* yes,
-   in 02-A, with timeout mapped to `INVALID_HANDOFF`. That returns control to
-   the player, which is the existing failure mode, rather than failing the
-   round. It is a behaviour change to a landed site, so it needs the user's
-   yes.
-2. **Should sampling exclude the none?** (5.2 rule 2.) *Recommendation:* yes.
+1. **Should the speaker pick get 3.4's deadline too?** Today a stalled
+   Decision model holds the turn until the facade's idle timeout.
+   *Recommendation:* yes, but as **its own slice**, not in 02-A, because it
+   changes a landed site while every feature is off. A timeout would map to
+   `INVALID_HANDOFF`, which returns control to the player (the existing
+   failure mode) rather than failing the round. It needs the user's yes.
+2. **Should the draw exclude the none?** (5.2 rule 2.) *Decided:* yes,
+   through `Eligibility(exclude=(NONE_KEY,))`, which 01c allows and records.
    Hand-back is a player-agency signal, and randomising it lets NPCs talk past
-   a pending player decision. The alternative, sampling none like any option,
-   is one constant to flip if the play gate shows chains that end too rarely.
+   a pending player decision.
 3. **Should a reroll re-ask the intent?** *Recommendation:* no for 02 (frozen
    snapshot, 3.1 rule 5). A "reroll with a fresh approach" control would store
-   the section outside the snapshot as an appended block and needs its own
+   the block outside the snapshot as an appended block and needs its own
    design.
 4. **A global switch plus a campaign override, or campaign only?**
    *Recommendation:* both, mirroring the tracker (3.6). A cost knob a user sets
@@ -1677,3 +1769,67 @@ run B and C before 02-D lands; argmax is a valid configuration.
      8.6).
 
    The edges 09 ← 02-C5b and 10 ← 02-C5b are both in the checklist.
+   **Edge notes for the coordinator:**
+   - 13 uses 02-C3's `extra` slot (7.3), but the checklist has no `13 ←
+     02-C3 (S)` edge;
+   - the checklist lists 01b as hard for C5, but the kits make no call; the
+     capture belongs to 09's and 11's call sites (9.1);
+   - 11 section 5.4 runs its turn-path stage under `llm_call_budget`, which
+     02-C6's deadline rule (3.4) does not allow.
+9. **Is 01c's `floor=1/(2n)` the right policy for the speaker?** 01c's floor
+   **lifts** every eligible actor to at least half the uniform share. The
+   original 02 draft meant the opposite: to cut the long tail the model
+   argued against. With the floor, an actor the report gave 0.02 is drawn
+   about `1/(2n)` of the time. *Recommendation:* ship the coordinator's
+   `1/(2n)` as ruled, and have C2a's gate run `floor` as an axis (`0` vs
+   `1/(2n)`), reporting the departure rate and mass on intended for each.
+   If the lift reads as noise, cutting the tail needs a new 01c
+   `Eligibility` field, not a 02 sampler.
+
+---
+
+## 17. Review record
+
+**Substitute adversarial review, 2026-10-10** (`reviews/02.md`: 3 blocking,
+11 should-fix, 17 minor). Each item was checked against the code at the
+baseline, and against the revised 01a, 01c and 01d specs.
+
+| Item | Finding | Disposition |
+|---|---|---|
+| B1 | 02's own support, floor, record shape and 63-bit seed contradict 01c | **Fixed, by the coordinator's ruling** (01c owns the sampler). `draws.draw` with `Eligibility(exclude=(NONE_KEY,), only=addressed, floor=1/(2n))`, `new_seed()`, 01c's record unchanged under `pick`, "decided" means the record is present (5.2-5.4, 6.5, 11). The same applies to the stance. |
+| B2 | A failed or skipped hop leaves `known` in `items`, and `access_of` cannot see it | **Fixed.** `access_of(questions, decision)` reads `Decision.escalations[*].outcome`; not answered maps to `UNKNOWN` (9.2, 9.4, 10, 13). |
+| B3 | A roll resume recomposes, so the intent drops out | **Fixed.** 1.4 rule 4 corrected. The resume branch passes `record.get("intent")` into `_compose`; tests added (3.1 rule 5, 13). |
+| S1 | A per-call ceiling is several times the stated wait, and `_noting` blames healthy connections | **Fixed.** One deadline per decision, `DeadlineRefused` unsent past it, no `_noting`, worst case stated (3.4). |
+| S2 | Only `LLMError` and `DecideRequestError` are caught | **Fixed.** `except Exception` around the whole step (3.3). |
+| S3 | Kit cases and policy rows fail `make check` without a route | **Fixed.** What lands in 02-G versus the consumer's slice is spelled out (9.1). |
+| S4 | A `NO_LEGACY` route breaks the frozen equivalence baseline | **Fixed.** The shared structure's `NO_LEGACY_TASKS` set, excluded by the frozen baselines, landed with whichever spec adds the first such route (12). |
+| S5 | The play gate cannot apply a Decision selection to the turn path | **Fixed.** The isolate is seeded with the configuration's selections, and "on is really on" is a hard criterion (4.2, 4.3). |
+| S6 | C4's reroll story conflicts with variants | **Fixed.** Recorded per variant; reroll offers the tool, retry and resume do not (8.4, 8.6). |
+| S7 | The addressed narrowing is a hidden override, with a wrong citation | **Fixed.** Stated and recorded as an override, graded on its own line, mass on intended computed over the drawn weights, citation `response_actor.j2:74-75` (5.2, 5.7). |
+| S8 | The `extra` slot disagrees with 13's use | **Fixed.** Extra whole items, one `decide()`; the native request count and the no-conditioning limit are stated (7.3, 11). |
+| S9 | A layout can disable the section while the call is still paid | **Fixed by S10's move.** The block is no longer a catalog section, so a layout cannot drop it (6.5). |
+| S10 | Placement breaks prefix caching and skews 7.5 | **Fixed.** Placed after the history like an author's note at depth 0; cache-read tokens reported (6.5). |
+| S11 | The ceiling rule is ambiguous for 09 and 11 | **Fixed.** 02-C6 requires a named total deadline per turn-path decision; the 11 discrepancy is an edge note (3.4, 16). |
+| M1 | The structured path is `client.complete(schema=)`, not `generate(schema=)` | **Fixed** (1.2). |
+| M2 | One meter per call, not per chunk | **Fixed** (1.2). |
+| M3 | The "held by a guard" claim is too strong | **Fixed** (1, 11). |
+| M4 | `_named` takes no author | **Fixed.** New signature, author mapped to its ref (5.2). |
+| M5 | Settings fields and routes not named | **Fixed** (3.6, 12). |
+| M6 | 01s has no hiding toggle, so the route shows during the dark period | **Fixed** (3.6). |
+| M7 | Mechanics eligibility dropped silently | **Fixed.** Listed as a non-goal (15). |
+| M8 | `_soft_resolved`'s `None` not handled in the snippet | **Fixed** (3.2, 6.4). |
+| M9 | Open question 1 contradicted "not re-litigating F–H" | **Fixed.** Its own slice (16). |
+| M10 | 1.4.1 contradicted 1.4.2 on parsing prose | **Fixed** (1.4). |
+| M11 | The card brief goes to another provider | **Fixed.** Disclosed in the switch text (3.7). |
+| M12 | A replay asks a new intent per turn | **Fixed.** Stated in 6.3 and 11. |
+| M13 | "Visible text" versus the hidden perception fence | **Fixed.** The watcher's visible text (8.2). |
+| M14 | Sampling `deceive` makes lies absorb records without a signal | **Rejected.** A character lying is ordinary fiction on `main` today, with or without an intent, and how absorb treats an in-fiction lie is not 02's to change. The gate's stance diversity and adherence report how often `deceive` is drawn. |
+| M15 | Checklist edges: `13 ← 02-C3` missing; 01b hard for C5 | **Noted** as edge notes for the coordinator (16, question 8). |
+| M16 | The capture is on the pre-first-token path | **Fixed.** Counted in the worst case and in "added pre-generation time" (3.4). |
+| M17 | Readers must use `.get` | **Fixed** (5.3, 6.5). |
+
+**Also folded, from 01a and 01b:**
+
+- the play harness honours 01a's drain;
+- rows carry the fixture campaign's id, never a real campaign's;
+- each play gate declares its configuration as 01a's open `axes` (4.2).
