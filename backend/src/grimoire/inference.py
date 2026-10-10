@@ -895,15 +895,12 @@ MAX_OUTPUT_CAP = next(p.high for p in llm_sampling.PARAMS if p.name == "max_toke
 def clamp_to_max_output(target: wire.Target, requested: int) -> int:
     """The output cap `target` is sent for a call that asked for `requested`
     (01f 3.9): the caller's cap, held to the model's own maximum output where
-    that is known.
-
-    TODO(01i-C1): this tree has no model maximum yet. Once 01i-S1 lands
-    `wire.Limits(window, max_output)` on every target, return
-    `min(requested, target.limits.max_output)` when `max_output` is known
-    (and `requested` otherwise). Until then the cap applies as asked; the
-    Anthropic API's catalog limit still holds it there
-    (`llm_sampling._anthropic_max_tokens`)."""
-    return requested
+    that is known (01i-C1: `wire.Target.limits.max_output`, stated by the
+    user or listed by the provider's catalog). An unknown maximum holds
+    nothing back -- the cap applies as asked, and the Anthropic API's catalog
+    limit still holds it there (`llm_sampling._anthropic_max_tokens`)."""
+    most = target.limits.max_output.value
+    return requested if most is None else min(requested, most)
 
 
 def call_chain(resolved: ResolvedInference, *, schema: dict | None = None,

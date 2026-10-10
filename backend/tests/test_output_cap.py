@@ -127,9 +127,23 @@ def test_a_cap_that_is_not_a_positive_int_is_refused_before_any_call(bad, stream
     assert fake.calls == 0 and holder == {}
 
 
-def test_the_max_output_clamp_is_the_cap_until_01i_lands():
-    """The 01i-C1 hook: today the caller's cap applies as asked."""
+def test_the_cap_is_held_to_the_models_known_max_output():
+    """01i-C1: a known maximum output (the user's or the catalog's) holds the
+    caller's cap down to it; an unknown one holds nothing back."""
+    import dataclasses
+
+    from grimoire import wire
+
+    assert CONN.limits.max_output == wire.UNKNOWN_LIMIT
     assert inference.clamp_to_max_output(CONN, 777) == 777
+    capped = dataclasses.replace(CONN, limits=wire.Limits(
+        max_output=wire.Limit(500, "catalog")))
+    assert inference.clamp_to_max_output(capped, 777) == 500
+    assert inference.clamp_to_max_output(capped, 300) == 300
+    spare = dataclasses.replace(SPARE, limits=wire.Limits(
+        max_output=wire.Limit(1000, "user")))
+    chain = inference.call_chain(_resolved(sent=wire.Chain(capped, spare)), max_tokens=777)
+    assert (chain.primary.sampling.call_cap, chain.fallback.sampling.call_cap) == (500, 777)
 
 
 # ---- inference.cap_sent: where the adapter puts the cap on the wire ----
