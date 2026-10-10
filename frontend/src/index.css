@@ -887,12 +887,17 @@ form.column-actions { padding: 10px 16px 0; }
    up here loads the next page on its own, so this is the visible fallback */
 .stream-older { display: flex; justify-content: center; margin: 0 0 16px; }
 .msg { display: flex; margin: 0 0 14px; position: relative; }
-/* Never full width. 64ch is the measure prose is readable at, and a transcript
-   that runs the width of a 1600px monitor is a transcript nobody finishes. */
+/* Outside desktop focus mode, keep the readable prose measure rather than
+   running the transcript across the width of a 1600px monitor. */
 .msg-body {
   flex: 1; min-width: 0; max-width: 640px;
   font-family: var(--fb); font-weight: 300; font-size: 17px; line-height: 1.72;
   color: var(--ink);
+}
+/* Desktop focus mode uses the room released by the chrome; the phone keeps
+   its existing measure and layout below the shared 720px breakpoint. */
+@media (min-width: 721px) {
+  .shell.focus .msg-body { max-width: none; }
 }
 /* greeting art embedded in messages never overflows the text column */
 .msg-body img { max-width: 100%; height: auto; }
