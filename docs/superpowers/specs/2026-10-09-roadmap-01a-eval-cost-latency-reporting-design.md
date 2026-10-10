@@ -651,14 +651,16 @@ In `backend/tests/test_evals.py` (`FakeLLM`'s `usage=` dict stamps a holder,
 4. A subscription row with `cost_basis: "equivalent"` lands in `sub-equiv`
    only. A billed row on a subscription-tagged provider lands in `billed`.
 5. A mixed chain (native stage 0 failing two items, structured stage 1
-   answering them): `Decision.calls` names `stage`, `mode` and `items` for
-   each call, the items are batch indices, and the item lines name stage 1
+   answering them): `Decision.calls` names `stage`, `mode`, `items` and
+   `hop == ""` for each call, and a failed call carries `error_kind` and
+   `error_status` but no detail, the items are batch indices, and the item lines name stage 1
    for the two.
 6. A structured chunk of three items: the three item records share one
    `call` index, and no per-item money figure exists in the run file.
 7. The tripwire: with the isolate's `GRIMOIRE_HOME` equal to the real home,
-   `live()` sends nothing (`fake.calls == 0`) and fails the case with the
-   isolate message.
+   `live_all` sends nothing (`fake.calls == 0`), builds nothing (the real
+   home gains no `campaigns/` or `worlds/` directory), and fails the case with
+   the isolate message. `runner.live(..., real_home=None)` skips the check.
 8. No row reaches the real home: after a `live_all` run, the real home's
    `usage/` holds no file.
 9. `usage._add` is the folding function: the patched one is called (guarding
@@ -680,6 +682,29 @@ In `backend/tests/test_evals.py` (`FakeLLM`'s `usage=` dict stamps a holder,
     pick, a chat turn and a scene-break check) has one `bucket` equal to
     folding all three, and a `by_task` entry per task. The report prints the
     `by task` sub-block.
+
+16. Token coverage (B1):
+    - a billed row with no token counts prints `tokens: not reported`, never
+      `0 / 0`;
+    - a native row with only a prompt count prints `<n> / not reported`;
+    - a bucket mixing one counted and one uncounted call prints
+      `(1 of 2 counted)`;
+    - an embed row with a prompt count reads its completion as counted.
+17. An unreadable ledger (a month file made unreadable in the isolate) prints
+    `cost: not reported (ledger unreadable)`, not `calls 0`.
+18. Drain: a fake follow-up that files its row after the route returns is in
+    the harvest. One that outlives `DRAIN_CEILING_S` (patched small) fails
+    the case and leaves the isolate in place, and `GRIMOIRE_HOME` is not
+    restored while it runs.
+19. A failed call in the run file is `{"kind", "status"}`. The fake's error
+    detail string appears nowhere in the file bytes, and a check `detail`
+    longer than `MAX_DETAIL_CHARS` is truncated.
+20. `money(0.0001) == "$0.0001"`, matching `cost.tsx`'s `>=`. The billed call
+    count is `priced_calls - subscription_calls`.
+21. A row whose task no route claims aggregates under its task name.
+22. With `--decide-backend native --decide-backend structured`, a generate
+    case is listed once with `configs: ["c1", "c2"]`, and `--compare` fills
+    both columns from it. A run file with an unknown `axes` key is read.
 
 In `test_usage_guard.py`: `UNMETERED_OUTSIDE` is `{"scripts.ingest_scene":
 ...}` and the cap is 1.
@@ -722,3 +747,55 @@ table. `make check` is green.
 5. **Missing edge (none required).** 01h-C6's embed cases must resolve their
    embedding space before the isolate. That is 01h's work, stated here as a
    requirement on it, not a contract this spec needs.
+
+## 14. Review record
+
+**Substitute adversarial review, 2026-10-10**
+(`scratchpad/roadmap/reviews/01a.md`): 1 blocking, 6 should-fix, 9 minor.
+Each finding was verified against the code before it was folded in.
+
+- **B1 (folded).** `_add` floors absent counts to 0, which is true at
+  `store/usage.py:961-965` and `:1032-1040`. Eval-only coverage tallies are
+  added beside `_add` (§6, §7, C1, test 16).
+- **S1 (folded).** The tripwire moves into `live_all` before `prepare`, and is
+  re-checked before the harvest. `real_home` is an optional keyword (§3, test
+  7).
+- **S2 (folded).** The harvest uses a strict `_read_rows`, so an unreadable
+  ledger is reported as such (§6, test 17).
+- **S3 (folded).** The drain contract keeps detached follow-ups from
+  outliving the isolate. C2 is restated: the guarantee rests on the isolate,
+  the tripwire and the drain, and rows may carry the fixture's campaign id
+  (§3, §6, C2, test 18).
+- **S4 (folded).** Each config carries an open `axes` dict, and a consumer
+  mode may set its own `--repeat` default (§8, C3).
+- **S5 (folded, partly cross-spec).** `CallRecord.hop` is reserved, items
+  carry `escalated`, and the comparison table shows `escalated n/N`. Per-hop
+  time is summed call time, labelled as such. A measured hop span needs 01d
+  to stamp it (cross-spec item).
+- **S6 (folded).** Persisted errors are kind and status only, and check
+  details are truncated (§5, §8, test 19).
+- **Minors folded:**
+  - M1: rows alone when no item answered;
+  - M2: what one record is, stated;
+  - M3: `>=`;
+  - M4: an unrouted task aggregates under its own name;
+  - M5: the billed count is derived;
+  - M6: the clash lists;
+  - M7: the aggregate is a list;
+  - M8: `configs` list per case;
+  - M9: the README note on where rates come from.
+- **Rejected:** none.
+
+**Cross-spec items, for the coordinator (no other spec was edited):**
+
+- 01d: stamp a measured escalation span (`Decision.hop_wall_ms`, or similar)
+  if 01d-C3 tuning needs elapsed hop time rather than summed call time. 01d
+  also sets `CallRecord.hop = "escalation"` and the row's `hop`.
+- 02: the play-gate harness must honour §6's drain. 02's `--repeat` default
+  of 5 is that mode's own. 02's "never against a campaign" should read
+  "never against a real campaign": rows carry the fixture campaign's id.
+- 01d, 01h, 02, 10: declare their configuration axes as `axes` keys (§8)
+  rather than through new version bumps.
+- 01b: a capture call record and a `CallRecord` count different things (§5),
+  and 01b's spec says the same.
+

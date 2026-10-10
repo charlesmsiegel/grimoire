@@ -1,6 +1,6 @@
 # 01i. Context window as a resolved model fact
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01i in `ROADMAP-CHECKLIST.md`. Lane: retrieval (feeds 01g, 09, 12).
 **Baseline:** `main` at `35c1fb7`.
@@ -28,12 +28,13 @@ section 3.1).
 
 | Contract (provided here) | Consumer | What the consumer uses it for |
 |---|---|---|
-| 01i-C1 `wire.Limits` on every target and resolved attempt | 01g (S) | Sizing a loop turn's context and its per-turn output cap (01g-C4) where the window is known |
-| 01i-C1 | 01f (S) | `generate(max_tokens=)` never asks for more than the model's known max output (01f section 3.9) |
-| 01i-C1 | 09 (S) | The history section's budget (09-C3), through 01i-C2; without it 09 uses its own cap |
-| 01i-C1 | 12 (H) | Bounding each investigation turn's accumulated context (12-C2), through 01i-C2 |
-| 01i-C2 `prompt_ceiling(resolved)` | 09, 12 (within their 01i-C1 edge) | The one helper they call: smallest window minus the reply reserve, `None` when unknown |
+| 01i-C1 `wire.Limits` on every target and resolved attempt | 01g (S) | Sizing a loop turn's context against the window where it is known, through 01i-C2 with the run's per-turn output cap (01g-C4) passed as `max_tokens` |
+| 01i-C1 + 01i-C2 | 09 (S) | The history section's budget (09-C3): a share of `prompt_ceiling(resolved).tokens`. Without it, 09 uses its own cap |
+| 01i-C1 + 01i-C2 | 12 (H) | Bounding each investigation turn's accumulated context (12-C2): `prompt_ceiling(resolved, max_tokens=<per-turn cap>)`, never `window - max_output` |
 | 01i-C3 user-stated limits, the Models readout, `model_window` | 09, 12 (indirectly) | A local server whose catalog says nothing still gets a ceiling |
+
+**01i-C2 is the stated way a consumer derives a ceiling** (section 5). The
+checklist's edges for 09 and 12 should cite `01i-C1/C2`, not C1 alone.
 
 ## 1. Current state (reconciled against main)
 
@@ -199,7 +200,11 @@ from two sources:
   (`llm_sampling.py:384`), so nothing about what the Anthropic API is sent
   changes.
 
-It is read with the same `_positive_int` rule (`catalog.py:93-94`). It is not
+It is read with `_context`'s rule (`catalog.py:162-170`): a positive whole
+number, an integral float such as `16000.0` included, since JSON does not tell
+the two apart. The window and the cap therefore treat the same JSON the same
+way. (`_positive_int`, `catalog.py:93-94`, which refuses the float, stays the
+rule for `features.max_tokens`, unchanged.) It is not
 read from `per_request_limits`: that is a limit on the key, not a fact about
 the model. A sidecar cached before this change has no `max_output`, so the
 model reads `unknown` until the next catalog refresh. **No migration**: the
@@ -214,22 +219,40 @@ class Ceiling:
     window: int | None        # the window that bound it
     reserve: int              # the reply reservation subtracted from it
     complete: bool            # every target on the chain had a known window
-    binding: str              # "<provider_id>/<model>" of the target that bound it ("" when none)
+    binding: tuple[str, str] | None   # (provider_id, model) of the attempt that bound it
+    reason: str               # "" or a sentence, set when tokens == 0 (below)
 
-def reply_reserve(target: wire.Target, controls: dict) -> int: ...
-def prompt_ceiling(resolved: ResolvedInference, *, reserve: int | None = None) -> Ceiling: ...
+def reply_reserve(attempt: Attempt, *, max_tokens: int | None = None) -> int: ...
+def prompt_ceiling(resolved: ResolvedInference, *, reserve: int | None = None,
+                   max_tokens: int | None = None) -> Ceiling: ...
 ```
 
-**`reply_reserve(target, controls)`** reserves the tokens a reply on that
-target may take:
+`binding` is a tuple, not a joined string, because most OpenRouter model ids
+contain `/` and a joined string could not be split back.
 
-1. The `max_tokens` the attempt is actually sent: the `max_tokens` control's
-   value in `controls["effective"]`, under its wire name (`max_tokens`, or
-   `max_completion_tokens` at OpenAI, `llm_sampling.py:308-309`). The Anthropic
-   API is always sent one (`llm_sampling.py:588-590`), so its reserve is known
-   exactly.
-2. Otherwise `min(DEFAULT_REPLY_RESERVE, window // 4)`, and never more than a
-   known `max_output`.
+**`reply_reserve(attempt, max_tokens=None)`** reserves the tokens a reply on
+that attempt may take, reading the attempt's own `controls` and
+`target.limits`:
+
+1. A **per-call cap** the caller will send (`max_tokens`): 01f-C1's
+   `generate(max_tokens=)`, or 01g-C4's per-turn output cap. It is not in
+   `Attempt.controls`, which `llm_sampling.effective` built from the preset at
+   resolution (`resolve.py:498-503`), so the caller must pass it. A caller
+   that sends a per-call cap and does not pass it here gets a ceiling that
+   reserves the preset's figure, and its prompt can overflow by the
+   difference. Section 5 makes passing it a rule.
+2. Otherwise, the `max_tokens` the attempt is sent from its preset: the
+   `max_tokens` control's value in `controls["effective"]`, under its wire
+   name (`max_tokens`, or `max_completion_tokens` at OpenAI,
+   `llm_sampling.py:308-309`). The Anthropic API is always sent one
+   (`llm_sampling.py:588-590`), so its reserve is known exactly.
+3. Otherwise, `min(DEFAULT_REPLY_RESERVE, window // 4)`.
+
+In every case the reserve is capped at a known `max_output`: a reply cannot be
+longer than the model allows, whatever was asked. `Limits.max_output` is a cap
+on what may be *requested*, and is **never itself used as the reserve**.
+Reserving it whole would refuse every prompt on a model whose listing puts
+`max_completion_tokens` close to the window.
 
 `DEFAULT_REPLY_RESERVE = 4096`. It is argued structurally: an unset
 `max_tokens` says nothing about how long the reply will be, a shared window
@@ -241,12 +264,16 @@ the providers that have them (`llm_sampling.py:86-91`), so a sent
 `max_tokens` already covers them. An unset one is covered only by the
 default, which is one more reason the default is not small.
 
-**`prompt_ceiling(resolved, reserve=None)`** walks the targets on
-`resolved.chain`: the primary, and the fallback **only when it rides**
-(`resolved.py:145-154`). A decide resolution's separate fallback stage is not
-on the chain, and its prompt is the decide template's, not a packed one. For
-each target with a known window it computes `window - (reserve if given else
-reply_reserve(target, controls))`, floored at 0. It returns the **smallest**
+**`prompt_ceiling(resolved, reserve=None, max_tokens=None)`** walks the
+attempts `resolved.chain` is built from: `resolved.attempts[0]`, and
+`resolved.attempts[1]` only when `resolved.rides` (the rule `chain` applies,
+`resolved.py:145-154`). It walks attempts, not targets, because each
+attempt's own `controls` are what `reply_reserve` reads. A fallback that does
+not ride is never sent, and a decide resolution's separate fallback stage is
+not on the chain (its prompt is the decide template's, not a packed one), so
+neither lowers the ceiling. For each attempt with a known window it computes
+`window - (reserve if given else reply_reserve(attempt, max_tokens=max_tokens))`,
+floored at 0. It returns the **smallest**
 result, since the facade may send the same messages to either target, and a
 prompt sized for the primary's window overflows a fallback with a smaller one.
 
@@ -256,31 +283,53 @@ prompt sized for the primary's window overflows a fallback with a smaller one.
 - `tokens is None` when no target's window is known. **It is never `0` for
   unknown**: `0` means a known window with no room left after the reserve,
   which a consumer must treat as "nothing more fits".
+- When `tokens == 0`, `reason` names why, for example "The preset asks for
+  32,000 reply tokens; this model's window is 8,192." The settings view's
+  `limits` carries the ceiling and its reason (section 6.3), so the Models
+  readout shows the misconfiguration rather than a section that silently
+  receives nothing.
 - An override resolution (`override_inference`, a reroll) is just another
   `ResolvedInference`, so the same call answers for it.
 
 The helper is pure and reads nothing. It is cheap enough to call per turn.
+`store/inference/limits.py` imports `wire` and `resolved` (the latter as a
+submodule, `from . import resolved`). That is acyclic: `resolved` imports
+only `wire`, `capabilities` and `cascade` (`resolved.py:26-28`).
 
-## 5. How 09, 10 and 12 read it
+## 5. How consumers derive a ceiling (normative)
 
-- **09-C3 (history section budget).** The history section's budget is
-  `min(09's own cap, share × ceiling.tokens)`, where the share and the cap
-  are 09's constants. With `tokens is None`, 09 uses its cap alone. So a
-  model with an unknown window behaves exactly as it would without 01i.
-  `context_budget`, when set, still bounds the whole prompt. 09 takes the
-  smaller of the two, as `ContextBreakdown.contextLimit` already does on the
-  client.
-- **10 (query planning).** The planner input bound reads
-  `prompt_ceiling(require_inference("history-query-plan", cid))`. The Fast
-  role is often a small local model, which is where an unknown or small
-  window matters most.
-- **12 (bounded investigation).** Each loop turn's accumulated context is
-  checked against the ceiling of the resolution the loop runs on. Approaching
-  it is a terminal state (`budget_exhausted`, 12-C2) beside 01g-C4's limits,
-  not a truncation.
-- **What none of them do.** None reads `catalog` or `facts` directly, and none
-  treats an unknown window as zero or as unbounded. Unknown means: use your
-  own fixed cap.
+A consumer that bounds a prompt, or a share of one, against the model's
+window **must** derive it through `prompt_ceiling` (01i-C2), or through
+`reply_reserve` for a check of one attempt. It must not compute
+`window - max_output`, must not take a minimum over `resolved.attempts`
+itself, and must not read `catalog` or `facts`. Each of those disagrees with
+the facade about which targets a prompt reaches and how much reply to hold
+back. A caller that sends a per-call output cap passes it as `max_tokens`.
+`tokens is None` means "use your own fixed cap", never zero and never
+unbounded.
+
+- **09-C3 (history section budget).** The section's budget is
+  `min(09's own cap, floor(share × ceiling.tokens))`, where the share and the
+  cap are 09's constants, plus 09's packer-budget term when `context_budget`
+  is set. With `tokens is None`, 09 uses its cap alone, so a model with an
+  unknown window behaves exactly as it would without 01i. **09 must change:**
+  section 9.2 takes `WINDOW_SHARE * min known context_window over the chain's
+  attempts` from C1 directly. It should take `WINDOW_SHARE *
+  prompt_ceiling(resolved).tokens` instead. That drops a non-riding fallback
+  from the minimum and reserves the reply.
+- **12 (bounded investigation).** Before each model turn, the loop refuses as
+  `budget_exhausted` (`limit: "context"`) when `estimate + CONTEXT_MARGIN >
+  prompt_ceiling(resolved, max_tokens=<the run's per-turn output cap>).tokens`.
+  With `tokens is None`, it uses its own fallback cap. **12 must change:**
+  section 7.3 checks `estimate + max_output > context_window -
+  CONTEXT_MARGIN`. Reserving `max_output` refuses every turn at once on a
+  model whose listed output cap is close to its window. Its
+  `FALLBACK_CONTEXT_TOKENS` stays, as its "own cap".
+- **01g (tool loop).** Its per-turn output cap (01g-C4) is what it passes as
+  `max_tokens`.
+- **10** is not a consumer: it does not cite 01i, and the checklist has no
+  edge from it. If 10 later bounds its planner input against the window, it
+  follows this section and adds the edge.
 
 ## 6. 01i-C3: stating it, and seeing it
 
@@ -297,8 +346,15 @@ The helper is pure and reads nothing. It is cheap enough to call per turn.
 `0` removes for the reason `catalog._context` reads `0` as "does not say"
 (`catalog.py:162-164`): no model has a zero window, so zero cannot be a
 statement. The `2**31` bound only refuses typos that no int32 field on any
-wire could carry. A write that would leave a stated `max_output` above a
-stated `context_window` for the same model is refused with a sentence. A
+wire could carry.
+
+A write that would leave a stated `max_output` above a stated
+`context_window` for the same model is refused with a sentence. The check
+needs the merged entry: a request may state only one of the two while the
+other is already on file. So it runs **inside `change`**, after the merge,
+under the hold `_write_existing` takes (`facts.py:251-285`). It raises
+`ValueError` there, so nothing is stored (`change` runs before `_store`), and
+the route answers 400. A
 stated value that only disagrees with the *catalog* is allowed, because the
 user's word may be the correction.
 
@@ -319,7 +375,14 @@ so `registry.forget_model` is not called for it.
 `_facts_body` (`routes/config.py:1628-1650`) adds `limits`:
 `{"window": {"value", "source"}, "max_output": {"value", "source"}}`. These
 are resolved from the same row and facts the route already reads, through
-`limits.of`, so the panel shows exactly what a call would use.
+`limits.of`, so the panel shows exactly what a call would use. `_facts_body`
+already spreads `facts.of`'s view into the body (`**known`,
+`routes/config.py:1644`), so the two *stated* values also appear at the top
+level. The panel reads **stated** values from the top-level `context_window` /
+`max_output` (what the form edits) and **resolved** values from `limits`
+(what the view shows). The frontend `ModelFacts` type
+(`frontend/src/api/types.ts:428`) gains all three fields, and
+`ModelFactsUpdate` the two writable ones.
 
 ### 6.2 The model facts panel
 
@@ -341,17 +404,30 @@ list/detail record view for one model on one provider:
   That second sentence keeps the fact from becoming a second budget setting.
 - **Deep link:** `?edit=limits` on `/providers/:id/models/<model>` opens the
   form with the caret in the window field. It behaves exactly as `?edit=rates`
-  does today (`ProvidersView.tsx:882-893`): once per arrival, and cleared on
-  leaving the form.
+  does today: once per arrival, and cleared on leaving the form. The panel's
+  `?edit=rates` effect (`ProvidersView.tsx:884-906`) is generalised to both
+  values. The address is built only in `frontend/src/providerPaths.ts`, which
+  gains `EDIT_LIMITS = "limits"` and `modelLimitsPath(id, model)` beside
+  `EDIT_RATES` and `modelRatesPath` (`providerPaths.ts:17-22`). It encodes the
+  model **segment by segment**, so a model's own `/` stays a path separator
+  for the `models/*` splat (`App.tsx:375`).
 
 Tests follow the list/detail rule in CLAUDE.md: the row shows read-only Size,
 **Edit** reveals the two fields, and a save re-reads the facts.
 
 ### 6.3 The Models page (01s)
 
-`RoleCard`, `RouteRow` and `EmbeddingCard` (`store/inference/settings.py:164-238`)
-each gain `limits` (the shape in section 6.1, or `null` when nothing resolves).
-It is computed from the same resolved primary as `resolves` and 01s's `rate`.
+The server's `_role_card`, `_route_row` and `_embedding_card`
+(`store/inference/settings.py:164-238`; the frontend types are `RoleCard`,
+`RouteRow` and `EmbeddingCard`) each gain `limits`:
+`{"window", "max_output", "fallback_window", "ceiling": {"tokens", "binding",
+"reason"}}`. `window` and `max_output` are the resolved primary's (section
+6.1's shape), `fallback_window` is the riding fallback's window (or absent),
+and `ceiling` is `prompt_ceiling(resolved)`. It is computed from the same
+resolution as `resolves` and 01s's `rate`. **`limits` is `null` when nothing
+resolves, and also on a card or route whose `decision_mode` is `native`**: a
+native decision sends no prompt to pack. The server decides this, so the
+frontend holds no rule of its own (the decide-note precedent in CLAUDE.md).
 The summary row gains a short readout after the rate:
 
 ```
@@ -359,10 +435,15 @@ Primary    Saltmarch AI ●  · model-large   · Story   · $3 / $15 per M (prov
 Fast       Saltmarch AI ●  · model-small   · —       · $0.25 / $1 per M (provider) · window unknown [Set]
 ```
 
-**Set** links to `/providers/<id>/models/<model>?edit=limits`, encoded as
-01s's **Set rate** link is (01s, section 3.5). A native Decision row shows no
-window: a native decision sends no prompt to pack. That row already carries
-01s's "native decisions" sentence instead of a rate. The readout is
+**Set** links to `modelLimitsPath(id, model)`, for example
+`/providers/saltmarch/models/vendor/m?edit=limits`. This is *not* 01s's
+**Set rate** grammar, which carries the model in a query parameter on
+`/models`. The fallback line 01s already draws ("Fallback: provider · model ·
+preset") gains `· 8k window` when the fallback rides. A ceiling bound by the
+fallback rather than the primary therefore shows, and a `ceiling.reason`
+(a reply reserve larger than the window) shows under the row in the warning
+style. A native Decision row, whose `limits` is `null`, shows no window. That
+row already carries 01s's "native decisions" sentence instead of a rate. The readout is
 display-only. Nothing on the Models page writes a limit, because the facts
 panel owns that write.
 
@@ -384,7 +465,9 @@ it was captured, as it already is against the budget then in force
 
 `pack.py`'s docstring sentence "The backend cannot infer the number" is
 corrected to say the backend now knows the window (01i) and deliberately does
-not default to it (Open question 1).
+not default to it (Open question 1). So is the same claim in the comment
+beside `DEFAULT_CONTEXT_BUDGET` (`store/config.py:32-34`, "the backend cannot
+see the model's window size, only the frontend can").
 
 ## 7. Contract
 
@@ -404,25 +487,28 @@ Guarantees:
 - It is never `0` and never guessed from a name.
 - `window` is always read as shared by prompt and reply.
 
-**01i-C2 `limits.prompt_ceiling(resolved, reserve=None) -> Ceiling`.**
+**01i-C2 `limits.prompt_ceiling(resolved, reserve=None, max_tokens=None) -> Ceiling`.**
 
-- `tokens` is the smallest `window - reserve` over the targets on
-  `resolved.chain` whose window is known, floored at 0, or `None` when none is
-  known.
-- The reserve is the sent `max_tokens`, else `min(DEFAULT_REPLY_RESERVE,
-  window // 4)`, capped at a known `max_output`, unless the caller passes
-  one.
-- `complete` says whether every chain target was known, and `binding` names
-  the target that bound it.
+- It walks `resolved.attempts[0]`, plus `attempts[1]` when `resolved.rides`.
+  `tokens` is the smallest `window - reserve` over those whose window is
+  known, floored at 0, or `None` when none is known.
+- The reserve is the caller's per-call cap (`max_tokens`), else the preset's
+  sent `max_tokens`, else `min(DEFAULT_REPLY_RESERVE, window // 4)`. It is
+  always capped at a known `max_output`, unless the caller passes `reserve`
+  outright. `max_output` is never itself the reserve.
+- `complete` says whether every walked attempt was known, `binding` is the
+  `(provider_id, model)` that bound it, and `reason` explains a ceiling of 0.
 
-It is pure. A consumer must treat `None` as "use your own cap" and `0` as
-"nothing more fits".
+It is pure. **It is the stated way every consumer derives a ceiling**
+(section 5). A consumer must treat `None` as "use your own cap" and `0` as
+"nothing more fits", and must pass any per-call output cap it sends.
 
 **01i-C3 stated limits and their surfaces.**
 
 - `facts.state(..., context_window=, max_output=)` and the facts route accept
   `None` (leave), `0` (remove) or a positive int below `2**31`. A stated
-  output above a stated window is refused.
+  output above a stated window, judged on the merged entry inside the write's
+  hold, is refused.
 - `GET /llm-connections/{id}/facts` returns the resolved `limits`.
 - The facts panel shows and edits them.
 - The settings view's role, route and Embedding cards carry `limits` for the
@@ -481,12 +567,17 @@ Backend (pytest):
 - **`test_inference_facts.py`, the facts route tests**:
   - set, remove and leave each value;
   - 400 for `"8192"`, `true`, `-1`, `2**31` and an output above the window;
+  - **two requests**: a stated window of 8192, then a request stating only
+    `max_output: 16000`, gives 400 and leaves the file unchanged; the reverse
+    order likewise;
   - the stated value survives a `rev` change;
   - `not_migrated` before format 2;
   - no `confirm_embedding` is asked;
   - GET returns the resolved `limits` with their sources.
-- **Settings view**: each card's `limits` follows its `resolves`; it is `null`
-  when nothing resolves; a native Decision card carries no window.
+- **Settings view**: each card's `limits` follows its `resolves`; it is
+  `null` when nothing resolves and on a native decide card or route; it
+  carries the riding fallback's window and a ceiling `reason` when the preset
+  reserve exceeds the window.
 - **Breakdown**: a chat turn's breakdown and its prompt-log capture carry
   `model_window` from the target sent.
 - **Byte-identity**: with `context_budget` at 0, a composed prompt is
@@ -499,8 +590,11 @@ Frontend (vitest):
 - **`ModelFactsPanel`**: the view shows Size with sources and the catalog's
   figure beside a stated one; **Edit** shows the two fields; clearing a
   stated value sends `0`; `?edit=limits` opens the form once.
-- **Models summary**: a known window, `window unknown` with its **Set** link
-  (an encoded model id with `/`), and no window on a native Decision row.
+- **Models summary**: a known window; `window unknown` with its **Set** link,
+  which for `vendor/m` on `saltmarch` is
+  `/providers/saltmarch/models/vendor/m?edit=limits`; the fallback line's
+  window; a ceiling `reason`; and no window where `limits` is `null`.
+- **`providerPaths`**: `modelLimitsPath` encodes per segment.
 - **`ContextBreakdown`**: `model_window` is preferred over the catalog lookup.
   An older snapshot falls back to the lookup. The smaller of budget and window
   still bounds the bar.

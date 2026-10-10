@@ -1,6 +1,6 @@
 # 07. Explicit group membership
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 07 in `ROADMAP-CHECKLIST.md`. Lane: "Now" (no hard upstream);
 feeds the cache lane at 08 and the retrieval lane at 09 and 11.
@@ -127,7 +127,9 @@ is itself present, which opens the owner gate on lore the group owns
 (`structural_presence`, `:361-372`). `world_state` feeds the parsed refs in
 (`_STRUCTURAL_FIELDS`, `context/world_state.py:41`, used at `:242-244`). This is
 the seam section 11 extends. The stale docstring is corrected in the same
-change.
+change, together with the same docstring's other stale claim, "the editor sends
+every declared field on every save", which `EntityEditor`'s `changedFields`
+contradicts (`EntityEditor.tsx:409-418`).
 
 ### 1.4 Campaign overlay and sync
 
@@ -206,6 +208,14 @@ settles a temptation in advance: membership coverage is not added to `home/`.
 | Campaign divergence uses "normal" copy-on-write | Normal CoW is whole-record, and the sync panel cannot show field diffs | Section 5 adds field visibility to sync; field-level merge is an open question |
 | Inverse "invalidated" on external edit | 03 makes stale artifacts unreachable, not invalidated | Section 7.4 keys the inverse on content digests |
 | Removing an absent member is "a low-value row" | The materializer drops rows whose before equals after | Such rows are never staged (section 9.3) |
+
+Three of the draft's items are dropped, each deliberately: "group-related
+threads and commitments" as a retrieval signal (draft section 9) needs a
+thread-to-group link nothing stores, and building one is not membership; "an
+actor node lists groups" (draft section 8) is served by `member_of` edges and
+the node detail rather than a field on the actor node; and "continuity
+reconciliation" (draft section 1) would add a candidate kind to a capstone that
+§33 holds closed, for no consumer that asked.
 
 ---
 
@@ -1162,6 +1172,18 @@ One row added to the existing table (`context/activation.py:107-111`):
 and `"members"` added to `world_state._STRUCTURAL_FIELDS` (`:41`), so the
 entry's `refs` carry it.
 
+**For groups, `world_state` takes `leader` and `members` from the index, not
+from the frontmatter.** Today it fills every structural field with
+`entity_schema.parse_refs` (`world_state.py:242-244`), which keeps any ref of
+any kind. A hand-written `members: groups:other` would then make a group
+present whenever `groups:other` activates, which brings nested groups in
+through the back door (section 2), and it would bypass section 7.6's detached
+rule. So for a `groups` entry, `refs["leader"]` and `refs["members"]` are the
+roster's `leader` and `members` from `membership.campaign_index(cid)` (one
+index per turn, built from the listing the turn already read); `headquarters`
+and the other kinds' fields are parsed as today. A store with no members and
+no hand-written non-actor leader composes exactly as before.
+
 A group with a present member is present, with reason
 `{"type": "member_present", "via": "characters:mara"}`. Field order makes a
 present leader win over a present member, which wins over the headquarters.
@@ -1181,6 +1203,13 @@ present leader win over a present member, which wins over the headquarters.
   presence was already the scene's, not the NPC's (`world_state.py:208-214`).
 - A gm-only or excluded group confers no presence, by the engine's existing
   rule (`activation.py:79-80`).
+- **It cascades, as a present leader's group already does.** Through the
+  structural fixed point (`structural_presence`, `activation.py:361-385`), a
+  member-present group makes an item whose `holder` is that group present,
+  which opens the gate on that item's owned lore too. The recall stage's owner
+  gate reads the same present set, so recalled entries owned by the group or
+  its items become eligible the same way. Both follow from one rule and are
+  stated so nobody is surprised by them; section 17.6 tests the item cascade.
 
 ### 11.3 Inspector and wording
 
@@ -1207,8 +1236,12 @@ Any consumer that sends text to a model (generate, decide, or embed) applies
 one filter before using a roster or an affiliation:
 
 ```python
-def prompt_visible(roster: Roster) -> bool:
-    return roster.secrecy != entities.GM_ONLY
+def prompt_visible(roster: Roster, *, secret_framed: bool = False) -> bool:
+    if roster.secrecy == entities.GM_ONLY:
+        return False
+    if roster.secrecy == entities.SECRET:
+        return secret_framed
+    return True
 ```
 
 "Never sent to the model" means every model or it means nothing
@@ -1216,9 +1249,20 @@ def prompt_visible(roster: Roster) -> bool:
 SearchDocument text, 09's history section and any decide item drop gm-only
 rosters before rendering or embedding a name.
 
-A `secret` roster stays visible to the narrator perspective. For an actor
-perspective (11's `perspective = actor:<ref>`), a secret group's membership is
-narrator-only until 11 decides otherwise. 07 marks the row; 11 owns the rule.
+**A `secret` roster is off by default too.** `secret` means the entry
+"renders under a heading telling the model not to let uninvolved characters
+voice or act on it" (`entities.py:26-31`). A narrator-prompt consumer that
+rendered "Mara, of the Salt Circle" in plain history would put a secret
+affiliation into the turn prompt with none of that framing. So a consumer
+passes `secret_framed=True` only when it renders the name inside the same
+secret-framed block the entry itself gets; otherwise a secret roster's name
+and membership do not reach a prompt. Until 11-C2 rules on actor perspectives,
+no actor-perspective consumer passes it. 07 marks the row; 11 owns the rule
+past that default.
+
+Metadata that is never rendered or embedded (08's `groups` field) is not a
+prompt and may carry secret rosters' refs; the filter applies where the text is
+built.
 
 Every consumer intersects member refs with its own roster before rendering a
 name: a dangling ref is a missing person, not a member to describe.
@@ -1230,42 +1274,60 @@ name: a dangling ref is a missing person, not a member to describe.
 class SceneGroup:
     group: str                      # "groups:<id>"
     name: str
+    secrecy: str
     present: tuple[str, ...]        # affiliated actors in the cast, sorted
     leader_present: bool
 
 SCENE_GROUP_LIMIT = 8
 
 def scene_groups(index: Index, cast: Iterable[str], *,
-                 visible: Callable[[Roster], bool] = prompt_visible,
-                 limit: int = SCENE_GROUP_LIMIT) -> tuple[SceneGroup, ...]
+                 visible: Callable[[Roster], bool] | None = None,
+                 limit: int | None = None) -> tuple[SceneGroup, ...]
 ```
 
-The groups at least one of whose affiliated actors is in `cast` (actor refs in
-`<kind>:<id>` form; a `characters/<id>` token is normalized), ordered by the
-number of present affiliates descending, then name, then ref, and cut at
-`limit`. Deterministic, and bounded by the cast rather than the library.
+The groups at least one of whose **affiliated** actors (members or leader) is
+in `cast` (actor refs in `<kind>:<id>` form; a `characters/<id>` token is
+normalized), ordered by the number of present affiliates descending, then
+name, then ref. `visible` filters rosters (None keeps all, gm-only included,
+marked by `secrecy`), and `limit` cuts the tuple (None does not). Deterministic,
+and bounded by the cast times the groups each actor is in, not by the library.
 
-`SCENE_GROUP_LIMIT` is structural, not measured: it caps one metadata line of a
-document that must stay bounded by design (08's draft, §7), at a size where a
-scene with a large cast still lists the groups that most of it shares. It is
-tuned against real prompts later, in conversation, with nothing committed.
+**What 08 stores.** 08 settled that groups are metadata only, never document
+text or embedded text (08 §4.6), and its `groups` field is "groups any cast
+member belongs to now". So 08 calls `scene_groups(index, cast)` with
+`visible=None` and `limit=None`: every affiliated group, uncapped, gm-only
+rows included and marked, so 09's structural prefilter misses no group because
+of a cap nobody decided on. 07 recommends affiliation (leader included) as the
+meaning of "belongs to"; 08 should say so (cross-spec item).
 
-**For 08's key.** A SearchDocument that renders "Groups relevant" must change
-when that scene's projection changes. 08 hashes the canonical JSON of
-`scene_groups(...)` as a non-file input (03-C1 `params`/`inputs`). Keying on
-`Index.digest` instead would also be correct, but it would re-render every scene
-document when any group anywhere changes. The per-scene projection moves only
-the scenes it affects.
+**What a renderer passes.** A consumer that renders group names into a prompt
+(09's history section) passes `visible=prompt_visible` and
+`limit=SCENE_GROUP_LIMIT`. The constant is structural, not measured: it caps
+one rendered line at a size where a scene with a large cast still lists the
+groups most of it shares. It is tuned against real prompts later, in
+conversation, with nothing committed.
+
+**For 08's key.** 08's `groups` metadata must move when that scene's
+projection moves. 08 hashes the canonical JSON of its `scene_groups(...)`
+output as a non-file input (03-C1 `params`/`inputs`). Keying on `Index.digest`
+would also be correct but would rebuild every scene's metadata when any group
+anywhere changes; the per-scene projection moves only the scenes it affects.
 
 ### 12.3 Co-affiliation and membership lookups (for 09)
 
-09's structural candidate generation may use, through `co_affiliates`,
-`groups_for` and `members_of`:
+The exact calls 09 makes, by their 07 names:
 
-- other actors sharing a group with the speaker or addressee;
-- scenes in which several affiliates of one group appear (09 computes this from
-  08's per-scene metadata; 07 provides the projection, not the scene search);
-- a group's `headquarters` (on `Roster`), as a location signal.
+| 09 needs | 07 call | Membership meaning |
+|---|---|---|
+| Group seeds for each present actor (09's table calls it `groups_for_actor(ref)`, the bundle draft's name) | `groups_for(index, actor)` | affiliated (roles say which) |
+| Actors sharing a group with the speaker or addressee | `co_affiliates(index, actor)` | affiliated |
+| The `group` relation: scenes where two or more people of a seeded group stood | `affiliated(index, group)`, joined with 08's per-scene metadata or `scene_actors` | affiliated, so a leader nobody listed still counts |
+| A group's place, as a location signal | `index.groups[ref].headquarters` | n/a |
+
+09's relation text says "two or more members"; read through 07 that is
+`affiliated`, not `members_of`, unless 09 deliberately wants to exclude an
+unlisted leader (cross-spec item). 07 provides the projections, not the scene
+search.
 
 **These are recall signals, not evidence.** Co-membership says two people are
 connected; it does not say either knows what the other saw. 09 weights them;
@@ -1273,6 +1335,15 @@ connected; it does not say either knows what the other saw. 09 weights them;
 
 ### 12.4 Rules for 11 (epistemic retrieval)
 
+- **Which set a group audience expands to.** 11's group overrides expand a
+  `groups:<id>` audience through "effective members (07-C1)". 07-C1's
+  `members` excludes a leader nobody listed (section 4.4), so "the Watch knows"
+  read through `members_of` silently leaves out the Watch's leader. 11's call
+  is `membership.campaign_index(cid)` (07-C2, which applies section 7.6's
+  detached rule) followed by `affiliated` (recommended) or `members_of`; 11
+  decides and says which (cross-spec item). Reading `parse_members` off
+  `overlay.read_entity` directly would skip the detached rule and is not a
+  supported path.
 - **Membership never yields `ACTOR_KNOWN`.** A retrieval result may carry a
   `basis` such as `"co_affiliate"` as candidate provenance; it is never the
   basis of a knowledge classification on its own. A module or world rule that
@@ -1346,9 +1417,12 @@ under test.
 
 Each slice ships alone and leaves the tree green.
 
-1. **A. Field, reader, inverse, routes, editor, actor sections** (C1 minus
-   sync, C2 in-process tier). The smallest slice with user value: record
-   members, see them on both sides.
+1. **A. Field, reader, inverse, routes, editor, actor sections, hand-edit
+   journalling** (C1 minus sync, C2 in-process tier, section 6.4), plus the
+   `invisibleChangeHint` wording that names typed fields (section 5.3), so a
+   world-side membership change is never shown as a change with nothing in it
+   while B is pending. The smallest slice with user value: record members, see
+   them on both sides.
 2. **B. Sync visibility and push/promote check** (rest of C1).
 3. **C. Structural presence** (C3d). Small, prompt-affecting, isolated.
 4. **D. Absorb** (C3a). The largest; touches templates, evals and the review
@@ -1369,17 +1443,26 @@ Each slice ships alone and leaves the tree green.
 - Stored as one comma-separated frontmatter line of `characters:<id>` /
   `pcs:<id>` refs on `<root>/groups/<id>.md`.
 - `membership.parse_members(meta)` and `parse_leader(meta)`: lenient, never
-  raise (section 4.3).
+  raise (section 4.3). `membership.edited_line(raw, actor, change)`: the one
+  writer-side edit, on raw tokens.
 
 **Guarantees.**
 - The group is the only place a membership is stored. No actor record, sidecar
   or campaign ledger holds a copy.
 - Save-boundary validation is format-only (kind and id), never existence.
 - `leader` and `members` are independent, and nothing in this spec writes
-  `leader`.
+  `leader`. `members` excludes a leader nobody listed; a consumer expanding a
+  group audience says whether it means `members_of` or `affiliated`
+  (section 4.4).
+- Every writer this spec adds keeps every token of `members` it does not
+  change, a legacy non-ref value included (section 4.3).
 - Campaign effective membership is the `members` line of the file the overlay
-  resolves, with no merge across layers. A campaign change materializes the
-  group (whole-record copy-on-write) and diverges it from the world.
+  resolves, with no merge across layers, minus section 7.6's detached refs on
+  an inherited roster. A campaign change materializes the group (whole-record
+  copy-on-write) and diverges it from the world.
+- A hand edit of `members` in a campaign is journalled and undoable
+  (section 6.4). The entity route's unlocked check-then-write is a named
+  residual, not closed here.
 - Sync shows declared entity fields, `members` included, on both sides of a
   pending change (section 5.3).
 - `promote` and `push` of a group refuse a member ref that names no library
@@ -1396,14 +1479,20 @@ never fails a read. A malformed submitted value is a 400 naming `members`.
 `GET .../membership` routes (sections 7.1-7.5).
 
 **Inputs.** The world's `groups/*.md` (stems passing `safe_id`); for a
-campaign, also the campaign's `groups/*.md`, `deleted.json` and the world the
-campaign names.
+campaign, also the campaign's `groups/*.md`, `deleted.json`, `detached.json`
+and the world the campaign names, all reached through overlay helpers.
 
 **Guarantees.**
 - Deterministic: the same files give the same index and the same `digest`, in
   any process, with or without 03.
-- `digest` moves if and only if some roster's `(ref, secrecy, leader,
-  members)` moves. A body, key or group-state edit does not move it.
+- `digest` moves if and only if some roster's `(ref, name, secrecy, leader,
+  members, headquarters)` moves, which is everything the index hands out. A
+  body, keys or group-state edit does not move it.
+- In a campaign, a member or leader ref naming one of the campaign's detached
+  actors is absent from an inherited roster (section 7.6).
+- The memo is keyed on resolved roots, so a data-dir move or a second store
+  holding the same id is never served another store's index.
+- The index is immutable; callers may share it.
 - Refs are reported as stored, existence unchecked; gm-only rosters are
   included and marked.
 - Never stale: the in-process tier re-stats its inputs on every call, and the
@@ -1425,7 +1514,11 @@ apply, conflict, journal, undo, review drawer), section 9.
 - Nothing is written without an approved row in a saved review.
 - Only known groups and known actors are staged; joins of members and leaves
   of non-members are never staged.
-- Apply is a per-(group, actor) delta, so approved rows on one group commute.
+- Apply re-validates the row's shape (actor ref kind and id, group id)
+  before any read, and is a per-(group, actor) delta on raw tokens, so
+  approved rows on one group commute and no untouched token is lost.
+- Each row's citation and undo are per (group, actor): one row's undo never
+  clears another's citation.
 - The absorb context names only present affiliates, never gm-only groups.
 
 **Failure behaviour.** A missing or malformed section is `[]`. A row naming a
@@ -1449,14 +1542,24 @@ adds `groups` to `omitted`.
 C2 lookups, with the rules of section 12.
 
 **Guarantees.**
-- `scene_groups` is deterministic and bounded by `limit`.
+- `scene_groups` is deterministic, affiliation-based, and bounded by the cast
+  times groups per actor; `limit` cuts it only when a caller passes one.
 - A consumer that follows `prompt_visible` sends no gm-only group's name or
-  membership to any model.
+  membership to any model, and no secret group's outside a secret-framed
+  rendering.
 - Membership is never offered as knowledge, and never as historical fact.
 
-**Consumers' obligations.** 08 keys a SearchDocument that renders groups on
-the scene's `scene_groups` output. 09 treats co-affiliation as a recall signal.
-11 classifies knowledge without reading membership as evidence of it.
+**Consumers' obligations** (section 12, by their 07 names):
+- **08** stores `scene_groups(index, cast)` with `visible=None, limit=None` as
+  metadata, never as document or embedded text, and keys that metadata on the
+  projection's canonical JSON.
+- **09** seeds with `groups_for`, finds co-affiliates with `co_affiliates`,
+  and reads its `group` relation through `affiliated`; it renders names only
+  through `prompt_visible` and `SCENE_GROUP_LIMIT`; co-affiliation is a recall
+  signal.
+- **11** expands a group audience from `campaign_index` plus `affiliated`
+  (recommended) or `members_of`, stating which, and classifies knowledge
+  without reading membership as evidence of it.
 
 ### 07-C3d: Structural presence through members
 
@@ -1480,9 +1583,9 @@ never activates a group's own entry and never changes `actor.knows`.
   `entities.update_entity` / `overlay.update_entity`, which use
   `atomic.write_text`. No new writer touches a file directly.
 - **Overlay guard (`test_overlay_guard.py`).** `campaign_index` reads groups
-  through `overlay.list_entities`, never off a raw campaign root. The 03
-  persistent tier's digests are computed by 03's own reader, which owns its
-  marker if one is needed.
+  and their stamps through two new overlay helpers, `overlay.group_listing`
+  and `overlay.listing_stamps` (section 7.3), so `membership` never builds a
+  campaign path. The 03 persistent tier's digests go through the same helpers.
 - **Paths guard.** All paths come from `entities`, `overlay` and
   `campaigns_paths`; nothing joins a home-relative path by hand.
 - **Lock domain (`test_lock_domain_guard.py`).** `store/membership.py` mutates
@@ -1490,8 +1593,9 @@ never activates a group's own entry and never changes `actor.knows`.
   the chronicle save's campaign lock), in `undo` (journalled, as today), and in
   the entity routes, which stay as they are: `store.overlay` is in `UNREVIEWED`
   (`locks.py:548`) and campaign entity saves are guarded by the `rev`
-  precondition (`routes/entities.py:203-204`), not a lock. This spec does not
-  widen that backlog.
+  precondition (`routes/entities.py:203`), not a lock. The race that leaves
+  against absorb's locked apply is a named residual (section 6.4, Q12). The
+  two new overlay helpers are readers and do not widen that backlog.
 - **Import guard (`test_import_guard.py`).** `membership.py` imports
   `entities`, `entity_schema`, `overlay` and `statcache` at module scope;
   `continuity/graph.py` and `absorb/*` bind `from .. import membership`. No
