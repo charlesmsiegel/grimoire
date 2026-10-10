@@ -1116,7 +1116,14 @@ would answer neither question.
   with the app's `embeddings.AsyncEmbeddingsClient` (`routes.get_embeddings`,
   one per app, closed by its lifespan; one deadline covers its whole call,
   and a cancel files the row `aborted`). Each refuses the other's client.
-  Both take `post=` and `run_id=`, filed on the row. The task must be in
+  Both take `post=` and `run_id=`, filed on the row. The third,
+  `embed_groups_sync`, embeds several campaigns' documents in one run:
+  `attribute(claims)` charges a text to the one campaign that claims it and
+  leaves a shared or world-scoped one unattributed (counted toward no
+  campaign's budget), and each group is its own `embed_sync` call -- one row
+  per group, no request mixing groups, one deadline for the run, a
+  `bad_response` group skipped and any other failure stopping the run with
+  the rest `not_sent` and filed nowhere. The task must be in
   `routing.EMBED_TASKS` (a
   route would carry no choice: every embed task resolves through the global
   Embedding role, and the frozen observer enumerates `TASK_ROUTE`). The caller

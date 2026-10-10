@@ -82,6 +82,8 @@ import re
 import threading
 import time
 import traceback
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any
 
@@ -468,3 +470,113 @@ async def embed(task: str, texts: list[str], *, space: dict,
                      error=error, cached=cached, uncached=uncached, run_id=run_id)
     assert vectors is not None
     return vectors
+
+
+# ---- cross-campaign attribution (roadmap 01h-C5) ----
+
+@dataclass(frozen=True)
+class EmbedGroup:
+    """Documents one campaign's spend covers: one ledger row, one capture
+    line, and never a request shared with another group. `campaign` "" is
+    unattributed: a text several campaigns (or none) claim, whose spend
+    counts toward no campaign's budget -- the global Costs totals only, as
+    library-wide search's rows do."""
+
+    campaign: str
+    scene: str = ""
+    texts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GroupResult:
+    """What became of one group: its vectors in the group's text order, or
+    None with the error kind -- `not_sent` for a group the run stopped
+    before (nothing sent, nothing filed)."""
+
+    vectors: list[list[float]] | None
+    error: str = ""
+
+
+#: The `GroupResult.error` of a group never sent.
+GROUP_NOT_SENT = embeddings.NOT_SENT
+
+
+def attribute(claims: Iterable[tuple[str, str]]) -> list[EmbedGroup]:
+    """Group `(campaign, text)` claims by who pays for each text.
+
+    A text claimed by exactly one campaign goes to that campaign's group; a
+    text claimed by several, or by none (`""`, world-scoped), goes to the
+    unattributed group, embedded once. Charging it to whichever campaign
+    sorted first would put one campaign's spend in another's total, and
+    apportioning a provider's whole-request figure would charge each a number
+    nobody reported. The unattributed group comes FIRST -- its texts serve
+    several campaigns, so a run cut short should not always starve them --
+    then the campaigns by id; texts keep the order they were first claimed
+    in. Deterministic for the same claims."""
+    order: list[str] = []
+    owners: dict[str, set[str]] = {}
+    for campaign, text in claims:
+        if text not in owners:
+            order.append(text)
+            owners[text] = set()
+        owners[text].add(campaign)
+    by: dict[str, list[str]] = {}
+    for text in order:
+        who = owners[text]
+        payer = next(iter(who)) if len(who) == 1 else ""
+        by.setdefault(payer, []).append(text)
+    return [EmbedGroup(campaign, texts=tuple(by[campaign]))
+            for campaign in sorted(by, key=lambda c: (c != "", c))]
+
+
+def embed_groups_sync(task: str, groups: Sequence[EmbedGroup], *, space: dict,
+                      client: embeddings.EmbeddingsClient, deadline: float | None = None,
+                      budgeted: bool = False, run_id: str = "",
+                      cached: int | None = None, uncached: int | None = None,
+                      on_group: Callable[[EmbedGroup, GroupResult], None] | None = None,
+                      ) -> list[GroupResult]:
+    """Embed each group's documents as its own `embed_sync` call, in order,
+    under ONE deadline taken at entry (`embeddings.TIMEOUT` from now when
+    none is given -- never a fresh one per group): one row and one capture
+    line per group, attributed to its campaign and scene, and no request
+    that mixes groups. Documents only: a query belongs to one campaign's
+    turn, which uses `embed_sync`.
+
+    A `bad_response` (the input's fault) fails its group and the next still
+    runs. Any other failure -- `auth`, `missing_key` (a width-ignoring
+    endpoint's `dimensions_mismatch` included), `rate_limit`, `network`, the
+    deadline -- stops the run: every later group is `not_sent` and files
+    nothing, the split `semantic._embed` makes. `on_group(group, result)` is
+    called for each group that was tried, as its result lands and before the
+    next is sent, so the caller can save what landed; one that raises stops
+    the run the same way (its exception is recorded, not raised). `cached`
+    and `uncached` go to the first group's call only, and `run_id` to every
+    row. Raises what `embed_sync` raises before sending (a task that is not
+    an embed task, a space whose options do not match it), unchanged."""
+    if task not in routing.EMBED_TASKS:
+        raise ValueError(f"{task!r} is not an embed task")
+    if deadline is None:
+        deadline = time.monotonic() + embeddings.TIMEOUT
+    out: list[GroupResult] = []
+    stopped = False
+    for n, group in enumerate(groups):
+        if stopped:
+            out.append(GroupResult(None, GROUP_NOT_SENT))
+            continue
+        try:
+            got = GroupResult(embed_sync(
+                task, list(group.texts), space=space, client=client, deadline=deadline,
+                budgeted=budgeted, campaign=group.campaign, scene=group.scene, run_id=run_id,
+                cached=cached if n == 0 else None, uncached=uncached if n == 0 else None))
+        except embeddings.EmbeddingsError as exc:
+            not_sent = getattr(exc, "code", None) == embeddings.NOT_SENT
+            got = GroupResult(None, GROUP_NOT_SENT if not_sent else exc.kind)
+            stopped = exc.kind != "bad_response"
+        out.append(got)
+        if on_group is not None and got.error != GROUP_NOT_SENT:
+            try:
+                on_group(group, got)
+            except Exception as exc:  # noqa: BLE001 - the docstring's rule
+                errors.record_exception(exc, task, campaign=group.campaign, task=task)
+                stopped = True
+    return out
