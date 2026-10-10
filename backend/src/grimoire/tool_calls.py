@@ -47,9 +47,13 @@ never written.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import re
+import threading
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
 
@@ -734,3 +738,193 @@ def anthropic_stop(usage: object, stop_reason: object) -> None:
     collector = _collector(usage)
     if collector is not None and isinstance(stop_reason, str) and stop_reason:
         collector.finish(_ANTHROPIC_FINISH.get(stop_reason, "other"))
+
+
+# ---- the loop's shapes (01g-S4; spec 3.7, 3.9, 3.10) ----
+#: The shortest window a turn could plausibly answer in: a turn is not sent
+#: when the run's wall clock has less than this left (spec 3.9).
+MIN_TURN_SECONDS = 5.0
+
+#: The default executor's own bounded thread pool (spec 3.6): never the
+#: shared default executor, which also serves httpx's DNS lookups.
+TOOL_WORKERS = 4
+
+#: The limits a run can stop on (`LoopResult.limit`). `spend` is 01g-S5's.
+LIMITS: tuple[str, ...] = ("turns", "tool_calls", "decisions", "wall", "spend",
+                           "result_chars")
+
+#: The results a model is sent for a call the loop did not run as asked.
+NOT_RUN = "not run: the run's tool budget is spent"
+CUT_OFF = "your arguments were cut off; call again with a shorter request"
+TOOL_FAILED = "the tool failed"
+TIMED_OUT = "timed out"
+CAPACITY = "tool capacity exhausted"
+
+#: A tool-call id every provider accepts (spec 3.11).
+SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+@dataclass(frozen=True)
+class RunBudget:
+    """What one run may spend, checked before every send and execution (spec
+    3.9). The defaults are structural and to be tuned against real runs.
+    `wall_seconds` None is `llm_call_budget`; `<= 0` is no wall."""
+    max_turns: int = 6
+    max_tool_calls: int = 12
+    max_decisions: int = 2
+    wall_seconds: float | None = None
+    max_output_tokens: int = 2048
+    max_result_chars_total: int = 48_000
+    reserve_final: bool = True
+
+    def __post_init__(self) -> None:
+        for name in ("max_turns", "max_tool_calls", "max_output_tokens",
+                     "max_result_chars_total"):
+            if not _positive_int(getattr(self, name)):
+                raise ValueError(f"RunBudget.{name} is a positive whole number")
+        if isinstance(self.max_decisions, bool) or not isinstance(self.max_decisions, int) \
+                or self.max_decisions < 0:
+            raise ValueError("RunBudget.max_decisions is a whole number")
+
+
+@dataclass(frozen=True)
+class TraceEntry:
+    """One thing a run did (spec 3.10): a model turn, a tool call, a decision
+    or the stop -- with refs and sizes, never argument or result text."""
+    turn: int
+    kind: Literal["model", "tool", "decide", "stop"]
+    name: str = ""
+    call_id: str = ""
+    ok: bool = True
+    refs: tuple[str, ...] = ()
+    chars: int = 0
+    elapsed_ms: int = 0
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class LoopResult:
+    """How a run ended (spec 3.7). `error` is the `LLMError` a `failed` run
+    stopped on."""
+    status: Literal["completed", "budget_exhausted", "failed"]
+    limit: str = ""
+    text: str = ""
+    final: dict | None = None
+    final_call: ToolCall | None = None
+    declined: tuple[ToolCall, ...] = ()
+    proposals: tuple[dict, ...] = ()
+    messages: tuple[dict, ...] = ()
+    trace: tuple[TraceEntry, ...] = ()
+    rows: tuple[dict, ...] = ()
+    error: Exception | None = None
+    run_id: str = ""
+
+
+@dataclass(frozen=True)
+class LoopEvent:
+    """One step of a run as it happens: `text` (a turn's delta), `turn_end`
+    (`interstitial` for a turn that ended in calls), `tool_start`,
+    `tool_end` and, last, `done` with the result."""
+    kind: Literal["text", "turn_end", "tool_start", "tool_end", "done"]
+    turn: int = 0
+    delta: str = ""
+    finish: str = ""
+    interstitial: bool = False
+    call_id: str = ""
+    name: str = ""
+    ok: bool = True
+    chars: int = 0
+    refs: tuple[str, ...] = ()
+    result: LoopResult | None = None
+
+
+class RunRefused(Exception):  # noqa: N818 - the spec's name for it (01g 3.9)
+    """A run refused before anything is sent (spec 3.9): `kind` says why
+    (`unpriceable`), the message what to do about it."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
+def truncate(text: str, limit: int) -> str:
+    """`text` held to `limit` characters, with a marker saying how much was
+    cut."""
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit)] + f"\n[truncated: {len(text) - max(0, limit)} more characters]"
+
+
+def loop_id(run_id: str, n: int) -> str:
+    """The loop's own call id: `gc_<run8>_<n>`, inside `SAFE_ID`."""
+    return f"gc_{re.sub(r'[^A-Za-z0-9]', '', run_id)[:8]}_{n}"
+
+
+def rewrite_ids(messages: list[dict], mapping: dict[str, str]) -> list[dict]:
+    """`messages` with each call id in `mapping` renamed, call and result
+    alike, on new messages; the rest as they were."""
+    out: list[dict] = []
+    for message in messages:
+        calls = message.get("tool_calls") if isinstance(message, dict) else None
+        renamed = message
+        if isinstance(calls, list):
+            renamed = {**message, "tool_calls": [
+                {**c, "id": mapping.get(c.get("id", ""), c.get("id", ""))}
+                if isinstance(c, dict) else c for c in calls]}
+        elif (isinstance(message, dict) and message.get("role") == "tool"
+              and message.get("tool_call_id") in mapping):
+            renamed = {**message, "tool_call_id": mapping[message["tool_call_id"]]}
+        out.append(renamed)
+    return out
+
+
+class _Workers:
+    """A bounded thread pool that says when it is full rather than queueing:
+    a thread a timed-out wait abandoned keeps its worker until it returns."""
+
+    def __init__(self, size: int):
+        self._pool = ThreadPoolExecutor(max_workers=size, thread_name_prefix="grimoire-tool")
+        self._size = size
+        self._busy = 0
+        self._lock = threading.Lock()
+
+    def submit(self, fn: Callable, *args: object) -> Future | None:
+        with self._lock:
+            if self._busy >= self._size:
+                return None
+            self._busy += 1
+        future = self._pool.submit(fn, *args)
+        future.add_done_callback(self._release)
+        return future
+
+    def _release(self, _future: Future) -> None:
+        with self._lock:
+            self._busy -= 1
+
+
+def registered(toolset: Toolset, *, workers: int = TOOL_WORKERS) -> Execute:
+    """The default executor (spec 3.6): each call dispatched by name to its
+    `ToolSpec.fn`. An async tool is awaited; a sync one runs on this
+    executor's own bounded pool, and once every worker is held -- by threads
+    the loop stopped waiting on -- a call is refused with `CAPACITY` rather
+    than queued. The loop bounds the wait; nothing here kills a thread."""
+    pool = _Workers(workers)
+
+    async def execute(call: ToolCall, ctx: ToolContext) -> ToolOutput:
+        spec = toolset.get(call.name)
+        if spec is None:
+            raise ToolError(f"there is no tool named {call.name!r}")
+        args = call.arguments or {}
+        if inspect.iscoroutinefunction(spec.fn):
+            return await spec.fn(args, ctx)
+        future = pool.submit(spec.fn, args, ctx)
+        if future is None:
+            raise ToolError(CAPACITY)
+        result = await asyncio.wrap_future(future)
+        return await result if inspect.isawaitable(result) else result
+
+    return execute
