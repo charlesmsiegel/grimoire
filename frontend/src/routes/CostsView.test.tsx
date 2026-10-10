@@ -360,7 +360,7 @@ test("an unpriced model on two providers is two lines, each naming its provider"
     .toBe("/providers/saltmarch/models/vendor/model-a?edit=rates");
   // A row filed before providers were named has only the table to price it.
   expect(within(items[2]).getByRole("link").getAttribute("href"))
-    .toBe("/config?section=pricing");
+    .toBe("/models#rates");
   expect(list.getByText(/own rates on its provider page/)).toBeInTheDocument();
   expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
   errors.mockRestore();
@@ -415,7 +415,7 @@ test("before the model-settings upgrade every line points at the pricing table",
     (label) => within(label.closest(".unpriced-models") as HTMLElement));
   const [item] = list.getAllByRole("listitem");
   expect(item.textContent).toMatch(/Saltmarch/);
-  expect(within(item).getByRole("link").getAttribute("href")).toBe("/config?section=pricing");
+  expect(within(item).getByRole("link").getAttribute("href")).toBe("/models#rates");
   expect(list.queryByText("Set its rates")).toBeNull();
   expect(list.getByText(/after the upgrade/)).toBeInTheDocument();
 });
@@ -435,7 +435,7 @@ test("a store a newer version wrote says so, never \"after the upgrade\"", async
   const list = await screen.findByText("No rate matches these").then(
     (label) => within(label.closest(".unpriced-models") as HTMLElement));
   const [item] = list.getAllByRole("listitem");
-  expect(within(item).getByRole("link").getAttribute("href")).toBe("/config?section=pricing");
+  expect(within(item).getByRole("link").getAttribute("href")).toBe("/models#rates");
   expect(list.getByText(/newer version/)).toBeInTheDocument();
   expect(list.queryByText(/after the upgrade/)).toBeNull();
 });
@@ -458,5 +458,5 @@ test("a deleted provider's line points at the pricing table, not a dead page", a
     (label) => within(label.closest(".unpriced-models") as HTMLElement));
   const [item] = list.getAllByRole("listitem");
   expect(item.textContent).toMatch(/gone/);
-  expect(within(item).getByRole("link").getAttribute("href")).toBe("/config?section=pricing");
+  expect(within(item).getByRole("link").getAttribute("href")).toBe("/models#rates");
 });

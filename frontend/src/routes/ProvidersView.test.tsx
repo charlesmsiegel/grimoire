@@ -934,3 +934,24 @@ test("the column opens with the Inference group, Providers current", async () =>
   expect(nav.getByRole("link", { name: "Providers" })).toHaveAttribute("aria-current", "page");
   expect(nav.getByRole("link", { name: "Models" })).toHaveAttribute("href", "/models");
 });
+
+test("a refreshed /providers/new still returns to where it came from, search and hash kept", async () => {
+  // A reload keeps the history entry, state included: the same entry, mounted again.
+  const entry = { pathname: "/providers/new", state: { returnTo: "/models?add=x#rates" } };
+  const page = () => (
+    <MemoryRouter initialEntries={[entry]}>
+      <Where />
+      <Routes>
+        <Route path="/providers/new" element={<ProvidersView />} />
+        <Route path="/models" element={<div>the models page</div>} />
+      </Routes>
+    </MemoryRouter>);
+  const first = render(page());
+  await main().findByRole("button", { name: "Cancel" });
+  first.unmount();
+  render(page());
+  fireEvent.click(await main().findByRole("button", { name: "Cancel" }));
+  expect(await screen.findByText("the models page")).toBeInTheDocument();
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/models#rates$/);
+  expect(screen.getByTestId("search")).toHaveTextContent(/^\?add=x$/);
+});
