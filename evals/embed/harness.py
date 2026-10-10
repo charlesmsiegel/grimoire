@@ -55,10 +55,19 @@ BOW_DIMS = 64
 
 # ---- ranking -----------------------------------------------------------------
 
+#: Decimal places a score is compared at. Scores that are equal in exact
+#: arithmetic (two documents sharing the same words) can differ in their last
+#: bit, and that bit must never order them: `sum` over floats rounds
+#: differently on 3.11 than on 3.12+, so an unrounded tie would rank one way in
+#: CI's 3.11 job and the other in 3.14's.
+SCORE_PLACES = 9
+
+
 def _rank(scores: dict[str, float]) -> list[str]:
-    """Document ids, best first; ties broken by id, so a ranking is
-    deterministic."""
-    return [doc for doc, _s in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))][:DEPTH]
+    """Document ids, best first; scores compared at `SCORE_PLACES` and ties
+    broken by id, so a ranking is the same on every Python version."""
+    return [doc for doc, _s in sorted(scores.items(),
+                                      key=lambda kv: (-round(kv[1], SCORE_PLACES), kv[0]))][:DEPTH]
 
 
 def lexical_rankings(corpus: Corpus) -> dict[str, list[str]]:
@@ -72,9 +81,10 @@ def lexical_rankings(corpus: Corpus) -> dict[str, list[str]]:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
+    # `math.fsum`, never `sum`: it is correctly rounded on every version.
+    dot = math.fsum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(math.fsum(x * x for x in a))
+    nb = math.sqrt(math.fsum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
 
 
@@ -117,7 +127,7 @@ def bow_vector(text: str, width: int = BOW_DIMS) -> list[float]:
     out = [0.0] * width
     for word in _TOKEN.findall(text.lower()):
         out[int.from_bytes(hashlib.sha256(word.encode()).digest()[:4], "big") % width] += 1.0
-    norm = math.sqrt(sum(x * x for x in out)) or 1.0
+    norm = math.sqrt(math.fsum(x * x for x in out)) or 1.0
     return [x / norm for x in out]
 
 
