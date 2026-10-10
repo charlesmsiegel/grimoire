@@ -5,7 +5,7 @@ THAT model on THAT provider (the preset table in `providers.py` holds what is
 true of every model behind a preset; this holds what is true of one):
 
     {"<model>": {"vision": "on"|"off", "prefill": bool, "post_process": str,
-                 "rates": {...},
+                 "rates": {...}, "context_window": int, "max_output": int,
                  "verified": {"rev": "<connection rev>", "caps": {cap: {...}}},
                  "overrides": {cap: "yes"|"no"}}}
 
@@ -19,8 +19,9 @@ Two kinds of fact, and they age differently:
   connection's own, checked and written under the connection lock every
   connection write holds -- otherwise a run that started on an old rev would
   replace the new rev's results, or recreate a deleted connection's file.
-- **Stated** facts (`overrides`, `vision`, `prefill`, `post_process`, `rates`)
-  are the user's own word about the model and survive a rev change.
+- **Stated** facts (`overrides`, `vision`, `prefill`, `post_process`, `rates`,
+  and the model's size, `context_window` / `max_output`, 01i) are the user's
+  own word about the model and survive a rev change.
 
 Reads never raise: the file is one a sync or a hand can mangle into any JSON,
 and it is read on the path of a turn. No write replaces a file it could not
@@ -162,6 +163,23 @@ def of(provider_id: str, model: str, rev: str, *, strict: bool = False) -> dict:
     return _view(_load(provider_id).get(model, {}), rev)
 
 
+#: A stated size no int32 field on any wire could carry is a typo.
+_LIMIT_CEILING = 2**31
+
+#: The model's size, as the user may state it (01i): its context window and
+#: the most a reply may be asked for. Read by `limits.of` before the catalog's.
+LIMIT_FIELDS: tuple[str, ...] = ("context_window", "max_output")
+
+
+def stated_limit(value: object) -> int | None:
+    """A stated size as it is kept: a positive int (never a bool) below
+    `2**31`, else None -- what a hand-edited file holding anything else reads
+    as. 0 is never a size (no model has a zero window), so it is not one."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 < value < _LIMIT_CEILING:
+        return value
+    return None
+
+
 def _view(entry: dict, rev: str) -> dict:
     """`of`'s shape for one raw entry, its verified results kept only under
     `rev`."""
@@ -182,6 +200,7 @@ def _view(entry: dict, rev: str) -> dict:
         "overrides": ({c: v for c, v in overrides.items()
                        if c in CAPABILITIES and v in OVERRIDE_VALUES}
                       if isinstance(overrides, dict) else {}),
+        **{name: stated_limit(entry.get(name)) for name in LIMIT_FIELDS},
     }
 
 

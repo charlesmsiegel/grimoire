@@ -17,7 +17,7 @@ P = providers.PRESETS
 
 def _facts(**kw) -> dict:
     base = {"vision": "", "prefill": None, "post_process": "", "rates": None,
-            "verified": {}, "overrides": {}}
+            "verified": {}, "overrides": {}, "context_window": None, "max_output": None}
     return {**base, **kw}
 
 

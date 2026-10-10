@@ -23,7 +23,7 @@ from grimoire import llm, llm_sampling, routes, wire
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import capabilities, migrate
+from grimoire.store.inference import capabilities, limits, migrate
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
@@ -1210,3 +1210,82 @@ def test_a_dual_capable_attempt_keeps_its_controls(tmp_path):
     assert primary.decision_mode == "structured"
     assert primary.controls == llm_sampling.effective(primary.target)
     assert primary.controls["effective"] == {"temperature": 0.8}
+
+
+# ---- 01i: the model's size rides the attempt ----
+def _state_facts(conn_id: str, model: str, **stated: int) -> None:
+    """`stated` written into `model`'s facts on `conn_id`, as the facts
+    panel's write keeps them, without going through it."""
+    path = store.llm_connections.facts_path(conn_id)
+    doc = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    doc.setdefault(model, {}).update(stated)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_an_attempts_limits_are_of_its_row_and_facts(at_state):
+    at_state("fresh")
+    row = {"id": "vendor/active", "context": 131072, "max_output": 16000}
+    _catalog("openrouter", [row])
+    _state_facts("openrouter", "vendor/active", context_window=32768)
+    first = inf.resolve("chat").attempts[0]
+    assert first.limits is first.target.limits
+    assert first.limits == limits.of(row, first.facts)
+    assert first.limits == wire.Limits(wire.Limit(32768, "user"), wire.Limit(16000, "catalog"))
+
+
+def test_a_model_nothing_lists_or_states_has_unknown_limits(at_state):
+    at_state("fresh")
+    assert inf.resolve("chat").attempts[0].limits == wire.Limits()
+
+
+def test_a_reroll_override_resolves_its_own_limits(at_state):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "context": 131072},
+                            {"id": "vendor/bigger", "context": 1000000, "max_output": 64000}])
+    standing = inf.resolve("regenerate")
+    rerolled = inf.resolve("regenerate", override=Selection("", "vendor/bigger", ""))
+    assert standing.attempts[0].limits.window == wire.Limit(131072, "catalog")
+    assert rerolled.attempts[0].limits == wire.Limits(wire.Limit(1000000, "catalog"),
+                                                      wire.Limit(64000, "catalog"))
+
+
+def test_an_embedding_attempt_judged_without_the_catalog_reads_only_stated_limits(at_state):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/embedder", "context": 8192, "max_output": 1}])
+    _state_facts("openrouter", "vendor/embedder", max_output=512)
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    judged = inf.embed_attempt("openrouter", "vendor/embedder", raw, catalog=False).attempt
+    assert judged.limits == wire.Limits(wire.UNKNOWN_LIMIT, wire.Limit(512, "user"))
+    read = inf.embed_attempt("openrouter", "vendor/embedder", raw).attempt
+    assert read.limits == wire.Limits(wire.Limit(8192, "catalog"), wire.Limit(512, "user"))
+
+
+def test_a_catalog_cached_under_an_old_rev_gives_unknown_limits(at_state):
+    at_state("fresh")
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active", "context": 131072, "max_output": 16000}],
+        "a-rev-long-gone")
+    assert inf.resolve("chat").attempts[0].limits == wire.Limits()
+
+
+def test_target_for_carries_the_same_limits(at_state):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "context": 65536, "max_output": 8192}])
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    resolved = inf.resolve("chat").attempts[0]
+    standalone = inf.target_for(raw, "vendor/active", dict(inf.NO_SAMPLING),
+                                model_facts=resolved.facts)
+    assert standalone.limits == resolved.limits == limits.of(
+        {"context": 65536, "max_output": 8192}, {})
+
+
+def test_a_decide_resolutions_ceiling_is_its_primary_stage_alone(tmp_path):
+    """The native primary and its structured fallback are separate stages,
+    so the fallback's smaller window does not lower the primary's ceiling."""
+    resolved = _decision_on(tmp_path, [
+        {"id": "vendor/decider", "outputs": ["decisions"], "context": 32768},
+        {"id": "vendor/spare", "context": 4096}])
+    assert resolved.attempts[0].decision_mode == "native" and not resolved.rides
+    ceiling = limits.prompt_ceiling(resolved)
+    assert (ceiling.window, ceiling.binding) == (32768, ("openrouter", "vendor/decider"))
