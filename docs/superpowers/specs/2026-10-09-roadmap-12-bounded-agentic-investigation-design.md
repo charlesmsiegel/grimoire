@@ -525,7 +525,7 @@ tool returned in this run, and unknown ones are dropped. If every citation is
 dropped, the outcome is `insufficient_evidence`. The result is held on the
 draft run and reaped (`REAP_SECONDS`), never written to the store. A reader
 who wants to keep it copies it. A stored Q&A history would be a second store
-of model claims with no review path (section 14, question 4).
+of model claims with no review path (section 16, question 2).
 
 ## 7. Budgets (12-C2a)
 
