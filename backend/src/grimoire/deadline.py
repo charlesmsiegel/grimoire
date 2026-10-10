@@ -32,12 +32,21 @@ def abandon(task: asyncio.Future) -> None:
 async def bounded(work: Awaitable[T], seconds: float | None,
                   overrun: Callable[[float], BaseException]) -> T:
     """`work`'s result, or -- once `seconds` have passed -- `overrun(seconds)`
-    raised, with the work abandoned (`abandon`). `seconds` None or `<= 0` is
-    no bound. A caller that is cancelled while waiting abandons the work
-    too, and the cancellation propagates."""
-    if seconds is None or seconds <= 0:
+    raised, with the work abandoned (`abandon`). `seconds` None is no bound;
+    `<= 0` is a wait already spent, so the work is abandoned unstarted and
+    `overrun` raised at once. Every caller reads a ceiling of `<= 0` from
+    configuration as "off" itself (`_bounded_call` never calls here with
+    one; the tool loop's per-turn wait is None then), so a non-positive
+    number reaching here is always a remainder computed from a clock that
+    has run out -- which must never read as "wait forever". A caller that is
+    cancelled while waiting abandons the work too, and the cancellation
+    propagates."""
+    if seconds is None:
         return await work
     task = asyncio.ensure_future(work)
+    if seconds <= 0:
+        abandon(task)
+        raise overrun(seconds)
     try:
         done, _ = await asyncio.wait({task}, timeout=seconds)
     except asyncio.CancelledError:
