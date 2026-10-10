@@ -1227,3 +1227,40 @@ def test_a_model_that_neither_generates_nor_decides_is_refused(client):
     with pytest.raises(HTTPException) as exc:
         common.require_inference("scene-break", operation="decide")
     assert (exc.value.status_code, exc.value.detail) == (409, body)
+
+
+# ---- call records (01a-S1) ----
+def test_each_structured_chunk_is_one_call_record(client):
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)],
+                    [decision_reply({"over": False})]])
+    got = _decide(fake, items)
+    assert [(c.stage, c.mode, c.items, c.hop, c.error_kind) for c in got.calls] == [
+        (0, "structured", tuple(range(8)), "", ""), (0, "structured", (8,), "", "")]
+    assert [c.row for c in got.calls] == list(got.usage) == _rows()
+
+
+def test_a_schema_refusal_re_send_is_its_own_call_record(client):
+    _store(client, fallback=False)
+    _catalog("openrouter", [{"id": "vendor/active",
+                             "params": ["temperature", "structured_outputs"]}])
+    provider = SequencedProvider([_refused_schema(), [decision_reply({"over": True})]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()])
+    refused, resent = got.calls
+    assert (refused.items, refused.error_kind, refused.error_status) == (
+        (0,), "bad_response", 400)
+    assert refused.row is not None and refused.row["status"] == "error"
+    assert (resent.items, resent.error_kind, resent.row["status"]) == ((0,), "", "ok")
+
+
+def test_a_failed_call_record_carries_kind_and_status_but_no_detail(client):
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)]],
+                   error=LLMError("network", "connection reset"), fail_after=1)
+    got = _decide(fake, items)
+    ok, failed = got.calls
+    assert ok.error_kind == "" and failed.items == (8,)
+    assert (failed.error_kind, failed.error_status) == ("network", None)
+    assert "connection reset" not in repr(dataclasses.asdict(failed))

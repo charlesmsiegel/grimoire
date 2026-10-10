@@ -197,6 +197,17 @@ class _Call:
     around: Around | None
     chain: wire.Chain
     retries: int | None
+    #: The stage's index in the chain `run_stages` was handed, and its
+    #: positions mapped back to batch indices (`positions[p]` is the batch
+    #: index of the stage's item `p`; empty means the identity).
+    stage: int = 0
+    positions: tuple[int, ...] = ()
+
+    def batch(self, unit: Sequence[int]) -> tuple[int, ...]:
+        """`unit`'s stage positions as batch indices."""
+        if not self.positions:
+            return tuple(unit)
+        return tuple(self.positions[p] for p in unit)
 
 
 class _Answered(NamedTuple):
@@ -207,13 +218,16 @@ class _Answered(NamedTuple):
     rows and what answered (`decisions.Decision.served`). Every unanswered
     item is in exactly one failed unit. `stopped` is the failure that made
     the stage start nothing more, or None -- `run_stages` reads it to skip a
-    later stage that would only meet it again."""
+    later stage that would only meet it again. `calls` is one
+    `decisions.CallRecord` per metered request the stage made, in the order
+    they settled."""
 
     results: tuple[decisions.ItemResult | None, ...]
     failed: tuple[tuple[tuple[int, ...], LLMError], ...]
     rows: tuple[dict, ...]
     served: tuple[tuple[str, str], ...]
     stopped: LLMError | None = None
+    calls: tuple[decisions.CallRecord, ...] = ()
 
 
 #: A backend: one stage's attempt at every item it is given.
@@ -256,11 +270,23 @@ def _served_by(holder: dict) -> tuple[str, str]:
     return "", ""
 
 
+def _record(call: _Call, mode: str, unit: Sequence[int], row: dict | None,
+            error: LLMError | None) -> decisions.CallRecord:
+    """One settled request's `decisions.CallRecord`: its error's kind and
+    status only, never its detail (the provider's own text)."""
+    return decisions.CallRecord(
+        stage=call.stage, mode=mode, items=call.batch(unit), row=row,
+        error_kind=error.kind if error is not None else "",
+        error_status=error.status if error is not None else None)
+
+
 async def _once(call: _Call, sending: wire.Chain, messages: list[dict], schema: dict,
-                rows: list[dict]) -> _Reply:
+                rows: list[dict], *, records: list[decisions.CallRecord],
+                unit: tuple[int, ...]) -> _Reply:
     """One metered facade call: its text and the answering holder, or its
     error. Its ledger row, when the meter filed one, is appended to
-    `rows`."""
+    `rows`, and its `CallRecord` (over the stage positions `unit`) to
+    `records`."""
     # Named `client`, the receiver `test_usage_guard.py` recognises.
     client = call.client
     m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
@@ -281,16 +307,18 @@ async def _once(call: _Call, sending: wire.Chain, messages: list[dict], schema: 
         error = exc
     if m.row is not None:
         rows.append(m.row)
+    records.append(_record(call, STRUCTURED, unit, m.row, error))
     sent = bool(m.usage)
     return (_Reply(text, m.usage, None, sent) if error is None
             else _Reply("", None, error, sent))
 
 
 async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dict,
-               rows: list[dict]) -> _Reply:
+               rows: list[dict], *, records: list[decisions.CallRecord],
+               unit: tuple[int, ...]) -> _Reply:
     """One chunk's call: its text and the answering holder, or its error,
     and whether any of the calls it made went out. Each call's ledger row is
-    appended to `rows`.
+    appended to `rows`, and its `CallRecord` to `records`.
 
     The attempt chain, and -- only when every route failed and a route's
     failure was its provider refusing the structured field
@@ -301,7 +329,7 @@ async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dic
     reason. Each re-send is its own metered call, and none is re-sent twice.
     Should those fail too, the error is the routes' failures composed afresh
     (`llm.routes_failed`), each re-sent route's word now its own failure."""
-    first = await _once(call, chain, messages, schema, rows)
+    first = await _once(call, chain, messages, schema, rows, records=records, unit=unit)
     error = first.error
     if not isinstance(error, llm.SchemaRefusalError) or not error.attempts:
         return first
@@ -310,7 +338,8 @@ async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dic
     for index, attempt in enumerate(error.attempts):
         if not isinstance(attempt, wire.Target):
             continue
-        again = await _once(call, _without_mode(attempt), messages, schema, rows)
+        again = await _once(call, _without_mode(attempt), messages, schema, rows,
+                            records=records, unit=unit)
         sent = sent or again.sent
         if again.error is None:
             return again._replace(sent=sent)
@@ -360,6 +389,7 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
     explain = bool(call.explain)
     results: list[decisions.ItemResult | None] = [None] * len(items)
     rows: list[dict] = []
+    records: list[decisions.CallRecord] = []
     failed: list[tuple[tuple[int, ...], LLMError]] = []
     served: list[tuple[str, str]] = []
     stopped: LLMError | None = None
@@ -373,7 +403,8 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
         # Off the loop: the template loader touches the filesystem.
         messages = await asyncio.to_thread(structured_messages, chunk, explain=call.explain)
         schema = decisions.schema(chunk, explain=explain)
-        text, holder, error, sent = await _ask(call, chain, messages, schema, rows)
+        text, holder, error, sent = await _ask(call, chain, messages, schema, rows,
+                                               records=records, unit=unit)
         answered: list[decisions.ItemResult] = []
         if holder is not None:
             answered = [replace(result, backend=STRUCTURED)
@@ -396,7 +427,8 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
             failed.append((unit, error))
             if _stops_chunks(error, chain):
                 stopped = error
-    return _Answered(tuple(results), tuple(failed), tuple(rows), tuple(served), stopped)
+    return _Answered(tuple(results), tuple(failed), tuple(rows), tuple(served), stopped,
+                     tuple(records))
 
 
 def _connection_wide(exc: LLMError) -> bool:
@@ -478,6 +510,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
     errors: list[LLMError | None] = [None] * len(items)
     rows: list[dict | None] = [None] * len(items)
     holders: list[dict | None] = [None] * len(items)
+    records: list[decisions.CallRecord] = []    # in the order the items settle
     started = [False] * len(items)
     stopped: list[LLMError] = []
     timeouts = [0]      # how many items in a row have timed out
@@ -506,6 +539,8 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
                     stopped.append(exc)
             finally:
                 rows[index] = m.row
+        # Settled (a cancel or an unexpected exception never reaches here).
+        records.append(_record(call, NATIVE, (index,), m.row, errors[index]))
         # Settled, and out of the gate (a cancel never reaches here): the
         # request as sent, built off the loop -- or none, when the call was
         # refused before it went out (`Capture`).
@@ -537,7 +572,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
     served = tuple(dict.fromkeys(_served_by(h) for h in holders if h is not None))
     return _Answered(tuple(results), failed,
                      tuple(row for row in rows if row is not None), served,
-                     stopped[0] if stopped else None)
+                     stopped[0] if stopped else None, tuple(records))
 
 
 def _native_request(item: decisions.Item, target: wire.Target) -> list[dict]:
@@ -638,12 +673,13 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     #: Per item, the failure of each stage that failed it, in stage order.
     words: dict[int, list[LLMError]] = {}
     rows: list[dict] = []
+    records: list[decisions.CallRecord] = []
     served: dict[tuple[str, str], None] = {}     # ordered, each once
     failed: list[tuple[tuple[int, ...], LLMError]] = []
     pending = list(range(len(items)))
     #: The provider of each stage that stopped on a connection-wide failure.
     dead: list[str] = []
-    for stage in chain:
+    for number, stage in enumerate(chain):
         if not pending:
             break
         if any(_same_connection(stage.chain.primary.provider_id, d) for d in dead):
@@ -651,8 +687,10 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
             continue
         got = await _BACKENDS[stage.mode](
             tuple(items[i] for i in pending),
-            replace(call, chain=stage.chain, retries=stage.retries))
+            replace(call, chain=stage.chain, retries=stage.retries, stage=number,
+                    positions=tuple(pending)))
         rows.extend(got.rows)
+        records.extend(got.calls)
         served.update(dict.fromkeys(got.served))
         failed = _settle(got, pending, results, words)
         pending = [i for i in pending if results[i] is None]
@@ -678,7 +716,8 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     provider, model = next(iter(served)) if len(served) == 1 else ("", "")
     return decisions.Decision(items=tuple(r for r in results if r is not None),
                               backend=backend, provider=provider, model=model,
-                              usage=tuple(rows), served=tuple(served), errors=errors)
+                              usage=tuple(rows), served=tuple(served), errors=errors,
+                              calls=tuple(records))
 
 
 async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClient,

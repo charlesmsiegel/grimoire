@@ -1252,3 +1252,55 @@ def test_a_raising_capture_leaves_the_decision_and_the_ok_row(client, mode, capl
     assert (row["status"], row["decision_mode"]) == ("ok", mode)
     assert any("the prompt log is full" in r.getMessage() for r in caplog.records
                if r.levelname == "WARNING")
+
+
+# ---- call records (01a-S1) ----
+def test_each_native_item_is_one_call_record(client):
+    """One `CallRecord` per native item, carrying its ledger row; the items
+    settle concurrently, so the records are compared as a set."""
+    resolved = _native_resolution(client, fallback=False)
+    fake = FakeLLM([["unused"]], decisions=[_yes()])
+    got = _decide(fake, _items(3), resolved=resolved)
+    assert sorted(c.items for c in got.calls) == [(0,), (1,), (2,)]
+    assert {(c.stage, c.mode, c.hop, c.error_kind) for c in got.calls} == {
+        (0, NATIVE, "", "")}
+    assert len(got.calls) == len(got.usage) == 3
+    assert all(c.row in got.usage for c in got.calls)
+
+
+def test_a_mixed_chain_names_each_calls_stage_and_batch_items(client):
+    """Items a connection-wide failure held back are never sent and have no
+    record; the fallback stage's one structured call carries them by their
+    BATCH indices, and its stage is 1. The failed call keeps its kind and
+    status, never the provider's words."""
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(10)
+    native: dict[str, object] = {i.context: _yes() for i in items}
+    native[items[0].context] = LLMError("auth", "invalid key", status=401)
+    fake = _Endpoint([[decision_reply(*({"over": False},) * 7)]], native)
+    got = _decide(fake, items, resolved=resolved)
+    first = [c for c in got.calls if c.stage == 0]
+    assert len(first) == fake.sent == NATIVE_CONCURRENCY
+    assert all(c.mode == NATIVE for c in first)
+    (failed,) = [c for c in first if c.error_kind]
+    assert (failed.items, failed.error_kind, failed.error_status) == ((0,), "auth", 401)
+    assert "invalid key" not in repr(dataclasses.asdict(failed))
+    (last,) = [c for c in got.calls if c.stage == 1]
+    assert last.mode == STRUCTURED and last.items == (0, 4, 5, 6, 7, 8, 9)
+    assert last.row is not None and last.row["decision_mode"] == STRUCTURED
+    assert got.calls[-1] is last
+    assert [c.row for c in got.calls] == list(got.usage)
+
+
+def test_a_native_item_refused_unsent_has_a_record_and_no_row(client):
+    wide = Item("Seraphine weighs the roster.",
+                (Choice("who", "Who steps forward?",
+                        tuple(Option(f"o{n}", f"Candidate {n}") for n in range(255)),
+                        allow_none=True),))
+    resolved = _native_resolution(client, fallback=False)
+    got = _decide(FakeLLM([["unused"]], decisions=[_yes()]), [_item(), wide],
+                  resolved=resolved)
+    (unsent,) = [c for c in got.calls if c.items == (1,)]
+    assert unsent.row is None
+    assert (unsent.error_kind, unsent.error_status) == ("bad_response", None)
+    assert len(got.usage) == 1
