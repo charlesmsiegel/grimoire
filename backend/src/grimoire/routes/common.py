@@ -403,6 +403,22 @@ def _turn_override(body) -> dict | None:
     return fields
 
 
+def _sampling_report(target: wire.Target | None) -> dict | None:
+    """`llm_sampling.report(target)`, plus what the CALL added to the attempt
+    (01f 3.7, `inference.call_chain`): `structured` when it was sent its
+    provider's structured mode, and `call_cap` when the call capped its
+    output (the capped `max_tokens` is already in `applied`). Neither key is
+    there otherwise, so a capture of a plain call is what it always was."""
+    report = llm_sampling.report(target)
+    if report is None or target is None:
+        return report
+    if target.structured:
+        report = {**report, "structured": True}
+    if target.sampling.call_cap is not None:
+        report = {**report, "call_cap": target.sampling.call_cap}
+    return report
+
+
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
                    messages: list[dict] | None = None,
@@ -448,7 +464,7 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     if breakdown is None:
         return
     chain = conn if isinstance(conn, wire.Chain) else None
-    report = llm_sampling.report(conn.primary if isinstance(conn, wire.Chain) else conn)
+    report = _sampling_report(conn.primary if isinstance(conn, wire.Chain) else conn)
     if report is not None:
         breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):

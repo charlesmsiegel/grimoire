@@ -25,7 +25,6 @@ Invented connection ids and fake keys only.
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -35,6 +34,7 @@ import grimoire.store as store
 from grimoire import llm, routes
 from grimoire.routes.models import RegenerateBody
 from grimoire.store.inference import resolve as inf
+from tests import wire_kit
 
 from . import inference_baseline as base
 
@@ -161,7 +161,7 @@ def test_provider_only_keeps_the_standing_preset_on_format_2(at):
     ctx = at()
     _format2(**_standing(preset="cold"))
     resolved, routed = _run({"provider": "spare"}, ctx["cid"])
-    sampling = asdict(resolved.chain.primary.sampling)
+    sampling = wire_kit.sampling_dict(resolved.chain.primary.sampling)
     assert (sampling["preset_id"], sampling["scope"]) == ("cold", "connection")
     assert routed is True
 
@@ -468,7 +468,7 @@ def test_preset_clear_in_an_override(at):
     ctx = at()
     _route_preset_with_fallback()
     resolved, routed = _run({"preset": PRESET_CLEAR}, ctx["cid"])
-    sampling = asdict(resolved.chain.primary.sampling)
+    sampling = wire_kit.sampling_dict(resolved.chain.primary.sampling)
     assert sampling["preset_id"] == "" and sampling["params"] == {}
     assert sampling["scope"] == "override"
     assert routed is True    # the standing route runs `cold`
@@ -556,7 +556,7 @@ def test_provider_only_override_cells_after_migration(state, tmp_path):
             assert standing.standing is not None, state
             assert standing.standing.provider == legacy["conn"], state
             assert standing.chain.primary.model == legacy["model"], state
-            migrated = asdict(standing.chain.primary.sampling)
+            migrated = wire_kit.sampling_dict(standing.chain.primary.sampling)
             assert migrated["preset_id"] == legacy["sampling"]["preset_id"], state
             assert migrated["params"] == legacy["sampling"]["params"], state
         for name, body in provider_only.items():
@@ -581,7 +581,7 @@ def test_provider_only_override_cells_after_migration(state, tmp_path):
                 conn = {**raw, "model": model}
                 expected = base._normalise({
                     "conn": raw["id"], "model": inf.provider_target(conn).model,
-                    "sampling": asdict(standing.chain.primary.sampling),
+                    "sampling": wire_kit.sampling_dict(standing.chain.primary.sampling),
                     "model_params": inf.model_params(conn),
                     "routed": raw["id"] != standing.standing.provider,
                 }, base._revs())

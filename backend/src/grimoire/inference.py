@@ -72,7 +72,17 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Literal, NamedTuple, TypeVar, overload
 
-from . import decisions, llm, llm_errors, model_guidance, prompts, schemas, store, wire
+from . import (
+    decisions,
+    llm,
+    llm_errors,
+    llm_sampling,
+    model_guidance,
+    prompts,
+    schemas,
+    store,
+    wire,
+)
 from .llm import LLMClient
 from .llm_errors import LLMError
 from .store.inference import resolve
@@ -855,6 +865,66 @@ def _structured_chain(resolved: ResolvedInference) -> wire.Chain:
     return wire.Chain(primary, fallback)
 
 
+#: The highest output cap a call may ask for: the sampler parameter's own
+#: bound. Above it `llm_sampling` reads the value as invalid and sends none
+#: (the Anthropic API its default instead), so the cap would silently not be
+#: one; it is refused instead.
+MAX_OUTPUT_CAP = next(p.high for p in llm_sampling.PARAMS if p.name == "max_tokens")
+
+
+def clamp_to_max_output(target: wire.Target, requested: int) -> int:
+    """The output cap `target` is sent for a call that asked for `requested`
+    (01f 3.9): the caller's cap, held to the model's own maximum output where
+    that is known.
+
+    TODO(01i-C1): this tree has no model maximum yet. Once 01i-S1 lands
+    `wire.Limits(window, max_output)` on every target, return
+    `min(requested, target.limits.max_output)` when `max_output` is known
+    (and `requested` otherwise). Until then the cap applies as asked; the
+    Anthropic API's catalog limit still holds it there
+    (`llm_sampling._anthropic_max_tokens`)."""
+    return requested
+
+
+def call_chain(resolved: ResolvedInference, *, schema: dict | None = None,
+               max_tokens: int | None = None) -> wire.Chain:
+    """The chain a `generate` call sends (01f 3.7), pure: with a `schema`,
+    each attempt flagged for its provider's structured mode when its model
+    takes it (`_structured_chain`); with `max_tokens`, each attempt capped
+    (`wire.Target.with_output_cap`, at `clamp_to_max_output`'s figure). Both
+    on new targets, so the resolution is never mutated; with neither, the
+    resolution's own chain, as it always was. A caller that records its
+    prompt hands this to `routes.common._record_prompt(conn=...)`, so the
+    prompt log reports the cap and the flag the call was sent with."""
+    chain = _structured_chain(resolved) if schema is not None else resolved.chain
+    if chain is None:
+        raise ValueError(f"{resolved.task!r} resolved to no connection")
+    if max_tokens is None:
+        return chain
+    primary = chain.primary.with_output_cap(clamp_to_max_output(chain.primary, max_tokens))
+    fallback = (None if chain.fallback is None else
+                chain.fallback.with_output_cap(clamp_to_max_output(chain.fallback, max_tokens)))
+    return wire.Chain(primary, fallback)
+
+
+def cap_sent(target: wire.Target) -> bool:
+    """Whether `target`'s adapter puts `max_tokens` (or its translation) on
+    the wire -- asked of the target as a call sends it (`call_chain`), so a
+    capped attempt says whether its cap is a bound. Not on the Claude Agent
+    SDK, which takes no sampling, nor on an OpenRouter model whose cached
+    catalog omits the parameter (dropped as unsupported). Pure."""
+    return "max_tokens" in llm_sampling.sent_names(target)
+
+
+def _check_cap(max_tokens: object) -> None:
+    """`generate`'s refusal of an output cap that is not an int in
+    `[1, MAX_OUTPUT_CAP]`, before any client call."""
+    if (isinstance(max_tokens, bool) or not isinstance(max_tokens, int)
+            or not 1 <= max_tokens <= MAX_OUTPUT_CAP):
+        raise ValueError(f"max_tokens must be a whole number from 1 to {MAX_OUTPUT_CAP}, "
+                         f"not {max_tokens!r}")
+
+
 def _texts(content: object) -> Iterator[str]:
     """The text a message's `content` carries: the string itself, or each
     text part of a content-part list."""
@@ -959,20 +1029,20 @@ async def _streamed_structured(
 @overload
 def generate(task: str, messages: list[dict], *, client: LLMClient,
              resolved: ResolvedInference, usage: dict | None = None,
-             schema: dict | None = None,
+             schema: dict | None = None, max_tokens: int | None = None,
              stream: Literal[True] = True) -> AsyncIterator[str]: ...
 
 
 @overload
 def generate(task: str, messages: list[dict], *, client: LLMClient,
              resolved: ResolvedInference, usage: dict | None = None,
-             schema: dict | None = None,
+             schema: dict | None = None, max_tokens: int | None = None,
              stream: Literal[False]) -> Awaitable[str]: ...
 
 
 def generate(task: str, messages: list[dict], *, client: LLMClient,
              resolved: ResolvedInference, usage: dict | None = None,
-             schema: dict | None = None,
+             schema: dict | None = None, max_tokens: int | None = None,
              stream: bool = True) -> AsyncIterator[str] | Awaitable[str]:
     """Generate free text for `task` (spec 7.2): with `stream=True` an async
     iterator of the reply's deltas, with `stream=False` an awaitable of the
@@ -1005,14 +1075,27 @@ def generate(task: str, messages: list[dict], *, client: LLMClient,
     caller's holder, so the one row filed describes the attempt that
     answered and counts every attempt the call made. The reply is text, as
     ever: nothing guarantees it conforms, and the caller parses it
-    (`schemas.find_value`)."""
+    (`schemas.find_value`).
+
+    With `max_tokens` (01f 3.9), with or without a schema, each attempt's
+    output is capped at `min(preset's, max_tokens)` -- and the model's own
+    maximum where known (`clamp_to_max_output`) -- on new per-call targets,
+    where that attempt's adapter sends `max_tokens` (`cap_sent`). A value
+    that is not a whole number in `[1, MAX_OUTPUT_CAP]` is a `ValueError`
+    before any call. A provider refusing a cap only the call carried is
+    `llm.CapRefusalError`, worded as the call's; it is never re-sent without
+    the cap. The chain sent is exactly `call_chain(resolved, schema=,
+    max_tokens=)`."""
     chain = _generating(task, resolved)
+    if max_tokens is not None:
+        _check_cap(max_tokens)
     if schema is None:
+        chain = call_chain(resolved, max_tokens=max_tokens)
         if stream:
             return client.stream(messages, chain, usage)
         return client.complete(messages, chain, usage)
     _check_structured(messages, schema)
-    chain = _structured_chain(resolved)
+    chain = call_chain(resolved, schema=schema, max_tokens=max_tokens)
 
     # The re-sends, nested here so they forward this call's `usage` as the
     # facade calls above do (`test_usage_guard.FORWARDERS`).

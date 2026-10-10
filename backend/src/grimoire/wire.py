@@ -33,6 +33,10 @@ class Sampling:
     #: "connection" or "none".
     scope: str = "none"
     params: dict = field(default_factory=dict)
+    #: The output cap THIS CALL asked for (`Target.with_output_cap`; 01f
+    #: 3.9), or None: never a preset's. It tells a refusal of a cap the call
+    #: added (`llm.CapRefusalError`) from one the user's preset carried.
+    call_cap: int | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,26 @@ class Target:
         """This target with `fields` laid over its account: a NEW target and a
         NEW `Account`. An unknown field raises TypeError."""
         return dataclasses.replace(self, account=dataclasses.replace(self.account, **fields))
+
+    def with_output_cap(self, n: int) -> Target:
+        """A NEW target whose sampling `max_tokens` is `min(the preset's, n)`,
+        or `n` when the preset sets none (01f 3.9): a cap THIS CALL asks for,
+        recorded as `Sampling.call_cap`. The preset's id, name and scope are
+        kept, so the ledger still names the preset the call was sent with.
+        Whether the cap reaches the wire is the adapter's, as a preset's
+        `max_tokens` is (`inference.cap_sent`). A cap that is not a positive
+        int is a ValueError."""
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            raise ValueError(f"an output cap is a positive int, not {n!r}")
+        params = dict(self.sampling.params)
+        own = params.get("max_tokens")
+        if isinstance(own, int) and not isinstance(own, bool) and own > 0:
+            n_sent = min(own, n)
+        else:
+            n_sent = n
+        params["max_tokens"] = n_sent
+        return dataclasses.replace(
+            self, sampling=dataclasses.replace(self.sampling, params=params, call_cap=n))
 
     def without_sampling(self) -> Target:
         """This target with no sampler preset: what a native decision is sent,
