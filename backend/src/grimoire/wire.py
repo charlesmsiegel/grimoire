@@ -150,7 +150,7 @@ class Target:
         """A NEW target whose sampling `max_tokens` is `min(the preset's, n)`,
         or `n` when the preset sets none (01f 3.9), and never above `most`
         when one is given (the model's known maximum output, 01i-C1;
-        `inference.clamp_to_max_output`). `n` is the cap THIS CALL asked for,
+        `llm.clamp_to_max_output`). `n` is the cap THIS CALL asked for,
         recorded as `Sampling.call_cap` whatever was sent, and the preset's
         own `max_tokens` as `Sampling.preset_cap`. The preset's id, name and
         scope are kept, so the ledger still names the preset the call was

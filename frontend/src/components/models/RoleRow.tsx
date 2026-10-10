@@ -7,7 +7,7 @@ import { WhatItSends } from "../inference/ControlsReadout";
 import { describe, droppedFallbackWords, ROLE_LABEL, ROLE_NEEDS } from "../inference/selection";
 import { HealthDot } from "./health";
 import { DecideNote, Problem, useWarning, Warning } from "./notes";
-import { compactTokens, windowWords } from "./limits";
+import { windowWords } from "./limits";
 import { rateWords, setRateHref } from "./rates";
 import { taskHash } from "./taskHash";
 
@@ -86,10 +86,25 @@ function RateLine({ rate, model, promptOnly = false, limits = null, provider = "
   );
 }
 
-/** The riding fallback's window on its line, so a ceiling it binds shows. */
-function fallbackWindow(limits: CardLimits | null | undefined): string {
-  const value = limits?.fallback_window?.value;
-  return value != null ? ` · ${compactTokens(value)} window` : "";
+/** The riding fallback's window on its line, so a ceiling it binds shows:
+ *  `fallback_window` null is "no fallback rides", and a riding one whose
+ *  window nobody states says so, with Set, as the primary's does. */
+function FallbackWindow({ limits, provider, model }:
+  { limits: CardLimits | null | undefined; provider: string; model: string }) {
+  const window = limits?.fallback_window;
+  if (!window) return null;
+  const known = window.value != null;
+  return (
+    <>
+      {" · "}
+      <span title={known ? `${window.value!.toLocaleString("en-US")} tokens` : undefined}>
+        {windowWords(window)}
+        {!known && provider && model && (
+          <> <Link to={modelLimitsPath(provider, model)}>Set</Link></>
+        )}
+      </span>
+    </>
+  );
 }
 
 /** Every task Decision answers -- its own `uses`, inherited or not -- each a
@@ -155,7 +170,7 @@ export function RoleRow({ role, settings, health }:
             <SelectionLine provider={fb.provider} providerName={fbName} model={fb.model}
                            preset={fb.preset} presetName={presetName(settings, fb.preset)}
                            health={health} />
-            {fallbackWindow(card.limits)}
+            <FallbackWindow limits={card.limits} provider={fb.provider} model={fb.model} />
           </p>
         )}
         <RateLine rate={card.rate} model={sel?.model ?? ""} limits={card.limits ?? null}

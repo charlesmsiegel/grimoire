@@ -671,6 +671,26 @@ def _observe(observer, conn: wire.Target, error: LLMError | None) -> None:
         log.warning("could not record connection health for %r: %s", _label(conn), exc)
 
 
+#: The highest output cap a call is sent: the sampler parameter's own bound.
+#: Above it `llm_sampling` reads the value as invalid and sends none (the
+#: Anthropic API its default instead), so the cap would silently not be one;
+#: a larger cap is held to it (`clamp_to_max_output`) rather than refused.
+MAX_OUTPUT_CAP = int(next(p.high for p in llm_sampling.PARAMS if p.name == "max_tokens"))
+
+
+def clamp_to_max_output(target: wire.Target, requested: int) -> int:
+    """The output cap `target` is sent for a call that asked for `requested`
+    (01f 3.9): the caller's cap, held to the model's own maximum output where
+    that is known (01i-C1: `wire.Target.limits.max_output`, stated by the
+    user or listed by the provider's catalog), and always to `MAX_OUTPUT_CAP`,
+    the most a sampler `max_tokens` may carry. An unknown maximum holds
+    nothing else back -- the cap applies as asked, and the Anthropic API's catalog
+    limit still holds it there (`llm_sampling._anthropic_max_tokens`)."""
+    bound = min(requested, MAX_OUTPUT_CAP)
+    most = target.limits.max_output.value
+    return bound if most is None else min(bound, most)
+
+
 def fallback_sampling(primary: wire.Target, fallback: wire.Target) -> wire.Target:
     """`fallback` as it will be sent when it serves `primary`'s generation.
 
@@ -681,9 +701,21 @@ def fallback_sampling(primary: wire.Target, fallback: wire.Target) -> wire.Targe
     carrying it took the call. Public because the prompt capture of a fallback
     attempt (`routes.common._record_prompt`) has to describe the same request.
     """
-    if primary.sampling.scope in ROUTE_SCOPES:
-        return dataclasses.replace(fallback, sampling=primary.sampling)
-    return fallback
+    if primary.sampling.scope not in ROUTE_SCOPES:
+        return fallback
+    sampling = primary.sampling
+    if sampling.call_cap is None:
+        return dataclasses.replace(fallback, sampling=sampling)
+    # The call's own cap (01f 3.9) was held to the PRIMARY's maximum output;
+    # the fallback is held to its own (01i-C1), so the preset follows with its
+    # own `max_tokens` back and the cap is applied again.
+    params = {k: v for k, v in sampling.params.items() if k != "max_tokens"}
+    if sampling.preset_cap is not None:
+        params["max_tokens"] = sampling.preset_cap
+    uncapped = dataclasses.replace(fallback, sampling=dataclasses.replace(
+        sampling, params=params, call_cap=None, preset_cap=None))
+    return uncapped.with_output_cap(
+        sampling.call_cap, most=clamp_to_max_output(fallback, sampling.call_cap))
 
 
 class PresetRefusalError(LLMError):

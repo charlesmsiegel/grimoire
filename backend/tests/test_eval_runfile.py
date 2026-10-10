@@ -171,6 +171,21 @@ def test_a_bucket_missing_a_figure_is_not_costed_rather_than_zero(tmp_path, caps
     assert "1/1 ok  1.00s  - / -  -" in out
 
 
+@pytest.mark.parametrize("figure", ["1e400", "NaN"])
+def test_a_non_finite_figure_is_not_costed(tmp_path, capsys, figure):
+    """`1e400` reads as inf (an `int()` of it raises) and NaN as nan: both are
+    not costed, never a traceback or a tiny cost."""
+    path = _write(tmp_path / "e.json", _doc(
+        [runfile.config("c1", "x", {})],
+        [_entry("scene-length", ["c1"], bucket=_bucket(0.002, prompt=8))]))
+    text = path.read_text().replace('"prompt_tokens": 8', f'"prompt_tokens": {figure}', 1)
+    assert figure in text
+    path.write_text(text)
+    assert run.main(["--compare", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "1/1 ok  1.00s  - / -  -" in out
+
+
 def test_configs_sharing_a_label_are_told_apart_by_their_axes(tmp_path, capsys):
     doc = _doc([runfile.config("c1", "x", {"feature": "off"}),
                 runfile.config("c2", "x", {"feature": "on"})],
