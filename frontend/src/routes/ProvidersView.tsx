@@ -5,7 +5,8 @@ import {
   type InferenceSettings, type LLMConnection, type LLMConnectionDetail,
   type LLMConnectionDraft, type LLMConnectionKind, type ModelCapabilities, type ModelFacts,
   type ModelFactsUpdate, type ProviderBilling, type ProviderHealth, type ProviderPresetOption,
-  type ProviderUse, type TestableCapability, type VisionOverride,
+  type LimitSource, type ModelLimit, type ProviderUse, type TestableCapability,
+  type VisionOverride,
 } from "../api/client";
 import { ErrorNote } from "../components/ErrorNote";
 import { Field } from "../components/Field";
@@ -22,7 +23,7 @@ import { RATE_FIELDS, RateFields, entryOf, filled, formOf, hasBase,
          type RateForm } from "../components/RateFields";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { errorText } from "../api/errors";
-import { EDIT_RATES, modelPath, providerPath } from "../providerPaths";
+import { EDIT_LIMITS, EDIT_RATES, modelPath, providerPath } from "../providerPaths";
 
 /** Adapters whose provider can be asked for a catalog. Mirrors
  *  `llm.LISTABLE_KINDS`: the Claude subscription's models are SDK aliases with
@@ -869,14 +870,54 @@ type FactsForm = {
   vision: VisionOverride; prefill: boolean; post_process: "none" | "strict";
   overrides: Partial<Record<CapabilityName, "" | "yes" | "no">>;
   rates: RateForm;
+  /** The model's stated size (01i), as typed: "" is not stated. */
+  context_window: string; max_output: string;
 };
+
+/** The two size facts the form states, in the order it shows them. */
+const SIZE_FIELDS = [
+  { key: "context_window", label: "Context window", side: "Window" },
+  { key: "max_output", label: "Max output", side: "Max output" },
+] as const;
+
+/** Why the size fields exist, and what they are not: a second budget. */
+const SIZE_HINT = "The model's own limits on this provider, when its listing does not say or "
+  + "says wrong. To pack prompts smaller than the model allows, set the context budget instead.";
+
+const SOURCE_WORDS: Record<LimitSource, string> = {
+  user: "you", catalog: "catalog", unknown: "unknown",
+};
+
+const tokens = (n: number) => n.toLocaleString("en-US");
 
 function factsForm(f: ModelFacts): FactsForm {
   return {
     vision: f.vision, prefill: !!f.prefill, post_process: f.post_process || "none",
     overrides: Object.fromEntries(OVERRIDABLE.map(({ name }) => [name, f.overrides[name] ?? ""])),
     rates: formOf(f.rates),
+    context_window: f.context_window ? String(f.context_window) : "",
+    max_output: f.max_output ? String(f.max_output) : "",
   };
+}
+
+/** One size fact in the view: its figure and where it came from, and -- when
+ *  the user's word is what counts and the listing says otherwise -- the
+ *  listing's figure beside it, so a statement gone stale shows. */
+function SizeLine({ label, limit }: { label: string; limit: ModelLimit | undefined }) {
+  if (!limit || limit.value == null) {
+    return <div><span className="field-hint">{label} unknown</span></div>;
+  }
+  const disagrees = limit.source === "user" && limit.catalog != null && limit.catalog !== limit.value;
+  return (
+    <div>
+      <span className="chip on">
+        {`${label} ${tokens(limit.value)} tokens (${SOURCE_WORDS[limit.source]})`}
+      </span>
+      {disagrees && (
+        <span className="field-hint">{` The catalog says ${tokens(limit.catalog!)}.`}</span>
+      )}
+    </div>
+  );
 }
 
 /** What is known of one model on one provider: the user's statements, what a
@@ -901,32 +942,35 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
   const [asking, setAsking] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
   const ratesId = useId();
-  /** `?edit=rates` opens the form once the facts are read and the store is
-   *  known to take writes, and puts the caret in the Input box. A store that
-   *  is locked (or not yet known) keeps the view, as its disabled Edit does.
-   *  Once per arrival: a later reload (a landed test) must not throw a reader
-   *  back into a form, and leaving the form clears the param, which re-arms
-   *  it for the next link that carries one. */
-  const askedRates = params.get("edit") === EDIT_RATES;
+  /** `?edit=rates` (or `?edit=limits`) opens the form once the facts are read
+   *  and the store is known to take writes, and puts the caret in the Input
+   *  box (or the Context window box). A store that is locked (or not yet
+   *  known) keeps the view, as its disabled Edit does. Once per arrival: a
+   *  later reload (a landed test) must not throw a reader back into a form,
+   *  and leaving the form clears the param, which re-arms it for the next
+   *  link that carries one. */
+  const askedEdit = params.get("edit");
+  const asked = askedEdit === EDIT_RATES || askedEdit === EDIT_LIMITS ? askedEdit : null;
   const openedFromUrl = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [focusRates, setFocusRates] = useState(false);
+  const windowRef = useRef<HTMLInputElement>(null);
+  const [focusOn, setFocusOn] = useState<string | null>(null);
 
   const load = useCallback(() => api.readModelFacts(provider.id, model).then(setFacts), [provider.id, model]);
   useEffect(() => { load().catch(setError); }, [load]);
   useEffect(() => {
-    if (!askedRates) { openedFromUrl.current = false; return; }
+    if (!asked) { openedFromUrl.current = false; return; }
     if (!facts || factsBlocked || openedFromUrl.current) return;
     openedFromUrl.current = true;
     setForm(factsForm(facts));
     setMode("edit");
-    setFocusRates(true);
-  }, [facts, askedRates, factsBlocked]);
+    setFocusOn(asked);
+  }, [facts, asked, factsBlocked]);
   useEffect(() => {
-    if (mode !== "edit" || !focusRates) return;
-    inputRef.current?.focus();
-    setFocusRates(false);
-  }, [mode, focusRates]);
+    if (mode !== "edit" || !focusOn) return;
+    (focusOn === EDIT_LIMITS ? windowRef : inputRef).current?.focus();
+    setFocusOn(null);
+  }, [mode, focusOn]);
   // A landed test moves this model's facts and its badges -- whichever page
   // started it (the runs are shared, so a test begun from the /models picker
   // is the one Test… rejoins here).
@@ -1000,6 +1044,12 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
     if (RATE_FIELDS.some(({ key }) => form.rates[key].trim() !== was.rates[key].trim())) {
       body.rates = filled(form.rates) ? entryOf(form.rates) : {};
     }
+    // A size only when its box changed: emptied, a stated one is removed
+    // (`0`); a box that was empty and still is sends nothing.
+    for (const { key } of SIZE_FIELDS) {
+      const now = form[key].trim();
+      if (now !== was[key].trim()) body[key] = now === "" ? 0 : Number(now);
+    }
     if (confirm) body.confirm_embedding = true;
     setSaving(true);
     setError(null);
@@ -1027,6 +1077,12 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
     // A filled box whose value the store refuses (a negative) is not this: it
     // is sent, and the store's own reason is shown.
     const halfRated = filled(form.rates) && !hasBase(form.rates);
+    // A size is a whole number of tokens, or nothing; the store refuses the
+    // rest (a max output above the window included) in its own words.
+    const badSize = SIZE_FIELDS.some(({ key }) => {
+      const typed = form[key].trim();
+      return typed !== "" && !/^[1-9][0-9]*$/.test(typed);
+    });
     return (
       <div className="form">
         {back}
@@ -1084,6 +1140,17 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
                     idPrefix={ratesId} subject={model} disabled={saving}
                     inputRef={inputRef} />
         {halfRated && <div className="field-hint error">Input and output are both needed.</div>}
+        <h4>Size</h4>
+        <div className="field-hint">{SIZE_HINT}</div>
+        {SIZE_FIELDS.map(({ key, label }) => (
+          <Field key={key} label={label}>
+            <input type="number" min={1} step={1} inputMode="numeric" placeholder="Not stated"
+                   value={form[key]} disabled={saving}
+                   ref={key === "context_window" ? windowRef : undefined}
+                   onChange={(e) => set({ [key]: e.target.value })} />
+          </Field>
+        ))}
+        {badSize && <div className="field-hint error">Sizes are whole numbers of tokens.</div>}
         {asking !== null && (
           <div className="banner" role="group" aria-label="Confirm the embedding">
             {asking}{" "}
@@ -1099,7 +1166,8 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
             Cancel
           </button>
           <button className="primary" onClick={() => { void save(); }}
-                  disabled={factsBlocked || saving || unreadable || halfRated || asking !== null}>
+                  disabled={factsBlocked || saving || unreadable || halfRated || badSize
+                            || asking !== null}>
             Save facts
           </button>
         </div>
@@ -1168,6 +1236,13 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
               ))}
             </div>
           )}
+        </div>
+        <div className="side-section">
+          <h4>Size</h4>
+          {SIZE_FIELDS.map(({ key, side }) => (
+            <SizeLine key={key} label={side}
+                      limit={key === "context_window" ? facts.limits?.window : facts.limits?.max_output} />
+          ))}
         </div>
         <div className="side-section">
           <h4>Capability overrides</h4>

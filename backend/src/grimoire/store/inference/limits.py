@@ -88,6 +88,17 @@ def of(row: object, model_facts: object) -> wire.Limits:
                        max_output=_limit(facts_view, listing, "max_output", "max_output"))
 
 
+def limit_body(limit: wire.Limit) -> dict:
+    """One limit as every surface spells it: `{"value", "source"}` (the
+    facts panel, a breakdown's `model_window`, the Models readout)."""
+    return {"value": limit.value, "source": limit.source}
+
+
+def body(sizes: wire.Limits) -> dict:
+    """`{"window": limit_body, "max_output": limit_body}`."""
+    return {"window": limit_body(sizes.window), "max_output": limit_body(sizes.max_output)}
+
+
 @dataclass(frozen=True)
 class Ceiling:
     """What a prompt may hold on a resolution (`prompt_ceiling`)."""

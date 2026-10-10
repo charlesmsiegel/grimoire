@@ -81,7 +81,11 @@ function answer(need: CapabilityNeed) {
 function facts(over: Record<string, unknown> = {}) {
   return {
     provider: "saltmarch", model: "vendor/m", vision: "", prefill: false, post_process: "none",
-    rates: null, verified: {}, overrides: {}, capabilities: CAPS, ...over,
+    rates: null, verified: {}, overrides: {}, capabilities: CAPS,
+    context_window: null, max_output: null,
+    limits: { window: { value: null, source: "unknown", catalog: null },
+              max_output: { value: null, source: "unknown", catalog: null } },
+    ...over,
   };
 }
 
@@ -515,6 +519,79 @@ test("?edit=rates is cleared on Save and on Cancel", async () => {
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
   expect(screen.getByTestId("search")).toBeEmptyDOMElement();
   // Cleared, not merely hidden: the view stays the view.
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
+});
+
+// ---- 01i: the model's size ----
+const SIZED = {
+  context_window: 32768, max_output: null,
+  limits: { window: { value: 32768, source: "user", catalog: 131072 },
+            max_output: { value: 16000, source: "catalog", catalog: 16000 } },
+};
+
+test("a model's size shows in its sidebar with its sources", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  const side = sidebarOf("vendor/m");
+  expect(side.getByText("Window 32,768 tokens (you)")).toBeInTheDocument();
+  // The listing disagrees with the user's word: its figure shows beside it.
+  expect(side.getByText(/The catalog says 131,072/)).toBeInTheDocument();
+  expect(side.getByText("Max output 16,000 tokens (catalog)")).toBeInTheDocument();
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
+});
+
+test("an unknown size says so", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  const side = sidebarOf("vendor/m");
+  expect(side.getByText("Window unknown")).toBeInTheDocument();
+  expect(side.getByText("Max output unknown")).toBeInTheDocument();
+});
+
+test("Edit shows the two size fields with their hint", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  expect(await main().findByLabelText("Context window")).toHaveValue(32768);
+  expect(main().getByLabelText("Max output")).toHaveValue(null);
+  expect(main().getByText(/set the context budget instead/)).toBeInTheDocument();
+});
+
+test("clearing a stated window sends 0, and an untouched size sends nothing", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Context window"), { target: { value: "" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenLastCalledWith("saltmarch",
+                                                     { model: "vendor/m", context_window: 0 });
+
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Max output"), { target: { value: "4096" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenLastCalledWith("saltmarch",
+                                                     { model: "vendor/m", max_output: 4096 });
+});
+
+test("a size that is not a whole number is not sent", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Context window"), { target: { value: "1.5" } });
+  expect(main().getByText("Sizes are whole numbers of tokens.")).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeDisabled();
+});
+
+test("?edit=limits opens the form once, with the caret in the window box", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  open("/providers/saltmarch/models/vendor/m?edit=limits");
+  const box = await main().findByLabelText("Context window");
+  expect(box).toHaveFocus();
+  fireEvent.click(main().getByRole("button", { name: "Cancel" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(screen.getByTestId("search")).toBeEmptyDOMElement();
   expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
 });
 

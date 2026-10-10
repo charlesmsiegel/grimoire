@@ -341,3 +341,86 @@ def test_clearing_overrides_on_an_unknown_model_leaves_no_entry(conn):
     cid, _ = conn
     facts.set_overrides(cid, "ghost", {})
     assert facts.read(cid) == {}
+
+
+# ---- 01i: the model's size, stated ----
+def _sizes(cid: str, rev: str, model: str = "m") -> tuple:
+    got = facts.of(cid, model, rev)
+    return got["context_window"], got["max_output"]
+
+
+def test_a_stated_limit_is_set_removed_and_left(conn):
+    cid, rev = conn
+    facts.state(cid, "m", context_window=8192, max_output=2000)
+    assert _sizes(cid, rev) == (8192, 2000)
+    facts.state(cid, "m", vision="on")                    # None leaves both
+    assert _sizes(cid, rev) == (8192, 2000)
+    facts.state(cid, "m", max_output=0)                   # 0 removes one
+    assert _sizes(cid, rev) == (8192, None)
+    assert "max_output" not in facts.read(cid)["m"]
+    facts.state(cid, "m", context_window=0)
+    assert facts.read(cid) == {"m": {"vision": "on"}}
+
+
+@pytest.mark.parametrize("bad", ["8192", True, False, -1, 2**31, 1.5, 8192.0, [8192]])
+def test_a_limit_that_is_not_a_positive_int_is_refused_before_the_file(conn, bad):
+    cid, _ = conn
+    facts.state(cid, "m", context_window=4096)
+    before = llm_connections.facts_path(cid).read_bytes()
+    for field in ("context_window", "max_output"):
+        with pytest.raises(ValueError):
+            facts.state(cid, "m", **{field: bad})
+    assert llm_connections.facts_path(cid).read_bytes() == before
+
+
+@pytest.mark.parametrize("first, second", [
+    ({"context_window": 8192}, {"max_output": 16000}),
+    ({"max_output": 16000}, {"context_window": 8192}),
+])
+def test_a_max_output_above_the_window_is_refused_on_the_merged_entry(conn, first, second):
+    """The check needs the merged entry: the second request states one value
+    while the other is already on file."""
+    cid, rev = conn
+    facts.state(cid, "m", **first)
+    before = llm_connections.facts_path(cid).read_bytes()
+    with pytest.raises(ValueError, match="window"):
+        facts.state(cid, "m", **second)
+    assert llm_connections.facts_path(cid).read_bytes() == before
+    with pytest.raises(ValueError):
+        facts.state(cid, "n", context_window=4096, max_output=4097)
+    assert llm_connections.facts_path(cid).read_bytes() == before
+    # Equal is not above; and a value that only disagrees with no stated
+    # partner is allowed.
+    facts.state(cid, "n", context_window=4096, max_output=4096)
+    assert _sizes(cid, rev, "n") == (4096, 4096)
+
+
+def test_a_stated_limit_survives_a_rev_change(conn):
+    cid, rev = conn
+    facts.state(cid, "m", context_window=32768)
+    llm_connections.update_connection(cid, api_key="sk-new")
+    moved = llm_connections.read_connection_raw(cid)["rev"]
+    assert moved != rev
+    assert _sizes(cid, moved) == (32768, None)
+
+
+def test_a_hand_edited_size_pair_does_not_refuse_an_unrelated_write(conn):
+    """The size check judges a write that states a size; a file a hand left
+    inconsistent still takes a vision change, and reads its sizes as stated."""
+    cid, rev = conn
+    p = llm_connections.facts_path(cid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"m": {"context_window": 4096, "max_output": 8192}}),
+                 encoding="utf-8")
+    facts.state(cid, "m", vision="on")
+    assert facts.of(cid, "m", rev)["vision"] == "on"
+    with pytest.raises(ValueError):
+        facts.state(cid, "m", context_window=4000)
+    facts.state(cid, "m", max_output=0)
+    assert _sizes(cid, rev) == (4096, None)
+
+
+def test_removing_an_unstated_limit_leaves_no_entry(conn):
+    cid, _ = conn
+    facts.state(cid, "ghost", context_window=0, max_output=0)
+    assert facts.read(cid) == {}

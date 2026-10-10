@@ -343,6 +343,82 @@ def test_facts_round_trip_and_validate(client):
     assert not store.llm_connections.facts_path("nope").exists()
 
 
+# ---- 01i: the model's size, stated and resolved ----
+def _limit(value, source, catalog=None) -> dict:
+    return {"value": value, "source": source, "catalog": catalog}
+
+
+def test_facts_state_and_return_the_models_limits(client):
+    _format("2")
+    pid = _spare(client)
+    store.llm_connections.set_cached_models(
+        pid, [{"id": "vendor/m", "context": 131072, "max_output": 16000}], _raw(pid)["rev"])
+    url = f"/api/llm-connections/{pid}/facts"
+    got = client.get(url, params={"model": "vendor/m"}).json()
+    assert got["limits"] == {"window": _limit(131072, "catalog", 131072),
+                             "max_output": _limit(16000, "catalog", 16000)}
+    assert (got["context_window"], got["max_output"]) == (None, None)
+
+    put = client.put(url, json={"model": "vendor/m", "context_window": 32768})
+    assert put.status_code == 200, put.text
+    body = put.json()
+    assert body["context_window"] == 32768 and body["max_output"] is None
+    # The user's word wins, and the listing's figure stays beside it.
+    assert body["limits"]["window"] == _limit(32768, "user", 131072)
+    assert body["limits"]["max_output"] == _limit(16000, "catalog", 16000)
+    assert client.get(url, params={"model": "vendor/m"}).json() == body
+
+    cleared = client.put(url, json={"model": "vendor/m", "context_window": 0}).json()
+    assert cleared["limits"]["window"] == _limit(131072, "catalog", 131072)
+    assert cleared["context_window"] is None
+
+    # A model nothing lists or states.
+    other = client.get(url, params={"model": "vendor/unlisted"}).json()
+    assert other["limits"] == {"window": _limit(None, "unknown"),
+                               "max_output": _limit(None, "unknown")}
+
+
+def test_a_limit_write_is_refused_as_every_facts_write_is(client):
+    _format("2")
+    pid = _spare(client)
+    url = f"/api/llm-connections/{pid}/facts"
+    assert client.put(url, json={"model": "m", "context_window": 8192}).status_code == 200
+    before = store.llm_connections.facts_path(pid).read_bytes()
+    for bad in ({"context_window": "8192"}, {"context_window": True}, {"max_output": -1},
+                {"context_window": 2**31}, {"max_output": 1.5}, {"max_output": 16000},
+                {"context_window": 4096, "max_output": 8000}):
+        r = client.put(url, json={"model": "m", **bad})
+        assert r.status_code == 400, (bad, r.text)
+    assert store.llm_connections.facts_path(pid).read_bytes() == before
+    # The reverse order: an output stated first, then a window below it.
+    assert client.put(url, json={"model": "n", "max_output": 16000}).status_code == 200
+    before = store.llm_connections.facts_path(pid).read_bytes()
+    r = client.put(url, json={"model": "n", "context_window": 8192})
+    assert r.status_code == 400 and "window" in r.json()["detail"]
+    assert store.llm_connections.facts_path(pid).read_bytes() == before
+
+
+def test_a_limit_write_before_the_switch_is_409_not_migrated(client):
+    pid = _spare(client)
+    r = client.put(f"/api/llm-connections/{pid}/facts",
+                   json={"model": "m", "context_window": 8192})
+    assert r.status_code == 409 and r.json()["kind"] == "not_migrated"
+    assert not store.llm_connections.facts_path(pid).exists()
+
+
+def test_a_limit_write_asks_no_confirm_embedding(client):
+    """Stating a size spends nothing and moves no vector space -- not even on
+    the model the Embedding role embeds with."""
+    pid = _embedding_on(client)
+    space = store.embed_space.resolve()
+    assert space is not None
+    got = client.put(f"/api/llm-connections/{pid}/facts",
+                     json={"model": "vendor/embed-small", "context_window": 8192,
+                           "max_output": 1})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve() == space
+
+
 def test_facts_default_to_the_providers_own_model(client):
     pid = _spare(client)
     store.llm_connections.update_connection(pid, model="vendor/spare")

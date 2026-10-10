@@ -171,6 +171,49 @@ _LIMIT_CEILING = 2**31
 LIMIT_FIELDS: tuple[str, ...] = ("context_window", "max_output")
 
 
+def check_limit(name: str, value: object) -> int | None:
+    """A limit as a write may state it: None leaves it, 0 removes it, and a
+    positive int below `2**31` sets it. Anything else -- a bool, a float, a
+    string, a negative number -- is a `ValueError`. 0 removes for the reason a
+    catalog's 0 says nothing: no model has a zero window, so zero cannot be a
+    statement."""
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool) and value == 0:
+        return 0
+    found = stated_limit(value)
+    if found is None:
+        raise ValueError(f"{name} must be a whole number of tokens from 1 to {_LIMIT_CEILING - 1}"
+                         f" (0 to remove it), not {value!r}")
+    return found
+
+
+def _apply_sizes(entry: dict, sized: dict[str, int]) -> None:
+    """Lay `sized` (`check_limit`'s answers: 0 removes, else sets) over
+    `entry`, then judge the merged entry (`_check_sizes`) -- only when this
+    write states a size, so a pair a hand left inconsistent does not refuse
+    an unrelated write."""
+    for name, size in sized.items():
+        if size:
+            entry[name] = size
+        else:
+            entry.pop(name, None)
+    if sized:
+        _check_sizes(entry)
+
+
+def _check_sizes(entry: dict) -> None:
+    """Refuse an entry that would state a max output above its own stated
+    window -- the merged entry, since a request may state one of the two
+    while the other is already on file. Disagreeing with the CATALOG is
+    allowed: the user's word may be the correction."""
+    window = stated_limit(entry.get("context_window"))
+    output = stated_limit(entry.get("max_output"))
+    if window is not None and output is not None and output > window:
+        raise ValueError(f"max output ({output:,} tokens) cannot be above the context window "
+                         f"({window:,} tokens): lower the max output, or clear it, first")
+
+
 def stated_limit(value: object) -> int | None:
     """A stated size as it is kept: a positive int (never a bool) below
     `2**31`, else None -- what a hand-edited file holding anything else reads
@@ -365,7 +408,8 @@ def set_stated(provider_id: str, model: str, *, vision: str | None = None,
 
 def state(provider_id: str, model: str, *, vision: object = None, prefill: object = None,
           post_process: object = None, overrides: object = None,
-          rates: object = None, guard: Guard | None = None) -> None:
+          rates: object = None, context_window: object = None, max_output: object = None,
+          guard: Guard | None = None) -> None:
     """The facts panel's write: `set_stated`'s fields, and `overrides` MERGED
     per capability -- `{cap: "yes"|"no"}` sets one, `{cap: ""}` removes it,
     and a capability the dict does not name is left as it is. Everything is
@@ -377,6 +421,12 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
     removes it, and anything else replaces it after `pricing.check_entry` --
     both base rates, no unknown field -- so a partial entry is refused rather
     than half-stored. A stated fact like the rest: it survives a `rev` change.
+
+    `context_window` and `max_output` are the model's size on this provider
+    (01i, `check_limit`): None leaves one, 0 removes it, a positive int sets
+    it. A write that would leave a stated output above a stated window is
+    refused (`ValueError`) on the MERGED entry, inside the hold that writes,
+    so nothing is stored.
     """
     _require_safe(provider_id)
     stated = _check_stated(vision, prefill, post_process)
@@ -384,11 +434,15 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
     priced = (None if rates is None
               else {} if isinstance(rates, dict) and not rates
               else pricing.check_entry(rates))
-    if not stated and not changed and priced is None:
+    sized = {name: value for name, value in (
+        ("context_window", check_limit("context_window", context_window)),
+        ("max_output", check_limit("max_output", max_output))) if value is not None}
+    if not stated and not changed and priced is None and not sized:
         return
 
     def change(entry: dict) -> None:
         entry.update(stated)
+        _apply_sizes(entry, sized)
         if priced is not None:
             if priced:
                 entry["rates"] = priced

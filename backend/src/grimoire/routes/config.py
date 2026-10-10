@@ -30,7 +30,7 @@ from .. import (
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store import inference_retired as retired
-from ..store.inference import capabilities, controls, facts, providers
+from ..store.inference import capabilities, controls, facts, limits, providers
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
 from ..store.inference import settings as inference_settings
@@ -1635,7 +1635,14 @@ def _facts_body(conn: dict, model: str) -> dict:
     model nothing was said of -- the panel must not offer a save over the
     user's word it could not read (the write would be refused anyway,
     `put_connection_facts`). `unreadable_reason` says which: `held` clears on
-    its own, `mangled` needs the file fixed by hand."""
+    its own, `mangled` needs the file fixed by hand.
+
+    `limits` is the model's size as a call would use it (01i): `limits.of`
+    over the same cached row and facts a resolved attempt reads, each value
+    `{value, source}` plus the catalog's own figure (`catalog`, null when the
+    row states none), so a stated value the listing disagrees with shows
+    beside it. The stated values themselves are the top-level
+    `context_window` / `max_output` (from `facts.of`), which the form edits."""
     caps = capabilities.caps_for(conn, model)
     reason = ""
     try:
@@ -1643,8 +1650,13 @@ def _facts_body(conn: dict, model: str) -> dict:
     except facts.FactsUnreadableError as exc:
         known = facts.of(conn["id"], model, conn["rev"])
         reason = "mangled" if isinstance(exc, facts.FactsMangledError) else "held"
+    row = store.llm_connections.cached_row(conn["id"], model)
+    sizes, listed = limits.of(row, known), limits.of(row, {})
     body = {"provider": conn["id"], "model": model, **known, "unreadable": bool(reason),
-            "capabilities": {n: capabilities.cap_body(c) for n, c in caps.items()}}
+            "capabilities": {n: capabilities.cap_body(c) for n, c in caps.items()},
+            "limits": {name: {**limits.limit_body(getattr(sizes, name)),
+                              "catalog": getattr(listed, name).value}
+                       for name in ("window", "max_output")}}
     if reason:
         body["unreadable_reason"] = reason
     return body
@@ -1678,9 +1690,13 @@ FACTS_MANGLED = ("This provider's model facts file is not valid JSON (it may hav
 def put_connection_facts(conn_id: str, body: FactsUpdate,
                          registry: health.ProviderHealth = Depends(get_health)):
     """State `vision`, `prefill`, `post_process`, capability `overrides`
-    (`{cap: "" | "yes" | "no"}`, "" removing one) and `rates` (the model's own
-    per-token price; `{}` removing it) for one model; a field left out (or
-    null) is left as it is. 400 for a value the store refuses -- a partial or
+    (`{cap: "" | "yes" | "no"}`, "" removing one), `rates` (the model's own
+    per-token price; `{}` removing it) and the model's size, `context_window`
+    and `max_output` (01i: a positive int, `0` removing it), for one model; a
+    field left out (or null) is left as it is. A stated max output above a
+    stated window -- judged on the merged entry, in the hold that writes -- is
+    a 400. A size spends nothing, moves no vector space and changes no health
+    verdict, so it asks no `confirm_embedding` and forgets nothing. 400 for a value the store refuses -- a partial or
     unknown-field rate included -- before anything is written; 404 for a
     provider that does not exist -- or stopped existing before the write, which
     `facts.state` checks under the connection lock. The facts file it merges
@@ -1721,7 +1737,8 @@ def put_connection_facts(conn_id: str, body: FactsUpdate,
         facts.state(conn_id, model, vision=fields.get("vision"),
                     prefill=fields.get("prefill"), post_process=fields.get("post_process"),
                     overrides=fields.get("overrides"), rates=fields.get("rates"),
-                    guard=guard)
+                    context_window=fields.get("context_window"),
+                    max_output=fields.get("max_output"), guard=guard)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except store.llm_connections.ConnectionNotFound:
