@@ -49,14 +49,14 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [ ] |
 | 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [x] |
 | 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [x] |
-| 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | 3 | [ ] |
-| 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | 5 | [ ] |
+| 01c | Decision distributions and seeded sampling | now (01a has landed: a task is switched on with its evidence) | [x] | [~] substitute | 3 | [ ] |
+| 01d | Decision escalation and per-task policy | now (01a has landed: escalation is enabled with its evidence) | [x] | [~] substitute | 5 | [ ] |
 | 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [x] |
 | 01f | Structured generation | now | [x] | [~] substitute | 4 | [x] |
-| 01g | Tool calling, Decision as a tool, run budgets | 01f | [x] | [~] substitute | 8 | [ ] |
-| 01h | Embedding options, async embed, embedding evals | now (C6 waits for 01a) | [x] | [~] substitute | 7 | [ ] |
+| 01g | Tool calling, Decision as a tool, run budgets | now (01f has landed) | [x] | [~] substitute | 8 | [ ] |
+| 01h | Embedding options, async embed, embedding evals | now (01a has landed, so C6 too) | [x] | [~] substitute | 7 | [ ] |
 | 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
-| 02 | Decision integration (what 01's slices F–H did not land) | 01a, 01b, plus 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
+| 02 | Decision integration (what 01's slices F–H did not land) | now (01a, 01b landed); 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
 | 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | 6 | [ ] |
 | 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | 10 | [ ] |
 | 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | 7 | [ ] |
@@ -64,19 +64,20 @@ all of them have landed. `check` holds both to the slice checklist.
 | 07 | Explicit group membership | now | [x] | [~] substitute | 8 | [ ] |
 | 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [~] substitute | 6 | [ ] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
-| 10 | Retrieval query planning | 09, 01f | [x] | [~] substitute | 3 | [ ] |
+| 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
 | 11 | Epistemic history retrieval | 09 (the Decision stage waits for 02-C5a) | [x] | [~] substitute | 6 | [ ] |
-| 12 | Bounded agentic investigation | 01g, 01i, 08, 09 (RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
+| 12 | Bounded agentic investigation | 01g, 08, 09 (01i has landed; RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
 | 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | now for II-A..II-D; C3 waits for 01c | [x] | [~] substitute | 16 | [ ] |
 
 ## Parallel lanes
 
-- **Now:** 01a, 01b, 01e, 01f, 01i, 03, 07, 13 (II-A to II-D). 01c, 01d and
-  01h land their mechanisms now, and switch a task on only with 01a's
-  evidence.
-- **Decision lane:** 01a + 01b → 01c + 01d → 02 → 11 (Decision stage). 01e
-  feeds 02, 09 and 13.
-- **Generate lane:** 01f → 01g → 12.
+- **Landed:** 01a, 01b, 01e, 01f, 01i.
+- **Now:** 01c, 01d, 01g, 01h, 02 (from 02-S1), 03, 07, 13 (II-A to II-D).
+  01a has landed, so 01c, 01d and 01h switch a task on as soon as 01a's
+  evidence supports it, rather than waiting on a spec.
+- **Decision lane:** ~~01a + 01b~~ → 01c + 01d → 02 → 11 (Decision stage).
+  01e (landed) feeds 02, 09 and 13.
+- **Generate lane:** ~~01f~~ → 01g → 12.
 - **Cache lane:** 03 → 04 → 05 → 06. 03 + 05 + 01h → 08.
 - **Retrieval lane:** 08 + 01h-C4 + 01i → 09 → 10 (with 01f) → 11 → 12.
 
