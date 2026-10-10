@@ -9,8 +9,9 @@ import pytest
 
 from grimoire import wire
 from grimoire.store import config, llm_connections, post_images
-from grimoire.store.inference import capabilities, facts, providers, resolve
+from grimoire.store.inference import capabilities, facts, probes, providers, resolve
 from grimoire.store.inference.capabilities import Cap
+from tests.ts_unions import TYPES, ts_union
 
 P = providers.PRESETS
 
@@ -185,6 +186,75 @@ def test_a_malformed_row_contributes_nothing():
     assert all(c == Cap("unknown", "unknown") for k, c in got.items() if k != "decide_native")
 
 
+# ---- tools (01g-S1) ----
+def test_tools_is_yes_from_the_preset_on_a_claude_subscription():
+    """01g-S8: the SDK path calls tools, every call deferred to the loop."""
+    assert _resolve("claude")["tools"] == Cap("yes", "preset")
+
+
+def test_tools_is_yes_from_the_anthropic_preset():
+    assert _resolve("anthropic")["tools"] == Cap("yes", "preset")
+    assert _resolve("anthropic", overrides={"tools": "no"})["tools"] == Cap("no", "user")
+
+
+@pytest.mark.parametrize("preset", ["openrouter", "openai", "zai", "zai_coding", "ollama",
+                                    "lmstudio", "custom"])
+def test_tools_is_unknown_where_the_preset_leaves_it_possible(preset):
+    assert _resolve(preset)["tools"] == Cap("unknown", "unknown")
+
+
+def test_a_tools_test_and_override_are_read():
+    assert _resolve("custom", verified={"tools": {"ok": True}})["tools"] == Cap("yes", "test")
+    assert (_resolve("custom", verified={"tools": {"ok": False, "error": "x"}})["tools"]
+            == Cap("unknown", "test", "x"))
+    assert _resolve("custom", overrides={"tools": "no"})["tools"] == Cap("no", "user")
+
+
+def test_an_openrouter_list_says_tools_both_ways():
+    yes = _resolve("openrouter", row={"id": "m", "params": ["tools", "temperature"]})
+    assert yes["tools"] == Cap("yes", "catalog")
+    for params in (["temperature", "tool_choice"], []):
+        got = _resolve("openrouter", row={"id": "m", "params": params})
+        assert got["tools"] == Cap("no", "catalog"), params
+    assert _resolve("openrouter", row={"id": "m"})["tools"] == Cap("unknown", "unknown")
+
+
+@pytest.mark.parametrize("preset", ["custom", "openai", "ollama"])
+def test_only_openrouter_lists_say_no_to_tools(preset):
+    """Another server's list is believed when it says yes, never made a
+    refusal of (01g open question 5)."""
+    assert (_resolve(preset, row={"id": "m", "params": ["tools"]})["tools"]
+            == Cap("yes", "catalog"))
+    assert (_resolve(preset, row={"id": "m", "params": ["temperature"]})["tools"]
+            == Cap("unknown", "unknown"))
+
+
+def test_a_failed_tools_test_never_lifts_the_catalogs_no():
+    row = {"id": "m", "params": ["temperature"]}
+    got = _resolve("openrouter", row=row, verified={"tools": {"ok": False, "error": "x"}})
+    assert got["tools"] == Cap("no", "catalog")
+
+
+def test_a_passed_tools_test_or_the_users_yes_lifts_it():
+    row = {"id": "m", "params": ["temperature"]}
+    assert (_resolve("openrouter", row=row, verified={"tools": {"ok": True}})["tools"]
+            == Cap("yes", "test"))
+    assert (_resolve("openrouter", row=row, overrides={"tools": "yes"})["tools"]
+            == Cap("yes", "user"))
+
+
+def test_fits_and_groups_for_tools():
+    assert capabilities.fits(_resolve("anthropic"), "tools") == "yes"
+    assert capabilities.fits(_resolve("custom"), "tools") == "unknown"
+    assert capabilities.fits(_resolve("claude"), "tools") == "yes"
+    assert capabilities.group_for(_resolve("custom", overrides={"tools": "no"}), "tools",
+                                  P["custom"]) == (
+        "hidden", "you marked this model as not calling tools")
+    no = _resolve("openrouter", row={"id": "m", "params": []})
+    assert capabilities.group_for(no, "tools", P["openrouter"]) == (
+        "hidden", "the catalog says this model does not call tools")
+
+
 # ---- the name rule ----
 def test_name_rule():
     got = _resolve("custom", model="test-Embed-1")
@@ -291,7 +361,7 @@ def test_fits_decide():
 
 def test_fits_refuses_an_unknown_need():
     with pytest.raises(ValueError):
-        capabilities.fits(_resolve("custom"), "tools")
+        capabilities.fits(_resolve("custom"), "telepathy")
 
 
 # ---- group_for ----
@@ -488,3 +558,13 @@ def test_anthropic_prefill_follows_the_model():
     assert older.value == "unknown"
     stated = _resolve("anthropic", model="claude-haiku-4-5-20251001", prefill=True)
     assert stated["prefill"].value == "yes"
+
+
+# ---- the frontend's copy ----
+def test_the_frontend_mirrors_the_capability_vocabulary():
+    """`api/types.ts` spells these three by hand; nothing held them before
+    `tools` (01g-S1) was the change that would have let them drift."""
+    src = TYPES.read_text(encoding="utf-8")
+    assert set(ts_union(src, "CapabilityName")) == set(capabilities.NAMES)
+    assert set(ts_union(src, "CapabilityNeed")) == set(capabilities.NEEDS)
+    assert set(ts_union(src, "TestableCapability")) == set(probes.PROBES)

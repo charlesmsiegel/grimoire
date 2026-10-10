@@ -56,8 +56,13 @@ export function routePinNeeds(row: RouteRow): CapabilityNeed[] {
 const CANNOT: Record<CapabilityName, string> = {
   generate: "generate text", vision: "read images", embed: "make embeddings",
   structured_output: "return structured output", prefill: "continue a prefilled reply",
-  decide_native: "make native decisions", stream: "stream",
+  decide_native: "make native decisions", stream: "stream", tools: "call tools",
 };
+
+/** The server's `fallback_problem` for a task whose code policy sends no
+ *  fallback (`resolve.NO_FALLBACK_POLICY`; `test_task_policy.py` holds the
+ *  two equal). Worded apart: that fallback could be sent, and is not. */
+export const NO_FALLBACK_POLICY = "this task's policy sends no fallback";
 
 /** Why a fallback is never sent, worded as the library's Models page words a
  *  dropped fallback: `missing` is the server's `fallback_missing`, `fits` the
@@ -67,6 +72,8 @@ const CANNOT: Record<CapabilityName, string> = {
 export function droppedFallbackWords(missing: CapabilityName[], fits: string,
                                      fallback = "", problem: string | null = null): string | null {
   const which = fallback ? `The fallback, ${fallback},` : "The fallback";
+  // Only a route row can carry it: a role card resolves no task.
+  if (problem === NO_FALLBACK_POLICY) return `${which} is never sent: ${fits} runs without a fallback.`;
   // A fallback that cannot send at all (the server's `fallback_problem`) is
   // left out before anything is asked of what it can do.
   if (problem) return `${which} cannot be sent (${problem}), so it is never tried.`;

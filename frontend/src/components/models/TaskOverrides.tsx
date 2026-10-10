@@ -7,7 +7,8 @@ import type {
 import { WhatItSends } from "../inference/ControlsReadout";
 import { PresetSelect } from "../inference/PresetSelect";
 import {
-  CHOOSE_A_MODEL, droppedFallbackWords, inheritedPreset, ROLE_LABEL, routePinNeeds, wantsModel,
+  CHOOSE_A_MODEL, droppedFallbackWords, inheritedPreset, NO_FALLBACK_POLICY, ROLE_LABEL,
+  routePinNeeds, wantsModel,
 } from "../inference/selection";
 import { ModelSelect } from "./ModelSelect";
 import { CHECKED_ON_SAVE, DecideNote, Problem, useWarning, Warning } from "./notes";
@@ -125,7 +126,10 @@ function TaskRow({ row, base, draft, onChange, settings, health, blocked }:
         <>
           <Problem text={row.problem} />
           {decides && <DecideNote mode={row.decision_mode} decidesNatively={row.decides_natively} />}
-          <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "", row.fallback_problem)} />
+          {/* A policy that sends no fallback is a code choice, not a fault. */}
+          {row.fallback_problem === NO_FALLBACK_POLICY
+            ? <p className="field-hint">{droppedFallbackWords([], row.label, "", NO_FALLBACK_POLICY)}</p>
+            : <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "", row.fallback_problem)} />}
           {row.resolves && (
             <WhatItSends presetId={row.resolves.preset} provider={row.resolves.provider}
                          model={row.resolves.model} operation={decides ? "decide" : undefined} />

@@ -531,6 +531,16 @@ def test_semantic_ranking_files_one_art_catalog_row(world, monkeypatch):
         "art-catalog", "embed", "saltmarch", "001-quay")
 
 
+def test_art_sends_its_query_as_a_query(world, monkeypatch):
+    """01h-S2: the recent text goes first, marked as the call's one query."""
+    double = FakeEmbeddings()
+    monkeypatch.setattr(art, "_CLIENT", double)
+    cfg = {"space": "s", "model": "m", "key": "k", "base_url": "u", "threshold": 0.0}
+    art._semantic_scores([{"description": "Fishing boats at the quay."}],
+                         "The boats came in.", cfg, campaign="saltmarch", scene="001-quay")
+    assert double.queries == [1]
+
+
 def test_a_turns_art_embed_is_in_its_scenes_usage(world, sid, monkeypatch):
     """The art catalogue a turn builds is part of what playing the scene cost,
     so its embed row names the scene and the scene's own totals carry it."""

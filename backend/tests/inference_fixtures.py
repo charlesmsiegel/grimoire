@@ -193,6 +193,29 @@ def decide_only(client, *, fallback: bool, on: tuple[str, str] = SPARE) -> None:
                      else {"provider": ""})}}})
 
 
+#: A model that both generates and decides natively (invented id): what a
+#: native-first task asks its decisions endpoint first (spec 01c §4.2).
+BOTH = ("openrouter", "vendor/both")
+
+
+def generates_and_decides(client, *, fallback: bool, on: tuple[str, str] = SPARE) -> None:
+    """The Decision role on an OpenRouter model whose catalog row says it
+    generates AND decides natively (`generate` and `decide_native` both a
+    catalog `yes`, and structured outputs listed), with a generating fallback
+    (`on`) or none. Served structured, as every generating model is: only a
+    task's `native_first` policy puts a native stage in front (spec 01c)."""
+    format2(client)
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": BOTH[1], "outputs": ["text", "decisions"],
+                        "params": ["temperature", "structured_outputs"]},
+                       {"id": "vendor/active", "outputs": ["text"]}], rev)
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": BOTH[0], "model": BOTH[1]},
+        "fallback": ({"provider": on[0], "model": on[1]} if fallback
+                     else {"provider": ""})}}})
+
+
 #: The model `neither` puts on the Decision role.
 NEITHER = ("openrouter", "vendor/neither")
 

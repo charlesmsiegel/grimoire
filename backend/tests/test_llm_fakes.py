@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from grimoire import decisions, inference, prompts
+from grimoire import decisions, inference, prompts, tool_calls
 from grimoire.llm_errors import LLMError
 from grimoire.store import routing, suggest, voice_drift
 from grimoire.store.continuity import identity, reconcile
@@ -510,3 +510,40 @@ def test_decision_reply_omits_a_none_index():
     first, second = decisions.parse(json.dumps(body), items, explain=True)
     assert first.answers[identity.DECISION_ID].detail == decisions.NO_ITEM
     assert second.answers[identity.DECISION_ID].answer == "new"
+
+
+# ---- tools on `single` (01g-S1) ----
+PING = {"name": "ping", "description": "Says the caller is here.",
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False}}
+
+
+async def test_single_answers_an_offer_of_tools_from_its_script():
+    fake = FakeLLM([["ok"]], tool_calls=["ping"])
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    assert await fake.single([], CONN, usage, tools=(PING,), tool_choice="required") == "ok"
+    found = usage[tool_calls.KEY]
+    assert found.names() == ("ping",) and found.finish_reason == "tool_calls"
+    assert fake.requests[-1]["tools"] == (PING,)
+    assert fake.requests[-1]["tool_choice"] == "required"
+
+
+async def test_single_without_tools_notes_nothing():
+    fake = FakeLLM([["ok"]], tool_calls=["ping"])
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    await fake.single([], CONN, usage)
+    assert not usage[tool_calls.KEY].called
+    assert "tools" not in fake.requests[-1]
+    # An unscripted fake answers an offer in prose: no call, ended `stop`.
+    plain = FakeLLM([["ok"]])
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    await plain.single([], CONN, usage, tools=(PING,))
+    assert not usage[tool_calls.KEY].called
+    assert usage[tool_calls.KEY].finish_reason == "stop"
+
+
+async def test_single_checks_an_offer_as_the_facade_does():
+    fake = FakeLLM([["ok"]])
+    with pytest.raises(ValueError):
+        await fake.single([], CONN, None, tools=(), tool_choice="auto")
+    assert fake.calls == 0

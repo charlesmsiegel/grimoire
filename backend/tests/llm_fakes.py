@@ -4,9 +4,11 @@
 is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
-    async def stream(messages, chain, usage=None, *, schema=None) -> AsyncIterator[str]
-    async def complete(messages, chain, usage=None, *, schema=None, retries=None) -> str
-    async def single(messages, target, usage=None) -> str
+    async def stream(messages, chain, usage=None, *, schema=None, tools=None,
+                     tool_choice=None) -> AsyncIterator[str]
+    async def complete(messages, chain, usage=None, *, schema=None, retries=None,
+                       tools=None, tool_choice=None) -> str
+    async def single(messages, target, usage=None, *, tools=None, tool_choice=None) -> str
     async def decide_native(item, target, usage=None, *, retries=None) -> ItemResult
     async def list_models(target) -> list[dict]
     async def check(target) -> None
@@ -33,6 +35,10 @@ overrides `stream(messages, conn, usage=None)` alone still takes it. `stream`
 accepts it for signature parity and records nothing: the facade's decide path
 only completes. `single` takes no `schema`, exactly as the facade's does not:
 a model test asks one model one question, and nothing asks it for a schema.
+
+`tools` and `tool_choice` (01g) are accepted by `FakeLLM` and answered in
+prose; `FakeToolTurns` scripts a tool loop's turns, noting each call on the
+holder's `tool_calls.Collector` as an adapter's stream reader would.
 
 `retries` is the primary's retry count a decide chain's fallback stage names
 (slice H, ruling 12). `complete` records it in `retries`, one entry per call
@@ -89,14 +95,18 @@ import json
 import threading
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import anyio
+import httpx
 
-from grimoire import adapters, decisions, llm_usage, wire
+from grimoire import adapters, decisions, llm_reasoning, llm_usage, tool_calls, wire
+from grimoire.anthropic import AnthropicClient
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
+from grimoire.openai_compatible import OpenAICompatibleClient
+from grimoire.openrouter import OpenRouterClient
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
 
@@ -261,7 +271,8 @@ class FakeLLM:
                  models: list[dict] | None = None,
                  models_error: LLMError | None = None,
                  health_error: LLMError | None = None,
-                 decisions: list[decisions.ItemResult | LLMError] | None = None):
+                 decisions: list[decisions.ItemResult | LLMError] | None = None,
+                 tool_calls: Sequence[str] = ()):
         if (turns is None) == (cassette is None):
             raise ValueError("FakeLLM takes exactly one of `turns` or `cassette`")
         if turns is not None and not turns:
@@ -311,9 +322,14 @@ class FakeLLM:
         #: `(item, target, retries)`. Not counted in `calls`: no generation ran.
         self.decisions = None if decisions is None else list(decisions)
         self.native_requests: list[tuple] = []
+        #: The tool names every `single` that offers tools reports calling
+        #: (01g's `tools` probe), through the holder's `tool_calls.Collector`
+        #: as an adapter's stream reader would; none reports a plain answer.
+        self.tool_calls = tuple(tool_calls)
 
     # ---- the LLMClient surface ----
-    async def stream(self, messages, conn, usage=None, *, schema=None):
+    async def stream(self, messages, conn, usage=None, *, schema=None, tools=None,
+                     tool_choice=None):
         # `schema` is accepted for the facade's signature and not recorded:
         # `complete` records it, and the decide path only completes.
         # Stamped BEFORE anything can fail, like `llm._stamp`: the route is
@@ -360,7 +376,7 @@ class FakeLLM:
         return entry if entry.backend else replace(entry, backend="native")
 
     async def complete(self, messages, conn, usage=None, *, schema=None,
-                       retries=None) -> str:
+                       retries=None, tools=None, tool_choice=None) -> str:
         # The schema and the retry count are recorded here and NOT forwarded
         # to `stream`: the subclasses that hold or rewrite a request override
         # `stream(messages, conn, usage=None)` and need not know they exist.
@@ -375,14 +391,30 @@ class FakeLLM:
         # still recorded, because `stream` records exactly once.
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
-    async def single(self, messages, target, usage=None) -> str:
+    async def single(self, messages, target, usage=None, *, tools=None,
+                     tool_choice=None) -> str:
         """The model test call's one attempt. A fake has no retries or fallback
         to skip, so this is `complete` -- consuming `stream` for the same reason
         `complete` does. That `single` itself skips both is held by the facade's
         own tests and the route's wire tests, not by this double. No `schema=`,
-        exactly as the facade's `single` takes none."""
-        return "".join([delta async for delta in self.stream(messages, _target_of(target),
+        exactly as the facade's `single` takes none.
+
+        `tools`/`tool_choice` (01g) are checked as the facade checks them,
+        recorded on the request, and answered from `tool_calls`: each name is
+        noted on the holder's `Collector`, and the reply ends `tool_calls`
+        when there were any, `stop` when not."""
+        if tools is not None or tool_choice is not None:
+            tool_calls.check(tools, tool_choice)
+        text = "".join([delta async for delta in self.stream(messages, _target_of(target),
                                                              usage)])
+        if tools is not None:
+            self.requests[-1].update({"tools": tools, "tool_choice": tool_choice})
+            found = usage.get(tool_calls.KEY) if usage is not None else None
+            if isinstance(found, tool_calls.Collector):
+                for n, name in enumerate(self.tool_calls):
+                    found.note(f"fake_call_{n}", name)
+                found.finish("tool_calls" if self.tool_calls else "stop")
+        return text
 
     async def list_models(self, target) -> list[dict]:
         """The catalog half of the facade's surface (#149).
@@ -582,15 +614,17 @@ class StallingGateway(FakeCatalog):
         await super().check(conn)
 
     async def complete(self, messages, conn, usage=None, *, schema=None,
-                       retries=None) -> str:
+                       retries=None, tools=None, tool_choice=None) -> str:
         if self.where == "complete":
             await asyncio.sleep(self.seconds)
         return await super().complete(messages, conn, usage, schema=schema, retries=retries)
 
-    async def single(self, messages, target, usage=None) -> str:
+    async def single(self, messages, target, usage=None, *, tools=None,
+                     tool_choice=None) -> str:
         if self.where == "single":
             await asyncio.sleep(self.seconds)
-        return await super().single(messages, target, usage)
+        return await super().single(messages, target, usage, tools=tools,
+                                    tool_choice=tool_choice)
 
 
 # ---- provider doubles ----
@@ -718,6 +752,147 @@ class CassetteProvider:
             yield delta
 
 
+# ---- tool-call SSE bodies, per kind (01g-S2) ----
+#
+# Hand-authored in the documented wire shapes, like the cassettes: what a
+# well-formed reply that calls tools looks like on each kind's stream, so the
+# adapters' parsers run under the REAL facade (`SSEProvider` serves them to a
+# real client). Evidence that the code reads such a reply, never that a model
+# would send one.
+
+def _data(obj: dict) -> str:
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def openai_tool_sse(calls: Sequence[tuple[str, str, str]] = (), *, text: str = "",
+                    reasoning_details: Sequence[dict] = (), finish: str = "tool_calls",
+                    usage: dict | None = None) -> str:
+    """An OpenAI-style chat completion stream (OpenRouter, OpenAI-compatible):
+    each `reasoning_details` entry, then `text`, then each `(id, name,
+    arguments_json)` call at its own index as three fragments -- the id and
+    name with empty arguments, then the arguments in two halves carrying no
+    id -- and a last chunk with `finish` (and `usage`, when given)."""
+    out = [_data({"choices": [{"delta": {"reasoning_details": [entry]}}]})
+           for entry in reasoning_details]
+    if text:
+        out.append(_data({"choices": [{"delta": {"content": text}}]}))
+    for index, (call_id, name, arguments) in enumerate(calls):
+        half = len(arguments) // 2
+        out.append(_data({"choices": [{"delta": {"tool_calls": [{
+            "index": index, "id": call_id, "type": "function",
+            "function": {"name": name, "arguments": ""}}]}}]}))
+        out.extend(_data({"choices": [{"delta": {"tool_calls": [{
+            "index": index, "function": {"arguments": piece}}]}}]})
+            for piece in (arguments[:half], arguments[half:]))
+    last: dict = {"choices": [{"delta": {}, "finish_reason": finish}]}
+    if usage is not None:
+        last["usage"] = usage
+    out.append(_data(last))
+    out.append("data: [DONE]\n\n")
+    return "".join(out)
+
+
+def _event(obj: dict) -> str:
+    return f"event: {obj['type']}\ndata: {json.dumps(obj)}\n\n"
+
+
+def anthropic_tool_sse(calls: Sequence[tuple[str, str, str]] = (), *, text: str = "",
+                       thinking: tuple[str, str] | None = None, stop: str = "tool_use",
+                       output_tokens: int | None = 7, ended: bool = True) -> str:
+    """An Anthropic Messages stream: a signed `thinking` block (`(text,
+    signature)`, when given), then `text`, then a `tool_use` block per `(id,
+    name, arguments_json)` call with its `input_json_delta`s in two halves,
+    then the `message_delta` with `stop` -- and `message_stop` unless `ended`
+    is False (a body cut short, which the reader fails as `network`)."""
+    out = [_event({"type": "message_start", "message": {
+        "id": "msg_tools", "model": "claude-test-1", "role": "assistant", "content": [],
+        "usage": {"input_tokens": 10}}})]
+    index = 0
+    if thinking is not None:
+        said, signature = thinking
+        out += [_event({"type": "content_block_start", "index": index,
+                        "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+                _event({"type": "content_block_delta", "index": index,
+                        "delta": {"type": "thinking_delta", "thinking": said}}),
+                _event({"type": "content_block_delta", "index": index,
+                        "delta": {"type": "signature_delta", "signature": signature}}),
+                _event({"type": "content_block_stop", "index": index})]
+        index += 1
+    if text:
+        out += [_event({"type": "content_block_start", "index": index,
+                        "content_block": {"type": "text", "text": ""}}),
+                _event({"type": "content_block_delta", "index": index,
+                        "delta": {"type": "text_delta", "text": text}}),
+                _event({"type": "content_block_stop", "index": index})]
+        index += 1
+    for call_id, name, arguments in calls:
+        half = len(arguments) // 2
+        out.append(_event({"type": "content_block_start", "index": index, "content_block": {
+            "type": "tool_use", "id": call_id, "name": name, "input": {}}}))
+        for piece in (arguments[:half], arguments[half:]):
+            out.append(_event({"type": "content_block_delta", "index": index,
+                               "delta": {"type": "input_json_delta", "partial_json": piece}}))
+        out.append(_event({"type": "content_block_stop", "index": index}))
+        index += 1
+    delta: dict = {"type": "message_delta", "delta": {"stop_reason": stop}}
+    if output_tokens is not None:
+        delta["usage"] = {"output_tokens": output_tokens}
+    out.append(_event(delta))
+    if ended:
+        out.append(_event({"type": "message_stop"}))
+    return "".join(out)
+
+
+class Cut:
+    """An `SSEProvider` body that streams `text` and then drops the
+    connection: a read error mid-stream, which a client reports as
+    `network`."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _CutStream(httpx.AsyncByteStream):
+    def __init__(self, text: str):
+        self._text = text
+
+    async def __aiter__(self):
+        yield self._text.encode()
+        raise httpx.ReadError("the connection dropped")
+
+    async def aclose(self) -> None:
+        return None
+
+
+_SSE_CLIENTS = {"openrouter": OpenRouterClient, "openai_compatible": OpenAICompatibleClient,
+                "anthropic": AnthropicClient}
+
+
+class SSEProvider:
+    """A REAL provider client of `kind` over `httpx.MockTransport`, answering
+    its N-th request with `bodies[N]` (the last repeating): an SSE body, a
+    `(status, text)` error response, or a `Cut` body. Each request's JSON
+    body is recorded in `sent`. Hand `client` to `LLMClient` as that kind's
+    client, so a test runs the facade, the adapter and the client's stream
+    parser as they run in the app."""
+
+    def __init__(self, kind: str, bodies: Sequence[object]):
+        self.bodies = list(bodies)
+        self.sent: list[dict] = []
+        http = httpx.AsyncClient(transport=httpx.MockTransport(self._answer))
+        self.client = _SSE_CLIENTS[kind](http=http)
+
+    def _answer(self, request: httpx.Request) -> httpx.Response:
+        self.sent.append(json.loads(request.content))
+        body = self.bodies[min(len(self.sent), len(self.bodies)) - 1]
+        if isinstance(body, tuple):
+            status, text = body
+            return httpx.Response(status, text=text)
+        if isinstance(body, Cut):
+            return httpx.Response(200, stream=_CutStream(body.text))
+        return httpx.Response(200, text=str(body))
+
+
 class RecordingProvider:
     """Answers the two non-generating calls and records what it was asked.
 
@@ -757,6 +932,11 @@ class FakeEmbeddings:
     `usage_for`, when given, maps a call's texts to what the endpoint
     "reported" (`{"prompt_tokens": 7}`), folded into the meter's holder the
     way the real client folds a response's usage block.
+
+    `threads` is the `threading.get_ident()` of each call, so a test can say
+    which thread embedded (01h-C4a: never the app's loop). `options` and
+    `queries` are what each call was handed (01h-S2): the texts it records are
+    the operation's, before any prefix the real client would add.
     """
 
     def __init__(self, vector_for=lambda t: [1.0, 0.0], error=None, fail_after=0,
@@ -767,15 +947,114 @@ class FakeEmbeddings:
         self.usage_for = usage_for
         self.calls: list[list[str]] = []
         self.deadlines: list[float | None] = []
+        self.threads: list[int] = []
+        self.options: list = []
+        self.queries: list[int] = []
 
-    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None, *,
+              options=None, queries=0):
         self.calls.append(list(texts))
+        self.options.append(options)
+        self.queries.append(queries)
         self.deadlines.append(deadline)
+        self.threads.append(threading.get_ident())
         if self.error is not None and len(self.calls) > self.fail_after:
             raise self.error
         if usage is not None and self.usage_for is not None:
             usage.update(self.usage_for(list(texts)))
         return [self.vector_for(t) for t in texts]
+
+
+@dataclass(frozen=True)
+class ToolTurn:
+    """One scripted model turn of a tool loop (`FakeToolTurns`): its text,
+    its calls as `(name, arguments)` -- a dict, or a str sent as the raw
+    argument JSON -- seconds held before answering, whether the chain's
+    FALLBACK served it, and the end reason (default: `tool_calls` with
+    calls, `stop` without)."""
+    text: str = ""
+    calls: tuple = ()
+    delay: float = 0.0
+    fallback: bool = False
+    finish: str = ""
+    #: What `stream` yields, in place of `text` as one delta (01g-S6).
+    deltas: tuple[str, ...] = ()
+    #: Seconds held after the first delta, mid-stream.
+    pause: float = 0.0
+    #: Display reasoning fed to the holder before any delta.
+    thinking: str = ""
+
+
+class FakeToolTurns(FakeLLM):
+    """A tool loop's model, scripted by call order (01g-S4): each step a
+    `ToolTurn`, a `(text, calls)` pair, or an `LLMError` to raise after the
+    attempt is stamped; the last step repeats.
+
+    `complete` answers like the facade: it checks an offer of tools as the
+    facade does, stamps the attempt (the chain's fallback when the step says
+    it served), notes each call on the holder's `tool_calls.Collector` as an
+    adapter's stream reader would -- ids `call_<request>_<n>` -- and returns
+    the text. Each request records its `tools`, `tool_choice` and `schema`."""
+
+    def __init__(self, *steps: object, usage: dict | None = None):
+        super().__init__([[""]], usage=usage)
+        self.script = [s if isinstance(s, (ToolTurn, BaseException)) else ToolTurn(s[0], tuple(s[1]))
+                       for s in steps]
+
+    async def complete(self, messages, conn, usage=None, *, schema=None, retries=None,
+                       tools=None, tool_choice=None) -> str:
+        step = await self._begin(messages, conn, usage, schema, retries, tools, tool_choice)
+        self._settle(step, usage)
+        return step.text
+
+    async def stream(self, messages, conn, usage=None, *, schema=None, tools=None,
+                     tool_choice=None):
+        """`complete`'s turn, streamed: its `deltas` (else its text as one),
+        the calls noted after the last, as a provider's stream ends."""
+        step = await self._begin(messages, conn, usage, schema, None, tools, tool_choice)
+        for n, delta in enumerate(step.deltas or ((step.text,) if step.text else ())):
+            yield delta
+            if n == 0 and step.pause:
+                await asyncio.sleep(step.pause)
+        self._settle(step, usage)
+
+    async def _begin(self, messages, conn, usage, schema, retries, tools, tool_choice):
+        if tools is not None or tool_choice is not None:
+            tool_calls.check(tools, tool_choice)
+        chain = _chain_of(conn)
+        index, self.calls = self.calls, self.calls + 1
+        step = self.script[min(index, len(self.script) - 1)]
+        served = (chain.fallback if isinstance(step, ToolTurn) and step.fallback
+                  and chain.fallback is not None else chain.primary)
+        self._stamp(usage, served)
+        self.schemas.append(schema)
+        self.retries.append(retries)
+        self.requests.append({"messages": deepcopy(list(messages)), "chain": chain,
+                              "target": chain.primary, "tools": tools,
+                              "tool_choice": tool_choice, "schema": schema})
+        if isinstance(step, BaseException):
+            raise step
+        if step.delay:
+            await asyncio.sleep(step.delay)
+        found = usage.get(tool_calls.KEY) if usage is not None else None
+        if isinstance(found, tool_calls.Collector):
+            found.begin(kind=served.kind, provider_id=served.provider_id, model=served.model)
+        buffer = usage.get(llm_reasoning.KEY) if usage is not None else None
+        if isinstance(buffer, llm_reasoning.Buffer):
+            buffer.begin()
+        if step.thinking:
+            llm_reasoning.feed(usage, step.thinking)
+        return step
+
+    def _settle(self, step, usage) -> None:
+        found = usage.get(tool_calls.KEY) if usage is not None else None
+        if isinstance(found, tool_calls.Collector):
+            for n, (name, args) in enumerate(step.calls):
+                found.note(f"call_{self.calls - 1}_{n}", name,
+                           args if isinstance(args, str) else json.dumps(args))
+            found.finish(step.finish or ("tool_calls" if step.calls else "stop"))
+        if usage is not None and self.usage is not None:
+            usage.update(self.usage)
 
 
 class StallingOpenRouter(FakeLLM):
@@ -804,6 +1083,16 @@ class ModelessHolder(FakeLLM):
             if usage is not None:
                 usage.pop("model", None)
             yield delta
+
+
+class UnstampedHolder(FakeLLM):
+    """Answers like `FakeLLM` but never stamps the usage holder: no model, no
+    route, no `llm.ATTEMPTED` target. The real facade cannot produce this --
+    `llm._stamp` runs before every attempt -- so it exists only to pin that a
+    reader of the stamp (`inference._server`, a call's per-item provenance)
+    degrades to "nothing named" rather than failing an answered decision."""
+
+    _stamp = staticmethod(lambda usage, attempt: None)
 
 
 class HeldOpenRouter(FakeLLM):

@@ -5,14 +5,18 @@ conventions, same `LLMError` taxonomy, same "base_url is caller-supplied and
 the key is optional" posture. Nothing here reads config or touches the store —
 `store/context/semantic.py` owns that, the way `llm.py` owns it for chat.
 
-**Synchronous**, and alone among the providers in that. Its one caller is the
-world-info activation seam (`store/context/world_state.activate`), which is
-reached from a synchronous `build_messages`; an async client here would mean
-threading `await` up through the whole context builder and its six call sites,
-for a call that is off by default. The cost is real and stated rather than
-hidden: while a recall is in flight the event loop is blocked, which is why
-`TIMEOUT` is a tight bound rather than the generous one the streaming clients
-take. See semantic.py's docstring for the tradeoff in full.
+Two clients. **`EmbeddingsClient` is synchronous**, and every current caller
+uses it: the world-info activation seam (`store/context/world_state.activate`)
+is reached from a synchronous `build_messages`, and an async client there would
+mean threading `await` up through the whole context builder and its six call
+sites, for a call that is off by default. The cost is real and stated rather
+than hidden: while a recall is in flight it holds a worker thread -- every
+caller is a `def` handler, a `run_in_threadpool` or a `to_thread`, and
+`store.inference.embed` refuses a call on the app's event-loop thread
+(01h-C4a) -- which is why `TIMEOUT` is a tight bound rather than the generous
+one the streaming clients take. See semantic.py's docstring for the tradeoff
+in full. **`AsyncEmbeddingsClient`** (01h-C4b) is the same request for a caller
+already in a coroutine, one per app; it shares everything but the transport.
 
 Two invariants the parser exists to hold, both of which produce a *silently*
 wrong prompt rather than an error when they are missed:
@@ -25,21 +29,23 @@ wrong prompt rather than an error when they are missed:
   out-of-range index set leaves a slot unfilled; `bad_response` is the honest
   answer, and the caller degrades to keyword-only.
 
-One bound this module does *not* achieve, named here rather than papered over:
+One bound the synchronous client does *not* achieve, named here rather than
+papered over:
 `READ_SLICE` bounds each read and `TIMEOUT` is checked between body chunks, but
 response **headers** arrive before `stream()` yields, outside that loop, and
 every successful socket read resets httpx's timer. An endpoint that drip-feeds
 an incomplete header a byte at a time is therefore bounded per read and not in
 total. No arrangement of httpx timeouts fixes it — httpx has no total-request
 deadline, and a synchronous call cannot be cancelled from outside without a
-watchdog thread that would outlive the call it abandoned. The fix is the async
-rewrite named above, where the whole thing is one `asyncio.wait_for`. Until
-then it is a real hole against a deliberately hostile endpoint, and the user
-chooses the endpoint.
+watchdog thread that would outlive the call it abandoned. `AsyncEmbeddingsClient`
+closes it, because there the whole call is one `asyncio` deadline (roadmap
+01h-C4b); a synchronous call still has the hole against a deliberately hostile
+endpoint, and the user chooses the endpoint.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import ssl
@@ -49,7 +55,7 @@ import time
 import certifi
 import httpx
 
-from . import llm_usage
+from . import llm_usage, wire
 from .llm_errors import LLMError
 
 #: Inputs per request. The endpoints cap request size rather than list length,
@@ -60,9 +66,9 @@ BATCH = 64
 
 #: Seconds one `embed` call may take **in total** — every batch, every read,
 #: start to finish. Deliberately tighter than the chat clients' 120s: this call
-#: blocks the event loop (see the module docstring), and a recall that has not
-#: returned by now is worth abandoning — the caller's fallback is the keyword
-#: activation that shipped before any of this.
+#: holds a worker thread for its length (see the module docstring), and a
+#: recall that has not returned by now is worth abandoning — the caller's
+#: fallback is the keyword activation that shipped before any of this.
 #:
 #: A wall-clock deadline, not an httpx timeout, because those are not the same
 #: thing and the difference is the whole point. httpx bounds each network
@@ -126,6 +132,113 @@ MAX_TOTAL_DIMS = BATCH * 8192
 
 class EmbeddingsError(LLMError):
     pass
+
+
+# ---- the request (01h §3.4) ----
+
+#: The `code` of a reply whose vectors are not the width the request asked
+#: for (`DimensionsMismatchError`).
+DIMENSIONS_MISMATCH = "dimensions_mismatch"
+
+
+class DimensionsMismatchError(EmbeddingsError):
+    """A reply that ignored a requested `dimensions` (01h §3.4).
+
+    `missing_key`, the kind for "configured, but not usably" (the redirect
+    precedent below): an endpoint that silently drops an unknown field
+    answers every later request the same way, so no caller retries it, and
+    storing its native-width vectors under a space that claims the requested
+    width would be honest only until it started honouring the field. The
+    widths ride the exception for the model test's verdict."""
+
+    def __init__(self, requested: int, returned: int, field_name: str):
+        super().__init__(
+            "missing_key",
+            f"requested {requested} dimensions in `{field_name}`, the endpoint returned "
+            f"{returned}: it ignores the field",
+            code=DIMENSIONS_MISMATCH)
+        self.requested_dims = requested
+        self.returned_dims = returned
+
+
+def check_sendable(options: wire.EmbedOptions | None) -> None:
+    """`ValueError` unless `options` is None or an `EmbedOptions` that can be
+    sent: a `param` mode with its field and both values, and a `dimensions`
+    that is a positive whole number. The facts validator holds a stated
+    block to this and more; this holds a hand-built one, before anything is
+    sent."""
+    if options is None:
+        return
+    if not isinstance(options, wire.EmbedOptions):
+        raise ValueError("embedding options must be a wire.EmbedOptions")
+    if options.input not in wire.EMBED_INPUT_MODES:
+        raise ValueError("unknown embedding input mode")
+    if options.input == "param" and not (options.param_field and options.query_value
+                                         and options.document_value):
+        raise ValueError("the request-field input type needs a field and both values")
+    dims = options.dimensions
+    if dims is not None and (isinstance(dims, bool) or not isinstance(dims, int) or dims < 1
+                             or not options.dimensions_field):
+        raise ValueError("requested dimensions must be a positive whole number with a field")
+
+
+def check_queries(queries: object, count: int) -> None:
+    """`ValueError` unless `queries` -- how many of the `count` texts, from the
+    first, are queries -- is a whole number from 0 to `count`."""
+    if isinstance(queries, bool) or not isinstance(queries, int) or not 0 <= queries <= count:
+        raise ValueError("queries must be a whole number from 0 to the number of texts")
+
+
+def prepare_inputs(texts: list[str], options: wire.EmbedOptions | None,
+                   queries: int) -> list[str]:
+    """The inputs as sent: in the `prefix` input type each text gets the query
+    prefix (the first `queries` texts) or the document prefix (the rest);
+    otherwise the texts unchanged. A mixed batch is still one request,
+    because the type rides each text. The callers clip before this, so a
+    prefix is never cut off."""
+    if options is None or options.input != "prefix":
+        return list(texts)
+    return [(options.query_prefix if i < queries else options.document_prefix) + text
+            for i, text in enumerate(texts)]
+
+
+def segments(count: int, options: wire.EmbedOptions | None,
+             queries: int) -> list[tuple[int, int, bool]]:
+    """`(start, end, is_query)` runs of the inputs that may share a request.
+    One run for every mode but `param`, which carries one input type per
+    request, so its queries and its documents are separate runs (an empty
+    side is no run). Each run is then batched by `BATCH`."""
+    if options is None or options.input != "param":
+        return [(0, count, False)] if count else []
+    runs = [(0, queries, True), (queries, count, False)]
+    return [run for run in runs if run[1] > run[0]]
+
+
+def request_body(model: str, chunk: list[str], options: wire.EmbedOptions | None,
+                 query: bool = False) -> dict:
+    """One request's JSON body: `{"model", "input"}` -- byte for byte what was
+    sent before options existed -- plus, in the `param` input type, the type
+    as `<param_field>: <query_value or document_value>` (`query` says which),
+    and a requested width as `<dimensions_field>: n`."""
+    body: dict = {"model": model, "input": chunk}
+    if options is None:
+        return body
+    if options.input == "param":
+        body[options.param_field] = options.query_value if query else options.document_value
+    if options.dimensions is not None:
+        body[options.dimensions_field] = options.dimensions
+    return body
+
+
+def check_widths(vectors: list[list[float]], options: wire.EmbedOptions | None) -> None:
+    """`DimensionsMismatchError` unless every vector is the width `options`
+    requested (when they request one)."""
+    if options is None or options.dimensions is None:
+        return
+    for vector in vectors:
+        if len(vector) != options.dimensions:
+            raise DimensionsMismatchError(options.dimensions, len(vector),
+                                          options.dimensions_field)
 
 
 #: The `code` of the "deadline passed before the request" error when it fires
@@ -341,6 +454,104 @@ def _vectors(body: object, count: int) -> list[list[float]]:
     return out
 
 
+def _bounded(raw: bytearray, part: bytes) -> None:
+    """Refuse a part that would take the body past `MAX_BYTES`.
+
+    Before the append, not after. `iter_bytes` yields *decoded* bytes, so a
+    gzip bomb makes one part far larger than the bound -- appending first
+    copies it into `raw` as well, so the peak was the overshoot twice over.
+    Checking first stops at the first oversized part and never copies it.
+
+    What this cannot bound is `part` itself: httpx has already decoded and
+    allocated it by the time it is yielded, and taking that away means
+    `iter_raw` plus decompressing here, which trades a bounded overshoot for
+    hand-rolled inflate. So the peak is MAX_BYTES plus one decoded chunk,
+    against an endpoint the user chose."""
+    if len(raw) + len(part) > MAX_BYTES:
+        raise EmbeddingsError("bad_response", f"embeddings response exceeded {MAX_BYTES} bytes")
+
+
+def _answer(status: int, location: str | None, raw: bytes) -> object:
+    """The parsed body of a response read in full, or the error it answers:
+    shared by both clients, so a redirect, an error status and a body that is
+    not JSON mean the same thing from either door."""
+    if 300 <= status < 400:
+        # The client does not follow redirects, so a 3xx would sail past the
+        # check below as a "success" whose body is empty, and surface as
+        # "response is not JSON" -- which sends the user looking at a
+        # perfectly good endpoint. A FastAPI-based server whose route is
+        # `/embeddings/` returns 307 for the path this module builds, so this
+        # is a plausible configuration, not a hostile one.
+        #
+        # Named rather than followed, deliberately. Following costs the
+        # deadline: httpx bounds each network operation, so a chain of hops
+        # multiplies TIMEOUT by the hop count, and this module has already had
+        # to fight for that bound twice. `missing_key` is the kind for
+        # "configured, but not usably" (it is what an empty base URL raises),
+        # and it is not the kind `_embed` retries -- a second request would
+        # take the same redirect.
+        target = location or "somewhere else"
+        raise EmbeddingsError(
+            "missing_key",
+            f"embeddings endpoint redirected ({status}) to {target} — "
+            f"point the connection's base URL there")
+    if status >= 400:
+        raise EmbeddingsError(_status_kind(status),
+                              _extract_error(raw.decode("utf-8", "replace")), status=status)
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # A 200 that is not JSON is a captive portal or a proxy login page,
+        # not a transport failure — naming it `network` would send the user
+        # looking at their connection instead of their base URL.
+        raise EmbeddingsError(
+            "bad_response", f"embeddings response is not JSON: {exc}") from exc
+
+
+def _check_call(texts: list[str], model: str, base_url: str,
+                options: wire.EmbedOptions | None, queries: int) -> None:
+    """What both clients refuse before anything is sent: options that cannot
+    be sent or a `queries` out of range (`ValueError`), and -- for a call
+    with texts -- no base URL or no model (`missing_key`, matching
+    openai_compatible.stream: neither is a provider failure, they are "this
+    is not configured yet", and the caller treats the whole kind as "stay on
+    keyword activation")."""
+    check_sendable(options)
+    check_queries(queries, len(texts))
+    if not texts:
+        return
+    if not base_url:
+        raise EmbeddingsError("missing_key", "No embeddings base URL configured")
+    if not model:
+        raise EmbeddingsError("missing_key", "No embeddings model configured")
+
+
+def _requests(texts: list[str], options: wire.EmbedOptions | None,
+              queries: int) -> list[tuple[list[str], bool]]:
+    """`(inputs as sent, is_query)` for each request a call makes, in order:
+    every `segments` run, batched by `BATCH`."""
+    sent = prepare_inputs(texts, options, queries)
+    return [(sent[start:min(start + BATCH, end)], query)
+            for begin, end, query in segments(len(sent), options, queries)
+            for start in range(begin, end, BATCH)]
+
+
+def _verify() -> ssl.SSLContext:
+    # Same stale-$SSL_CERT_FILE guard as the chat clients: an override left
+    # by a removed conda install points at a missing file and crashes TLS
+    # setup, so honor it only when it exists.
+    cert = os.environ.get("SSL_CERT_FILE")
+    cafile = cert if cert and os.path.exists(cert) else certifi.where()
+    return ssl.create_default_context(cafile=cafile)
+
+
+def _headers(key: str) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+
 class EmbeddingsClient:
     def __init__(self, http: httpx.Client | None = None):
         self._http = http
@@ -357,32 +568,19 @@ class EmbeddingsClient:
         # loop thread.
         self._lock = threading.Lock()
 
-    def _verify(self) -> ssl.SSLContext:
-        # Same stale-$SSL_CERT_FILE guard as the chat clients: an override left
-        # by a removed conda install points at a missing file and crashes TLS
-        # setup, so honor it only when it exists.
-        cert = os.environ.get("SSL_CERT_FILE")
-        cafile = cert if cert and os.path.exists(cert) else certifi.where()
-        return ssl.create_default_context(cafile=cafile)
-
     def _client(self) -> httpx.Client:
         with self._lock:
             if self._http is None:
                 self._http = httpx.Client(
                     timeout=httpx.Timeout(TIMEOUT, connect=min(TIMEOUT, 10.0)),
-                    verify=self._verify(),
+                    verify=_verify(),
                 )
             return self._http
 
-    def _headers(self, key: str) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        return headers
-
     def embed(self, texts: list[str], model: str, key: str, base_url: str,
               deadline: float | None = None,
-              usage: dict | None = None) -> list[list[float]]:
+              usage: dict | None = None, *, options: wire.EmbedOptions | None = None,
+              queries: int = 0) -> list[list[float]]:
         """Embed `texts`, returning one vector per input, in input order.
 
         An empty `texts` returns ``[]`` without touching the network — the
@@ -399,16 +597,19 @@ class EmbeddingsClient:
         `prompt_tokens` and `cost_usd` (with `cost_basis`) summed over the
         batches, `model` as the provider named it. A key stays out unless every
         batch read reported it; see `_Spend.fold`. Without a holder nothing is read.
+
+        `options` are the model's stated embedding options (01h), the object
+        the caller's vector space was computed from, and `queries` how many of
+        `texts`, from the first, are queries; the rest are documents
+        (`prepare_inputs`). In the `param` input type the queries and the
+        documents go in separate requests (`segments`), still one call under
+        one deadline and one holder. A requested width is checked on every
+        reply (`DimensionsMismatchError`). Options that cannot be sent, or a
+        `queries` out of range, are a `ValueError` before anything is sent.
         """
+        _check_call(texts, model, base_url, options, queries)
         if not texts:
             return []
-        # `missing_key` for both, matching openai_compatible.stream: neither is
-        # a provider failure, they are "this is not configured yet", and the
-        # caller treats the whole kind as "stay on keyword activation".
-        if not base_url:
-            raise EmbeddingsError("missing_key", "No embeddings base URL configured")
-        if not model:
-            raise EmbeddingsError("missing_key", "No embeddings model configured")
         url = base_url.rstrip("/") + "/embeddings"
         # One deadline for the whole call, so batching cannot multiply it:
         # a per-request bound would let ten batches take ten times TIMEOUT.
@@ -416,17 +617,18 @@ class EmbeddingsClient:
             deadline = time.monotonic() + TIMEOUT
         out: list[list[float]] = []
         spend = None if usage is None else _Spend(usage)
-        for start in range(0, len(texts), BATCH):
-            chunk = texts[start:start + BATCH]
+        for n, (chunk, query) in enumerate(_requests(texts, options, queries)):
             out.extend(self._post(url, chunk, model, key, deadline,
-                                  spend=spend, first=start == 0))
+                                  spend=spend, first=n == 0, options=options, query=query))
         return out
 
     def _post(self, url: str, chunk: list[str], model: str, key: str,
               deadline: float, *, spend: _Spend | None,
-              first: bool) -> list[list[float]]:
+              first: bool, options: wire.EmbedOptions | None = None,
+              query: bool = False) -> list[list[float]]:
         try:
-            body = self._fetch(url, chunk, model, key, deadline, first=first, spend=spend)
+            body = self._fetch(url, chunk, model, key, deadline, first=first, spend=spend,
+                               options=options, query=query)
         except EmbeddingsError:
             _lost_unread(spend)
             raise
@@ -448,10 +650,14 @@ class EmbeddingsClient:
         # Deliberately outside the handlers above: `_vectors` raises
         # EmbeddingsError by design, and anything else escaping it is a bug in
         # this module, which must not be disguised as a provider failure.
-        return _vectors(body, len(chunk))
+        vectors = _vectors(body, len(chunk))
+        # After the fold: a reply of the wrong width was read, and billed.
+        check_widths(vectors, options)
+        return vectors
 
     def _fetch(self, url: str, chunk: list[str], model: str, key: str,
-               deadline: float, *, first: bool, spend: _Spend | None = None) -> object:
+               deadline: float, *, first: bool, spend: _Spend | None = None,
+               options: wire.EmbedOptions | None = None, query: bool = False) -> object:
         """The response body, parsed, within what is left of the deadline.
 
         Streamed rather than read whole so the deadline can be enforced
@@ -476,27 +682,13 @@ class EmbeddingsClient:
             spend.in_flight = True
         slice_ = min(remaining, READ_SLICE)
         with self._client().stream(
-            "POST", url, headers=self._headers(key),
-            json={"model": model, "input": chunk},
+            "POST", url, headers=_headers(key),
+            json=request_body(model, chunk, options, query),
             timeout=httpx.Timeout(slice_, connect=min(remaining, 10.0)),
         ) as resp:
             raw = bytearray()
             for part in resp.iter_bytes():
-                # Before the append, not after. `iter_bytes` yields *decoded*
-                # bytes, so a gzip bomb makes one part far larger than the
-                # bound -- appending first copies it into `raw` as well, so the
-                # peak was the overshoot twice over. Checking first stops at
-                # the first oversized part and never copies it.
-                #
-                # What this cannot bound is `part` itself: httpx has already
-                # decoded and allocated it by the time it is yielded, and
-                # taking that away means `iter_raw` plus decompressing here,
-                # which trades a bounded overshoot for hand-rolled inflate. So
-                # the peak is MAX_BYTES plus one decoded chunk, against an
-                # endpoint the user chose.
-                if len(raw) + len(part) > MAX_BYTES:
-                    raise EmbeddingsError(
-                        "bad_response", f"embeddings response exceeded {MAX_BYTES} bytes")
+                _bounded(raw, part)
                 raw += part
                 if time.monotonic() > deadline:
                     raise EmbeddingsError(
@@ -506,42 +698,142 @@ class EmbeddingsClient:
             # a body that is not JSON) was answered in full.
             if spend is not None:
                 spend.in_flight = False
-            if 300 <= resp.status_code < 400:
-                # The client does not follow redirects, so a 3xx would sail
-                # past the check below as a "success" whose body is empty, and
-                # surface as "response is not JSON" -- which sends the user
-                # looking at a perfectly good endpoint. A FastAPI-based server
-                # whose route is `/embeddings/` returns 307 for the path this
-                # module builds, so this is a plausible configuration, not a
-                # hostile one.
-                #
-                # Named rather than followed, deliberately. Following costs the
-                # deadline: httpx bounds each network operation, so a chain of
-                # hops multiplies TIMEOUT by the hop count, and this module has
-                # already had to fight for that bound twice. `missing_key` is
-                # the kind for "configured, but not usably" (it is what an
-                # empty base URL raises), and it is not the kind `_embed`
-                # retries -- a second request would take the same redirect.
-                target = resp.headers.get("location") or "somewhere else"
-                raise EmbeddingsError(
-                    "missing_key",
-                    f"embeddings endpoint redirected ({resp.status_code}) to {target} — "
-                    f"point the connection's base URL there")
-            if resp.status_code >= 400:
-                raise EmbeddingsError(_status_kind(resp.status_code),
-                                      _extract_error(bytes(raw).decode("utf-8", "replace")),
-                                      status=resp.status_code)
-            try:
-                return json.loads(bytes(raw))
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                # A 200 that is not JSON is a captive portal or a proxy login
-                # page, not a transport failure — naming it `network` would send
-                # the user looking at their connection instead of their base URL.
-                raise EmbeddingsError(
-                    "bad_response", f"embeddings response is not JSON: {exc}") from exc
+            return _answer(resp.status_code, resp.headers.get("location"), bytes(raw))
 
     def close(self) -> None:
         with self._lock:
             if self._owns and self._http is not None:
                 self._http.close()
                 self._http = None
+
+
+class AsyncEmbeddingsClient:
+    """The same endpoint, for a caller already on an event loop (roadmap
+    01h-C4b): `store.inference.embed.embed` is its one door.
+
+    It shares everything but the transport with `EmbeddingsClient` -- the
+    request builder and its `param` split (`_requests`, `request_body`), the
+    accounting (`_Spend`), the parser and its bounds (`_vectors`,
+    `_bounded`, `check_widths`), the status map and the redirect refusal
+    (`_answer`) -- so a reply means the same thing from either door.
+
+    **One total deadline.** The whole call, every batch and every read,
+    headers included, runs under one `asyncio.timeout`. That closes the hole
+    the module docstring names for the synchronous client: a server that
+    drip-feeds its headers a byte at a time is cut at the deadline, not at
+    each read. The deadline's error is the sync client's: `NOT_SENT` when no
+    request had gone out, else `DEADLINE`.
+
+    **Cancellation is real.** A cancel mid-request drops the call's sums if a
+    batch was in flight (`_Spend.lose`, since it may have been billed for
+    counts nobody read) and propagates; the operation files the meter
+    `aborted`.
+
+    One per app, built in the lifespan and closed at its exit
+    (`routes.get_embeddings`), and touched only from that app's loop, so --
+    unlike the synchronous client -- it needs no lock around its lazy pool.
+    """
+
+    def __init__(self, http: httpx.AsyncClient | None = None):
+        self._http = http
+        self._owns = http is None
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._http is None:
+            self._http = httpx.AsyncClient(
+                timeout=httpx.Timeout(TIMEOUT, connect=min(TIMEOUT, 10.0)),
+                verify=_verify(),
+            )
+        return self._http
+
+    async def embed(self, texts: list[str], model: str, key: str, base_url: str,
+                    deadline: float | None = None,
+                    usage: dict | None = None, *, options: wire.EmbedOptions | None = None,
+                    queries: int = 0) -> list[list[float]]:
+        """`EmbeddingsClient.embed`, awaited: the same arguments, the same
+        vectors in input order, the same errors -- with the deadline over the
+        whole call."""
+        _check_call(texts, model, base_url, options, queries)
+        if not texts:
+            return []
+        url = base_url.rstrip("/") + "/embeddings"
+        if deadline is None:
+            deadline = time.monotonic() + TIMEOUT
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise EmbeddingsError("network", "embeddings deadline passed before the request",
+                                  code=NOT_SENT)
+        spend = None if usage is None else _Spend(usage)
+        out: list[list[float]] = []
+        sent = False
+        try:
+            async with asyncio.timeout(remaining):
+                for chunk, query in _requests(texts, options, queries):
+                    sent = True
+                    out.extend(await self._post(url, chunk, model, key, deadline,
+                                                spend=spend, options=options, query=query))
+        except TimeoutError as exc:
+            _lost_unread(spend)
+            raise EmbeddingsError("network", f"embeddings call exceeded its deadline ({TIMEOUT}s"
+                                  " unless the caller set one)",
+                                  code=DEADLINE if sent else NOT_SENT) from exc
+        return out
+
+    async def _post(self, url: str, chunk: list[str], model: str, key: str,
+                    deadline: float, *, spend: _Spend | None,
+                    options: wire.EmbedOptions | None, query: bool) -> list[list[float]]:
+        try:
+            body = await self._fetch(url, chunk, model, key, deadline, spend=spend,
+                                     options=options, query=query)
+        except EmbeddingsError:
+            _lost_unread(spend)
+            raise
+        except httpx.HTTPError as exc:
+            _lost_unread(spend)
+            spent = (isinstance(exc, httpx.TimeoutException)
+                     and time.monotonic() >= deadline)
+            raise EmbeddingsError("network", str(exc),
+                                  code=DEADLINE if spent else None) from exc
+        except Exception as exc:  # client/TLS setup and other unexpected failures
+            _lost_unread(spend)
+            raise EmbeddingsError("network", str(exc)) from exc
+        except BaseException:
+            # A cancel -- the caller's, or the deadline's own -- with a batch
+            # in flight: it may have been billed for counts nobody read.
+            _lost_unread(spend)
+            raise
+        if spend is not None:
+            spend.fold(body)
+        vectors = _vectors(body, len(chunk))
+        check_widths(vectors, options)
+        return vectors
+
+    async def _fetch(self, url: str, chunk: list[str], model: str, key: str,
+                     deadline: float, *, spend: _Spend | None,
+                     options: wire.EmbedOptions | None, query: bool) -> object:
+        """The response body, parsed. httpx's own timeouts are only a floor
+        here (the remaining budget, per operation); the call's
+        `asyncio.timeout` is what bounds it."""
+        # A second's slack, so the call's own deadline is what fires.
+        remaining = max(deadline - time.monotonic(), 0.0) + 1.0
+        if spend is not None:
+            spend.in_flight = True
+        async with self._client().stream(
+            "POST", url, headers=_headers(key),
+            json=request_body(model, chunk, options, query),
+            timeout=httpx.Timeout(remaining, connect=min(remaining, 10.0)),
+        ) as resp:
+            raw = bytearray()
+            async for part in resp.aiter_bytes():
+                _bounded(raw, part)
+                raw += part
+            if spend is not None:
+                spend.in_flight = False
+            return _answer(resp.status_code, resp.headers.get("location"), bytes(raw))
+
+    async def aclose(self) -> None:
+        """Close the pool this client opened (an injected one is the
+        caller's); the next call opens a new one."""
+        if self._owns and self._http is not None:
+            http, self._http = self._http, None
+            await http.aclose()

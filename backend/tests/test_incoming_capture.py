@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 import httpx
 import pytest
 
-from grimoire import routes, wire
+from grimoire import llm, llm_capture, routes, wire
 from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import OpenRouterClient
@@ -46,6 +46,7 @@ async def test_all_lines_survive_before_content_and_usage_filtering(kind):
     assert [e["sequence"] for e in events] == list(range(len(events)))
     assert all(e["attempt"] == 1 and e["elapsed_ms"] >= 0 for e in events)
     assert "secret-key" not in json.dumps(events)
+    assert not any("run_id" in e for e in events), "no run, no run id"
 
 
 async def test_failed_attempt_and_fallback_keep_distinct_frames():
@@ -185,3 +186,101 @@ async def test_durable_capture_does_not_change_metered_accounting(monkeypatch, t
         await client.aclose()
         logs.apply_level("info")
         logs.forget_file_sizes()
+
+
+# ---- run attribution (01g-S3) ----
+def test_stamp_keeps_the_run_key_and_clears_the_rest():
+    holder = {llm_capture.RUN_KEY: "run-1", "prompt_tokens": 99, "cost_usd": 0.5}
+    llm._stamp(holder, CONN, 1)
+    assert holder[llm_capture.RUN_KEY] == "run-1"
+    assert "prompt_tokens" not in holder and "cost_usd" not in holder
+    holder = {"prompt_tokens": 99}
+    llm._stamp(holder, CONN, 1)
+    assert llm_capture.RUN_KEY not in holder
+
+
+async def test_the_run_id_rides_every_attempt_of_a_call(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    answers = iter([httpx.Response(429, text='{"error":{"message":"slow down"}}'),
+                    httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"}}]}\n')])
+    events: list[dict] = []
+    client = LLMClient(openai_compatible=OpenAICompatibleClient(http=httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: next(answers)))),
+        capture=lambda: events.append, retries=1)
+    try:
+        with usage.meter("chat", run_id="run-1", loop_turn=1) as m:
+            assert await client.complete([], CONN, m.usage) == "ok"
+    finally:
+        await client.aclose()
+    assert {e["attempt"] for e in events} == {1, 2}
+    assert all(e["run_id"] == "run-1" for e in events)
+    assert m.row["run_id"] == "run-1" and m.row["attempts"] == 2
+
+
+def _declared_holder_keys() -> dict[str, str]:
+    """Every holder key the gateway declares: a module-level `KEY`, `*_KEY`
+    or `ATTEMPTED` string beginning with `_`, in a top-level module."""
+    import importlib
+    import pkgutil
+
+    import grimoire
+
+    found: dict[str, str] = {}
+    for info in pkgutil.iter_modules(grimoire.__path__):
+        if info.ispkg:
+            continue
+        module = importlib.import_module(f"grimoire.{info.name}")
+        for name, value in vars(module).items():
+            if ((name == "KEY" or name.endswith("_KEY") or name == "ATTEMPTED")
+                    and isinstance(value, str) and value.startswith("_")):
+                found[f"{info.name}.{name}"] = value
+    return found
+
+
+def test_the_keys_stamp_keeps_are_the_pre_send_keys():
+    """`llm._stamp` clears the holder per attempt and keeps a few keys a caller
+    placed before the call. Those, and only those, are what `store.usage.sent`
+    must not count as a request sent (`PRE_SEND_KEYS`), or a holder refused
+    before sending files a model-less row. A key the gateway declares without
+    a value here fails first, so a new kept key cannot skip the comparison."""
+    from grimoire import llm_reasoning, llm_usage, tool_calls
+
+    values = {
+        llm_capture.RUN_KEY: "run-1",
+        llm_capture.KEY: llm_capture.Capture(lambda event: None, "c", 1, "m", "p"),
+        llm_reasoning.KEY: llm_reasoning.Buffer(),
+        tool_calls.KEY: tool_calls.Collector(),
+        llm_usage.ESTIMATE_KEY: llm_usage.Estimate([]),
+        llm_usage.ENDED_KEY: True,
+        llm.ATTEMPTED: CONN,
+    }
+    declared = _declared_holder_keys()
+    missing = {name for name, key in declared.items() if key not in values}
+    assert not missing, f"holder keys with no candidate value here: {missing}"
+    fresh: dict = {}
+    llm._stamp(fresh, CONN, 1)
+    holder = dict(values)
+    llm._stamp(holder, CONN, 1)
+    kept = {key for key in holder if key not in fresh}
+    assert kept == set(usage.PRE_SEND_KEYS)
+
+
+async def test_the_run_id_rides_a_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    events: list[dict] = []
+
+    def handler(request):
+        if json.loads(request.content)["model"] == "m":
+            return httpx.Response(400, text='{"error":{"message":"bad"}}')
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"}}]}\n')
+    client = client_for(handler, events.append)
+    chain = wire.Chain(CONN, replace(CONN, model="fallback", requested_model="fallback"))
+    try:
+        with usage.meter("chat", run_id="run-1") as m:
+            assert await client.complete([], chain, m.usage) == "ok"
+    finally:
+        await client.aclose()
+    assert {e["attempt"] for e in events} == {1, 2}
+    assert all(e["run_id"] == "run-1" for e in events)
+    assert m.row["model"] == "fallback" and m.row["run_id"] == "run-1"

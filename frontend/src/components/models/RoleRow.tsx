@@ -5,6 +5,7 @@ import type {
 import { modelLimitsPath, providerPath } from "../../providerPaths";
 import { WhatItSends } from "../inference/ControlsReadout";
 import { describe, droppedFallbackWords, ROLE_LABEL, ROLE_NEEDS } from "../inference/selection";
+import { optionsSummary } from "./embeddingOptions";
 import { HealthDot } from "./health";
 import { DecideNote, Problem, useWarning, Warning } from "./notes";
 import { windowWords } from "./limits";
@@ -197,6 +198,9 @@ export function EmbeddingRow({ card, settings, health }:
   const { provider, model } = card.stored;
   const warning = useWarning(provider, model, "embed", ROLE_LABEL.embedding);
   const on = card.on && card.resolves;
+  // What its requests carry (01h), read back from the server: nothing is
+  // edited here -- the model's facts are where options are stated.
+  const options = optionsSummary(card.options);
   return (
     <div className="role-row" role="group" aria-label="Embedding">
       <div className="role-row-name">Embedding</div>
@@ -209,6 +213,7 @@ export function EmbeddingRow({ card, settings, health }:
                               model={card.resolves.model} health={health} withPreset={false} /></p>
             <RateLine rate={card.rate} model={card.resolves.model} promptOnly
                       limits={card.limits ?? null} provider={card.resolves.provider} />
+            {options && <p className="field-hint">Options: {options}</p>}
           </>
         ) : (
           <>

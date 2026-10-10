@@ -189,6 +189,23 @@ class Scope:
         if self.on:
             self.notes.setdefault(part, {})[key] = value
 
+    def note_escalations(self, part: str, decision: decisions.Decision) -> None:
+        """Note what became of each escalation `decision` triggered (roadmap
+        01d §8), under `notes[part]["escalations"]`, in its priority order. A
+        hop's calls reach the capture through the hook; a SKIPPED hop makes
+        no call, so this is the only place a skip -- `cap`, `same_model`, a
+        refusal's sentence -- is seen. Each detail keeps only what precedes
+        its first ": ", so a failed hop's provider text (`"rate_limit:
+        <the provider's words>"`, `"unreadable: <detail>"`) is never kept.
+        Nothing when the decision escalated nothing."""
+        if not decision.escalations:
+            return
+        self.note(part, "escalations", [
+            {"index": e.index, "trigger": e.trigger, "margin": e.margin,
+             "outcome": e.outcome, "detail": e.detail.split(": ", 1)[0],
+             "served": list(e.served)}
+            for e in decision.escalations])
+
     def _take(self, part: str, messages: list[dict], outcome: dict,
               target: wire.Target) -> None:
         full = len(self.calls) < MAX_CALLS_IN_FULL

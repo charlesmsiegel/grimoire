@@ -1,3 +1,4 @@
+import dataclasses
 import types
 
 import pytest
@@ -322,3 +323,211 @@ async def test_a_run_that_says_nothing_is_still_healthy(monkeypatch):
     install_fake_sdk(monkeypatch, replies=[types.SimpleNamespace()])
 
     await ClaudeAgentClient().probe("opus")
+
+
+# ---- 01g-S8: tools on the SDK path, every call deferred to the loop ----
+from grimoire import tool_calls  # noqa: E402
+
+READ = {"name": "read", "description": "Reads one record.",
+        "parameters": {"type": "object", "properties": {"ref": {"type": "string"}},
+                       "required": ["ref"], "additionalProperties": False}}
+
+
+class _HookMatcher:
+    def __init__(self, matcher=None, hooks=()):
+        self.matcher, self.hooks = matcher, list(hooks)
+
+
+def install_tool_sdk(monkeypatch, replies=()):
+    """`install_fake_sdk` plus the tool API: `tool` records each declaration
+    (and whether its handler ever ran), `create_sdk_mcp_server` returns its
+    tools, and `query` hands each reply through."""
+    captured = install_fake_sdk(monkeypatch, replies=replies)
+    declared: list[dict] = []
+
+    def tool(name, description, input_schema):
+        def wrap(handler):
+            entry = {"name": name, "description": description, "schema": input_schema,
+                     "handler": handler}
+            declared.append(entry)
+            return entry
+        return wrap
+
+    monkeypatch.setattr(claude_agent, "sdk_tool", tool)
+    monkeypatch.setattr(claude_agent, "create_sdk_mcp_server",
+                        lambda name, tools: {"name": name, "tools": tools})
+    monkeypatch.setattr(claude_agent, "HookMatcher", _HookMatcher)
+    monkeypatch.setattr(claude_agent, "DeferredToolUse", _DeferredToolUse)
+    captured["declared"] = declared
+    return captured
+
+
+class _DeferredToolUse:
+    pass
+
+
+def _result(deferred=None):
+    return types.SimpleNamespace(usage={"input_tokens": 5, "output_tokens": 2},
+                                 deferred_tool_use=deferred)
+
+
+async def test_an_offer_of_tools_is_isolated_declared_and_deferred(monkeypatch):
+    deferred = types.SimpleNamespace(id="toolu_1", name="mcp__grimoire__read",
+                                     input={"ref": "characters:mara"})
+    captured = install_tool_sdk(monkeypatch, replies=[
+        _AssistantMessage([_TextBlock("Let me look.")]), _result(deferred)])
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    chunks = [c async for c in ClaudeAgentClient().stream(
+        [{"role": "user", "content": "Who keeps the ledger?"}], "sonnet", usage,
+        tools=(READ,), tool_choice="auto")]
+    assert "".join(chunks) == "Let me look."
+    options = captured["options"]
+    assert options.tools == [] and options.setting_sources == []
+    assert options.strict_mcp_config is True
+    assert options.allowed_tools == ["mcp__grimoire__read"]
+    assert options.mcp_servers["grimoire"]["tools"][0]["name"] == "read"
+    (call,) = usage[tool_calls.KEY].calls()
+    assert (call.id, call.name, call.arguments) == ("toolu_1", "read", {"ref": "characters:mara"})
+    assert usage[tool_calls.KEY].finish_reason == "tool_calls"
+
+
+async def test_the_hook_defers_a_grimoire_tool_and_denies_anything_else(monkeypatch):
+    captured = install_tool_sdk(monkeypatch)
+    [c async for c in ClaudeAgentClient().stream(
+        [{"role": "user", "content": "go"}], "sonnet", tools=(READ,), tool_choice="auto")]
+    (matcher,) = captured["options"].hooks["PreToolUse"]
+    assert matcher.matcher == "*"
+    (gate,) = matcher.hooks
+
+    async def decision(name):
+        out = await gate({"tool_name": name}, "id", None)
+        return out["hookSpecificOutput"]["permissionDecision"]
+
+    assert await decision("mcp__grimoire__read") == "defer"
+    assert await decision("Bash") == "deny"
+    assert await decision("mcp__other__read") == "deny"
+    # The handler exists to declare a schema, and raises if ever reached.
+    with pytest.raises(RuntimeError):
+        await captured["declared"][0]["handler"]({"ref": "x"})
+
+
+async def test_tool_choice_none_denies_even_a_grimoire_tool(monkeypatch):
+    captured = install_tool_sdk(monkeypatch)
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    [c async for c in ClaudeAgentClient().stream(
+        [{"role": "user", "content": "go"}], "sonnet", usage, tools=(READ,),
+        tool_choice="none")]
+    options = captured["options"]
+    assert options.allowed_tools == []
+    gate = options.hooks["PreToolUse"][0].hooks[0]
+    out = await gate({"tool_name": "mcp__grimoire__read"}, "id", None)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert usage[tool_calls.KEY].finish_reason == "stop"
+
+
+async def test_a_name_too_long_for_the_prefix_is_refused_for_this_kind(monkeypatch):
+    install_tool_sdk(monkeypatch)
+    long = {**READ, "name": "r" * 50}
+    with pytest.raises(ClaudeAgentError) as exc:
+        [c async for c in ClaudeAgentClient().stream(
+            [{"role": "user", "content": "go"}], "sonnet", tools=(long,))]
+    assert exc.value.code == tool_calls.REFUSED
+    assert claude_agent.MAX_TOOL_NAME == 49
+
+
+async def test_a_missing_sdk_still_raises_missing_dependency_with_tools(monkeypatch):
+    monkeypatch.setattr(claude_agent, "query", None)
+    monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR",
+                        ImportError("No module named 'claude_agent_sdk'"))
+    with pytest.raises(ClaudeAgentError) as exc:
+        [c async for c in ClaudeAgentClient().stream(
+            [{"role": "user", "content": "go"}], "sonnet", tools=(READ,))]
+    assert exc.value.kind == "missing_dependency"
+
+
+async def test_a_tool_history_is_flattened_into_labelled_blocks(monkeypatch):
+    captured = install_tool_sdk(monkeypatch)
+    history = [{"role": "user", "content": "Who keeps the ledger?"},
+               {"role": "assistant", "content": "",
+                "tool_calls": [{"id": "toolu_1", "name": "read",
+                                "arguments": {"ref": "characters:mara"}}]},
+               {"role": "tool", "tool_call_id": "toolu_1", "name": "read",
+                "content": "Mara keeps it."}]
+    [c async for c in ClaudeAgentClient().stream(history, "sonnet", tools=(READ,))]
+    prompt = captured["prompt"]
+    assert '[assistant -> tool read toolu_1]\n{"ref": "characters:mara"}' in prompt
+    assert "[tool toolu_1]\nMara keeps it." in prompt
+
+
+async def test_without_tools_the_options_are_what_they_were(monkeypatch):
+    captured = install_tool_sdk(monkeypatch)
+    [c async for c in ClaudeAgentClient().stream([{"role": "user", "content": "hi"}], "opus")]
+    assert vars(captured["options"]) == {"system_prompt": None, "model": "opus",
+                                         "allowed_tools": [], "max_turns": 1}
+
+
+
+# ---- brutal review round 1 (F3): gate on the features, not the names ----
+@dataclasses.dataclass
+class _Options073:
+    """`ClaudeAgentOptions` as 0.1.73 has it, in the fields this uses: no
+    `strict_mcp_config` (nor, elsewhere, a `"defer"` decision)."""
+    system_prompt: str | None = None
+    model: str | None = None
+    tools: list | None = None
+    allowed_tools: list = dataclasses.field(default_factory=list)
+    mcp_servers: dict = dataclasses.field(default_factory=dict)
+    setting_sources: list | None = None
+    hooks: dict | None = None
+    max_turns: int | None = None
+
+
+@dataclasses.dataclass
+class _Options076(_Options073):
+    strict_mcp_config: bool = False
+
+
+def _sdk_073(monkeypatch, replies=()):
+    """The tool API's three names present, as on 0.1.73, and nothing else."""
+    captured = install_tool_sdk(monkeypatch, replies=replies)
+    monkeypatch.setattr(claude_agent, "ClaudeAgentOptions", _Options073)
+    monkeypatch.setattr(claude_agent, "DeferredToolUse", None)
+    return captured
+
+
+async def test_an_sdk_with_the_tool_api_but_not_the_rest_refuses_tools(monkeypatch):
+    """0.1.73 exports `tool`, `create_sdk_mcp_server` and `HookMatcher`, so
+    the old guard passed and the options raised `TypeError` inside the call."""
+    captured = _sdk_073(monkeypatch)
+    assert claude_agent._declares_tools() is False
+    with pytest.raises(ClaudeAgentError) as exc:
+        [c async for c in ClaudeAgentClient().stream(
+            [{"role": "user", "content": "go"}], "sonnet", tools=(READ,), tool_choice="auto")]
+    assert exc.value.code == tool_calls.REFUSED and "0.1.76" in exc.value.detail
+    assert "prompt" not in captured
+    # The deferred call alone is not enough either: the options must take
+    # `strict_mcp_config`.
+    monkeypatch.setattr(claude_agent, "DeferredToolUse", _DeferredToolUse)
+    assert claude_agent._declares_tools() is False
+    monkeypatch.setattr(claude_agent, "ClaudeAgentOptions", _Options076)
+    assert claude_agent._declares_tools() is True
+
+
+async def test_a_call_without_tools_still_runs_on_an_older_sdk(monkeypatch):
+    captured = _sdk_073(monkeypatch, replies=[_AssistantMessage([_TextBlock("ok")])])
+    chunks = [c async for c in ClaudeAgentClient().stream(
+        [{"role": "user", "content": "hi"}], "sonnet")]
+    assert "".join(chunks) == "ok" and captured["options"].max_turns == 1
+
+
+async def test_options_the_sdk_cannot_take_are_a_coded_refusal_not_a_crash(monkeypatch):
+    install_tool_sdk(monkeypatch)
+
+    def options(**kw):
+        raise TypeError("__init__() got an unexpected keyword argument 'strict_mcp_config'")
+
+    monkeypatch.setattr(claude_agent, "ClaudeAgentOptions", options)
+    with pytest.raises(ClaudeAgentError) as exc:
+        [c async for c in ClaudeAgentClient().stream(
+            [{"role": "user", "content": "go"}], "sonnet", tools=(READ,), tool_choice="auto")]
+    assert exc.value.code == tool_calls.REFUSED

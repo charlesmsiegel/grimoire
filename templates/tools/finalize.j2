@@ -1,0 +1,19 @@
+{#- The finalize turn of a tool loop (`grimoire.inference.finalize_message`, spec 01g 3.7 step 7):
+    appended as a user message after the run's last tool results. The tool
+    definitions are still sent with it (both providers require them while the
+    history holds calls), with tool_choice "none".
+    Vars:
+      schema — dict | None: the caller's final record, rendered with the
+               `schema_json` filter (01f-C1: the schema rides the prompt
+               whatever mode the attempt is sent), or None for a plain answer.
+      stopped — bool: whether a budget limit, not the model, ended the run. -#}
+{%- if stopped -%}
+The run's budget for tools is spent: no more tools can be called.
+{% else -%}
+No more tools can be called.
+{% endif -%}
+Using only what the conversation and the tool results above already hold, give your final answer now.
+{%- if schema %}
+Answer with a single JSON value matching this schema, and nothing else:
+{{ schema | schema_json }}
+{%- endif %}

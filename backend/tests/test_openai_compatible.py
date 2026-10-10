@@ -1,6 +1,9 @@
+import json
+
 import httpx
 import pytest
 
+from grimoire import tool_calls
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import (
     PROBE_TIMEOUT,
@@ -153,7 +156,7 @@ def test_strict_empty_list_gets_a_placeholder():
 
 def test_strict_unrecognized_role_raises():
     with pytest.raises(OpenAICompatibleError) as exc:
-        _strict_messages([{"role": "tool", "content": "x"}])
+        _strict_messages([{"role": "function", "content": "x"}])
     assert exc.value.kind == "bad_response"
 
 
@@ -355,3 +358,56 @@ async def test_an_http_error_carries_its_status():
     with pytest.raises(OpenAICompatibleError) as exc:
         [c async for c in client.stream([], "m", "k", "https://custom.example.com/v1")]
     assert exc.value.status == 422
+
+
+# ---- tools (01g-S1) ----
+PING = {"name": "ping", "description": "Says the caller is here.",
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False}}
+
+
+async def test_tools_and_their_choice_are_sent_when_offered():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, text=SSE_BODY)
+
+    client = make_client(handler)
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k",
+                                    "https://custom.example.com/v1", tools=(PING,),
+                                    tool_choice="auto")]
+    assert captured["body"]["tools"] == tool_calls.openai_tools((PING,))
+    assert captured["body"]["tool_choice"] == "auto"
+
+
+async def test_parallel_calls_at_index_zero_are_two_calls():
+    body = (
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a",'
+        '"function":{"name":"ping","arguments":"{}"}}]}}]}\n\n'
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b",'
+        '"function":{"name":"pong","arguments":"{}"}}]}}]}\n\n'
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n")
+    client = make_client(lambda request: httpx.Response(200, text=body))
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k",
+                                    "https://custom.example.com/v1", usage=usage,
+                                    tools=(PING,))]
+    found = usage[tool_calls.KEY]
+    assert found.names() == ("ping", "pong")
+    # Some upstreams end a turn of calls with `stop`: the calls still count.
+    assert found.called and found.finish_reason == "stop"
+
+
+async def test_a_plain_answer_leaves_the_collector_uncalled():
+    body = ('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n")
+    client = make_client(lambda request: httpx.Response(200, text=body))
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    chunks = [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k",
+                                             "https://custom.example.com/v1", usage=usage,
+                                             tools=(PING,))]
+    assert "".join(chunks) == "ok"
+    assert not usage[tool_calls.KEY].called
+    assert usage[tool_calls.KEY].finish_reason == "stop"

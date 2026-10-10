@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Mapping
 import certifi
 import httpx
 
-from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage
+from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage, tool_calls
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
@@ -78,7 +78,16 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
     mid-conversation or a non-user opening turn.
 
     A user turn may hold content parts rather than a string (an image beside
-    its text, #377); `_join` folds those the way it folds strings."""
+    its text, #377); `_join` folds those the way it folds strings.
+
+    A tool history (01g, already in this wire's shapes) keeps its places: an
+    assistant turn carrying `tool_calls` is passed through as itself, never
+    merged into -- a plain assistant turn just before it is carried INTO it,
+    so alternation holds -- and each `tool` message stays where it is, between
+    the calls and the next turn. Alternation is over user and assistant turns,
+    with the results between them. A result is never folded into a user turn:
+    that would misattribute it, as the refusal below says of any unknown
+    role, and an endpoint that refuses the `tool` role is refusing tools."""
     folded: list[dict] = []
     pending: list[str] = []
 
@@ -91,10 +100,21 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
         return joined
 
     def append(role: str, content: str | list) -> None:
-        if folded and folded[-1]["role"] == role:
+        if folded and folded[-1]["role"] == role and "tool_calls" not in folded[-1]:
             folded[-1]["content"] = _join(folded[-1]["content"], content)
         else:
             folded.append({"role": role, "content": content})
+
+    def calls_turn(m: dict) -> None:
+        turn = dict(m)
+        previous = folded[-1] if folded else None
+        if (previous is not None and previous["role"] == "assistant"
+                and "tool_calls" not in previous):
+            folded.pop()
+            said = turn.get("content")
+            turn["content"] = (_join(previous["content"], said) if said
+                               else previous["content"])
+        folded.append(turn)
 
     for m in messages:
         if m["role"] == "system":
@@ -104,7 +124,12 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
         elif m["role"] == "assistant":
             if pending:
                 append("user", flush())
-            append("assistant", m["content"])
+            if m.get("tool_calls"):
+                calls_turn(m)
+            else:
+                append("assistant", m["content"])
+        elif m["role"] == "tool":
+            folded.append(dict(m))
         else:
             # grimoire's context/assemble.py only ever emits system/user/assistant
             # today, but silently folding an unrecognized role into
@@ -333,7 +358,9 @@ class OpenAICompatibleClient:
                       strict: bool = False, usage: dict | None = None,
                       reasoning_effort: str = "",
                       sampling: dict | None = None,
-                      schema: dict | None = None) -> AsyncIterator[str]:
+                      schema: dict | None = None,
+                      tools: tuple[dict, ...] | None = None,
+                      tool_choice: str | None = None) -> AsyncIterator[str]:
         """`usage` is filled in place when the endpoint volunteers an accounting
         block — see `llm_usage`.
 
@@ -350,7 +377,10 @@ class OpenAICompatibleClient:
         hides."""
         if not base_url:
             raise OpenAICompatibleError("missing_key", "No base URL configured")
-        payload_messages = _strict_messages(messages) if strict else messages
+        # A neutral tool history (01g) in this wire's shapes first, so the
+        # strict folding sees `tool` messages and calls as the endpoint will.
+        lowered = tool_calls.openai_messages(messages)
+        payload_messages = _strict_messages(lowered) if strict else lowered
         url = base_url.rstrip("/") + "/chat/completions"
         # The preset's parameters first, so the request's own fields always
         # win (see `openrouter._payload`); `llm_sampling.split` has already
@@ -367,6 +397,12 @@ class OpenAICompatibleClient:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "reply", "strict": True, "schema": schema}}
+        # Tools (01g) only when given: a strict endpoint refuses a field it
+        # does not know, so nothing here sends one unasked.
+        if tools is not None:
+            payload["tools"] = tool_calls.openai_tools(tools)
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
         try:
             http = self._client()
             async with http.stream(
@@ -408,6 +444,8 @@ class OpenAICompatibleClient:
                     # with no choices, so reading it after would skip it.
                     llm_usage.from_openai_chunk(obj, usage)
                     llm_reasoning.from_chunk(obj, usage)
+                    # A call is not text (01g; see openrouter.stream).
+                    llm_usage.note_reply(usage, tool_calls.from_openai_chunk(obj, usage))
                     if llm_reasoning.pending(usage):
                         yield ""
                     try:

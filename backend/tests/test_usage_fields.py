@@ -324,6 +324,145 @@ def test_account_never_raises_and_copies_only_strings():
 
 
 def test_the_account_fields_are_the_ledgers():
-    assert llm_usage.ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode")
+    assert llm_usage.ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode",
+                                        "hop")
     fields = tuple(f.name for f in dataclasses.fields(wire.Account))
     assert fields == llm_usage.ACCOUNT_FIELDS
+
+
+# ---- the escalation hop's mark (roadmap 01d-S3) ----
+
+def test_a_hop_is_filed_only_when_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    row = usage.record(task="scene-break", model="vendor/active", hop="escalation")
+    assert row is not None and row["hop"] == "escalation"
+    row = usage.record(task="scene-break", model="vendor/active")
+    assert row is not None and "hop" not in row
+
+
+def test_a_meter_files_the_hop_its_target_carried(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    target = wire.Target(provider_id="openrouter", kind="openrouter", model="vendor/active")
+    for account, hop in (({"hop": "escalation", "operation": "decide"}, "escalation"),
+                         ({"operation": "decide"}, None)):
+        with usage.meter("scene-break") as m:
+            llm._stamp(m.usage, target.with_account(**account), 1)
+        assert m.row is not None
+        assert m.row.get("hop") == hop
+
+
+def test_every_account_field_reaches_the_row():
+    """An account field the facade stamps but `Meter.done` does not file would
+    be dropped silently: each is in `Meter.SERVED` and a `record` parameter."""
+    import inspect
+    assert set(llm_usage.ACCOUNT_FIELDS) <= set(usage.Meter.SERVED)
+    params = inspect.signature(usage.record).parameters
+    assert all(field in params for field in llm_usage.ACCOUNT_FIELDS)
+
+
+# ---- run attribution (01g-S3; spec 01g §3.10) ----
+RUN_FIELDS = ("run_id", "loop_turn", "tool_calls")
+
+
+def test_record_writes_the_run_fields_only_when_set(home):
+    plain = usage.record(task="chat", model=MODEL_A)
+    assert plain is not None and not set(RUN_FIELDS) & set(plain)
+    assert not set(RUN_FIELDS) & set(_ledger_lines(home)[0])
+
+    usage.record(task="chat", model=MODEL_A, run_id="run-1", loop_turn=2, tool_calls=3)
+    row = list(usage.calls(days=1))[-1]
+    assert {k: row[k] for k in RUN_FIELDS} == {"run_id": "run-1", "loop_turn": 2,
+                                               "tool_calls": 3}
+
+
+@pytest.mark.parametrize("field, value", [
+    ("run_id", ""), ("run_id", object()), ("run_id", 7),
+    ("loop_turn", 0), ("loop_turn", -1), ("loop_turn", True), ("loop_turn", "2"),
+    ("tool_calls", 0), ("tool_calls", -1), ("tool_calls", False), ("tool_calls", 1.5),
+])
+def test_run_fields_are_type_tested_not_coerced(home, field, value):
+    row = usage.record(task="chat", model=MODEL_A, **{field: value})
+    assert row is not None, "a bad run field costs the field, never the row"
+    assert field not in row
+    assert len(_ledger_lines(home)) == 1
+
+
+def test_an_older_row_reads_unchanged(home):
+    old = {"ts": usage._now(), "kind": "llm", "task": "chat", "model": MODEL_A,
+           "prompt_tokens": 10, "completion_tokens": 2, "duration_ms": 5, "status": "ok"}
+    path = usage.month_path(old["ts"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(old) + "\n", encoding="utf-8")
+    assert list(usage.calls(days=1)) == [old]
+
+    plain = usage.summary(days=1)["totals"]
+    usage.record(task="chat", model=MODEL_A, prompt_tokens=10, completion_tokens=2,
+                 duration_ms=5, run_id="run-1", loop_turn=1, tool_calls=2)
+    rows = list(usage.calls(days=1))
+    assert usage._turn(rows[0]).keys() == usage._turn(rows[1]).keys()
+    assert not set(RUN_FIELDS) & set(usage._turn(rows[1]))
+    doubled = usage.summary(days=1)["totals"]
+    assert doubled["calls"] == 2 * plain["calls"]
+    assert doubled["total_tokens"] == 2 * plain["total_tokens"]
+
+
+def test_a_meter_files_its_run_fields(home):
+    with usage.meter("chat", run_id="run-1", loop_turn=1) as m:
+        assert m.usage == {usage.RUN_KEY: "run-1"}
+        m.usage.update(model=MODEL_A, attempts=1)
+        m.tool_calls = 2
+    assert m.row is not None
+    assert {k: m.row[k] for k in RUN_FIELDS} == {"run_id": "run-1", "loop_turn": 1,
+                                                 "tool_calls": 2}
+    # The seeded holder key is the capture's, never a ledger field.
+    assert usage.RUN_KEY not in m.row
+    assert all(usage.RUN_KEY not in line for line in _ledger_lines(home))
+
+
+def test_a_run_row_folds_into_the_rollup_as_any_row(home):
+    from grimoire.store import usage_rollup
+
+    usage.record(task="chat", campaign="saltmarch", model=MODEL_A, cost_usd=1.0)
+    usage.record(task="chat", campaign="saltmarch", model=MODEL_A, cost_usd=2.0,
+                 run_id="run-1", loop_turn=1, tool_calls=1)
+    totals = usage_rollup.campaign_totals("saltmarch")
+    assert totals["cost_usd"] == 3.0
+    assert not set(RUN_FIELDS) & set(totals)
+
+
+def test_meter_takes_tool_calls_as_a_keyword(home):
+    with usage.meter("chat", tool_calls=4) as m:
+        m.usage.update(model=MODEL_A, attempts=1)
+    assert m.row is not None and m.row["tool_calls"] == 4
+    assert "run_id" not in m.row and m.usage.get(usage.RUN_KEY) is None
+
+
+def test_a_non_string_run_id_seeds_nothing(home):
+    m = usage.Meter("chat", run_id=object())  # type: ignore[arg-type]
+    assert m.usage == {}
+    m.usage.update(model=MODEL_A, attempts=1)
+    row = m.done()
+    assert row is not None and "run_id" not in row
+
+
+def test_a_run_meter_that_sent_nothing_files_no_row(home):
+    with usage.meter("chat", run_id="run-1") as clean:
+        pass
+    assert clean.row is None
+    with pytest.raises(llm.LLMError), usage.meter("chat", run_id="run-1") as failed:
+        raise llm.LLMError("missing_key", "no key for Saltmarch")
+    assert failed.row is None
+    assert _ledger_lines(home) == []
+    assert [r["kind"] for r in store.errors.summary()["rows"]] == ["missing_key"]
+
+
+def test_sent_ignores_only_the_pre_send_keys():
+    from grimoire import llm_reasoning
+
+    assert usage.sent({}) is False
+    assert usage.sent({usage.RUN_KEY: "run-1"}) is False
+    assert usage.sent({usage.RUN_KEY: "run-1",
+                       llm_reasoning.KEY: llm_reasoning.Buffer()}) is False
+    assert usage.sent({usage.RUN_KEY: "run-1", "model": MODEL_A}) is True
+    assert usage.sent({"model": MODEL_A}) is True
+    assert usage.sent(None) is False

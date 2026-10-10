@@ -4,8 +4,9 @@ Every capability in `providers.CAPABILITIES` resolves to `yes`, `no` or
 `unknown`, with the source of that answer (spec 6.2). Sources, highest
 authority first -- the first one that says anything is the answer:
 
-1. `adapter` -- the preset's `never`: the wire protocol cannot. A hard `no`
-   that nothing below may claim past, however sure it is.
+1. `adapter` -- the preset's `never`: the wire protocol cannot (the Claude
+   subscription's `embed`). A hard `no` that nothing below may claim past,
+   however sure it is.
 2. `test`, then `user` -- the model's facts (`facts.of`): a probe that
    PASSED for the connection's current `rev` (`yes`), then the user's
    `overrides`, then the user's own `prefill` statement and a facts
@@ -26,11 +27,12 @@ authority first -- the first one that says anything is the answer:
    them is a `no`; `decisions` -> decide_native, whose absence says nothing),
    `vision`, `params` naming `structured_outputs` (its absence says
    nothing; `response_format` alone also covers JSON mode, so says
-   nothing either), and Anthropic's
+   nothing either) or `tools` (a stated list without it is a `no` on an
+   OpenRouter connection only, `_params_caps`), and Anthropic's
    `features.structured_output`. A key the row does not state contributes
    nothing, so a row without `outputs` leaves the name rule room to apply.
 4. `preset` -- the preset's `always` (`generate`, `stream` on the generative
-   presets). `possible` never yields a `yes`: it only decides whether an
+   presets; `tools` on the Anthropic API's). `possible` never yields a `yes`: it only decides whether an
    unknown is worth offering as Unverified (`group_for`).
 5. `name` -- a model id containing `embed` is an embedding model.
 6. otherwise `unknown`.
@@ -52,7 +54,7 @@ SOURCES: tuple[str, ...] = ("adapter", "test", "user", "catalog", "preset", "nam
 
 #: Every capability, in a fixed order (the same set as `providers.CAPABILITIES`).
 NAMES: tuple[str, ...] = ("generate", "stream", "vision", "embed", "decide_native",
-                          "structured_output", "prefill")
+                          "structured_output", "prefill", "tools")
 
 
 class Cap(NamedTuple):
@@ -76,6 +78,9 @@ NEEDS: dict[str, tuple[str, ...]] = {
     "vision": ("vision",),
     "embed": ("embed",),
     "decide": ("decide_native", "generate"),
+    # Not a role's need: a route's (`requires=("tools",)`, 01g), asked of a
+    # pin picker the way the image route asks `vision`.
+    "tools": ("tools",),
 }
 
 UNVERIFIED_REASON = "not known yet — a test call can check"
@@ -88,6 +93,7 @@ _ADAPTER_SAYS = {
     "vision": "reads no images",
     "embed": "serves no embeddings",
     "decide": "cannot decide",
+    "tools": "calls no tools",
 }
 #: What a model lacking each capability cannot do: "... cannot <phrase>" and
 #: "... does not <phrase>". The one table; the seam's `incapable` refusal
@@ -100,9 +106,11 @@ CANNOT: dict[str, str] = {
     "prefill": "continue a prefilled reply",
     "decide_native": "make native decisions",
     "stream": "stream",
+    "tools": "call tools",
 }
 _GERUND = {"generate": "generating text", "vision": "reading images",
-           "embed": "producing embeddings", "decide_native": "deciding natively"}
+           "embed": "producing embeddings", "decide_native": "deciding natively",
+           "tools": "calling tools"}
 
 
 def _yes_no(flag: bool) -> str:
@@ -151,8 +159,30 @@ def _stated(model_facts: dict) -> dict[str, Cap]:
     return out
 
 
-def _listed(row: dict | None) -> dict[str, Cap]:
-    """Step 3: only what the catalog row states."""
+def _params_caps(params: set[str], kind: str) -> dict[str, Cap]:
+    """What a stated parameter list (OpenRouter's `supported_parameters`,
+    kept by `catalog.entry` as `params`) says.
+
+    `structured_output` only ever `yes`: `response_format` alone also covers
+    JSON mode, so its absence says nothing. `tools` is `yes` when the list
+    names it from any provider, and `no` when it does not -- but only on an
+    `openrouter` connection (01g, open question 5): OpenRouter states the
+    parameters each model's endpoints take, per model, and has no second
+    spelling for tools; any other server that happens to send such a list is
+    believed when it says yes and never made a refusal of."""
+    out: dict[str, Cap] = {}
+    if params & _STRUCTURED_PARAMS:
+        out["structured_output"] = Cap(YES, "catalog")
+    if "tools" in params:
+        out["tools"] = Cap(YES, "catalog")
+    elif kind == "openrouter":
+        out["tools"] = Cap(NO, "catalog")
+    return out
+
+
+def _listed(row: dict | None, kind: str = "") -> dict[str, Cap]:
+    """Step 3: only what the catalog row states. `kind` is the adapter the
+    row was listed by (`_params_caps`)."""
     if not isinstance(row, dict):
         return {}
     out: dict[str, Cap] = {}
@@ -169,9 +199,8 @@ def _listed(row: dict | None) -> dict[str, Cap]:
     if isinstance(vision, bool):
         out["vision"] = Cap(_yes_no(vision), "catalog")
     params = row.get("params")
-    if isinstance(params, list) and any(p in _STRUCTURED_PARAMS for p in params
-                                        if isinstance(p, str)):
-        out["structured_output"] = Cap(YES, "catalog")
+    if isinstance(params, list):
+        out.update(_params_caps({p for p in params if isinstance(p, str)}, kind))
     features = row.get("features")
     structured = features.get("structured_output") if isinstance(features, dict) else None
     if isinstance(structured, bool):
@@ -201,7 +230,7 @@ def resolve_caps(preset: providers.Preset, model: str, *, catalog_row: dict | No
                  facts: dict) -> dict[str, Cap]:
     """Every capability of `model` behind `preset`, with its source. Pure."""
     stated = _stated(facts) if isinstance(facts, dict) else {}
-    listed = _listed(catalog_row)
+    listed = _listed(catalog_row, preset.kind)
     named = _named(model)
     never = providers.never_for(preset, model)
     out: dict[str, Cap] = {}

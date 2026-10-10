@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ApiError, api, type ModelTestPreview, type ModelTestResult, type TestableCapability,
+  ApiError, api, type ModelTestPreview, type ModelTestProbe, type ModelTestResult,
+  type TestableCapability,
 } from "../../api/client";
 import { errorText } from "../../api/errors";
 import { isAbortError, newAttemptId } from "../../api/stream";
 import { isTopModal } from "../../shortcuts/registry";
 import { useHotkeys } from "../../shortcuts/useHotkeys";
 import { about } from "../cost";
+import { mismatchLine } from "../models/embeddingOptions";
 
 /** What the estimate reads when no source prices the test (the catalog, the
  *  model's rates, `pricing.json`). A price nobody reported is never rendered
@@ -20,9 +22,9 @@ function listed(key: string): TestableCapability[] {
 }
 
 /** One probe's outcome as a line. */
-function outcome(cap: string, r: { ok: boolean; error?: string; dims?: number }): string {
+function outcome(cap: string, r: ModelTestProbe): string {
   if (r.ok) return `${cap}: works${r.dims ? ` (${r.dims} dimensions)` : ""}`;
-  return `${cap}: failed — ${r.error ?? "no reason given"}`;
+  return `${cap}: failed — ${mismatchLine(r) ?? r.error ?? "no reason given"}`;
 }
 
 /** The test runs in flight, by provider and model. */

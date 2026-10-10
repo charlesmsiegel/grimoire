@@ -47,6 +47,7 @@ class FakeProvider:
         self.rules = list(rules)
         self.error = error
         self.calls: list[list[str]] = []
+        self.queries: list[int] = []
 
     def vector(self, text: str) -> list[float]:
         low = text.casefold()
@@ -55,8 +56,10 @@ class FakeProvider:
                 return list(vector)
         return list(FAR)
 
-    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         self.calls.append(list(texts))
+        self.queries.append(queries)
         if self.error is not None:
             raise self.error
         return [self.vector(t) for t in texts]
@@ -433,3 +436,26 @@ def test_a_retry_does_not_count_the_runs_hits_and_misses_again(world, provider, 
     first, retry = _embed_lines()
     assert "uncached" in first and "cached" in first
     assert "uncached" not in retry and "cached" not in retry
+
+
+def test_search_sends_its_query_as_a_query(world, provider):
+    """01h-S2: the reader's query goes first and is marked as one, on the first
+    call and on the query-only retry alike."""
+    _, root = world
+    configure()
+    entities.create_entity(root, "lore", "The Salt Pact", body="Debts written in brine.")
+    semsearch.search_semantic("brine")
+    assert provider.queries == [1]
+    real = provider.embed
+    calls: list[int] = []
+
+    def broken_then_fine(texts, *a, **kw):
+        calls.append(kw.get("queries"))
+        if len(calls) == 1:
+            raise EmbeddingsError("bad_response", "unreadable")
+        return real(texts, *a, **kw)
+
+    provider.embed = broken_then_fine
+    semsearch.search_semantic("salt pact debts")
+    assert calls[0] == 1
+    assert all(q == 1 for q in calls)

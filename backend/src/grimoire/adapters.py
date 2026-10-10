@@ -19,7 +19,10 @@ gateway reads instead of keeping kind lists of its own:
   (`store.inference.resolve.embed_endpoint`). Embedding itself is not sent
   through here: it stays the caller-owned `EmbeddingsClient` door (slice D),
   because the store may not import the gateway;
-- `decides_natively`: its kind has a native decisions endpoint.
+- `decides_natively`: its kind has a native decisions endpoint;
+- `calls_tools`: its kind can be sent tool definitions (01g) -- held equal
+  to the presets' `never` (`store.inference.providers`); every kind can since
+  01g-S8 fitted the Claude Agent SDK's own tool model to the loop.
 
 A gateway module: it imports the provider clients and the gateway leaves,
 and never the store (#239).
@@ -31,7 +34,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-from . import decisions, llm_sampling, openai_compatible, openrouter, wire
+from . import decisions, llm_sampling, openai_compatible, openrouter, tool_calls, wire
 from .anthropic import AnthropicClient
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
@@ -61,12 +64,16 @@ class Adapter(Protocol):
     #: `openai_compatible` one that may; every other lists `decide_native` in
     #: its `never`), and the resolver says so per attempt.
     decides_natively: bool
+    #: Its kind can be sent tool definitions (01g).
+    calls_tools: bool
 
     def generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
-                 *, schema: dict | None = None) -> AsyncIterator[str]:
+                 *, schema: dict | None = None, tools: tuple[dict, ...] | None = None,
+                 tool_choice: str | None = None) -> AsyncIterator[str]:
         """The provider stream for one attempt. `schema`, when given, asks for
         the provider's structured mode; the caller passes one only for a
-        target flagged `structured`."""
+        target flagged `structured`. `tools` and `tool_choice` (01g), when
+        given, are sent in the kind's own spelling; absent, nothing changes."""
         ...
 
     async def models(self, target: wire.Target) -> list[dict]:
@@ -103,6 +110,22 @@ def _no_native(kind: str) -> LLMError:
     return LLMError("bad_response", f"{kind} connections have no native decisions endpoint")
 
 
+def _offered(tools: tuple[dict, ...] | None, tool_choice: str | None) -> dict[str, Any]:
+    """The client keywords for an offer of tools: both, only when there are
+    tools, so a call without them is the call it always was."""
+    if tools is None:
+        return {}
+    return {"tools": tools, "tool_choice": tool_choice}
+
+
+def _own_state(messages: list[dict], target: wire.Target) -> list[dict]:
+    """`messages` with any opaque provider state another provider or model
+    wrote dropped (`tool_calls.provenanced`, 01g spec 3.11 rule 3): signed
+    thinking and reasoning details go back only to the attempt's own
+    `(kind, provider_id, model)`. The same list when none rides on it."""
+    return tool_calls.provenanced(messages, target.kind, target.provider_id, target.model)
+
+
 def _controls(target: wire.Target) -> tuple[dict, dict, dict]:
     """`(effective, applied, reasoning)` for one attempt: the controls
     `llm_sampling.effective` decides, the sampler half `split` sends, and the
@@ -126,19 +149,25 @@ class OpenRouterAdapter:
     lists_models = True
     embeds = True
     decides_natively = True
+    calls_tools = True
 
     def __init__(self, client: OpenRouterClient) -> None:
         self._client = client
 
     def generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
-                 *, schema: dict | None = None) -> AsyncIterator[str]:
+                 *, schema: dict | None = None, tools: tuple[dict, ...] | None = None,
+                 tool_choice: str | None = None) -> AsyncIterator[str]:
         _, applied, reasoning = _controls(target)
         sampling = {**applied, **reasoning}
         # Each keyword only when there is something to send, so a call with no
-        # preset and no schema is byte-for-byte the call it always was.
-        return self._client.stream(messages, target.model, target.api_key, usage=usage,
-                                   **({"sampling": sampling} if sampling else {}),
-                                   **({"schema": schema} if schema is not None else {}))
+        # preset, no schema and no tools is byte-for-byte the call it always was.
+        extra: dict[str, Any] = _offered(tools, tool_choice)
+        if sampling:
+            extra["sampling"] = sampling
+        if schema is not None:
+            extra["schema"] = schema
+        return self._client.stream(_own_state(messages, target), target.model, target.api_key,
+                                   usage=usage, **extra)
 
     async def models(self, target: wire.Target) -> list[dict]:
         return await self._client.list_models(target.api_key)
@@ -167,12 +196,14 @@ class OpenAICompatibleAdapter:
     lists_models = True
     embeds = True
     decides_natively = True
+    calls_tools = True
 
     def __init__(self, client: OpenAICompatibleClient) -> None:
         self._client = client
 
     def generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
-                 *, schema: dict | None = None) -> AsyncIterator[str]:
+                 *, schema: dict | None = None, tools: tuple[dict, ...] | None = None,
+                 tool_choice: str | None = None) -> AsyncIterator[str]:
         _, applied, reasoning = _controls(target)
         effort = reasoning.get("reasoning_effort", "")
         extra: dict[str, Any] = {}
@@ -182,8 +213,9 @@ class OpenAICompatibleAdapter:
             extra["sampling"] = applied
         if schema is not None:
             extra["schema"] = schema
+        extra.update(_offered(tools, tool_choice))
         return self._client.stream(
-            messages, target.model, target.api_key, target.base_url,
+            _own_state(messages, target), target.model, target.api_key, target.base_url,
             strict=target.post_process == "strict", usage=usage, **extra)
 
     async def models(self, target: wire.Target) -> list[dict]:
@@ -214,17 +246,21 @@ class AnthropicAdapter:
     lists_models = True
     embeds = False
     decides_natively = False
+    calls_tools = True
 
     def __init__(self, client: AnthropicClient) -> None:
         self._client = client
 
     def generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
-                 *, schema: dict | None = None) -> AsyncIterator[str]:
+                 *, schema: dict | None = None, tools: tuple[dict, ...] | None = None,
+                 tool_choice: str | None = None) -> AsyncIterator[str]:
         controls, _applied, _reasoning = _controls(target)
+        extra: dict[str, Any] = _offered(tools, tool_choice)
+        if schema is not None:
+            extra["schema"] = schema
         return self._client.stream(
-            messages, target.model, target.api_key, usage=usage, base_url=target.base_url,
-            effective=controls["effective"],
-            **({"schema": schema} if schema is not None else {}))
+            _own_state(messages, target), target.model, target.api_key, usage=usage,
+            base_url=target.base_url, effective=controls["effective"], **extra)
 
     async def models(self, target: wire.Target) -> list[dict]:
         return await self._client.list_models(target.api_key, target.base_url)
@@ -252,14 +288,21 @@ class ClaudeAgentAdapter:
     lists_models = False
     embeds = False
     decides_natively = False
+    #: 01g-S8: tools are declared through an in-process MCP server and every
+    #: call is deferred back to the loop (`claude_agent`), never executed.
+    calls_tools = True
 
     def __init__(self, client: ClaudeAgentClient) -> None:
         self._client = client
 
     def generate(self, messages: list[dict], target: wire.Target, usage: dict | None,
-                 *, schema: dict | None = None) -> AsyncIterator[str]:
+                 *, schema: dict | None = None, tools: tuple[dict, ...] | None = None,
+                 tool_choice: str | None = None) -> AsyncIterator[str]:
         # Never structured: the SDK path has no structured mode to ask for.
         _controls(target)
+        if tools is not None:
+            return self._client.stream(messages, target.model, usage=usage, tools=tools,
+                                       tool_choice=tool_choice)
         return self._client.stream(messages, target.model, usage=usage)
 
     async def models(self, target: wire.Target) -> list[dict]:
@@ -309,6 +352,13 @@ def decides_natively(kind: str) -> bool:
     `store.inference.resolve.decides_natively(attempt)`."""
     adapter = _CLASSES.get(kind)
     return adapter is not None and bool(adapter.decides_natively)
+
+
+def calls_tools(kind: str) -> bool:
+    """Whether connections of `kind` can be sent tool definitions: the
+    registry's `calls_tools` flag, False for a kind it does not know."""
+    adapter = _CLASSES.get(kind)
+    return adapter is not None and bool(adapter.calls_tools)
 
 
 def decision_body(item: decisions.Item, target: wire.Target) -> dict:

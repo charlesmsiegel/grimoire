@@ -9,7 +9,7 @@ import json
 import httpx
 import pytest
 
-from grimoire import catalog, llm_capture, llm_reasoning, llm_sampling, wire
+from grimoire import catalog, llm_capture, llm_reasoning, llm_sampling, tool_calls, wire
 from grimoire.anthropic import (
     API_VERSION,
     PROBE_TIMEOUT,
@@ -291,7 +291,7 @@ async def test_a_system_only_prompt_is_sent_as_the_user_turn():
 async def test_an_unknown_role_is_refused_before_sending():
     seen: list = []
     with pytest.raises(AnthropicError) as err:
-        await _drain(_client(_ok(), seen).stream([{"role": "tool", "content": "x"}], "m", KEY))
+        await _drain(_client(_ok(), seen).stream([{"role": "function", "content": "x"}], "m", KEY))
     assert err.value.kind == "bad_response"
     assert seen == []
 
@@ -674,3 +674,50 @@ async def test_aclose_leaves_an_injected_pool_alone():
     await AnthropicClient(http=http).aclose()
     assert not http.is_closed
     await http.aclose()
+
+
+# ---- tools (01g-S1) ----
+PING = {"name": "ping", "description": "Says the caller is here.",
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False}}
+
+
+async def test_tools_are_sent_in_the_messages_api_spelling_only_when_offered():
+    plain = await _body_for(MSG)
+    assert "tools" not in plain and "tool_choice" not in plain
+    offered = await _body_for(MSG, tools=(PING,), tool_choice="required")
+    assert offered["tools"] == tool_calls.anthropic_tools((PING,))
+    assert offered["tool_choice"] == {"type": "any"}
+
+
+async def test_the_adapter_never_rewrites_a_required_choice():
+    """Forced tool use beside thinking is the caller's to avoid (the probe
+    asks `auto` there, the loop's downgrade is 01g-S4's): the client lowers
+    what it is handed."""
+    body = await _body_for(MSG, effective={"thinking": {"type": "adaptive"}, "max_tokens": 64},
+                           tools=(PING,), tool_choice="required")
+    assert body["tool_choice"] == {"type": "any"}
+
+
+async def test_a_tool_use_block_is_noted_and_yields_no_text():
+    body = _sse(START,
+                {"type": "content_block_start", "index": 0,
+                 "content_block": {"type": "tool_use", "id": "toolu_1", "name": "ping",
+                                   "input": {}}},
+                {"type": "content_block_delta", "index": 0,
+                 "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+                {"type": "content_block_stop", "index": 0},
+                _done("tool_use"), STOP)
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    chunks = await _drain(_client(_ok(body)).stream(MSG, "claude-test-1", KEY, usage=usage,
+                                                    tools=(PING,)))
+    assert "".join(chunks) == ""
+    found = usage[tool_calls.KEY]
+    assert found.names() == ("ping",) and found.finish_reason == "tool_calls"
+
+
+async def test_a_text_reply_leaves_the_collector_uncalled():
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    await _drain(_client(_ok()).stream(MSG, "claude-test-1", KEY, usage=usage, tools=(PING,)))
+    assert not usage[tool_calls.KEY].called
+    assert usage[tool_calls.KEY].finish_reason == "stop"

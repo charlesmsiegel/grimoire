@@ -25,6 +25,12 @@ preset's -- `max_completion_tokens` at the OpenAI API, the required
   yes/no question, through the native endpoint and not a chat call. It is the
   one probe with no price (`Probe.priceable`): its size is not a token count
   anybody states, so no estimator will put a number on it.
+- `tools` (01g) -- one user message asking for a call, one `ping` tool that
+  takes no arguments, the same cap. Unlike the others it needs an answer of
+  a particular shape: it passes only when the reply CALLED the tool
+  (`offer`, `tool_choice`, and the route's verdict). Under the 64-token cap a
+  model that reasons first can reach the cap before calling; that probe is
+  inconclusive and nothing is filed for it.
 
 The capabilities a preset states outright (`stream`, ...) are not probed at
 all: `PROBES` is the whole list of what can be tested.
@@ -54,6 +60,27 @@ DECIDE_QUESTION = "Is the lamp lit?"
 PROBE_ITEM = decisions.Item(DECIDE_CONTEXT, (decisions.Predicate("probe", DECIDE_QUESTION),))
 #: The vision probe's picture is this many pixels on a side.
 PROBE_EDGE = 64
+
+TOOLS_PROMPT = "Call the ping tool."
+#: The tools probe's one tool: no arguments, inside the portable schema
+#: subset every tool definition is held to (`schemas.check`, 01g 3.2).
+PING_TOOL = {"name": "ping", "description": "Says the caller is here. Takes no arguments.",
+             "parameters": {"type": "object", "properties": {}, "required": [],
+                            "additionalProperties": False}}
+#: Presets whose provider takes `tool_choice: auto` only (z.ai documents
+#: it so); the prompt asks for the call either way.
+AUTO_ONLY_PRESETS = frozenset({"zai", "zai_coding"})
+#: What a tools probe that completed without a call reports -- a verdict on
+#: the model, filed -- and one cut by the cap first, which is not.
+NO_CALL = "the model answered without calling the tool"
+CAPPED = "the reply reached the test's cap before calling the tool"
+#: A stated GUESS at the tools probe's prompt: the message and the `ping`
+#: definition are a few dozen tokens, and a provider adds framing of its own
+#: to a request that carries tools (Anthropic documents a tool-use system
+#: prompt of a few hundred tokens), so the guess takes the larger side, as the
+#: vision guess takes the largest per-image charge. To be tuned against real
+#: ledger rows.
+TOOLS_PROMPT_TOKENS = 400
 
 
 def _chunk(kind: bytes, data: bytes) -> bytes:
@@ -105,6 +132,7 @@ PROBES: dict[str, Probe] = {p.capability: p for p in (
     Probe("vision", "generate", 300, MAX_TOKENS, images=1),
     Probe("embed", "embed", 10, 0),
     Probe("decide_native", "decide", 0, 0, priceable=False),
+    Probe("tools", "generate", TOOLS_PROMPT_TOKENS, MAX_TOKENS),
 )}
 
 
@@ -120,12 +148,53 @@ def messages(cap: str) -> list[dict]:
     call: the facade and the adapters may annotate what they are handed."""
     if cap == "generate":
         return [{"role": "user", "content": GENERATE_PROMPT}]
+    if cap == "tools":
+        return [{"role": "user", "content": TOOLS_PROMPT}]
     if cap == "vision":
         return [{"role": "user", "content": [
             {"type": "text", "text": VISION_PROMPT},
             {"type": "image_url", "image_url": {"url": PROBE_DATA_URI}},
         ]}]
     raise ValueError(f"{cap!r} is not a chat probe")
+
+
+def tool_choice(preset_id: str, kind: str, features: dict | None,
+                sent_thinking: object, model: str = "") -> str:
+    """The `tool_choice` the tools probe asks of a target: `required` where
+    the provider takes it beside what the call sends, else `auto`.
+
+    - a preset whose provider takes only `auto` (`AUTO_ONLY_PRESETS`);
+    - a Claude subscription: the Agent SDK cannot be asked to require a
+      call, and offers every tool as `auto` (`claude_agent._tool_options`),
+      so the probe -- and its confirmation -- asks for one;
+    - the Anthropic API refuses forced tool use while the model thinks, and
+      an adaptive model thinks when `thinking` is left unset -- which the
+      probe leaves it, since it sends no reasoning control. So `required`
+      only where the body says thinking is `disabled` (`sent_thinking`), or
+      the catalog's features say the model does not think when nothing is
+      sent (`adaptive_thinking: False`, `llm_sampling._thinking`'s readings);
+    - a Claude model behind OpenRouter (an `anthropic/` id) may think as it
+      would at Anthropic, and no feature row says otherwise there, so `auto`;
+    - everywhere else `required`."""
+    if preset_id in AUTO_ONLY_PRESETS or kind == "claude":
+        return "auto"
+    if kind == "openrouter" and model.startswith("anthropic/"):
+        return "auto"
+    if kind != "anthropic":
+        return "required"
+    if sent_thinking == {"type": "disabled"}:
+        return "required"
+    adaptive = features.get("adaptive_thinking") if isinstance(features, dict) else None
+    return "required" if adaptive is False and sent_thinking is None else "auto"
+
+
+def offer(cap: str, choice: str = "required") -> dict:
+    """The keywords a chat probe's `single` call carries beyond its messages:
+    the tools probe's one tool and its `choice` (`tool_choice`), and nothing
+    for every other probe."""
+    if cap == "tools":
+        return {"tools": (PING_TOOL,), "tool_choice": choice}
+    return {}
 
 
 def sampling() -> dict:
@@ -138,12 +207,14 @@ def sampling() -> dict:
             "params": {"max_tokens": MAX_TOKENS}}
 
 
-def describe(cap: str, capped: bool = True) -> str:
+def describe(cap: str, capped: bool = True, choice: str = "required") -> str:
     """One sentence saying what `cap`'s probe sends, for the confirmation.
 
     `capped` is whether the connection can be sent the reply cap at all -- the
     Claude subscription path takes no sampling options, and a confirmation
-    that promised a cap it cannot send would be the one untrue line on it."""
+    that promised a cap it cannot send would be the one untrue line on it.
+    `choice` is the tools probe's `tool_choice` (`tool_choice`): the
+    sentence says "requiring" a call only where one is required."""
     cap_clause = (f", with the reply capped at {MAX_TOKENS} tokens" if capped
                   else "; this connection cannot be sent a reply cap")
     if cap == "generate":
@@ -156,6 +227,12 @@ def describe(cap: str, capped: bool = True) -> str:
     if cap == "decide_native":
         return (f"One native decision request: the statement “{DECIDE_CONTEXT}” "
                 f"and the yes/no question “{DECIDE_QUESTION}”.")
+    if cap == "tools":
+        asks = "requiring a call" if choice == "required" else "asking for a call"
+        inconclusive = ("; a model that reasons first can reach the cap before "
+                        "calling, which leaves this probe inconclusive" if capped else "")
+        return (f"One chat message, “{TOOLS_PROMPT}”, offering one tool, ping, that "
+                f"takes no arguments, and {asks}{cap_clause}{inconclusive}.")
     raise ValueError(f"no probe for {cap!r}")
 
 

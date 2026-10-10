@@ -11,7 +11,6 @@ import from one.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import math
@@ -26,7 +25,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import decisions, llm, llm_sampling, model_guidance, store, wire
+from .. import deadline, decisions, embeddings, llm, llm_sampling, model_guidance, store, wire
 from .. import inference as operations
 from ..health import ProviderHealth
 from ..llm import LLMClient
@@ -387,6 +386,19 @@ def get_openai_compatible_client(request: Request) -> OpenAICompatibleClient:
     return request.app.state.openai_compatible
 
 
+def build_embeddings() -> embeddings.AsyncEmbeddingsClient:
+    """The app's async embeddings client (roadmap 01h-C4b), owned and closed
+    like `build_llm`'s: one per app, so its pool is closed by the lifespan
+    that served it, and touched only from that app's loop."""
+    return embeddings.AsyncEmbeddingsClient()
+
+
+def get_embeddings(request: Request) -> embeddings.AsyncEmbeddingsClient:
+    """The client an async caller hands `store.inference.embed.embed`.
+    `app.dependency_overrides` replaces this callable whole: the test seam."""
+    return request.app.state.embeddings
+
+
 def _dump(model: BaseModel) -> dict:
     """model_dump() on pydantic v2, dict() on v1. The Android build may pin the
     pure-python pydantic 1.x wheel (docs/android-architecture.md §7); this is
@@ -639,19 +651,6 @@ def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str 
         return   # gone, contended, or unreadable: capture nothing, cost nothing
 
 
-def _abandon(task: asyncio.Task) -> None:
-    """Ask an overrun call to stop, then stop waiting on it.
-
-    Retrieving the exception in a callback is what keeps asyncio from logging
-    the abandoned task as never-retrieved (`llm._swallow`'s job, kept local:
-    routes does not reach into that module's privates). Cancellation is not
-    awaited here on purpose -- awaiting it is the very thing that lets the
-    ceiling be overrun.
-    """
-    task.cancel()
-    task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
-
-
 async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
     """Await one non-streaming generation under a total-duration ceiling (#272).
 
@@ -695,19 +694,10 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
     seconds = store.config.llm_call_budget() if ceiling is None else ceiling
     if seconds <= 0:
         return await coro
-    task = asyncio.ensure_future(coro)
-    try:
-        done, _ = await asyncio.wait({task}, timeout=seconds)
-    except asyncio.CancelledError:
-        # The caller went away (SSE disconnect, shutdown). `wait_for` propagated
-        # that inward for free; `asyncio.wait` does not, and an uncancelled task
-        # here would outlive the request that wanted it.
-        _abandon(task)
-        raise
-    if not done:
-        _abandon(task)
-        overrun = LLMError(
-            "timeout", f"the reply did not finish within {seconds:g}s — giving up")
+
+    def overrun(limit: float) -> LLMError:
+        error = LLMError(
+            "timeout", f"the reply did not finish within {limit:g}s — giving up")
         # The one failure the facade cannot see for itself: cancelling the call
         # unwinds `_resilient` through `GeneratorExit`, not through its
         # `except LLMError`, so without this the connection that just held a
@@ -715,10 +705,11 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
         # over a 504 (#146). Only the holder of the ceiling can tell this from
         # a caller who simply walked away, which is why the facade does not try.
         if on_timeout is not None:
-            on_timeout(overrun)
-        raise overrun
+            on_timeout(error)
+        return error
+
     try:
-        return task.result()
+        return await deadline.bounded(coro, seconds, overrun)
     except TimeoutError as exc:
         # asyncio.TimeoutError IS the builtin TimeoutError from 3.11 on, so an
         # upstream that gives up on its own lands in the same handler as an
@@ -1521,7 +1512,8 @@ def override_inference(body, task: str = "", cid: str = "", *,
     resolution carries it (`wire.Chain.fallback`), with the sampling it would have
     had without the override; a fallback on the override's own provider is
     dropped there (`llm._same_route`'s rule), so "reroll this on the fallback"
-    does not double up.
+    does not double up. A task whose code policy is `fallback="none"`
+    (`routing.TaskPolicy`) carries none, overridden or not.
     """
     conn_id = ((getattr(body, "provider", None) or "").strip()
                or (getattr(body, "connection_id", None) or "").strip()) if body else ""
@@ -1671,6 +1663,46 @@ def _soft_inference(resolve: Callable[[], UsableInference]
     """
     resolved, why, _kind = _soft_resolved(resolve)
     return (None, why) if resolved is None else (resolved, "")
+
+
+def escalation_inference(task: str, cid: str = "") -> tuple[UsableInference | None, str]:
+    """Where `task`'s escalation hop runs (roadmap 01d §5.2), or why it has
+    none: `(resolved, "")`, or `(None, sentence)` -- never a raised 409.
+
+    The seam a decide call site's escalator stands on, and the only one:
+
+        escalation=lambda: run_in_threadpool(
+            lambda: common.escalation_inference("continuity-identity", cid))
+
+    It resolves the task through its code policy's `escalate_to` ROLE
+    (`resolve(..., role=)`), so the hop sends that role's own selection and
+    its own sampling preset -- never the decide route's, which was chosen
+    for the route's model. It holds that role's model to the base route's
+    `requires` (`escalation_refusal`, whose `incapable` sentence names the
+    route) and refuses a missing key as the seam does, both through
+    `_soft_resolved`: a lost second opinion costs only itself, so a refusal
+    is the sentence every triggered item is skipped with, never a third way
+    of failing softly.
+
+    A task whose policy does not escalate to a role (none, or
+    `routing.CALLER`, which brings its own resolver) is a `ValueError`: a
+    caller bug, which `test_routing_guard.py` also fails statically. That
+    guard holds every call to a literal task, as it holds
+    `require_inference`'s; the thunk is what keeps the literal at the call
+    site and the file reads in the threadpool."""
+    policy = store.routing.policy(task)
+    if policy.escalate_to not in store.routing.ESCALATION_ROLES:
+        raise ValueError(f"{task!r}'s policy escalates to no role "
+                         f"({policy.escalate_to!r}); there is no hop to resolve")
+
+    def held() -> UsableInference:
+        got = inference.resolve(  # routing-ok: the escalation seam, the policy's own role
+            task, cid, operation="decide", role=policy.escalate_to)
+        _raise(inference.escalation_refusal(got, task))
+        return _narrowed(got)
+
+    resolved, why, _kind = _soft_resolved(held)
+    return resolved, why
 
 
 def _decide_error(decision: decisions.Decision, qid: str) -> LLMError | None:

@@ -1,0 +1,5 @@
+[
+  {"model": "gpt-6-luna", "answers": [{"type": "choice", "name": "decision", "choice": "existing:find-the-ledger", "confidence": 0.6, "probabilities": [{"value": "existing:find-the-ledger", "probability": 0.58}, {"value": "new", "probability": 0.4}, {"value": "uncertain", "probability": 0.02}]}], "usage": {"input_tokens": 610, "output_tokens": 0, "total_tokens": 610}},
+  {"model": "gpt-6-luna", "answers": [{"type": "choice", "name": "decision", "choice": "new", "confidence": 0.6, "probabilities": [{"value": "new", "probability": 0.6}]}], "usage": {"input_tokens": 610, "output_tokens": 0, "total_tokens": 610}},
+  {"model": "gpt-6-luna", "answers": [{"type": "choice", "name": "decision", "choice": "new", "confidence": 0.5, "probabilities": [{"value": "new", "probability": 0.52}, {"value": "existing:seraphines-debts", "probability": 0.46}, {"value": "uncertain", "probability": 0.02}]}], "usage": {"input_tokens": 610, "output_tokens": 0, "total_tokens": 610}}
+]

@@ -48,6 +48,8 @@ in and anything unrecognized is simply not recorded.
 
 from __future__ import annotations
 
+import json
+
 from . import wire
 
 #: Money reported by a provider that charges per call. The other basis
@@ -178,7 +180,7 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
 #: `decision_mode` one call used. No adapter reads it, and nothing here sends
 #: it. A stamp is laid on a target's account (`wire.Target.with_account`).
 #: These are its fields `account` files, each as its own ledger field.
-ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode")
+ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode", "hop")
 
 
 def _text(value: object) -> str:
@@ -230,8 +232,10 @@ class Estimate:
     few. Everything here is bookkeeping, so nothing raises on a shape it does
     not expect -- it skips it."""
 
-    def __init__(self, messages: list):
+    def __init__(self, messages: list, tools: object = None):
         self._messages = messages
+        #: The neutral tool definitions the attempt was sent (01g), or None.
+        self._tools = tools
         self._reply: list[str] = []
 
     def add(self, text: str) -> None:
@@ -242,7 +246,13 @@ class Estimate:
         """Every `str` content and every `{"type": "text"}` part's `str` text,
         one message per line. An image part is not text, and there is no
         portable per-image count, so it is skipped (spec 9.1); so is any shape
-        this does not recognize."""
+        this does not recognize.
+
+        A tool offer is prompt too (01g): each definition the attempt was sent,
+        and each call an assistant turn of the history made (its name and
+        arguments), are counted as their JSON -- an approximation of every
+        wire's own spelling, and never nothing, so a provider that reports no
+        counts is not under-counted by the size of its toolset."""
         out: list[str] = []
         for message in self._messages if isinstance(self._messages, list) else ():
             if not isinstance(message, dict):
@@ -254,6 +264,12 @@ class Estimate:
                 parts = [p.get("text") for p in content
                          if isinstance(p, dict) and p.get("type") == "text"]
                 out.extend(t for t in parts if isinstance(t, str))
+            calls = message.get("tool_calls")
+            out.extend(_as_json([call.get("name"), call.get("arguments")])
+                       for call in (calls if isinstance(calls, list) else ())
+                       if isinstance(call, dict))
+        out.extend(_as_json(tool) for tool in
+                   (self._tools if isinstance(self._tools, tuple) else ()))
         return "\n".join(out)
 
     def completion_text(self) -> str:
@@ -272,14 +288,22 @@ class Estimate:
                 counter(self.completion_text()) if completion else None)
 
 
-def note_prompt(usage: dict | None, messages: list) -> None:
-    """Install a fresh `Estimate` for `messages`, replacing any. Called per
+def _as_json(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return ""
+
+
+def note_prompt(usage: dict | None, messages: list, tools: object = None) -> None:
+    """Install a fresh `Estimate` for `messages` -- and `tools`, the neutral
+    definitions the attempt is offered (01g) -- replacing any. Called per
     attempt, after its prompt is chosen and again after it is lowered, so the
     count is of what this attempt sent."""
     if usage is None:
         return
     try:
-        usage[ESTIMATE_KEY] = Estimate(messages)
+        usage[ESTIMATE_KEY] = Estimate(messages, tools)
     except Exception:  # noqa: BLE001 - bookkeeping never fails a call
         return
 

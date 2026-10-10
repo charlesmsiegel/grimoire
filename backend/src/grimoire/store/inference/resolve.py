@@ -29,7 +29,8 @@ of a decide resolution also says which backend would answer it
 (`decision_mode`, slice H): its provider's native decisions endpoint for a
 model known unable to generate that may decide natively (`native_only`),
 structured generation for one that can generate, whatever its
-`decide_native` says.
+`decide_native` says (a native-first task asks its decisions endpoint first:
+`native_first`, a stage of `inference.stages`, not a mode).
 
 Each attempt's target carries an account (`wire.Account`): what the ledger
 files about the attempt that the wire does not say -- its `billing`, its
@@ -105,6 +106,13 @@ ROUTE_SCOPES = frozenset({"campaign", "global"})
 #: where it lifts the drop, and leaves the credential ones (`problem`) alone.
 #: The same model there is still a second try, and still dropped with it.
 SAME_PROVIDER = "it is on the primary's own provider"
+
+#: Why a task's fallback is left out of `attempts` when its code policy sends
+#: none (`routing.TaskPolicy.fallback == "none"`, spec 01d §4.2). Outranks the
+#: other reasons: on such a task the policy is why the fallback is unsent,
+#: whatever else is true of it. Said only for a fallback the cascade chose,
+#: so the readout never reports dropping one that did not exist.
+NO_FALLBACK_POLICY = "this task's policy sends no fallback"
 
 #: The ways reading one connection can fail, every one of which reads as "no
 #: such connection" -- a dangling reference is walked past, never raised.
@@ -306,19 +314,32 @@ def stored_embedding_role(cfg: Mapping[str, str]) -> tuple[str, str]:
 
 
 def _read_facts(provider_id: str, model: str, rev: str,
-                stated: Mapping[str, Mapping[str, dict]] | None) -> dict:
+                stated: Mapping[str, Mapping[str, dict]] | None, *,
+                strict: bool = False) -> dict:
     """`model`'s facts on `provider_id`, never raising. Below format 2 the
     planner lists the provider in `stated` (`Overlay.facts`: the legacy fields
     its connection states, by the connection's own model), and the facts are
     read as the migration's step 3 will leave them (`facts.adopted`): an
     interrupted run's copies taken back, the connection's fields laid over.
-    Otherwise they are the file's (`_model_facts`)."""
+    Otherwise they are the file's (`_model_facts`).
+
+    `strict` (the Embedding role's read, 01h) lets `facts.FactsUnreadableError`
+    through -- a file that exists and cannot be read, or does not parse --
+    rather than reading it as a model nothing was said of; anything else
+    still reads as `{}`."""
     planned = (stated or {}).get(provider_id)
-    if not planned:
-        return _model_facts(provider_id, model, rev)
-    adopting, fields = next(iter(planned.items()))
     try:
-        return facts.adopted(provider_id, model, rev, adopting=adopting, stated=dict(fields))
+        if not planned:
+            if strict:
+                return facts.of(provider_id, model, rev, strict=True)
+            return _model_facts(provider_id, model, rev)
+        adopting, fields = next(iter(planned.items()))
+        return facts.adopted(provider_id, model, rev, adopting=adopting,
+                             stated=dict(fields), strict=strict)
+    except facts.FactsUnreadableError:
+        if strict:
+            raise
+        return {}
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
 
@@ -448,6 +469,7 @@ def _target(raw: dict, model: str, sampling: dict, row: dict | None,
     features = row.get("features") if row is not None else None
     vision, prefill, post_process = _stated(model_facts)
     return wire.Target(
+        embed_options=_stated_options(model_facts),
         provider_id=_text(raw, "id"), kind=_text(raw, "kind"), model=sent,
         provider_name=_text(raw, "name"), base_url=_text(raw, "base_url"),
         api_key=_text(raw, "api_key"), rev=_rev(raw), requested_model=sent,
@@ -462,6 +484,18 @@ def _target(raw: dict, model: str, sampling: dict, row: dict | None,
             str(raw.get("kind", "openrouter")), vision,
             caps.get("vision", _UNKNOWN_CAP)),
         account=wire.Account(billing=providers.billing(raw)))
+
+
+def _stated_options(model_facts: dict) -> wire.EmbedOptions | None:
+    """The embedding options `model_facts` state, read fail-soft: a block the
+    validator refuses is no options here. What a chat target, and a target
+    outside any route, carry for display; the Embedding role reads them
+    strictly instead (`embed_attempt`), and so does the model test
+    (`strict_embed_options`)."""
+    try:
+        return facts.embed_options(model_facts)
+    except ValueError:
+        return None
 
 
 #: A capability nothing has said anything about.
@@ -592,6 +626,19 @@ def _missing(attempt: Attempt, needs: tuple[frozenset[str], ...]) -> tuple[str, 
     unmet = {cap for group in needs if all(_known_no(caps.get(c)) for c in group)
              for cap in group}
     return tuple(cap for cap in capabilities.NAMES if cap in unmet)
+
+
+def known_lacks(resolved: ResolvedInference, cap: str, *, fallback: bool = False) -> bool:
+    """Whether `resolved`'s primary -- or, with `fallback`, its fallback
+    attempt -- is KNOWN (`no`, never a guess) unable to do `cap`: the seam's
+    own `_missing` test, for a caller that may offer a capability its route
+    does not require (01g's `routing.TOOLS_OPTIONAL`), which the resolver's
+    `fallback_missing` therefore never names. A resolution of nothing (or
+    with no fallback) lacks nothing it could be asked for."""
+    index = 1 if fallback else 0
+    if len(resolved.attempts) <= index:
+        return False
+    return cap in _missing(resolved.attempts[index], (frozenset({cap}),))
 
 
 def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple[str, str]]:
@@ -732,6 +779,9 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     `_apart`) -- either says why in
     `fallback_problem`
     (`problem`'s reason, or `SAME_PROVIDER`), which nothing refuses on; and
+    always, whatever the role says, on a task whose code policy sends none
+    (`routing.policy(task).fallback == "none"`, `NO_FALLBACK_POLICY`; "" --
+    a role card -- reads the default policy); and
     when the route has a
     preset -- campaign or global scope, a `PRESET_CLEAR` included -- the
     fallback carries that same sampling rather than its own preset
@@ -821,18 +871,26 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         attempts.append(first)
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
-        # A fallback on the primary's own provider is a retry (#144), which
-        # the retry budget already covers -- except behind a decide primary
-        # that cannot generate (`_apart`) when it names ANOTHER model: that
-        # fallback is a stage of its own, never a second try of the call that
-        # failed. The same model on the same connection is that second try
-        # whatever the stage is called, so it is dropped as C drops it. The
-        # reason is lifted exactly where the drop is (`SAME_PROVIDER`).
-        fallback_problem = (problem(fb_raw)
-                            if fb_raw is not None and fallback is not None
-                            and _apart(first, operation)
-                            and not _same_model(first.target, fb_raw, fallback.model)
-                            else _fallback_problem(first.target.provider_id, fb_raw))
+        if routing.policy(task).fallback == "none":
+            # The task's code policy sends no fallback, whatever its role
+            # says (spec 01d §4.2). The cascade already walked past a slot
+            # naming no provider, so `fb_raw` is None here only for a
+            # connection that vanished since -- which says nothing, as below.
+            fallback_problem = NO_FALLBACK_POLICY if fb_raw is not None else None
+        else:
+            # A fallback on the primary's own provider is a retry (#144),
+            # which the retry budget already covers -- except behind a decide
+            # primary that cannot generate (`_apart`) when it names ANOTHER
+            # model: that fallback is a stage of its own, never a second try
+            # of the call that failed. The same model on the same connection
+            # is that second try whatever the stage is called, so it is
+            # dropped as C drops it. The reason is lifted exactly where the
+            # drop is (`SAME_PROVIDER`).
+            fallback_problem = (problem(fb_raw)
+                                if fb_raw is not None and fallback is not None
+                                and _apart(first, operation)
+                                and not _same_model(first.target, fb_raw, fallback.model)
+                                else _fallback_problem(first.target.provider_id, fb_raw))
         if fallback is not None and fb_raw is not None and fallback_problem is None:
             # A copy, so the two attempts never share a mutable block.
             fb_sampling = ({**unforced, "params": dict(unforced["params"])}
@@ -933,13 +991,45 @@ def native_only(caps: dict[str, capabilities.Cap]) -> bool:
     return _known_no(caps.get("generate")) and not _known_no(caps.get("decide_native"))
 
 
+def native_capable(attempt: Attempt) -> bool:
+    """Whether `attempt` may be asked natively FIRST (spec 01c §3.2, §4.2):
+    its `decide_native` is a known `yes` -- never `unknown`, which
+    `native_only` allows because a native-only model has no other way to
+    answer, and a native-first one does. That a kind with no decisions
+    endpoint never reads `yes` is the presets' business: each lists
+    `decide_native` in `never`, an adapter-source `no` no override lifts
+    (`capabilities.resolve_caps`), and a test holds every preset to it -- so
+    the store needs no gateway import (`adapters`: the store never imports
+    the gateway). Production only: `evals/runner.chain` keeps
+    `decides_natively`, so evidence can be gathered on an `unknown`."""
+    found = attempt.capabilities.get("decide_native")
+    return found is not None and found.value == capabilities.YES
+
+
+def native_first(resolved: ResolvedInference) -> bool:
+    """Whether `resolved`'s decide chain asks its primary's decisions endpoint
+    before its structured stage (01c-C1): a decide resolution whose primary
+    is `structured`, whose adapter kind its task's code policy lists
+    (`routing.policy(resolved.task).native_first`), and which is
+    `native_capable`. The one rule `inference.stages` (and a later settings
+    readout) asks. Pure: reads only the resolution and the policy."""
+    if resolved.operation != "decide" or not resolved.attempts:
+        return False
+    primary = resolved.attempts[0]
+    return (primary.decision_mode == "structured"
+            and primary.target.kind in routing.policy(resolved.task).native_first
+            and native_capable(primary))
+
+
 def decision_mode(attempt: Attempt) -> str:
     """The backend that would answer `attempt` on a decide resolution (ruling
     1, C1): "native" (its provider's decisions endpoint) when it is
     `native_only`; else "structured" (`generate(schema=)` and the parser)
     when it `generates`, whatever its `decide_native` says -- a model that
-    can generate stays structured until native wins on evals (spec 16); else
-    "", for an attempt that can do neither."""
+    can generate stays structured; a task whose policy lists its kind in
+    `native_first` asks its decisions endpoint first, which is a stage of
+    `inference.stages` (`native_first`), not a mode; else "", for an attempt
+    that can do neither."""
     if native_only(attempt.capabilities):
         return "native"
     return "structured" if generates(attempt) else ""
@@ -1010,7 +1100,51 @@ def embed_endpoint(conn: dict) -> str:
     return ""
 
 
-def space_of(conn: dict, model: str) -> str:
+#: Why the Embedding role names no space because of its model's facts (01h):
+#: the facts file is held by another program, does not parse, or states an
+#: `embedding` block the validator refuses. Each turns embedding off for that
+#: read rather than reading as "no options" -- which would move the space
+#: unasked (`ResolvedInference.embed_options_problem`).
+OPTIONS_HELD = "held"
+OPTIONS_MANGLED = "mangled"
+OPTIONS_INVALID = "invalid"
+
+
+def _strict_options(provider_id: str, model: str, rev: str,
+                    stated: Mapping[str, Mapping[str, dict]] | None
+                    ) -> tuple[dict, wire.EmbedOptions | None, str]:
+    """`(facts, options, problem)` for `model` (the model SENT) on
+    `provider_id`: one strict read of its facts. A held file is `({}, None,
+    OPTIONS_HELD)`, a mangled one `({}, None, OPTIONS_MANGLED)`, and a block
+    the validator refuses `(facts, None, OPTIONS_INVALID)`; otherwise the
+    problem is ""."""
+    try:
+        model_facts = _read_facts(provider_id, model, rev, stated, strict=True)
+    except facts.FactsMangledError:
+        return {}, None, OPTIONS_MANGLED
+    except facts.FactsUnreadableError:
+        return {}, None, OPTIONS_HELD
+    try:
+        return model_facts, facts.embed_options(model_facts), ""
+    except ValueError:
+        return model_facts, None, OPTIONS_INVALID
+
+
+def strict_embed_options(raw: dict, model: str
+                         ) -> tuple[dict, wire.EmbedOptions | None, str]:
+    """`_strict_options` for `raw` (a connection record) at `model`, read as
+    `facts_for` reads a target outside any route -- below format 2 through
+    the planner's overlay. What the model test's embed probe sends, so a
+    confirmed test verifies what the role would send, and sends nothing when
+    the role would name no space."""
+    try:
+        stated = _overlay(config.read_config(), {}).facts
+    except (locks.StoreBusy, OSError, UnicodeDecodeError):
+        stated = {}
+    return _strict_options(_text(raw, "id"), _sent_model(raw, model), _rev(raw), stated)
+
+
+def space_of(conn: dict, model: str, options: wire.EmbedOptions | None = None) -> str:
     """The vector space `conn` embeds `model` in: the key a cached vector is
     read and written under.
 
@@ -1034,8 +1168,17 @@ def space_of(conn: dict, model: str) -> str:
     this reason.
 
     `model` stays explicit because it lives in config.md, not on the
-    connection, so changing it does not move `rev`."""
-    return f"{conn['id']}\0{conn['rev']}\0{model}"
+    connection, so changing it does not move `rev`.
+
+    `options` are the model's stated embedding options (01h §5.1). Their
+    document side moves the space -- a cached vector is what was sent for a
+    document -- as a NUL, `embopt1:` and its digest after today's string; default
+    options (none, or a query-side-only set) leave today's string byte for
+    byte, so no vector written before options existed is orphaned."""
+    base = f"{conn['id']}\0{conn['rev']}\0{model}"
+    if options is None or options.is_default():
+        return base
+    return f"{base}\0{wire.EMBED_OPTIONS_TAG}:{options.digest()}"
 
 
 #: What the Embedding role's one attempt must be able to do.
@@ -1051,6 +1194,9 @@ class EmbedAttempt(NamedTuple):
     missing: tuple[str, ...]
     #: The space it embeds in (`space_of`), or None when it embeds nothing.
     space_id: str | None
+    #: Why its model's facts left it no space (`OPTIONS_HELD`,
+    #: `OPTIONS_MANGLED`, `OPTIONS_INVALID`), or "".
+    options_problem: str = ""
 
 
 def embed_attempt(provider_id: str, model: str, raw: dict, *,
@@ -1072,14 +1218,33 @@ def embed_attempt(provider_id: str, model: str, raw: dict, *,
     provider no longer has (the verdicts need no such flag -- `facts.of` is
     already read at `raw`'s own rev). `model_facts` judges it with facts not
     yet written instead of `facts.json`'s (`embed_space.facts_moved`), and
-    `stated` is the planner's legacy facts (`Overlay.facts`)."""
+    `stated` is the planner's legacy facts (`Overlay.facts`).
+
+    The facts are read STRICTLY, once (`_strict_options`; 01h §3.2): a facts
+    file that exists and cannot be read, or an `embedding` block the
+    validator refuses, names no space and says why (`options_problem`) --
+    reading either as "no options" would move the space unasked. The same
+    read feeds the capabilities, and the options it yields are both put on
+    the attempt's target and the space is computed from them: what is sent
+    and where it is cached are one object."""
+    if model_facts is None:
+        model_facts, options, why = _strict_options(
+            provider_id, _sent_model(raw, model), _rev(raw), stated)
+    else:
+        try:
+            options, why = facts.embed_options(model_facts), ""
+        except ValueError:
+            options, why = None, OPTIONS_INVALID
     attempt = _attempt(provider_id, model, dict(NO_SAMPLING), raw, catalog=catalog,
                        model_facts=model_facts, stated=stated)
     endpoint = embed_endpoint(raw)
-    attempt = dataclasses.replace(attempt, base_url=endpoint)
+    attempt = dataclasses.replace(
+        attempt, base_url=endpoint,
+        target=dataclasses.replace(attempt.target, embed_options=options))
     missing = _missing(attempt, _EMBED_NEEDS)
-    space_id = space_of(raw, model) if model and endpoint and not missing else None
-    return EmbedAttempt(attempt, missing, space_id)
+    space_id = (space_of(raw, model, options)
+                if model and endpoint and not missing and not why else None)
+    return EmbedAttempt(attempt, missing, space_id, why)
 
 
 def _fallback_problem(primary_id: str, fallback: dict | None) -> str | None:
@@ -1149,7 +1314,8 @@ def embedding(cfg: dict | None = None, *,
     return ResolvedInference(
         task="", operation="embed", route="",
         role="embedding", via="role", scope=scope, attempts=(attempt,),
-        standing=selection, missing=got.missing, space_id=got.space_id)
+        standing=selection, missing=got.missing, space_id=got.space_id,
+        embed_options_problem=got.options_problem)
 
 
 def _role_supplied(standing: Selection | None, selection: Selection | None,
@@ -1289,6 +1455,42 @@ def refusal(resolved: ResolvedInference) -> Refusal | None:
     the screen says is wrong with a row is the seam's own answer rather than a
     copy of it."""
     return unusable(resolved) or incapable(resolved)
+
+
+def escalation_refusal(resolved: ResolvedInference, task: str) -> Refusal | None:
+    """Why the escalation role's resolution of `task` cannot serve its hop
+    (roadmap 01d §5.2), or None when it can. Pure, like `refusal`.
+
+    `resolved` is `resolve(task, operation="decide", role=...)`, which has no
+    route: its `missing` covers only the operation's own needs. A hop answers
+    for the BASE route, though, so it is held to that route's `requires`
+    too, and never runs on a model the route itself could not. `unusable`
+    (no key, nothing selected) comes first, as at the seam; then a known gap,
+    as 409 `incapable` with `escalation_text`'s sentence naming the route."""
+    found = unusable(resolved)
+    if found is not None or not resolved.attempts:
+        return found
+    route = routing.route(task)
+    missing = _missing(resolved.attempts[0], _needs(route, resolved.operation))
+    if not missing:
+        return None
+    held = dataclasses.replace(resolved, route=route.key if route is not None else "",
+                               missing=missing)
+    return 409, {"detail": escalation_text(held, missing[0]), "kind": "incapable"}
+
+
+def escalation_text(resolved: ResolvedInference, cap: str) -> str:
+    """The `incapable` sentence for an escalation hop: the BASE route it
+    escalates (`resolved.route`), the role and the model it would be handed
+    to, what that model cannot do (`_cannot`), and the remedy -- another
+    model for that role. Not `incapable_text`, whose "or pin this route"
+    would not move the hop: a pin moves the route's own calls, never its
+    escalation role."""
+    role = resolved.role.capitalize()
+    subject = (f"The {routing.label_for(resolved.route)} route" if resolved.route
+               else "This decision")
+    return (f"{subject} escalates to the {role} role ({_on(resolved.attempts[0])}), "
+            f"which cannot {_cannot(resolved, cap)} — choose another {role} model.")
 
 
 def incapable_text(resolved: ResolvedInference, cap: str) -> str:

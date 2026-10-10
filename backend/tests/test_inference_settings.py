@@ -506,6 +506,25 @@ def test_a_fallback_that_cannot_send_says_why_on_its_rows(client):
     assert _row(_campaign(client, cid), "scene")["fallback_problem"] == "OpenRouter key not set"
 
 
+def test_a_no_fallback_policy_says_why_on_its_route_rows_only(client, monkeypatch):
+    """Spec 01d §4.2: a task whose code policy sends no fallback says so on
+    its route's rows, at both scopes. A role card resolves no task, so it
+    reads the default policy and keeps its fallback; so does another route."""
+    cid = _fresh(client)
+    _ok(client, {"roles": {"primary": {"fallback": {"provider": "spare",
+                                                    "model": "vendor/spare"}}}})
+    for task in routing.route_by_key("scene").tasks:
+        monkeypatch.setitem(routing.TASK_POLICY, task, routing.TaskPolicy(fallback="none"))
+
+    got = _global(client)
+
+    assert _row(got, "scene")["fallback_problem"] == inference.NO_FALLBACK_POLICY
+    assert _row(_campaign(client, cid), "scene")["fallback_problem"] == inference.NO_FALLBACK_POLICY
+    assert got["roles"]["primary"]["fallback_problem"] is None
+    assert _row(got, "opener")["fallback_problem"] is None
+    assert len(inference.resolve("opener").attempts) == 2
+
+
 def test_a_fallback_on_the_primarys_own_provider_says_why_on_its_rows(client):
     """A fallback on the primary's own provider -- another model there -- is
     left out of the chain (a second try on the connection that just failed is
@@ -829,6 +848,60 @@ def test_a_provider_known_not_to_embed_turns_the_card_off(client):
                                "so embedding is off — choose another Embedding model.")
 
 
+def _facts_file(conn: str, text: str) -> None:
+    path = store.llm_connections.facts_path(conn)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_the_card_says_why_options_turned_embedding_off(client, monkeypatch):
+    """01h: an invalid `embedding` block, or a facts file that cannot be read,
+    names no space -- and the card says so, naming the file, before any
+    capability reason (which, with the file unreadable, was judged from no
+    facts at all)."""
+    import json
+    from pathlib import Path
+
+    _fresh(client)
+    conn = store.llm_connections.create_connection(
+        "openai_compatible", "Saltmarch Vectors", base_url="https://vectors.example/v1",
+        api_key="sk-fake", model="", post_process="none")
+    where = f"llm_connections/{conn}.facts.json"
+    _facts_file(conn, json.dumps({"embed-1": {"embedding": {"input": "both"}}}))
+    card = _embedding_problem(client, conn, "embed-1")
+    assert card["on"] is False
+    assert card["problem"] == (
+        "The embedding options of embed-1 on Saltmarch Vectors are invalid, so embedding "
+        f"is off — fix them in the model's facts ({where}).")
+
+    _facts_file(conn, "{")
+    card = _embedding_problem(client, conn, "embed-1")
+    assert card["problem"] == (
+        f"The model facts file of Saltmarch Vectors ({where}) is not valid JSON, so "
+        "embedding is off — fix or remove that file.")
+    assert "try again" not in card["problem"]
+
+    # Held, with a catalog `no` for the model: the file is the reason given,
+    # not the model.
+    _facts_file(conn, "{}")
+    store.llm_connections.set_cached_models(
+        conn, [{"id": "embed-1", "outputs": ["text"]}],
+        store.llm_connections.read_connection_raw(conn)["rev"])
+    path = store.llm_connections.facts_path(conn)
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == path:
+            raise OSError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+    card = _embedding_problem(client, conn, "embed-1")
+    assert card["problem"] == (
+        f"The model facts file of Saltmarch Vectors ({where}) is held by another program, "
+        "so embedding is off until it can be read — try again shortly.")
+
+
 def _choose_embedding(client, name: str, base_url: str) -> dict:
     provider = store.llm_connections.create_connection(
         "openai_compatible", name, base_url=base_url, api_key="sk-fake")
@@ -1039,3 +1112,17 @@ def test_the_view_never_carries_a_key(client):
                  client.get(f"/api/campaigns/{cid}/inference").text):
         assert "sk-test-active" not in text and "sk-spare" not in text
         assert "api_key" not in text
+
+
+# ---- the Embedding card's options (01h-S4) ----
+
+def test_the_embedding_card_reads_back_its_options(client):
+    from grimoire.store.inference import facts
+
+    _fresh(client)
+    _ok(client, {**EMBED, "confirm_embedding": True})
+    assert _global(client)["roles"]["embedding"]["options"] is None
+    block = {"input": "param", "param_field": "input_type", "query_value": "query",
+             "document_value": "document", "dimensions": 512}
+    facts.state("spare", "vendor/embed-small", embedding=block)
+    assert _global(client)["roles"]["embedding"]["options"] == block

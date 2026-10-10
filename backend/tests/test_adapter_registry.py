@@ -64,6 +64,9 @@ ITEM = Item("Mara and Winifred argue over the Saltmarch charts.",
 MESSAGES = [{"role": "system", "content": "You narrate Saltmarch."},
             {"role": "user", "content": "Mara unrolls the charts."}]
 SCHEMA = {"type": "object", "properties": {"over": {"type": "boolean"}}}
+TOOL = {"name": "ping", "description": "Says the caller is here.",
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False}}
 
 
 class _Wire:
@@ -154,7 +157,8 @@ def test_adapter_facts_agree_with_the_registry():
     capability out, and a capability every preset of a kind rules out is a
     False flag -- so the registry and the store's facts cannot drift."""
     registry = _registry(_clients())
-    flags = {"embed": "embeds", "decide_native": "decides_natively", "vision": "carries_images"}
+    flags = {"embed": "embeds", "decide_native": "decides_natively", "vision": "carries_images",
+             "tools": "calls_tools"}
     for preset in providers.PRESETS.values():
         adapter = registry[preset.kind]
         for cap, flag in flags.items():
@@ -172,6 +176,47 @@ def test_adapter_facts_agree_with_the_registry():
     assert "decide_native" not in providers.PRESETS["openai"].never
     assert all("decide_native" in p.never for p in providers.PRESETS.values()
                if p.kind == "openai_compatible" and p.id != "openai")
+
+
+def test_calls_tools_is_exactly_the_presets_never():
+    """01g 3.5: a kind calls tools exactly when none of its presets rules
+    `tools` out -- so 01g-S8 lifts the Claude preset's `never` and the flag
+    in the same change, or this fails."""
+    registry = _registry(_clients())
+    for preset in providers.PRESETS.values():
+        assert ("tools" in preset.never) is (not registry[preset.kind].calls_tools), preset.id
+    assert {k for k in adapters.KINDS if adapters.calls_tools(k)} == {
+        "openrouter", "openai_compatible", "anthropic", "claude"}
+    assert adapters.calls_tools("x") is False
+
+
+async def test_the_claude_adapter_hands_its_client_tools_only_when_offered():
+    """01g-S8: the SDK path takes an offer of tools, which its client
+    declares and defers (`claude_agent._tool_options`)."""
+    clients = _clients()
+    registry = _registry(clients)
+    target = wire.Target(provider_id="c", kind="claude", model="sonnet")
+    [c async for c in registry["claude"].generate(MESSAGES, target, None)]
+    [c async for c in registry["claude"].generate(MESSAGES, target, None, tools=(TOOL,),
+                                                  tool_choice="required")]
+    (_, _, plain), (_, _, offered) = clients["claude"].calls
+    assert "tools" not in plain and "tool_choice" not in plain
+    assert offered["tools"] == (TOOL,) and offered["tool_choice"] == "required"
+
+
+@pytest.mark.parametrize("kind", ["openrouter", "openai_compatible", "anthropic"])
+async def test_an_adapter_hands_its_client_tools_only_when_offered(kind):
+    clients = _clients()
+    registry = _registry(clients)
+    target = wire.Target(provider_id="p", kind=kind, model="m", api_key="k",
+                         base_url="https://example.test/v1")
+    [c async for c in registry[kind].generate(MESSAGES, target, None)]
+    [c async for c in registry[kind].generate(MESSAGES, target, None, tools=(TOOL,),
+                                              tool_choice="required")]
+    plain, offered = (call[2] for call in clients[kind].calls)
+    assert "tools" not in plain and "tool_choice" not in plain
+    assert offered["tools"] == (TOOL,) and offered["tool_choice"] == "required"
+    assert {k: v for k, v in offered.items() if k not in ("tools", "tool_choice")} == plain
 
 
 def test_the_registry_embed_flag_matches_the_store_endpoint_rule():

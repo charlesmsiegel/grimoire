@@ -1543,7 +1543,11 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
                   "the reply's JSON Schema is not in the system message"),
             *graders.grade_decision(output, ctx["items"], explain=False,
                                     question=response_protocol.SELECTOR_QUESTION,
-                                    expected="characters:winifred")]
+                                    expected="characters:winifred"),
+            # Spec 01c section 4.3's bar: a native answer carries a usable
+            # distribution; a structured one is not applicable.
+            *graders.grade_distribution(ctx["items"][0], response_protocol.SELECTOR_QUESTION,
+                                        ctx.get("native_results", {}).get(0))]
 
 
 # ------------------------------------- case 13: decide, continuity identity
@@ -2098,7 +2102,12 @@ CASES: tuple[Case, ...] = (
              # The first row refused: the app leaves that row unchecked, so it
              # is not covered, and its verdict is left out rather than failed.
              Recording("native-refused", ("identity.covers_rows",), "json",
-                       native="openai"))),
+                       native="openai"),
+             # The compliant verdicts again, each with the distribution the
+             # endpoint reported beside it: a narrow lead, a partial report
+             # of exactly 0.6, and a narrower lead still.
+             # What `--escalation-sweep` reads margins from (spec 01d §6.3).
+             Recording("native-margins", (), "json", native="openai"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "
@@ -2118,7 +2127,18 @@ CASES: tuple[Case, ...] = (
              Recording("off-roster", ("decide.answer",), "json"),
              # Well formed, and a null: control handed back to the player
              # when the player had asked someone a question.
-             Recording("abstained", ("decide.answer",), "json"))),
+             Recording("abstained", ("decide.answer",), "json"),
+             # The compliant pick from each kind's decisions endpoint, with
+             # a distribution the sampler would draw from (spec 01c 4.3).
+             Recording("native", (), "json", native="openai"),
+             Recording("native-openrouter", (), "json", native="openrouter"),
+             # The right pick, reported over half the mass: not drawn from.
+             Recording("native-partial", ("decide.distribution",), "json",
+                       native="openai"),
+             # The right pick chosen explicitly, beside a report that gives
+             # it no weight: the answer stands, the report is no draw of it.
+             Recording("native-inconsistent", ("decide.distribution",), "json",
+                       native="openrouter"))),
     Case(id="decide-rank",
          task="continuity-reconcile",
          hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "

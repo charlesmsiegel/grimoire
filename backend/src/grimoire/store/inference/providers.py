@@ -24,7 +24,7 @@ BILLINGS: tuple[str, ...] = ("metered", "subscription")
 #: The capability vocabulary (spec 6.2).
 CAPABILITIES: frozenset[str] = frozenset({
     "generate", "stream", "vision", "embed", "decide_native",
-    "structured_output", "prefill",
+    "structured_output", "prefill", "tools",
 })
 
 
@@ -55,7 +55,7 @@ def _preset(
                   always, possible, never)
 
 
-_ZAI_POSSIBLE = frozenset({"vision", "structured_output", "prefill"})
+_ZAI_POSSIBLE = frozenset({"vision", "structured_output", "prefill", "tools"})
 _ZAI_NEVER = frozenset({"embed", "decide_native"})
 
 PRESETS: dict[str, Preset] = {p.id: p for p in (
@@ -63,18 +63,25 @@ PRESETS: dict[str, Preset] = {p.id: p for p in (
         "openrouter", "OpenRouter", "openrouter", "https://openrouter.ai/api/v1",
         locked=True, reports_price=True, always=_GEN,
         possible=frozenset({"vision", "embed", "decide_native",
-                            "structured_output", "prefill"}),
+                            "structured_output", "prefill", "tools"}),
         never=_NONE),
     _preset(
         "anthropic", "Anthropic API", "anthropic", "https://api.anthropic.com",
-        locked=True, always=_GEN,
+        # Every model on the Messages API takes tool definitions (01g 3.14).
+        # This preset is every `anthropic`-kind connection's (`infer`), a
+        # third-party base URL included; one that cannot call tools is met by
+        # its own refusal, or by the user's `no`.
+        locked=True, always=_GEN | {"tools"},
         # Prefill is per model (`never_for`): Claude 4.6 and later refuse it.
         possible=frozenset({"vision", "structured_output", "prefill"}),
         never=frozenset({"embed", "decide_native"})),
     _preset(
         # The Agent SDK: no URL, and it reports a subscription-equivalent price.
         "claude", "Claude subscription", "claude", "",
-        locked=False, billing="subscription", reports_price=True, always=_GEN,
+        # Every Claude model calls tools, and since 01g-S8 the SDK path offers
+        # them as the loop's (`claude_agent`: declared, every call deferred);
+        # the adapter's `calls_tools` is held equal to the `never` below.
+        locked=False, billing="subscription", reports_price=True, always=_GEN | {"tools"},
         possible=_NONE,
         never=frozenset({"vision", "embed", "decide_native",
                          "structured_output", "prefill"})),
@@ -82,7 +89,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in (
         "openai", "OpenAI", "openai_compatible", "https://api.openai.com/v1",
         locked=True, always=_GEN,
         possible=frozenset({"vision", "embed", "decide_native",
-                            "structured_output", "prefill"}),
+                            "structured_output", "prefill", "tools"}),
         never=_NONE),
     _preset(
         "zai", "z.ai", "openai_compatible", "https://api.z.ai/api/paas/v4",

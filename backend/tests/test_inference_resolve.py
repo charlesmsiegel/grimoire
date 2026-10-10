@@ -19,6 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
+from grimoire import inference as inference_ops
 from grimoire import llm, llm_sampling, routes, wire
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
@@ -1289,3 +1290,195 @@ def test_a_decide_resolutions_ceiling_is_its_primary_stage_alone(tmp_path):
     assert resolved.attempts[0].decision_mode == "native" and not resolved.rides
     ceiling = limits.prompt_ceiling(resolved)
     assert (ceiling.window, ceiling.binding) == (32768, ("openrouter", "vendor/decider"))
+
+
+# ---- 01d: a task's policy may send no fallback ----
+def _no_fallback(monkeypatch, *route_keys: str) -> None:
+    """Every task of each route set to `fallback="none"` -- a table the
+    policy rules accept (`test_task_policy.violations`)."""
+    for key in route_keys:
+        for task in routing.route_by_key(key).tasks:
+            monkeypatch.setitem(routing.TASK_POLICY, task, routing.TaskPolicy(fallback="none"))
+
+
+def _pairs(resolved: ResolvedInference) -> list[tuple[str, str]]:
+    return [(a.provider_id, a.model) for a in resolved.attempts]
+
+
+def test_a_no_fallback_policy_drops_a_generate_tasks_fallback(at_state, monkeypatch):
+    at_state("routed")
+    before = inf.resolve("tracker-update")
+    assert _second(before).provider_id == "spare" and before.fallback_problem is None
+    _no_fallback(monkeypatch, "tracker")
+
+    after = inf.resolve("tracker-update")
+
+    assert len(after.attempts) == 1 and after.chain.fallback is None
+    assert after.rides is False and after.fallback_missing == ()
+    assert after.fallback_problem == inf.NO_FALLBACK_POLICY
+    assert _primary(after) == _primary(before)
+    # Another route keeps its role's fallback.
+    assert _second(inf.resolve("dossier")).provider_id == "spare"
+
+
+def test_a_no_fallback_policy_drops_a_decide_tasks_fallback_stage(tmp_path, monkeypatch):
+    with baseline.client_at(tmp_path) as client:
+        inference_fixtures.decide_only(client, fallback=True)
+        before = inf.resolve("scene-break", operation="decide")
+        assert [s.mode for s in inference_ops.stages(before)] == ["native", "structured"]
+        _no_fallback(monkeypatch, "scene_break")
+
+        after = inf.resolve("scene-break", operation="decide")
+
+        assert _pairs(after) == [("openrouter", "vendor/decider")]
+        assert after.fallback_problem == inf.NO_FALLBACK_POLICY
+        assert [s.mode for s in inference_ops.stages(after)] == ["native"]
+
+
+def test_the_policy_reason_outranks_same_provider(tmp_path, monkeypatch):
+    with baseline.client_at(tmp_path) as client:
+        inference_fixtures.decide_only(client, fallback=True,
+                                       on=("openrouter", "vendor/decider"))
+        assert (inf.resolve("scene-break", operation="decide").fallback_problem
+                == inf.SAME_PROVIDER)
+        _no_fallback(monkeypatch, "scene_break")
+        after = inf.resolve("scene-break", operation="decide")
+        assert after.fallback_problem == inf.NO_FALLBACK_POLICY
+        assert len(after.attempts) == 1
+
+
+def test_a_no_fallback_policy_on_a_role_with_no_fallback_says_nothing(tmp_path, monkeypatch):
+    """Spec 01d review M1: never report dropping a fallback that did not exist."""
+    with baseline.client_at(tmp_path) as client:
+        inference_fixtures.decide_only(client, fallback=False)
+        before = inf.resolve("scene-break", operation="decide")
+        assert len(before.attempts) == 1 and before.fallback_problem is None
+        _no_fallback(monkeypatch, "scene_break")
+        after = inf.resolve("scene-break", operation="decide")
+        assert len(after.attempts) == 1 and after.fallback_problem is None
+
+
+def test_a_no_fallback_policy_names_an_inherited_fallback(tmp_path, monkeypatch):
+    """A fallback slot naming a provider that does not exist is not a
+    fallback: the cascade walks past it (`cascade._slot`) to the inherited
+    role's (Decision -> Fast -> Primary). That one would have been sent, so a
+    "none" policy names itself for it."""
+    with baseline.client_at(tmp_path) as client:
+        inference_fixtures.decide_only(client, fallback=False)
+        inference_fixtures.put_settings(client, {"roles": {"primary": {"fallback": {
+            "provider": "spare", "model": "vendor/spare"}}}})
+        store.write_config(**{keys.fallback_key("decision", "provider"): "gone",
+                              keys.fallback_key("decision", "model"): "vendor/gone"})
+        assert store.read_config().get(keys.fallback_key("decision", "provider")) == "gone"
+        before = inf.resolve("scene-break", operation="decide")
+        assert _pairs(before) == [("openrouter", "vendor/decider"), ("spare", "vendor/spare")]
+        _no_fallback(monkeypatch, "scene_break")
+
+        after = inf.resolve("scene-break", operation="decide")
+
+        assert _pairs(after) == [("openrouter", "vendor/decider")]
+        assert after.fallback_problem == inf.NO_FALLBACK_POLICY
+
+
+def test_a_role_resolution_reads_the_default_policy(at_state, tmp_path, monkeypatch):
+    """The settings view's role cards resolve `task=""`: no task, no policy."""
+    _no_fallback(monkeypatch, *(r.key for r in routing.ROUTES))
+    at_state("routed")
+    primary = inf.resolve("", role="primary")
+    assert _second(primary).provider_id == "spare" and primary.fallback_problem is None
+    with baseline.client_at(tmp_path / "decide") as client:
+        inference_fixtures.decide_only(client, fallback=True)
+        decision = inf.resolve("", role="decision", operation="decide")
+        assert _pairs(decision)[1:] == [("spare", "vendor/spare")]
+        assert decision.fallback_problem is None
+
+
+def test_for_task_between_siblings_keeps_the_policys_fallback(at_state, tmp_path,
+                                                              monkeypatch):
+    """`for_task` hands one sibling's resolution to another; the route's
+    tasks agree on `fallback`, so it is the sibling's own answer."""
+    _no_fallback(monkeypatch, "absorb", "continuity")
+    at_state("routed")
+    handed = inference_ops.for_task(inf.resolve("absorb"), "audit")
+    own = inf.resolve("audit")
+    assert _pairs(handed) == _pairs(own) and len(own.attempts) == 1
+    assert handed.fallback_problem == own.fallback_problem == inf.NO_FALLBACK_POLICY
+    with baseline.client_at(tmp_path / "decide") as client:
+        inference_fixtures.decide_only(client, fallback=True)
+        handed = inference_ops.for_task(
+            inf.resolve("continuity-identity", operation="decide"), "continuity-reconcile")
+        own = inf.resolve("continuity-reconcile", operation="decide")
+        assert [a.target for a in handed.attempts] == [a.target for a in own.attempts]
+        assert len(own.attempts) == 1
+        assert handed.fallback_problem == own.fallback_problem == inf.NO_FALLBACK_POLICY
+
+
+# ---- a route that requires tools (01g-S1) ----
+#: No route requires `tools` yet (`test_routing_guard.py` fails a route whose
+#: tasks nothing uses), so the seam's refusal is proven on one planted here.
+PLANTED = routing.Route("planted_tools", "Planted tool runs", "", ("planted-tools",), True,
+                        requires=("tools",))
+
+
+@pytest.fixture
+def planted(monkeypatch):
+    monkeypatch.setitem(routing.TASK_ROUTE, "planted-tools", PLANTED.key)
+    monkeypatch.setitem(routing._BY_KEY, PLANTED.key, PLANTED)
+
+
+def test_a_tools_route_refuses_a_primary_the_catalog_says_cannot_call_tools(at_state, planted):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["temperature"]}])
+    resolved = inf.resolve("planted-tools")
+    assert resolved.attempts[0].capabilities["tools"] == Cap("no", "catalog")
+    assert resolved.missing == ("tools",)
+    exc = _refused(lambda: routes.common.require_inference("planted-tools"))
+    assert exc.detail == {
+        "detail": "The Planted tool runs route runs on the Primary role (vendor/active on "
+                  "OpenRouter), which cannot call tools — choose another Primary model "
+                  "or pin this route.",
+        "kind": "incapable"}
+    # A route that requires nothing is not held to it.
+    assert inf.resolve("chat").missing == ()
+
+
+def test_a_tools_route_runs_on_an_unknown_primary(at_state, planted):
+    at_state("fresh")
+    resolved = inf.resolve("planted-tools")
+    assert resolved.attempts[0].capabilities["tools"] == Cap("unknown", "unknown")
+    assert resolved.missing == ()
+    assert routes.common.require_inference(
+        "planted-tools").chain.primary.provider_id == "openrouter"
+
+
+def test_a_tools_route_refuses_a_users_no(at_state, planted):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["tools"]}])
+    assert inf.resolve("planted-tools").missing == ()
+    inference_facts.set_overrides("openrouter", "vendor/active", {"tools": "no"})
+    assert inf.resolve("planted-tools").missing == ("tools",)
+    exc = _refused(lambda: routes.common.require_inference("planted-tools"))
+    assert exc.detail["kind"] == "incapable"
+    assert "which cannot call tools" in exc.detail["detail"]
+
+
+def test_a_tools_route_runs_on_a_claude_subscription(at_state, planted):
+    """01g-S8: the SDK path calls tools, so the seam lets it serve one."""
+    at_state("claude_active")
+    resolved = inf.resolve("planted-tools")
+    assert resolved.attempts[0].capabilities["tools"] == Cap("yes", "preset")
+    assert routes.common.require_inference("planted-tools").chain.primary.provider_id == "claude"
+
+
+def test_a_tools_fallback_known_unable_is_dropped(at_state, planted):
+    at_state("routed")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["tools"]}])
+    _catalog("spare", [{"id": "vendor/spare", "params": ["temperature"]}])
+    resolved = inf.resolve("planted-tools")
+    assert _primary(resolved).provider_id == "openrouter"
+    assert _second(resolved).provider_id == "spare"
+    assert resolved.missing == () and resolved.fallback_missing == ("tools",)
+    sent = routes.common.build_llm()._routes(resolved.chain)
+    assert [route.target.provider_id for route in sent] == ["openrouter"]
+    assert routes.common.require_inference(
+        "planted-tools").chain.primary.provider_id == "openrouter"

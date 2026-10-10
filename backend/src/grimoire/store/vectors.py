@@ -52,8 +52,10 @@ at load rather than once per score.
 **The cache is derived data**, under `home()/.cache/` beside the thumbnail
 cache: safe to delete, never scanned by the store, excluded from backups.
 Deleting it costs one re-embed per entry and can never cost content. Entries
-are keyed by ``sha256(space + text)``, where `space` identifies the embedding
-space the vector lives in -- endpoint *and* model, not the model alone. A
+are keyed by ``sha256(space + text)`` (NUL-joined, with any NUL removed from
+the text), where `space` identifies the embedding space the vector lives in --
+endpoint *and* model, and the model's stated document-side embedding options
+(`resolve.space_of`), not the model alone. A
 model name is not a space: two endpoints can both serve "embedding" or
 "text-embedding-3-small" and mean different weights, and vectors from
 different spaces are not comparable even when their dimensionality matches, so
@@ -117,7 +119,10 @@ def _path(space: str, text: str) -> Path:
     # it carries a URL and a model id, both full of slashes, and slugifying
     # them would let two spaces share a directory. A hex digest also cannot
     # name anything outside the cache dir.
-    key = hashlib.sha256(f"{space}\0{text}".encode()).hexdigest()
+    # NUL is removed from the text, as `inference.embed` removes it from what
+    # is sent: the NUL-joined key is injective only while no text carries one,
+    # and a NUL-free text -- every real one -- keys exactly as it always did.
+    key = hashlib.sha256(f"{space}\0{text.replace(chr(0), '')}".encode()).hexdigest()
     return _cache_dir() / f"{key}{SUFFIX}"
 
 

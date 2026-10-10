@@ -696,6 +696,52 @@ def test_item_result_backend_defaults_empty_and_parse_leaves_it():
         assert result.backend == ""
 
 
+# --- per-item provenance (01d-S2, spec 01d §5.6) -----------------------------
+
+DECIDER = ("openrouter", "openrouter", "vendor/decider")
+
+
+def test_item_result_served_defaults_empty_and_parse_and_unanswered_leave_it():
+    assert ItemResult({}).served == ()
+    for result in decisions.parse(REPLY, [_item()], explain=True):
+        assert result.served == ()
+    for result in decisions.unanswered([_item()], "error"):
+        assert result.served == ()
+
+
+def test_item_result_served_is_three_strings_or_nothing():
+    assert ItemResult({}, served=DECIDER).served == DECIDER
+    for bad in (("openrouter", "vendor/active"),
+                ("openrouter", "spare", "vendor/spare", "extra"),
+                ("openrouter", "spare", None)):
+        with pytest.raises(ValueError):
+            ItemResult({}, served=bad)  # type: ignore[arg-type]
+
+
+def test_item_result_served_is_not_compared():
+    """Two results that read alike are equal whoever answered them, so every
+    equality assertion written before `served` existed still holds."""
+    stamped = ItemResult({"over": Answer(True)}, backend="native", served=DECIDER)
+    assert stamped == ItemResult({"over": Answer(True)}, backend="native")
+    assert (decisions.Decision(items=(stamped,), backend="native")
+            == decisions.Decision(items=(ItemResult({"over": Answer(True)}, backend="native"),),
+                                  backend="native"))
+
+
+def test_native_lift_keeps_the_lowered_results_server():
+    rank = Rank("order", "i", (MARA, WINIFRED), pointwise="Should this one go first?")
+    item = Item("ctx", (rank, Choice("who", "i", (MARA, GRIMOIRE))))
+    lowered, lift = decisions.native_form(item)
+    server = ("openai_compatible", "local", "local-model")
+    answered = ItemResult({"order#0": Answer(True, probability=0.75),
+                           "order#1": Answer(False, probability=0.25),
+                           "who": Answer("grimoire")},
+                          backend="native", served=server)
+    assert [q.id for q in lowered.questions] == list(answered.answers)
+    got = decisions.native_lift(item, answered, lift)
+    assert got.served == server and got.backend == "native"
+
+
 def test_none_key_is_refused_as_an_option():
     assert decisions.NONE_KEY == "<none>"
     with pytest.raises(DecideRequestError):
@@ -1676,3 +1722,37 @@ def test_native_questions_are_the_three_an_endpoint_has():
     assert decisions.native_questions(_item()) == _item().questions
     with pytest.raises(ValueError, match="relevant"):
         decisions.native_questions(Item("c", (Predicate("p", "i"), _rank())))
+
+
+# ---- escalation records (roadmap 01d-S3) ----------------------------------
+
+def _escalation(**fields) -> decisions.Escalation:
+    base = {"index": 0, "trigger": "abstained", "margin": None,
+            "before": ItemResult({"over": Answer(True)}), "outcome": "skipped",
+            "detail": decisions.SKIPPED_CAP}
+    return decisions.Escalation(**{**base, **fields})
+
+
+def test_a_decision_records_no_escalation_by_default():
+    assert decisions.Decision(items=(), backend="").escalations == ()
+    assert decisions.Decision(items=(), backend="") == decisions.Decision(items=(), backend="")
+
+
+def test_an_escalation_checks_its_words():
+    for outcome in decisions.ESCALATION_OUTCOMES:
+        assert _escalation(outcome=outcome).outcome == outcome
+    _escalation(trigger="low_margin", margin=0.1,
+                served=("openrouter", "openrouter", "vendor/active"))
+    for bad in ({"trigger": "bored"}, {"outcome": "maybe"},
+                {"trigger": "low_margin"}, {"margin": 0.1},
+                {"served": ("openrouter", "vendor/active")}):
+        with pytest.raises(ValueError):
+            _escalation(**bad)
+
+
+def test_a_resolver_reply_defaults_to_no_rows():
+    assert decisions.ResolverReply((None,)).rows == ()
+
+
+def test_the_hop_word_is_the_one_the_eval_reads():
+    assert decisions.HOP_ESCALATION == "escalation"

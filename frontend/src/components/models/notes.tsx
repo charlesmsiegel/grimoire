@@ -38,6 +38,10 @@ export function warningOf(answer: ModelCapabilities, model: string, role: string
       return answer.groups.unverified.some((r) => r.id === model) ? WARNINGS.vision : null;
     case "decide":
       return hidden ? WARNINGS.generate(role) : null;
+    case "tools":
+      // A tools route's refusal is the seam's own sentence, already the
+      // row's problem; no surface asks a tools warning today.
+      return null;
   }
 }
 

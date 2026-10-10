@@ -26,7 +26,7 @@ stake in:
 | `decide-voice-drift` | asked through `decide()` whether a character with a clipped, contraction-free anchor and a standing correction drifted when she chattered in contractions, the reply is the schema's object, answers `drift`, and gives a corrective no longer than `MAX_NOTE`; the prompt carries the question, every verdict with its description, the transcript and anchor, the correction and the schema |
 | `decide-continuity-identity` | asked through `decide()` about each row the duplicate check examines, the reply is the schema's object, maps a reworded duplicate to the existing record by an offered id, and keeps a same-topic question and a concrete continuation new; the prompt carries the question, every examined row's title, the rationale instruction and the schema |
 | `decide-continuity-reconcile` | asked through `decide()` about each candidate the reconciliation sweep sends, the reply is the schema's object, keeps a same-topic question distinct, reads a concrete question as a continuation, never merges a thread with a commitment, closes or resolves only on a scene its item shows, and keeps an old or overdue record open when nothing settles it; the prompt carries each vocabulary's question with a pair's directed words folded with their direction, the evidence questions, every candidate's records, the rationale instruction and the schema |
-| `decide-speaker` | asked through `decide()` who opens a round in which the player has just put a question to one of two NPCs by name, the reply is the schema's object and picks that NPC (no rationale is asked for); the prompt carries the question, every eligible ref with its name and `grimoire` with its description, null allowed, the observable transcript (gathered by the store helpers the route calls, so a director note in the scene never reaches it) and the schema |
+| `decide-speaker` | asked through `decide()` who opens a round in which the player has just put a question to one of two NPCs by name, the reply is the schema's object and picks that NPC (no rationale is asked for); the prompt carries the question, every eligible ref with its name and `grimoire` with its description, null allowed, the observable transcript (gathered by the store helpers the route calls, so a director note in the scene never reaches it) and the schema. A native answer must also carry a distribution the sampler would draw from (`decide.distribution`, [Decision distributions](#decision-distributions)); its native recordings are the compliant pick from each kind's endpoint, and a partial and an inconsistent report |
 | `decide-rank` | asked through `decide()` to rank five earlier scenes for a turn about Mara's lost ledger, at least the top three, the reply is a list of candidate ids, each once, with the two ledger scenes first and the unrelated one outside the top three; the prompt carries the ranking line, every candidate, the ranking bullet (which renders only beside a rank) and the schema. A synthetic item: 01e's vocabulary converts no call site, so the case is metered under an existing decide task (`continuity-reconcile`) only so a live run resolves the Decision role. Its counterexamples are a duplicate, an unknown id, too short a ranking and a null, each unreadable; its `native` recording is OpenRouter's endpoint answering one pointwise predicate per scene (the rank's `pointwise` question), lifted to tiers of P(true) |
 | `decide-select` | asked through `decide()` which of three characters present saw Seraphine take a key (one watching, one with her back turned, one asleep), at least one, the reply is a list of option ids naming the watcher alone; the prompt carries the selection line with its bound, every option, the selection bullet (which renders only beside a multi-select) and the schema. Synthetic like `decide-rank`, metered under `continuity-identity`. Its counterexamples are a duplicate, an unknown id, the empty list (below the bound: never padded) and a null, each unreadable; its `native` recordings are OpenAI's endpoint answering one "is this option selected" predicate per character -- the watcher alone above 0.5, and (`native-undecided`) one character at exactly 0.5, which this select, allowing no null, reads as unreadable |
 | `decide-joint` | asked through `decide()` for one action and its target in one question, on a turn where an ally bleeds out unless tended and nothing else threatens, the reply is the key of the legal pair that binds the ally's wound; the prompt carries the joint line, every legal pair (`action=>target`, or the action alone) with its description, the joint bullet (which renders only beside a joint) and the schema. Synthetic, metered under `response-selector`. A joint is one answer, so its counterexamples are the analogues of the others': an illegal pair, the action alone where it takes a target, a two-element list and a null, each unreadable; its `native` recording is OpenAI's endpoint answering the one flattened choice, read back as a pair with its distribution |
@@ -69,6 +69,11 @@ backend\.venv\Scripts\python.exe evals\run.py --compare evals\out\a.json evals\o
 # the decide gate: today's parse against the structured one. Offline.
 backend/.venv/bin/python evals/run.py --gate
 backend\.venv\Scripts\python.exe evals\run.py --gate
+
+# decision escalation (below): which items each margin threshold would
+# escalate, from a decide case's native recordings. Offline.
+backend/.venv/bin/python evals/run.py --escalation-sweep --case decide-continuity-identity
+backend\.venv\Scripts\python.exe evals\run.py --escalation-sweep --case decide-continuity-identity
 ```
 
 ### What each mode can and cannot show
@@ -157,6 +162,11 @@ answered natively`, listed under the case in the report rather than
 dropped; an item answered structured keeps the real check, and fails it
 without a rationale.
 
+The other direction holds for `decide.distribution` (on `decide-speaker`):
+a structured answer reports no distribution, so its check passes as `n/a:
+answered structured`, and only a native answer is graded on what it
+reported ([Decision distributions](#decision-distributions)).
+
 The `prompt.*` checks of a live decide case grade the case's own prompt,
 built fresh -- what a structured stage sends. A native item sends no such
 prompt (its request is the decisions endpoint's own body), so on a native
@@ -215,9 +225,9 @@ backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME 
 -- which prints the comparison table after the report, and keeps it in the
 run file for `--compare` later. A native-only model
 against a structured one would compare the models as well as the backends.
-That comparison is the measurement the later "native first" decision (spec
-16) waits on: the chain serves a model that can generate structured until
-native wins on evals. Like every live run it **costs money**, and is never
+That comparison is the measurement the "native first" decision waits on:
+the chain serves a model that can generate structured until a task is
+switched on with that evidence ([Decision distributions](#decision-distributions)). Like every live run it **costs money**, and is never
 run without the user's explicit approval; point it at a throwaway
 `GRIMOIRE_HOME` holding only the chosen provider's connection and key,
 rather than repointing your real store's Decision role.
@@ -275,6 +285,161 @@ before its fixture is built and again before its rows are read. The one real-sto
 `llm_connections/` migration the app itself runs at startup, on a library old
 enough to predate that feature. Live runs cost API credits, so they are opt-in
 and the result is a report, never a gate.
+
+## Decision distributions
+
+Spec 01c's recorded policy (01c-C1) for where a Decision call made through a
+model that **also generates** gets a distribution to sample from:
+
+- **Structured verbalised probabilities: never.** A number the prompt asks
+  the model to write beside each option is generated text, not the model's
+  distribution, and it is the synthetic confidence the decide contract
+  forbids. It is never requested and never read.
+- **Native-first: per task, per adapter kind, opt-in, on evidence.**
+  `routing.TaskPolicy.native_first` lists the adapter kinds whose decisions
+  endpoint is asked first for a task, on a model whose `decide_native` is a
+  known `yes`; the structured stage on the same model takes what it fails.
+  It is allowed only on a task that consumes the distribution (one that
+  samples, or escalates on `low_margin`), and a kind is added only with the
+  evidence below.
+- **Otherwise neither**, which is every task today: `routing.TASK_POLICY` is
+  empty, so a generating Decision model answers structured, with no
+  distribution, and a sampling caller acts on the plain answer, recorded
+  `sampled: false` (`draws.draw`).
+
+### The check: `decide.distribution`
+
+`graders.grade_distribution` asks the sampler's own question of a native
+answer: would `draws.draw` sample from what was reported? It passes when
+it would, with the reported mass beside it, and fails, saying which, on
+each of the sampler's plain-answer rows: `no_report` (none reported, or
+one the adapter dropped as invalid), `partial` (mass under `1 -
+draws.MASS_SLACK`, which is never normalised) and `inconsistent` (an
+answer the report gives no weight). A structured answer is `n/a: answered
+structured`, and an item with no answer (refused, abstained) is `n/a: no
+answer to draw from`, which `decide.answer` grades instead. The detail,
+mass included, is kept in the run file, which is the per-kind figure
+`MASS_SLACK` is to be tuned against.
+
+Offline, `decide-speaker` replays four native recordings through it: the
+compliant pick from each kind's endpoint (`native` from OpenAI's,
+`native-openrouter` from OpenRouter's), a `native-partial` report holding
+half the mass and a `native-inconsistent` one giving the explicit pick no weight.
+Those prove the grader, never a model: they are hand-authored bodies.
+
+### What switches a kind on for a task
+
+A change that adds a kind to a task's `native_first` carries all four of
+these, from a model **of that kind** that both generates and has a native
+decisions endpoint (spec 01c section 4.3). The evidence is per kind because
+the two decisions endpoints are different services, and `native_first`
+moves every user whose Decision model is of that kind.
+
+1. **The run.** The task's decide cases (today `decide-speaker`) on one
+   model, `native` then `structured`, into one run file:
+
+   ```sh
+   backend/.venv/bin/python evals/run.py --live --provider ID --model NAME --decide-backend native --decide-backend structured --case decide-speaker --out evals/out/distributions.json
+   backend\.venv\Scripts\python.exe evals\run.py --live --provider ID --model NAME --decide-backend native --decide-backend structured --case decide-speaker --out evals\out\distributions.json
+   ```
+
+   `--repeat N` shows the variance; the comparison table it prints (and
+   `--compare` prints later) has per-item pass counts, wall time, tokens
+   and the three money columns, kept apart.
+2. **The bar.** Every case the structured backend passes, the native
+   backend passes on the same model; every native answer passes
+   `decide.distribution` (so none is partial or inconsistent); and the
+   fall-through tests (`backend/tests/test_inference_decide_native.py`: a
+   403, a rate limit, an auth failure with a riding fallback) pass on that
+   kind's fake. Latency and cost are reported, never gated: they are the
+   user's call, made from the table.
+3. **A cost note.** A native row whose provider reports no cost is
+   unpriced (`unpriced_native_calls`), and no rate can model it. If the
+   kind's endpoint reports none, the change says the task's rows will read
+   "not reported" on the Costs card, and the user accepts that.
+4. **The record**, below: the table, whether or not it meets the bar, and
+   the policy line's comment in `routing.TASK_POLICY` naming this section,
+   the kind and the run's date.
+
+Live runs cost money and need the user's key, so the user runs them,
+against a throwaway `GRIMOIRE_HOME` holding only that provider. The figures
+recorded here are the eval corpus's: synthetic fixtures, never a library's
+content.
+
+### The record
+
+| Kind | Model | Run | `decide-speaker` native / structured | `decide.distribution` | Meets the bar |
+|---|---|---|---|---|---|
+| `openai_compatible` | -- | not run yet | -- | -- | owed |
+| `openrouter` | -- | not run yet | -- | -- | owed |
+
+No kind has evidence yet, and no task lists one. The first change to list
+a kind for `response-selector` is the one that also makes it sample
+(roadmap 02-C2a), since a `native_first` entry needs `samples` or a
+`low_margin` trigger; that change, or a run before it, fills its row here.
+
+## Decision escalation
+
+A task's code policy (`routing.TaskPolicy`, spec 01d) may hand an answered
+decision item once to a stronger role when the backend itself said it was
+unsure: a native `refused`, an abstention, or a low margin between the
+answered key and its best rival (`decisions.margin`). Every task ships with
+escalation off (`routing.TASK_POLICY` is empty), and a task is switched on
+only by the change that carries its evidence, in this section. Margins exist
+only where a native decisions endpoint reported a distribution; a structured
+reply reports none, so on a structured Decision model only an abstention can
+escalate.
+
+The procedure, per task:
+
+1. **Offline sweep.** `--escalation-sweep --case <decide case>` reads the
+   case's native recordings (`recordings/decide-*.native*.json`) through
+   their adapter, prints each item's deciding answer and margin, and, for
+   each threshold from 0.05 to 0.5, which items would escalate. It counts
+   through `decisions.triggers` itself, so it agrees with the hop at the
+   boundary: a margin a float hair under the threshold (a report of exactly
+   0.6) does not escalate there. `--escalation POLICY_JSON` beside it sets
+   the deciding question, the triggers and the answer filter the sweep
+   reads; without it, the task's own question (else the case's first) and
+   every trigger. The recordings are synthetic, and a task's switching
+   change adds the cases its threshold needs: items the base answers wrongly
+   at a low margin.
+2. **Live comparison.** Two runs of the same decide cases, each saved:
+   one as the app runs today, and one with `--escalation POLICY_JSON` -- a
+   `TaskPolicy`'s escalation fields as a JSON object (`escalate_to`,
+   `escalate_on`, `question`, `margins` keyed by native kind,
+   `escalate_max`, `escalate_answers`, `reads_declines`), applied to the
+   named cases' tasks for that run only. It is refused for a task off a
+   decide route, for a role the route already runs on, for a forced
+   `--decide-backend` (the hop follows the chain `decide()` sends), and for
+   anything `backend/tests/test_task_policy.py` would refuse in the table.
+   The escalation role is resolved from the real store's settings before
+   any case runs, like each case's own resolution, and its hop is metered
+   into the case's throwaway home; the tripwire refuses the hop if that home
+   is the real one. Then `--compare` the two run files: correctness per
+   item, which items escalated, and, from the aggregate keyed by route,
+   backend and hop, the hop's own wall time, tokens and three money columns
+   apart from the base call's.
+
+   ```sh
+   backend/.venv/bin/python evals/run.py --live --case decide-continuity-identity --out evals/out/off.json
+   backend/.venv/bin/python evals/run.py --live --case decide-continuity-identity --escalation '{"escalate_to": "primary", "escalate_on": ["refused", "abstained", "low_margin"], "question": "decision", "margins": {"openrouter": 0.2}}' --out evals/out/on.json
+   backend/.venv/bin/python evals/run.py --compare evals/out/off.json evals/out/on.json
+   backend\.venv\Scripts\python.exe evals\run.py --live --case decide-continuity-identity --out evals\out\off.json
+   backend\.venv\Scripts\python.exe evals\run.py --live --case decide-continuity-identity --escalation '{"escalate_to": "primary", "escalate_on": ["refused", "abstained", "low_margin"], "question": "decision", "margins": {"openrouter": 0.2}}' --out evals\out\on.json
+   backend\.venv\Scripts\python.exe evals\run.py --compare evals\out\off.json evals\out\on.json
+   ```
+3. **The bar.** On the task's cases, escalation corrects at least one item
+   the base answered wrongly, and turns no correctly answered item wrong
+   (damage is zero). The escalation rate and the added cost and latency are
+   reported; they are the user's call, not a gate.
+4. **The record.** The comparison table goes here, under a heading naming
+   the task and the run's date, and the task's `TASK_POLICY` entry carries a
+   comment naming this section and that date. The corpus is synthetic, so no
+   library's content enters it. A continuity task's switching change also
+   adds the hop's time to CLAUDE.md's stated bound on a sweep.
+
+No task has been switched on yet.
 
 ## The decide gate
 
@@ -351,6 +516,59 @@ What it cannot show is the other half of the switch: whether a model, given
 the decide prompt and schema, writes the right answer. Each conversion lands
 with a permanent `decide-*` case beside its corpus, which holds that prompt's
 contract offline, and `--live` (above) is the only thing that asks a model.
+
+## Embedding evals
+
+`--embed` asks a different question from every case above: not whether a
+model follows an instruction, but how well an embedding model -- with the
+options its facts state (roadmap 01h) -- ranks the documents a query is
+about. It lives in `evals/embed/`:
+
+- **The corpus** (`corpus.json`) is invented, with the codebase's placeholder
+  names only, in three shapes, one per kind of production caller: `recall`
+  (a scene's last posts against lore), `search` (a reader's question against
+  library records) and `identity` (a reworded record against the record it
+  restates, compared symmetrically). Every query ranks the whole pool. Its
+  relevant document is a **paraphrase** that shares no content word with it
+  -- the miss semantic recall exists for -- and a **lexical decoy** shares
+  its names and words and is not relevant, so a term scorer cannot pass.
+  `corpus.problems` holds both rules, and the size is structural (at least
+  ten documents per unit of the largest k), to be tuned later.
+- **The metrics** are recall@1/3/5/10 and MRR, per shape and overall, beside
+  a lexical baseline (`store/search.py`'s term scorer over the same corpus),
+  so a model is judged against what keyword search already does. A query
+  with no relevant document in the top 10 is listed as a miss.
+- **Replay** (offline; `pytest backend` runs it in `test_embed_evals.py`)
+  grades the recorded rankings in `recordings/embed/<model>-<option digest or
+  none>.json` -- query ids to document ids, never a vector. The shipped one
+  is the offline endpoint's: a deterministic hashed bag of words, which the
+  same test also drives through the whole embedded path (`embed_sync` with
+  prefixes, the `param` split and the dimensions check) over an
+  `httpx.MockTransport`. It proves the harness and claims nothing about
+  quality.
+- **Live** costs money and is opt-in. The Embedding role's space is resolved
+  in the real store before anything else; each option set then runs in its
+  own throwaway home, its rows harvested into the report (time, tokens and
+  the money columns) and never left in your ledger. It prints the corpus's
+  size and estimated tokens before sending. `--embed-options` adds an option
+  set (repeatable), validated as a facts write is and run in memory under
+  its own recomputed space id; nothing is written. `--record` saves each
+  set's rankings. Each set prints its own rows: an embedding run writes no
+  run file yet (`--out` and `--compare` are refused with `--embed`).
+
+```sh
+# replay: grade the recorded rankings beside the lexical baseline
+backend/.venv/bin/python evals/run.py --embed
+backend\.venv\Scripts\python.exe evals\run.py --embed
+
+# live, on the Embedding role's model, under its own options and one more set
+backend/.venv/bin/python evals/run.py --live --embed --embed-options '{"input": "prefix", "query_prefix": "query: ", "document_prefix": "passage: "}'
+backend\.venv\Scripts\python.exe evals\run.py --live --embed --embed-options "{\"dimensions\": 512}"
+```
+
+What it cannot show: whether a real library retrieves well. A synthetic
+corpus is evidence for a choice of model or options; the recall thresholds
+stay "tune against the inspector".
 
 ## How a case works
 
@@ -469,8 +687,10 @@ and renders the drivers and controls addenda whole.
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
   `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`,
   `eager`, `unfounded`, `timid`, `cloned`, `bad-date`, `unknown-ref`,
-  `wrong`, `no-reason`, `no-note`, `long-note`, `off-roster`, `abstained`)
-  and is never touched by a live run. So is a `native` recording, which is
+  `wrong`, `no-reason`, `no-note`, `long-note`, `off-roster`, `abstained`,
+  `native-partial`, `native-inconsistent`)
+  and is never touched by a live run. So is a `native` recording (and
+  `native-openrouter`, the same from the other kind), which is
   hand-authored and passes: response bodies of a native decisions endpoint
   (above).
 

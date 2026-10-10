@@ -1,6 +1,9 @@
+import json
+
 import httpx
 import pytest
 
+from grimoire import tool_calls
 from grimoire.openrouter import OpenRouterClient, OpenRouterError
 
 SSE_BODY = (
@@ -527,3 +530,44 @@ async def test_a_plain_error_carries_no_upstream():
     with pytest.raises(OpenRouterError) as exc:
         [c async for c in client.stream([], "m", "k")]
     assert exc.value.upstream == ""
+
+
+# ---- tools (01g-S1) ----
+PING = {"name": "ping", "description": "Says the caller is here.",
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False}}
+
+CALL_BODY = (
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",'
+    '"function":{"name":"ping","arguments":""}}]}}]}\n\n'
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]}}]}\n\n'
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+async def test_tools_are_sent_only_when_offered():
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, text=SSE_BODY)
+
+    client = make_client(handler)
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "sk-or-x")]
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "sk-or-x",
+                                    tools=(PING,), tool_choice="required")]
+    assert "tools" not in bodies[0] and "tool_choice" not in bodies[0]
+    assert bodies[1]["tools"] == tool_calls.openai_tools((PING,))
+    assert bodies[1]["tool_choice"] == "required"
+
+
+async def test_a_streamed_call_is_noted_and_yields_no_text():
+
+    client = make_client(lambda request: httpx.Response(200, text=CALL_BODY))
+    usage = {tool_calls.KEY: tool_calls.Collector()}
+    chunks = [c async for c in client.stream([{"role": "user", "content": "hi"}], "m",
+                                             "sk-or-x", usage=usage, tools=(PING,))]
+    assert "".join(chunks) == ""
+    found = usage[tool_calls.KEY]
+    assert found.names() == ("ping",) and found.finish_reason == "tool_calls"

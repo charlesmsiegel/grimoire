@@ -172,6 +172,11 @@ def _walk() -> Iterator[tuple[str, ast.Module, bool]]:
 EMBED_MODULE = "grimoire.store.inference.embed"
 EMBED_SYNC = "embed_sync"
 EMBED = "embed"
+#: The run that embeds several campaigns' documents, one call per group
+#: (01h-C5): an operation call like the other two.
+EMBED_GROUPS = "embed_groups_sync"
+#: The operation's names that no other callable in the package shares.
+_OPERATION_NAMES = (EMBED_SYNC, EMBED_GROUPS)
 #: The embeddings client's own module, outside the client rules.
 CLIENT_MODULE = "grimoire.embeddings"
 #: The only modules that call the client: the operation, and the model test's
@@ -179,8 +184,9 @@ CLIENT_MODULE = "grimoire.embeddings"
 CLIENT_DOORS = frozenset({EMBED_MODULE, "grimoire.routes.config"})
 
 #: At least this many operation calls exist (vacuity insurance): lore recall
-#: 2, library search 2, art 1, continuity 1. The async `embed` has no caller
-#: yet (ruling 9).
+#: 2, library search 2, art 1, continuity 1. The async `embed` (01h-C4b, a
+#: native door on the app's `routes.get_embeddings` client) has no caller
+#: yet: 09 and 10 are its consumers.
 MIN_EMBED_CALLS = 6
 
 
@@ -195,10 +201,10 @@ def _is_embed_module(node: ast.AST, modules: set[str]) -> bool:
 def _names_operation(node: ast.AST, modules: set[str], names: dict[str, str]) -> bool:
     """Whether a loaded `Name` or `Attribute` names the embed operation."""
     if isinstance(node, ast.Name):
-        return node.id == EMBED_SYNC or names.get(node.id) in (EMBED_SYNC, EMBED)
+        return node.id in _OPERATION_NAMES or names.get(node.id) in (*_OPERATION_NAMES, EMBED)
     if isinstance(node, ast.Attribute):
-        return node.attr == EMBED_SYNC or (node.attr == EMBED
-                                           and _is_embed_module(node.value, modules))
+        return node.attr in _OPERATION_NAMES or (node.attr == EMBED
+                                                 and _is_embed_module(node.value, modules))
     return False
 
 
@@ -747,6 +753,9 @@ _PRELUDE = ("from .. import embed_space\n"
      "    if conn:\n"
      "        space = conn\n"
      "    embed.embed_sync('semantic-recall', t, space=space, client=c)\n"),
+    # The group door, with a space built by hand (01h-C5).
+    ("def f(conn):\n"
+     "    embed.embed_groups_sync('semantic-search', g, space={'space': 's'}, client=c)\n"),
     # A helper returning a hand-built space.
     ("def made():\n"
      "    return {'model': 'm', 'key': 'k', 'base_url': 'u', 'space': 's'}\n"
@@ -780,6 +789,10 @@ def test_the_provenance_guard_flags_planted_cases(src):
     ("def f():\n"
      "    space = embed_space.endpoint()\n"
      "    embed.embed_sync('semantic-recall', t, space=space, client=c)\n"),
+    # The group door, with the role's space (01h-C5).
+    ("def f():\n"
+     "    space = embed_space.endpoint()\n"
+     "    embed.embed_groups_sync('semantic-search', g, space=space, client=c)\n"),
     # Through a parameter, a spread with keys of its own, a fallback, and a
     # helper that may answer None.
     ("def settings():\n"
@@ -866,6 +879,13 @@ def _planted_embed_problems(src: str, modname: str = _EMBED_PLANTED_IN) -> list[
       "asyncio.to_thread(embed.embed_sync, task, t)\n"), _EMBED_PLANTED_IN),
     (("from ..inference.embed import embed_sync\n"
       "asyncio.to_thread(embed_sync, task, t)\n"), _EMBED_PLANTED_IN),
+    # The group door (01h-C5): not an embed task, and not a literal.
+    (("from ..inference import embed\n"
+      "embed.embed_groups_sync('chat', g, space=s, client=c)\n"), _EMBED_PLANTED_IN),
+    (("from ..inference.embed import embed_groups_sync as run\n"
+      "run(task, g, space=s, client=c)\n"), _EMBED_PLANTED_IN),
+    (("from ..inference import embed\n"
+      "asyncio.to_thread(embed.embed_groups_sync, task, g)\n"), _EMBED_PLANTED_IN),
     # The client, called directly from a store module.
     (("_CLIENT = embeddings.EmbeddingsClient()\n"
       "_CLIENT.embed(t, m, k, u)\n"), "grimoire.store.semsearch"),
@@ -888,6 +908,10 @@ def test_the_embed_guard_flags_planted_cases(src, modname):
     (("from .. import store\n"
       "store.inference.embed.embed('semantic-search', t, space=s, client=c)\n"),
      "grimoire.routes.scenes"),
+    # The group door, with an embed task.
+    (("from ..inference import embed\n"
+      "embed.embed_groups_sync('semantic-search', g, space=s, client=c)\n"),
+     _EMBED_PLANTED_IN),
     # The module itself, reached through a chain, as the model test reaches
     # `record_failure`.
     (("from .. import store\n"
@@ -895,7 +919,11 @@ def test_the_embed_guard_flags_planted_cases(src, modname):
     # The model test's probe, at its door.
     ("asyncio.to_thread(lambda: _EMBEDDINGS.embed([x], m, k, u, usage=m.usage))\n",
      "grimoire.routes.config"),
-    # The operation's own module: the async form forwards `task`, and hands
+    # The operation's own module: the async form awaits the async client
+    # (01h-C4b) with its holder.
+    (("async def embed(task, texts, client):\n"
+      "    return await client.embed(texts, m, k, u, usage=h)\n"), EMBED_MODULE),
+    # The operation's own module: a form that forwards `task`, and hands
     # `embed_sync` to a worker thread.
     (("async def embed(task, texts):\n"
       "    return await asyncio.to_thread(embed_sync, task, texts)\n"
@@ -960,14 +988,23 @@ def decide_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.
 
 def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
                     route_of: Callable[[str], routing.Route | None] = routing.route,
+                    policy_of: Callable[[str], routing.TaskPolicy] = routing.policy,
                     ) -> list[str]:
-    """What is wrong with one module's use of the `decide` operation."""
+    """What is wrong with one module's use of the `decide` operation --
+    including (roadmap 01d-S4) an `escalation=` passed where the task's code
+    policy does not escalate, or missing where it does: `decide` refuses
+    either at run time before any meter opens, and this says so before it
+    ships."""
     out: list[str] = []
     for ref, is_call in _decide_refs(tree, modname, is_pkg):
         if not is_call:
             out.append(f"{modname}:{ref.lineno}: decide handed around as a value")
     for call in decide_calls(tree, modname, is_pkg):
         task = _task(call)
+        if task is None and modname == DECISION_TOOL_MODULE and _reads_its_task(call):
+            # The shim's one inner `decide(resolved.task, ...)` (01g spec 3.12):
+            # the caller's literal is checked at `decision_tool(...)`.
+            continue
         if task is None:
             out.append(f"{modname}:{call.lineno}: decide's task is not a string literal")
             continue
@@ -976,13 +1013,92 @@ def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
             out.append(f"{modname}:{call.lineno}: {task!r} is not a task of a decide route")
         if not any(k.arg == "resolved" for k in call.keywords):
             out.append(f"{modname}:{call.lineno}: decide({task!r}) passes no resolved=")
+        passes = any(k.arg == "escalation" for k in call.keywords)
+        escalates = bool(policy_of(task).escalate_to)
+        if passes != escalates:
+            out.append(f"{modname}:{call.lineno}: decide({task!r}) "
+                       f"{'passes' if passes else 'passes no'} escalation=, and its "
+                       f"policy {'escalates' if escalates else 'does not escalate'}")
+    return out
+
+
+#: The decide tool's builder (01g-S7): a `decision_tool(...)` call is a decide
+#: call site whose literal task the caller names, and the module's one inner
+#: `decide(<resolution>.task, ...)` is accepted.
+DECISION_TOOL_MODULE = "grimoire.routes.tool_decision"
+DECISION_TOOL = "decision_tool"
+
+
+def _reads_its_task(call: ast.Call) -> bool:
+    first = call.args[0] if call.args else None
+    return isinstance(first, ast.Attribute) and first.attr == "task"
+
+
+def decision_tool_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.Call]:
+    """Every `decision_tool(...)` call through a binding of its module."""
+    modules, names = bindings(tree, modname, DECISION_TOOL_MODULE, is_pkg=is_pkg)
+    aliases = {local for local, name in names.items() if name == DECISION_TOOL}
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and (
+        (isinstance(n.func, ast.Name) and n.func.id in aliases)
+        or (isinstance(n.func, ast.Attribute) and n.func.attr == DECISION_TOOL
+            and _dotted(n.func.value) in modules))]
+
+
+def decision_tool_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
+                           route_of: Callable[[str], routing.Route | None] = routing.route,
+                           policy_of: Callable[[str], routing.TaskPolicy] = routing.policy,
+                           ) -> list[str]:
+    """A `decision_tool(...)` names a literal task on a decide route whose
+    policy does not escalate (the tool hands its inner `decide` no
+    escalator, so `decide_problems`' rule reads: it passes none, and the
+    policy must not ask for one), and passes a resolution (its second
+    argument, or `resolved=`)."""
+    out = []
+    for call in decision_tool_calls(tree, modname, is_pkg):
+        task = _task(call)
+        route = route_of(task) if task is not None else None
+        if route is None or route.operation != "decide":
+            out.append(f"{modname}:{call.lineno}: decision_tool's task is not a literal "
+                       "on a decide route")
+        if task is not None and policy_of(task).escalate_to:
+            out.append(f"{modname}:{call.lineno}: decision_tool({task!r}) passes no "
+                       "escalation=, and its policy escalates")
+        if len(call.args) < 2 and not any(k.arg == "resolved" for k in call.keywords):
+            out.append(f"{modname}:{call.lineno}: decision_tool passes no resolution")
     return out
 
 
 def _decided_tasks() -> set[str]:
     return {task for modname, tree, is_pkg in _walk()
-            for call in decide_calls(tree, modname, is_pkg)
+            for call in (*decide_calls(tree, modname, is_pkg),
+                         *decision_tool_calls(tree, modname, is_pkg))
             if (task := _task(call)) is not None}
+
+
+def test_every_decision_tool_names_a_task_on_a_decide_route():
+    found = [p for modname, tree, is_pkg in _walk()
+             for p in decision_tool_problems(tree, modname, is_pkg)]
+    assert not found, "\n  ".join(found)
+
+
+@pytest.mark.parametrize("src", [
+    "from .tool_decision import decision_tool\ndecision_tool('chat', r, c, cid=x)\n",
+    "from .tool_decision import decision_tool\ndecision_tool(task, r, c, cid=x)\n",
+    "from . import tool_decision\ntool_decision.decision_tool('scene-break')\n",
+])
+def test_the_decision_tool_guard_flags_planted_cases(src):
+    assert decision_tool_problems(ast.parse(src), "grimoire.routes.scenes"), src
+
+
+def test_the_decision_tool_guard_passes_a_planted_call_and_the_shims_inner_decide():
+    src = ("from .tool_decision import decision_tool\n"
+           "decision_tool('scene-break', r, c, cid=x)\n")
+    assert decision_tool_problems(ast.parse(src), "grimoire.routes.scenes") == []
+    inner = ("from .. import inference as operations\n"
+             "operations.decide(using.task, [item], client=c, resolved=using)\n")
+    assert decide_problems(ast.parse(inner), DECISION_TOOL_MODULE) == []
+    # Anywhere else, a task read off a resolution is not a literal.
+    assert decide_problems(ast.parse(inner), "grimoire.routes.scenes")
 
 
 def test_every_decide_names_a_task_on_a_decide_route():
@@ -1067,6 +1183,47 @@ def test_the_decide_guard_flags_planted_cases(src):
 ])
 def test_the_decide_guard_passes_planted_cases(src, modname):
     assert _planted_decide_problems(src, modname) == [], src
+
+
+def _escalating(task: str) -> routing.TaskPolicy:
+    """A planted policy: `scene-break` escalates, every other task as the
+    product has it (none does)."""
+    if task == "scene-break":
+        return routing.TaskPolicy(escalate_to="primary", escalate_on=("abstained",),
+                                  question="over")
+    return routing.policy(task)
+
+
+@pytest.mark.parametrize(("src", "policy_of", "flagged"), [
+    # The policy escalates and the call hands no escalator.
+    ("operations.decide('scene-break', items, client=c, resolved=r)\n", _escalating, True),
+    # The call hands one and the policy does not escalate.
+    ("operations.decide('scene-break', items, client=c, resolved=r, escalation=e)\n",
+     routing.policy, True),
+    ("operations.decide('voice-drift', items, client=c, resolved=r, escalation=e)\n",
+     _escalating, True),
+    # Agreeing both ways.
+    ("operations.decide('scene-break', items, client=c, resolved=r, escalation=e)\n",
+     _escalating, False),
+    ("operations.decide('scene-break', items, client=c, resolved=r)\n", routing.policy, False),
+])
+def test_the_decide_guard_holds_escalation_to_the_policy(src, policy_of, flagged):
+    tree = ast.parse("from .. import inference as operations\n" + src)
+    found = decide_problems(tree, _DECIDE_PLANTED_IN, policy_of=policy_of)
+    assert bool(found) == flagged, (src, found)
+    assert all("escalation=" in f for f in found), found
+
+
+@pytest.mark.parametrize(("policy_of", "flagged"), [(_escalating, True),
+                                                     (routing.policy, False)])
+def test_the_decision_tool_guard_refuses_an_escalating_task(policy_of, flagged):
+    """R2-3: the decide tool hands its inner `decide` no escalator, so a
+    `decision_tool(...)` on a task whose policy escalates is flagged."""
+    tree = ast.parse("from . import tool_decision\n"
+                     "tool_decision.decision_tool('scene-break', r, c, cid='x')\n")
+    found = decision_tool_problems(tree, "grimoire.routes.scenes", policy_of=policy_of)
+    assert bool(found) == flagged, found
+    assert all("escalation=" in f for f in found), found
 
 
 def test_bindings_resolve_the_decide_module():
@@ -1430,3 +1587,101 @@ def test_the_generate_guard_flags_planted_cases(src):
 ])
 def test_the_generate_guard_passes_planted_cases(src):
     assert _planted_generate_problems(src) == [], src
+
+
+# ---- the tool loop half (01g-S4, spec §5) ----
+
+#: The loop's doors in `grimoire.inference` (`DECIDE_MODULE`): `run_tools`,
+#: and `stream_tools` once 01g-S6 lands it.
+LOOP_OPS = ("run_tools", "stream_tools")
+
+
+def loop_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.Call]:
+    """Every tool-loop operation call in one module."""
+    called = {id(ref) for op in LOOP_OPS
+              for ref, is_call in _inference_refs(tree, modname, is_pkg, op) if is_call}
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and id(n.func) in called]
+
+
+def _offers_tools(route: routing.Route) -> bool:
+    return "tools" in route.requires or route.key in routing.TOOLS_OPTIONAL
+
+
+def loop_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
+                  route_of: Callable[[str], routing.Route | None] = routing.route,
+                  ) -> list[str]:
+    """What is wrong with one module's use of the loop: a door handed around
+    as a value, a task that is not a literal, a task not on a generate route
+    that requires tools or lists them as optional, or no `resolved=`."""
+    out = [f"{modname}:{ref.lineno}: a tool loop handed around as a value"
+           for op in LOOP_OPS for ref, is_call in _inference_refs(tree, modname, is_pkg, op)
+           if not is_call]
+    for call in loop_calls(tree, modname, is_pkg):
+        task = _task(call)
+        if task is None:
+            out.append(f"{modname}:{call.lineno}: a loop's task is not a string literal")
+            continue
+        route = route_of(task)
+        if route is None or route.operation != "generate" or not _offers_tools(route):
+            out.append(f"{modname}:{call.lineno}: {task!r} is not on a generate route "
+                       "that requires or offers tools")
+        if not any(k.arg == "resolved" for k in call.keywords):
+            out.append(f"{modname}:{call.lineno}: a loop over {task!r} passes no resolved=")
+    return out
+
+
+def _looped_tasks() -> set[str]:
+    return {task for modname, tree, is_pkg in _all_walked()
+            for call in loop_calls(tree, modname, is_pkg) if (task := _task(call)) is not None}
+
+
+def test_every_loop_names_a_task_on_a_route_that_offers_tools():
+    found = [p for modname, tree, is_pkg in _all_walked()
+             for p in loop_problems(tree, modname, is_pkg)]
+    assert not found, "\n  ".join(found)
+
+
+def test_every_route_requiring_tools_is_looped_by_a_call_site():
+    """The safety rule both ways (spec §5): a route requires `tools` only in
+    the change whose call site runs a loop on it. Vacuous until 12 or 02-C4
+    adds one; the planted cases below prove the check."""
+    looped = _looped_tasks()
+    unused = [r.key for r in routing.ROUTES
+              if "tools" in r.requires and not set(r.tasks) & looped]
+    assert not unused, f"routes requiring tools that no loop runs on: {unused}"
+
+
+_TOOL_ROUTE = routing.Route("investigation", "Investigation", "", ("investigation",), True,
+                            requires=("tools",))
+
+
+def _planted_loop_problems(src: str) -> list[str]:
+    """`loop_problems` over planted source, against the real routes plus one
+    route that requires tools (`investigation`): `chat` offers none."""
+    def route_of(task: str) -> routing.Route | None:
+        return _TOOL_ROUTE if task == "investigation" else routing.route(task)
+    return loop_problems(ast.parse(src), "grimoire.routes.scenes", route_of=route_of)
+
+
+@pytest.mark.parametrize("src", [
+    _OPS + "operations.run_tools('chat', m, toolset=t, execute=e, client=c, resolved=r)\n",
+    _OPS + "operations.run_tools(task, m, toolset=t, execute=e, client=c, resolved=r)\n",
+    _OPS + "operations.run_tools('investigation', m, toolset=t, execute=e, client=c)\n",
+    _OPS + "operations.stream_tools('scene-break', m, client=c, resolved=r)\n",
+    _OPS + "run(operations.run_tools, 'investigation')\n",
+    ("from ..inference import run_tools as loop\n"
+     "loop('chat', m, toolset=t, execute=e, client=c, resolved=r)\n"),
+])
+def test_the_loop_guard_flags_planted_cases(src):
+    assert _planted_loop_problems(src), src
+
+
+@pytest.mark.parametrize("src", [
+    _OPS + ("operations.run_tools('investigation', m, toolset=t, execute=e, client=c, "
+            "resolved=r)\n"),
+    ("from ..inference import stream_tools\n"
+     "stream_tools('investigation', m, toolset=t, execute=e, client=c, resolved=r)\n"),
+    _OPS + "self.run_tools('chat')\n",
+])
+def test_the_loop_guard_passes_planted_cases(src):
+    assert _planted_loop_problems(src) == [], src

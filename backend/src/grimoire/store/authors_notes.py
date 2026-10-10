@@ -24,8 +24,8 @@ through `delete_scene`, so the scenes it takes off lose their notes.
 ledger uses: the same character can need different steering in two campaigns.
 
 **Reads are lenient and lock-free.** `read` sits on the path that composes a
-turn -- and the opener composes on the event loop, where a lock wait would stall
-every other request -- so a missing file, unparseable JSON, a document of the
+turn -- in a worker, the opener's included, where a lock wait would hold the turn
+being built -- so a missing file, unparseable JSON, a document of the
 wrong shape or a malformed entry all read as no note, never as a failed turn.
 
 **The mutators read leniently too**, so saving over a garbled file replaces it.

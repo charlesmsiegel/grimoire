@@ -34,17 +34,19 @@ drain (`drain`) keeps a detached follow-up from outliving the home.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 import uuid
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from grimoire import adapters, decisions, inference, openai_compatible, openrouter, wire
-from grimoire.store import paths, usage
+from grimoire.store import paths, routing, usage
 from grimoire.store.inference import providers
 from grimoire.store.inference import resolve as inference_resolve
 
@@ -300,6 +302,70 @@ def resolve_connections(cases: tuple[Case, ...], *, provider: str = "",
     return out
 
 
+@dataclass(frozen=True)
+class Escalating:
+    """A run's escalation override (`--escalation`, spec 01d §6.3): the
+    policy every selected decide case's task runs under, and each task's
+    escalation role resolved up front (`escalation_roles`)."""
+
+    policy: routing.TaskPolicy
+    roles: dict[str, ResolvedInference]
+
+
+def escalation_roles(cases: tuple[Case, ...],
+                     policy: routing.TaskPolicy) -> dict[str, ResolvedInference]:
+    """task -> where its escalation hop runs: `policy.escalate_to`, resolved
+    for the decide operation through the path every case's own resolution
+    takes (`store.inference.resolve` with `role=`, never `routes.common`),
+    and held to the case route's `requires` as the app's seam holds it
+    (`resolve.escalation_refusal`). Read from the REAL store, before any
+    isolate -- the throwaway home holds no settings, so a role resolved
+    there would resolve to nothing; reading settings is all this does, as
+    `resolve_connections` reads them. What the thunk then does runs inside
+    each case's isolate, behind the tripwire (`escalator`).
+
+    A task the refusal names raises RuntimeError with its sentence, so the
+    run is refused before anything is sent rather than comparing against a
+    hop that could never run."""
+    out: dict[str, ResolvedInference] = {}
+    for case in cases:
+        if case.task in out:
+            continue
+        resolved = inference_resolve.resolve(case.task, operation="decide",
+                                             role=policy.escalate_to)
+        refused = inference_resolve.escalation_refusal(resolved, case.task)
+        if refused is not None:
+            detail = refused[1]
+            if isinstance(detail, dict):
+                detail = detail.get("detail") or detail.get("kind") or ""
+            raise RuntimeError(f"{case.task}: escalation: {detail}")
+        out[case.task] = resolved
+    return out
+
+
+def escalator(task: str, policy: routing.TaskPolicy, resolved: ResolvedInference, *,
+              real_home: Path | None = None) -> inference.Escalator:
+    """The `inference.Escalator` a live decide case hands `decide` under
+    `policy` (spec 01d §6.3): `resolved`, its escalation role's resolution
+    of `task` (`escalation_roles`). The thunk is awaited inside the case's
+    throwaway home, and refuses -- every trigger skipped with
+    `ISOLATE_ERROR`, nothing sent -- when the active home is `real_home`
+    (01a-C2's tripwire), since the hop's meter files its row in whatever
+    home is active."""
+    if policy.escalate_to not in routing.ESCALATION_ROLES:
+        raise ValueError(f"{task!r}: an eval escalates to a role, not "
+                         f"{policy.escalate_to!r}")
+    if resolved.task != task or resolved.role != policy.escalate_to:
+        raise ValueError(f"a {resolved.role!r} resolution of {resolved.task!r} cannot "
+                         f"escalate {task!r} to {policy.escalate_to!r}")
+
+    async def thunk() -> tuple[ResolvedInference | None, str]:
+        if _is_real_home(real_home):
+            return None, ISOLATE_ERROR
+        return resolved, ""
+    return thunk
+
+
 class BackendRefusedError(ValueError):
     """A forced decide backend the resolution's primary cannot serve, in one
     sentence. Raised before anything is sent."""
@@ -360,15 +426,15 @@ def item_records(decision: decisions.Decision) -> tuple[dict, ...]:
     it, its answers' reasons (`refused`, `abstained`, `unreadable`, `error`),
     whether any answer carries a distribution, whether an escalation hop's
     call carried it, and `call` -- the index in `decision.calls` of the call
-    that answered it (the last call carrying it that did not fail; else the
-    last one carrying it; None for an item no call carried). Money is never
+    that answered it (`_answering_call`: the last call carrying it that did
+    not fail, a hop's only when its escalation was answered; else the last
+    one carrying it; None for an item no call carried). Money is never
     here: a structured call's figures belong to the call, never to its items
     (spec 01a, section 6)."""
     out = []
     for index, result in enumerate(decision.items):
         carried = [n for n, record in enumerate(decision.calls) if index in record.items]
-        answered = [n for n in carried if not decision.calls[n].error_kind]
-        call = (answered or carried or [None])[-1]
+        call = _answering_call(decision, index, carried)
         answers = result.answers.values()
         out.append({
             "index": index, "backend": result.backend,
@@ -378,6 +444,21 @@ def item_records(decision: decisions.Decision) -> tuple[dict, ...]:
             "escalated": any(decision.calls[n].hop == "escalation" for n in carried),
             "call": call})
     return tuple(out)
+
+
+def _answering_call(decision: decisions.Decision, index: int,
+                    carried: list[int]) -> int | None:
+    """The index in `decision.calls` of the call that answered item `index`
+    (`item_records`): the last call carrying it that did not fail, else the
+    last carrying it, else None. An escalation hop's call counts only when
+    the item's escalation was `answered` (01d-S3): a hop whose answer the
+    merge rejected left the item as the chain answered it."""
+    hopped = any(e.index == index and e.outcome == "answered"
+                 for e in decision.escalations)
+    eligible = [n for n in carried
+                if hopped or decision.calls[n].hop != decisions.HOP_ESCALATION]
+    answered = [n for n in eligible if not decision.calls[n].error_kind]
+    return (answered or eligible or carried or [None])[-1]
 
 
 def backend_note(decision: decisions.Decision) -> str:
@@ -532,10 +613,14 @@ def _crashed(case: Case, ctx: dict, exc: Exception, started: float, *,
 
 async def _ask(case: Case, ctx: dict, target: ResolvedInference,
                stages: tuple[inference.Stage, ...] | None,
-               client) -> tuple[str, decisions.Decision | None]:
+               client, escalating: Escalating | None = None,
+               real_home: Path | None = None) -> tuple[str, decisions.Decision | None]:
     """The case's model work on `client`: a generation (`stages` None) or a
     decision down `stages`, as the reply text its graders read and the
-    `Decision` when there is one."""
+    `Decision` when there is one. With `escalating`, a decision is
+    `inference.decide` itself under that policy (its chain is `stages` of
+    the resolution, which `live` checked the run sends), so the hop runs as
+    the app's would."""
     if stages is None:
         # The production meter, into this case's throwaway home: no campaign
         # and no scene, as the case plays none.
@@ -544,8 +629,15 @@ async def _ask(case: Case, ctx: dict, target: ResolvedInference,
                                             resolved=target, usage=m.usage, stream=False)
         return text, None
     explain = ctx.get("explain", "")
-    decision = await inference.run_stages(case.task, ctx["items"], stages, client=client,
-                                          explain=explain)
+    if escalating is not None:
+        with overriding(case.task, escalating.policy):
+            decision = await inference.decide(
+                case.task, ctx["items"], client=client, resolved=target, explain=explain,
+                escalation=escalator(case.task, escalating.policy,
+                                     escalating.roles[case.task], real_home=real_home))
+    else:
+        decision = await inference.run_stages(case.task, ctx["items"], stages, client=client,
+                                              explain=explain)
     # Which items a native endpoint answered: it is asked for no rationale,
     # so a grader reads that item's as not applicable.
     ctx["native_items"] = frozenset(
@@ -557,9 +649,25 @@ async def _ask(case: Case, ctx: dict, target: ResolvedInference,
     return decisions.render(decision.items, ctx["items"], explain=bool(explain)), decision
 
 
+@contextlib.contextmanager
+def overriding(task: str, policy: routing.TaskPolicy) -> Iterator[None]:
+    """`policy` as `task`'s code policy while inside, and the table as it was
+    after -- an entry restored, an absent one removed."""
+    before = routing.TASK_POLICY.get(task)
+    routing.TASK_POLICY[task] = policy
+    try:
+        yield
+    finally:
+        if before is not None:
+            routing.TASK_POLICY[task] = before
+        else:
+            routing.TASK_POLICY.pop(task, None)
+
+
 def _model_work(case: Case, ctx: dict, target: ResolvedInference,
-                stages: tuple[inference.Stage, ...] | None,
-                client) -> tuple[str, decisions.Decision | None, Exception | None, int]:
+                stages: tuple[inference.Stage, ...] | None, client,
+                escalating: Escalating | None = None, real_home: Path | None = None,
+                ) -> tuple[str, decisions.Decision | None, Exception | None, int]:
     """`_ask` on `client`, or on one `LLMClient` opened and closed here:
     the reply, the decision, the provider's `LLMError` when it failed, and
     how long `_ask` took (ms) -- the model work alone, never the client's
@@ -571,7 +679,7 @@ def _model_work(case: Case, ctx: dict, target: ResolvedInference,
     async def timed(c) -> tuple[str, decisions.Decision | None]:
         span.append(time.monotonic())
         try:
-            return await _ask(case, ctx, target, stages, c)
+            return await _ask(case, ctx, target, stages, c, escalating, real_home)
         finally:
             span.append(time.monotonic())
 
@@ -594,10 +702,22 @@ def _model_work(case: Case, ctx: dict, target: ResolvedInference,
     return output, decision, None, took()
 
 
+def _escalating_for(case: Case, backend: str,
+                    escalating: Escalating | None) -> Escalating | None:
+    """What a case's decision runs under: `escalating` for a decide case on
+    the chain backend, None for a generate case; a forced backend under a
+    policy is a `ValueError` (the hop follows the chain `decide()` sends)."""
+    if escalating is None or case.schema is None:
+        return None
+    if backend != CHAIN:
+        raise ValueError("--escalation runs the chain decide() sends, not a forced backend")
+    return escalating
+
+
 def live(case: Case, target: ResolvedInference, record: bool = False, *,
          client=None, backend: str = CHAIN, real_home: Path | None = None,
          run_id: str = "", run_day: str = "",
-         rates: usage.Rates | None = None) -> Result:
+         rates: usage.Rates | None = None, escalating: Escalating | None = None) -> Result:
     """One real generation for `case`, scored against the baseline expectation
     (live output must PASS). With `record`, the reply replaces the baseline
     recording — counterexample variants are never overwritten.
@@ -620,7 +740,10 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     fixture is built (`ISOLATE_ERROR`), and again before the harvest; None
     skips both checks. A case whose follow-ups outlive `DRAIN_CEILING_S`
     raises `FollowUpsRunningError`. `rates` prices modelled figures (read once
-    in the real store by the caller)."""
+    in the real store by the caller). `escalating` (`--escalation`) answers a
+    decide case through `inference.decide` under its policy, on the chain
+    backend only (`ValueError` otherwise: a forced backend is not what
+    `decide` sends)."""
     if isinstance(target, dict):
         raise TypeError(f"{case.id}: pass its resolution, not a connection")
     if _is_real_home(real_home):
@@ -630,7 +753,9 @@ def live(case: Case, target: ResolvedInference, record: bool = False, *,
     started = time.monotonic()
     try:
         stages = chain(target, backend) if case.schema is not None else None
-        output, decision, failure, asked = _model_work(case, ctx, target, stages, client)
+        output, decision, failure, asked = _model_work(
+            case, ctx, target, stages, client,
+            _escalating_for(case, backend, escalating), real_home)
     except Exception as exc:  # noqa: BLE001 - anything but a provider's error
         return _crashed(case, ctx, exc, started, real_home=real_home, run_day=run_day,
                         run_id=run_id, rates=rates)
@@ -693,7 +818,8 @@ def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isola
              record: bool = False, *, client=None, backend: str = CHAIN,
              backends: tuple[str, ...] = (), repeat: int = 1,
              real_home: Path | None = None, run_id: str = "", run_day: str = "",
-             rates: usage.Rates | None = None) -> list[Result]:
+             rates: usage.Rates | None = None,
+             escalating: Escalating | None = None) -> list[Result]:
     """Each case live, on what its task resolved to (`resolve_connections`,
     keyed by `conn_key`); a decide case down `chain(..., backend)` -- once per
     backend of `backends` (default: `backend` alone), each its own config --
@@ -718,7 +844,7 @@ def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isola
             with isolate():
                 result = live(case, conns[conn_key(case)], record=record, client=client,
                               backend=chosen, real_home=real_home, run_id=run_id,
-                              run_day=run_day, rates=rates)
+                              run_day=run_day, rates=rates, escalating=escalating)
         except FollowUpsRunningError as exc:
             result = exc.result
             if exc.__context__ is not None and not isinstance(exc.__context__,

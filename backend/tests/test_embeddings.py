@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import threading
 import time
@@ -749,3 +750,201 @@ def test_an_overlong_model_is_not_kept():
     handler, _ = _usage_handler([{"model": "m" * embeddings.MAX_MODEL_CHARS}])
     make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
     assert len(holder["model"]) == embeddings.MAX_MODEL_CHARS
+
+
+# ---- embedding options (01h-S2) ----
+
+NOMIC = embeddings.wire.EmbedOptions(input="prefix", query_prefix="search_query: ",
+                                     document_prefix="search_document: ")
+
+
+def _recording(seen):
+    def handler(request):
+        seen.append(request)
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": [1.0, 0.0]}
+                                                  for i in range(len(inputs))]})
+    return handler
+
+
+@pytest.mark.parametrize("extra", [{}, {"options": embeddings.wire.EmbedOptions(), "queries": 1},
+                                   {"options": None, "queries": 2}])
+def test_no_options_sends_todays_exact_bytes(extra):
+    seen = []
+    make_client(_recording(seen)).embed(["a", "b"], "embed-1", "sk-x", BASE, **extra)
+    assert len(seen) == 1
+    assert seen[0].content == httpx.Request(
+        "POST", BASE, json={"model": "embed-1", "input": ["a", "b"]}).content
+
+
+def test_prefix_mode_prefixes_each_input_in_one_request():
+    seen = []
+    texts = ["Where is Mara?", "Mara crossed the Saltmarch.", "Seraphine waits."]
+    out = make_client(_recording(seen)).embed(texts, "embed-1", "sk-x", BASE,
+                                              options=NOMIC, queries=1)
+    assert len(out) == 3 and len(seen) == 1
+    body = json.loads(seen[0].content)
+    assert set(body) == {"model", "input"}
+    assert body["input"] == ["search_query: Where is Mara?",
+                             "search_document: Mara crossed the Saltmarch.",
+                             "search_document: Seraphine waits."]
+
+
+def test_a_query_only_prefix_leaves_documents_bare():
+    seen = []
+    bge = embeddings.wire.EmbedOptions(input="prefix", query_prefix="Represent: ")
+    make_client(_recording(seen)).embed(["q", "d"], "m", "", BASE, options=bge, queries=1)
+    assert json.loads(seen[0].content)["input"] == ["Represent: q", "d"]
+
+
+def test_prefixes_survive_batching():
+    seen = []
+    texts = [f"t{i}" for i in range(BATCH + 2)]
+    make_client(_recording(seen)).embed(texts, "m", "", BASE, options=NOMIC, queries=1)
+    first, second = (json.loads(r.content)["input"] for r in seen)
+    assert first[0] == "search_query: t0"
+    assert all(t.startswith("search_document: ") for t in first[1:] + second)
+    assert len(first) == BATCH and len(second) == 2
+
+
+@pytest.mark.parametrize("queries", [3, -1, True])
+def test_queries_out_of_range_is_a_value_error_before_sending(queries):
+    seen = []
+    with pytest.raises(ValueError):
+        make_client(_recording(seen)).embed(["a", "b"], "m", "", BASE, options=NOMIC,
+                                            queries=queries)
+    assert seen == []
+
+
+@pytest.mark.parametrize("options", [
+    embeddings.wire.EmbedOptions(input="param", param_field="input_type",
+                                 query_value="query"),
+    embeddings.wire.EmbedOptions(input="param", query_value="q", document_value="d"),
+    embeddings.wire.EmbedOptions(dimensions=0),
+    embeddings.wire.EmbedOptions(dimensions=True),
+    embeddings.wire.EmbedOptions(dimensions=512, dimensions_field=""),
+    embeddings.wire.EmbedOptions(input="both"),
+    "prefix",
+])
+def test_options_that_cannot_be_sent_are_refused_before_sending(options):
+    seen = []
+    with pytest.raises(ValueError):
+        make_client(_recording(seen)).embed(["a"], "m", "", BASE, options=options)
+    assert seen == []
+
+
+# ---- the request field and dimensions (01h-S3) ----
+
+JINA = embeddings.wire.EmbedOptions(input="param", param_field="task",
+                                    query_value="retrieval.query",
+                                    document_value="retrieval.passage")
+
+
+def _indexed(seen, width=None):
+    """A handler answering each input with a vector naming its text, or a
+    vector `width` wide."""
+    def handler(request):
+        seen.append(request)
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"data": [
+            {"index": i, "embedding": [float(len(t))] * (width or 1)}
+            for i, t in enumerate(inputs)]})
+    return handler
+
+
+def test_param_mode_sends_the_query_then_the_documents():
+    seen = []
+    texts = ["q", "dd", "ddd"]
+    out = make_client(_indexed(seen)).embed(texts, "m", "", BASE, options=JINA, queries=1)
+    bodies = [json.loads(r.content) for r in seen]
+    assert bodies == [
+        {"model": "m", "input": ["q"], "task": "retrieval.query"},
+        {"model": "m", "input": ["dd", "ddd"], "task": "retrieval.passage"},
+    ]
+    assert out == [[1.0], [2.0], [3.0]]
+
+
+@pytest.mark.parametrize(("queries", "sides"), [(0, ["retrieval.passage"]),
+                                                (2, ["retrieval.query"])])
+def test_param_mode_with_one_side_is_one_request(queries, sides):
+    seen = []
+    make_client(_indexed(seen)).embed(["a", "b"], "m", "", BASE, options=JINA, queries=queries)
+    assert [json.loads(r.content)["task"] for r in seen] == sides
+
+
+def test_param_mode_batches_each_side():
+    seen = []
+    texts = [str(n) for n in range(BATCH + 3)]
+    out = make_client(_indexed(seen)).embed(texts, "m", "", BASE, options=JINA, queries=2)
+    sizes = [(len(json.loads(r.content)["input"]), json.loads(r.content)["task"]) for r in seen]
+    assert sizes == [(2, "retrieval.query"), (BATCH, "retrieval.passage"),
+                     (1, "retrieval.passage")]
+    assert out == [[float(len(t))] for t in texts]
+
+
+def test_param_mode_sums_usage_over_both_requests():
+    def handler(request):
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={
+            "data": [{"index": i, "embedding": [1.0]} for i in range(len(inputs))],
+            "usage": {"prompt_tokens": len(inputs)}})
+    holder: dict = {}
+    make_client(handler).embed(["a", "b", "c"], "m", "", BASE, usage=holder, options=JINA,
+                               queries=1)
+    assert holder["prompt_tokens"] == 3
+
+
+@pytest.mark.parametrize(("options", "extra"), [
+    (embeddings.wire.EmbedOptions(dimensions=4), {"dimensions": 4}),
+    (embeddings.wire.EmbedOptions(dimensions=4, dimensions_field="output_dimension"),
+     {"output_dimension": 4}),
+    (embeddings.wire.EmbedOptions(input="prefix", document_prefix="passage: ", dimensions=4),
+     {"dimensions": 4}),
+])
+def test_dimensions_ride_every_request(options, extra):
+    seen = []
+    make_client(_indexed(seen, width=4)).embed(["a"], "m", "", BASE, options=options)
+    body = json.loads(seen[0].content)
+    assert {k: v for k, v in body.items() if k not in ("model", "input")} == extra
+
+
+def test_param_and_dimensions_together():
+    seen = []
+    both = embeddings.wire.EmbedOptions(input="param", param_field="input_type",
+                                        query_value="query", document_value="document",
+                                        dimensions=4)
+    make_client(_indexed(seen, width=4)).embed(["q", "d"], "m", "", BASE, options=both,
+                                               queries=1)
+    assert [json.loads(r.content) for r in seen] == [
+        {"model": "m", "input": ["q"], "input_type": "query", "dimensions": 4},
+        {"model": "m", "input": ["d"], "input_type": "document", "dimensions": 4}]
+
+
+def test_a_reply_that_ignored_dimensions_is_a_mismatch():
+    seen = []
+    holder: dict = {}
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0] * 6}],
+                                         "usage": {"prompt_tokens": 3}})
+    with pytest.raises(EmbeddingsError) as got:
+        make_client(handler).embed(["a"], "m", "", BASE, usage=holder,
+                                   options=embeddings.wire.EmbedOptions(dimensions=4))
+    exc = got.value
+    assert isinstance(exc, embeddings.DimensionsMismatchError)
+    assert (exc.kind, exc.code) == ("missing_key", embeddings.DIMENSIONS_MISMATCH)
+    assert (exc.requested_dims, exc.returned_dims) == (4, 6)
+    assert exc.status is None
+    # The reply was read and billed: its count is kept.
+    assert holder["prompt_tokens"] == 3
+    assert len(seen) == 1
+
+
+def test_a_mismatch_on_the_query_request_sends_no_documents():
+    seen = []
+    with pytest.raises(embeddings.DimensionsMismatchError):
+        make_client(_indexed(seen, width=6)).embed(
+            ["q", "d"], "m", "", BASE, queries=1,
+            options=dataclasses.replace(JINA, dimensions=4))
+    assert len(seen) == 1

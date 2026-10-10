@@ -243,7 +243,8 @@ around that single sentence.
 **A row says what served it, and which numbers this side supplied.** Each
 row carries `provider_id` (the provider's store id; `provider` stays the
 adapter kind), `requested_model` (only when the answer named a dated snapshot),
-`operation`, `role`, `preset` and `billing`. Nobody passes them at a call site:
+`operation`, `role`, `preset` and `billing` (and `hop`, on a call an
+escalation hop sent). Nobody passes them at a call site:
 `llm._stamp` copies them off the target (`wire.Target`) of the attempt that
 served, a fallback included, and `usage.Meter.done` files what the holder carries.
 `billing` (`metered` or `subscription`) is a label, and only `cost_basis` moves
@@ -853,7 +854,11 @@ would answer neither question.
   (`fallback_missing`) and never rides, so the facade never sends it -- nor
   one that names the primary's own connection (a retry, which the retry budget
   covers -- except behind a Decision model that cannot generate, where it is a
-  decide stage of its own), nor one that cannot carry the call's images. A reroll's connection override goes through `override_inference`, and
+  decide stage of its own), nor one that cannot carry the call's images. A
+  task whose `routing.TaskPolicy` says `fallback="none"` is sent no fallback
+  at all, and its route row says so (`resolve.NO_FALLBACK_POLICY`) when its
+  role had one; a route's tasks agree on it, because `for_task` hands one
+  sibling's resolution to another (`test_task_policy.py`). A reroll's connection override goes through `override_inference`, and
   absorb's secondary phases hand `_soft_inference` a thunk (voice drift and the
   duplicate check hand one to `_soft_resolved`, which keeps the whole
   resolution `decide` takes), so a phase that cannot resolve reports itself
@@ -916,27 +921,57 @@ would answer neither question.
   decisions-only model the catalog cannot place (an OpenAI-preset one, whose
   preset says every model generates) with the model-facts override
   `generate: no`, which outranks the preset. A model that can
-  generate stays on structured generation whatever its `decide_native` says:
-  trying native first for one is a later decision, to be made on the
-  same-model comparison `evals/run.py --live --decide-backend` exists to
-  give (it grades a native item's rationale n/a, and refuses `native` before
-  sending for a primary with no native endpoint, a preset that never decides
-  natively, or a known `no`), and the chain does not do it today. A model that can do neither is
+  generate stays on structured generation whatever its `decide_native` says,
+  unless its task's `routing.TaskPolicy.native_first` lists its adapter kind
+  and it is `resolve.native_capable` -- `decide_native` a known `yes`, never
+  `unknown` (a kind with no decisions endpoint never reads `yes`: its preset
+  rules it out, and a test holds every preset to that). Then the chain asks
+  its decisions endpoint first (`resolve.native_first`), in an *isolated*
+  stage on the same model with no retries, and the structured stage after it,
+  unchanged, takes the items that stage failed. An isolated stage never marks
+  its connection dead -- a key a decisions endpoint refuses may serve every
+  chat call -- and its failure is not composed into the error of an item a
+  later stage took; any stage is skipped as dead only when every route it
+  sends is. A kind is listed only on the same-model comparison `evals/run.py
+  --live --decide-backend` exists to give (it grades a native item's
+  rationale n/a, and refuses `native` before sending for a primary with no
+  native endpoint, a preset that never decides natively, or a known `no`),
+  recorded in `evals/README.md`; no task lists one today.
+  `inference.reports_distribution` says whether a resolution's first stage is
+  native. A model that can do neither is
   refused with 409 `incapable`, and for the speaker pick `post_chat` raises
   it before it writes anything (`refuse_an_unanswerable_pick`). **What moves
   an item on to the next stage is a failed call, never an answer**: an
   `LLMError` (a 2xx body that is not the documented envelope, or an envelope
   that answers none of the item's questions, is `bad_response`), or an item
-  refused unsent. A native `refused`, an abstention and a `None` from a
+  refused unsent -- on a native-first stage too. A native `refused`, an abstention and a `None` from a
   well-formed body are answers; re-asking them elsewhere would be asking until
-  something agreed. A `llm.PresetRefusalError` ends the chain where it is met,
+  something agreed. A policy-declared escalation is not a stage
+  (`routing.TaskPolicy.escalate_to`, `inference.decide(escalation=)`): after
+  the unchanged chain it hands an ANSWERED item, once, to a stronger resolver
+  only on what the backend itself reported (`decisions.triggers`: a refusal,
+  an abstention, a low margin), never to the model that answered it, and a
+  hop that fails, garbles or declines leaves the original standing
+  (`Decision.escalations`; `Decision.errors` stays the chain's). Its calls
+  file `hop: escalation`. A call site resolves the hop through one seam,
+  `routes.common.escalation_inference(<task>, cid)` (in the threadpool, as a
+  thunk): the policy's role with its own preset, held to the base route's
+  `requires`, and soft -- a refusal is the sentence every candidate is skipped
+  with, never a 409. It passes `escalation=` exactly when its task's policy
+  escalates (`test_operation_guard.py`), notes the outcomes in its capture
+  scope (`Scope.note_escalations`, a failed detail cut to its kind), and
+  `test_routing_guard.py` holds the seam's task to a literal whose policy
+  names a role. No task enables it yet. A `llm.PresetRefusalError` ends the chain where it is met,
   as it ends the facade's: the preset is the user's to fix, and a native stage
   that takes no sampling would only hide it. So does the caller's clock
   refusing a call unsent: the refusal comes out as the `BudgetRefused` it is,
   never composed with a later stage's, so a phase still reports it skipped.
   A fallback on the primary's own connection AND model is dropped with
   `SAME_PROVIDER` even behind a native primary: that is a second send of
-  the call that failed, whatever stage it sits in (#144).
+  the call that failed, whatever stage it sits in (#144). The same-model
+  structured stage behind a native-first stage is not one: it is the chat
+  endpoint, a different endpoint from the decisions one that failed, so it is
+  no resend.
   `decide_native` is metered per item (`store.usage.meter`, opened in
   `inference._native` with `decision_mode` stamped on a new copy of the
   stage target's account), at most `NATIVE_CONCURRENCY` in flight inside one
@@ -952,7 +987,15 @@ would answer neither question.
   failed call, and with no stage after it the reason reaches the caller and
   the error store. A native 4xx in `llm.NATIVE_REJECTED_STATUSES` does not mark
   the connection failing: the connection answered, and it was that model, key
-  or request the decisions endpoint refused. A native stage starts **no
+  or request the decisions endpoint refused. It still files an error row
+  (`Meter.done` records every failed call), so under native first a key
+  refused by the decisions endpoint logs errors under its task on every
+  decide call -- roughly one per wave of `NATIVE_CONCURRENCY` items, since
+  an `auth` stops the native stage -- even when the structured stage
+  answers. And a 5xx or a timeout from the decisions endpoint is not in that
+  set, so under native first it counts against the connection's health: a
+  working chat endpoint can show "failing" (spec 01c §4.2.3). Both are costs
+  the change that first lists a kind accepts. A native stage starts **no
   further item** after a connection-wide failure -- auth, `missing_key`, a
   `rate_limit` the facade has already retried as far as it will, a spend
   refusal, or absorb's `BudgetRefused` -- and a structured stage sends no
@@ -960,14 +1003,18 @@ would answer neither question.
   finish, and those never sent carry the failure that stopped them. A call
   with a fallback behind it is the exception: a bare error from one stops
   nothing, because the facade never tried the fallback, unless the clock refused
-  it unsent. A stage that stopped that way skips a later stage on the same
-  connection. A native stage also stops after `NATIVE_TIMEOUT_STOP` items in a
+  it unsent. A non-isolated stage that stopped that way skips a later stage
+  every route of which is on that connection. A native stage also stops after `NATIVE_TIMEOUT_STOP` items in a
   row time out -- a hung decisions endpoint -- but that stop is its own: a
   generating stage on the same connection still runs.
-  **Who answered is only named when one did.** `Decision.backend`, `provider`
-  and `model` are empty when answers came from more than one backend or route
-  (the fallback took the items the primary failed): `ItemResult.backend` is the
-  per-item truth, `Decision.served` lists every `(provider, model)` that
+  **Who answered is only named when one did.** `Decision.backend` is empty
+  when answers came from more than one backend, and `provider` and `model`
+  when they came from more than one route (the fallback took the items the
+  primary failed) -- so a native-first stage and the structured stage behind
+  it, one model, name it with `backend` empty: `ItemResult.backend` is the
+  per-item truth, `ItemResult.served` names the `(kind, provider id, model)`
+  that answered each item (stamped by its backend, never compared),
+  `Decision.served` lists every `(provider, model)` that
   answered across the stages, and `Decision.errors` holds each failed unit's
   final error -- a chunk on a structured stage, an item on a native one -- with
   an item that answered on a later stage contributing none.
@@ -1041,9 +1088,43 @@ would answer neither question.
   role has no seam to refuse at, so the same known `no` for `embed` turns
   embedding off instead: `embed_space.resolve` names no space, no request is
   sent that could only fail, and the Embedding card says why.
-- **Adding an embedding call site?** There is one door,
-  `store.inference.embed.embed_sync(<task>, texts, space=embed_space.endpoint(),
-  client=…, campaign=…)`, and the task must be in `routing.EMBED_TASKS` (a
+- **Sampling a decision goes through `draws.py`, and only there** (roadmap
+  01c). A caller that wants a probabilistic outcome calls `draws.draw(q,
+  result, seed=draws.new_seed(), purpose=…, eligibility=draws.Eligibility(…))`,
+  and the only reshaping is that recorded `Eligibility` (`only`, `exclude`,
+  `cutoff`, `floor`). Its `floor` is sized to the eligible set (at most
+  `1 / len(eligible)`) and refused up front otherwise, so no report can make
+  a draw raise mid-turn. `draws.draw_from` is not for callers: it takes raw
+  weights and so skips the rules below. The draw is SHA-256 and integer
+  arithmetic (`quanta`), never `random` and never a float sum, so a record
+  replays to the same key on 3.11 to 3.14, on Android and in a browser, and a
+  change of rule is a new `ALGORITHM`. Nothing that reported no distribution
+  is sampled. An answer of None is `basis: none`. A structured answer, a
+  report under `1 - MASS_SLACK` in mass, a report that contradicts its own
+  answer, and a rank's or selection's `marginals` are each `basis: answer`,
+  `sampled: false`: acted on, and never replayed. The helper stores nothing.
+  The caller files `Draw.record` in the same write, under the same lock, as
+  the outcome it chose (for the speaker pick, the round record through
+  `responses.update_round`). A present record means decided, a decided
+  outcome is never re-drawn, and a reroll mints a new seed. No task samples
+  yet.
+- **Adding an embedding call site?** The doors are in one module,
+  `store/inference/embed.py`: `embed_sync(<task>, texts,
+  space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread
+  or a CLI, with a module's own synchronous `embeddings.EmbeddingsClient`,
+  and `await embed(...)`, the same call natively async, from a coroutine,
+  with the app's `embeddings.AsyncEmbeddingsClient` (`routes.get_embeddings`,
+  one per app, closed by its lifespan; one deadline covers its whole call,
+  and a cancel files the row `aborted`). Each refuses the other's client.
+  Both take `post=` and `run_id=`, filed on the row. The third,
+  `embed_groups_sync`, embeds several campaigns' documents in one run:
+  `attribute(claims)` charges a text to the one campaign that claims it and
+  leaves a shared or world-scoped one unattributed (counted toward no
+  campaign's budget), and each group is its own `embed_sync` call -- one row
+  per group, no request mixing groups, one deadline for the run, a
+  `bad_response` group skipped and any other failure stopping the run with
+  the rest `not_sent` and filed nowhere. The task must be in
+  `routing.EMBED_TASKS` (a
   route would carry no choice: every embed task resolves through the global
   Embedding role, and the frozen observer enumerates `TASK_ROUTE`). The caller
   resolves the space **once**, from that role (`resolve.embedding`, which
@@ -1063,7 +1144,18 @@ would answer neither question.
     none and is unattributed. A
     call that sends nothing files nothing -- no row, no error, no capture line
     -- whether its input was empty or its deadline lapsed before the first
-    request. When the caller's own budget cuts a request that did go out
+    request. One named exception: **never on the app's event loop**.
+    `runner.install` marks the lifespan's loop and the lifespan's exit
+    unmarks it, and `embed_sync` called while that is the running loop is
+    refused before any meter as `network`/`on_loop`, so the caller degrades
+    as it does for an unreachable endpoint -- and it writes ONE error row (the
+    task, the kind, the code, the campaign and scene it was handed, and the
+    caller's innermost frames as `file:line in function`, never its text),
+    because it records a programming error rather than a call and the frames
+    are what find the caller. A worker, a CLI, a thread calling through a portal, the `embed`
+    door and a private `asyncio.run` loop are never refused; an `async def`
+    caller reaches a compose or an embed through `run_in_threadpool`, as the
+    greeting opener does. When the caller's own budget cuts a request that did go out
     (`budgeted=True`: absorb's identity check and the continuity sweep), the
     row is `aborted` and nothing reaches the error store: that is the
     caller's clock, not the provider failing. A deadline that only bounds the
@@ -1099,6 +1191,25 @@ would answer neither question.
     Costs card offers rates rather than saying nobody counted. An embed row
     with no prompt count is still unmetered. An OpenRouter embed reports its
     cost, which is real spend and counts against the campaign's budget.
+  - **Options are a stated fact, and part of the space** (01h). A model's
+    embedding options live in its provider's facts (`embedding`: `input`
+    `none`, `prefix` with the query and document prefixes, or `param` with
+    a request field and its two values; and a requested `dimensions`) and are only ever
+    the user's confirmed write -- no catalog, preset or probe derives one.
+    The Embedding role reads that file strictly: one it cannot read, or a
+    block the validator refuses, names no space and the card says why; it is
+    never read as "no options". The document side enters the space id as a
+    NUL, `embopt1:` and a digest after today's string, so a model with none
+    keeps its id and its cached vectors. The endpoint dict carries the
+    `options` its id came from, the request is built from them, and
+    `embed_sync` refuses a dict whose two disagree. A caller puts its query
+    first and passes `queries=1` (recall, search and art; continuity sends
+    documents only), and no caller caches a query vector. NUL is stripped
+    from what is sent and from the vector key alike. A `param` call sends
+    its queries and its documents as separate requests under the one meter,
+    and a reply narrower or wider than a requested `dimensions` is
+    `missing_key`/`dimensions_mismatch` (never retried; its error row files
+    the code), never truncated here.
   - `test_operation_guard.py` (the embed half) holds the task, the door, and
     where each call's `space=` comes from -- traced back through the package
     to `embed_space.endpoint`, so a space built by hand fails it -- and
@@ -1117,13 +1228,18 @@ would answer neither question.
   /inference/settings`), a new key or address on the provider it embeds
   through, which restamps that provider's `rev` (`PUT /llm-connections/{id}`,
   judged by `embed_space.moved_by`), or a model-facts write that turns the
-  role on, such as the user's `embed: yes` over a known `no` (`PUT
-  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`), or, on a
+  role on, such as the user's `embed: yes` over a known `no`, or changes the
+  document side of the embedding options of the model it embeds with (`PUT
+  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`; a
+  query-prefix-only change asks nothing), or, on a
   store not yet at format 2, a legacy `embeddings_connection_id` /
   `embeddings_model` change through `PUT /config` (judged by
   `embed_space.config_moved`) -- each
   400 `confirm_embedding` without `confirm_embedding: true`, compared inside
-  the hold that writes, because re-embedding a library may cost money. Two
+  the hold that writes, because re-embedding a library may cost money. A
+  side whose model facts cannot be judged (held, mangled, or invalid
+  options) is not "embeds nothing": a provider edit that moves its `rev`, or
+  a legacy key change, asks then too. Two
   things can still lift a known `no` without that question, because neither
   is a settings write the user makes to the Embedding role: a test call that
   PASSES (itself confirmed before it is sent; a failed test is `unknown` and

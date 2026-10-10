@@ -66,6 +66,7 @@ const CAPS = {
   vision: { value: "unknown", source: "unknown" },
   embed: { value: "no", source: "catalog" },
   decide_native: { value: "no", source: "adapter" },
+  tools: { value: "unknown", source: "unknown" },
 };
 
 function answer(need: CapabilityNeed) {
@@ -326,7 +327,7 @@ test("a catalog's no is offered to a test; only the adapter's rules a probe out"
   fireEvent.click(main().getByRole("button", { name: "Test…" }));
   expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
   expect(api.previewModelTest).toHaveBeenCalledWith(
-    "saltmarch", { model: "vendor/m", capabilities: ["vision", "embed"] });
+    "saltmarch", { model: "vendor/m", capabilities: ["vision", "embed", "tools"] });
 });
 
 test("Test… lists decide_native for a model whose native decisions are unknown", async () => {
@@ -338,13 +339,38 @@ test("Test… lists decide_native for a model whose native decisions are unknown
   fireEvent.click(main().getByRole("button", { name: "Test…" }));
   expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
   expect(api.previewModelTest).toHaveBeenCalledWith(
-    "saltmarch", { model: "vendor/m", capabilities: ["generate", "vision", "embed", "decide_native"] });
+    "saltmarch", { model: "vendor/m",
+                   capabilities: ["generate", "vision", "embed", "decide_native", "tools"] });
+});
+
+test("an adapter's no on tools leaves the tools probe out of Test…", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+    ...CAPS, tools: { value: "no", source: "adapter" } } }));
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Test…" }));
+  expect(await screen.findByRole("dialog", { name: "Test a model" })).toBeInTheDocument();
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "vendor/m", capabilities: ["generate", "vision", "embed"] });
+});
+
+test("the facts form overrides tool calling", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByRole("combobox", { name: "Tool calling: override" }),
+                   { target: { value: "no" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", {
+    model: "vendor/m", overrides: { tools: "no" },
+  });
 });
 
 test("a model the adapter rules out of every probe has nothing to test", async () => {
   const never = { value: "no", source: "adapter" };
   (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
-    ...CAPS, generate: never, vision: never, embed: never } }));
+    ...CAPS, generate: never, vision: never, embed: never, tools: never } }));
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
   expect(main().getByRole("button", { name: "Test…" })).toBeDisabled();
@@ -1031,4 +1057,104 @@ test("a refreshed /providers/new still returns to where it came from, search and
   expect(await screen.findByText("the models page")).toBeInTheDocument();
   expect(screen.getByTestId("where")).toHaveTextContent(/^\/models#rates$/);
   expect(screen.getByTestId("search")).toHaveTextContent(/^\?add=x$/);
+});
+
+// ---- embedding options (01h-S4) ----
+
+const EMBEDS = { ...CAPS, embed: { value: "unknown", source: "unknown" } };
+const NOMIC_MODEL = "vendor/nomic-embed-text-v1.5";
+
+test("the embedding options are only for a model that may embed", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  await main().findByRole("button", { name: "Save facts" });
+  expect(main().queryByRole("heading", { name: "Embedding options" })).toBeNull();
+  expect(main().queryByRole("combobox", { name: "Input type" })).toBeNull();
+});
+
+test("Suggest fills the options and saves nothing; Save asks, and the yes is resent", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({ model: NOMIC_MODEL, capabilities: EMBEDS }));
+  (api.putModelFacts as any).mockImplementation((_id: string, body: Record<string, unknown>) =>
+    Promise.resolve(facts({ ...body, capabilities: EMBEDS })));
+  (api.putModelFacts as any).mockRejectedValueOnce(new ApiError(
+    400, "This moves the Embedding role to a new vector space.", "confirm_embedding"));
+  open(`/providers/saltmarch/models/${NOMIC_MODEL}`);
+  await main().findByRole("heading", { name: NOMIC_MODEL });
+  expect(await sidebarOf(NOMIC_MODEL).findByText("None — texts are sent as they are."))
+    .toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.click(await main().findByRole("button", { name: "Suggest" }));
+
+  expect(main().getByLabelText("Input type")).toHaveValue("prefix");
+  expect(main().getByLabelText("Query prefix")).toHaveValue("search_query: ");
+  expect(main().getByLabelText("Document prefix")).toHaveValue("search_document: ");
+  expect(api.putModelFacts).not.toHaveBeenCalled();
+
+  fireEvent.change(main().getByLabelText("Dimensions"), { target: { value: "512" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  const ask = await main().findByRole("group", { name: "Confirm the embedding" });
+  const block = { input: "prefix", query_prefix: "search_query: ",
+                  document_prefix: "search_document: ", dimensions: 512 };
+  expect(api.putModelFacts).toHaveBeenLastCalledWith("saltmarch",
+    { model: NOMIC_MODEL, embedding: block });
+  fireEvent.click(within(ask).getByRole("button", { name: "Embed and save" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenLastCalledWith("saltmarch",
+    { model: NOMIC_MODEL, embedding: block, confirm_embedding: true });
+  expect(sidebarOf(NOMIC_MODEL).getByText("query/document prefixes, 512 dimensions"))
+    .toBeInTheDocument();
+});
+
+test("a save that leaves the options alone does not send them", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({
+    capabilities: EMBEDS, embedding: { input: "param", param_field: "task",
+                                       query_value: "q", document_value: "d" } }));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+  expect(await sidebarOf("vendor/m").findByText("query/document in `task`, two requests per recall"))
+    .toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.click(await main().findByRole("checkbox", { name: /Continue replies by prefill/ }));
+  expect(main().getByRole("button", { name: "Suggest" })).toBeDisabled();
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", { model: "vendor/m", prefill: true });
+});
+
+test.each([
+  ["an unknown input type", { input: "bogus" }, {}],
+  ["a block that is not an object", "prefix", {}],
+  ["a request field with no name", { input: "param" },
+   { input: "param", param_field: "", query_value: "", document_value: "" }],
+])("a save over an invalid block (%s) sends the form, so it is repaired",
+   async (_label, stored, sent) => {
+  (api.readModelFacts as any).mockResolvedValue(facts({
+    capabilities: EMBEDS, embedding: stored, embedding_invalid: true,
+    embedding_invalid_reason: "the embedding options are not valid" }));
+  (api.putModelFacts as any).mockImplementation((_id: string, body: Record<string, unknown>) =>
+    Promise.resolve(facts({ ...body, capabilities: EMBEDS })));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.click(await main().findByRole("checkbox", { name: /Continue replies by prefill/ }));
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch",
+    { model: "vendor/m", prefill: true, embedding: sent });
+});
+
+test("an invalid block and a width the endpoint ignored are both said", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({
+    capabilities: EMBEDS, embedding: { input: "param" }, embedding_invalid: true,
+    embedding_invalid_reason: "the request-field input type needs a field name",
+    verified: { embed: { ok: false, error: "ignored", requested_dims: 512,
+                         returned_dims: 1536 } } }));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+  expect(await sidebarOf("vendor/m").findByText(/Invalid — embedding is off with this model/))
+    .toBeInTheDocument();
+  expect(main().getByText(
+    "embed: failed — requested 512, test returned 1536: this endpoint ignores `dimensions`"))
+    .toBeInTheDocument();
 });

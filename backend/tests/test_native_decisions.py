@@ -1366,3 +1366,17 @@ async def test_a_native_joint_past_the_option_limit_is_refused_unsent(provider):
         await client.decide_native(Item(CONTEXT, (wide,)), target)
     assert exc.value.code == "native_unrepresentable" and "act" in exc.value.detail
     assert sent.requests == []
+
+
+async def test_a_native_capture_carries_the_run_id_across_a_retry():
+    """01g-S3: a native item's capture names the run on every attempt."""
+    from grimoire import llm_capture
+
+    wire = Wire((429, {"error": {"code": 429, "message": "slow down"}}), (200, body("answered")))
+    events: list[dict] = []
+    client = facade(wire, capture=lambda: events.append, retries=1)
+    holder: dict = {llm_capture.RUN_KEY: "run-1"}
+    await client.decide_native(ITEM, CONN, holder)
+    assert {e["attempt"] for e in events} == {1, 2}
+    assert all(e["run_id"] == "run-1" for e in events)
+    assert holder[llm_capture.RUN_KEY] == "run-1"

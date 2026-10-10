@@ -57,9 +57,12 @@ class FakeProvider:
         self.mapping = mapping or {}
         self.error = error
         self.calls: list[list[str]] = []
+        self.queries: list[int] = []
 
-    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         self.calls.append(list(texts))
+        self.queries.append(queries)
         if self.error is not None:
             raise self.error
         return [list(self.mapping.get(t, FAR)) for t in texts]
@@ -435,7 +438,8 @@ def test_any_provider_error_degrades_to_keyword_only(store, provider, kind):
 
 def _poisoned(provider, poison_text, mapping):
     """A provider that refuses any request containing `poison_text`."""
-    def embed(texts, model, key, base_url, deadline=None, usage=None):
+    def embed(texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         provider.calls.append(list(texts))
         if poison_text in texts:
             raise embeddings.EmbeddingsError("bad_response", "input rejected")
@@ -523,7 +527,8 @@ def test_both_embed_calls_share_one_deadline(store, provider):
     seen = []
     configure()
 
-    def record(texts, model, key, base_url, deadline=None, usage=None):
+    def record(texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         provider.calls.append(list(texts))
         seen.append(deadline)
         if len(texts) > 1:
@@ -592,7 +597,8 @@ def test_a_zero_query_vector_recalls_nothing(store, provider):
 def test_a_provider_that_returns_too_few_vectors_recalls_nothing(store, provider):
     configure()
 
-    def short(texts, model, key, base_url, deadline=None, usage=None):
+    def short(texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         provider.calls.append(list(texts))
         return [QUERY] * (len(texts) - 1)       # always one short, batch or solo
 
@@ -964,7 +970,8 @@ def test_a_down_provider_degrades_and_files_one_error_row_per_request(store, pro
 def test_a_bad_response_retries_the_query_alone_and_files_two_rows(store, provider):
     configure()
 
-    def once_bad(texts, model, key, base_url, deadline=None, usage=None):
+    def once_bad(texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
         provider.calls.append(list(texts))
         if len(provider.calls) == 1:
             raise embeddings.EmbeddingsError("bad_response", "nope")
@@ -984,7 +991,8 @@ def test_a_retry_does_not_count_the_runs_hits_and_misses_again(store, provider):
     try:
         configure()
 
-        def once_bad(texts, model, key, base_url, deadline=None, usage=None):
+        def once_bad(texts, model, key, base_url, deadline=None, usage=None, *, options=None,
+            queries=0):
             provider.calls.append(list(texts))
             if len(provider.calls) == 1:
                 raise embeddings.EmbeddingsError("bad_response", "nope")
@@ -999,3 +1007,111 @@ def test_a_retry_does_not_count_the_runs_hits_and_misses_again(store, provider):
     finally:
         logs.forget_file_sizes()
         logs.apply_level("info")
+
+
+# --- embedding options (01h-S2) ----------------------------------------------
+
+
+def test_recall_sends_its_query_as_a_query(store, provider):
+    configure()
+    semantic.recall([entry("Near")], "scene text")
+    assert provider.queries == [1]
+    # The query-only retry after a response-shaped failure is a query too.
+    provider.queries.clear()
+    real = provider.embed
+    state = {"n": 0}
+
+    def once_bad(texts, *a, **kw):
+        state["n"] += 1
+        if state["n"] == 1:
+            provider.queries.append(kw.get("queries"))
+            raise embeddings.EmbeddingsError("bad_response", "nope")
+        return real(texts, *a, **kw)
+
+    provider.embed = once_bad
+    semantic.recall([entry("Near"), entry("Other")], "later text")
+    assert provider.queries == [1, 1]
+
+
+def test_no_block_reads_todays_vectors(store, provider):
+    """No re-embed on upgrade: with no `embedding` block the vector a recall
+    writes is at today's key, and a later recall sends only its query."""
+    import hashlib
+
+    conn = configure()
+    rev = llm_connections.read_connection_raw(conn)["rev"]
+    e = entry("Near")
+    semantic.recall([e], "scene text")
+    text = semantic.entry_text(e)
+    today = hashlib.sha256(f"{conn}\0{rev}\0embed-1\0{text}".encode()).hexdigest()
+    cached = list((store / ".cache" / "embeddings").glob("*" + vectors.SUFFIX))
+    assert [p.name for p in cached] == [today + vectors.SUFFIX]
+    semantic.recall([e], "later text")
+    assert provider.calls[-1] == ["later text"]
+
+
+def test_prefix_options_end_to_end(store, monkeypatch):
+    """Stated options reach the wire through the real client: one request,
+    the query prefixed as a query and the entry as a document; the entry's
+    vector is cached under the options space, keyed by its own text; the
+    query is never cached."""
+    import json
+
+    import httpx
+
+    from grimoire.store.inference import facts
+
+    conn = configure(threshold="0.0")
+    facts.state(conn, "embed-1", embedding={
+        "input": "prefix", "query_prefix": "search_query: ",
+        "document_prefix": "search_document: "})
+    seen: list[httpx.Request] = []
+
+    def handler(request):
+        seen.append(request)
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": [1.0, 0.0]}
+                                                  for i in range(len(inputs))]})
+
+    monkeypatch.setattr(semantic, "_CLIENT", embeddings.EmbeddingsClient(
+        httpx.Client(transport=httpx.MockTransport(handler))))
+    e = entry("Near")
+    semantic.recall([e], "scene text")
+    text = semantic.entry_text(e)
+    assert len(seen) == 1
+    assert json.loads(seen[0].content)["input"] == ["search_query: scene text",
+                                                    "search_document: " + text]
+    assert space().endswith("\0embopt1:b61a0b1188d1b0bd3a7cf05b26a81c2a")
+    assert set(vectors.load(space(), [text])) == {text}
+    rev = llm_connections.read_connection_raw(conn)["rev"]
+    assert vectors.load(f"{conn}\0{rev}\0embed-1", [text]) == {}
+    cached = list((store / ".cache" / "embeddings").glob("*" + vectors.SUFFIX))
+    assert len(cached) == 1
+
+
+def test_a_width_ignoring_endpoint_costs_one_request_per_turn(store, monkeypatch):
+    """01h-S3: an endpoint that ignores a requested `dimensions` answers
+    `missing_key`/`dimensions_mismatch`, which recall never retries -- one
+    request and one error row a turn, not two."""
+    import json
+
+    import httpx
+
+    from grimoire.store.inference import facts
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": [1.0, 0.0, 0.0]}
+                                                  for i in range(len(inputs))]})
+
+    monkeypatch.setattr(semantic, "_CLIENT", embeddings.EmbeddingsClient(
+        httpx.Client(transport=httpx.MockTransport(handler))))
+    cid = configure()
+    facts.state(cid, "embed-1", embedding={"dimensions": 2})
+    assert semantic.recall([entry("Miss")], "scene text") == []
+    assert len(seen) == 1
+    [row] = _rows()
+    assert (row["status"], row["error"]) == ("error", "missing_key")

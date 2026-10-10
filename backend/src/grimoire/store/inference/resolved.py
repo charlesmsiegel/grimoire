@@ -126,7 +126,8 @@ class ResolvedInference:
     #: Why the chosen fallback is left out of `attempts` though it exists: it
     #: cannot send at all (`resolve.problem`: no key, no base URL), or it is on
     #: the primary's own provider (`resolve.SAME_PROVIDER`; lifted behind a
-    #: decide primary that cannot generate). None when it is
+    #: decide primary that cannot generate), or the task's code policy sends
+    #: none (`resolve.NO_FALLBACK_POLICY`, which outranks both). None when it is
     #: attempted, or there is no fallback to send. Never refused on -- the primary is
     #: what the call runs on -- so the settings view is where it shows.
     fallback_problem: str | None = None
@@ -134,8 +135,12 @@ class ResolvedInference:
     #: (`resolve.embedding`): `f"{provider_id}\0{rev}\0{model}"`, the key every
     #: vector cache is read and written under. Set only when the role embeds --
     #: a model, an endpoint, and nothing in `missing`; None otherwise, and
-    #: always None for a generative resolution.
+    #: always None for a generative resolution. Stated embedding options whose
+    #: document side is not the default add `\0embopt1:<digest>` (01h §5.1).
     space_id: str | None = None
+    #: Why the Embedding role names no space because of its model's facts
+    #: (`resolve.OPTIONS_HELD`, `OPTIONS_MANGLED`, `OPTIONS_INVALID`), or "".
+    embed_options_problem: str = ""
     #: Whether the fallback attempt rides the facade behind the primary
     #: (`chain`'s `fallback`): always on a generate resolution whose fallback
     #: is not known incapable; on a decide one only where both attempts are
