@@ -960,8 +960,13 @@ def decide_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.
 
 def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
                     route_of: Callable[[str], routing.Route | None] = routing.route,
+                    policy_of: Callable[[str], routing.TaskPolicy] = routing.policy,
                     ) -> list[str]:
-    """What is wrong with one module's use of the `decide` operation."""
+    """What is wrong with one module's use of the `decide` operation --
+    including (roadmap 01d-S4) an `escalation=` passed where the task's code
+    policy does not escalate, or missing where it does: `decide` refuses
+    either at run time before any meter opens, and this says so before it
+    ships."""
     out: list[str] = []
     for ref, is_call in _decide_refs(tree, modname, is_pkg):
         if not is_call:
@@ -976,6 +981,12 @@ def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
             out.append(f"{modname}:{call.lineno}: {task!r} is not a task of a decide route")
         if not any(k.arg == "resolved" for k in call.keywords):
             out.append(f"{modname}:{call.lineno}: decide({task!r}) passes no resolved=")
+        passes = any(k.arg == "escalation" for k in call.keywords)
+        escalates = bool(policy_of(task).escalate_to)
+        if passes != escalates:
+            out.append(f"{modname}:{call.lineno}: decide({task!r}) "
+                       f"{'passes' if passes else 'passes no'} escalation=, and its "
+                       f"policy {'escalates' if escalates else 'does not escalate'}")
     return out
 
 
@@ -1067,6 +1078,35 @@ def test_the_decide_guard_flags_planted_cases(src):
 ])
 def test_the_decide_guard_passes_planted_cases(src, modname):
     assert _planted_decide_problems(src, modname) == [], src
+
+
+def _escalating(task: str) -> routing.TaskPolicy:
+    """A planted policy: `scene-break` escalates, every other task as the
+    product has it (none does)."""
+    if task == "scene-break":
+        return routing.TaskPolicy(escalate_to="primary", escalate_on=("abstained",),
+                                  question="over")
+    return routing.policy(task)
+
+
+@pytest.mark.parametrize(("src", "policy_of", "flagged"), [
+    # The policy escalates and the call hands no escalator.
+    ("operations.decide('scene-break', items, client=c, resolved=r)\n", _escalating, True),
+    # The call hands one and the policy does not escalate.
+    ("operations.decide('scene-break', items, client=c, resolved=r, escalation=e)\n",
+     routing.policy, True),
+    ("operations.decide('voice-drift', items, client=c, resolved=r, escalation=e)\n",
+     _escalating, True),
+    # Agreeing both ways.
+    ("operations.decide('scene-break', items, client=c, resolved=r, escalation=e)\n",
+     _escalating, False),
+    ("operations.decide('scene-break', items, client=c, resolved=r)\n", routing.policy, False),
+])
+def test_the_decide_guard_holds_escalation_to_the_policy(src, policy_of, flagged):
+    tree = ast.parse("from .. import inference as operations\n" + src)
+    found = decide_problems(tree, _DECIDE_PLANTED_IN, policy_of=policy_of)
+    assert bool(found) == flagged, (src, found)
+    assert all("escalation=" in f for f in found), found
 
 
 def test_bindings_resolve_the_decide_module():

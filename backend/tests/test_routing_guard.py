@@ -22,6 +22,10 @@ The claims, each held against the AST of `routes/`:
   argument nothing here reads;
 - a second argument handed to `require_inference` is `cid`, and a decorated
   handler passing one is mounted under `/campaigns/{cid}`;
+- the escalation seam (`escalation_inference(task, cid)`, roadmap 01d-S4) is
+  held the same way: only ever called, its task a literal a route claims
+  whose code policy escalates to a ROLE (`routing.TaskPolicy.escalate_to`),
+  its second argument `cid` under `/campaigns/{cid}`;
 - a direct `store.inference.resolve.resolve(...)` is marked and capped
   (`llm_connections.get_active()`, the other way round the seam this used to
   scan for, was deleted in inference slice I);
@@ -183,7 +187,7 @@ def test_a_campaign_override_only_reaches_calls_that_pass_a_campaign():
     for path, text in _sources():
         tree = ast.parse(text)
         for fn in [n for n in ast.walk(tree) if isinstance(n, _FUNCTIONS)]:
-            for call in _calls(fn, "require_inference"):
+            for call in [*_calls(fn, "require_inference"), *_calls(fn, SEAM_ESCALATION)]:
                 if len(call.args) < 2:
                     continue
                 second = call.args[1]
@@ -219,6 +223,10 @@ def test_the_walk_finds_the_call_sites_and_not_the_definition():
                     "the definition line is being read as a call site")
     assert seen >= 15, f"only {seen} call sites found; the walk is not finding them"
     assert definitions == 1, f"expected one definition of the seam, found {definitions}"
+    escalation = [node for _path, text in _sources() for node in ast.walk(ast.parse(text))
+                  if isinstance(node, _FUNCTIONS) and node.name == SEAM_ESCALATION]
+    assert len(escalation) == 1, (
+        f"expected one definition of the escalation seam, found {len(escalation)}")
 
 
 def test_the_guard_reaches_the_scripts_and_the_evals():
@@ -337,12 +345,15 @@ def _unmarked_resolver_calls(text: str, where: str) -> tuple[list[str], list[tup
     return unmarked, marked
 
 
-#: The seam's own two calls (`require_inference`, `override_inference`) and the
-#: three display-only reads of where chat would run (`config._chat`, which the
-#: header and `send_images_reach` share; `scenes._chat_target`, which the
-#: context breakdown and a new scene's `model` stamp share; and the live side
-#: of a prompt diff). Raising it is a review question, not a fix.
-RESOLVER_CALL_CAP = 5
+#: The seam's own three calls (`require_inference`, `override_inference` and
+#: the escalation seam, `escalation_inference`, which resolves a task's
+#: escalation ROLE -- roadmap 01d-S4 -- and refuses what cannot serve the hop
+#: softly) and the three display-only reads of where chat would run
+#: (`config._chat`, which the header and `send_images_reach` share;
+#: `scenes._chat_target`, which the context breakdown and a new scene's
+#: `model` stamp share; and the live side of a prompt diff). Raising it is a
+#: review question, not a fix.
+RESOLVER_CALL_CAP = 6
 
 
 def test_the_resolver_is_reached_only_through_the_seam_or_a_marked_display():
@@ -473,14 +484,16 @@ def test_the_operation_check_flags_a_planted_mismatch():
     assert not _operation_mismatches(tree, "planted.py")
 
 
-def _value_references(text: str) -> list[tuple[ast.AST, str | None]]:
-    """Every `require_inference` named other than as a call's callee, with the
-    `# routing-ok:` reason attached to it (None for none)."""
+def _value_references(text: str, name: str = "require_inference"
+                      ) -> list[tuple[ast.AST, str | None]]:
+    """Every `name` (a seam) named other than as a call's callee, with the
+    `# routing-ok:` reason attached to it (None for none). A `def` of it is
+    no reference: a definition is a statement, not a `Name` load."""
     tree = ast.parse(text)
     callees = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     refs = [node for node in ast.walk(tree)
-            if ((isinstance(node, ast.Name) and node.id == "require_inference")
-                or (isinstance(node, ast.Attribute) and node.attr == "require_inference"))
+            if ((isinstance(node, ast.Name) and node.id == name)
+                or (isinstance(node, ast.Attribute) and node.attr == name))
             and id(node) not in callees]
     return [(node, _reason(text, node, [r for r in refs if r is not node])) for node in refs]
 
@@ -585,7 +598,7 @@ def _str_literal(node: ast.AST | None) -> str | None:
 
 def _task_nodes(tree: ast.AST):
     """`(task expression, call)` for every place a task is spelled in `tree`."""
-    for name in ("require_inference", "meter"):
+    for name in ("require_inference", "meter", SEAM_ESCALATION):
         for call in _calls(tree, name):
             if call.args:
                 yield call.args[0], call
@@ -665,3 +678,86 @@ def test_every_registered_task_is_actually_named_by_a_call_site(task):
     """
     assert task in _task_literals(), (
         f"routing.ROUTES claims task {task!r}, but nothing in routes/ names it")
+
+
+# ---- the escalation seam (roadmap 01d-S4) ----
+#: The escalation seam's name (`routes.common.escalation_inference`).
+SEAM_ESCALATION = "escalation_inference"
+
+
+def _escalation_problems(text: str, where: str, *,
+                         policy_of=routing.policy) -> list[str]:
+    """What is wrong with one file's use of the escalation seam: a reference
+    that is not a call, a task that is not a literal or that no route
+    claims, or a task whose code policy escalates to no ROLE (none, or
+    `routing.CALLER`, which brings its own resolver and has nothing for the
+    seam to resolve). No marker exempts one: a hop on a task its policy does
+    not name is not a call that needs arguing, it is the drift `decide`'s
+    `ValueError` exists for, caught before it runs."""
+    out = [f"{where}:{node.lineno}: {SEAM_ESCALATION} handed around as a value"
+           for node, _reason in _value_references(text, SEAM_ESCALATION)]
+    for call in _calls(ast.parse(text), SEAM_ESCALATION):
+        task = _str_literal(call.args[0]) if call.args else None
+        site = f"{where}:{call.lineno}"
+        if task is None:
+            out.append(f"{site}: {SEAM_ESCALATION}'s task is not a string literal")
+        elif task not in routing.TASK_ROUTE:
+            out.append(f"{site}: {task!r} is claimed by no route")
+        elif policy_of(task).escalate_to not in routing.ESCALATION_ROLES:
+            out.append(f"{site}: {task!r}'s policy escalates to no role "
+                       f"({policy_of(task).escalate_to!r})")
+    return out
+
+
+def test_the_escalation_seam_names_a_task_whose_policy_escalates():
+    """Each call site of the escalation seam resolves a task whose code policy
+    hands its unsure answers to a role. None does today (`TASK_POLICY` is
+    empty); a task's switching change adds its own."""
+    found = [p for path, text in _sources() for p in _escalation_problems(text, path.name)]
+    assert not found, (
+        "the escalation seam takes a task literal whose routing.TaskPolicy "
+        f"escalates to a role, and is only ever called: {found}")
+
+
+def _escalating(task: str) -> routing.TaskPolicy:
+    """A planted policy: `scene-break` escalates to Primary, `voice-drift` to
+    a caller's resolver, every other task as the product has it."""
+    if task == "scene-break":
+        return routing.TaskPolicy(escalate_to="primary", escalate_on=("abstained",),
+                                  question="over")
+    if task == "voice-drift":
+        return routing.TaskPolicy(escalate_to=routing.CALLER, escalate_on=("abstained",),
+                                  question="verdict")
+    return routing.policy(task)
+
+
+@pytest.mark.parametrize(("src", "why"), [
+    ('e = escalation_inference(task, cid)\n', "not a string literal"),
+    ('e = escalation_inference()\n', "not a string literal"),
+    ('e = common.escalation_inference("no-such-task", cid)\n', "claimed by no route"),
+    ('e = escalation_inference("chat", cid)\n', "escalates to no role ('')"),
+    ('e = escalation_inference("voice-drift", cid)\n', "escalates to no role ('caller')"),
+    ('e = run_in_threadpool(escalation_inference, "scene-break", cid)\n',
+     "handed around as a value"),
+    ('seam = common.escalation_inference\n', "handed around as a value"),
+    ('seam = escalation_inference  # routing-ok: a planted reference, argued here\n',
+     "handed around as a value"),
+])
+def test_the_escalation_check_flags_a_planted_call(src, why):
+    found = _escalation_problems(src, "planted.py", policy_of=_escalating)
+    assert found and why in found[0], (src, found)
+
+
+def test_the_escalation_check_passes_a_planted_call():
+    fine = ('esc = lambda: run_in_threadpool(\n'
+            '    lambda: common.escalation_inference("scene-break", cid))\n'
+            'e = escalation_inference("scene-break")\n'
+            'def escalation_inference(task, cid=""):\n    pass\n')
+    assert _escalation_problems(fine, "planted.py", policy_of=_escalating) == []
+    # Under the product's (empty) table, the same call is flagged.
+    assert _escalation_problems(fine, "planted.py")
+
+
+def test_the_escalation_seam_s_task_is_inventoried_and_its_cid_checked():
+    tree = ast.parse('e = escalation_inference("scene-break", cid)\n')
+    assert [_str_literal(node) for node, _call in _task_nodes(tree)] == ["scene-break"]
