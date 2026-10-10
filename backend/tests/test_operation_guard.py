@@ -179,8 +179,9 @@ CLIENT_MODULE = "grimoire.embeddings"
 CLIENT_DOORS = frozenset({EMBED_MODULE, "grimoire.routes.config"})
 
 #: At least this many operation calls exist (vacuity insurance): lore recall
-#: 2, library search 2, art 1, continuity 1. The async `embed` has no caller
-#: yet (ruling 9).
+#: 2, library search 2, art 1, continuity 1. The async `embed` (01h-C4b, a
+#: native door on the app's `routes.get_embeddings` client) has no caller
+#: yet: 09 and 10 are its consumers.
 MIN_EMBED_CALLS = 6
 
 
@@ -895,7 +896,11 @@ def test_the_embed_guard_flags_planted_cases(src, modname):
     # The model test's probe, at its door.
     ("asyncio.to_thread(lambda: _EMBEDDINGS.embed([x], m, k, u, usage=m.usage))\n",
      "grimoire.routes.config"),
-    # The operation's own module: the async form forwards `task`, and hands
+    # The operation's own module: the async form awaits the async client
+    # (01h-C4b) with its holder.
+    (("async def embed(task, texts, client):\n"
+      "    return await client.embed(texts, m, k, u, usage=h)\n"), EMBED_MODULE),
+    # The operation's own module: a form that forwards `task`, and hands
     # `embed_sync` to a worker thread.
     (("async def embed(task, texts):\n"
       "    return await asyncio.to_thread(embed_sync, task, texts)\n"

@@ -523,8 +523,22 @@ def test_nothing_is_captured_above_debug(space):
 
 # ---- the async form ------------------------------------------------------------
 
+def _aclient(handler=None) -> tuple[embeddings.AsyncEmbeddingsClient, list[httpx.Request]]:
+    """`_client`, for the async door: the same recording, over an
+    `httpx.AsyncClient`."""
+    seen: list[httpx.Request] = []
+    handler = handler or _answer()
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    return (embeddings.AsyncEmbeddingsClient(
+        httpx.AsyncClient(transport=httpx.MockTransport(record))), seen)
+
+
 def test_the_async_form_is_the_same_call(space):
-    client, seen = _client()
+    client, seen = _aclient()
 
     out = asyncio.run(embed.embed("semantic-search", ["x"], space=space, client=client))
 
@@ -603,7 +617,7 @@ def test_nul_never_reaches_a_request(space):
 
 
 def test_the_async_door_forwards_queries(nomic_space):
-    client, seen = _client()
+    client, seen = _aclient()
     asyncio.run(embed.embed("semantic-recall", ["q", "d"], space=nomic_space, client=client,
                             queries=1))
     assert json.loads(seen[0].content)["input"] == ["search_query: q", "search_document: d"]

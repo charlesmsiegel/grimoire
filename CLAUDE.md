@@ -1108,9 +1108,16 @@ would answer neither question.
   `responses.update_round`). A present record means decided, a decided
   outcome is never re-drawn, and a reroll mints a new seed. No task samples
   yet.
-- **Adding an embedding call site?** There is one door,
-  `store.inference.embed.embed_sync(<task>, texts, space=embed_space.endpoint(),
-  client=…, campaign=…)`, and the task must be in `routing.EMBED_TASKS` (a
+- **Adding an embedding call site?** The doors are in one module,
+  `store/inference/embed.py`: `embed_sync(<task>, texts,
+  space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread
+  or a CLI, with a module's own synchronous `embeddings.EmbeddingsClient`,
+  and `await embed(...)`, the same call natively async, from a coroutine,
+  with the app's `embeddings.AsyncEmbeddingsClient` (`routes.get_embeddings`,
+  one per app, closed by its lifespan; one deadline covers its whole call,
+  and a cancel files the row `aborted`). Each refuses the other's client.
+  Both take `post=` and `run_id=`, filed on the row. The task must be in
+  `routing.EMBED_TASKS` (a
   route would carry no choice: every embed task resolves through the global
   Embedding role, and the frozen observer enumerates `TASK_ROUTE`). The caller
   resolves the space **once**, from that role (`resolve.embedding`, which

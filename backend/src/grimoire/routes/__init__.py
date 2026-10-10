@@ -100,16 +100,20 @@ from . import (
     worlds,
 )
 from .common import (
+    build_embeddings,
     build_llm,
     build_openai_compatible_client,
+    get_embeddings,
     get_health,
     get_llm,
     get_openai_compatible_client,
 )
 
 __all__ = [
+    "build_embeddings",
     "build_llm",
     "build_openai_compatible_client",
+    "get_embeddings",
     "get_health",
     "get_llm",
     "get_openai_compatible_client",

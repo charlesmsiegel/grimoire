@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import runner
 from .health import ProviderHealth
-from .routes import build_llm, build_openai_compatible_client, router, runs
+from .routes import build_embeddings, build_llm, build_openai_compatible_client, router, runs
 from .routes import config as config_routes
 from .routes.common import NEWER_FORMAT
 from .store import (
@@ -369,7 +369,7 @@ async def _lifespan(app: FastAPI):
         # no app to hang them on, and are still closed by nobody.
         # `test_llm_lifecycle` fails if a closable is added to `app.state` and
         # left out of the loop below.
-        for client in (app.state.llm, app.state.openai_compatible):
+        for client in (app.state.llm, app.state.openai_compatible, app.state.embeddings):
             try:
                 await client.aclose()
             except Exception as exc:  # noqa: BLE001 -- see above
@@ -633,6 +633,8 @@ def create_app() -> FastAPI:
     # client opens a socket before its first call.
     app.state.llm = build_llm(app.state.health)
     app.state.openai_compatible = build_openai_compatible_client()
+    # The async embeddings door's client (01h-C4b), on the same footing.
+    app.state.embeddings = build_embeddings()
     # Same reasoning as the gateway clients directly above: the run registry is
     # pure data with nothing to close, and a bare `TestClient` never runs a
     # lifespan -- so a registry created only at startup would be absent for

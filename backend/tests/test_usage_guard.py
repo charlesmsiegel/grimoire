@@ -278,9 +278,12 @@ def test_the_embeddings_check_flags_and_passes_planted_cases():
     where = "grimoire.store.semsearch"
     for src in ("_CLIENT.embed(texts, m, k, u)\n",
                 "_CLIENT.embed(texts, m, k, u, usage=None)\n",
-                "_CLIENT.embed(texts, m, k.usage, u)\n"):
+                "_CLIENT.embed(texts, m, k.usage, u)\n",
+                # The async client (01h-C4b), awaited: the same rule.
+                "async def f(client):\n    await client.embed(texts, m, k, u)\n"):
         assert _unmetered_embeds(ast.parse(src), where), src
     for src in ("_CLIENT.embed(texts, m, k, u, usage=m.usage)\n",
+                "async def f(client):\n    await client.embed(texts, m, k, u, usage=m.usage)\n",
                 # An operation call, not a client call: the operation meters.
                 ("from .. import store\n"
                  "store.inference.embed.embed('semantic-search', t, space=s, client=c)\n"),
