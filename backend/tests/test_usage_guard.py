@@ -53,6 +53,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import pytest
+
 import grimoire.inference as inference_mod
 import grimoire.routes as routes_pkg
 
@@ -369,3 +371,125 @@ def test_the_generate_holder_check_flags_planted_calls():
                 ops + ("operations.generate('tagline', m, client=c, resolved=r,\n"
                        "                    usage=meter.usage, stream=False)\n")):
         assert _unmetered_generates(ast.parse(src), where) == [], src
+
+
+# ---- "was a request sent?" is asked one way (01g-S3) ----
+#: The one module allowed to read a holder's emptiness: it defines the test.
+SENT_MODULE = "grimoire.store.usage"
+#: How the package spells a usage holder: an attribute or a bare name (or a
+#: subscript of one) called one of these -- `m.usage`, `usage`, `holder`,
+#: `holders[i]`.
+HOLDER_NAMES = frozenset({_HOLDER, "holder", "holders"})
+#: Receivers whose `.usage` is NOT a holder, exempt by name: `store.usage`
+#: is the ledger module, and `decisions.Decision.usage` is a tuple of ledger
+#: rows, bound as `decision` / `decided` / `got` wherever it is read. A
+#: binding added under another name is flagged until it is listed here.
+NOT_HOLDER_RECEIVERS = frozenset({"store", "decision", "decided", "got"})
+
+
+def _is_holder(node: ast.AST) -> bool:
+    if isinstance(node, ast.Subscript):
+        return _is_holder(node.value)
+    if isinstance(node, ast.Name):
+        return node.id in HOLDER_NAMES
+    if isinstance(node, ast.Attribute):
+        receiver = node.value
+        return (node.attr in HOLDER_NAMES
+                and not (isinstance(receiver, ast.Name)
+                         and receiver.id in NOT_HOLDER_RECEIVERS))
+    return False
+
+
+def _is_empty_dict(node: ast.AST) -> bool:
+    """`{}` or `dict()`."""
+    return ((isinstance(node, ast.Dict) and not node.keys)
+            or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "dict" and not node.args and not node.keywords))
+
+
+def _truth_tested(node: ast.AST):
+    """The expressions whose truth value (or length) `node` takes."""
+    if isinstance(node, (ast.If, ast.IfExp, ast.While, ast.Assert)):
+        yield node.test
+    elif isinstance(node, ast.comprehension):
+        yield from node.ifs
+    elif isinstance(node, ast.BoolOp):
+        # `holder or {}` is a None default, not a question about emptiness.
+        if not (isinstance(node.op, ast.Or) and _is_empty_dict(node.values[-1])):
+            yield from node.values
+    elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        yield node.operand
+    elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+          and node.func.id in ("bool", "len") and node.args):
+        yield node.args[0]
+
+
+def _compares_to_empty(node: ast.AST) -> bool:
+    """`<holder> == {}`, `!= dict()`, either way round."""
+    if not (isinstance(node, ast.Compare) and len(node.ops) == 1
+            and isinstance(node.ops[0], (ast.Eq, ast.NotEq))):
+        return False
+    left, right = node.left, node.comparators[0]
+    return ((_is_holder(left) and _is_empty_dict(right))
+            or (_is_holder(right) and _is_empty_dict(left)))
+
+
+def _tested_holder(node: ast.AST) -> ast.AST | None:
+    """The holder expression whose emptiness `node` takes, or None."""
+    if _compares_to_empty(node):
+        return node
+    return next((e for e in _truth_tested(node) if _is_holder(e)), None)
+
+
+def _emptiness_tests(tree: ast.AST, modname: str) -> list[str]:
+    """A holder's emptiness taken as an answer: its truth value (`if`,
+    `while`, a ternary, `assert`, a comprehension's `if`, `not`, `and`/`or`,
+    `bool()`), its `len()`, or a comparison with `{}` / `dict()`. Each reads
+    "the holder is non-empty" as "a request went out", which a holder seeded
+    before the call (`store.usage.PRE_SEND_KEYS`: a run id, a reasoning
+    buffer) makes false. Ask `store.usage.sent`.
+
+    Honest about its reach: a holder is recognised by its NAME (see
+    `HOLDER_NAMES`), so one bound under another name is not seen; and
+    `x or {}`, the None default, is allowed."""
+    if modname == SENT_MODULE:
+        return []
+    # The holder's own line: a comprehension clause has none of its own.
+    return [f"{modname}:{held.lineno}" for node in ast.walk(tree)
+            if (held := _tested_holder(node)) is not None]
+
+
+def test_no_holder_emptiness_test_outside_the_ledger():
+    offenders = [o for modname, tree, _pkg in _walk() for o in _emptiness_tests(tree, modname)]
+    assert not offenders, (
+        "a holder's emptiness read as 'sent' -- a meter seeded with a run id is "
+        "non-empty before anything goes out; ask `store.usage.sent(m.usage)`:\n  "
+        + "\n  ".join(offenders))
+
+
+@pytest.mark.parametrize("src", [
+    "sent = bool(m.usage)\n", "x = a if m.usage else b\n",
+    "if m.usage:\n    pass\n", "if not meter.usage:\n    pass\n",
+    "if m.usage and y:\n    pass\n", "sent = m.usage and True\n",
+    "n = len(m.usage)\n", "x = m.usage == {}\n", "x = {} != m.usage\n",
+    "x = m.usage == dict()\n", "assert m.usage\n", "xs = [h for h in hs if m.usage]\n",
+    "if usage:\n    pass\n", "if not usage:\n    pass\n", "x = bool(holder)\n",
+    "if holders[i]:\n    pass\n", "while holder:\n    pass\n",
+])
+def test_the_emptiness_check_flags_each_planted_shape(src):
+    assert _emptiness_tests(ast.parse(src), "grimoire.inference"), src
+
+
+@pytest.mark.parametrize("src", [
+    "sent = store.usage.sent(m.usage)\n", "if m.usage is None:\n    pass\n",
+    "if usage is None:\n    pass\n", "x = m.usage.get('model')\n",
+    "x = (usage or {}).get('k')\n", "x = _served_by(holder or {})\n",
+    "if got.usage:\n    pass\n", "n = len(decision.usage)\n",
+    "if store.usage:\n    pass\n", "x = m.usage == other\n",
+])
+def test_the_emptiness_check_passes_what_is_not_one(src):
+    assert _emptiness_tests(ast.parse(src), "grimoire.inference") == [], src
+
+
+def test_the_ledger_module_may_ask_its_own_question():
+    assert _emptiness_tests(ast.parse("if not self.usage:\n    pass\n"), SENT_MODULE) == []

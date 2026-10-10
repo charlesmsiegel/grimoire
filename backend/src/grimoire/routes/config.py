@@ -1197,7 +1197,8 @@ async def _embed_probe(raw: dict, target: wire.Target, model: str,
     an embed task and resolves no role).
 
     The holder is stamped as `llm._stamp` stamps a chat attempt, which is what
-    makes the meter file a row at all (an empty holder means "never sent"),
+    makes the meter file a row at all (an unstamped holder means "never
+    sent", `store.usage.sent`),
     and the client folds into it whatever counts the endpoint reports (a
     prompt count it did not report is estimated, `embed.estimate_prompt`).
     What served it -- the provider id and the `embed` operation -- is filed

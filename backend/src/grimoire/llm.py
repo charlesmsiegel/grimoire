@@ -588,6 +588,10 @@ def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> No
     (`llm_usage.account`): its provider id, the sampler preset it was sent,
     and its account. So a fallback, a degrade sibling or a retry each
     describes itself, and a row that fell back names the fallback.
+
+    Two keys survive the clear: the display reasoning buffer (reset), and the
+    run id a `store.usage.Meter` seeded (`llm_capture.RUN_KEY`), which every
+    attempt's incoming-response capture names.
     """
     if usage is None:
         return
@@ -596,10 +600,15 @@ def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> No
         route = _Route(route, 0)
     target = route.target
     reasoning = usage.get(llm_reasoning.KEY)
+    run = llm_capture.run_id(usage)
     usage.clear()
     if isinstance(reasoning, llm_reasoning.Buffer):
         reasoning.begin()
         usage[llm_reasoning.KEY] = reasoning
+    if run:
+        # The caller's run (01g-C3) is the call's, not the attempt's: every
+        # attempt's capture names it.
+        usage[llm_capture.RUN_KEY] = run
     usage.update({"model": target.model, "connection": _label(target),
                   "provider": target.kind, "attempts": attempts,
                   # Which attempt is live, for the route that may have to
@@ -1085,7 +1094,8 @@ async def _resilient(open_stream, routes: list[_Route], timeout: float,
             _stamp(usage, route, tries)
             if capture is not None and usage is not None:
                 usage[llm_capture.KEY] = llm_capture.Capture(
-                    capture, call_id, tries, target.model, target.kind)
+                    capture, call_id, tries, target.model, target.kind,
+                    run_id=llm_capture.run_id(usage))
                 llm_capture.emit(usage, "start", None)
             outcome = "interrupted"
             if llm_reasoning.pending(usage):
@@ -1574,7 +1584,8 @@ class LLMClient:
             _stamp(usage, route, tries)
             if sink is not None and usage is not None:
                 usage[llm_capture.KEY] = llm_capture.Capture(
-                    sink, call_id, tries, attempt.model, attempt.kind)
+                    sink, call_id, tries, attempt.model, attempt.kind,
+                    run_id=llm_capture.run_id(usage))
                 llm_capture.emit(usage, "start", None)
             outcome = "interrupted"
             try:

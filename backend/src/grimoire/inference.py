@@ -288,6 +288,11 @@ class _Call:
     #: §5.5): its `CallRecord.hop` and its capture outcome's "hop". "" on a
     #: call of the chain itself, which then records and captures nothing new.
     hop: str = ""
+    #: Attribution every meter of the call files (02 §3.5, 01g-C3): the
+    #: reply a decision serves, and the caller's run and its turn.
+    response_id: str = ""
+    run_id: str = ""
+    loop_turn: int | None = None
 
     def batch(self, unit: Sequence[int]) -> tuple[int, ...]:
         """`unit`'s stage positions as batch indices."""
@@ -396,8 +401,8 @@ async def _stream_without_refused_mode(
 class _Reply(NamedTuple):
     """One chunk's last word: the reply text and the holder that answered,
     or the error -- and whether any request went out for it (`sent`: a
-    holder the facade stamped, the same test `store.usage.Meter` files a row
-    by)."""
+    holder the facade stamped, `store.usage.sent`, the same test
+    `store.usage.Meter` files a row by)."""
 
     text: str
     holder: dict | None
@@ -429,6 +434,15 @@ def _server(target: object) -> tuple[()] | tuple[str, str, str]:
     return (kind, provider_id, model)
 
 
+def _meter(call: _Call) -> store.usage.Meter:
+    """The meter for one request `call` makes: the one place `decide` opens
+    one, so every meter files the same attribution."""
+    return store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
+                             post=call.post, round_id=call.round_id,
+                             response_id=call.response_id, run_id=call.run_id,
+                             loop_turn=call.loop_turn)
+
+
 def _record(call: _Call, mode: str, unit: Sequence[int], row: dict | None,
             error: LLMError | None) -> decisions.CallRecord:
     """One settled request's `decisions.CallRecord`: its error's kind and
@@ -448,8 +462,7 @@ async def _once(call: _Call, sending: wire.Chain, messages: list[dict], schema: 
     `records`."""
     # Named `client`, the receiver `test_usage_guard.py` recognises.
     client = call.client
-    m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
-                          post=call.post, round_id=call.round_id)
+    m = _meter(call)
     error: LLMError | None = None
     text = ""
     try:
@@ -467,7 +480,7 @@ async def _once(call: _Call, sending: wire.Chain, messages: list[dict], schema: 
     if m.row is not None:
         rows.append(m.row)
     records.append(_record(call, STRUCTURED, unit, m.row, error))
-    sent = bool(m.usage)
+    sent = store.usage.sent(m.usage)
     return (_Reply(text, m.usage, None, sent) if error is None
             else _Reply("", None, error, sent))
 
@@ -695,8 +708,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
         async with gate:
             if stopped:
                 return
-            m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
-                                  post=call.post, round_id=call.round_id)
+            m = _meter(call)
             started[index] = True
             try:
                 with m:
@@ -724,7 +736,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
         # refused before it went out (`Capture`).
         answered = results[index]
         await _captured(
-            call, partial(_native_request, item, named) if m.usage else [],
+            call, partial(_native_request, item, named) if store.usage.sent(m.usage) else [],
             partial(_outcome, call, (index,), NATIVE, named, holders[index],
                     () if answered is None else (answered,), errors[index]),
             named)
@@ -821,7 +833,9 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
                      client: LLMClient, explain: str = "",
                      campaign: str = "", scene: str = "", post: int | None = None,
                      round_id: str = "", capture: Capture | None = None,
-                     around: Around | None = None) -> decisions.Decision:
+                     around: Around | None = None, response_id: str = "",
+                     run_id: str = "", loop_turn: int | None = None
+                     ) -> decisions.Decision:
     """Answer `items` down `chain`, stage by stage (spec 5.5): each stage runs
     the items still pending through its own backend, and an item moves on
     only when its stage FAILED to answer it -- an answer, a `refused` or a
@@ -865,7 +879,8 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     call = _Call(task=task, client=client, explain=explain,
                  campaign=campaign, scene=scene, post=post, round_id=round_id,
                  capture=capture, around=around, chain=chain[0].chain,
-                 retries=chain[0].retries)
+                 retries=chain[0].retries, response_id=response_id, run_id=run_id,
+                 loop_turn=loop_turn)
     results: list[decisions.ItemResult | None] = [None] * len(items)
     #: Per item, the failure of each stage that failed it, in stage order.
     words: dict[int, list[LLMError]] = {}
@@ -929,7 +944,8 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
                  scene: str = "", post: int | None = None, round_id: str = "",
                  capture: Capture | None = None,
                  around: Around | None = None,
-                 escalation: Escalator | None = None) -> decisions.Decision:
+                 escalation: Escalator | None = None, response_id: str = "",
+                 run_id: str = "", loop_turn: int | None = None) -> decisions.Decision:
     """Answer `items` (spec 7.4): one `ItemResult` per item, in input order.
 
     `resolved` is the call site's own resolution of `task` for the `decide`
@@ -939,7 +955,9 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     neither files a ledger row.
 
     `explain` is the rationale instruction ("" asks for none). `campaign`,
-    `scene`, `post` and `round_id` attribute each call's ledger row. `capture`
+    `scene`, `post`, `round_id` and `response_id` attribute each call's
+    ledger row, and `run_id` / `loop_turn` the caller's run and its turn
+    (01g-C3), which the call's incoming-response capture names too. `capture`
     is handed each call once it settles (`Capture`); `around` is handed each
     facade call and the meter's live holder, and returns what to await
     instead (a caller's time budget).
@@ -966,7 +984,8 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
         raise ValueError(f"no decision backend for mode {resolved.decision_mode!r}")
     base = await run_stages(task, items, chain, client=client,
                             explain=explain, campaign=campaign, scene=scene, post=post,
-                            round_id=round_id, capture=capture, around=around)
+                            round_id=round_id, capture=capture, around=around,
+                            response_id=response_id, run_id=run_id, loop_turn=loop_turn)
     if policy is None or escalation is None:
         return base
     found = decisions.triggers(base.items, question=policy.question,
@@ -981,7 +1000,8 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     call = _Call(task=task, client=client, explain=explain, campaign=campaign,
                  scene=scene, post=post, round_id=round_id, capture=capture,
                  around=around, chain=chain[0].chain, retries=0, stage=len(chain),
-                 hop=decisions.HOP_ESCALATION)
+                 hop=decisions.HOP_ESCALATION, response_id=response_id, run_id=run_id,
+                 loop_turn=loop_turn)
     return await _escalate(call, items, base, found, policy, escalation, chain)
 
 

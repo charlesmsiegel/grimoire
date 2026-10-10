@@ -5,6 +5,11 @@ gets its own clock and sequence; adapters report what they actually received,
 including SSE framing and unknown fields. This module has no store dependency.
 Capture is diagnostic: a broken sink disables that attempt's recorder without
 changing generation, retries, or cancellation. It never buffers a whole reply.
+
+A call made under a caller's run (01g-C3) carries its `run_id` in every
+attempt's meta: the holder holds it under `RUN_KEY` (a `store.usage.Meter`
+given a run id seeds it, and `llm._stamp` keeps it across each attempt's
+clear), and the meta names it only when it is set.
 """
 from __future__ import annotations
 
@@ -14,7 +19,16 @@ from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 
 KEY = "_incoming_capture"
+#: The holder key a call's run id rides under (restated as
+#: `store.usage.RUN_KEY`; a test holds the spellings equal).
+RUN_KEY = "_run_id"
 Sink = Callable[[dict], None]
+
+
+def run_id(usage: dict | None) -> str:
+    """The run id `usage` carries under `RUN_KEY`, or ""."""
+    value = usage.get(RUN_KEY) if usage is not None else None
+    return value if isinstance(value, str) else ""
 
 
 def _fields(value):
@@ -24,9 +38,12 @@ def _fields(value):
 
 
 class Capture:
-    def __init__(self, sink: Sink, call_id: str, attempt: int, model: str, provider: str):
+    def __init__(self, sink: Sink, call_id: str, attempt: int, model: str, provider: str,
+                 run_id: str = ""):
         self.sink = sink
         self.meta = {"call_id": call_id, "attempt": attempt, "model": model, "provider": provider}
+        if run_id:
+            self.meta["run_id"] = run_id
         self.started = time.monotonic()
         self.sequence = 0
         self.failed = False

@@ -165,6 +165,37 @@ ESTIMATE_KEY = "_estimate"
 ENDED_KEY = "_ended"
 ESTIMATED = "tokens_estimated"
 
+#: The run a meter's holder belongs to (01g-C3), restated from
+#: `llm_capture.RUN_KEY` for the same reason, and pinned equal by the same
+#: test. A `Meter` given a `run_id` seeds its holder with it, before anything
+#: is sent, so the facade's incoming-response capture can name the run on
+#: every attempt (`llm._stamp` keeps the key across its per-attempt clear).
+RUN_KEY = "_run_id"
+#: The display reasoning buffer's key, restated from `llm_reasoning.KEY`: a
+#: streaming caller installs the buffer before the facade call.
+REASONING_KEY = "_reasoning_display"
+#: Holder keys a caller may place BEFORE the facade is called, which say
+#: nothing about whether a request went out (`sent`). 01g-S1's
+#: `tool_calls.KEY` (the loop's collector) joins this tuple when it lands.
+PRE_SEND_KEYS = (RUN_KEY, REASONING_KEY)
+
+
+def sent(holder: dict | None) -> bool:
+    """Whether a request went out for this holder: whether the facade (or an
+    embed's `_stamp`) stamped it, which is any key outside `PRE_SEND_KEYS`.
+
+    The one emptiness test in the package (`test_usage_guard.py` refuses the
+    shapes it can see): a holder seeded with a run id, or carrying a
+    reasoning buffer, is not a sent call, and no holder at all (None) is not
+    one either. Guarded: a holder whose keys cannot be iterated counts as
+    sent, which is what plain truthiness answered for it before."""
+    if holder is None:
+        return False
+    try:
+        return any(key not in PRE_SEND_KEYS for key in holder)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return True
+
 #: A row saying one scene id became another (#153). Not a call, and every
 #: rollup skips it -- see `_is_call`. A scene's id is its filename stem, so the
 #: first date set on a scene renames it and every store holding that id has to
@@ -275,7 +306,8 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            response_id: str = "", images: int = 0, operation: str = "",
            provider_id: str = "", requested_model: str = "", role: str = "",
            preset: str = "", billing: str = "", decision_mode: str = "",
-           hop: str = "", tokens_estimated: bool = False) -> dict | None:
+           hop: str = "", tokens_estimated: bool = False, run_id: str = "",
+           loop_turn: int | None = None, tool_calls: int = 0) -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
 
@@ -309,6 +341,13 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
     ``decision_mode``, ``hop`` (``escalation`` on a call an escalation hop
     sent, roadmap 01d §5.7), and ``tokens_estimated`` (true only when a count
     was estimated locally rather than reported).
+
+    Which run of a caller the call belonged to (01g-C3), under the same
+    "written only when set" rule: ``run_id`` (the caller's id, normally a
+    detached run's), ``loop_turn`` (the model turn of that run, from 1) and
+    ``tool_calls`` (how many tool calls the turn asked for). Each is
+    type-tested rather than coerced (`_run_fields`), so a value that is not
+    one costs that field and never the row. No rollup reads them.
     """
     ts = ts or _now()
     # The WHOLE body is inside the guard, the row's construction included. The
@@ -334,6 +373,7 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
             if value:
                 row[key] = value
         row.update(_estimated(tokens_estimated))
+        row.update(_run_fields(run_id, loop_turn, tool_calls))
         # Absent, not zero, when the provider counted nothing -- the same rule
         # the price gets below, and for the same reason. A row saying zero
         # tokens is a row saying the call used none, which is a claim no
@@ -415,6 +455,28 @@ def _estimated(flag: bool) -> dict:
     return {"tokens_estimated": True} if flag is True else {}
 
 
+def _positive(value: object) -> int | None:
+    """`value` when it is an `int` of at least 1 (never a `bool`), else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return None
+
+
+def _run_fields(run_id: object, loop_turn: object, tool_calls: object) -> dict:
+    """The run attribution a row carries (01g-C3): each field only when it is
+    what it says -- a non-empty `str` run id, a `loop_turn` and a
+    `tool_calls` of at least 1 -- so a row with none of them is the row an
+    older build wrote, and a malformed one costs its field, not the row."""
+    fields: dict = {}
+    if isinstance(run_id, str) and run_id:
+        fields["run_id"] = run_id
+    if (turn := _positive(loop_turn)) is not None:
+        fields["loop_turn"] = turn
+    if (calls := _positive(tool_calls)) is not None:
+        fields["tool_calls"] = calls
+    return fields
+
+
 def _append(row: dict, ts: str) -> dict:
     """Write one row to its month file. Raises -- every caller is inside the
     guard `record` documents, and sharing this is what keeps a second writer
@@ -480,7 +542,8 @@ class Meter:
 
     def __init__(self, task: str, *, kind: str = KIND_LLM, campaign: str = "",
                  scene: str = "", model: str = "", post: int | None = None,
-                 round_id: str = "", response_id: str = ""):
+                 round_id: str = "", response_id: str = "", run_id: str = "",
+                 loop_turn: int | None = None, tool_calls: int = 0):
         self.task = task
         self.kind = kind
         self.campaign = campaign
@@ -489,7 +552,17 @@ class Meter:
         self.post = post
         self.round_id = round_id
         self.response_id = response_id
+        #: The caller's run (01g-C3). `tool_calls` may be set after the meter
+        #: opens, since a loop learns the count only once the call returned;
+        #: `done` reads all three when it files.
+        self.run_id = run_id
+        self.loop_turn = loop_turn
+        self.tool_calls = tool_calls
         self.usage: dict = {}
+        if isinstance(run_id, str) and run_id:
+            # Seeded for the capture, never read back for the row: a seeded
+            # holder is still unsent (`sent`).
+            self.usage[RUN_KEY] = run_id
         self.row: dict | None = None
         self._done = False
         self._t0 = time.monotonic()
@@ -537,7 +610,8 @@ class Meter:
 
         **A request that never went out is not a row.** `llm._stamp` fills the
         holder with the route about to be tried *before* the first provider
-        attempt, so a holder that is still empty means nothing was ever sent —
+        attempt, so a holder it never stamped (`sent`: nothing in it but the
+        keys a caller places before the call) means nothing was ever sent —
         which really happens: absorb's budget refuses a step it has no time left
         for (`BudgetRefused`) and closes the coroutine unawaited, and a caller
         can raise between opening the meter and the call. Recording those would
@@ -551,8 +625,10 @@ class Meter:
         them go wrong -- so the error store is instrumented here rather than at
         sixteen call sites, half of which would end up passing no `kind` and
         dropping out of the per-kind counts. `missing_key` is the case that
-        forces the ordering: nothing is ever sent, so `usage` stays empty and
-        the early return below fires -- and a provider that has never been
+        forces the ordering: refused before the facade stamps anything,
+        nothing is sent, so `usage` stays unsent (`sent`: at most the keys a
+        caller placed before the call) and the early return below fires -- and
+        a provider that has never been
         configured is precisely the failure a user most needs written down.
 
         The ledger is not the error store and this is not a double write. A
@@ -578,7 +654,7 @@ class Meter:
                 # as recorded, so the call site catching it next stayed silent
                 # about a failure nothing had written down.
                 errors.mark_recorded(exc)
-        if not self.usage:
+        if not sent(self.usage):
             return None
         cost = self.usage.get("cost_usd")
         served = self._served()
@@ -595,7 +671,8 @@ class Meter:
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1),
             post=self.post, round_id=self.round_id, response_id=self.response_id,
-            images=self.usage.get("images", 0), **served)
+            images=self.usage.get("images", 0), run_id=self.run_id,
+            loop_turn=self.loop_turn, tool_calls=self.tool_calls, **served)
         try:
             self.usage.pop(ESTIMATE_KEY, None)
             self.usage.pop(ENDED_KEY, None)
@@ -629,7 +706,8 @@ class Meter:
 
 def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "",
           model: str = "", post: int | None = None,
-          round_id: str = "", response_id: str = "") -> Meter:
+          round_id: str = "", response_id: str = "", run_id: str = "",
+          loop_turn: int | None = None, tool_calls: int = 0) -> Meter:
     """A `Meter` for one call. `model` is only a fallback: the facade stamps the
     model the request actually ran on, which differs after a fallback route.
 
@@ -639,9 +717,13 @@ def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "
     A round groups the selector and its character contributions; a response ID
     groups that contribution and its replacement attempts. These stable optional
     identities survive transcript index changes without rewriting the ledger.
-    Selectors have no response identity; older callers have neither."""
+    Selectors have no response identity; older callers have neither.
+
+    `run_id`, `loop_turn` and `tool_calls` say which run of a caller the call
+    belonged to (01g-C3); see `record` and `Meter`."""
     return Meter(task, kind=kind, campaign=campaign, scene=scene, model=model,
-                 post=post, round_id=round_id, response_id=response_id)
+                 post=post, round_id=round_id, response_id=response_id,
+                 run_id=run_id, loop_turn=loop_turn, tool_calls=tool_calls)
 
 
 # ---- rollups ----

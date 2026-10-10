@@ -631,6 +631,21 @@ def test_hop_rows_carry_the_hop_and_the_role(client, monkeypatch):
             hop_row["round_id"]) == ("saltmarch", "s1", 3, "r1")
 
 
+def test_hop_rows_carry_the_run(client, monkeypatch):
+    """01g-S3: the hop's own call is built with the base's run attribution,
+    so its rows file the caller's run, turn and response through `_meter`."""
+    resolved = _native_base(client)
+    _low(monkeypatch, resolved)
+    fake = FakeLLM([[decision_reply({"over": False})]], decisions=[_p(0.55)])
+    _decide(fake, [_item()], resolved=resolved, escalation=_Escalator(),
+            run_id="run-1", loop_turn=2, response_id="response-mara")
+    base_row, hop_row = _rows()
+    assert "hop" not in base_row and hop_row["hop"] == "escalation"
+    for row in (base_row, hop_row):
+        assert (row["run_id"], row["loop_turn"], row["response_id"]) == (
+            "run-1", 2, "response-mara")
+
+
 def test_hop_calls_reach_the_capture_marked(client, monkeypatch):
     resolved = _native_base(client)
     _low(monkeypatch, resolved)
