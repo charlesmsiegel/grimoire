@@ -13,6 +13,9 @@
     backend/.venv/Scripts/python.exe evals/run.py --escalation-sweep --case decide-continuity-identity
     backend/.venv/Scripts/python.exe evals/run.py --live --case decide-continuity-identity \
         --escalation '{"escalate_to": "primary", ...}' --out evals/out/esc.json
+    backend/.venv/Scripts/python.exe evals/run.py --embed         # embedding rankings, replay
+    backend/.venv/Scripts/python.exe evals/run.py --live --embed \
+        --embed-options '{"input": "prefix", "document_prefix": "passage: "}'  # an A/B
 
 Bootstraps sys.path the same way scripts/verify_templates.py does, so it runs
 from a checkout without the package being installed.
@@ -23,6 +26,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import functools
 import json
 import os
 import shutil
@@ -37,7 +41,12 @@ sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
 from evals import cases as case_mod  # noqa: E402
-from evals import escalation, gate, runfile, runner  # noqa: E402
+from evals import costs, escalation, gate, runfile, runner  # noqa: E402
+from evals.embed import corpus as embed_corpus  # noqa: E402
+from evals.embed import harness as embed_harness  # noqa: E402
+from evals.embed import metrics as embed_metrics  # noqa: E402
+from grimoire import wire  # noqa: E402
+from grimoire.llm_errors import LLMError  # noqa: E402
 from grimoire.store import paths, usage  # noqa: E402
 
 
@@ -187,6 +196,107 @@ def _unknown_cases(ap: argparse.ArgumentParser, args: argparse.Namespace) -> Non
                  f"known: {', '.join(case_mod.BY_ID)}")
 
 
+def run_embed(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--embed`: rank the synthetic corpus (evals/embed/). Offline, the
+    recorded rankings are graded beside the lexical baseline; with `--live`,
+    the Embedding role's model ranks it once per option set, each in a
+    throwaway home, and the report carries what each set cost."""
+    clash = [flag for flag, on in (("--gate", args.gate), ("--compare", bool(args.compare)),
+                                   ("--case", bool(args.case)),
+                                   ("--escalation", bool(args.escalation)),
+                                   ("--escalation-sweep", args.escalation_sweep),
+                                   ("--provider", bool(args.provider)),
+                                   ("--model", bool(args.model)),
+                                   ("--decide-backend", args.decide_backend is not None),
+                                   ("--repeat", args.repeat is not None),
+                                   ("--out", bool(args.out)))
+             if on]
+    if clash:
+        ap.error(f"--embed ranks its own corpus; it takes no {', '.join(clash)} "
+                 f"(each option set prints its own rows instead of a run file)")
+    if args.embed_options and not args.embed:
+        ap.error("--embed-options only means anything with --embed")
+    if args.embed_options and not args.live:
+        ap.error("--embed-options only means anything with --live")
+    if args.record and not args.live:
+        ap.error("--record only means anything with --live")
+    corpus = embed_corpus.load()
+    broken = embed_corpus.problems(corpus)
+    if broken:
+        print(runner.ascii_safe("embed: the corpus breaks its rules:\n  " + "\n  ".join(broken)),
+              file=sys.stderr)
+        return 2
+    graded = [("lexical baseline",
+               embed_metrics.grade(corpus, embed_harness.lexical_rankings(corpus)))]
+    if not args.live:
+        recorded = embed_harness.read_recordings()
+        print(f"replay: {len(recorded)} recorded ranking(s), {len(corpus.queries)} queries, "
+              f"{len(corpus.documents)} documents")
+        graded += [(name, embed_metrics.grade(corpus, r)) for name, r in recorded]
+        print(runner.ascii_safe(embed_metrics.table(graded)))
+        return 0 if all(g.whole for _n, g in graded) else 1
+    return _embed_live(ap, args, corpus, graded)
+
+
+def _embed_live(ap: argparse.ArgumentParser, args: argparse.Namespace,
+                corpus: embed_corpus.Corpus, graded: list) -> int:
+    """`--live --embed`: the space resolved in the REAL store before any
+    isolate, each option set in its own throwaway home, its rows harvested
+    into the report and never left in the real ledger."""
+    try:
+        sets = [embed_harness.options_of(json.loads(raw)) for raw in args.embed_options or ()]
+    except (ValueError, TypeError) as exc:
+        ap.error(f"--embed-options: {exc}")
+    try:
+        base = embed_harness.resolve_live()
+    except RuntimeError as exc:
+        print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+        return 1
+    spaces = [embed_harness.with_options(base, o) for o in sets] or [base]
+    size, tokens = embed_harness.estimate(corpus)
+    print(runner.ascii_safe(
+        f"live: embedding through {base['provider_name']} / {base['model']}: "
+        f"{size} bytes, about {tokens} tokens before prefixes, per option set "
+        f"(x{len(spaces)})"))
+    real_home = paths.home()
+    rates = usage.Rates.current()
+    run_day = usage._today()
+    failed = False
+    for n, space in enumerate(spaces, 1):
+        options = space.get("options") or wire.EmbedOptions()
+        label = embed_harness.recording_name(space["model"], options)
+        rankings, rows, ledger_error, wall = None, (), "", 0
+        with temp_home():
+            if runner._is_real_home(real_home):
+                print(runner.ascii_safe(f"live: {runner.ISOLATE_ERROR}"), file=sys.stderr)
+                return 1
+            client = embed_harness.live_client()
+            try:
+                rankings, wall = embed_harness.timed(functools.partial(
+                    embed_harness.embedded_rankings, corpus, space=space, client=client,
+                    run_id=args.run_id))
+            except LLMError as exc:
+                failed = True
+                code = f"/{exc.code}" if getattr(exc, "code", None) else ""
+                print(runner.ascii_safe(f"  {label}: failed ({exc.kind}{code})"))
+            finally:
+                client.close()
+            try:
+                rows = runner.harvest(run_day, args.run_id, f"embed-{n}")
+            except OSError as exc:
+                ledger_error = str(exc)
+        spent = (f"cost not reported ({ledger_error})" if ledger_error
+                 else costs.bucket_line(costs.fold(rows, rates)))
+        print(runner.ascii_safe(f"  {label}: {costs.seconds(wall)}  {spent}"))
+        if rankings is not None:
+            graded.append((label, embed_metrics.grade(corpus, rankings)))
+            if args.record:
+                path = embed_harness.write_recording(label, space["model"], options, rankings)
+                print(runner.ascii_safe(f"  recorded {path.name}"))
+    print(runner.ascii_safe(embed_metrics.table(graded)))
+    return 1 if failed else 0
+
+
 def _label(conns: dict, backend: str) -> str:
     """A config's label: `<connection kind> / <model> [<backend>]` when every
     case resolved to one model, else `routed [<backend>]`."""
@@ -312,6 +422,18 @@ def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> 
                  "several --decide-backend it is ambiguous which")
 
 
+def _other_mode(args: argparse.Namespace):
+    """The mode that is not a case run, when one is asked for: the embedding
+    evals (`--embed`, or `--embed-options`, which it refuses alone), the
+    decide gate, a comparison, or the escalation sweep. None for a case run."""
+    for asked, mode in ((args.embed or bool(args.embed_options), run_embed),
+                        (args.gate, run_gate), (bool(args.compare), run_compare),
+                        (args.escalation_sweep, run_sweep)):
+        if asked:
+            return mode
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Score grimoire's LLM output against the eval suite.")
     ap.add_argument("--live", action="store_true",
@@ -351,15 +473,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--escalation-sweep", action="store_true",
                     help="for each --case, which items of its native recordings each "
                          "margin threshold would escalate; offline, never a call")
+    ap.add_argument("--embed", action="store_true",
+                    help="rank the embedding corpus (evals/embed/): recall@k and MRR "
+                         "against a lexical baseline; replay offline, or --live")
+    ap.add_argument("--embed-options", action="append", metavar="JSON",
+                    help="with --live --embed, also rank under this embedding options "
+                         "block (repeatable), in memory: nothing is written")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
 
-    if args.gate:
-        return run_gate(ap, args)
-    if args.compare:
-        return run_compare(ap, args)
-    if args.escalation_sweep:
-        return run_sweep(ap, args)
+    mode = _other_mode(args)
+    if mode is not None:
+        return mode(ap, args)
 
     _check_live_flags(ap, args)
     _unknown_cases(ap, args)
