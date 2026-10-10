@@ -23,6 +23,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire import decisions, inference, tool_calls
+from grimoire.llm_errors import LLMError
 from grimoire.routes import tool_decision
 from grimoire.routes.tool_decision import SpendGuard, ToolShape, decision_tool
 from grimoire.tool_calls import RunBudget, ToolContext, ToolError
@@ -276,8 +277,8 @@ class _SlowJudge(FakeLLM):
 
 def test_the_decide_tool_is_bounded_by_the_run_not_the_store_read_timeout():
     """F1: a decide is a model call, not a store read -- the ten-second tool
-    bound would abandon an ordinary structured decision. The run's wall
-    (`_around`) and the decide chain's own per-call ceiling bound it."""
+    bound would abandon an ordinary structured decision. The tool bounds each
+    of its own calls instead (`_around`; R2-1)."""
     spec, _ = decision_tool(TASK, _resolved(), FakeLLM([["x"]]), cid="c")
     assert spec.timeout == math.inf
 
@@ -364,8 +365,10 @@ def test_an_unpriceable_tool_under_a_ceiling_says_so_and_takes_no_decision(monke
     assert view.left == 1 and view.noted == [("unpriceable", None)]
     selection, _ = decision_tool(TASK, _resolved(mode="native"), judge, cid="saltmarch",
                                  shape=ToolShape(result="selection"))
+    # R2-7: on the selection shape it is the spend budget's `cap`, one of
+    # spec 3.12's four reasons.
     assert json.loads(_call(selection, view=_View(room=100.0)).text) == {
-        "selected": None, "reason": "unpriceable"}
+        "selected": None, "reason": "cap"}
     toolset = tool_calls.Toolset((spec,))
     model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
     result = asyncio.run(inference.run_tools(
@@ -395,7 +398,6 @@ def test_every_decide_call_notes_its_outcome_on_the_run(args, view, want):
 
 
 def test_a_failed_decision_is_noted_as_failed():
-    from grimoire.llm_errors import LLMError
     spec, _ = decision_tool(TASK, _resolved(), FakeLLM(
         [["x"]], error=LLMError("rate_limit", "slow down")), cid="c")
     view = _View()
@@ -418,3 +420,104 @@ def test_the_loops_trace_holds_a_decide_entry(monkeypatch):
         run_id="run-9", campaign="saltmarch"))
     (entry,) = [e for e in result.trace if e.kind == "decide"]
     assert (entry.turn, entry.name, entry.note, entry.ok) == (1, "truth", "answered", True)
+
+
+# ---- brutal review round 2 (R2-1, R2-3, R2-5, R2-6) ----
+def _looped(judge, budget, **kw):
+    spec, why = decision_tool(TASK, _resolved(), judge, cid="saltmarch", **kw)
+    assert spec is not None, why
+    toolset = tool_calls.Toolset((spec,))
+    model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
+    started = time.monotonic()
+    result = asyncio.run(inference.run_tools(
+        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
+        execute=tool_calls.registered(toolset), client=model,
+        resolved=wire_kit.resolution(TARGET), budget=budget,
+        run_id="run-9", campaign="saltmarch"))
+    return result, time.monotonic() - started
+
+
+def test_with_no_wall_each_decide_call_is_held_to_the_per_call_ceiling(monkeypatch):
+    """R2-1: a run with no wall still holds every model turn to
+    `llm_call_budget`; a decide inside it is held to the same ceiling."""
+    monkeypatch.setattr(store.routing, "TOOLS_OPTIONAL",
+                        frozenset({store.routing.route("chat").key}))
+    monkeypatch.setattr(store.config, "llm_call_budget", lambda: 1.0)
+    judge = _SlowJudge(3.0, [[decision_reply({"choice": "truth"})]])
+    result, took = _looped(judge, RunBudget(wall_seconds=0))
+    (tool,) = [m for m in result.messages if m.get("role") == "tool"]
+    assert tool["is_error"] and "timeout" in tool["content"]
+    assert took < 3.0 and result.status == "completed"
+    ctx = replace(_ctx(), call_budget=1.0)
+    assert tool_decision._around(ctx) is not None
+    assert tool_decision._around(_ctx()) is None
+
+
+def test_a_decide_leaves_a_reserved_finalize_turn_its_room(monkeypatch):
+    """R2-1: the wall's share of a decide's bound stops short of the
+    finalize reserve, and of the loop's own wait on the tool (R2-5)."""
+    seen: list[float] = []
+
+    async def spy(call, seconds, overrun):
+        seen.append(seconds)
+        call.close()
+        raise overrun(seconds)
+
+    monkeypatch.setattr(tool_decision.deadline, "bounded", spy)
+    ctx = replace(_ctx(), deadline=time.monotonic() + 100.0, call_budget=300.0,
+                  reserve=tool_calls.MIN_TURN_SECONDS)
+    bound = tool_decision._around(ctx)
+
+    async def nothing():
+        return None
+
+    with pytest.raises(LLMError):
+        asyncio.run(bound(nothing(), {}))
+    (seconds,) = seen
+    assert seconds <= 100.0 - tool_calls.MIN_TURN_SECONDS - tool_decision.DECIDE_MARGIN_S
+
+
+def test_a_decide_cut_by_the_wall_leaves_a_decide_entry(monkeypatch):
+    """R2-5: the decide's own bound fires before the loop stops waiting on
+    the tool, so the cut is noted in the run's trace."""
+    monkeypatch.setattr(store.routing, "TOOLS_OPTIONAL",
+                        frozenset({store.routing.route("chat").key}))
+    monkeypatch.setattr(store.config, "llm_call_budget", lambda: 300.0)
+    judge = _SlowJudge(30.0, [[decision_reply({"choice": "truth"})]])
+    result, took = _looped(judge, RunBudget(wall_seconds=6.5))
+    (entry,) = [e for e in result.trace if e.kind == "decide"]
+    assert (entry.note, entry.ok) == ("failed", False)
+    assert took < 6.5 and result.text == "She told it."
+
+
+def test_a_task_whose_policy_escalates_is_not_offered_the_tool(monkeypatch):
+    """R2-3: the tool hands `decide` no escalator, which such a policy needs."""
+    escalating = store.routing.TaskPolicy(escalate_to="primary", escalate_on=("abstained",),
+                                          question="choice")
+    judge = FakeLLM([[decision_reply({"choice": "truth"})]])
+    built, _ = decision_tool(TASK, _resolved(), judge, cid="saltmarch")
+    monkeypatch.setitem(store.routing.TASK_POLICY, TASK, escalating)
+    spec, why = decision_tool(TASK, _resolved(), judge, cid="saltmarch")
+    assert spec is None and "escalates" in why
+    # A tool built before the policy changed: `decide` refuses before
+    # sending, so the call is noted failed and never charged as one that went
+    # out.
+    view = _View(decisions_left=2, room=None)
+    with pytest.raises(ToolError, match="not sent"):
+        _call(built, view=view)
+    assert view.noted == [("failed", None)] and view.charged == []
+    assert judge.calls == 0
+
+
+def test_a_ceiling_the_tool_could_never_be_priced_under_refuses_it_at_the_build():
+    """R2-6: handed the run's own ceiling, the build refuses a tool every call
+    of which the run would refuse; with none, it offers it."""
+    spec, why = decision_tool(TASK, _resolved(mode="native"), FakeLLM([["x"]]), cid="c",
+                              ceiling=100.0)
+    assert spec is None and "native" in why
+    spec, _ = decision_tool(TASK, _resolved(mode="native"), FakeLLM([["x"]]), cid="c",
+                            ceiling=None)
+    assert spec is not None
+    with pytest.raises(ValueError):
+        decision_tool(TASK, _resolved(), FakeLLM([["x"]]), cid="c",
+                      spend=SpendGuard(1.0), ceiling=2.0)

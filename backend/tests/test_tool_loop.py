@@ -693,3 +693,42 @@ def test_a_fallback_known_unable_to_call_tools_never_rides_a_loop():
     assert result.status == "completed"
     assert all(r["chain"].fallback is None for r in fake.requests)
     assert "claude-spare cannot call tools" in result.trace[0].note
+
+
+# ---- brutal review round 2 (R2-2, R2-4) ----
+def test_an_auto_only_finalize_turns_calls_are_declined_and_keep_the_text():
+    """R2-2: sent `auto`, a finalize turn may call anyway. Its calls are
+    declined on the record -- in `declined` and the trace -- never run, and
+    a turn that only called leaves the text the run already had."""
+    zai = wire_kit.target(provider_id="zai", model="glm-5", api_key="k")
+    resolved = wire_kit.resolution(zai)
+    resolved = replace(resolved, attempts=tuple(replace(a, provider_preset="zai")
+                                                for a in resolved.attempts))
+    fake = FakeToolTurns(("Mara looks around the quay.", [("read", {}), ("read", {})]),
+                         ("", [("read", {})]))
+    result = _run(fake, resolved=resolved, budget=RunBudget(max_tool_calls=1))
+    assert [r["tool_choice"] for r in fake.requests] == ["auto", "auto"]
+    assert (result.status, result.limit) == ("budget_exhausted", "tool_calls")
+    assert result.text == "Mara looks around the quay."
+    assert [c.name for c in result.declined] == ["read"]
+    (entry,) = [e for e in result.trace if e.kind == "tool" and e.turn == 2]
+    assert (entry.name, entry.ok, entry.note) == ("read", False, "declined: final")
+
+
+def test_the_spend_preflight_never_prices_a_fallback_the_loop_drops(monkeypatch):
+    """R2-4: a fallback known unable to call tools is never sent (F9), so a
+    run under a ceiling is not refused for want of its price."""
+    local = wire_kit.target(provider_id="local", model="tiny", api_key="")
+    resolved = _resolved(wire.Chain(PRIMARY, local))
+    primary, spare = resolved.attempts
+    resolved = replace(resolved, attempts=(
+        primary, replace(spare, capabilities={"tools": Cap("no", "user")})))
+    monkeypatch.setattr(inference, "cap_sent", lambda target: True)
+    prices = {("openrouter", "vendor/active"): inference.Price("catalog", 1e-6, 2e-6)}
+    assert inference.tool_run_refusal("chat", resolved, RunBudget(spend_ceiling_usd=1.0),
+                                      prices) is None
+    # A fallback that can call tools still needs its price.
+    rides = replace(resolved, attempts=(primary, spare))
+    refused = inference.tool_run_refusal("chat", rides, RunBudget(spend_ceiling_usd=1.0),
+                                         prices)
+    assert refused is not None and "tiny" in str(refused)

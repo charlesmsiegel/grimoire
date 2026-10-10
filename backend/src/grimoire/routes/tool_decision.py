@@ -20,11 +20,14 @@ in prose. It cannot recurse: `decide` takes no tools, and `run_tools`
 refuses to start inside a loop.
 
 A decide is a model call, not a store read, so the tool does not take the
-loop's per-tool wait (`tool_calls.TOOL_TIMEOUT_S`): the run's wall clock
-bounds it (`_around`), and the decide chain its own calls. Whatever stops
-the wait after the spend check -- a failed call, the run's wall, a cancel --
-charges the call's projection, since a request that went out can still
-bill. Each call notes its outcome on the run (`RunView.note_decision`),
+loop's per-tool wait (`tool_calls.TOOL_TIMEOUT_S`): each facade call it
+makes is bounded as a model turn is, by `min(llm_call_budget, wall left)`
+(`_around`), with the wall's share ending early enough to leave a reserved
+finalize turn its room and the outcome noted before the loop stops waiting.
+Whatever stops the wait after the spend check -- a failed call, the run's
+wall, a cancel -- charges the call's projection, since a request that went
+out can still bill; a request `decide` refuses before sending charges
+nothing. Each call notes its outcome on the run (`RunView.note_decision`),
 which the loop's trace records as a `decide` entry (spec 3.12).
 
 No route is added here: the `tool_decision` route lands with its first
@@ -35,17 +38,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from .. import deadline, decisions, tool_calls
+from .. import deadline, decisions, store, tool_calls
 from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference.resolved import ResolvedInference
+
+log = logging.getLogger(__name__)
 
 #: The most options one decide-tool call may offer: past a dozen a model is
 #: enumerating rather than choosing, and an unbounded list would let one call
@@ -60,10 +66,17 @@ MAX_DECIDE_CONTEXT = 4000
 DECIDE_MAX_TOKENS = 512
 #: The one question every decide-tool item asks.
 QUESTION_ID = "choice"
-#: The tool's own wait: none past the run's. A decision can take longer than
-#: a store read's ten seconds, and the run's wall (`_around`) and the decide
-#: chain's per-call ceiling already bound it.
+#: The loop's wait on the tool: none past the run's wall. A decision can
+#: take longer than a store read's ten seconds, so the tool bounds itself:
+#: `_around` holds each facade call of the decide chain to the run's
+#: per-call ceiling (`ToolContext.call_budget`) and the wall left. The chain
+#: has a fixed number of stages, so that bounds the whole decide.
 DECIDE_TIMEOUT = math.inf
+#: How long before the run's wall (less any finalize reserve) a decide's
+#: own bound fires: early enough that the decide unwinds and notes its
+#: outcome on the run before the loop's own wait on the tool returns and
+#: the run's result is built. Structural.
+DECIDE_MARGIN_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -73,7 +86,12 @@ class ToolShape:
     (inside `2..MAX_TOOL_OPTIONS`), what the model gets back (`full`: the
     answer with its status and any reported probability; `selection`: the
     selected id or why none), and what a call past the run's decision cap
-    gets (`error`, or `result`: `{"selected": null, "reason": "cap"}`)."""
+    gets (`error`, or `result`: `{"selected": null, "reason": "cap"}`).
+
+    A `selection` reason is one of spec 3.12's four: `abstained`,
+    `unanswered`, `cap` and `invalid_request`. `cap` covers both budgets: the
+    run's decisions, and its spend ceiling -- room spent, or a decision the
+    ceiling cannot price at all (noted `unpriceable` on the trace)."""
     name: str = "decide"
     description: str = ("Ask a closed question with a fixed set of options and get the "
                         "chosen option back, instead of deciding it yourself.")
@@ -129,6 +147,9 @@ def _offer_refusal(task: str, resolved: ResolvedInference | None,
         return f"a resolution of {resolved.task!r} cannot decide {task!r}"
     if resolved.operation != "decide" or resolved.chain is None:
         return f"{task!r} did not resolve to a decision"
+    if store.routing.policy(task).escalate_to:
+        # The tool hands `decide` no escalator, which such a policy needs.
+        return f"{task!r}'s policy escalates, and the decide tool takes no escalator"
     if spend is None:
         return ""
     return _unpriceable(resolved, max_tokens, prices or {})
@@ -214,14 +235,24 @@ def _refusal(shape: ToolShape, reason: str, said: str) -> tool_calls.ToolOutput:
 
 
 def _around(ctx: tool_calls.ToolContext) -> operations.Around | None:
-    """The run's remaining wall clock, around each decide call."""
-    if ctx.deadline == float("inf"):
+    """Each decide facade call's bound, as a model turn's (`_Loop._turn_seconds`):
+    `min(llm_call_budget, wall left)`, either absent when it is off. The wall
+    left is less the finalize reserve and `DECIDE_MARGIN_S`, so the bound
+    fires before the loop's wait on the tool; a wall already spent abandons
+    the call unsent (`deadline.bounded`)."""
+    ceiling = ctx.call_budget if ctx.call_budget > 0 else None
+    walled = ctx.deadline != math.inf
+    if ceiling is None and not walled:
         return None
 
     def bound(call, _holder):
-        left = ctx.deadline - time.monotonic()
-        return deadline.bounded(call, max(left, 0.001), lambda s: LLMError(
-            "timeout", f"the run's wall clock ran out ({s:g}s left)"))
+        left = (ctx.deadline - ctx.reserve - DECIDE_MARGIN_S - time.monotonic()
+                if walled else math.inf)
+        if ceiling is not None and ceiling <= left:
+            return deadline.bounded(call, ceiling, lambda s: LLMError(
+                "timeout", f"no decision within the per-call ceiling ({s:g}s)"))
+        return deadline.bounded(call, left, lambda _s: LLMError(
+            "timeout", "the run's wall clock ran out"))
     return bound
 
 
@@ -292,9 +323,10 @@ async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
     shape = asking.shape
     prices, unpriced = await _pricing(asking, ctx)
     if unpriced:
-        # Before the cap: a call no ceiling could price takes no decision.
+        # Before the cap: a call no ceiling could price takes no decision. On
+        # the selection shape it is the spend budget's `cap` (spec 3.12).
         _noted(ctx, "unpriceable")
-        return _refusal(shape, "unpriceable", f"not run: {unpriced}")
+        return _refusal(shape, "cap", f"not run: {unpriced}")
     if ctx.run is not None and not ctx.run.take_decision():
         _noted(ctx, "cap")
         if shape.on_cap == "result":
@@ -319,6 +351,12 @@ async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
     except decisions.DecideRequestError as exc:
         _noted(ctx, "invalid_request")
         return _refusal(shape, "invalid_request", f"invalid request: {exc}")
+    except ValueError as exc:
+        # `decide` refused the resolution before any meter opened: nothing
+        # went out, so nothing is charged. A wiring fault, not the model's.
+        log.error("decide tool for %s refused before sending: %s", using.task, exc)
+        _noted(ctx, "failed")
+        return _refusal(shape, "unanswered", "the decision could not be made: not sent")
     except LLMError as exc:
         # A failed call can still bill: its projection stands in.
         _charge(ctx, projection)
@@ -347,19 +385,28 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
                   select: Callable[[decisions.ItemResult], dict] | None = None,
                   capture: operations.Capture | None = None,
                   spend: SpendGuard | None = None,
+                  ceiling: float | None = None,
                   max_tokens: int = DECIDE_MAX_TOKENS
                   ) -> tuple[tool_calls.ToolSpec | None, str]:
     """The `decide` tool for one loop, metered under `task`, or `(None, why)`
     when it cannot be offered: no resolution (the caller's soft refusal,
-    `why`), a resolution of another task, or -- under a spend guard -- a
-    stage that is native, unpriceable or uncapped. Under a guard this reads
-    the store (the stage prices): call it off the event loop. Built without
-    one and run under a ceiling, each call is priced then (`_pricing`) and,
-    where it cannot be, refused as `unpriceable` without taking a decision.
+    `why`), a resolution of another task, a task whose code policy escalates
+    (the tool takes no escalator), or -- under a spend guard -- a stage that
+    is native, unpriceable or uncapped. `ceiling` is the run's own spend
+    ceiling, None included (`RunBudget.spend_ceiling_usd`), as a guard when
+    it is set: a caller that hands it never offers a tool every call of
+    which the run would refuse. Under a guard this reads the store (the
+    stage prices): call it off the event loop. Built without one and run
+    under a ceiling, each call is priced then (`_pricing`) and, where it
+    cannot be, refused as `unpriceable` without taking a decision.
 
     `select` maps the answered `ItemResult` to what the model is sent (02's
     own sampling rule, through 01c); 01g never samples."""
     shape = shape or ToolShape()
+    if spend is not None and ceiling is not None and spend.ceiling_usd != ceiling:
+        raise ValueError("decision_tool takes one spend ceiling: spend= or ceiling=")
+    if spend is None and ceiling is not None:
+        spend = SpendGuard(ceiling)
     prices = operations.prices_for(resolved) if spend is not None and resolved else {}
     refused = _offer_refusal(task, resolved, spend, max_tokens, prices)
     if refused or resolved is None:

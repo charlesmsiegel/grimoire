@@ -1046,9 +1046,13 @@ def decision_tool_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> li
 
 def decision_tool_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
                            route_of: Callable[[str], routing.Route | None] = routing.route,
+                           policy_of: Callable[[str], routing.TaskPolicy] = routing.policy,
                            ) -> list[str]:
-    """A `decision_tool(...)` names a literal task on a decide route and
-    passes a resolution (its second argument, or `resolved=`)."""
+    """A `decision_tool(...)` names a literal task on a decide route whose
+    policy does not escalate (the tool hands its inner `decide` no
+    escalator, so `decide_problems`' rule reads: it passes none, and the
+    policy must not ask for one), and passes a resolution (its second
+    argument, or `resolved=`)."""
     out = []
     for call in decision_tool_calls(tree, modname, is_pkg):
         task = _task(call)
@@ -1056,6 +1060,9 @@ def decision_tool_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
         if route is None or route.operation != "decide":
             out.append(f"{modname}:{call.lineno}: decision_tool's task is not a literal "
                        "on a decide route")
+        if task is not None and policy_of(task).escalate_to:
+            out.append(f"{modname}:{call.lineno}: decision_tool({task!r}) passes no "
+                       "escalation=, and its policy escalates")
         if len(call.args) < 2 and not any(k.arg == "resolved" for k in call.keywords):
             out.append(f"{modname}:{call.lineno}: decision_tool passes no resolution")
     return out
@@ -1204,6 +1211,18 @@ def test_the_decide_guard_holds_escalation_to_the_policy(src, policy_of, flagged
     tree = ast.parse("from .. import inference as operations\n" + src)
     found = decide_problems(tree, _DECIDE_PLANTED_IN, policy_of=policy_of)
     assert bool(found) == flagged, (src, found)
+    assert all("escalation=" in f for f in found), found
+
+
+@pytest.mark.parametrize(("policy_of", "flagged"), [(_escalating, True),
+                                                     (routing.policy, False)])
+def test_the_decision_tool_guard_refuses_an_escalating_task(policy_of, flagged):
+    """R2-3: the decide tool hands its inner `decide` no escalator, so a
+    `decision_tool(...)` on a task whose policy escalates is flagged."""
+    tree = ast.parse("from . import tool_decision\n"
+                     "tool_decision.decision_tool('scene-break', r, c, cid='x')\n")
+    found = decision_tool_problems(tree, "grimoire.routes.scenes", policy_of=policy_of)
+    assert bool(found) == flagged, found
     assert all("escalation=" in f for f in found), found
 
 
