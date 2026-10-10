@@ -63,12 +63,17 @@ its id is refused before anything is metered. A caller puts its queries first
 and says how many (`queries`); the rest are documents. A query vector is never
 cached by any caller. NUL is removed from every text before it is sent, as
 `vectors._path` removes it from the key. The capture line and a locally
-counted prompt count what was sent, prefixes included.
+counted prompt count what was sent, prefixes included. In the `param` input
+type the client sends the queries and the documents as separate requests,
+still one call: one row, one line. A reply that ignored a requested
+`dimensions` is `missing_key`/`embeddings.DIMENSIONS_MISMATCH`, which no
+caller retries, and its error row names that code (01h-S3).
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 import traceback
@@ -77,6 +82,10 @@ from typing import Any
 
 from ... import embeddings, llm_usage, wire
 from .. import errors, logs, routing, tokens, usage
+
+#: What an error `code` must look like to be filed beside the kind and status
+#: (`record_failure`): a token this side names, never a sentence.
+_CODE = re.compile(r"[a-z_]{1,40}")
 
 #: The `code` of the refusal on the app's loop (see the module docstring). Its
 #: kind is `network`.
@@ -228,7 +237,8 @@ def record_failure(meter: usage.Meter, exc: BaseException, *,
     `budgeted` deadline: the caller's own budget) is `aborted`: a row for the request that
     went out, and no error, because the caller's clock is not the provider
     failing. Anything else is an error whose recorded detail is the kind and
-    HTTP status ONLY -- never `str(exc)`, which can hold a provider body
+    HTTP status ONLY, with the error's `code` when it is a fixed token
+    (`dimensions_mismatch`) -- never `str(exc)`, which can hold a provider body
     echoing the input or a redirect's `Location` carrying a key (I1). The
     caller re-raises `exc` unchanged; `Meter.__exit__` then finds the meter
     done.
@@ -247,7 +257,12 @@ def record_failure(meter: usage.Meter, exc: BaseException, *,
         return "aborted"
     kind = getattr(exc, "kind", None) or type(exc).__name__
     status = getattr(exc, "status", None)
-    meter.done("error", kind, detail=f"{kind} (HTTP {status})" if status else kind, exc=exc)
+    detail = f"{kind} (HTTP {status})" if status else kind
+    if isinstance(code, str) and _CODE.fullmatch(code):
+        # A fixed token this side named (`embeddings.DIMENSIONS_MISMATCH`),
+        # never provider text: what lets the error store say why (01h §3.4).
+        detail += f", code {code}"
+    meter.done("error", kind, detail=detail, exc=exc)
     return kind
 
 

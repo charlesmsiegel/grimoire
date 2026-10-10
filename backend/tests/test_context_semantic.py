@@ -1087,3 +1087,31 @@ def test_prefix_options_end_to_end(store, monkeypatch):
     assert vectors.load(f"{conn}\0{rev}\0embed-1", [text]) == {}
     cached = list((store / ".cache" / "embeddings").glob("*" + vectors.SUFFIX))
     assert len(cached) == 1
+
+
+def test_a_width_ignoring_endpoint_costs_one_request_per_turn(store, monkeypatch):
+    """01h-S3: an endpoint that ignores a requested `dimensions` answers
+    `missing_key`/`dimensions_mismatch`, which recall never retries -- one
+    request and one error row a turn, not two."""
+    import json
+
+    import httpx
+
+    from grimoire.store.inference import facts
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        inputs = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": [1.0, 0.0, 0.0]}
+                                                  for i in range(len(inputs))]})
+
+    monkeypatch.setattr(semantic, "_CLIENT", embeddings.EmbeddingsClient(
+        httpx.Client(transport=httpx.MockTransport(handler))))
+    cid = configure()
+    facts.state(cid, "embed-1", embedding={"dimensions": 2})
+    assert semantic.recall([entry("Miss")], "scene text") == []
+    assert len(seen) == 1
+    [row] = _rows()
+    assert (row["status"], row["error"]) == ("error", "missing_key")

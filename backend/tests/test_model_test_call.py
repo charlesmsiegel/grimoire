@@ -1675,3 +1675,35 @@ def test_an_anthropic_model_is_never_forced_to_call_beside_implicit_thinking(
     assert "thinking" not in body
     assert body["tools"] == tool_calls.anthropic_tools((probes.PING_TOOL,))
     assert body["tool_choice"] == choice
+
+
+# ---- the request field and dimensions (01h-S3) ----
+
+def test_a_probe_whose_endpoint_ignores_dimensions_carries_both_widths(client, monkeypatch):
+    """The probe sends the stated width; a reply of another width is a FAILED
+    `embed` probe -- filed, so the panel can say why, and read as `unknown`,
+    never `no` -- carrying what was asked and what came back. It stops no
+    other probe."""
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    facts.state(conn, MODEL, embedding={"input": "param", "param_field": "input_type",
+                                        "query_value": "query", "document_value": "document",
+                                        "dimensions": 512})
+    seen = _embedder(monkeypatch, _vector)
+
+    run = _run(client, conn, ["embed", "generate"])
+
+    assert json.loads(seen[0].content) == {
+        "model": MODEL, "input": [probes.EMBED_TEXT], "input_type": "document",
+        "dimensions": 512}
+    got = run["result"]["results"]["embed"]
+    assert got["ok"] is False
+    assert (got["kind"], got["code"]) == ("missing_key", "dimensions_mismatch")
+    assert (got["requested_dims"], got["returned_dims"]) == (512, 3)
+    assert run["result"]["results"]["generate"]["ok"] is True
+    verified = facts.of(conn, MODEL, _rev(conn))["verified"]
+    assert verified["embed"]["ok"] is False
+    assert (verified["embed"]["requested_dims"], verified["embed"]["returned_dims"]) == (512, 3)
+    caps = store.inference.capabilities.caps_for(
+        store.llm_connections.read_connection_raw(conn), MODEL)
+    assert caps["embed"].value == "unknown"

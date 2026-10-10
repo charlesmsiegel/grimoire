@@ -133,22 +133,50 @@ class EmbeddingsError(LLMError):
 
 # ---- the request (01h §3.4) ----
 
-#: Why a set of options cannot be sent by this build: the request-field input
-#: type and requested dimensions arrive with roadmap 01h-S3. Refused before
-#: anything is sent, so a hand-built `EmbedOptions` can never produce a body
-#: that disagrees with the space its vectors are saved under.
-UNSENDABLE = "embedding options this build cannot send (a request field or dimensions)"
+#: The `code` of a reply whose vectors are not the width the request asked
+#: for (`DimensionsMismatchError`).
+DIMENSIONS_MISMATCH = "dimensions_mismatch"
+
+
+class DimensionsMismatchError(EmbeddingsError):
+    """A reply that ignored a requested `dimensions` (01h §3.4).
+
+    `missing_key`, the kind for "configured, but not usably" (the redirect
+    precedent below): an endpoint that silently drops an unknown field
+    answers every later request the same way, so no caller retries it, and
+    storing its native-width vectors under a space that claims the requested
+    width would be honest only until it started honouring the field. The
+    widths ride the exception for the model test's verdict."""
+
+    def __init__(self, requested: int, returned: int, field_name: str):
+        super().__init__(
+            "missing_key",
+            f"requested {requested} dimensions in `{field_name}`, the endpoint returned "
+            f"{returned}: it ignores the field",
+            code=DIMENSIONS_MISMATCH)
+        self.requested_dims = requested
+        self.returned_dims = returned
 
 
 def check_sendable(options: wire.EmbedOptions | None) -> None:
-    """`ValueError` unless `options` is None or an `EmbedOptions` this build
-    sends: no options, or the `prefix` input type."""
+    """`ValueError` unless `options` is None or an `EmbedOptions` that can be
+    sent: a `param` mode with its field and both values, and a `dimensions`
+    that is a positive whole number. The facts validator holds a stated
+    block to this and more; this holds a hand-built one, before anything is
+    sent."""
     if options is None:
         return
     if not isinstance(options, wire.EmbedOptions):
         raise ValueError("embedding options must be a wire.EmbedOptions")
-    if options.input not in ("none", "prefix") or options.dimensions is not None:
-        raise ValueError(UNSENDABLE)
+    if options.input not in wire.EMBED_INPUT_MODES:
+        raise ValueError("unknown embedding input mode")
+    if options.input == "param" and not (options.param_field and options.query_value
+                                         and options.document_value):
+        raise ValueError("the request-field input type needs a field and both values")
+    dims = options.dimensions
+    if dims is not None and (isinstance(dims, bool) or not isinstance(dims, int) or dims < 1
+                             or not options.dimensions_field):
+        raise ValueError("requested dimensions must be a positive whole number with a field")
 
 
 def check_queries(queries: object, count: int) -> None:
@@ -171,11 +199,43 @@ def prepare_inputs(texts: list[str], options: wire.EmbedOptions | None,
             for i, text in enumerate(texts)]
 
 
-def request_body(model: str, chunk: list[str], options: wire.EmbedOptions | None) -> dict:
+def segments(count: int, options: wire.EmbedOptions | None,
+             queries: int) -> list[tuple[int, int, bool]]:
+    """`(start, end, is_query)` runs of the inputs that may share a request.
+    One run for every mode but `param`, which carries one input type per
+    request, so its queries and its documents are separate runs (an empty
+    side is no run). Each run is then batched by `BATCH`."""
+    if options is None or options.input != "param":
+        return [(0, count, False)] if count else []
+    runs = [(0, queries, True), (queries, count, False)]
+    return [run for run in runs if run[1] > run[0]]
+
+
+def request_body(model: str, chunk: list[str], options: wire.EmbedOptions | None,
+                 query: bool = False) -> dict:
     """One request's JSON body: `{"model", "input"}` -- byte for byte what was
-    sent before options existed, for every option this build sends. `options`
-    is where the request-field type and dimensions will add to it (01h-S3)."""
-    return {"model": model, "input": chunk}
+    sent before options existed -- plus, in the `param` input type, the type
+    as `<param_field>: <query_value or document_value>` (`query` says which),
+    and a requested width as `<dimensions_field>: n`."""
+    body: dict = {"model": model, "input": chunk}
+    if options is None:
+        return body
+    if options.input == "param":
+        body[options.param_field] = options.query_value if query else options.document_value
+    if options.dimensions is not None:
+        body[options.dimensions_field] = options.dimensions
+    return body
+
+
+def check_widths(vectors: list[list[float]], options: wire.EmbedOptions | None) -> None:
+    """`DimensionsMismatchError` unless every vector is the width `options`
+    requested (when they request one)."""
+    if options is None or options.dimensions is None:
+        return
+    for vector in vectors:
+        if len(vector) != options.dimensions:
+            raise DimensionsMismatchError(options.dimensions, len(vector),
+                                          options.dimensions_field)
 
 
 #: The `code` of the "deadline passed before the request" error when it fires
@@ -454,8 +514,11 @@ class EmbeddingsClient:
         `options` are the model's stated embedding options (01h), the object
         the caller's vector space was computed from, and `queries` how many of
         `texts`, from the first, are queries; the rest are documents
-        (`prepare_inputs`). Options this build cannot send, or a `queries`
-        out of range, are a `ValueError` before anything is sent.
+        (`prepare_inputs`). In the `param` input type the queries and the
+        documents go in separate requests (`segments`), still one call under
+        one deadline and one holder. A requested width is checked on every
+        reply (`DimensionsMismatchError`). Options that cannot be sent, or a
+        `queries` out of range, are a `ValueError` before anything is sent.
         """
         check_sendable(options)
         check_queries(queries, len(texts))
@@ -476,18 +539,21 @@ class EmbeddingsClient:
         out: list[list[float]] = []
         spend = None if usage is None else _Spend(usage)
         sent = prepare_inputs(texts, options, queries)
-        for start in range(0, len(sent), BATCH):
-            chunk = sent[start:start + BATCH]
-            out.extend(self._post(url, chunk, model, key, deadline,
-                                  spend=spend, first=start == 0, options=options))
+        for begin, end, query in segments(len(sent), options, queries):
+            for start in range(begin, end, BATCH):
+                chunk = sent[start:min(start + BATCH, end)]
+                out.extend(self._post(url, chunk, model, key, deadline,
+                                      spend=spend, first=start == 0, options=options,
+                                      query=query))
         return out
 
     def _post(self, url: str, chunk: list[str], model: str, key: str,
               deadline: float, *, spend: _Spend | None,
-              first: bool, options: wire.EmbedOptions | None = None) -> list[list[float]]:
+              first: bool, options: wire.EmbedOptions | None = None,
+              query: bool = False) -> list[list[float]]:
         try:
             body = self._fetch(url, chunk, model, key, deadline, first=first, spend=spend,
-                               options=options)
+                               options=options, query=query)
         except EmbeddingsError:
             _lost_unread(spend)
             raise
@@ -509,11 +575,14 @@ class EmbeddingsClient:
         # Deliberately outside the handlers above: `_vectors` raises
         # EmbeddingsError by design, and anything else escaping it is a bug in
         # this module, which must not be disguised as a provider failure.
-        return _vectors(body, len(chunk))
+        vectors = _vectors(body, len(chunk))
+        # After the fold: a reply of the wrong width was read, and billed.
+        check_widths(vectors, options)
+        return vectors
 
     def _fetch(self, url: str, chunk: list[str], model: str, key: str,
                deadline: float, *, first: bool, spend: _Spend | None = None,
-               options: wire.EmbedOptions | None = None) -> object:
+               options: wire.EmbedOptions | None = None, query: bool = False) -> object:
         """The response body, parsed, within what is left of the deadline.
 
         Streamed rather than read whole so the deadline can be enforced
@@ -539,7 +608,7 @@ class EmbeddingsClient:
         slice_ = min(remaining, READ_SLICE)
         with self._client().stream(
             "POST", url, headers=self._headers(key),
-            json=request_body(model, chunk, options),
+            json=request_body(model, chunk, options, query),
             timeout=httpx.Timeout(slice_, connect=min(remaining, 10.0)),
         ) as resp:
             raw = bytearray()

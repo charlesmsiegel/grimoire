@@ -1179,7 +1179,8 @@ would answer neither question.
     cost, which is real spend and counts against the campaign's budget.
   - **Options are a stated fact, and part of the space** (01h). A model's
     embedding options live in its provider's facts (`embedding`: `input`
-    `none` or `prefix`, the query and document prefixes) and are only ever
+    `none`, `prefix` with the query and document prefixes, or `param` with
+    a request field and its two values; and a requested `dimensions`) and are only ever
     the user's confirmed write -- no catalog, preset or probe derives one.
     The Embedding role reads that file strictly: one it cannot read, or a
     block the validator refuses, names no space and the card says why; it is
@@ -1190,7 +1191,11 @@ would answer neither question.
     `embed_sync` refuses a dict whose two disagree. A caller puts its query
     first and passes `queries=1` (recall, search and art; continuity sends
     documents only), and no caller caches a query vector. NUL is stripped
-    from what is sent and from the vector key alike.
+    from what is sent and from the vector key alike. A `param` call sends
+    its queries and its documents as separate requests under the one meter,
+    and a reply narrower or wider than a requested `dimensions` is
+    `missing_key`/`dimensions_mismatch` (never retried; its error row files
+    the code), never truncated here.
   - `test_operation_guard.py` (the embed half) holds the task, the door, and
     where each call's `space=` comes from -- traced back through the package
     to `embed_space.endpoint`, so a space built by hand fails it -- and
