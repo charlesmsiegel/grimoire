@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from typing import NamedTuple
 
 from fastapi import (
@@ -2105,7 +2106,8 @@ def _identity_status(exam: continuity_identity.Examination,
 async def _resolve_identity(cid: str, sid: str, client: LLMClient,
                             resolved: UsableInference | None, why: str,
                             exam: continuity_identity.Examination,
-                            budget: _Budget, block: dict) -> None:
+                            budget: _Budget, block: dict,
+                            stopped: Callable[[], bool] | None = None) -> None:
     """Decide `exam`'s rows, recording the outcome in `block`: no rows, no
     resolution, or `decide()` over one item per examined row (spec 7.4),
     chunked at `decisions.MAX_ITEMS_PER_CALL` with one metered call per
@@ -2136,7 +2138,11 @@ async def _resolve_identity(cid: str, sid: str, client: LLMClient,
     #
     # One capture scope around the whole chunked check (roadmap 01b): one
     # prompt-log entry for the absorbed scene, whatever the chunk count.
-    async with decision_capture.capturing(cid, sid, "continuity-identity") as scope:
+    # `stopped` is the review's own "closed" flags, asked inside the hold that
+    # covers the capture's write: a review dismissed while this check ran files
+    # nothing, though the check itself exits normally.
+    async with decision_capture.capturing(cid, sid, "continuity-identity",
+                                          fence=_still_wanted(stopped)) as scope:
         decision = await operations.decide(
             "continuity-identity", items, client=client, resolved=resolved,
             explain=explain, campaign=cid, scene=sid, capture=scope.hook(),
@@ -2185,7 +2191,8 @@ def _identity_outcome(cid: str, sid: str, exam: continuity_identity.Examination 
 
 async def _identify(cid: str, sid: str, client: LLMClient, resolved: UsableInference | None,
                     why: str, parsed: dict, prepared: _Prepared,
-                    budget: _Budget) -> tuple[dict, dict]:
+                    budget: _Budget, stopped: Callable[[], bool] | None = None,
+                    ) -> tuple[dict, dict]:
     """The identity phase (spec §10.4): `(parsed_for_materialize, block)`.
 
     Examines the extraction's proposed-new threads and commitments against
@@ -2221,7 +2228,8 @@ async def _identify(cid: str, sid: str, client: LLMClient, resolved: UsableInfer
             # proposed-new (§10.2), so this is the empty extraction's skip --
             # nothing embedded, nothing to rewrite, and (§29) no log row.
             return parsed, block
-        await _resolve_identity(cid, sid, client, resolved, why, exam, budget, block)
+        await _resolve_identity(cid, sid, client, resolved, why, exam, budget, block,
+                                stopped)
     except Abandoned:
         raise
     except BudgetRefused:
@@ -2253,7 +2261,8 @@ async def _identify(cid: str, sid: str, client: LLMClient, resolved: UsableInfer
 async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClient,
                                 prepared: _Prepared, budget: _Budget,
                                 ident_resolved: UsableInference | None,
-                                ident_why: str) -> tuple[dict, dict]:
+                                ident_why: str, stopped: Callable[[], bool] | None = None,
+                                ) -> tuple[dict, dict]:
     """The extraction, then the identity phase chained onto it.
 
     `extraction` is the already-built extraction awaitable: its
@@ -2262,7 +2271,7 @@ async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClien
     identity phase never raises for absorb."""
     text = await extraction
     return await _identify(cid, sid, client, ident_resolved, ident_why,
-                           store.absorb.parse_output(text), prepared, budget)
+                           store.absorb.parse_output(text), prepared, budget, stopped)
 
 
 async def _run_audit(cid: str, sid: str, client: LLMClient,
@@ -2520,13 +2529,17 @@ def _voice_item(name: str, record: dict, transcript: str,
 async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMClient,
                              resolved: UsableInference | None, budget: _Budget,
                              unroutable: str = "", abandoned=None,
+                             stopped: Callable[[], bool] | None = None,
                              ) -> tuple[list[dict], dict]:
     """Judge every present NPC's dialogue in this scene against their voice
     anchor, proposing a drift flag (or a clear) for each.
 
     `abandoned` is the review's own "is anyone still waiting" check
     (`_review_abandoned`), asked only by the phase's capture scope: answering
-    True files no capture of a review nobody is waiting for.
+    True files no capture of a review nobody is waiting for. `stopped` is the
+    same flags read synchronously (`_review_stopped`), asked again inside the
+    hold that covers the capture's write, so a Discard landing between the
+    two still files nothing.
 
     Runs ONLY for NPCs that actually have an anchor (#59). That is the cost
     control for the whole feature: a library with no anchors makes no extra LLM
@@ -2654,8 +2667,8 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
     # entry per review, each NPC's call a record under its anchored record id
     # (`part`), never a name. The loop swallows `Abandoned` per NPC, so the
     # review's own check is what keeps a closed review from filing.
-    async with decision_capture.capturing(cid, sid, "voice-drift",
-                                          abandoned=abandoned) as scope:
+    async with decision_capture.capturing(cid, sid, "voice-drift", abandoned=abandoned,
+                                          fence=_still_wanted(stopped)) as scope:
         for i, (aid, name, record) in enumerate(todo):
             if budget.spent():
                 drop_tail(i)
@@ -2920,6 +2933,19 @@ _PERSIST_ATTEMPTS = 3
 _PERSIST_BACKOFF = 0.5
 
 
+def _review_stopped(run) -> Callable[[], bool]:
+    """`_review_abandoned`'s two flags, read synchronously: what a capture
+    scope's `fence` asks inside the hold that covers its write (roadmap 01b),
+    where nothing may be awaited."""
+    return lambda: bool(run.review_cancelled or run.cancel_requested)
+
+
+def _still_wanted(stopped: Callable[[], bool] | None) -> Callable[[], bool] | None:
+    """A capture fence from a review's `stopped` check: holds while the
+    review is still wanted, and is no fence at all without one."""
+    return None if stopped is None else (lambda: not stopped())
+
+
 def _review_abandoned(run):
     """"Is anyone still waiting for this?", asked of the RUN rather than the socket.
 
@@ -3118,6 +3144,7 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, resolved: UsableIn
                        run, generation: str, prepared: _Prepared) -> dict:
     """The four phases, and the durable write that is this run's whole value."""
     abandoned = _review_abandoned(run)
+    stopped = _review_stopped(run)
     budget = _Budget(store.config.absorb_budget())
     try:
         # All four phases AT ONCE. Nothing here ever needed the one before it:
@@ -3181,11 +3208,12 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, resolved: UsableIn
                                                    client=client, resolved=resolved,
                                                    usage=m.usage, stream=False),
                                on_timeout=_noting(client, resolved, m.usage)),
-                    cid, sid, client, prepared, budget, ident_resolved, ident_why),
+                    cid, sid, client, prepared, budget, ident_resolved, ident_why, stopped),
                 _stage_dossiers(cid, sid, prepared.transcript, client, dossier_resolved,
                                 budget, unroutable=dossier_why),
                 _stage_voice_drift(cid, sid, prepared.transcript, client, voice_resolved,
-                                   budget, unroutable=voice_why, abandoned=abandoned),
+                                   budget, unroutable=voice_why, abandoned=abandoned,
+                                   stopped=stopped),
                 _run_audit(cid, sid, client, audit_resolved, budget, unroutable=audit_why),
                 limit=store.config.absorb_concurrency()), abandoned)
         extraction, dossier_result, voice_result, audit_result = results

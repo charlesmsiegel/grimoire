@@ -48,7 +48,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01 | Inference backend refactor (`2026-10-07-inference-backend-refactor-design.md`) | — | [x] | [x] | — | [x] |
 | 01s | Inference settings group (`2026-10-09-inference-settings-group-design.md`) | now | [x] | [x] | — (planned whole) | [ ] |
 | 01a | Eval cost, latency and token reporting | now | [x] | [~] substitute | 4 | [ ] |
-| 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [ ] |
+| 01b | Decision capture at every decide site | now | [x] | [~] substitute | 3 | [x] |
 | 01c | Decision distributions and seeded sampling | now (switching a task on waits for 01a) | [x] | [~] substitute | 3 | [ ] |
 | 01d | Decision escalation and per-task policy | now (enabling escalation waits for 01a) | [x] | [~] substitute | 5 | [ ] |
 | 01e | Decision vocabulary: Rank, finer Score, MultiSelect, Joint | now | [x] | [~] substitute | 5 | [ ] |
@@ -101,12 +101,18 @@ These are headlines. The owning spec's Contract section is authoritative.
   (eval-run v1) and `--compare FILE...`, which works offline.
 
 ### 01b: Decision capture
-- [ ] **01b-C1** One capture helper used at all five decide sites, plus every
+- [x] **01b-C1** One capture helper used at all five decide sites, plus every
   new one. Each outcome records `stage` and `at`. Captures go to their own
   retention pool. The reconcile sweep captures at campaign level. Captures
   are fenced.
-- [ ] **01b-C2** Capture stays off the decide path: it is filed after the
+- [x] **01b-C2** Capture stays off the decide path: it is filed after the
   call settles, never on cancel, with the speaker capture's privacy.
+
+  Landed as three slices (plans:
+  `docs/superpowers/plans/2026-10-10-roadmap-01b-decision-capture.md`). Their
+  plan gate, review and final gate were **substitute reviews**, because Codex
+  was not available where they were built. The Codex gates are still owed for
+  01b-S1, S2 and S3, as for the `[~]` spec gates above.
 
 ### 01c: Distributions and seeded sampling
 - [ ] **01c-C1** Recorded policy:
@@ -365,9 +371,9 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 01b-S1 | Stage and batch positions on the decide outcome | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01b-S2 | The capture helper, the decision pool and the four scene-level sites | L | 2 | 01b-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 01b-S3 | Campaign-level capture for the reconcile sweep, and the guard | M | 3 | 01b-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 01b-S1 | Stage and batch positions on the decide outcome | S | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01b-S2 | The capture helper, the decision pool and the four scene-level sites | L | 2 | 01b-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 01b-S3 | Campaign-level capture for the reconcile sweep, and the guard | M | 3 | 01b-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 01c
 

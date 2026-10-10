@@ -1258,5 +1258,8 @@ def test_a_raising_capture_leaves_the_decision_and_the_ok_row(client, mode, capl
     assert got.items[0].backend == mode
     (row,) = _rows()
     assert (row["status"], row["decision_mode"]) == ("ok", mode)
-    assert any("the prompt log is full" in r.getMessage() for r in caplog.records
-               if r.levelname == "WARNING")
+    # One warning naming the task and the exception type -- never its text,
+    # which a capture's failure could carry from the prompt (roadmap 01b-C2).
+    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any(m.endswith("decision: RuntimeError") for m in warned), warned
+    assert not any("the prompt log is full" in m for m in warned)

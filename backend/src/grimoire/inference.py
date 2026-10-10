@@ -111,10 +111,9 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 #: call's `stage` and the batch positions `at` it carried (`_outcome`); the
 #: target is the one the attempt that answered was sent (`llm.ATTEMPTED`, a
 #: fallback's or a prompt-only re-send's included), or the stage's
-#: account-stamped primary
-#: when the call failed -- a native stage's `without_sampling`, as it was
-#: sent. One structured chunk is one call, its prompt-only re-send included;
-#: each native item is one call.
+#: account-stamped primary when the call failed -- a native stage's
+#: `without_sampling`, as it was sent. One structured chunk is one call, its
+#: prompt-only re-send included; each native item is one call.
 Capture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
 
 
@@ -134,6 +133,12 @@ class Recorder:
     async def settled(self, messages: list[dict], outcome: dict, target: wire.Target,
                       error: LLMError | None) -> None:
         raise NotImplementedError
+
+    def wants_messages(self) -> bool:
+        """Whether the next call's request is worth building: a recorder
+        that will keep only the outcome answers False, and a native item's
+        body is then never built (`_captured` hands it `[]`)."""
+        return True
 
 
 def structured_messages(items: Sequence[decisions.Item], *,
@@ -372,19 +377,25 @@ async def _captured(call: _Call, messages: list[dict] | Callable[[], list[dict]]
                     error: LLMError | None) -> None:
     """Hand one settled call to `call.capture` (spec 9.4): `messages` as
     they are, or -- a callable -- built in a worker thread; `outcome` built
-    here; `error`, the call's failure, to a `Recorder` alone. Called outside the call's meter, and guarded as `llm._observe` is:
-    a capture that raises costs the capture and nothing else (I4), never an
-    answered decision, and never turns its `ok` row into an error."""
+    here; `error`, the call's failure, to a `Recorder` alone (and a callable
+    `messages` is built only when the recorder wants them). Called outside
+    the call's meter, and guarded as `llm._observe` is: a capture that raises
+    costs the capture and nothing else (I4), never an answered decision, and
+    never turns its `ok` row into an error. Its warning names the task and the
+    exception type only, never the exception's text."""
     if call.capture is None:
         return
     try:
+        if (callable(messages) and isinstance(call.capture, Recorder)
+                and not call.capture.wants_messages()):
+            messages = []
         sent = await asyncio.to_thread(messages) if callable(messages) else messages
         if isinstance(call.capture, Recorder):
             await call.capture.settled(sent, outcome(), target, error)
         else:
             await call.capture(sent, outcome(), target)
     except Exception as exc:  # noqa: BLE001 - see the docstring
-        log.warning("could not capture a %s decision: %s", call.task, exc)
+        log.warning("could not capture a %s decision: %s", call.task, type(exc).__name__)
 
 
 async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
@@ -429,10 +440,11 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
         # preset it was really sent); a failed chunk names its stage's
         # primary.
         ran = holder.get(llm.ATTEMPTED) if holder is not None else None
-        await _captured(call, messages if sent else [],
-                        partial(_outcome, STRUCTURED, chain.primary, holder, answered, error,
-                                stage=call.stage, at=_at(call, unit)),
-                        ran if isinstance(ran, wire.Target) else chain.primary, error)
+        await _captured(
+            call, messages if sent else [],
+            partial(_outcome, STRUCTURED, chain.primary, holder, answered, error,
+                    stage=call.stage, at=_at(call, unit)),
+            ran if isinstance(ran, wire.Target) else chain.primary, error)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
             failed.append((unit, error))

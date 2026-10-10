@@ -37,7 +37,11 @@ export function SweepCaptures({ cid, refreshing }: { cid: string; refreshing: bo
     if (!open || refreshing) return;
     const asked = cid;
     api.listCampaignPrompts(asked)
-      .then(({ entries }) => { if (live.current === asked) setRows({ cid: asked, data: entries }); })
+      .then(({ entries }) => {
+        if (live.current !== asked) return;
+        setRows({ cid: asked, data: entries });
+        setError(null);   // a failed earlier read is not this one's
+      })
       .catch((err: unknown) => {
         if (live.current === asked) setError({ cid: asked, data: errorText(err) });
       });

@@ -220,4 +220,32 @@ spec gates.
 - **Final gate** (the diff against the spec): the same review's conformance
   table, clause by clause.
 
-Findings: see the PR description, which lists each one and what was done.
+Findings: no blocking finding, two should-fix and five minor. Each was
+checked against the code.
+
+- **Fixed (should-fix).** The review's `abandoned` check ran outside the hold
+  that covers the write, and the duplicate check had none. A Discard landing
+  in between still filed a capture for a dismissed review.
+  - Both absorb sites now also pass a synchronous fence over the review's
+    flags (`_review_stopped`, `_still_wanted`), asked inside the hold.
+- **Fixed (should-fix).** A campaign-level scope could be opened without a
+  fence, leaving only the campaign-exists check, which is the residual the
+  spec accepts for the sweep alone.
+  - Such a scope now captures nothing and logs a counts-only warning.
+- **Fixed.**
+  - Calls refused unsent no longer take any of the four in-full places.
+  - Once the places are full a native body is no longer built
+    (`Recorder.wants_messages`).
+  - `_captured`'s warning names the exception type, not its text.
+    `test_a_raising_capture_leaves_the_decision_and_the_ok_row` pinned the
+    text, and is updated to C2's rule.
+  - "What the sweep asked" clears a stale read error.
+  - The two cosmetic nits.
+- **Left as is.**
+  - The sweep list re-reads when a Refresh or a followed sweep settles, but
+    not for a sweep the hook never followed. Reopening the list re-reads it.
+  - Test 3 is covered through the scene-break site alone. Every site gets
+    its hook from the same `Scope.hook`.
+- **Conformance.** Every requirement of spec §3, §4, §6 and the slices' scope
+  and acceptance was found implemented. The three deviations above were
+  judged acceptable.

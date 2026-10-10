@@ -155,6 +155,9 @@ class _Hook(operations.Recorder):
                       error: LLMError | None) -> None:
         self.scope._held(self.part, messages, outcome, target, error)
 
+    def wants_messages(self) -> bool:
+        return self.scope._room()
+
 
 @dataclass
 class Scope:
@@ -183,9 +186,15 @@ class Scope:
         if self.live:
             self.notes.setdefault(part, {})[key] = value
 
+    def _room(self) -> bool:
+        """Whether another call's messages would be kept: only calls that sent
+        something take one of the `MAX_CALLS_IN_FULL` places, so a run of
+        calls refused unsent never crowds out the prompt that did go out."""
+        return sum(1 for held in self.calls if held.messages) < MAX_CALLS_IN_FULL
+
     def _held(self, part: str, messages: list[dict], outcome: dict,
               target: wire.Target, error: LLMError | None) -> None:
-        keep = len(self.calls) < MAX_CALLS_IN_FULL
+        keep = self._room()
         if messages and not keep:
             self.elided += 1
         self.calls.append(_Held(part, list(messages) if keep else None,
@@ -323,6 +332,13 @@ async def capturing(cid: str, sid: str, task: str, *,
     except Exception as exc:  # noqa: BLE001 - see `_file`
         log.warning("could not capture a %s decision: %s", task, type(exc).__name__)
         live, identity = False, None
+    if live and sid == NO_SCENE and fence is None:
+        # A campaign-level scope has no identity to fence on, so it must bring
+        # its own (01b-C1). One that does not captures nothing, rather than
+        # leaving the campaign-exists check as its only guard -- the residual
+        # accepted for the sweep, and for nothing else.
+        log.warning("could not capture a %s decision: %s", task, "NoFence")
+        live = False
     scope = Scope(task, live)
     try:
         yield scope

@@ -394,6 +394,35 @@ def test_parts_and_notes_are_filed_with_their_calls(client):
                                                    "mass": 0.7}}}
 
 
+def test_a_campaign_level_scope_without_a_fence_captures_nothing(client):
+    """01b-C1: a campaign-level site must bring its own fence; one that does
+    not is a scope that captures nothing, never one guarded only by the
+    campaign-exists check."""
+    cid, _sid = _scene(client, posts=0)
+
+    async def body(scope):
+        assert scope.hook() is None
+
+    _scoped(cid, decision_capture.NO_SCENE, body)
+    assert store.prompt_log.list_entries(cid, decision_capture.NO_SCENE) == []
+
+
+def test_a_closed_review_is_fenced_inside_the_hold():
+    """A review's synchronous flags are the absorb sites' capture fence, so a
+    Discard landing after the scope's own `abandoned` check still files
+    nothing."""
+    class Run:
+        review_cancelled = False
+        cancel_requested = False
+
+    run = Run()
+    fence = scenes_routes._still_wanted(scenes_routes._review_stopped(run))
+    assert fence is not None and fence() is True
+    run.review_cancelled = True
+    assert fence() is False
+    assert scenes_routes._still_wanted(None) is None
+
+
 # ---- size ----
 
 def test_a_long_scope_keeps_four_calls_in_full(client):
@@ -416,6 +445,29 @@ def test_a_long_scope_keeps_four_calls_in_full(client):
     kept = [s for s in entry["sections"] if s["id"] != "decision"]
     assert {s["id"].split("_", 1)[0] for s in kept} == {"c0", "c1", "c2", "c3"}
     assert entry["total_tokens"] == sum(s["tokens"] for s in kept)
+
+
+def test_calls_refused_unsent_take_no_place_in_full(client):
+    """Only a call that sent something takes one of the four places, so a run
+    of refusals cannot crowd out the prompt that did go out -- and once the
+    places are full, a native body is not even built (`wants_messages`)."""
+    cid, sid = _scene(client, posts=0)
+    seen: list = []
+
+    async def body(scope):
+        hook = scope.hook()
+        for k in range(4):
+            await hook.settled([], _outcome(at=(k,), error="bad_response: x"), _target(),
+                               LLMError("bad_response", "x", code="native_unrepresentable"))
+        for k in range(4, 9):
+            seen.append(hook.wants_messages())
+            await hook(_MESSAGES, _outcome(at=(k,)), _target())
+
+    _scoped(cid, sid, body)
+    assert seen == [True, True, True, True, False]
+    envelope = _envelope(_entry(cid, sid))
+    assert envelope["elided_calls"] == 1
+    assert envelope["calls"][0]["code"] == "native_unrepresentable"
 
 
 def test_an_outcome_past_the_cap_drops_whole_calls_from_the_end(client, monkeypatch):
