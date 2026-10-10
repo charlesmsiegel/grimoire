@@ -33,7 +33,10 @@ the capture while Task 9d and Task 10 move the facade and delete the
 lowering.
 
 **It is never regenerated to make a change pass.** A change that moves a
-stage, a wire call, a row or a capture here is argued for on its own.
+stage, a wire call, a row or a capture here is argued for on its own. It has
+been re-recorded once, by roadmap 01b-S1 (spec
+`2026-10-09-roadmap-01b-decision-capture-design.md` §3.2): every capture's
+outcome gained `stage` and `at`, and nothing else in any run moved.
 `test_record_the_decide_chain_golden` wrote it once: it writes only where no
 file exists, and only when `GRIMOIRE_RECORD_DECIDE_GOLDEN=1` asks it to.
 """

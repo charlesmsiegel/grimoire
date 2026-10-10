@@ -416,8 +416,11 @@ def test_capture_records_each_structured_call_once_it_settles(client):
         assert conn.account.decision_mode == "structured"
         assert (conn.provider_id, conn.model) == ("openrouter", "vendor/active")
     first, second = (outcome for _m, outcome, _conn, _c in captured)
-    assert first == decisions.outcome("structured", "openrouter", "vendor/active",
-                                      got.items[:8])
+    assert first == {**decisions.outcome("structured", "openrouter", "vendor/active",
+                                         got.items[:8]),
+                     "stage": 0, "at": list(range(8))}
+    # The second chunk carried the ninth item (spec 01b §3.2).
+    assert (second["stage"], second["at"]) == (0, [8])
     assert first["mode"] == second["mode"] == "structured"
     assert first["items"][0] == {"backend": "structured",
                                  "answers": {"over": {"answer": False}}}
@@ -443,7 +446,7 @@ def test_a_schema_refusal_retry_is_one_capture(client):
     assert isinstance(conn, wire.Target) and not conn.structured
     assert (conn.provider_id, conn.model) == ("openrouter", "vendor/active")
     assert outcome == {"mode": "structured", "provider": "openrouter",
-                       "model": "vendor/active",
+                       "model": "vendor/active", "stage": 0, "at": [0],
                        "items": [{"backend": "structured",
                                   "answers": {"over": {"answer": True}}}]}
 
@@ -487,7 +490,8 @@ def test_capture_records_a_failed_call_with_its_error(client):
     ((messages, outcome, conn, calls),) = captured
     assert calls == 1 and messages == fake.requests[0]["messages"]
     assert outcome == {"mode": "structured", "provider": "openrouter",
-                       "model": "vendor/active", "error": "rate_limit: slow down"}
+                       "model": "vendor/active", "stage": 0, "at": [0],
+                       "error": "rate_limit: slow down"}
     assert conn is fake.requests[0]["chain"].primary
 
 

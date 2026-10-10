@@ -1060,6 +1060,7 @@ def test_capture_records_a_native_call_with_its_distribution(client):
     assert key and key not in messages[0]["content"]
     assert "http" not in messages[0]["content"]
     assert outcome == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
+                       "stage": 0, "at": [0],
                        "items": [{"backend": NATIVE, "answers": {"who": {
                            "answer": "mara",
                            "distribution": {"mara": 0.7, "winifred": 0.3}}}}]}
@@ -1088,6 +1089,10 @@ def test_each_native_item_is_one_capture_and_a_fallback_stage_its_own(client):
     (fallen,) = [(m, o) for m, o, _c in captured if o["mode"] == STRUCTURED]
     assert fallen[0] == fake.requests[0]["messages"]
     assert (fallen[1]["provider"], fallen[1]["model"]) == SPARE
+    # Each call says which stage sent it and which batch items it carried
+    # (spec 01b §3.2): the fallback stage was handed item 1 alone.
+    assert sorted((o["stage"], o["at"]) for _m, o, _c in captured) == [
+        (0, [0]), (0, [1]), (0, [2]), (1, [1])]
 
 
 def test_an_item_refused_unsent_is_captured_with_no_messages(client):
@@ -1108,9 +1113,12 @@ def test_an_item_refused_unsent_is_captured_with_no_messages(client):
     (refused, answered) = captured
     assert refused[0] == []
     assert refused[1] == {"mode": NATIVE, "provider": DECIDER[0], "model": DECIDER[1],
+                          "stage": 0, "at": [0],
                           "error": f"bad_response: {decisions.native_gap(wide)}"}
     assert answered[0] == fake.requests[0]["messages"]
     assert answered[1]["mode"] == STRUCTURED
+    # The fallback stage answered the item the native stage refused unsent.
+    assert (answered[1]["stage"], answered[1]["at"]) == (1, [0])
 
 
 def test_a_call_the_clock_refused_unsent_is_captured_with_no_messages(client):

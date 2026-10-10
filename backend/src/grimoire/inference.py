@@ -107,9 +107,11 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 #: messages are the request as sent (a structured chunk's
 #: `structured_messages`; a native item's normalised body, `llm.native_body`,
 #: as one user message), and `[]` for a call refused before anything went
-#: out; the outcome is `decisions.outcome`'s record of it; the target is the
-#: one the attempt that answered was sent (`llm.ATTEMPTED`, a fallback's or a
-#: prompt-only re-send's included), or the stage's account-stamped primary
+#: out; the outcome is `decisions.outcome`'s record of it, stamped with the
+#: call's `stage` and the batch positions `at` it carried (`_outcome`); the
+#: target is the one the attempt that answered was sent (`llm.ATTEMPTED`, a
+#: fallback's or a prompt-only re-send's included), or the stage's
+#: account-stamped primary
 #: when the call failed -- a native stage's `without_sampling`, as it was
 #: sent. One structured chunk is one call, its prompt-only re-send included;
 #: each native item is one call.
@@ -197,6 +199,18 @@ class _Call:
     around: Around | None
     chain: wire.Chain
     retries: int | None
+    #: The stage's index into the chain `run_stages` was handed, and the batch
+    #: positions of the items it was given (spec 01b §3.2): what a capture's
+    #: `stage` and `at` say. A backend called with neither reads its own
+    #: positions as the batch's.
+    stage: int = 0
+    positions: tuple[int, ...] = ()
+
+
+def _at(call: _Call, unit: Sequence[int]) -> tuple[int, ...]:
+    """The batch positions of `unit`, a run of positions into the items
+    `call`'s stage was given."""
+    return tuple(call.positions[i] for i in unit) if call.positions else tuple(unit)
 
 
 class _Answered(NamedTuple):
@@ -319,15 +333,20 @@ async def _ask(call: _Call, chain: wire.Chain, messages: list[dict], schema: dic
 
 
 def _outcome(mode: str, target: wire.Target, holder: dict | None,
-             results: Sequence[decisions.ItemResult], error: LLMError | None) -> dict:
+             results: Sequence[decisions.ItemResult], error: LLMError | None, *,
+             stage: int = 0, at: Sequence[int] = ()) -> dict:
     """A settled call's record for the capture (`decisions.outcome`): what
     answered it and its results, or -- failed -- the primary its stage sent
-    (`target`) and its error."""
+    (`target`) and its error. Stamped with the call's `stage` and the batch
+    positions `at` it carried (spec 01b §3.2), beside what served it."""
     if error is not None:
-        return decisions.outcome(mode, target.provider_id, target.model,
-                                 error=f"{error.kind}: {error.detail}")
-    provider, model = _served_by(holder or {})
-    return decisions.outcome(mode, provider, model, results)
+        record = decisions.outcome(mode, target.provider_id, target.model,
+                                   error=f"{error.kind}: {error.detail}")
+    else:
+        provider, model = _served_by(holder or {})
+        record = decisions.outcome(mode, provider, model, results)
+    tail = {k: record.pop(k) for k in ("items", "error") if k in record}
+    return {**record, "stage": stage, "at": list(at), **tail}
 
 
 async def _captured(call: _Call, messages: list[dict] | Callable[[], list[dict]],
@@ -389,7 +408,8 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
         # primary.
         ran = holder.get(llm.ATTEMPTED) if holder is not None else None
         await _captured(call, messages if sent else [],
-                        partial(_outcome, STRUCTURED, chain.primary, holder, answered, error),
+                        partial(_outcome, STRUCTURED, chain.primary, holder, answered, error,
+                                stage=call.stage, at=_at(call, unit)),
                         ran if isinstance(ran, wire.Target) else chain.primary)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
@@ -513,7 +533,8 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
         await _captured(
             call, partial(_native_request, item, named) if m.usage else [],
             partial(_outcome, NATIVE, named, holders[index],
-                    () if answered is None else (answered,), errors[index]),
+                    () if answered is None else (answered,), errors[index],
+                    stage=call.stage, at=_at(call, (index,))),
             named)
 
     try:
@@ -643,7 +664,7 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     pending = list(range(len(items)))
     #: The provider of each stage that stopped on a connection-wide failure.
     dead: list[str] = []
-    for stage in chain:
+    for number, stage in enumerate(chain):
         if not pending:
             break
         if any(_same_connection(stage.chain.primary.provider_id, d) for d in dead):
@@ -651,7 +672,8 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
             continue
         got = await _BACKENDS[stage.mode](
             tuple(items[i] for i in pending),
-            replace(call, chain=stage.chain, retries=stage.retries))
+            replace(call, chain=stage.chain, retries=stage.retries,
+                    stage=number, positions=tuple(pending)))
         rows.extend(got.rows)
         served.update(dict.fromkeys(got.served))
         failed = _settle(got, pending, results, words)
