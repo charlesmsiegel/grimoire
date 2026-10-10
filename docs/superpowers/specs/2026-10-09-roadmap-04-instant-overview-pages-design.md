@@ -1,6 +1,6 @@
 # 04. Instant Worlds, Campaigns, Todo and shell
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 04 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06).
 **Baseline:** `main` at `35c1fb7`.
@@ -23,11 +23,11 @@ records why it does not land layer 3 (section 6.6).
 
 | Contract | Provided by | What this spec uses it for | Hard or soft |
 |---|---|---|---|
-| 03-C1 | 03 | Composite keys: the card rows over one file, `scene_summary` over a collection digest with a **member filter** (section 3.4), `scene_turns` over a file plus a non-file input (player names), `continuity_summary` over five absent-ok files (section 3). | Hard |
+| 03-C1 | 03 | Composite keys: the card rows over one file, `scene_turns` over a file plus a non-file input (player names), `continuity_summary` over five absent-ok files (section 3). As amended in parallel, 03-C1 keys an absent-ok input as an explicit sentinel, which 3.6 relies on. The collection member filter is not used in v1 (`scene_summary` is in-process only, section 3.4); it is what a persisted summary would use later. | Hard |
 | 03-C2 | 03 | Liveness by construction. It is why Grimoire's own writes need no server-side retirement step (section 5.1) and why an external edit is seen on the next read (section 6.5). | Hard |
-| 03-C4 | 03 | The validate-and-hash primitive behind every key, and its rule 5 registry flag: every kind here is registered "may use persisted `sources`", and 03's guard keeps them away from decision sites (section 3.7). | Hard |
-| 03-C5 | 03 | Storing artifacts at write time: the turn path warms `scene_head` and `scene_turns` for the scene it just wrote. | Hard for 04-C2a only; the rest of 04 works without it |
-| 03-C6 | 03 | Batch lookup of `scene_head` artifacts for a campaign's live scene set on a `scene_summary` miss (section 3.4), and the hit and miss counts 04-C3a surfaces (section 8). | Soft: without it the miss path does one lookup per scene, and the compiled counters read zero |
+| 03-C4 | 03 | The validate-and-hash primitive behind every key, and its rule 5 registry flag: every kind here is registered "may use persisted `sources`", and 03's guard keeps them away from decision sites (section 3.7). As amended, a failed read of any input makes the derivation uncacheable for that request and falls back to the live path; 3.6 cites that rule rather than defining one. | Hard |
+| 03-C5 | 03 | Storing artifacts at write time: the turn path warms `scene_turns` for the scene it just wrote. | Hard for 04-C2a only; the rest of 04 works without it |
+| 03-C6 | 03 | Batch artifact lookup over a request's live key set: every campaign's `campaign_row` and `continuity_summary` on the global pages, every open scene's `scene_turns` on the shell. Also the hit and miss counts 04-C3a surfaces (section 8). | Soft: without it each key is looked up on its own, and the compiled counters read zero |
 | 03-C9 | 03 | The synthetic-library generator, owned by 03's plan. 04-C3b extends it with the overview scenarios and the harness (section 9). | Soft: without it 04-C3b builds the generator core to section 9.1 itself |
 
 03-C3 (`materialized`) is not used directly: every artifact 04 stores leaves
@@ -172,9 +172,10 @@ Not landed:
 - **TodoView** calls `setData(null)` on every load (`TodoView.tsx:129-139`). The
   page is blank until the server answers, on every visit and after every
   ignore.
-- **The rail** (`shell/useShellPayload.ts`) keeps the last payload for its
-  `(data_dir, cid)` key and refetches. Within a tab it already paints at once;
-  after a page reload it waits.
+- **The rail** (`shell/useShellPayload.ts`) holds one payload, the one for the
+  current `(data_dir, cid)` key, and refetches. Navigating within one campaign
+  it already paints at once. Switching to a different campaign drops the held
+  payload (`useShellPayload.ts:86-91`) and waits, and so does a page reload.
 
 ### 1.4 Drift found while reconciling
 
@@ -196,9 +197,9 @@ Not landed:
   builds the title map before the glob loop (`todo.py:871-878`), so every
   campaign whose `scenes/` directory exists pays `list_scenes`, whether or not
   any review sidecar exists.
-- **Post-mutation refreshes that are not `fresh`.** `CampaignsView`'s rename
-  and delete (`:169`, `:175`) and `WorldsView`'s create, rename and delete
-  (`:60`, `:67`, `:78`) re-read without `fresh`, so they can join a read issued
+- **Post-mutation refreshes that are not `fresh`.** `CampaignsView`'s rename,
+  delete and fork-from-now (`:169`, `:175`, `:203`) and `WorldsView`'s create,
+  rename and delete (`:60`, `:67`, `:78`) re-read without `fresh`, so they can join a read issued
   before their own write. The read-path spec's section 4 made `fresh` the rule
   for these. Once every visit starts a background revalidation (section 6),
   that window is open on every mutation rather than rarely.
@@ -224,27 +225,34 @@ Restated because every decision below follows from it:
 
 ## 2. Goal
 
-1. **The four overview surfaces paint useful content immediately on every
-   in-tab visit after the first**, including after a backend restart, and
-   never paint the wrong library's content or a pre-write answer to the
-   tab's own write (section 6).
-2. **No overview request pays a cost that grows with a campaign's age.**
-   Scenes, transcripts and ledgers are what grow with play. Each of them
-   reaches these routes only through a content-keyed projection, so a warm
-   read after a restart costs stats and lookups rather than parses (section 3).
+1. **The four overview surfaces paint useful content immediately on an in-tab
+   revisit when nothing was written in between**, and never paint the wrong
+   library's content or a pre-write answer to the tab's own write (section 6).
+   A write forgets what was remembered (6.3), so **the visit after a turn or
+   any other write waits for the server**, and its speed comes from section 3,
+   not from memory. That case is measured on its own (scenario
+   `visit_after_turn`, 9.2) and has its own acceptance row (12.7).
+2. **No overview request parses a transcript or a ledger that has not changed
+   since it was last parsed**, in this process or, with the compiled cache on,
+   in an earlier one. Transcripts and ledgers are what grow with play, and
+   they reach these routes only through content-keyed projections. Scene
+   *heads* keep today's head-only read with its in-process memo (3.4). What
+   remains proportional to a campaign's size is stated, not hidden: a stat per
+   scene, the `scenes/` listing on a miss, and the review-sidecar glob (4.2).
 3. **A change to one campaign recomputes that campaign's projections and no
    other's** (section 4.4).
 4. **Todo stays derived and self-healing.** Every chore is still a live answer
    about the current files. What changes is that part of that answer is
-   reused, under a key that covers all of its inputs.
+   reused, under a key that covers all of its inputs, with the residuals
+   section 6.5 states.
 5. **What "instant" costs is measured**, on a synthetic library, with counters
    that a test can assert (sections 8 and 9).
 
 **Explicitly not the goal:**
 
 - Caching member counts or anything else 03 forbids (section 1.5).
-- Making cold-start-ever (empty cache, fresh tab) instant. That case is
-  bounded, not eliminated.
+- Making cold-start-ever (empty cache, fresh tab) instant. That case costs
+  what it costs today, plus the hashes section 7 lists.
 - Persisting payloads in the browser across a page reload (Open question 2).
 - Landing the library epoch, `ETag` or `304` (section 6.6).
 - Touching `usage_rollup`, the run registry, or any write path's semantics.

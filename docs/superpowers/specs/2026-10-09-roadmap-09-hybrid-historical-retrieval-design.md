@@ -621,40 +621,40 @@ lands first brings the route.
 ## 8. Expansion: from a selected scene to excerpts
 
 Selection is a scene; evidence is lines. `expand.excerpts(cid, scene, query,
-budget_tokens) -> tuple[Excerpt, ...]` uses 08-C3b's transcript-expansion
-helper (08-C3b), called with `phase="prompt"`, which this spec relies on to
-behave as follows:
+max_bytes) -> tuple[Excerpt, ...]` is a thin adapter over 08-C3b's
+`expand(cid, sid, phase="prompt", terms=..., identity=..., radius=1,
+max_excerpts=2, max_bytes=..., fallback="none")` (08 section 10):
 
-1. **Prompt view.** The scene's messages are read through
-   `store.regex.view.view(messages, cid=cid, phase="prompt")`, with director
-   notes and hidden posts dropped and images reduced to their alt text, the
-   same projection `story._project_history` applies (`story.py:47`-`71`).
-   `test_regex_prompt_guard.py` is extended to scan `store/history/` and pins
-   `expand.excerpts` by name, so a later edit that reads raw text fails.
-2. **Anchors.** Posts matching the query's weighted terms, then its plain
-   terms. A window is the anchor post and `EXCERPT_PAD` (1) post either side.
-3. **Bounds.** At most `MAX_WINDOWS` (2) windows per scene, merged when they
-   overlap, cut from the far edge to fit the scene's share of the budget,
-   never mid-word.
-4. **No anchor.** A scene admitted only structurally or semantically, with no
-   lexical anchor in its transcript, contributes its header and its summary,
-   and no excerpt. Choosing lines by embedding would need post-level vectors,
-   which 08 defers.
-5. **Never the whole transcript.** There is no "read full transcript" step on
-   the turn path. The draft's step 4 is 12's `get_scene_transcript`, behind
-   that spec's budgets.
+1. **Prompt phase, named by the caller.** 08-C3b requires the phase and views
+   the whole transcript in it, drops hidden posts and director notes, and
+   reduces prompt-phase images to alt text. `test_regex_prompt_guard.py`'s
+   extended scan (08 section 12) covers `store/history/` and pins
+   `expand.excerpts` by name.
+2. **Terms** are the query's weighted terms, then its plain terms, through
+   `search.query_terms`' normalisation (08's step 6). Excluded and gm-only
+   names were already removed from them (section 4).
+3. **Bounds.** `radius=1`, `max_excerpts=2`, and `max_bytes` from the item's
+   share of the ceiling (section 9.3) at four bytes per token, the
+   characters-per-token heuristic `tokens.count_if_loaded` falls back to.
+4. **No anchor.** With `fallback="none"`, a scene with no matching post yields
+   no excerpt and contributes its header and summary only. Choosing lines by
+   embedding would need post-level vectors, which 08 defers. Such a scene is
+   **skipped at selection** when its summary is already in the prompt (the
+   archive case of section 9.4), so a depth slot is never spent on a bare
+   header (review M6).
+5. **Never the whole transcript.** `allow_whole` stays off on the turn path.
+   The draft's "read the full transcript" step is 12's
+   `get_scene_transcript`, behind that spec's budgets.
 
-Each `Excerpt` carries, per post it includes, the transcript index, the
-post key (the stored `post_id`, or the response id for a reply, so a post can
-be named across a cut that renumbers indices) and the post's prompt-view text,
-plus the joined text that renders. 11 classifies actor knowledge per post, so
-the post is the unit 09-C1 promises, not only the window:
+Each `Excerpt` carries, per post it includes, the transcript index, the post
+key and the post's prompt-view text, plus the joined text that renders. 11
+classifies actor knowledge per post, so the post is the unit 09-C1 promises:
 
 ```python
 @dataclass(frozen=True)
 class EvidencePost:
-    index: int          # transcript index at retrieval time
-    key: str            # post_id / response id; "" for a legacy post with none
+    index: int          # absolute transcript index at retrieval time (08-C3b)
+    key: str            # post_id, else response_id, else ""
     speaker: str        # the stored speaker label
     text: str           # prompt-view text, as rendered
 
@@ -664,9 +664,13 @@ class Excerpt:
     text: str           # what renders: the posts joined as history lines
 ```
 
-Section 8's requirements on 08-C3b: the caller names the phase (`prompt`
-here), and the helper returns posts with their indices and keys rather than a
-flattened string.
+**The post key needs one field from 08-C3b** (review B3): 08's post dicts are
+`{index, role, speaker, content}`, with no key. Stored messages already carry
+`post_id` and `response_id` (`store/scenes/serialize.py:430`-`431`), so 08-C3b
+adds `key` to each post dict (`post_id`, else `response_id`, else `""`). This
+is a cross-spec request routed to 08. Until it lands, `EvidencePost.key` is
+`""`, and a consumer names a post by `(SceneRef.key, index)`, which is stable
+within the turn but not across a later cut.
 
 ## 9. The history prompt section (09-C3)
 
@@ -676,12 +680,20 @@ One new catalog entry, placed directly after "Earlier scenes":
 
 ```python
 Section("history_recall", "Recalled history",
-        "scene/sections/history_recall.j2", pack.RECALLED),
+        "scene/sections/history_recall.j2", pack.HISTORY_RECALL),
 ```
 
-- **RECALLED**, the tier `pack.py:85`-`91` reserves for "anything retrieved by
-  a mechanism that did not exist before". It gives way before the archive,
-  the trailing history trim and everything else, so it can only add.
+- **A tier of its own, `HISTORY_RECALL`, first in `DROP_ORDER`**:
+  `DROP_ORDER = (HISTORY_RECALL, RECALLED, ARCHIVE, BACKGROUND, SPOTLIGHT)`.
+  Sharing RECALLED would break "can only add": within a tier the packer takes
+  the largest section first (`pack.py:333`-`336`), so with lore recall on and
+  its section the larger, Recalled lore would be dropped whole before history
+  shed a scene, swapping context the prompt already had for context it never
+  had, the exact failure `pack.py:85`-`91` created RECALLED to prevent
+  (review S1). `pack.py`'s and `layout.py`'s docstrings gain the new tier and
+  the reason. With no section in the tier (retrieval off), the packer's loop
+  over it does nothing, so off stays byte-identical. It also means the archive
+  is never dropped while this section survives, which section 9.4 relies on.
 - **A layout saved before 09** gets it after its nearest preceding catalog
   neighbour, `layout.py`'s upgrade rule, and a reader can switch it off by id
   like any other section.
@@ -690,8 +702,17 @@ Section("history_recall", "Recalled history",
   (scene title, in-fiction date, location name), the summary when it is not
   already in the prompt (section 9.4), and the excerpt lines in transcript
   order. Nothing else: no signals, no ranks, no refs, no scores.
-- **Empty when off**: with `history_recall_depth` unset, `_assemble` puts an
-  empty list under `history_evidence`, the template renders nothing, and
+- **The header's location passes the same gate as the current setting**
+  (`assemble.py:381`-`406`): a gm-only location, or one the reader excluded,
+  is not named; the header omits the location rather than leaking its name
+  (review S8).
+- **Empty when off**: with `history_recall_depth` unset, **or the section
+  switched off in the reader's layout** (`_section_on("history_recall")`,
+  `assemble.py:799`, the rule `available_art` already follows at
+  `assemble.py:731`-`741`: "the off switch, not a way to hide output you are
+  still paying for"), `gather` returns empty without reading or spending
+  anything (review S7), `_assemble` puts an empty list under
+  `history_evidence`, the template renders nothing, and
   `_render_sections` drops the empty section (`assemble.py:1383`-`1386`), so
   the composed prompt and the inspector rows are byte-identical. A test runs
   the whole `test_lore_golden.py` scenario list with the new code and an
@@ -704,37 +725,47 @@ Section("history_recall", "Recalled history",
 
 ### 9.2 The ceiling
 
-`budget.ceiling(cfg, chain) -> int`, the strict budget for the section,
-computed before expansion:
+`budget.ceiling(cfg, resolved) -> int`, the strict budget for the section,
+computed before expansion through **01i-C2, the required way to derive a
+ceiling** (01i section 5: a consumer must not take its own minimum over the
+attempts or compute `window - max_output`):
 
 ```text
-ceiling = history_recall_budget                        (absolute, tokens)
-        min floor(WINDOW_SHARE * min known context_window over the chain's attempts)   [01i-C1]
-        min floor(BUDGET_SHARE * context_budget)       [only when context_budget > 0]
+ceiling = history_recall_budget                                   (absolute, tokens)
+        min floor(WINDOW_SHARE * prompt_ceiling(resolved).tokens)  [01i-C2; skipped when tokens is None]
+        min floor(BUDGET_SHARE * context_budget)                   [only when context_budget > 0]
 ```
 
+- `prompt_ceiling(resolved)` already walks only the attempts the chain sends
+  (the primary, and the fallback only when it rides), reserves each one's
+  reply, and returns the smallest, so a fallback with a smaller window is
+  covered and a non-riding one is not counted (01i section 5).
 - `WINDOW_SHARE` (0.10): the section is targeted recall beside a conversation
   that is the only thing the model cannot reconstruct (`pack.py:33`-`37`); a
-  tenth of the window leaves the rest of the prompt its room on the smallest
-  windows that serve roleplay. Tuned later against the eval suite's
+  tenth of the prompt ceiling leaves the rest of the prompt its room on the
+  smallest windows that serve roleplay. Tuned later against the eval suite's
   added-tokens column.
-- The **minimum over the chain**: a fallback attempt with a smaller window
-  reads the same frozen prompt (`_prepare`'s rule, `assemble.py:1499`-`1510`),
-  so the ceiling must fit the smallest reader. An attempt whose window is
-  unknown (01i-C1 provenance `unknown`) does not lower it.
+- `tokens is None` means "use your own cap" (01i): the absolute budget then
+  bounds the section alone. That is also the whole rule before 01i lands.
 - `BUDGET_SHARE` (0.15) applies only when the reader set a packer budget,
   because then the packer will enforce the whole prompt against it anyway and
   the section should not arrive already larger than its likely share.
-- With 01i-C1 not yet landed, the first term is the whole rule.
 
 ### 9.3 The fit and the shed units
 
 `budget.fit(items, ceiling, count) -> list[EvidenceItem]` walks the merged
 order and gives each item at most `ceiling // depth` tokens (and at least
 `MIN_ITEM_TOKENS`, 80, below which a header and one line do not fit), trims
-excerpts from their far edge to fit, and stops at the ceiling. The counter is
-the compose's own memoised one (`_token_memo`, `assemble.py:1582`), so the
-fit and the packer agree on what a string costs.
+excerpts from their far edge to fit, and stops at the ceiling. It counts with
+**the same tokenizer** the packer uses (`tokens.count_tokens`); the compose's
+memoised counter (`_token_memo`) does not exist yet when retrieval runs. "Never
+exceeds its ceiling" is measured on **the rendered section text**: `fit`
+renders the template's heading, separators and item blocks for the kept items
+and counts that string, so the heading and joins are charged. Macro expansion
+in `_render_sections` can still change the length of transcript text that
+happens to contain a macro token; that is the same latitude the conversation
+history has (`assemble.py:575`), and the packer, which measures the expanded
+text, remains the final bound (review M1).
 
 The section carries a `shed` hook (`pack.py:228`-`234`) so the packer can give
 it up one scene at a time instead of whole:
@@ -752,17 +783,24 @@ shedding never re-draws a `{{random}}`. No unit is `keep` or `pinned` (a pin
 has nothing in this section to name), so the section can be dropped whole
 when its last unit goes, exactly as World info can.
 
-`pack` needs no change. Its shed loop is generic over units (`pack.py:305`-`328`)
-and its tier loop already admits any section carrying `shed`
-(`pack.py:333`-`336`). One test pins that `_world_info_section` remains the
-only other section with a hook and that both shed in their documented order.
+`"ref"` is `item.scene.key` (section 7.2), never the nullable identity.
+`pack` changes only by the new tier constant and its place in `DROP_ORDER`
+(9.1). Its shed loop is generic over units (`pack.py:305`-`328`) and its tier
+loop already admits any section carrying `shed` (`pack.py:333`-`336`). One test
+pins that `_world_info_section` remains the only other section with a hook and
+that both shed in their documented order; another packs a prompt with both
+Recalled lore and Recalled history present and shows history sheds first.
 
 ### 9.4 No repeated text
 
 The section must never carry text the prompt already carries:
 
-- **Archive**: for a scene in `archive_entries`, the item omits its summary
-  and renders the header and excerpts only.
+- **Archive**: for a scene in `archive_entries`, when the archive section is
+  on in the reader's layout (`_section_on("archive")`), the item omits its
+  summary and renders the header and excerpts only. With "Earlier scenes"
+  switched off, the summary renders here, since nothing else carries it
+  (review S7). The packer cannot drop the archive while this section survives
+  (9.1), so the omission never leaves a summary sent nowhere.
 - **Recap**: in the full variant (the opener, `OPENER_RECAP_DEPTH`), summaries
   of recap scenes are omitted; in the compact variant the one-liner is shown
   and the summary may be.
@@ -797,14 +835,20 @@ reach a row, a capture or JSON:
   "ceiling": 1200, "budget_from": ["config", "context_window"]}}
 ```
 
-`test_reasons_never_reach_the_prompt` gains the history row: every relation
-name, signal name, score, ref and verdict word above is asserted absent from
-`json.dumps(build_messages(...))`, with a scenario in which every signal fired.
+`test_reasons_never_reach_the_prompt` gains the history row, built from a
+**hand-built `Evidence`** in which every signal is set (the preview path skips
+semantic, so a real retrieval cannot make every signal fire offline). The
+assertions use distinctive markers planted in the evidence (a matched term,
+a relation ref, a cosine value, a rerank level label, the verdict) rather than
+common words like "relationship" or "location", which already occur in prompt
+text, the style of `test_lore_shedding.py:627`-`631` (review M5).
 
-The live inspector (`context_breakdown`, `assemble.py:1942`) composes a
-hypothetical turn and has no evidence handed to it. It runs `retrieve` with
-`semantic` and `rerank` skipped (`skipped:preview`), so opening the panel never
-spends money or waits on a provider, and the row says what was skipped. The
+The live inspector (`context_breakdown`, `assemble.py:1942`) is synchronous
+and composes a hypothetical turn. It calls `history.retrieve_preview(cid, sid,
+query, ceiling)`, the synchronous core of `retrieve` with the semantic and
+rerank stages left out (`skipped:preview`), directly in its worker: no bridge,
+no embed, no decide, so opening the panel never spends money or waits on a
+provider, and the row says what was skipped. The
 evidence a real turn used is in that turn's prompt-log capture, which carries
 its breakdown (`routes/common.py:406`, `_record_prompt`).
 

@@ -880,11 +880,15 @@ python -m grimoire.cache sync [PATH ...]
         [--no-embed] [--dry-run] [--verify] [--json] [--quiet]
 ```
 
-From a checkout, with the backend venv, in the two forms CLAUDE.md gives:
+From a checkout, with the backend venv. `PYTHONPATH` is set in every form,
+because the venv's editable install points at whichever checkout created it
+(CLAUDE.md, the `check-py` note); in a worktree, use the `PY` rule
+CONTRIBUTING.md gives:
 
 ```
 PYTHONPATH=backend/src backend/.venv/bin/python -m grimoire.cache sync ...          # macOS/Linux
 PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync ...  # Windows (Git Bash)
+$env:PYTHONPATH="backend/src"; backend\.venv\Scripts\python.exe -m grimoire.cache sync ...  # Windows (PowerShell)
 ```
 
 - **The module.** `backend/src/grimoire/cache.py`, beside `where.py`, with a
@@ -913,9 +917,9 @@ PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync .
 
 **Exit status.**
 
-- `0`: no path is `failed` or `refused`. Cache off, cold paths and deferred
-  vectors all count as success.
-- `1`: some path is `failed` or `refused`.
+- `0`: no path is `failed`, `refused`, `missing` or `verify_failed`. Cache
+  off, cold paths and deferred vectors all count as success.
+- `1`: some path is `failed`, `refused`, `missing` or `verify_failed`.
 - `2`: a usage error.
 - `3`: the root cannot be used at all (missing, not a directory, or
   unreadable).
@@ -925,11 +929,17 @@ An agent can branch on the status without parsing the report.
 ### 7.2 Explicit paths
 
 Each path goes through section 8's validation, then section 3.3's steps. A path
-that exists is rebuilt or reported cold. A path that does not exist is
-reported `deleted`, and bumps its campaign's token (section 10). `--deleted
-PATH` says the same thing explicitly. It is how a script hands over a delete
-it made through a store function, since deletes are not in the write set
-(section 5.3).
+that exists is rebuilt or reported cold.
+
+A path that does not exist is **`missing`**, not deleted. It exits `1`, bumps
+nothing, and the report suggests `--deleted` if the removal was meant. A
+mistyped path, or one pasted with git's C-quoting, would otherwise report
+success while the real edit went unsynced. `--deleted PATH` is how a caller
+says a removal was intended: the path is reported `deleted` and bumps its
+campaign's token (section 10). It is also how a script hands over a delete it
+made through a store function, since deletes are not in the write set
+(section 5.3). A `--deleted` path that still exists is refused
+(`not_deleted`).
 
 ### 7.3 Scoped modes: `--campaign`, `--world`, `--all`
 
@@ -940,31 +950,36 @@ listing, never from the cache:
    `test_path_guard_store.py` holds for a caller-supplied id joined onto a
    path. `--campaign CID` is `campaigns/<cid>/`, `--world WID` is
    `worlds/<wid>/`, and `--all` is every syncable top-level directory
-   (section 8).
+   (section 8). A scope whose directory does not exist is refused
+   (`not_found`, exit `1`). It never purges: a typo must not wipe every
+   device's cache (section 7.6).
 2. **Walk the scope**, skipping `atomic` temp files (`atomic.is_write_temp`,
    `atomic.py:162`) and anything section 8 refuses, and stat every file.
 3. **Look up the rows.** In one batched read of 03's tables, keyed by the
    listed paths, fetch each file's `materialized` rows and its `sources` row.
    That is within 03 section 9's rule, since the keys came from the
    filesystem.
-4. **Pick the candidates.** A file is a candidate when it has `materialized`
-   rows and either its stamp does not match its `sources` row or it has no
-   row. A file with no `materialized` rows is cold, and is skipped without
-   being read. A file whose stamp matches is current by 03's trust rule, and
-   is also skipped without being read.
+4. **Pick the candidates.** A file with no `materialized` rows is cold, and is
+   skipped without being read. Every other file is a candidate unless all of
+   its hot kinds are known to be current, which needs two things:
+   - its stamp matches its `sources` row, so the row's `content_hash` is the
+     current hash by 03's trust rule; and
+   - every one of its `materialized` rows was built from that hash. A
+     `sources` row proves only that *some* read hashed the file after the edit
+     (a GET of the lore page, say). It does not prove that recall's vector,
+     the overview card or 08's document was rebuilt. So this spec asks 03-C3
+     for a `built_from` column on each `materialized` row: the content hash of
+     that path's bytes when the artifact was built. Without that column, every
+     file with rows is a candidate.
 5. **Sync the candidates** through `sync_paths`.
 
 The `sources` table serves only as a hint about which files to read, never as
-an answer. A candidate is still read and hashed through 03-C4, and a
-non-candidate is one that 03's own read path would also have trusted. A scoped
-sync therefore costs a stat per file, plus a read for each hot file whose
-stamp moved.
+an answer. A candidate is still read and hashed through 03-C4. A scoped sync
+therefore costs a stat per file, plus a read for each hot file not proved
+current.
 
 To keep the report bounded, a scoped sync lists individually only the paths
 whose status is not `current` or `cold`, and counts the rest.
-
-A scoped sync over a deleted root, where the directory is gone, is section
-7.6.
 
 ### 7.4 Deletes
 
@@ -986,24 +1001,35 @@ identical content hashes, because a renamed record may be a different record.
 That is the draft's rule, and it is right. The caller may state one:
 
 - `--renamed OLD=NEW` (and `renamed=` on the primitive) copies OLD's
-  `materialized` kinds, without their instances, to NEW before NEW is
-  classified, so NEW is rebuilt as hot. Each hook derives NEW's instance from
-  NEW's path. OLD is then handled as a delete.
+  `materialized` kinds, without their instances or `built_from`, to NEW before
+  NEW is classified, so NEW is rebuilt as hot. Each hook derives NEW's
+  instance from NEW's path. OLD is then handled as an intended delete. 03
+  writes rows only beside an artifact, so this needs one more 03-C3
+  operation: `copy_materialized(old, new)`, which writes rows for NEW naming
+  the same kinds (multi-unit vector rows included) and nothing else.
 - A wrong statement costs some compute and, at worst, embeddings of NEW's
-  projections, which are new content and are reported like any other spend.
+  projections, up to the units OLD had embedded and each producer's lazy
+  limit. That is the one way sync can embed text whose predecessor was not
+  embedded at that path, and the dry run shows it before anything is sent.
   Identical text costs nothing, since vectors are keyed by text.
 
 ### 7.6 A deleted world or campaign root
 
-An argument may be a world or campaign root (`worlds/<wid>` or
-`campaigns/<cid>`, from a path or a scope flag) whose directory no longer
-exists. In that case the store has lost a whole world or campaign outside the
-app. When the app deletes one, 03-C8 purges the cache, so that derived
-private text does not outlive it, either in this device's file or in other
-devices' synced copies. A delete made by hand deserves the same. So sync runs
-03's purge (the marker, plus this device's purge) and reports `purged`. That
-is 03-C8, the callable purge through a purge marker. If 03-C8 has not
-landed, sync reports the root as deleted and says the purge did not run.
+A world or campaign root (`worlds/<wid>` or `campaigns/<cid>`) named in
+`--deleted` (or `deleted=`) whose directory no longer exists means the store
+has lost a whole world or campaign outside the app. When the app deletes one,
+03-C8 purges the cache, so that derived private text does not outlive it,
+either in this device's file or in other devices' synced copies. A delete made
+by hand deserves the same. So sync calls 03-C8's purge (the marker, plus this
+device's purge) and reports `purged`. If 03-C8 has not landed, sync reports
+the root as deleted and says the purge did not run.
+
+The purge is triggered **only** by an explicit `--deleted` naming the root.
+03-C8 is a whole-cache purge whose marker makes every device purge, which also
+erases every `materialized` row, the memory 05 depends on. A scope flag or a
+plain path naming a root that does not exist is `not_found` or `missing`
+(sections 7.2 and 7.3), never a purge, so a mistyped campaign id cannot cost
+every device its cache.
 
 ### 7.7 Verify
 
@@ -1028,30 +1054,38 @@ and a tab that should forget its remembered reads when the sync ends (section
 - **Body.** A plain `BaseModel` with plain fields, v1/v2-agnostic and dumped
   through `routes.common._dump`: `paths: list[str]`, `campaigns: list[str]`,
   `worlds: list[str]`, `all_records: bool`, `renamed: list[dict]`,
-  `deleted: list[str]`, `embed: bool = True`, `dry_run: bool = False` and
-  `verify: bool = False`. At least one selector is required; otherwise the
-  route answers 400.
+  `deleted: list[str]`, `embed: bool = True`, `dry_run: bool = False`,
+  `verify: bool = False` and an optional `attempt_id`. At least one selector
+  is required; otherwise the route answers 400.
 - **Answer.** 202, with the run payload. The run is the `background` class,
-  kind `cache-sync`, on `runs.GLOBAL_SUBJECT` (`runs.py:1349`), reserved with
-  `single_live=True` (`start_or_existing`, `runs.py:497`). A second request
-  while one is live is handed the live run, and its paths are left for that run
-  to take after its pass, through the registry's pending set (`pend_touched`,
-  `runs.py:666`). This is the same arrangement a campaign's reconcile sweep
-  uses. The pending set is keyed by subject alone today, and the global
-  subject would share it between kinds, so the plan keys it by subject and
-  kind.
+  kind `cache-sync`, on `runs.GLOBAL_SUBJECT` (`runs.py:1349`).
+- **One at a time, and no merging.** While a `cache-sync` run is live, a new
+  request is refused with 409 `sync_in_flight`, carrying the live run's id so
+  the caller can poll it and retry. The one exception is a repeat of the same
+  `attempt_id`, which is handed its own run back (the registry's
+  `_by_own_attempt`). Requests are never adopted into a live run. Adoption
+  would have to carry each request's options (`dry_run`, `embed`, `verify`,
+  `renamed`, `deleted`), which the registry's pending set (`pend_touched`,
+  `runs.py:666`, a `set[str]` per subject) cannot, so an adopted dry run would
+  spend and an adopted `embed: false` would embed. It would also inherit the
+  reconcile pattern's race, where a pend that lands after the run's last take
+  is silently dropped (`routes/continuity.py`, around `:807-815` and
+  `:925-930`). A refusal is honest and costs one retry.
 - **Progress and result.** The run appends progress frames (counts only) and a
   final frame carrying the report. It is reached through the global subject's
-  existing four run routes: list, poll, stream and cancel. Cancel stops before
-  the next path or group, and the report says what ran.
-- **Exclusion.** None, as for every `background` run: it neither holds a scene
-  nor is refused by one. A live run does make `PUT /config/data-dir` answer
-  409, like any run. That is correct, since a sync in flight is pinned to the
-  root it started on.
+  existing four run routes: list, poll, stream and cancel. Cancel sets the
+  run's `cancel_requested`, which the batch's `stop` reads (section 4.2); the
+  report says what ran.
+- **Exclusion.** No exclusion key, as for every `background` run: it neither
+  holds a scene nor is refused by one. A live run does make
+  `PUT /config/data-dir` answer 409, like any run. That is correct, since a
+  sync in flight is pinned to the root it started on.
 - **Not a write.** The path is not under `/api/campaigns/`, so the activity
   middleware stamps nothing. Sync bumps the write tokens (section 10) itself,
   where it writes. CLAUDE.md states that rule for "Everything a *detached* run
-  writes".
+  writes". The run's own token writes land in its isolated write set and reach
+  the queue, which drops them, since a `revision.txt` has no `materialized`
+  rows.
 - **Docs.** CLAUDE.md's "Detached runs" section counts the handlers that start
   runs ("Thirty-two handlers") and lists them by class. This change adds
   `post_cache_sync` to the `background` bullet and moves the count in the same
@@ -1070,8 +1104,8 @@ except `scripts/grimoire_sync.py` over adb. So on Android:
   there. 03's cache is off on Android until 03 confirms that the APK ships
   `sqlite3` and the `BUILD` stamp (03 section 13). While it is off, every sync
   reports `cache: off` and does nothing else, successfully.
-- `POST /api/cache/sync` is the explicit door. A PC-side tool could reach it
-  through `adb forward`. Nothing does today, and lazy rebuilding covers a file
+- `POST /api/cache/sync` is the explicit door. The phone's server listens on
+  loopback only, so only a PC-side tool could reach it, through `adb forward`. Nothing does today, and lazy rebuilding covers a file
   `grimoire_sync.py` pushed (Open question 3).
 
 ## 8. Path validation

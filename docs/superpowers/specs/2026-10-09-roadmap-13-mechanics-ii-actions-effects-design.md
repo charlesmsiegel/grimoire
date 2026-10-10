@@ -642,15 +642,28 @@ them, and an Action that drains a statistic for a while is a condition's job
 Every operation names `target` (`actor` or `target`), `field`, and an
 `amount` (or `value` for `set`), each an integer literal or an expression
 string. Bounds are stated by the engine, not by `validate_sheet_values` (1.9
-item 3): a `resource` lives in `0..max` (its live `max`), a `track` in
-`0..max` (the field definition's `max`).
+item 3): a `resource` lives in `lower..upper = 0..max` (its live `max`), a
+`track` in `0..max` (the field definition's `max`).
 
-| Op | Amount | Semantics | Out of bounds |
+**The bounds constrain only the direction of the change.** A resource's
+`current` is unbounded on disk today (1.2), so a field may already sit outside
+its bounds (`-3/8` after an overshoot, `11/8` from a hand-entered surplus). An
+Effect never moves such a value *against the sign of its own op*, and never
+moves a value further outside the bounds than it already is. Inside the
+bounds, the bounds hold as usual. With `b` the value before the op and `a` the
+amount:
+
+| Op | Amount | Result | Out of bounds |
 |---|---|---|---|
-| `set` | `value`, an integer | The field becomes `value` | **Rejects.** An absolute value outside the bounds is an authoring error, not a game event |
-| `add` | signed integer | The field moves by `amount` | Per the template's `bounds`: `"clamp"` (default for outcome effects) clamps and records `clamped`; `"reject"` rejects |
-| `spend` | integer `>= 0` | The field falls by `amount` | **Rejects** when the field would fall below 0. A negative amount rejects |
-| `restore` | integer `>= 0` | The field rises by `amount`, never past the upper bound | Always clamps at the upper bound and records `clamped`. A negative amount rejects |
+| `set` | `value`, an integer | `value` | **Rejects** a `value` outside the bounds: an absolute value outside them is an authoring error, not a game event |
+| `add`, `bounds: "clamp"` (the default for outcome effects) | signed | `a < 0`: `min(b, max(lower, b + a))`; `a >= 0`: `max(b, min(upper, b + a))` | Clamps, recording `clamped` when `applied != requested` |
+| `add`, `bounds: "reject"` | signed | `b + a` | **Rejects** when `b + a` is outside the bounds *and* further outside than `b` (a move back toward the bounds is always allowed) |
+| `spend` | `>= 0` | `b - a` | **Rejects** when `b - a < lower` (an overdrawn `b` therefore cannot pay anything). A negative amount rejects |
+| `restore` | `>= 0` | `max(b, min(upper, b + a))` | Always clamps, recording `clamped`. A negative amount rejects |
+
+So Seraphine at `-3/8` struck for 2 stays at `-3` (`applied: 0`, `clamped`),
+never healed to `0`; Mara at `11/8` restored by 1 stays at `11`, never wounded
+to `8`. Both cases are 7.5's tests.
 
 `spend` and `add -N` differ on purpose (MII 7, kept): `spend` is a cost that
 cannot be paid; `add -N` is a consequence that can overshoot. `restore` is
@@ -681,7 +694,9 @@ to be impossible writes `"bounds": "reject"`. See Open question 2.
   in the list.
 - The result must be an `int` (not `bool`), or a finite `float` with an
   integral value (division yields one), which is converted. Anything else
-  rejects with `amount_not_integer`.
+  rejects with `amount_not_integer`. A value or amount whose magnitude passes
+  `MAX_EFFECT_MAGNITUDE` rejects with `amount_out_of_range` (5.3), before it
+  can reach a record.
 - A name present in two layers of the scope (a field named `total` on a checked
   Action) is `ambiguous_name` at evaluation; the validator reports it at load
   wherever the sheet types are listed.
@@ -694,15 +709,23 @@ to be impossible writes `"bounds": "reject"`. See Open question 2.
 Costs are templates on the `actor` selector only, using `spend`, or `add` with
 `"bounds": "reject"` (a cost that raises strain until a track is full). They:
 
-1. are evaluated against the claim snapshot with no roll scope;
+1. are evaluated against the claim snapshot, with the actor's sheet and static
+   values only (5.4 refuses anything else at load), so the same numbers come
+   out at availability, at claim and at plan;
 2. are checked for payability **before the roll**: applying them in order must
-   keep every field in bounds, or the Action "cannot be attempted"
-   (`cost_unpayable`), which reverts the proposal to `pending` exactly as a
-   failed check does today and rolls nothing;
-3. apply **whatever the outcome**, first, ahead of the outcome effects (MII 26
-   and 27, kept). A refundable cost is later work.
+   respect 7.2's rules, or the Action "cannot be attempted"
+   (`cost_unpayable`); nothing is rolled (11.1 step 1);
+3. **land whatever the outcome, including a rejected one.** If the outcome's
+   effects are rejected after the roll (7.5), the costs are still planned as
+   units and applied, and only the outcome ops are dropped. The costs were
+   proven payable against the same snapshot in the same lock hold, so they
+   cannot fail there. Refunding them would let a module whose outcome can
+   reject hand out free retries. MII 13.1 ("no operations") and MII 26 ("costs
+   normally still apply") contradicted each other on this point; this rule
+   settles it in MII 26's favour. A refundable cost is later work.
 
-A cost on a target is refused at load. Paying with someone else's resource is a
+Costs apply first, ahead of the outcome effects (MII 26 and 27, kept). A cost
+on a target is refused at load. Paying with someone else's resource is a
 second actor's Action.
 
 ### 7.5 Multi-target fan-out
@@ -718,7 +741,8 @@ Kept from MII 7, made exact:
 - a selection naming one target twice is rejected (`target_duplicate`) at
   validation, before the roll;
 - **one failing expansion rejects the whole outcome**: no partial fan-out.
-  After the roll that is a `rejected` transaction (11.1), never a partial one.
+  After the roll that is a `rejected` transaction (11.1) whose only units are
+  the costs (7.4), never a partial outcome.
 
 Contests take exactly one target (22).
 
@@ -727,8 +751,11 @@ Contests take exactly one target (22).
 ```python
 # store/mechanics/effects.py  -- pure: no I/O, no lock
 def plan(action: dict, *, actor: SheetView, targets: list[SheetView],
-         params: dict, roll: dict | None, tier: str | None) -> Plan | Rejection
+         params: dict, roll: dict | None, tier: str | None) -> Plan
 ```
+
+A rejected outcome is a `Plan` too: `rejection` set, the cost ops and units
+present, and no outcome ops (7.4).
 
 `SheetView` is `{ref, kind, id, sheet_type, gen, fields (merged with
 defaults), derived, fdefs}`, read once at claim. `plan` evaluates values, picks
@@ -737,6 +764,7 @@ copy of the touched fields, checks every bound, and returns:
 
 ```python
 Plan = {
+  "rejection": None,                # or {"code": "amount_out_of_range", "detail": "..."}
   "values": {"damage": 3},
   "branch": "success" | "_otherwise" | "resolved" | None,
   "ops": [Op, ...],                 # display order, as 7.5
@@ -789,12 +817,18 @@ already on disk reads as before.
  "action": "strike", "action_label": "Strike",
  "actor": "characters:mara", "actor_label": "Mara",
  "targets": ["characters:seraphine"], "target_labels": ["Seraphine"],
- "check": "athletics", "check_label": "Athletics",
+ "check": null, "action_check": "athletics", "check_label": "Athletics",
  "difficulty": 14, "modifier": 0, "reason": "she swings at Seraphine",
  "available": {"characters:mara": [["strike", "Strike"], ["mend", "Mend"]]},
  "problems": [],
  "selection": null}
 ```
+
+**`check` is always `null` on an action payload, and the Action's check
+travels as `action_check`.** An older build sharing the store reads only
+`payload["check"]`; accepting an action proposal there calls `resolve_check`
+with `None`, raises `CheckError` and reverts cleanly, rather than resolving the
+Action as a bare check and bypassing its legality and effects.
 
 `available` mirrors the check payload's field of the same name so the chip's
 Modify menus need no second request; target menus come from
@@ -815,12 +849,22 @@ The play model proposes an Action with the **same ` ```roll ` fence**, naming
 - `FenceWatcher` is unchanged; one fence per reply, so a reply can never carry
   both a check and an Action (1.9 item 4).
 - `fence.parse_roll_body` gains tolerant patterns for `action` and `targets`
-  (a JSON array, or a comma-separated string in the regex path).
+  (a JSON array, or a comma-separated string in the regex path). The `action`
+  pattern is anchored on a key boundary, as `check` effectively is, so a
+  `"reaction":` key does not match it. The regex path's "roll request had no
+  check id" problem (`fence.py:174-176`) is not raised when an `action` was
+  found.
 - `streaming._make_proposal` branches on `"action" in fields`: actor and targets
-  resolve by exact ref, then by case-insensitive label, against the pools (6.3);
-  problems come from `check_proposal` (6.5) plus the existing parse problems. A
-  bad Action proposal is never dropped; it opens the chip in Modify, the
-  existing rule.
+  resolve by exact ref, then by case-insensitive label, against the pools
+  (6.3). **A label that matches more than one ref is the problem
+  `target_ambiguous` (or `actor_ambiguous`)**, never the first match: two cast
+  members who share a name must not make the model's target silently the wrong
+  one. Problems come from `check_proposal` (6.5) plus the parse problems. A bad
+  Action proposal is never dropped; it opens the chip in Modify, the existing
+  rule.
+- Modify can change the Action itself: the adjudication body accepts an
+  `action_id` override (8.4), re-checked by `check_proposal`, so an unknown or
+  unavailable Action is repairable rather than only declinable.
 - A fence carrying both `check` and `action` is an action proposal with the
   problem `check_and_action` (the `check` is ignored, never resolved).
 
@@ -853,6 +897,14 @@ lock across `check_proposal`, `runs.require_scene_free` and
 `runs.require_scene_open` (the heal inside `new` can append a projected line,
 which is a shape change; `test_scene_freeze.py` gains the door).
 
+**It is refused with 409 `round_open` while a character round is unfinished**
+(`responses.unfinished(cid, sid)`, the refusal `routes/scenes.py:5752` already
+answers). A paused round has released its scene key, so `require_scene_free`
+passes; but the round is paused on its own proposal, and superseding that
+would leave every later accept answering "the character round's proposal is
+stale" (`routes/mechanics.py:170-199`). The player finishes or stops the round
+first.
+
 ### 8.4 The adjudication body
 
 `ProposalAction` gains two optional fields; `action` keeps meaning accept or
@@ -867,14 +919,20 @@ class ProposalAction(BaseModel):      # routes/models.py
     targets: list[str] | None = None  # new; action proposals only
     difficulty: int | None = None     # refused unless the Action lists it in `adjustable`
     modifier: int | None = None       # likewise
+    action_id: str | None = None      # new; action proposals only: Modify's Action override, re-checked
     narrate: bool = True              # new; False resolves and projects with no continuation
 ```
 
-`narrate: false` answers through `runs.answer_without_running` with one frame
-carrying the resolution, and leaves the record `resolved`; the next send
-supersedes it after `heal` (which projects nothing new, since it already
-projected). That is the manual-check experience (`post_scene_check`) on the
-proposal path.
+`narrate: false` resolves and projects, then ends in
+`proposals.commit_narration(cid, sid, pid, lambda: None)`, which heals and
+marks the record `narrated` with no new edge, the precedent `_pause` sets
+(`routes/character_turns.py:848-849`). Leaving it `resolved` would be wrong:
+`resolved` means "narration owed", so a reload or a second device would offer
+"Continue narration" (`RollProposal.tsx`) and an accept would stream one. It
+answers through `runs.answer_without_running` with one frame carrying the
+resolution, and it skips `require_inference("continuation")`, so resolving an
+Action without narration works on a store with no usable model. That is the
+manual-check experience (`post_scene_check`) on the proposal path.
 
 ---
 
@@ -905,11 +963,16 @@ object narration and the UI read:
   action resolution's roll part unchanged. The roll-log label is
   `mechanics.lines.roll_label(res)`, `"{actor_label} — {action_label}"`, not
   `checks.roll_label` (which needs a `check_label` a no-roll Action lacks).
-- A no-roll Action has `check`, `notation`, `result`, `tier`, `difficulty` and
-  `modifier` all `null`, and `branch: "resolved"`.
-- `status` is the transaction's (10.3); a `rejected` resolution has empty
-  `costs` and `effects` and a `rejection: {code, detail}`; a `stalled` one
-  marks each effect `"landed": true|false` (11.5).
+- A no-roll Action **omits** `result` and `notation` (rather than writing
+  `null`), and has `check`, `tier`, `difficulty` and `modifier` `null`, and
+  `branch: "resolved"`. An older build's `heal` tests `"result" in
+  resolution` (`proposals.py:343-344`); a `null` there would send it into
+  `format_check_roll` and fail every later send in the scene.
+- `status` is the transaction's (10.3); a `rejected` resolution lists its
+  `costs` (they landed, 7.4), an empty `effects` and a `rejection: {code,
+  detail}`; a `stalled` one marks each effect `"landed": true|false` (11.5).
+- The resolution is built at record time (10.2); the hand-off stamps `status`
+  and the per-effect `landed` marks from the record as it then stands (11.4).
 - Narration and UI never see an expression, only `requested`/`applied`
   integers and before/after values (the draft's "narration receives concrete
   effects, never unresolved formulas").
@@ -1712,7 +1775,8 @@ handled exactly as 24.4 and 24.5 say. Without 02-C3 the question is its own
 
 - **Inputs**: a pack's effect templates (7); a claim snapshot; a check
   resolution or none.
-- **Outputs**: `effects.plan(...) -> Plan | Rejection` (pure);
+- **Outputs**: `effects.plan(...) -> Plan` (pure; a rejected outcome is a
+  `Plan` with `rejection` set);
   `txn.record/apply/complete/recover/settle/undo` and
   `sheets.writer.apply_unit_locked` (10-12).
 - **Guarantees**: II-A ops are `set`, `add`, `spend`, `restore` on `resource`

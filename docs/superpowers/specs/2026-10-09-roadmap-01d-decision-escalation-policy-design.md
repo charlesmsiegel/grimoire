@@ -1,6 +1,6 @@
 # 01d. Decision escalation and per-task fallback policy
 
-**Status:** Draft — cross-linked; spec gate pending.
+**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
 **Date:** 2026-10-09
 **Roadmap:** 01d in `ROADMAP-CHECKLIST.md`. Lane: decision.
 **Baseline:** `main` at `35c1fb7`.
@@ -175,8 +175,14 @@ class TaskPolicy(NamedTuple):
     escalate_max: int = 8
     #: Optional answer filter (02 named it): when non-empty, `low_margin`
     #: fires only on an item whose deciding answer, as a key (option id,
-    #: `str(level)`, "true"/"false"), is listed. Empty = every answer.
+    #: `str(level)`, "true"/"false"), matches an entry. An entry ending in
+    #: ":" matches by prefix ("existing:"), any other entry exactly.
+    #: Empty = every answer.
     escalate_answers: tuple[str, ...] = ()
+    #: Whether the task's caller reads `abstained` and `refused` on its
+    #: deciding question as answers (section 5.3). Only then may a hop's
+    #: decline replace a base answer.
+    reads_declines: bool = False
 
 TASK_POLICY: dict[str, TaskPolicy] = {}   # empty at landing: today's behaviour
 
@@ -191,8 +197,11 @@ immutable and hashable.
 ### 4.2 The fallback field
 
 `resolve.resolve` reads `routing.policy(task).fallback` and, for `"none"`,
-attaches no fallback attempt. It sets `fallback_problem = NO_FALLBACK_POLICY`
-("this task's policy sends no fallback"), next to `SAME_PROVIDER` (:107).
+attaches no fallback attempt. When the role had a fallback configured, it
+sets `fallback_problem = NO_FALLBACK_POLICY` ("this task's policy sends no
+fallback"), next to `SAME_PROVIDER` (:107). When the role has none, it sets
+nothing, so the readout never reports dropping a fallback that did not
+exist.
 Nothing refuses on it, as with every other `fallback_problem`. The settings
 view's dropped-fallback line (01s, `droppedFallbackWords`) gets a matching
 sentence. A call made with `role=` and no task (the settings view's role
@@ -224,19 +233,31 @@ decide tasks. No existing task changes.
   hop that replaced its distribution with one that may carry none would turn
   the draws that most needed a distribution into `basis: answer` (02 asked
   for this rule);
-- `escalate_answers` is set only beside `low_margin`, and each key is one the
-  deciding question can answer (checked against the store constant's
-  question builder where one exists);
+- `escalate_answers` is set only beside `low_margin`. Each exact entry is a
+  key the deciding question can answer (checked against the store
+  constant's question builder where one exists). A prefix entry (ending in
+  ":") is checked against the store's prefix constant (for example
+  `identity.EXISTING_PREFIX`, `continuity/identity.py:123-126`), because
+  per-row options such as `existing:<id>` cannot be listed statically;
+- `reads_declines=True` only where the deciding question's caller maps
+  `abstained`/`refused` to an outcome of its own (the speaker pick's
+  `selection_of` maps `abstained` to "hand control back"). It is refused on
+  the continuity tasks, whose `decision` reads a decline as not read
+  (`decisions.was_read`, `decisions.py:634-647`);
 - `escalate_to` is `CALLER`, or is in `ESCALATION_ROLES` and not the route's
   `default_role`. Otherwise the hop would resolve to the same selection and
-  always be skipped as `same_model`;
+  always be skipped as `same_model`. This catches only the static case:
+  `escalate_to="fast"` on a decide route whose Decision role is unset
+  (Decision inherits Fast) also resolves to the base's own model, and every
+  hop is then skipped `same_model` per item. That is correct, and costs no
+  call, but it is a no-op the settings readout should name (section 11);
 - `question` equals the store constant the call site builds its item with.
   The test imports `SELECTOR_QUESTION`, both `DECISION_ID`s, and both
   `QUESTION_ID`s, and pins them;
 - `low_margin` in `escalate_on` needs at least one `margins` entry. Each
   entry's kind is an adapter kind whose `decides_natively` is true
-  (`adapters.py:22,128`), and each value satisfies `0 < m <= MAX_MARGIN`
-  (section 6.1);
+  (`adapters.decides_natively`, `adapters.py:305`), and each value satisfies
+  `0 < m <= MAX_MARGIN` (section 6.1);
 - `1 <= escalate_max <= decisions.MAX_ITEMS_PER_CALL`.
 
 ## 5. The escalation helper (C2)
@@ -247,8 +268,9 @@ In `decisions.py` (a leaf, so 12 can call it without the operation):
 
 ```python
 def margin(answer: Answer) -> float | None:
-    """How far the answer's own report puts its best option above the next:
-    None when nothing was reported (section 6.1 has the formula)."""
+    """How far the answer's own report puts the ANSWERED key above its best
+    rival: negative when the report ranks another key higher. None when the
+    answer is None or nothing was reported (section 6.1 has the formula)."""
 
 @dataclass(frozen=True)
 class Trigger:
@@ -272,10 +294,12 @@ def triggers(results: Sequence[ItemResult], *, question: str,
   An unlisted endpoint therefore keeps today's behaviour; it is not given
   some default threshold.
 - **The answer filter** (`answers`, the policy's `escalate_answers`) narrows
-  `low_margin` only: when it is non-empty, an item whose deciding answer is
-  not listed does not trigger, however small its margin. 02 uses it to
-  escalate, for example, a low-margin `existing:<id>` merge but not a
-  low-margin `new`, where the cost of a wrong answer differs. `refused` and
+  `low_margin` only: when it is non-empty, an item whose deciding answer
+  matches no entry does not trigger, however small its margin. An entry
+  ending in ":" matches by prefix. 02-C5a uses exact entries to escalate only
+  the permissive epistemic answers (`known`, `suspected`, `experienced`),
+  where a wrong answer is a leak. Continuity could use `"existing:"` to
+  escalate a low-margin merge but not a low-margin `new`. `refused` and
   `abstained` carry no answer, so the filter does not apply to them. Keys
   are compared as the record spells them: an option id, `str(i)` for a score
   level, `"true"`/`"false"` for a predicate.
@@ -294,11 +318,21 @@ would be the synthetic one 01 forbids (01c-C1). This is the main way 01c's
 
 ```python
 #: A caller-supplied next resolver: given the triggered items and their
-#: triggers, one result per item (None where it produced nothing).
+#: triggers, its reply (below).
 Resolver = Callable[[tuple[Item, ...], tuple[Trigger, ...]],
-                    Awaitable[tuple[ItemResult | None, ...]]]
+                    Awaitable["ResolverReply"]]
 
 Escalator = Callable[[], Awaitable[tuple[ResolvedInference | Resolver | None, str]]]
+
+@dataclass(frozen=True)
+class ResolverReply:
+    #: One per triggered item: an ItemResult whose `backend` is in
+    #: `decisions.BACKENDS` (a tool loop that ends in a generated answer
+    #: stamps "structured") and whose `served` is the final target's
+    #: (kind, provider_id, model); None where the resolver produced nothing.
+    results: tuple[ItemResult | None, ...]
+    #: The ledger rows its calls filed, each carrying hop="escalation".
+    rows: tuple[dict, ...] = ()
 
 async def decide(task, items, *, client, resolved, explain="", campaign="",
                  scene="", post=None, round_id="", capture=None, around=None,
@@ -309,9 +343,20 @@ async def decide(task, items, *, client, resolved, explain="", campaign="",
   `routes.common.escalation_inference(task, cid) -> (UsableInference | None,
   reason)`. It is soft: it never raises a 409. It resolves
   `inference.resolve(task, cid, operation="decide",
-  role=policy.escalate_to)  # routing-ok: the escalation seam`. When
-  `inference.refusal(resolved)` (missing key, incapable) holds, it returns
-  `(None, refusal sentence)`. It is a thunk so that the resolution, which
+  role=policy.escalate_to)  # routing-ok: the escalation seam` and wraps the
+  result in the existing soft pattern (`_soft_resolved`, `routes/common.py:1519`),
+  so a refusal (missing key, incapable) comes back as `(None, sentence)`
+  rather than a third way of failing softly.
+- **What a `role=` resolution runs with** (review S3). `resolve(..., role=)`
+  has no route (`resolve.py:766`). So: the hop sends the escalation role's
+  **own** sampling preset, not the decide route's preset, because the route's
+  preset was chosen for the route's model. A native hop sends none, as any
+  native call does. `escalation_inference` itself checks the base route's
+  `requires` against the hop's primary (`resolve._missing` over
+  `_needs(route, "decide")`), and returns `(None, the incapable sentence
+  naming the base route's label)` when one is known missing, so the hop
+  never runs on a model the route could not. The refusal sentence names the
+  base route (`routing.label_for`), not "This decision". It is a thunk so that the resolution, which
   reads files, happens only when some item triggered, and in the threadpool:
   `lambda: run_in_threadpool(lambda: escalation_inference("continuity-identity", cid))`.
   The task stays a literal at the call, where `test_routing_guard.py` reads
@@ -333,7 +378,9 @@ async def decide(task, items, *, client, resolved, explain="", campaign="",
   caller: the resolver opens its own meters and must stamp
   `hop="escalation"` on the rows it files (01g-C3's rows carry it through
   their targets' account), captures its own calls, and runs under its own
-  budget, since `decide`'s `around` cannot bound a loop. `same_model` is not
+  budget, since `decide`'s `around` cannot bound a loop. Its `rows` join
+  `Decision.usage` and, through 01a's `CallRecord`, `Decision.calls`; its
+  results' `served` join `Decision.served`, under the rules of section 5.5. `same_model` is not
   checked for it: the resolver is not one model. `decide` raises `TypeError`
   before any meter opens if a `Resolver` comes back for a policy that names
   a role, or a resolution for a `CALLER` policy.
