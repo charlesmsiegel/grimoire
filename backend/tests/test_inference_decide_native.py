@@ -595,6 +595,48 @@ def test_an_unrepresentable_item_moves_to_the_fallback_with_its_reason(client):
     assert (newest["kind"], newest["message"]) == ("bad_response", gap)
 
 
+#: A rank that names no `pointwise` question (01e §4.3, §4.4): a decisions
+#: endpoint cannot order its candidates, so a native stage refuses it unsent.
+BLIND_RANK = Item("Mara asks after the ledger she lost.", (decisions.Rank(
+    "relevant", "Order these scenes by how much the turn needs them.",
+    (Option("scene:ledger", "Mara loses the ledger."),
+     Option("scene:market", "Winifred counts the stalls.")), top=1),))
+
+
+def test_a_rank_without_pointwise_is_answered_by_the_structured_fallback(client):
+    gap = decisions.native_gap(BLIND_RANK)
+    assert "names no pointwise question" in gap
+    resolved = _native_resolution(client, fallback=True)
+    fake = FakeLLM([[decision_reply({"relevant": ["scene:ledger"]})]], decisions=[_yes()])
+    got = _decide(fake, [BLIND_RANK], resolved=resolved)
+    assert got.items[0].answers["relevant"] == Answer(decisions.Ranking(
+        (("scene:ledger",),), rest=("scene:market",)))
+    assert got.items[0].backend == STRUCTURED
+    assert fake.native_requests == []
+    assert [r["decision_mode"] for r in _rows()] == [STRUCTURED]
+    (refused, answered) = got.calls
+    assert (refused.mode, refused.row, refused.error_kind) == (NATIVE, None, "bad_response")
+    assert (answered.mode, answered.items) == (STRUCTURED, (0,))
+
+
+def test_a_rank_without_pointwise_and_no_fallback_is_native_unrepresentable(client):
+    resolved = _native_resolution(client, fallback=False)
+    # Beside an item the native stage answers, the batch comes back, and the
+    # rank's one error is the refusal unsent.
+    fake = FakeLLM([["unused"]], decisions=[_yes()])
+    got = _decide(fake, [_item(), BLIND_RANK], resolved=resolved)
+    assert got.items[0].answers["over"] == Answer(True)
+    assert all(a.reason == "error" for a in got.items[1].answers.values())
+    (error,) = got.errors
+    assert (error.kind, error.code) == ("bad_response", "native_unrepresentable")
+    assert error.detail == decisions.native_gap(BLIND_RANK)
+    assert len(fake.native_requests) == 1                 # the answered item alone
+    # Alone, the refusal is the caller's.
+    with pytest.raises(LLMError) as exc:
+        _decide(FakeLLM([["unused"]], decisions=[_yes()]), [BLIND_RANK], resolved=resolved)
+    assert exc.value.code == "native_unrepresentable"
+
+
 def test_around_runs_inside_each_native_meter(client):
     """`around` is handed each native call and its meter's live holder: a
     timeout it raises is that meter's `error/timeout` row, stamped native, and

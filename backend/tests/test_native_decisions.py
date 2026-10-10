@@ -1227,6 +1227,133 @@ def test_a_native_joint_answer_is_a_pair_with_its_distribution_by_key(provider):
     assert json.loads(text)["0"]["answers"]["act"] == "heal=>characters:mara"
 
 
+# A rank (with its `pointwise`) and a multi-select are lowered to one
+# predicate per candidate or option, in one request, and lifted back from
+# the P(true) each was given.
+
+LEDGER_SCENES = (Option("scene:ledger", "Mara loses the ledger."),
+                 Option("scene:market", "Winifred counts the stalls."),
+                 Option("scene:storm", "Seraphine waits out the storm."))
+RELEVANT = decisions.Rank("relevant", "Order the scenes.", LEDGER_SCENES,
+                          pointwise="Does this scene bear on the ledger?")
+SAW = decisions.MultiSelect("saw", "Who saw Seraphine take the key?", (MARA, WINIFRED),
+                            max=1)
+SAW_OR_NONE = decisions.MultiSelect("saw", "Who saw Seraphine take the key?",
+                                    (MARA, WINIFRED), allow_none=True)
+
+
+def _pointwise_reply(provider: str, ps: dict[str, float | None],
+                     refused: tuple[str, ...] = ()) -> dict:
+    """A reply answering lowered predicates by id: P(true), or (OpenAI) a
+    refusal; an id in neither is left out."""
+    if provider == "openrouter":
+        return {"answers": {qid: {"type": "noul", "noul": p} for qid, p in ps.items()}}
+    return {"answers": [*({"type": "predicate", "name": qid, "probability": p}
+                          for qid, p in ps.items()),
+                        *({"type": "refusal", "name": qid, "refusal": "I cannot judge this."}
+                          for qid in refused)]}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_rank_and_a_select_are_sent_as_their_predicates(provider):
+    item = Item(CONTEXT, (OVER, RELEVANT, SAW))
+    ids = ["over", "relevant#0", "relevant#1", "relevant#2", "saw#0", "saw#1"]
+    if provider == "openrouter":
+        sent = decision_body(item, MODEL)["questions"]
+        assert list(sent) == ids
+        assert sent["relevant#1"] == {"type": "noul", "instructions": (
+            "Does this scene bear on the ledger?\n\n"
+            "Candidate scene:market: Winifred counts the stalls.")}
+        assert sent["saw#0"] == {"type": "noul", "instructions": (
+            "Who saw Seraphine take the key?\n\nOption characters:mara: Mara, the "
+            "cartographer.\n\nIs this option one of those selected?")}
+    else:
+        sent = openai_compatible.decision_body(item, OPENAI_MODEL)["questions"]
+        assert [q["name"] for q in sent] == ids
+        assert {q["type"] for q in sent} == {"predicate"}
+        assert sent[3]["instructions"].endswith("Candidate scene:storm: Seraphine waits out "
+                                                "the storm.")
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_rank_is_lifted_from_its_candidates_p_true(provider):
+    item = Item(CONTEXT, (OVER, RELEVANT))
+    reply = _pointwise_reply(provider, {"over": 0.1, "relevant#0": 0.9, "relevant#1": 0.2,
+                                        "relevant#2": 0.6})
+    result = read(provider)(reply, item)
+    assert list(result.answers) == ["over", "relevant"] and result.backend == "native"
+    answer = result.answers["relevant"]
+    assert answer.answer == decisions.Ranking(
+        (("scene:ledger",), ("scene:storm",), ("scene:market",)))
+    assert answer.marginals == {"scene:ledger": 0.9, "scene:market": 0.2, "scene:storm": 0.6}
+    assert answer.distribution is None
+    # Equal P(true): one tier, the tie kept.
+    tied = read(provider)(_pointwise_reply(provider, {"relevant#0": 0.7, "relevant#1": 0.7,
+                                                      "relevant#2": 0.1}),
+                          Item(CONTEXT, (RELEVANT,))).answers["relevant"]
+    assert tied.answer.tiers == (("scene:ledger", "scene:market"), ("scene:storm",))
+    # A candidate the reply left out: unreadable, the reported P(true)s kept.
+    missing = read(provider)(_pointwise_reply(provider, {"over": 0.1, "relevant#0": 0.9,
+                                                         "relevant#2": 0.6}),
+                             item).answers["relevant"]
+    assert (missing.answer, missing.reason) == (None, "unreadable")
+    assert missing.marginals == {"scene:ledger": 0.9, "scene:storm": 0.6}
+
+
+def test_openai_a_native_rank_every_candidate_refused_is_refused():
+    reply = _pointwise_reply("openai", {"over": 0.3},
+                             refused=("relevant#0", "relevant#1", "relevant#2"))
+    result = openai_compatible.decision_result(reply, Item(CONTEXT, (OVER, RELEVANT)))
+    assert result.answers["relevant"] == Answer(None, "refused")
+    assert result.answers["over"] == Answer(False, probability=0.3)
+    one = _pointwise_reply("openai", {"relevant#0": 0.4, "relevant#1": 0.2},
+                           refused=("relevant#2",))
+    partly = openai_compatible.decision_result(one, Item(CONTEXT, (RELEVANT,)))
+    assert partly.answers["relevant"].reason == "unreadable"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_select_is_thresholded_by_its_predicates(provider):
+    def lifted(q, ps):
+        return read(provider)(_pointwise_reply(provider, ps),
+                              Item(CONTEXT, (q,))).answers["saw"]
+
+    chosen = lifted(SAW, {"saw#0": 0.2, "saw#1": 0.85})
+    assert chosen == Answer(("characters:winifred",),
+                            marginals={"characters:mara": 0.2, "characters:winifred": 0.85})
+    assert lifted(SAW, {"saw#0": 0.2, "saw#1": 0.1}).answer == ()
+    # Exactly 0.5: abstained only where the caller allowed none.
+    assert lifted(SAW_OR_NONE, {"saw#0": 0.5, "saw#1": 0.1}).reason == "abstained"
+    strict = lifted(SAW, {"saw#0": 0.5, "saw#1": 0.1})
+    assert (strict.reason, strict.marginals) == (
+        "unreadable", {"characters:mara": 0.5, "characters:winifred": 0.1})
+    # Two selected where at most one was asked: unreadable, never cut to one.
+    over = lifted(SAW, {"saw#0": 0.9, "saw#1": 0.8})
+    assert (over.answer, over.reason) == (None, "unreadable")
+    assert over.marginals == {"characters:mara": 0.9, "characters:winifred": 0.8}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_reply_answering_no_lowered_predicate_is_a_bad_response(provider):
+    stray = _pointwise_reply(provider, {"relevant": 0.9})     # the rank's own id
+    with pytest.raises(LLMError) as exc:
+        read(provider)(stray, Item(CONTEXT, (RELEVANT,)))
+    assert exc.value.kind == "bad_response"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_a_rank_without_pointwise_is_refused_unsent(provider):
+    blind = decisions.Rank("relevant", "Order the scenes.", LEDGER_SCENES)
+    sent = Wire((200, {"answers": {}}))
+    client = facade(sent) if provider == "openrouter" else openai_facade(sent)
+    target = CONN if provider == "openrouter" else OPENAI_CONN
+    with pytest.raises(LLMError) as exc:
+        await client.decide_native(Item(CONTEXT, (blind,)), target)
+    assert exc.value.code == "native_unrepresentable"
+    assert exc.value.detail == decisions.native_gap(Item(CONTEXT, (blind,)))
+    assert "relevant" in exc.value.detail and sent.requests == []
+
+
 @pytest.mark.parametrize("provider", PROVIDERS)
 async def test_a_native_joint_past_the_option_limit_is_refused_unsent(provider):
     wide = decisions.Joint("act", "i", (Option("strike", "Strike."),),
