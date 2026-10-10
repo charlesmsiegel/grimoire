@@ -5,8 +5,8 @@ Every capability in `providers.CAPABILITIES` resolves to `yes`, `no` or
 authority first -- the first one that says anything is the answer:
 
 1. `adapter` -- the preset's `never`: the wire protocol cannot (the Claude
-   subscription's `tools`, until 01g-S8). A hard `no` that nothing below may
-   claim past, however sure it is.
+   subscription's `embed`). A hard `no` that nothing below may claim past,
+   however sure it is.
 2. `test`, then `user` -- the model's facts (`facts.of`): a probe that
    PASSED for the connection's current `rev` (`yes`), then the user's
    `overrides`, then the user's own `prefill` statement and a facts

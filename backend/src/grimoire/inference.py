@@ -88,6 +88,7 @@ from functools import partial
 from typing import Any, Literal, NamedTuple, TypeVar, overload
 
 from . import (
+    claude_agent,
     deadline,
     decisions,
     llm,
@@ -1802,6 +1803,11 @@ def _loop_refusal(task: str, messages: list[dict], toolset: tool_calls.Toolset,
         schemas.check(final_schema)
     _check_loop_prompt(messages)
     _check_loop_route(task, resolved)
+    if any(a.target.kind == "claude" for a in resolved.attempts):
+        long = [t.name for t in toolset.tools if len(t.name) > claude_agent.MAX_TOOL_NAME]
+        if long:
+            raise ValueError(f"a Claude subscription takes tool names of at most "
+                             f"{claude_agent.MAX_TOOL_NAME} characters: {', '.join(long)}")
     current = asyncio.current_task()
     if current is not None and current in _LOOPING:
         raise ValueError("a tool loop cannot start inside another")

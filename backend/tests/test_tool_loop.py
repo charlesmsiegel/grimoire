@@ -478,3 +478,12 @@ def test_a_three_turn_run_over_a_frozen_copy(monkeypatch, tmp_path):
         ("tool", "campaign"), ("tool", "scenes")]
     assert result.trace[1].refs == (f"campaigns:{cid}",)
     assert all(r.startswith("scenes:") for r in result.trace[3].refs) and result.trace[3].refs
+
+
+def test_a_claude_chain_refuses_a_name_too_long_for_its_prefix():
+    claude = wire_kit.target(provider_id="claude", kind="claude", model="sonnet")
+    toolset = Toolset((ToolSpec("r" * 50, "Reads.", NONE, _read),))
+    fake = FakeToolTurns(("ok", []))
+    with pytest.raises(ValueError, match="at most 49"):
+        _run(fake, toolset=toolset, resolved=_resolved(claude))
+    assert fake.calls == 0
