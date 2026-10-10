@@ -74,3 +74,27 @@ test("a table that could not be read offers nothing to edit", async () => {
   expect(await block().findByText(/Could not read the rate table/)).toBeInTheDocument();
   expect(block().queryByRole("button", { name: "Edit rates" })).toBeNull();
 });
+
+test("Cancel goes back to reading and saves nothing", async () => {
+  const onCancel = vi.fn();
+  render(<TokenRates onSaved={() => {}} onCancel={onCancel} />);
+  fireEvent.click(await block().findByRole("button", { name: "Edit rates" }));
+  fireEvent.click(await block().findByRole("button", { name: "Cancel" }));
+  expect(await block().findByRole("button", { name: "Edit rates" })).toBeInTheDocument();
+  expect(api.setPricing).not.toHaveBeenCalled();
+  expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+test("a second Set rate keeps what was typed into the first", async () => {
+  const { rerender } = render(<TokenRates addModel="vendor/a" onSaved={() => {}} />);
+  const a = await block().findByRole("spinbutton", { name: "Input rate for vendor/a" });
+  fireEvent.change(a, { target: { value: "0.004" } });
+  const reads = vi.mocked(api.getPricing).mock.calls.length;
+  rerender(<TokenRates addModel="vendor/b" onSaved={() => {}} />);
+  expect(await block().findByDisplayValue("vendor/b")).toBeInTheDocument();
+  expect(block().getByRole("spinbutton", { name: "Input rate for vendor/a" })).toHaveValue(0.004);
+  await waitFor(() => expect(block().getByRole("spinbutton", { name: "Input rate for vendor/b" }))
+    .toHaveFocus());
+  // The table is not read again over what was typed.
+  expect(api.getPricing).toHaveBeenCalledTimes(reads);
+});
