@@ -29,7 +29,8 @@ of a decide resolution also says which backend would answer it
 (`decision_mode`, slice H): its provider's native decisions endpoint for a
 model known unable to generate that may decide natively (`native_only`),
 structured generation for one that can generate, whatever its
-`decide_native` says.
+`decide_native` says (a native-first task asks its decisions endpoint first:
+`native_first`, a stage of `inference.stages`, not a mode).
 
 Each attempt's target carries an account (`wire.Account`): what the ledger
 files about the attempt that the wire does not say -- its `billing`, its
@@ -951,13 +952,45 @@ def native_only(caps: dict[str, capabilities.Cap]) -> bool:
     return _known_no(caps.get("generate")) and not _known_no(caps.get("decide_native"))
 
 
+def native_capable(attempt: Attempt) -> bool:
+    """Whether `attempt` may be asked natively FIRST (spec 01c §3.2, §4.2):
+    its `decide_native` is a known `yes` -- never `unknown`, which
+    `native_only` allows because a native-only model has no other way to
+    answer, and a native-first one does. That a kind with no decisions
+    endpoint never reads `yes` is the presets' business: each lists
+    `decide_native` in `never`, an adapter-source `no` no override lifts
+    (`capabilities.resolve_caps`), and a test holds every preset to it -- so
+    the store needs no gateway import (`adapters`: the store never imports
+    the gateway). Production only: `evals/runner.chain` keeps
+    `decides_natively`, so evidence can be gathered on an `unknown`."""
+    found = attempt.capabilities.get("decide_native")
+    return found is not None and found.value == capabilities.YES
+
+
+def native_first(resolved: ResolvedInference) -> bool:
+    """Whether `resolved`'s decide chain asks its primary's decisions endpoint
+    before its structured stage (01c-C1): a decide resolution whose primary
+    is `structured`, whose adapter kind its task's code policy lists
+    (`routing.policy(resolved.task).native_first`), and which is
+    `native_capable`. The one rule `inference.stages` (and a later settings
+    readout) asks. Pure: reads only the resolution and the policy."""
+    if resolved.operation != "decide" or not resolved.attempts:
+        return False
+    primary = resolved.attempts[0]
+    return (primary.decision_mode == "structured"
+            and primary.target.kind in routing.policy(resolved.task).native_first
+            and native_capable(primary))
+
+
 def decision_mode(attempt: Attempt) -> str:
     """The backend that would answer `attempt` on a decide resolution (ruling
     1, C1): "native" (its provider's decisions endpoint) when it is
     `native_only`; else "structured" (`generate(schema=)` and the parser)
     when it `generates`, whatever its `decide_native` says -- a model that
-    can generate stays structured until native wins on evals (spec 16); else
-    "", for an attempt that can do neither."""
+    can generate stays structured; a task whose policy lists its kind in
+    `native_first` asks its decisions endpoint first, which is a stage of
+    `inference.stages` (`native_first`), not a mode; else "", for an attempt
+    that can do neither."""
     if native_only(attempt.capabilities):
         return "native"
     return "structured" if generates(attempt) else ""

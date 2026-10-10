@@ -250,10 +250,10 @@ def test_stages_put_no_structured_stage_after_a_native_one(client):
     """An attempt that is native AND generates has one stage, its native one,
     then the fallback's: under ruling 1 no resolution builds it (a model
     that generates is served structured, C1), so a structured stage on it
-    would be unreachable and is dropped. Trying native first on a model that
-    also generates is a later user decision, made after `evals/run.py --live
-    --decide-backend` compares the two backends (spec 16); that decision
-    adds the structured stage back beside `decision_mode`."""
+    would be unreachable and is dropped. Native first on a model that also
+    generates (01c §4.2) is a separate branch, on a STRUCTURED primary whose
+    task's policy lists its kind (`resolve.native_first`); this hand-built
+    native-and-generating attempt is still given no structured stage."""
     _structured_store(client)
     resolved = _resolved()
     both = dataclasses.replace(resolved, attempts=(
@@ -293,6 +293,154 @@ def test_stages_copy_and_never_pop(client):
     assert resolved.attempts == before
     assert resolved.rides == rides
     assert resolved.chain == chain
+
+
+# ---- native first (spec 01c §4.2): stage shapes ----
+def _native_first(monkeypatch, *kinds: str) -> None:
+    """Plant `scene-break`'s policy at runtime, listing `kinds` in
+    `native_first`. The code table lists no task (`test_task_policy.py`);
+    this is how the chain answers a policy, not a policy."""
+    monkeypatch.setitem(store.routing.TASK_POLICY, "scene-break",
+                        store.routing.TaskPolicy(native_first=kinds))
+
+
+def _shape(chain) -> list[tuple]:
+    return [(s.mode, s.retries, s.isolated) for s in chain]
+
+
+#: A decide-only model on `spare`, for a native fallback behind a
+#: native-first primary.
+SPARE_DECIDER = ("spare", "vendor/spare-decider")
+
+
+@pytest.mark.parametrize("fallback", [True, False], ids=["rides", "none"])
+def test_stages_for_a_native_first_primary(client, monkeypatch, fallback):
+    """A listed kind on a `native_capable` primary that generates: its
+    decisions endpoint first, isolated and with no retries, sent the primary
+    alone and unflagged (it is sent no structured envelope); then today's
+    structured stage, the resolution's own chain, its riding fallback and
+    all. The resolution is left as it was."""
+    fx.generates_and_decides(client, fallback=fallback)
+    _native_first(monkeypatch, "openrouter")
+    resolved = _resolved()
+    before = deepcopy(resolved.chain)
+    primary = resolved.attempts[0].target
+    assert primary.structured is True
+    chain = inference.stages(resolved)
+    assert _shape(chain) == [(NATIVE, 0, True), (STRUCTURED, None, False)]
+    assert chain[0].chain == wire.Chain(dataclasses.replace(primary, structured=False))
+    assert chain[0].chain.fallback is None
+    assert chain[1].chain == resolved.chain
+    assert (chain[1].chain.fallback is not None) == fallback
+    assert resolved.attempts[0].target is primary and primary.structured is True
+    assert resolved.chain == before
+
+
+def test_stages_for_a_native_first_primary_with_a_native_fallback(client, monkeypatch):
+    fx.generates_and_decides(client, fallback=True, on=SPARE_DECIDER)
+    _catalog("spare", [{"id": SPARE_DECIDER[1], "outputs": ["decisions"]}])
+    _native_first(monkeypatch, "openrouter")
+    resolved = _resolved()
+    assert [a.decision_mode for a in resolved.attempts] == [STRUCTURED, NATIVE]
+    chain = inference.stages(resolved)
+    assert _shape(chain) == [(NATIVE, 0, True), (STRUCTURED, None, False),
+                             (NATIVE, 0, False)]
+    assert chain[1].chain == resolved.chain.alone()
+    assert chain[2].chain == wire.Chain(resolved.attempts[1].target)
+
+
+@pytest.mark.parametrize("shape", ["native_alone", "native_fallback", "unknown",
+                                   "structured_native_fallback"])
+def test_a_planted_policy_leaves_every_other_shape_as_today(client, monkeypatch, shape):
+    """`native_first=("openrouter",)` planted on `scene-break` adds a stage
+    only for a structured primary that is `native_capable`: every other
+    resolution keeps the stages it has today, spelled out here."""
+    _native_first(monkeypatch, "openrouter")
+    if shape == "native_alone":
+        resolved = _native_resolution(client, fallback=False)
+        expected = [(NATIVE, None, False)]
+        chains = [resolved.chain.alone()]
+    elif shape == "native_fallback":
+        resolved = _native_resolution(client, fallback=True)
+        expected = [(NATIVE, None, False), (STRUCTURED, 0, False)]
+        chains = [resolved.chain.alone(), wire.Chain(resolved.attempts[1].target)]
+    elif shape == "unknown":
+        resolved = _structured_resolution(client)
+        assert resolved.attempts[0].capabilities["decide_native"].value == "unknown"
+        expected = [(STRUCTURED, None, False)]
+        chains = [resolved.chain]
+        assert resolved.chain.fallback is not None
+    else:
+        resolved = _structured_resolution(client, fallback_mode=NATIVE)
+        expected = [(STRUCTURED, None, False), (NATIVE, 0, False)]
+        chains = [resolved.chain.alone(), wire.Chain(resolved.attempts[1].target)]
+    chain = inference.stages(resolved)
+    assert _shape(chain) == expected
+    assert [s.chain for s in chain] == chains
+    # The appended field defaults: a three-field Stage is the stage it was.
+    assert all(Stage(s.mode, s.chain, s.retries) == s for s in chain)
+
+
+def test_an_unlisted_kind_is_not_native_first(client, monkeypatch):
+    fx.generates_and_decides(client, fallback=True)
+    _native_first(monkeypatch, "openai_compatible")
+    resolved = _resolved()
+    assert _shape(inference.stages(resolved)) == [(STRUCTURED, None, False)]
+
+
+def test_a_kind_with_no_decisions_endpoint_gets_todays_stages(client, monkeypatch):
+    """An Anthropic primary the user says decides natively, under a policy
+    planted with its kind (which the static rules refuse): its preset rules
+    the endpoint out, an adapter-source `no` that outranks the user, so the
+    chain is today's single structured stage."""
+    fx.format2(client)
+    got = client.post("/api/llm-connections", json={
+        "kind": "anthropic", "name": "Realm Anthropic", "api_key": "sk-ant-test"})
+    assert got.status_code == 200, got.text
+    conn_id = got.json()["id"]
+    fx.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": conn_id, "model": "claude-test-1"},
+        "fallback": {"provider": ""}}}})
+    got = client.put(f"/api/llm-connections/{conn_id}/facts",
+                     json={"model": "claude-test-1", "overrides": {"decide_native": "yes"}})
+    assert got.status_code == 200, got.text
+    _native_first(monkeypatch, "anthropic")
+    resolved = _resolved()
+    cap = resolved.attempts[0].capabilities["decide_native"]
+    assert (cap.value, cap.source) == ("no", "adapter")
+    assert not inf.native_first(resolved)
+    assert inference.stages(resolved) == (Stage(STRUCTURED, resolved.chain, None),)
+    assert not inference.reports_distribution(resolved)
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("native_only", True), ("native_first", True), ("no_policy", False),
+    ("unknown", False), ("structured", False), ("generate", False), ("no_chain", False),
+])
+def test_reports_distribution(client, monkeypatch, case, expected):
+    """Whether the first stage is native: a forecast read off `stages`, which
+    sends nothing (spec 01c §4.2)."""
+    if case == "native_only":
+        resolved = _native_resolution(client, fallback=True)
+    elif case in ("native_first", "no_policy"):
+        fx.generates_and_decides(client, fallback=True)
+        if case == "native_first":
+            _native_first(monkeypatch, "openrouter")
+        resolved = _resolved()
+    elif case == "unknown":
+        _native_first(monkeypatch, "openrouter")
+        resolved = _structured_resolution(client)
+    elif case == "structured":
+        resolved = _structured_resolution(client)
+    elif case == "generate":
+        fx.generates_and_decides(client, fallback=True)
+        _native_first(monkeypatch, "openrouter")
+        resolved = inf.resolve("scene-break")
+    else:
+        resolved = dataclasses.replace(_native_resolution(client, fallback=False),
+                                       attempts=())
+        assert inference.stages(resolved) == ()
+    assert inference.reports_distribution(resolved) is expected
 
 
 def test_an_empty_chain_is_refused(client):
@@ -1003,6 +1151,182 @@ def test_an_id_less_stage_is_never_the_stopped_stages_connection(client):
                                Stage(STRUCTURED, wire.Chain(fallback), 0)), client=fake))
     assert fake.calls == 1
     assert {r.backend for r in got.items} == {STRUCTURED} and got.errors == ()
+
+
+# ---- native first (spec 01c §4.2.1): the stage never kills the ones after it ----
+def _both(client, monkeypatch, *, fallback: bool):
+    """`vendor/both` on the Decision role, `scene-break` native-first on
+    OpenRouter: its decisions endpoint, then its structured stage."""
+    fx.generates_and_decides(client, fallback=fallback)
+    _native_first(monkeypatch, "openrouter")
+    resolved = _resolved()
+    assert _shape(inference.stages(resolved))[0] == (NATIVE, 0, True)
+    return resolved
+
+
+def test_a_403_from_the_native_first_stage_falls_to_the_structured_stage(client, monkeypatch):
+    """Review B1: OpenRouter maps 403 to `auth`, which is what a key without
+    access to a decisions endpoint gets while it serves every chat call. With
+    no fallback, the structured stage on the same provider is the only route
+    left: only isolation (the stage never marks its provider dead) lets it
+    run. A 403 is a native rejection, so health sees no failure."""
+    resolved = _both(client, monkeypatch, fallback=False)
+    wire = _Wire(streams=[decision_reply({"over": True})],
+                 decides=[LLMError("auth", "forbidden", status=403)])
+    observed: list[tuple] = []
+    real = LLMClient(openrouter=wire, timeout=0, retries=2,
+                     observer=lambda target, error: observed.append((target, error)))
+    got = _decide(real, [_item()], resolved=resolved)
+    assert wire.decided == [fx.BOTH[1]]
+    assert [s["model"] for s in wire.streamed] == [fx.BOTH[1]]
+    assert [r.backend for r in got.items] == [STRUCTURED] and got.errors == ()
+    assert observed and all(error is None for _target, error in observed)
+
+
+def test_a_rate_limit_from_the_native_first_stage_is_sent_once(client, monkeypatch):
+    """`retries=0` (01c §4.2.2): a rate-limited decisions endpoint is not
+    retried before the structured stage, which can answer, gets its turn."""
+    resolved = _both(client, monkeypatch, fallback=False)
+    wire = _Wire(streams=[decision_reply({"over": False})],
+                 decides=[LLMError("rate_limit", "slow down", status=429, retry_after=1.0)])
+    got = _decide(_real(wire, retries=2), [_item()], resolved=resolved)
+    assert wire.decided == [fx.BOTH[1]]
+    assert len(wire.streamed) == 1
+    assert [r.backend for r in got.items] == [STRUCTURED]
+
+
+@pytest.mark.parametrize("todays_dead_rule", [False, True], ids=["as-built", "isolation-only"])
+def test_an_auth_from_native_first_leaves_the_riding_fallback(client, monkeypatch,
+                                                              todays_dead_rule):
+    """Review B1, the riding fallback: the native stage's `auth` does not
+    skip the structured stage on its provider, nor the `spare` fallback
+    riding it, which answers when the structured primary fails too. Before
+    01c-S2, the dead rule skipped both. Run again with `_all_dead` put back
+    to today's primary-only rule: the stage still runs, so it is isolation,
+    not the all-routes rule (which `spare` alone would satisfy), that keeps
+    it."""
+    if todays_dead_rule:
+        monkeypatch.setattr(inference, "_all_dead", lambda stage, dead: any(
+            inference._same_connection(stage.chain.primary.provider_id, d) for d in dead))
+    resolved = _both(client, monkeypatch, fallback=True)
+    assert resolved.chain.fallback is not None
+    wire = _Wire(streams=[LLMError("bad_response", "upstream exploded", status=500),
+                          decision_reply({"over": True})],
+                 decides=[LLMError("auth", "invalid key", status=401)])
+    got = _decide(_real(wire, retries=0), [_item()], resolved=resolved)
+    assert wire.decided == [fx.BOTH[1]]
+    assert [s["model"] for s in wire.streamed] == [fx.BOTH[1], SPARE[1]]
+    assert [r.backend for r in got.items] == [STRUCTURED] and got.errors == ()
+
+
+def test_a_native_failure_is_answered_by_the_structured_stage_and_a_refusal_is_not_re_asked(
+        client, monkeypatch):
+    resolved = _both(client, monkeypatch, fallback=False)
+    items = _items(3)
+    fake = _Endpoint([[decision_reply({"over": False})]], {
+        items[0].context: ItemResult({"over": Answer(None, "refused")}),
+        items[1].context: LLMError("bad_response", "upstream exploded", status=500),
+        items[2].context: _yes(),
+    })
+    got = _decide(fake, items, resolved=resolved)
+    assert fake.calls == 1          # one chunk: item 1 alone
+    assert [r.backend for r in got.items] == [NATIVE, STRUCTURED, NATIVE]
+    assert got.items[0].answers["over"].reason == "refused"
+    assert got.items[1].answers["over"].answer is False
+    assert got.items[2].answers["over"].answer is True
+    # Two backends answered; one route (the same model on both stages).
+    assert got.backend == "" and got.served == ((fx.BOTH[0], fx.BOTH[1]),)
+    # 01d-S2's per-item server: both stages stamp the same model, the native
+    # one from its stage target, the structured one from the reply's holder.
+    assert [r.served for r in got.items] == [("openrouter", *fx.BOTH)] * 3
+    assert sorted((c.stage, c.mode) for c in got.calls) == [
+        (0, NATIVE), (0, NATIVE), (0, NATIVE), (1, STRUCTURED)]
+
+
+def test_a_both_failed_item_reports_the_structured_failure(client, monkeypatch):
+    """D3: the native-first stage's 403 is not composed into the error of an
+    item a later stage took -- the turn's failure is the chat endpoint's
+    timeout, not a refused key. The 403 is still filed as its own row."""
+    resolved = _both(client, monkeypatch, fallback=False)
+    forbidden = LLMError("auth", "forbidden", status=403)
+    timeout = LLMError("timeout", "the call timed out")
+    wire = _Wire(streams=[timeout], decides=[forbidden])
+    with pytest.raises(LLMError) as exc:
+        _decide(_real(wire, retries=0), [_item()], resolved=resolved)
+    assert exc.value.kind == "timeout"
+    assert exc.value is not forbidden and forbidden not in exc.value.words
+    native_rows = [r for r in _rows() if r.get("decision_mode") == NATIVE]
+    assert len(native_rows) == 1 and native_rows[0]["status"] == "error"
+
+
+def test_a_clock_refusal_at_the_native_first_stage_ends_the_chain(client, monkeypatch):
+    """D5: isolation is about `dead`, not the caller's clock, which refuses
+    every later call too."""
+    resolved = _both(client, monkeypatch, fallback=False)
+    fake = FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
+    refused: list[LLMError] = []
+
+    async def around(call, holder):
+        call.close()
+        refused.append(_budget_refused())
+        raise refused[-1]
+
+    with pytest.raises(routes.scenes.BudgetRefused) as exc:
+        _decide(fake, [_item()], resolved=resolved, around=around)
+    assert exc.value is refused[0] and len(refused) == 1
+    assert fake.calls == 0
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_a_structured_stage_stop_still_skips_a_later_stage_on_its_connection(
+        client, monkeypatch, isolated):
+    """Rule 1's contrast: an isolated stage's `auth` kills nothing, so the
+    structured stage runs; its own `auth` still skips the stage after it on
+    the same connection (01 §5.5). Not isolated, the first `auth` skips both."""
+    resolved = _both(client, monkeypatch, fallback=False)
+    target = resolved.attempts[0].target
+    decider = dataclasses.replace(target, model="vendor/decider")
+    refused = LLMError("auth", "invalid key", status=401)
+    fake = FakeLLM([[decision_reply({"over": True})]], error=refused, decisions=[refused])
+    chain = (Stage(NATIVE, wire.Chain(target), 0, isolated=isolated),
+             Stage(STRUCTURED, wire.Chain(target), None),
+             Stage(NATIVE, wire.Chain(decider), 0))
+    with pytest.raises(LLMError):
+        asyncio.run(inference.run_stages("scene-break", [_item()], chain, client=fake))
+    assert len(fake.native_requests) == 1           # the third stage never ran
+    assert fake.calls == (1 if isolated else 0)
+
+
+def test_a_stage_with_a_live_riding_fallback_is_not_skipped_as_dead(client, monkeypatch):
+    """Rule 2 (01c §4.2.1): a stage is skipped as dead only when every route
+    it sends is dead. A later stage whose primary is on the stopped provider
+    but whose riding fallback is not still runs, and its fallback answers."""
+    resolved = _both(client, monkeypatch, fallback=True)
+    primary, spare = resolved.attempts[0].target, resolved.attempts[1].target
+    wire_ = _Wire(streams=[LLMError("auth", "invalid key", status=401),
+                           LLMError("auth", "invalid key", status=401),
+                           decision_reply({"over": True})])
+    chain = (Stage(STRUCTURED, wire.Chain(primary), None),
+             Stage(STRUCTURED, wire.Chain(primary, spare), 0))
+    got = asyncio.run(inference.run_stages("scene-break", [_item()], chain,
+                                           client=_real(wire_, retries=0)))
+    assert [s["model"] for s in wire_.streamed] == [fx.BOTH[1], fx.BOTH[1], SPARE[1]]
+    assert [r.backend for r in got.items] == [STRUCTURED]
+
+
+def test_all_dead_counts_every_route_a_stage_sends(client, monkeypatch):
+    resolved = _both(client, monkeypatch, fallback=True)
+    primary, spare = resolved.attempts[0].target, resolved.attempts[1].target
+    dead = [primary.provider_id]
+    assert inference._all_dead(Stage(STRUCTURED, wire.Chain(primary), None), dead)
+    assert not inference._all_dead(Stage(STRUCTURED, wire.Chain(primary, spare), 0), dead)
+    assert inference._all_dead(Stage(STRUCTURED, wire.Chain(primary, spare), 0),
+                               [*dead, spare.provider_id])
+    # A native stage sends its primary alone, so only that counts there.
+    assert inference._all_dead(Stage(NATIVE, wire.Chain(primary, spare), 0), dead)
+    idless = dataclasses.replace(primary, provider_id="")
+    assert not inference._all_dead(Stage(STRUCTURED, wire.Chain(idless), None), [""])
+    assert not inference._all_dead(Stage(STRUCTURED, wire.Chain(primary), None), [])
 
 
 # ---- a hung decisions endpoint (brutal review H 🟣5) ----

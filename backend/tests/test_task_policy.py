@@ -9,8 +9,10 @@ as well.
 
 The checker reads the store constants each decide call site builds its
 item with (`_QUESTION`, `_answers`), which `routing` -- a pure leaf -- cannot
-import. 01c-S2 shares the structure (`samples`, `native_first`) and adds its
-rules to `_RULES`, including the refusal of `samples` beside `low_margin`.
+import. 01c shares the structure (spec 01c §4.1): `samples` and
+`native_first`, held by `_samples_valid` and `_native_first_valid` --
+including the refusal of `samples` beside `low_margin` -- and by the
+decide-only and stale-`question` rules.
 """
 
 from __future__ import annotations
@@ -48,6 +50,14 @@ _QUESTION: dict[str, str] = {
 #: control back on a null. The continuity tasks read a decline as not read
 #: (`decisions.was_read`), so they may never set `reads_declines`.
 _READS_DECLINES = frozenset({"response-selector"})
+
+#: The tasks whose caller may draw from a decision's distribution (spec 01c
+#: §7: "Only a task whose policy has `samples = True` calls `draw`", and a
+#: factual classification -- continuity, scene-break, voice drift -- never
+#: does: a verdict about what happened in the fiction must not change between
+#: two runs of the same input). The speaker pick is 02-C2's sampled path; a
+#: task 02 or 13 adds that samples joins it in the change that adds it.
+_SAMPLES = frozenset({"response-selector"})
 
 
 class _Vocab(NamedTuple):
@@ -141,7 +151,7 @@ def _escalation_on_decide_only(task: str, p: TaskPolicy, route: routing.Route) -
         return []
     default = TaskPolicy()
     fields = ("escalate_to", "escalate_on", "question", "margins", "escalate_answers",
-              "reads_declines")
+              "reads_declines", "samples", "native_first")
     set_ = [f for f in fields if getattr(p, f) != getattr(default, f)]
     if set_:
         return [f"{task}: {', '.join(set_)} set on a route whose operation is not decide"]
@@ -149,8 +159,6 @@ def _escalation_on_decide_only(task: str, p: TaskPolicy, route: routing.Route) -
 
 
 def _escalation_complete(task: str, p: TaskPolicy, route: routing.Route) -> list[str]:
-    # `question` alone is allowed: 01c's `samples` needs it too. 01c-S2
-    # tightens this to "`question` needs `escalate_to` or `samples`".
     if p.escalate_to:
         out = []
         if not p.escalate_on:
@@ -161,9 +169,12 @@ def _escalation_complete(task: str, p: TaskPolicy, route: routing.Route) -> list
     stale = [f for f in ("escalate_on", "margins", "escalate_answers", "escalate_max",
                          "reads_declines")
              if getattr(p, f) != getattr(TaskPolicy(), f)]
-    if stale:
-        return [f"{task}: {', '.join(stale)} set without escalate_to (stale)"]
-    return []
+    out = [f"{task}: {', '.join(stale)} set without escalate_to (stale)"] if stale else []
+    # The deciding question is read by the triggers or by the sampler
+    # (spec 01c §4.1); with neither, nothing reads it.
+    if p.question and not p.samples:
+        out.append(f"{task}: question set without escalate_to or samples (stale)")
+    return out
 
 
 def _triggers_known(task: str, p: TaskPolicy, route: routing.Route) -> list[str]:
@@ -237,6 +248,45 @@ def _declines_allowed(task: str, p: TaskPolicy, route: routing.Route) -> list[st
     return [f"{task}: reads_declines on a task whose caller maps no decline to an outcome"]
 
 
+def _samples_valid(task: str, p: TaskPolicy, route: routing.Route) -> list[str]:
+    """Spec 01c §4.1 and §7: a sampling task names its distribution-bearing
+    question, never escalates on `low_margin`, and is one whose caller draws."""
+    if not p.samples:
+        return []
+    out = []
+    if not p.question:
+        out.append(f"{task}: samples without a question")
+    if "low_margin" in p.escalate_on:
+        # A low-margin answer is exactly where the distribution has two live
+        # options. Escalating it would replace a reported distribution with a
+        # hop answer that may carry none, so the draw would fall back to
+        # `basis: answer` on the items that most needed it.
+        out.append(f"{task}: samples beside low_margin")
+    if task not in _SAMPLES:
+        out.append(f"{task}: samples on a task not in _SAMPLES -- a verdict about the "
+                   "fiction never samples (spec 01c §7)")
+    return out
+
+
+def _native_first_valid(task: str, p: TaskPolicy, route: routing.Route) -> list[str]:
+    """Spec 01c §3.2, §4.1: each kind has a decisions endpoint, none twice,
+    and each is a kind whose distribution the task consumes."""
+    out = [f"{task}: native_first kind {kind!r} has no native decisions endpoint"
+           for kind in p.native_first if not adapters.decides_natively(kind)]
+    if len(set(p.native_first)) != len(p.native_first):
+        out.append(f"{task}: a native_first kind is listed twice")
+    if not p.samples:
+        # Without sampling, a distribution is consumed only by `low_margin`,
+        # and a kind with no `margins` entry never triggers (01d). Native
+        # first on such a kind trades the rationale away for nothing.
+        # (`_margins_valid` makes a margins entry imply `low_margin`.)
+        margined = {kind for kind, _ in p.margins}
+        out += [f"{task}: native_first kind {kind!r} on a task that consumes no "
+                "distribution from it" for kind in dict.fromkeys(p.native_first)
+                if kind not in margined]
+    return out
+
+
 def _cap_valid(task: str, p: TaskPolicy, route: routing.Route) -> list[str]:
     if not 1 <= p.escalate_max <= decisions.MAX_ITEMS_PER_CALL:
         return [(f"{task}: escalate_max {p.escalate_max} is outside "
@@ -247,7 +297,7 @@ def _cap_valid(task: str, p: TaskPolicy, route: routing.Route) -> list[str]:
 _RULES: tuple[Rule, ...] = (
     _fallback_known, _escalation_on_decide_only, _escalation_complete, _triggers_known,
     _escalation_target, _question_pinned, _margins_valid, _answers_valid,
-    _declines_allowed, _cap_valid,
+    _declines_allowed, _cap_valid, _samples_valid, _native_first_valid,
 )
 
 
@@ -282,6 +332,7 @@ def test_policy_defaults_to_todays_behaviour():
     assert default.question == "" and default.margins == ()
     assert default.escalate_answers == () and default.reads_declines is False
     assert default.escalate_max == decisions.MAX_ITEMS_PER_CALL
+    assert default.samples is False and default.native_first == ()
     hash(default)
 
 
@@ -303,14 +354,17 @@ def test_the_code_table_breaks_no_rule():
     assert violations(routing.TASK_POLICY) == []
 
 
-def test_no_task_escalates_or_drops_its_fallback_at_landing():
+def test_every_task_is_off_at_landing():
     """Every task ships with escalation off and its role's fallback (spec
-    §2, §6.4). The change that switches a task on edits this test together
-    with its §6.3 evidence in `evals/README.md`."""
+    01d §2, §6.4), sampling nothing and asking no decisions endpoint first
+    (spec 01c §3.3). The change that switches a task on edits this test
+    together with its evidence in `evals/README.md`: "Decision escalation"
+    (01d §6.3) or "Decision distributions" (01c §4.3)."""
     assert routing.TASK_POLICY == {}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
+        assert not p.samples and p.native_first == (), task
 
 
 def test_every_decide_task_is_pinned():
@@ -345,11 +399,18 @@ _FULL_IDENTITY = TaskPolicy(
         escalate_max=4)},
     {"response-selector": TaskPolicy(escalate_to=routing.CALLER, escalate_on=("refused",),
                                      question="next", reads_declines=True)},
-    {"scene-break": TaskPolicy(question="over")},
     {task: TaskPolicy(fallback="none") for task in routing.route_by_key("scene").tasks},
     {task: TaskPolicy(fallback="none") for task in routing.route_by_key("continuity").tasks},
-], ids=["identity", "reconcile", "speaker-caller", "question-only", "scene-none",
-        "continuity-none"])
+    {"response-selector": TaskPolicy(samples=True, question="next",
+                                     native_first=("openai_compatible", "openrouter"))},
+    {"response-selector": TaskPolicy(samples=True, question="next",
+                                     escalate_to=routing.CALLER,
+                                     escalate_on=("refused", "abstained"),
+                                     reads_declines=True)},
+    {"continuity-identity": _FULL_IDENTITY._replace(
+        native_first=("openrouter", "openai_compatible"))},
+], ids=["identity", "reconcile", "speaker-caller", "scene-none", "continuity-none",
+        "speaker-samples", "speaker-samples-escalates-declines", "identity-native-first"])
 def test_a_valid_policy_is_accepted(table):
     assert violations(table) == []
 
@@ -436,6 +497,41 @@ PLANTED: dict[str, tuple[dict, str]] = {
                              "maps no decline"),
     "cap-zero": ({"continuity-identity": _escalating(escalate_max=0)}, "escalate_max 0"),
     "cap-over": ({"continuity-identity": _escalating(escalate_max=9)}, "escalate_max 9"),
+    # 01c (spec 01c §4.1).
+    "question-only": ({"scene-break": TaskPolicy(question="over")},
+                      "without escalate_to or samples"),
+    "samples-on-generate": ({"absorb": TaskPolicy(samples=True)}, "operation is not decide"),
+    "native-first-on-generate": ({"absorb": TaskPolicy(native_first=("openrouter",))},
+                                 "operation is not decide"),
+    "samples-without-question": ({"response-selector": TaskPolicy(samples=True)},
+                                 "samples without a question"),
+    "samples-question-wrong": ({"response-selector": TaskPolicy(
+        samples=True, question="over")}, "is not the call site's"),
+    "samples-with-low-margin": ({"response-selector": TaskPolicy(
+        samples=True, question="next", escalate_to=routing.CALLER,
+        escalate_on=("low_margin",), margins=(("openrouter", 0.2),))},
+        "samples beside low_margin"),
+    "samples-on-scene-break": ({"scene-break": TaskPolicy(samples=True, question="over")},
+                               "never samples"),
+    "samples-on-identity": ({"continuity-identity": TaskPolicy(
+        samples=True, question="decision")}, "never samples"),
+    "native-first-kind-anthropic": ({"response-selector": TaskPolicy(
+        samples=True, question="next", native_first=("anthropic",))},
+        "no native decisions endpoint"),
+    "native-first-kind-claude": ({"response-selector": TaskPolicy(
+        samples=True, question="next", native_first=("claude",))},
+        "no native decisions endpoint"),
+    "native-first-kind-unknown": ({"response-selector": TaskPolicy(
+        samples=True, question="next", native_first=("vendor",))},
+        "no native decisions endpoint"),
+    "native-first-kind-twice": ({"response-selector": TaskPolicy(
+        samples=True, question="next", native_first=("openrouter", "openrouter"))},
+        "listed twice"),
+    "native-first-without-consumer": ({"scene-break": TaskPolicy(
+        native_first=("openrouter",))}, "consumes no distribution"),
+    "native-first-kind-without-margin": ({"continuity-identity": _FULL_IDENTITY._replace(
+        margins=(("openai_compatible", 0.2),), native_first=("openrouter",))},
+        "consumes no distribution"),
 }
 
 

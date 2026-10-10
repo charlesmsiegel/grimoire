@@ -24,7 +24,10 @@ backends: `structured` (slice F), `generate` (`LLMClient.complete(...,
 schema=)`) over a prompt that carries the schema, read back by
 `decisions.parse`; and `native` (slice H), a provider's own decisions endpoint
 (`LLMClient.decide_native`), one request per item. An item moves to the next
-stage only when its stage FAILED to answer it (`run_stages`).
+stage only when its stage FAILED to answer it (`run_stages`). A task whose
+code policy lists the primary's kind (`routing.TaskPolicy.native_first`, 01c)
+asks a generating primary's decisions endpoint first, in an isolated stage
+of its own (`stages`, `resolve.native_first`).
 
 Four rules `decide` keeps:
 
@@ -44,7 +47,8 @@ Four rules `decide` keeps:
   (`wire.Chain.alone`) rather than changing the resolution's.
 - **Provider errors propagate.** A failed call's `LLMError` is re-raised when
   no item answered, composed with the later stages' failures
-  (`llm.routes_failed`); once one has, a failed unit's items are `None` with
+  (`llm.routes_failed`) -- an isolated (native-first) stage's failure is not
+  composed into the error of an item a later stage took; once one has, a failed unit's items are `None` with
   reason `error`, and `Decision.errors` holds each unit's final error.
   Cancellation passes through untouched (every open meter files `aborted`).
   One error is not yet the chunk's: a chain that failed on every route, one
@@ -166,11 +170,17 @@ class Stage(NamedTuple):
     `_BACKENDS`), the chain it sends -- a primary, and the fallback the
     facade fails over to when one rides it -- and the primary route's retry
     count: None for the facade's own budget (the primary's `llm_retries`),
-    0 on a fallback stage, which gets one attempt (spec 5.4, I3)."""
+    0 on a fallback stage, which gets one attempt (spec 5.4, I3), and on a
+    native-first one (01c §4.2.2)."""
 
     mode: str
     chain: wire.Chain
     retries: int | None
+    #: A native-first stage (01c §4.2.1): whatever stops it is a statement
+    #: about its decisions endpoint, so `run_stages` never marks its provider
+    #: dead, and its failures are not composed into the error of an item a
+    #: later stage took. False for every other stage.
+    isolated: bool = False
 
 
 def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
@@ -190,8 +200,16 @@ def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
 
     No structured stage follows a native one on the same selection: a native
     attempt is one that cannot generate (ruling 1, C1), so that stage could
-    never answer. Trying native first on a model that also generates is a
-    later user decision (spec 16), which would add it back here."""
+    never answer.
+
+    Native first (01c §4.2): a structured primary whose task's policy lists
+    its adapter kind, and which is known able to decide natively
+    (`resolve.native_first`), is asked through its decisions endpoint first
+    -- an isolated stage on the same model, with no retries, sent the
+    primary alone and unflagged (no structured envelope goes to a decisions
+    endpoint) -- and the structured stage after it, exactly today's, takes
+    the items that stage failed. No task's policy lists a kind yet, so no
+    chain built today has that stage."""
     whole = resolved.chain
     if whole is None:
         return ()
@@ -204,10 +222,24 @@ def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
     if primary.decision_mode == NATIVE:
         chain.append(Stage(NATIVE, whole.alone(), None))
     elif resolve.generates(primary):
+        if resolve.native_first(resolved):
+            target = primary.target
+            alone = replace(target, structured=False) if target.structured else target
+            chain.append(Stage(NATIVE, wire.Chain(alone), 0, isolated=True))
         chain.append(Stage(STRUCTURED, whole.alone() if apart else whole, None))
     if apart and fallback is not None:
         chain.append(Stage(fallback.decision_mode, wire.Chain(fallback.target), 0))
     return tuple(chain)
+
+
+def reports_distribution(resolved: ResolvedInference) -> bool:
+    """Whether `resolved`'s first decide stage is native (01c §4.2): a
+    native-only primary, or a native-first one (`resolve.native_first`).
+    Pure, and sends nothing. A forecast, not a guarantee: an item the native
+    stage fails is answered by a structured stage with no distribution, so a
+    sampling caller still goes through `draws.draw` per item."""
+    planned = stages(resolved)
+    return bool(planned) and planned[0].mode == NATIVE
 
 
 @dataclass(frozen=True)
@@ -722,6 +754,18 @@ def _same_connection(provider_id: str, other: str) -> bool:
     return bool(provider_id) and provider_id == other
 
 
+def _all_dead(stage: Stage, dead: Sequence[str]) -> bool:
+    """Whether every route `stage` sends -- its primary, and on a structured
+    stage the fallback riding it -- is on a connection a stage before it
+    stopped dead (01c §4.2.1). A native stage sends its primary alone
+    (`_native` reads only `chain.primary`), so only that counts there. Today
+    only a first stage carries a riding fallback, so for every chain built
+    this asks whether the primary's connection is dead."""
+    sent = (stage.chain.primary,) if stage.mode == NATIVE else stage.chain.attempts
+    return all(any(_same_connection(target.provider_id, d) for d in dead)
+               for target in sent)
+
+
 def _settle(got: _Answered, pending: list[int], results: list[decisions.ItemResult | None],
             words: dict[int, list[LLMError]]) -> list[tuple[tuple[int, ...], LLMError]]:
     """Lay one stage's answers over `results` (`pending` maps the stage's
@@ -763,11 +807,18 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     that takes no sampling would only hide it. So does the caller's clock
     refusing a call unsent (`_refused_unsent`, absorb's `BudgetRefused`):
     it refuses every later call too, so a later stage could only add another
-    refusal, and the one it has keeps its type. A stage that stopped on a
-    failure every call on its connection would meet (`_connection_wide`:
-    the key, the account's money, an exhausted rate limit) skips each later
-    stage on that SAME connection (`_same_connection`): its items keep the
-    failures they have, as items held back inside a stage do.
+    refusal, and the one it has keeps its type -- an isolated stage
+    included. A stage that stopped on a failure every call on its connection
+    would meet (`_connection_wide`: the key, the account's money, an
+    exhausted rate limit) skips each later stage every route of which is on
+    that SAME connection (`_all_dead`, `_same_connection`): its items keep
+    the failures they have, as items held back inside a stage do.
+
+    An isolated stage (native first, 01c §4.2.1) is a statement about its
+    decisions endpoint only: it never marks its connection dead -- a key
+    refused there may serve every chat call -- and its failures are set
+    aside, composed into an item's error only when no later stage reached
+    that item.
 
     When no item answered, the first failed unit's final error is raised
     (F's ruling 8): its failures on every stage it reached, composed
@@ -791,6 +842,9 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     results: list[decisions.ItemResult | None] = [None] * len(items)
     #: Per item, the failure of each stage that failed it, in stage order.
     words: dict[int, list[LLMError]] = {}
+    #: An isolated stage's failures, per item: an item's words only when no
+    #: later stage reached it (01c §4.2.1).
+    aside: dict[int, list[LLMError]] = {}
     rows: list[dict] = []
     records: list[decisions.CallRecord] = []
     served: dict[tuple[str, str], None] = {}     # ordered, each once
@@ -801,8 +855,9 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     for number, stage in enumerate(chain):
         if not pending:
             break
-        if any(_same_connection(stage.chain.primary.provider_id, d) for d in dead):
-            # It would meet the failure that stopped the stage before it.
+        if _all_dead(stage, dead):
+            # Every route it sends would meet the failure that stopped a
+            # stage before it.
             continue
         got = await _BACKENDS[stage.mode](
             tuple(items[i] for i in pending),
@@ -811,17 +866,20 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
         rows.extend(got.rows)
         records.extend(got.calls)
         served.update(dict.fromkeys(got.served))
-        failed = _settle(got, pending, results, words)
+        failed = _settle(got, pending, results, aside if stage.isolated else words)
         pending = [i for i in pending if results[i] is None]
         if any(isinstance(error, llm.PresetRefusalError) or _refused_unsent(error)
                for _unit, error in failed):
             break
-        if got.stopped is not None and _connection_wide(got.stopped):
+        if (got.stopped is not None and _connection_wide(got.stopped)
+                and not stage.isolated):
             dead.append(stage.chain.primary.provider_id)
     # Each failed unit of the last stage its items reached, with the failures
     # of every stage before it: a chunk's earlier failures are its first
     # item's (a native stage before it failed each item on its own).
-    errors = tuple(_final(words[unit[0]]) for unit, _error in failed)
+    # An isolated stage's failure counts only for an item no later stage
+    # reached (the chain ended right after it): `words` is then empty for it.
+    errors = tuple(_final(words.get(unit[0]) or aside[unit[0]]) for unit, _error in failed)
     # Each backend stamps the items it answered (`ItemResult.backend`).
     answered_by = list(dict.fromkeys(r.backend for r in results if r is not None))
     if not answered_by:
