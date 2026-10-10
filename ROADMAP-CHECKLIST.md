@@ -470,14 +470,14 @@ alone. This table is generated: after a spec's slices change, run
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 04-S2 | Client first paint, then revalidate | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S3 | Live-path fixes | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S4 | `scene_summary`, in-process, and its consumers | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S6 | `scene_turns`, in-process, on the shell | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 3 | 03-S2, 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S9 | Post-turn warm and `warm_paths` | S | 4 | 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S10 | Overview benchmark on synthetic libraries | M | 3 | 03-S2, 03-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 05
 
@@ -487,7 +487,7 @@ alone. This table is generated: after a spec's slices change, run
 | 05-S2 | The sync primitive and the `files` hook | L | 4 | 03-S2, 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 05-S3 | The CLI, scoped modes and scripts | M | 5 | 03-S2, 03-S4, 03-S5 (S), 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 05-S4 | The write-through queue | M | 5 | 05-S1, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 05-S5 | The `overview` hook adapter | S | 5 | 04-S9, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S5 | The `overview` hook adapter | S | 6 | 04-S9, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 05-S6 | The `vectors` hook and the three producers | L | 5 | 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 05-S7 | The API | M | 6 | 04-S2 (S), 05-S3, 05-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 

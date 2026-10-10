@@ -1299,10 +1299,10 @@ S10.
 ### 04-S3: Live-path fixes
 
 - **Delivers:** 04-C1c (part: the live-path fixes in 4.5 items 1 to 3)
-- **Needs (this spec):** S1 (S: the counter assertions. Without it, the
+- **Needs (this spec):** 04-S1 (S: the counter assertions. Without it, the
   assertions use the audit hook alone.)
 - **Needs (other specs):** none
-- **Needs (slices):** none
+- **Needs (slices):** 04-S1 (S)
 - **Scope:**
   - `modules.binding.resolve` reads the world's `module` key without
     `read_world`'s counts, and still raises `WorldNotFound` on a missing
@@ -1324,10 +1324,10 @@ S10.
 - **Delivers:** 04-C1b (part: `overview.scene_summary`, in-process); 04-C1c
   (part: the open-scenes chore, `has_campaign`, the shell's scene count and
   open list, and `GET /campaigns`' scene fields)
-- **Needs (this spec):** S1 (H: the `frontmatter.parse_head` counter and
+- **Needs (this spec):** 04-S1 (H: the `frontmatter.parse_head` counter and
   `readstats` in the acceptance tests)
 - **Needs (other specs):** none
-- **Needs (slices):** none
+- **Needs (slices):** 04-S1 (H)
 - **Scope:**
   - Adds the `store/overview/` package with `overview.scene_summary(cid)`: the
     fold over head-only `_scene_row` reads, `memo_stamped` in `_OVERVIEW_POOL`,
@@ -1354,9 +1354,9 @@ S10.
 - **Delivers:** 04-C1b (part: `overview.continuity_summary`, in-process);
   04-C1c (part: the `owed` and continuity chores and the shell's
   `ledger_open`)
-- **Needs (this spec):** S1 (H: the `overview.computed.<kind>` counter)
+- **Needs (this spec):** 04-S1 (H: the `overview.computed.<kind>` counter)
 - **Needs (other specs):** none
-- **Needs (slices):** none
+- **Needs (slices):** 04-S1 (H)
 - **Scope:**
   - Adds `*_from_text` twins to the five continuity readers (`plot`,
     `commitments`, `events`, `continuity/doc`, `continuity/candidates`). The
@@ -1380,9 +1380,9 @@ S10.
 ### 04-S6: `scene_turns`, in-process, on the shell
 
 - **Delivers:** 04-C1b (part: `overview.scene_turns`, in-process)
-- **Needs (this spec):** S1 (H: the `transcript.parse` counter)
+- **Needs (this spec):** 04-S1 (H: the `transcript.parse` counter)
 - **Needs (other specs):** none
-- **Needs (slices):** none
+- **Needs (slices):** 04-S1 (H)
 - **Scope:**
   - `overview.scene_turns(cid, sid)` is `memo_stamped` on `(scene path,
     players)`, with `players` from `cast.player_names`. The appearances record
@@ -1401,7 +1401,7 @@ S10.
 ### 04-S7: Persisted card rows, and the `module` chip
 
 - **Delivers:** 04-C1a (full)
-- **Needs (this spec):** S4 (H: `store/overview/` and `campaign_cards()`'s
+- **Needs (this spec):** 04-S4 (H: `store/overview/` and `campaign_cards()`'s
   scene fields)
 - **Needs (other specs):**
   - 03-C1 (H: kind registry entries with a `version`; composite keys over
@@ -1414,7 +1414,7 @@ S10.
     path.);
   - 03-C6 (S: batch lookup over a live key set. Until it lands, one lookup per
     key.)
-- **Needs (slices):** 03-S2 (H), 03-S3 (S)
+- **Needs (slices):** 03-S2 (H), 03-S3 (S), 04-S4 (H)
 - **Scope:**
   - Registers `overview.world_row` and `overview.campaign_row` as byte-fed 03
     kinds, with their live paths (`_world_row`, `_campaign_row` plus `module`),
@@ -1439,16 +1439,16 @@ S10.
 
 - **Delivers:** 04-C1b (full); 04-C1c (full)
 - **Needs (this spec):**
-  - S5 (H: the text twins and the in-process layer);
-  - S6 (H: the in-process `scene_turns`);
-  - S7 (H: the registry wiring and the decision-site guard allowlist).
+  - 04-S5 (H: the text twins and the in-process layer);
+  - 04-S6 (H: the in-process `scene_turns`);
+  - 04-S7 (H: the registry wiring and the decision-site guard allowlist).
 - **Needs (other specs):**
   - 03-C1 (H: absent-ok input roles; `params` for non-file inputs);
   - 03-C2 (H: liveness by construction);
   - 03-C4 (H: `InputUnavailable` with fallback to the caller's path reader);
   - 03-C6 (S: batch lookup over a live key set, plus per-kind counts. Until it
     lands, one lookup per key.)
-- **Needs (slices):** 03-S2 (H), 03-S3 (S)
+- **Needs (slices):** 03-S2 (H), 03-S3 (S), 04-S5 (H), 04-S6 (H), 04-S7 (H)
 - **Scope:**
   - Registers `overview.scene_turns` (scene bytes plus sorted `players`) and
     `overview.continuity_summary` (five absent-ok files) as byte-fed 03 kinds
@@ -1473,11 +1473,11 @@ S10.
 ### 04-S9: Post-turn warm and `warm_paths`
 
 - **Delivers:** 04-C2a (full)
-- **Needs (this spec):** S7 (H: card-row kinds for `warm_paths`); S8 (H:
+- **Needs (this spec):** 04-S7 (H: card-row kinds for `warm_paths`); 04-S8 (H:
   persisted `scene_turns` and `continuity_summary`)
 - **Needs (other specs):** 03-C5 (H: storing artifacts at write time while the
   `sources` row waits out the racy window)
-- **Needs (slices):** 03-S4 (H)
+- **Needs (slices):** 03-S4 (H), 04-S7 (H), 04-S8 (H)
 - **Scope:**
   - `overview.warm_scene(cid, sid)` is called from
     `routes/streaming._fire_follow_up` on a worker thread. It holds no lock or
@@ -1498,15 +1498,15 @@ S10.
 
 - **Delivers:** 04-C3b (full)
 - **Needs (this spec):**
-  - S1 (H: counters);
-  - S8 (H: persisted kinds for the restart scenarios);
-  - S9 (H: the warm, for `relevant_change` and `visit_after_turn`).
+  - 04-S1 (H: counters);
+  - 04-S8 (H: persisted kinds for the restart scenarios);
+  - 04-S9 (H: the warm, for `relevant_change` and `visit_after_turn`).
 - **Needs (other specs):**
   - 03-C9 (S: the synthetic-library generator. Until it lands, this slice
     builds the generator core to 9.1 and 03 adopts it.);
   - 03-C4 (H: the injectable clock behind the `PERSIST_WINDOW` age test, the
     `migrations._clock` precedent).
-- **Needs (slices):** 03-S2 (H), 03-S6 (S)
+- **Needs (slices):** 03-S2 (H), 03-S6 (S), 04-S1 (H), 04-S8 (H), 04-S9 (H)
 - **Scope:**
   - Extends the generator with what 9.1 asks for: backdated file and
     directory mtimes, a seeded clock, the `.synthetic-library` marker, and

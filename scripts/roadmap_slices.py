@@ -13,8 +13,11 @@ tracks each slice through its stages in the "Slice checklist" table.
     python3 scripts/roadmap_slices.py ready            # not landed, hard needs all landed
     python3 scripts/roadmap_slices.py status           # each spec's slices, per stage
 
-`check` holds the table to the specs (run `sync` after a spec's slices
-change), and holds the ticks to two rules: a slice's stages are ticked in
+`check` first checks the graph: every contract item in the checklist's
+Contracts section delivered in full by exactly one slice, every need
+resolved, no slice defined twice or named without its spec, no cycle. Then
+it holds the table to the specs (run `sync` after a spec's slices change),
+and holds the ticks to two rules: a slice's stages are ticked in
 order, and a slice is landed only after every slice it hard-needs. It also
 holds the Status table's "Slices" count and "Landed" box to the table.
 """
@@ -32,6 +35,9 @@ SPECS = os.path.join(HERE, "docs", "superpowers", "specs", "2026-10-09-roadmap-*
 SLICE_HDR = re.compile(r"^### (\d\d[a-z]?-S\d+)\s*[—:-]+\s*(.*)$")
 ID_C = re.compile(r"(\d\d[a-z]?-C\d+[a-z]?)\s*\(")
 ID_S = re.compile(r"(\d\d[a-z]?-S\d+)\s*\(")
+BARE_S = re.compile(r"(?<![\w-])(S\d+)\s*\(")
+CONTRACTS = re.compile(r"^## Contracts\n.*?(?=^## )", re.DOTALL | re.MULTILINE)
+CONTRACT_ID = re.compile(r"\*\*(\d\d[a-z]?-C\d+[a-z]?)\*\*")
 CHECKLIST = os.path.join(HERE, "ROADMAP-CHECKLIST.md")
 SECTION = re.compile(r"^## Slice checklist\n.*?(?=^## )", re.DOTALL | re.MULTILINE)
 ROW = re.compile(r"^\| (\d\d[a-z]?-S\d+) \|(.*)\|$", re.MULTILINE)
@@ -69,11 +75,16 @@ def load() -> dict[str, dict]:
             h = SLICE_HDR.match(part.splitlines()[0]) if part.strip() else None
             if not h:
                 continue
+            if h.group(1) in slices:
+                where = {slices[h.group(1)]["file"], os.path.basename(path)}
+                raise SystemExit(f"{h.group(1)} is defined twice, in {' and '.join(sorted(where))}")
+            own = _field(part, "Needs (this spec)")
             slices[h.group(1)] = {
                 "title": h.group(2),
+                "bare": BARE_S.findall(own),
                 "file": os.path.basename(path),
                 "delivers": _balanced(ID_C, _field(part, "Delivers")),
-                "own": _balanced(ID_S, _field(part, "Needs (this spec)")),
+                "own": _balanced(ID_S, own),
                 "other": _balanced(ID_C, _field(part, "Needs (other specs)")),
                 "needs": [(s, a[:1]) for s, a in
                           _balanced(ID_S, _field(part, "Needs (slices)"))],
@@ -109,6 +120,8 @@ def _slice_problems(sid: str, s: dict, slices: dict[str, dict],
     problems = [f"{sid}: needs unknown slice {t}" for t in needs if t not in slices]
     problems += [f"{sid}: {t} is neither (H) nor (S)"
                  for t, hs in needs.items() if hs not in ("H", "S")]
+    problems += [f"{sid}: 'Needs (this spec)' names {b} without its spec; write {spec}-{b}"
+                 for b in s["bare"]]
     for r, a in s["own"]:
         if not r.startswith(spec + "-S") or _key(r) >= _key(sid):
             problems.append(f"{sid}: 'Needs (this spec)' names {r}, not an earlier slice of {spec}")
@@ -243,9 +256,28 @@ def _checklist_problems(slices: dict[str, dict]) -> list[str]:
     return problems + _tick_problems(slices, boxes) + _status_problems(slices, text, boxes)
 
 
+def _inventory_problems(slices: dict[str, dict], by_contract: dict[str, set[str]]) -> list[str]:
+    """Every contract item the checklist declares is delivered, and only those."""
+    m = CONTRACTS.search(_checklist())
+    declared = set(CONTRACT_ID.findall(m.group(0))) if m else set()
+    specs = set(_specs(slices))
+    problems = [f"{c}: declared in the checklist's Contracts, delivered by no slice"
+                for c in sorted(declared - set(by_contract)) if c.split("-C")[0] in specs]
+    problems += [f"{c}: delivered by {sorted(by_contract[c])}, missing from the checklist's Contracts"
+                 for c in sorted(set(by_contract) - declared)]
+    return problems
+
+
 def check(slices: dict[str, dict]) -> list[str]:
+    """Graph problems first: the checklist is rendered from the graph, so it is
+    only compared once the graph is sound."""
+    problems = graph_problems(slices)
+    return problems or _checklist_problems(slices)
+
+
+def graph_problems(slices: dict[str, dict]) -> list[str]:
     by_contract, problems = _deliveries(slices)
-    problems += _checklist_problems(slices)
+    problems += _inventory_problems(slices, by_contract)
     for sid, s in slices.items():
         problems += _slice_problems(sid, s, slices, by_contract)
     state: dict[str, int] = {}
@@ -310,6 +342,10 @@ def _ready(slices: dict[str, dict], argv: list[str]) -> int:
 
 
 def _sync(slices: dict[str, dict], argv: list[str]) -> int:
+    problems = graph_problems(slices)
+    if problems:
+        print("not syncing; fix the specs first:\n" + "\n".join(problems))
+        return 1
     text = _checklist()
     table = render(slices, ticks(text))
     text = SECTION.sub(lambda _: table, text) if SECTION.search(text) else text + "\n" + table
