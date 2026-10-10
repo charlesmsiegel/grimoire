@@ -87,7 +87,8 @@ export type Listed = ReturnType<typeof combine>;
  *  An answer is used only while the provider and needs it was asked for are
  *  still the ones shown: a slow list for a provider the reader has left
  *  never fills the next one's. `reask(true)` clears the list first (the
- *  picker's radios are redrawn from nothing); `reask(false)` keeps it on
+ *  picker's radios are redrawn from nothing, a stale failure with them);
+ *  `reask(false)` keeps it on
  *  screen until the new one lands, so a control with focus is not unmounted. */
 export function useModelList(provider: string, needs: CapabilityNeed[], model: string) {
   const [listed, setListed] = useState<Listed | null>(null);
@@ -126,7 +127,7 @@ export function useModelList(provider: string, needs: CapabilityNeed[], model: s
   }, [needsVerdict, provider, needKey, model, asked]);
 
   const reask = useCallback((clear: boolean) => {
-    if (clear) setListed(null);
+    if (clear) { setListed(null); setFailed(null); }
     setAsked((n) => n + 1);
   }, []);
 
