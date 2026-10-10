@@ -161,6 +161,16 @@ def test_a_hand_edited_bucket_is_not_costed_rather_than_zero(tmp_path, capsys):
     assert "1/1 ok  1.00s  - / -  -" in out
 
 
+def test_a_bucket_missing_a_figure_is_not_costed_rather_than_zero(tmp_path, capsys):
+    """A priced call with no `cost_usd` is a missing price, never `$0.00`."""
+    bad = {k: v for k, v in _bucket(0.002).items() if k != "cost_usd"}
+    doc = _doc([runfile.config("c1", "x", {})], [_entry("scene-length", ["c1"], bucket=bad)])
+    assert run.main(["--compare", str(_write(tmp_path / "e.json", doc))]) == 0
+    out = capsys.readouterr().out
+    assert "$0.00" not in out
+    assert "1/1 ok  1.00s  - / -  -" in out
+
+
 def test_configs_sharing_a_label_are_told_apart_by_their_axes(tmp_path, capsys):
     doc = _doc([runfile.config("c1", "x", {"feature": "off"}),
                 runfile.config("c2", "x", {"feature": "on"})],

@@ -207,22 +207,17 @@ def _object(node: dict, path: str, level: int) -> int:
         raise SchemaError(f"{path}: an object has 'additionalProperties': false "
                           "(strict mode requires it)")
     required = node.get("required")
-    if (not isinstance(required, list) or len(set(map(_key, required))) != len(required)
-            or set(map(_key, required)) != set(map(_key, properties))):
-        raise SchemaError(f"{path}: 'required' names every property exactly once "
-                          "(strict mode requires it; an optional field is anyOf with null)")
+    if (not isinstance(required, list) or not all(isinstance(r, str) for r in required)
+            or len(set(required)) != len(required) or set(required) != set(properties)):
+        raise SchemaError(f"{path}: 'required' names every property exactly once, "
+                          "as strings (strict mode requires it; an optional field is "
+                          "anyOf with null)")
     total = 0
     for name, sub in properties.items():
         if not isinstance(name, str):
             raise SchemaError(f"{path}: a property name is a string, not {name!r}")
         total += _node(sub, f"{path}.{name}", level + 1)
     return total
-
-
-def _key(value: object) -> object:
-    """A `required` entry or a property name as a set member (a list or dict
-    in `required` would not hash)."""
-    return value if isinstance(value, (str, int)) else repr(value)
 
 
 def _node_items(node: dict, path: str, level: int) -> int:

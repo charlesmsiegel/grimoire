@@ -602,8 +602,8 @@ def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str 
     campaign -- and writes, all inside the same non-blocking hold, and bumps
     the write token after the write, in the hold, for `_record_prompt`'s
     reasons. Contention, a gone campaign, a failed fence or an unreadable
-    store cost the capture and nothing else, and a skipped capture stamps
-    nothing. A `still` that raises leaves this function, as it does
+    store cost the capture and nothing else, and a capture that filed no
+    entry stamps nothing. A `still` that raises leaves this function, as it does
     `_record_prompt`.
 
     The residual, stated rather than hidden: between a campaign's store delete
@@ -625,12 +625,15 @@ def _record_campaign_prompt(cid: str, task: str, breakdown: dict, *, model: str 
             store.campaigns.read_campaign(cid)
             if still is not None and not still():
                 return
-            try:
-                store.prompt_log.record(cid, store.prompt_log.NO_SCENE, task, breakdown,
-                                        model=model, kind=kind, operation=operation)
-            finally:
-                # After the record and inside the hold: `_record_prompt`'s
-                # ordering, for its reason.
+            eid = store.prompt_log.record(cid, store.prompt_log.NO_SCENE, task,
+                                          breakdown, model=model, kind=kind,
+                                          operation=operation)
+            # After the record and inside the hold: `_record_prompt`'s
+            # ordering, for its reason. `record` swallows its own I/O errors
+            # and answers None for a capture no reader can see (a payload the
+            # index never named), so only an entry it filed stamps -- nothing
+            # else here is a write a token holder could miss.
+            if eid is not None:
                 store.revision.bump(cid)
     except (store.campaigns.CampaignNotFound, store.locks.StoreBusy, OSError):
         return   # gone, contended, or unreadable: capture nothing, cost nothing

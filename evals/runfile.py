@@ -137,17 +137,24 @@ def read(path: Path) -> dict:
 
 # ---------------------------------------------------------------- compare
 
-#: The bucket fields a figure is read from; a bucket where any of them is
-#: not a number (a hand edit) is not costed, rather than read as zero.
+#: The bucket fields a figure is read from, which every folded bucket carries;
+#: a bucket missing one, or where one is not a number (a hand edit), is not
+#: costed, rather than read as zero.
 _FIGURES = ("calls", "priced_calls", "subscription_calls", "modelled_calls",
             "unpriced_calls", "cost_usd", "estimated_usd", "modelled_usd",
-            "prompt_tokens", "completion_tokens", *costs.COVERAGE)
+            "prompt_tokens", "completion_tokens")
+
+
+def _number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _costed(value: object) -> bool:
-    return isinstance(value, dict) and all(
-        isinstance(value.get(key, 0), (int, float))
-        and not isinstance(value.get(key, 0), bool) for key in _FIGURES)
+    """The coverage tallies are lazy (absent means no call reported that
+    count, which reads as uncounted), so only they may be missing."""
+    return (isinstance(value, dict)
+            and all(_number(value.get(key)) for key in _FIGURES)
+            and all(_number(value.get(key, 0)) for key in costs.COVERAGE))
 
 def _row_key(entry: dict) -> str:
     variant = entry.get("variant", BASELINE)
