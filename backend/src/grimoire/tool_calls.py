@@ -53,7 +53,7 @@ import json
 import math
 import re
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
@@ -943,3 +943,23 @@ def registered(toolset: Toolset, *, workers: int = TOOL_WORKERS) -> Execute:
         return await result if inspect.isawaitable(result) else result
 
     return execute
+
+
+async def text_deltas(events: AsyncIterator[LoopEvent],
+                      on_done: Callable[[LoopResult], None] | None = None
+                      ) -> AsyncIterator[str]:
+    """A loop's events (`inference.stream_tools`) as the plain iterator of
+    text deltas `generate(stream=True)` yields -- heartbeats (`""`) included
+    -- so a streaming caller keeps its display and its watcher as they are
+    (01g-C6). `on_done` is handed the run's result. Closing this closes the
+    run."""
+    try:
+        async for event in events:
+            if event.kind == "text":
+                yield event.delta
+            elif event.kind == "done" and on_done is not None and event.result is not None:
+                on_done(event.result)
+    finally:
+        close = getattr(events, "aclose", None)
+        if close is not None:
+            await close()

@@ -92,6 +92,7 @@ from . import (
     decisions,
     llm,
     llm_errors,
+    llm_reasoning,
     llm_sampling,
     model_guidance,
     prompts,
@@ -1815,6 +1816,8 @@ class _Turn:
     finish: str
     opaque: dict | None
     target: wire.Target | None
+    #: Whether the turn streamed visible text (01g-C6).
+    shown: bool = False
 
 
 class _Loop:
@@ -1826,8 +1829,15 @@ class _Loop:
                  attribution: dict, scene_identity: str,
                  cancelled: Callable[[], bool] | None, final_schema: dict | None,
                  tool_choice: str, capture: TurnCapture | None,
-                 prices: dict[tuple[str, str], Price | None] | None = None):
+                 prices: dict[tuple[str, str], Price | None] | None = None,
+                 streaming: bool = False, decline_after_text: bool = False,
+                 reasoning: llm_reasoning.Buffer | None = None):
         prices = prices or {}
+        #: 01g-C6: each turn through `client.stream`, the caller's display
+        #: reasoning buffer in each turn's holder, and visible text final.
+        self.streaming, self.decline_after_text = streaming, decline_after_text
+        self.reasoning = reasoning
+        self.shown = False
         self.task, self.base, self.toolset, self.execute = task, messages, toolset, execute
         self.client, self.resolved, self.budget, self.run_id = client, resolved, budget, run_id
         self.attribution, self.scene_identity = attribution, scene_identity
@@ -1838,7 +1848,7 @@ class _Loop:
         self.rows: list[dict] = []
         self.trace: list[tool_calls.TraceEntry] = []
         self.proposals: list[dict] = []
-        self.pending: list[tool_calls.LoopEvent] = []
+        self.emit: Callable[[object], None] = lambda _item: None
         self.turns = self.calls_used = self.result_chars = self.minted = 0
         self.finalized = self.fallen = False
         self.writers: set[tuple[str, str]] = set()
@@ -1858,18 +1868,52 @@ class _Loop:
 
     # ---- the run ----
     async def events(self) -> AsyncGenerator[tool_calls.LoopEvent, None]:
-        """The run, as events; `done` last, after every meter has filed."""
+        """The run, as events (spec 3.8): `text` deltas as they arrive, a
+        `turn_end` per turn, `tool_start`/`tool_end` per call, and `done`
+        last, after every meter has filed. The run itself is driven in a task
+        of its own (`_drive`), so that while a turn or a tool is in flight
+        this yields an empty `text` every `llm.HEARTBEAT_INTERVAL` -- a stream
+        is never silent past the interval an SSE consumer's guard protects."""
         self.root, self.wall, self.call_budget = await asyncio.to_thread(self._pin)
-        result: tool_calls.LoopResult | None = None
-        while result is None:
-            result = await self._step()
-            while self.pending:
-                yield self.pending.pop(0)
+        queue: asyncio.Queue = asyncio.Queue()
+        self.emit = queue.put_nowait
+        runner = asyncio.create_task(self._drive())
+        try:
+            while True:
+                item = await _next_or_beat(queue)
+                if item is None:
+                    yield tool_calls.LoopEvent("text", turn=self.turns, delta="")
+                    continue
+                if isinstance(item, BaseException):
+                    raise item
+                assert isinstance(item, tool_calls.LoopEvent)
+                yield item
+                if item.kind == "done":
+                    return
+        finally:
+            await _stopped(runner)
+
+    async def _drive(self) -> None:
+        """Every step of the run, each event handed to `events`; its result as
+        `done`, or the exception that ended it."""
+        me = asyncio.current_task()
+        if me is not None:
+            _LOOPING.add(me)
+        try:
+            result: tool_calls.LoopResult | None = None
+            while result is None:
+                result = await self._step()
+        except BaseException as exc:
+            # Handed to the consumer, which raises it there.
+            self.emit(exc)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return
         log.info("tool run %s (%s) ended %s%s: %d turns, %d tool calls, %.1fs",
                  self.run_id, self.task, result.status,
                  f" on {result.limit}" if result.limit else "", self.turns,
                  self.calls_used, time.monotonic() - self.t0)
-        yield tool_calls.LoopEvent("done", turn=self.turns, result=result)
+        self.emit(tool_calls.LoopEvent("done", turn=self.turns, result=result))
 
     def _pin(self) -> tuple[str, float, float]:
         """The store root, the run's wall and the per-call ceiling, read once
@@ -1953,6 +1997,13 @@ class _Loop:
         """A turn's calls answered, or the run ended by its answer."""
         if not turn.calls:
             return await self._answered(turn)
+        if self.decline_after_text and turn.shown:
+            # Visible text is final (01g-C6): the calls it ended with are
+            # declined, and no turn follows it.
+            for call in turn.calls:
+                self._trace(turn.turn, "tool", call.name, call.id, ok=False,
+                            note="declined: after_text")
+            return self._result("completed", declined=turn.calls)
         if turn.finish != "length":
             ended = self._terminal(turn)
             if ended is not None:
@@ -2005,6 +2056,7 @@ class _Loop:
             self.limit = self.limit or "spend"
             return None
         k = self.turns = self.turns + 1
+        self.shown = False
         if extra is not None:
             self.appended.append(extra)
         self.sent_len = len(self.appended)
@@ -2031,17 +2083,18 @@ class _Loop:
         target = holder.get(llm.ATTEMPTED)
         target = target if isinstance(target, wire.Target) else None
         calls = tuple(self._named(c) for c in collector.calls()) if not final else ()
-        turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target)
+        turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target,
+                     self.shown)
         self.text = text
         if target is not None and self._switched_to(target):
             notes.append("fell back")
         self._trace(k, "model", target.model if target else "", chars=len(text),
                     note=", ".join(notes), started=started)
         await self._captured(sending, turn)
-        if text:
-            self.pending.append(tool_calls.LoopEvent("text", turn=k, delta=text))
-        self.pending.append(tool_calls.LoopEvent("turn_end", turn=k, finish=turn.finish,
-                                                 interstitial=bool(calls)))
+        if text and not self.streaming:
+            self.emit(tool_calls.LoopEvent("text", turn=k, delta=text))
+        self.emit(tool_calls.LoopEvent("turn_end", turn=k, finish=turn.finish,
+                                       interstitial=bool(calls)))
         return turn
 
     # ---- the spend ceiling (01g-S5; spec 3.9) ----
@@ -2135,14 +2188,32 @@ class _Loop:
                         return await self.client.complete(sending, again, m.usage, schema=schema,
                                                           tools=self.defs, tool_choice=choice)
 
-                work: Awaitable[str] = (
-                    self.client.complete(sending, chain, m.usage, tools=self.defs,
-                                         tool_choice=choice) if schema is None
-                    else _joined_structured(self.client.complete(
-                        sending, chain, m.usage, schema=schema, tools=self.defs,
-                        tool_choice=choice), resend))
+                async def reopen(again: wire.Chain) -> AsyncGenerator[str, None]:
+                    with _counting_earlier(m.usage):
+                        async with aclosing(self.client.stream(
+                                sending, again, m.usage, schema=schema, tools=self.defs,
+                                tool_choice=choice)) as deltas:
+                            async for delta in deltas:
+                                yield delta
+
+                if self.reasoning is not None:
+                    m.usage[llm_reasoning.KEY] = self.reasoning
                 try:
-                    text = await deadline.bounded(work, seconds, overrun)
+                    if self.streaming:
+                        source = (self.client.stream(sending, chain, m.usage, tools=self.defs,
+                                                     tool_choice=choice) if schema is None
+                                  else _streamed_structured(self.client.stream(
+                                      sending, chain, m.usage, schema=schema, tools=self.defs,
+                                      tool_choice=choice), reopen))
+                        text = await self._streamed(k, source, seconds, overrun)
+                    else:
+                        work: Awaitable[str] = (
+                            self.client.complete(sending, chain, m.usage, tools=self.defs,
+                                                 tool_choice=choice) if schema is None
+                            else _joined_structured(self.client.complete(
+                                sending, chain, m.usage, schema=schema, tools=self.defs,
+                                tool_choice=choice), resend))
+                        text = await deadline.bounded(work, seconds, overrun)
                 finally:
                     m.tool_calls = len(collector.calls())
         finally:
@@ -2150,6 +2221,27 @@ class _Loop:
                 self.rows.append(meter.row)
             self._note_spend(projection, meter.row)
         return text, m.usage
+
+    async def _streamed(self, k: int, source: AsyncGenerator[str, None], seconds: float | None,
+                        overrun: Callable[[float], LLMError]) -> str:
+        """One streamed turn (01g-C6): each delta handed on as it arrives,
+        heartbeats included, as `generate(stream=True)` yields them. The
+        turn's bound holds only until visible text: a turn that has shown
+        text is never cut (spec 3.9), so the wall and the per-call ceiling
+        are checked at each delta before the first visible one -- as often as
+        the provider or the facade's heartbeat speaks."""
+        parts: list[str] = []
+        started = time.monotonic()
+        async with aclosing(source) as deltas:
+            async for delta in deltas:
+                if delta:
+                    self.shown = True
+                elif (not self.shown and seconds is not None
+                      and time.monotonic() - started > seconds):
+                    raise overrun(seconds)
+                parts.append(delta)
+                self.emit(tool_calls.LoopEvent("text", turn=k, delta=delta))
+        return "".join(parts)
 
     def _note_overrun(self, holder: dict, chain: wire.Chain, error: LLMError) -> None:
         """An `llm_call_budget` overrun, filed against the attempt that was
@@ -2311,8 +2403,7 @@ class _Loop:
 
     async def _executed(self, k: int, call: tool_calls.ToolCall,
                         spec: tool_calls.ToolSpec) -> dict:
-        self.pending.append(tool_calls.LoopEvent("tool_start", turn=k, call_id=call.id,
-                                                 name=call.name))
+        self.emit(tool_calls.LoopEvent("tool_start", turn=k, call_id=call.id, name=call.name))
         started = time.monotonic()
         output, ok = await self._run_tool(call, spec)
         text = tool_calls.truncate(output.text, spec.max_result_chars)
@@ -2325,9 +2416,8 @@ class _Loop:
             self.proposals.append(output.proposal)
         self._trace(k, "tool", call.name, call.id, ok=ok, refs=output.refs, chars=len(text),
                     started=started)
-        self.pending.append(tool_calls.LoopEvent("tool_end", turn=k, call_id=call.id,
-                                                 name=call.name, ok=ok, chars=len(text),
-                                                 refs=output.refs))
+        self.emit(tool_calls.LoopEvent("tool_end", turn=k, call_id=call.id, name=call.name,
+                                       ok=ok, chars=len(text), refs=output.refs))
         return self._result_message(call, text, error=not ok)
 
     async def _run_tool(self, call: tool_calls.ToolCall, spec: tool_calls.ToolSpec
@@ -2380,13 +2470,113 @@ class _Loop:
 
     def _result(self, status: Literal["completed", "budget_exhausted", "failed"], *,
                 final: dict | None = None, final_call: tool_calls.ToolCall | None = None,
-                error: Exception | None = None) -> tool_calls.LoopResult:
+                error: Exception | None = None,
+                declined: tuple[tool_calls.ToolCall, ...] = ()) -> tool_calls.LoopResult:
         limit = self.limit if status == "budget_exhausted" else ""
         self._trace(self.turns, "stop", limit, note=status)
         return tool_calls.LoopResult(
             status=status, limit=limit, text=self.text, final=final, final_call=final_call,
+            declined=declined,
             proposals=tuple(self.proposals), messages=tuple(self.appended),
             trace=tuple(self.trace), rows=tuple(self.rows), error=error, run_id=self.run_id)
+
+
+def _next_or_beat(queue: asyncio.Queue) -> Awaitable[object | None]:
+    """The queue's next item, or None after `llm.HEARTBEAT_INTERVAL` of
+    silence (none with an interval of 0)."""
+    async def wait() -> object | None:
+        interval = llm.HEARTBEAT_INTERVAL
+        if interval <= 0:
+            return await queue.get()
+        try:
+            return await asyncio.wait_for(queue.get(), interval)
+        except TimeoutError:
+            return None
+    return wait()
+
+
+#: How long a closed or cancelled run's driver is given to unwind (its turn's
+#: meter files `aborted`) before it is left to finish on its own.
+_DRIVER_UNWIND_S = 5.0
+
+
+async def _stopped(runner: asyncio.Task) -> None:
+    """`runner` cancelled if still running, and briefly awaited, so a closed
+    or cancelled run's open meter files before the caller moves on -- never
+    longer than `_DRIVER_UNWIND_S`."""
+    if not runner.done():
+        runner.cancel()
+        await asyncio.wait({runner}, timeout=_DRIVER_UNWIND_S)
+    runner.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
+
+async def _loop_events(task: str, messages: list[dict], options: dict
+                       ) -> AsyncGenerator[tool_calls.LoopEvent, None]:
+    """`stream_tools`' body after its entry checks: the spend preflight, then
+    the run's events. The consuming task is marked as running a loop."""
+    budget, resolved = options["budget"], options["resolved"]
+    prices: dict[tuple[str, str], Price | None] = {}
+    if budget.spend_ceiling_usd is not None:
+        prices = await asyncio.to_thread(prices_for, resolved)
+        refused = tool_run_refusal(task, resolved, budget, prices)
+        if refused is not None:
+            raise refused
+    loop = _Loop(task, messages, prices=prices, **options)
+    current = asyncio.current_task()
+    if current is not None:
+        _LOOPING.add(current)
+    try:
+        async with aclosing(loop.events()) as events:
+            async for event in events:
+                yield event
+    finally:
+        if current is not None:
+            _LOOPING.discard(current)
+
+
+def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset,
+                 execute: tool_calls.Execute, client: LLMClient,
+                 resolved: ResolvedInference, budget: tool_calls.RunBudget, run_id: str,
+                 campaign: str = "", scene: str = "", scene_identity: str = "",
+                 post: int | None = None, round_id: str = "", response_id: str = "",
+                 cancelled: Callable[[], bool] | None = None,
+                 final_schema: dict | None = None,
+                 tool_choice: Literal["auto", "required"] = "auto",
+                 capture: TurnCapture | None = None, decline_after_text: bool = False,
+                 reasoning: llm_reasoning.Buffer | None = None,
+                 streaming: bool = True) -> AsyncGenerator[tool_calls.LoopEvent, None]:
+    """`run_tools`' loop as it happens (spec 3.8; 01g-C6): an async iterator
+    of `tool_calls.LoopEvent`s in the order `text* turn_end (tool_start
+    tool_end)* ... done`, `done` last and carrying the `LoopResult`.
+
+    Every turn is sent through `client.stream` -- the path
+    `generate(stream=True)` takes, with the same retries, idle bound and
+    `""` heartbeats -- and its deltas are `text` events as they arrive
+    (`tool_calls.text_deltas` turns the events back into that plain
+    iterator). Between turns and while a tool runs, an empty `text` comes
+    every `llm.HEARTBEAT_INTERVAL`. `reasoning`, a caller's display buffer,
+    rides each turn's holder; `llm._stamp` resets it at each turn's first
+    attempt, so no continuity across turns is promised. The run's wall clock
+    never cuts a turn that has shown text: it only refuses the next send.
+
+    With `decline_after_text`, visible text is final: a turn that showed text
+    and ended in tool calls ends the run `completed` with that text, its calls
+    unexecuted, in `LoopResult.declined` and the trace as declined
+    `after_text`. A call before any visible text runs normally.
+
+    The entry checks (`ValueError`) are made here, before an iterator is
+    returned; the spend preflight (`RunRefused`) on the first step.
+    `streaming=False` is `run_tools`' joined path."""
+    _loop_refusal(task, messages, toolset, resolved, run_id, final_schema, tool_choice)
+    options = {"toolset": toolset, "execute": execute, "client": client,
+               "resolved": resolved, "budget": budget, "run_id": run_id,
+               "attribution": {"campaign": campaign, "scene": scene, "post": post,
+                               "round_id": round_id, "response_id": response_id},
+               "scene_identity": scene_identity, "cancelled": cancelled,
+               "final_schema": final_schema, "tool_choice": tool_choice, "capture": capture,
+               "streaming": streaming, "decline_after_text": decline_after_text,
+               "reasoning": reasoning}
+    return _loop_events(task, messages, options)
 
 
 async def run_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset,
@@ -2397,7 +2587,8 @@ async def run_tools(task: str, messages: list[dict], *, toolset: tool_calls.Tool
                     cancelled: Callable[[], bool] | None = None,
                     final_schema: dict | None = None,
                     tool_choice: Literal["auto", "required"] = "auto",
-                    capture: TurnCapture | None = None) -> tool_calls.LoopResult:
+                    capture: TurnCapture | None = None, decline_after_text: bool = False,
+                    reasoning: llm_reasoning.Buffer | None = None) -> tool_calls.LoopResult:
     """Run a bounded loop of model turns and tool calls for `task` (spec 3.7;
     01g-C2a, C3, C4 less spend).
 
@@ -2428,32 +2619,21 @@ async def run_tools(task: str, messages: list[dict], *, toolset: tool_calls.Tool
     Raises only for invalid input (`ValueError`, before any meter opens),
     `RunRefused`, an `LLMError` on turn 1, and cancellation -- `cancelled()` returning True
     included, as `asyncio.CancelledError`. Every later failure is a `failed`
-    result with the rows filed so far."""
-    _loop_refusal(task, messages, toolset, resolved, run_id, final_schema, tool_choice)
-    prices: dict[tuple[str, str], Price | None] = {}
-    if budget.spend_ceiling_usd is not None:
-        prices = await asyncio.to_thread(prices_for, resolved)
-        refused = tool_run_refusal(task, resolved, budget, prices)
-        if refused is not None:
-            raise refused
-    loop = _Loop(task, messages, toolset=toolset, execute=execute, client=client,
-                 resolved=resolved, budget=budget, run_id=run_id,
-                 attribution={"campaign": campaign, "scene": scene, "post": post,
-                              "round_id": round_id, "response_id": response_id},
-                 scene_identity=scene_identity, cancelled=cancelled,
-                 final_schema=final_schema, tool_choice=tool_choice, capture=capture,
-                 prices=prices)
-    current = asyncio.current_task()
-    if current is not None:
-        _LOOPING.add(current)
+    result with the rows filed so far.
+
+    It is `stream_tools` drained -- one implementation -- with each turn
+    joined (`client.complete`) and bounded whole."""
+    events = stream_tools(
+        task, messages, toolset=toolset, execute=execute, client=client, resolved=resolved,
+        budget=budget, run_id=run_id, campaign=campaign, scene=scene,
+        scene_identity=scene_identity, post=post, round_id=round_id,
+        response_id=response_id, cancelled=cancelled, final_schema=final_schema,
+        tool_choice=tool_choice, capture=capture, decline_after_text=decline_after_text,
+        reasoning=reasoning, streaming=False)
     result: tool_calls.LoopResult | None = None
-    try:
-        async with aclosing(loop.events()) as events:
-            async for event in events:
-                if event.kind == "done":
-                    result = event.result
-    finally:
-        if current is not None:
-            _LOOPING.discard(current)
+    async with aclosing(events) as running:
+        async for event in running:
+            if event.kind == "done":
+                result = event.result
     assert result is not None
     return result
