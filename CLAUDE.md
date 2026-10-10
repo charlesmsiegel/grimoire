@@ -953,7 +953,15 @@ would answer neither question.
   an abstention, a low margin), never to the model that answered it, and a
   hop that fails, garbles or declines leaves the original standing
   (`Decision.escalations`; `Decision.errors` stays the chain's). Its calls
-  file `hop: escalation`. No task enables it yet. A `llm.PresetRefusalError` ends the chain where it is met,
+  file `hop: escalation`. A call site resolves the hop through one seam,
+  `routes.common.escalation_inference(<task>, cid)` (in the threadpool, as a
+  thunk): the policy's role with its own preset, held to the base route's
+  `requires`, and soft -- a refusal is the sentence every candidate is skipped
+  with, never a 409. It passes `escalation=` exactly when its task's policy
+  escalates (`test_operation_guard.py`), notes the outcomes in its capture
+  scope (`Scope.note_escalations`, a failed detail cut to its kind), and
+  `test_routing_guard.py` holds the seam's task to a literal whose policy
+  names a role. No task enables it yet. A `llm.PresetRefusalError` ends the chain where it is met,
   as it ends the facade's: the preset is the user's to fix, and a native stage
   that takes no sampling would only hide it. So does the caller's clock
   refusing a call unsent: the refusal comes out as the `BudgetRefused` it is,

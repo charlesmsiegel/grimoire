@@ -1674,6 +1674,46 @@ def _soft_inference(resolve: Callable[[], UsableInference]
     return (None, why) if resolved is None else (resolved, "")
 
 
+def escalation_inference(task: str, cid: str = "") -> tuple[UsableInference | None, str]:
+    """Where `task`'s escalation hop runs (roadmap 01d §5.2), or why it has
+    none: `(resolved, "")`, or `(None, sentence)` -- never a raised 409.
+
+    The seam a decide call site's escalator stands on, and the only one:
+
+        escalation=lambda: run_in_threadpool(
+            lambda: common.escalation_inference("continuity-identity", cid))
+
+    It resolves the task through its code policy's `escalate_to` ROLE
+    (`resolve(..., role=)`), so the hop sends that role's own selection and
+    its own sampling preset -- never the decide route's, which was chosen
+    for the route's model. It holds that role's model to the base route's
+    `requires` (`escalation_refusal`, whose `incapable` sentence names the
+    route) and refuses a missing key as the seam does, both through
+    `_soft_resolved`: a lost second opinion costs only itself, so a refusal
+    is the sentence every triggered item is skipped with, never a third way
+    of failing softly.
+
+    A task whose policy does not escalate to a role (none, or
+    `routing.CALLER`, which brings its own resolver) is a `ValueError`: a
+    caller bug, which `test_routing_guard.py` also fails statically. That
+    guard holds every call to a literal task, as it holds
+    `require_inference`'s; the thunk is what keeps the literal at the call
+    site and the file reads in the threadpool."""
+    policy = store.routing.policy(task)
+    if policy.escalate_to not in store.routing.ESCALATION_ROLES:
+        raise ValueError(f"{task!r}'s policy escalates to no role "
+                         f"({policy.escalate_to!r}); there is no hop to resolve")
+
+    def held() -> UsableInference:
+        got = inference.resolve(  # routing-ok: the escalation seam, the policy's own role
+            task, cid, operation="decide", role=policy.escalate_to)
+        _raise(inference.escalation_refusal(got, task))
+        return _narrowed(got)
+
+    resolved, why, _kind = _soft_resolved(held)
+    return resolved, why
+
+
 def _decide_error(decision: decisions.Decision, qid: str) -> LLMError | None:
     """The provider error a decided batch must report as its own failure, or
     None when there is none to report (M12).
