@@ -25,7 +25,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import deadline, decisions, llm, llm_sampling, model_guidance, store, wire
+from .. import deadline, decisions, embeddings, llm, llm_sampling, model_guidance, store, wire
 from .. import inference as operations
 from ..health import ProviderHealth
 from ..llm import LLMClient
@@ -384,6 +384,19 @@ def get_health(request: Request) -> ProviderHealth:
 
 def get_openai_compatible_client(request: Request) -> OpenAICompatibleClient:
     return request.app.state.openai_compatible
+
+
+def build_embeddings() -> embeddings.AsyncEmbeddingsClient:
+    """The app's async embeddings client (roadmap 01h-C4b), owned and closed
+    like `build_llm`'s: one per app, so its pool is closed by the lifespan
+    that served it, and touched only from that app's loop."""
+    return embeddings.AsyncEmbeddingsClient()
+
+
+def get_embeddings(request: Request) -> embeddings.AsyncEmbeddingsClient:
+    """The client an async caller hands `store.inference.embed.embed`.
+    `app.dependency_overrides` replaces this callable whole: the test seam."""
+    return request.app.state.embeddings
 
 
 def _dump(model: BaseModel) -> dict:

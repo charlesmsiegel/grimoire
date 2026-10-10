@@ -213,6 +213,9 @@ def test_an_unmarked_private_loop_is_not_refused(space):
 
 def test_a_worker_under_a_marked_loop_is_not_refused(space):
     client, seen = _client()
+    # The async door takes the app's async client over the same transport.
+    aclient = embeddings.AsyncEmbeddingsClient(
+        httpx.AsyncClient(transport=client._client()._transport))
 
     async def body():
         loop = asyncio.get_running_loop()
@@ -221,7 +224,7 @@ def test_a_worker_under_a_marked_loop_is_not_refused(space):
             first = await asyncio.to_thread(
                 functools.partial(embed.embed_sync, "semantic-search", ["x"],
                                   space=space, client=client))
-            second = await embed.embed("semantic-search", ["y"], space=space, client=client)
+            second = await embed.embed("semantic-search", ["y"], space=space, client=aclient)
         finally:
             embed.unmark_app_loop(loop)
         return first, second

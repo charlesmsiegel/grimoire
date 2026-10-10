@@ -2,8 +2,12 @@
 (spec 7.3, 9.3, 9.4; slice D).
 
 `embed_sync` is what every store module that embeds calls -- lore recall,
-library search, art ranking and continuity similarity -- and `embed` is the
-same call in a worker thread. Each call files **one** ledger row under its
+library search, art ranking and continuity similarity -- through a module's
+synchronous `embeddings.EmbeddingsClient`, and `embed` is the same call,
+natively async, through the app's `embeddings.AsyncEmbeddingsClient` for a
+caller already in a coroutine (01h-C4b; no caller yet). The two share their
+checks, meter, stamp, failure record and capture line, so they cannot
+drift. Each call files **one** ledger row under its
 embed task (`routing.EMBED_TASKS`) with `operation: "embed"`, covering every
 batch the client splits it into, and writes one Debug-level capture line.
 
@@ -73,6 +77,7 @@ caller retries, and its error row names that code (01h-S3).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import threading
 import time
@@ -288,11 +293,44 @@ def _sendable(space: dict, texts: list[str],
     return options, [t.replace("\0", "") for t in texts]
 
 
+def _admit(task: str, texts: list[str], space: dict,
+           queries: int) -> tuple[wire.EmbedOptions, list[str]]:
+    """What both doors check before anything else: an embed task, then
+    `_sendable`. A `ValueError` before anything is sent or metered."""
+    if task not in routing.EMBED_TASKS:
+        raise ValueError(f"{task!r} is not an embed task")
+    return _sendable(space, texts, queries)
+
+
+def _not_sent_if_spent(deadline: float | None) -> None:
+    """The client's own kind and wording for a deadline already spent, raised
+    outside any meter: nothing was sent, so nothing is filed."""
+    if deadline is not None and time.monotonic() >= deadline:
+        raise embeddings.EmbeddingsError(
+            "network", "embeddings deadline passed before the request",
+            code=embeddings.NOT_SENT)
+
+
+def _meter(task: str, space: dict, *, campaign: str, scene: str, post: int | None,
+           run_id: str) -> usage.Meter:
+    """The call's one meter, stamped by the caller (`_stamp`) once it is open."""
+    return usage.meter(task, campaign=campaign, scene=scene, model=space["model"],
+                       post=post, run_id=run_id)
+
+
+def _sync_client(client: object) -> None:
+    """A sync client is never awaited, and an async one never handed to
+    `embed_sync` (01h, Required by)."""
+    if inspect.iscoroutinefunction(getattr(client, "embed", None)):
+        raise TypeError("embed_sync takes a synchronous embeddings client; await embed()")
+
+
 def embed_sync(task: str, texts: list[str], *, space: dict,
                client: embeddings.EmbeddingsClient, deadline: float | None = None,
                budgeted: bool = False, campaign: str = "", scene: str = "",
                cached: int | None = None,
-               uncached: int | None = None, queries: int = 0) -> list[list[float]]:
+               uncached: int | None = None, queries: int = 0,
+               run_id: str = "", post: int | None = None) -> list[list[float]]:
     """Embed `texts` at `space` through `client`: one vector per input, in
     input order. Metered under `task`, which must be an embed task.
 
@@ -307,33 +345,32 @@ def embed_sync(task: str, texts: list[str], *, space: dict,
     this call's warm window, so neither is `len(texts)`. They count a run, so
     a caller hands them to the run's first call alone; a retry or a later
     chunk of the same run passes neither. `queries` is how many of `texts`,
-    from the first, are queries (01h); the rest are documents.
+    from the first, are queries (01h); the rest are documents. `run_id`
+    names the caller's run (01g-C3) on the row and the line; `post` is the
+    transcript index of the player post a turn is answering, filed on the row
+    as a turn's generation rows file it. Neither resolves anything.
 
     Raises `ValueError` for a task that is not an embed task, before anything
     else, and for a `queries` out of range or a space whose options cannot be
-    sent or do not match it (`_sendable`), before anything is metered; `EmbeddingsError(..., code=ON_LOOP)` on an app's loop, before
-    anything is sent or metered (see the module docstring); and whatever the
-    client raises, unchanged.
+    sent or do not match it (`_sendable`), before anything is metered;
+    `TypeError` for an async client; `EmbeddingsError(..., code=ON_LOOP)` on
+    an app's loop, before anything is sent or metered (see the module
+    docstring); and whatever the client raises, unchanged.
     """
-    if task not in routing.EMBED_TASKS:
-        raise ValueError(f"{task!r} is not an embed task")
-    options, clean = _sendable(space, texts, queries)
+    options, clean = _admit(task, texts, space, queries)
     if not clean:
         return []
+    _sync_client(client)
     _refuse_on_loop(task, campaign=campaign, scene=scene)
-    if deadline is not None and time.monotonic() >= deadline:
-        # The client's own kind and wording, raised outside any meter: nothing
-        # was sent, so nothing is filed.
-        raise embeddings.EmbeddingsError(
-            "network", "embeddings deadline passed before the request",
-            code=embeddings.NOT_SENT)
+    _not_sent_if_spent(deadline)
     vectors: list[list[float]] | None = None
     # What goes out, prefixes included: what the line and a local count count.
     sent = embeddings.prepare_inputs(clean, options, queries)
     # "" while nothing failed; None once a failure turned out to send nothing.
     error: str | None = ""
     try:
-        with usage.meter(task, campaign=campaign, scene=scene, model=space["model"]) as m:
+        with _meter(task, space, campaign=campaign, scene=scene, post=post,
+                    run_id=run_id) as m:
             _stamp(m.usage, space)
             try:
                 vectors = client.embed(clean, space["model"], space["key"], space["base_url"],
@@ -346,7 +383,7 @@ def embed_sync(task: str, texts: list[str], *, space: dict,
     finally:
         if error is not None:
             _capture(task, sent, space, campaign=campaign, scene=scene, vectors=vectors,
-                     error=error, cached=cached, uncached=uncached)
+                     error=error, cached=cached, uncached=uncached, run_id=run_id)
     # A meter never swallows what it records (`Meter.__exit__` returns False),
     # so reaching here means the client returned.
     assert vectors is not None
@@ -355,13 +392,14 @@ def embed_sync(task: str, texts: list[str], *, space: dict,
 
 def _capture(task: str, texts: list[str], space: dict, *, campaign: str, scene: str,
              vectors: list[list[float]] | None, error: str,
-             cached: int | None, uncached: int | None) -> None:
+             cached: int | None, uncached: int | None, run_id: str = "") -> None:
     """The call's one Debug-level line (spec 9.4): what was sent, counted,
     and never the text, a provider's message or a URL. Its keys are the
     spec's: `inputs`, `bytes`, `dimension`, `space_id`, `cached` and
     `uncached` (a caller's whole run's hits and misses, which it hands to the
     run's first call only, so a reader summing lines counts them once), the
-    campaign and scene, and `error` -- the kind, or `aborted`."""
+    campaign and scene, the caller's `run_id` when it names one, and `error`
+    -- the kind, or `aborted`."""
     # Absent, not None, when a count does not apply: `logs.record` would write
     # a None through as `null`. `Any` because `**` into a signature with typed
     # keywords of its own is otherwise checked against every one of them.
@@ -374,6 +412,8 @@ def _capture(task: str, texts: list[str], space: dict, *, campaign: str, scene: 
         extra["cached"] = cached
     if uncached is not None:
         extra["uncached"] = uncached
+    if run_id:
+        extra["run_id"] = run_id
     logs.record("debug", "embed", "Embedding call", kind="embed", task=task,
                 campaign=campaign, scene=scene, inputs=len(texts),
                 bytes=sum(len(t.encode("utf-8")) for t in texts),
@@ -381,13 +421,50 @@ def _capture(task: str, texts: list[str], space: dict, *, campaign: str, scene: 
 
 
 async def embed(task: str, texts: list[str], *, space: dict,
-                client: embeddings.EmbeddingsClient, deadline: float | None = None,
+                client: embeddings.AsyncEmbeddingsClient, deadline: float | None = None,
                 budgeted: bool = False, campaign: str = "", scene: str = "",
                 cached: int | None = None,
-                uncached: int | None = None, queries: int = 0) -> list[list[float]]:
-    """`embed_sync` in a worker thread: the client is synchronous by design
-    (`embeddings`' docstring), so this is the form for a caller on the loop."""
-    return await asyncio.to_thread(
-        embed_sync, task, texts, space=space, client=client, deadline=deadline,
-        budgeted=budgeted, campaign=campaign, scene=scene, cached=cached,
-        uncached=uncached, queries=queries)
+                uncached: int | None = None, queries: int = 0,
+                run_id: str = "", post: int | None = None) -> list[list[float]]:
+    """`embed_sync`, natively async (roadmap 01h-C4b): the same keywords,
+    checks, row, failure record and capture line, through the app's
+    `embeddings.AsyncEmbeddingsClient` (`routes.get_embeddings`), whose whole
+    call runs under one deadline. Never refused on the loop -- it is the
+    loop's door.
+
+    A cancel while the request is out files the meter `aborted` (never an
+    error row; `usage.Meter.__exit__`) and the line `error: "aborted"`, and
+    propagates. A locally estimated prompt count is taken in a worker
+    thread, since a loaded encoder counts synchronously. Raises `TypeError`
+    for a synchronous client."""
+    options, clean = _admit(task, texts, space, queries)
+    if not clean:
+        return []
+    if not inspect.iscoroutinefunction(getattr(client, "embed", None)):
+        raise TypeError("embed takes an async embeddings client; call embed_sync instead")
+    _not_sent_if_spent(deadline)
+    vectors: list[list[float]] | None = None
+    sent = embeddings.prepare_inputs(clean, options, queries)
+    error: str | None = ""
+    try:
+        with _meter(task, space, campaign=campaign, scene=scene, post=post,
+                    run_id=run_id) as m:
+            _stamp(m.usage, space)
+            try:
+                vectors = await client.embed(clean, space["model"], space["key"],
+                                             space["base_url"], deadline=deadline,
+                                             usage=m.usage, options=options, queries=queries)
+            except asyncio.CancelledError:
+                # The meter files it `aborted` on the way out; never an error.
+                error = "aborted"
+                raise
+            except Exception as exc:
+                error = record_failure(m, exc, own_deadline=budgeted and deadline is not None)
+                raise
+            await asyncio.to_thread(estimate_prompt, m.usage, sent)
+    finally:
+        if error is not None:
+            _capture(task, sent, space, campaign=campaign, scene=scene, vectors=vectors,
+                     error=error, cached=cached, uncached=uncached, run_id=run_id)
+    assert vectors is not None
+    return vectors
