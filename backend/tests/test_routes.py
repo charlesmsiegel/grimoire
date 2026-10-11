@@ -9355,8 +9355,13 @@ def test_absorb_budget_exhaustion_cancels_the_slow_phase_and_keeps_the_rest(
     What survives unchanged is the reporting #243 asked for: the phase says the
     clock is why, and the review comes back rather than 502ing."""
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "0.20"})
-    fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
+    # This is a partial-success integration check, not a 200ms filesystem
+    # performance assertion: preparing the real audit touches multiple records
+    # and can take longer on Windows/under coverage. Separate that work from a
+    # deliberately stalled provider by an order of magnitude. The budget's
+    # short timers and exhausted-before-start arithmetic are pinned separately.
+    client.put("/api/config", json={"absorb_budget": "2.0"})
+    fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=30.0)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     body = review_runs.absorb(client, cid, sid).json()
@@ -9366,7 +9371,7 @@ def test_absorb_budget_exhaustion_cancels_the_slow_phase_and_keeps_the_rest(
     assert body["dossiers"]["status"] == "failed"
     assert _phase(body, "dossiers")["budget_exhausted"] is True
     # the phases that fit are no longer collateral damage
-    assert body["mechanics"]["status"] == "ok"
+    assert body["mechanics"]["status"] == "ok", body["mechanics"]
 
 
 def test_absorb_names_the_budget_when_it_stops_a_dossier(client, npc_module_scene):
