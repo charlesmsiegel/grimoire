@@ -271,10 +271,15 @@ def test_a_corrupt_file_is_untouched_and_the_rest_plan():
     assert rep["unique_images"] == 1
 
 
-def test_case_aliases_between_legacy_files_place_nothing(monkeypatch):
-    wid, _wroot, _char, wchar = _world()
+def test_case_aliases_against_refs_and_files_place_nothing(monkeypatch):
+    wid, wroot, _char, wchar = _world()
     a = _legacy(wchar, "gallery_1.png", _png(1))
     b = wchar / "Gallery_1.png"
+    # Keep two independent alias directories in the same plan: stopping after
+    # the first conflict must not leave another directory's images placeable.
+    other = assets.version_dir(wroot, "the-docks", "default", base="locations")
+    image_refs.write(other, "Map", image_store.ingest(_png(3), "png").id)
+    c = _legacy(other, "map.png", _png(4))
     fine = _legacy(wchar, "gallery_2.png", _png(5))
     if b.exists():
         # An insensitive filesystem cannot hold the two case-only siblings:
@@ -295,10 +300,13 @@ def test_case_aliases_between_legacy_files_place_nothing(monkeypatch):
     assert _untouched(rep) == {
         f"{prefix}/gallery_1.png": "case-alias",
         f"{prefix}/Gallery_1.png": "case-alias",
+        _rel(c): "case-alias",
     }
     assert [i.occurrence.path for i in plan.items] == [fine]
     assert rep["case_aliases"] == [
-        {"dir": prefix, "names": ["Gallery_1", "gallery_1"]}]
+        {"dir": prefix, "names": ["Gallery_1", "gallery_1"]},
+        {"dir": _rel(other), "names": ["Map", "map"]},
+    ]
     assert a.read_bytes() == _png(1)             # the fixture never overwrote it
 
 
