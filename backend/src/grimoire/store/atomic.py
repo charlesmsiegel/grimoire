@@ -144,10 +144,16 @@ def _carry_metadata(tmp_name: str, path: Path) -> None:
             except (OSError, AttributeError):
                 pass
 
-    if src is not None and hasattr(os, "listxattr"):
+    # Listing is not enough: copying needs the complete optional API. Bind the
+    # capabilities rather than statically naming absent Windows stdlib APIs.
+    list_attrs = getattr(os, "listxattr", None)
+    read_attr = getattr(os, "getxattr", None)
+    write_attr = getattr(os, "setxattr", None)
+    if (src is not None and callable(list_attrs)
+            and callable(read_attr) and callable(write_attr)):
         try:
-            for attr in os.listxattr(path):
-                os.setxattr(tmp_name, attr, os.getxattr(path, attr))
+            for attr in list_attrs(path):
+                write_attr(tmp_name, attr, read_attr(path, attr))
         except OSError:
             pass  # unsupported filesystem, or an attribute we may not copy
 

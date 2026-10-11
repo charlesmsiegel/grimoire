@@ -149,9 +149,6 @@
   "backend/src/grimoire/store/plot.py": {
     "arg-type": 2
   },
-  "backend/src/grimoire/store/proclock.py": {
-    "attr-defined": 4
-  },
   "backend/src/grimoire/store/scenes/serialize.py": {
     "return-value": 1
   },
