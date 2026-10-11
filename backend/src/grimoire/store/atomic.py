@@ -46,6 +46,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TextIO
 
 from . import proclock
 
@@ -58,11 +59,11 @@ _WINDOWS = os.name == "nt"
 _APPEND_WAIT = 10.0
 
 # Transient Windows sharing failures -- a concurrent reader, an antivirus
-# scanner, or a sync client holding the target for a moment. Everything else
-# (a read-only target, a directory ACL that denies child-create/delete) is
-# permanent, and retrying it would only delay the correct error while widening
-# the unlocked read-modify-write window callers already race in.
-_TRANSIENT_WINERRORS = frozenset((32, 33))  # SHARING_VIOLATION, LOCK_VIOLATION
+# scanner, or a sync client holding the target for a moment. ACCESS_DENIED is
+# ambiguous: MoveFileExW also reports it for a concurrent CRT read, not just
+# an ACL refusal (CPython #90161). Retry it only within the same short bound;
+# a permanent ACL still raises, and read-only targets are refused up front.
+_TRANSIENT_WINERRORS = frozenset((5, 32, 33))  # ACCESS_DENIED, SHARING/LOCK_VIOLATION
 _RETRY_DELAYS = (0.005, 0.010, 0.015, 0.020)  # ~50 ms total, then give up
 
 # The temp name embeds the target's for debuggability, but truncated: a record
@@ -83,6 +84,35 @@ _TEMP_NAME = re.compile(r"\..+\.[a-z0-9_]{8}\.tmp")
 # file, making their files world-writable.
 _UMASK = os.umask(0)
 os.umask(_UMASK)
+
+
+def open_text(path: Path, *, errors: str | None = None) -> TextIO:
+    """Open a UTF-8 record, tolerating a brief Windows replacement race.
+
+    CRT read opens can report only errno EACCES while MoveFileExW replaces a
+    record (CPython #90161); they lose the original Windows error code. This
+    boundary retries opening, never reading/decoding an already-open snapshot.
+    Real ACL failures still raise after at most ~50ms; absence, bad encoding,
+    and POSIX permission failures retain their immediate original behavior.
+    The caller owns closing the returned stream, normally with `with`.
+    """
+    path = Path(path)
+    for delay in _RETRY_DELAYS:
+        try:
+            return path.open(encoding="utf-8", errors=errors)
+        except PermissionError as exc:
+            if not _WINDOWS or (exc.errno != errno.EACCES
+                                and getattr(exc, "winerror", None)
+                                not in _TRANSIENT_WINERRORS):
+                raise
+            time.sleep(delay)
+    return path.open(encoding="utf-8", errors=errors)
+
+
+def read_text(path: Path, *, errors: str | None = None) -> str:
+    """Read one complete record via `open_text`, with universal newlines."""
+    with open_text(path, errors=errors) as stream:
+        return stream.read()
 
 
 def _replace(src: str, dst: Path) -> None:

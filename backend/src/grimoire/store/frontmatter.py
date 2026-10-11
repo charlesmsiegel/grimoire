@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import atomic
+
 #: The closing fence: a line that is exactly `---`. A line, not a prefix --
 #: `----` is a body's first line (or a horizontal rule inside a block nobody
 #: closed), and both parsers below ask this same question so a list endpoint
@@ -93,7 +95,7 @@ def parse_frontmatter_head(path: Path) -> dict[str, str]:
     {} when the fence is missing or never terminated."""
     meta: dict[str, str] = {}
     # universal newlines, same as the read_text the full parser sees
-    with open(path, encoding="utf-8") as f:
+    with atomic.open_text(path) as f:
         if f.readline() != "---\n":
             return {}
         for line in f:
@@ -144,7 +146,7 @@ def read_record(path: Path, what: str, *,
     An absent file raises `FileNotFoundError`, and the read's own `OSError` /
     `UnicodeDecodeError` pass through: every caller catches them beside
     `RecordUnreadableError`. `what` names the file in the message."""
-    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta, body = parse_frontmatter(atomic.read_text(path))
     if not meta:
         raise RecordUnreadableError(f"{what} holds no settings (empty, or unfenced); "
                                     "it is left as it is and retried on the next start")

@@ -81,6 +81,19 @@ is deliberate: handing out the path opens an interval in which another process
 can unlink the temp and substitute a symlink for the write, the `chmod` and the
 rename to follow. A caller that needs a real path is out of scope.
 
+Windows publication can briefly refuse an open with "Access denied", even
+when neither the file nor its directory is read-only
+([CPython issue #90161](https://github.com/python/cpython/issues/90161)). The
+publisher retries ambiguous access-denied and sharing errors within a roughly
+50 ms bound. Config reads, strict frontmatter reads, header-only reads and
+scene reads use `atomic.read_text` / `atomic.open_text` to apply the same bound
+to opening a snapshot. This retries the open, never a partially consumed read;
+UTF-8 decoding and universal-newline handling remain unchanged. Permanent
+permission failures still raise after the bound; missing files and non-Windows
+read errors are not retried. Other direct filesystem reads can still encounter
+an ordinary transient open failure: atomic publication guarantees complete
+versions, not that every filesystem operation succeeds.
+
 One more public name is not a writer at all: `atomic.is_write_temp(path)`
 answers whether a name is one of these temps caught mid-write. It exists for
 the walks that copy or pack a whole directory of records — a world export, a
