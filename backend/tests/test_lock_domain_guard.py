@@ -282,9 +282,10 @@ _FS_READERS = frozenset({
     "disk_usage", "which", "get_archive_formats", "get_unpack_formats",
     "ignore_patterns",
 })
-# `store.atomic` exists to publish; its whole public surface is a write. Named
-# separately because its readers are its own, not the stdlib's.
-_ATOMIC_READERS = frozenset({"replace_is_atomic"})
+# `store.atomic` primarily publishes; unknown public APIs remain writes. Its
+# bounded UTF-8 readers only open existing snapshots and belong in this narrow
+# exception, not in the campaign mutation domain. Imported aliases use it too.
+_ATOMIC_READERS = frozenset({"replace_is_atomic", "read_text", "open_text"})
 # `store.assets.put_in`/`delete_in` publish a file under a directory a caller
 # hands them, without ever touching `atomic`/`os`/`shutil` themselves --
 # `store.covers` is built entirely on the two of them (Task 1's directory-level
@@ -2826,6 +2827,20 @@ def test_reading_the_filesystem_is_not_publishing_it():
     ]:
         _f, _s, mutators = _probe(src)
         assert not mutators, f"{why} was read as a publication ({src!r})"
+
+
+def test_atomic_record_readers_are_not_publications():
+    """The bounded-open helpers read snapshots; they do not create a temp or
+    publish a file. Imported and rebound spellings must stay read-only too."""
+    for name in ("read_text", "open_text"):
+        for src in (
+            f"def read(cid):\n    return atomic.{name}(p)\n",
+            f"from . import atomic as records\ndef read(cid):\n    return records.{name}(p)\n",
+            f"from .atomic import {name} as read_record\ndef read(cid):\n    return read_record(p)\n",
+            f"snapshot = atomic.{name}\ndef read(cid):\n    return snapshot(p)\n",
+        ):
+            _funcs, _serializing, mutators = _probe(src)
+            assert not mutators, f"snapshot read was classified as a mutation: {src!r}"
 
 
 def test_a_rebound_target_is_still_the_target():
