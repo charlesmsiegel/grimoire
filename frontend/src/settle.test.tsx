@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 
 /** A page that settles in steps, one macrotask apart — the shape every page in
  *  this app has (campaign read → scene list → resolver redirect → the scene's
@@ -15,14 +15,19 @@ import { render, screen } from "@testing-library/react";
  *  exactly one step per macrotask: a timer chain queues its next 0 ms timeout
  *  while the current one is still running, so several come due in the same
  *  timer phase and land together — which silently hid the one-tick case when
- *  this test was written the obvious way. */
+ *  this test was written the obvious way.
+ *
+ *  Each timer updates through `act`, keeping its commit and effect on the queue
+ *  the harness drains. Otherwise React's Scheduler can
+ *  defer a pending commit or effect across several quiet snapshots under load:
+ *  the fixture would be testing Scheduler fairness, not the two-tick rule. */
 const LAST = 5;
 
 function Staged() {
   const [step, setStep] = useState(0);
   useEffect(() => {
     if (step >= LAST) return;
-    const t = setTimeout(() => setStep(step + 1), 0);
+    const t = setTimeout(() => act(() => setStep(step + 1)), 0);
     return () => clearTimeout(t);
   }, [step]);
   // Steps 2 and 4 render exactly what the step before them rendered.
