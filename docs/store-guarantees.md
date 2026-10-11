@@ -58,15 +58,23 @@ a unit.
 | `atomic.write_text(path, text)` | a whole record | temp + `os.replace` |
 | `atomic.write_bytes(path, data)` | a whole binary record | temp + `os.replace` |
 | `atomic.streaming_write(path)` | a payload too big to hold in memory (a store backup) | temp + `os.replace`, built *into* the temp |
-| `atomic.append_line(path, line)` | an append-only ledger (`store.usage`) | one `write` on an `O_APPEND` descriptor |
+| `atomic.append_line(path, line)` | an append-only ledger (`store.usage`) | one `write` on an `O_APPEND` descriptor; Windows appenders hold a per-file OS lock |
 
 `append_line` is the odd one out on purpose. Temp-and-replace is the wrong
 shape for a ledger: it rewrites the whole file to add a row, and two writers
 racing lose one row outright rather than interleaving them. Instead the row is
 published by a single `write` on a descriptor opened `O_APPEND`, so the kernel
 resolves the offset and the write as one step and concurrent appenders land
-whole lines in some order. (`O_APPEND` is honoured on Windows too — CPython
-maps it to `FILE_APPEND_DATA`.)
+whole small lines in some order on POSIX. Windows CPython instead uses the CRT's
+seek-to-EOF followed by write, which can overwrite another appender's row
+([CPython issue #86772](https://github.com/python/cpython/issues/86772)). There,
+`append_line` uses `proclock` to serialize cooperating grimoire appenders on
+this machine across the whole append. Its lock files stay machine-local,
+outside the synced store, keyed by parent-directory identity and filename;
+Windows case aliases share a lock. A failed acquire propagates, and a wait
+exceeding ten seconds raises rather than writing unlocked. POSIX appends keep
+their lock-free path. This does not coordinate another device, a sync client,
+or a writer that does not use this primitive. Linked records remain unsupported.
 
 `streaming_write` yields the temp's **file object**, never its pathname. That
 is deliberate: handing out the path opens an interval in which another process
