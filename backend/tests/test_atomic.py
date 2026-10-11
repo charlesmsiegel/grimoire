@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from grimoire.store import atomic
+from grimoire.store import atomic, proclock
 
 PRIOR = "---\ntitle: before\n---\n\nthe original body\n"
 
@@ -551,3 +552,143 @@ def test_concurrent_appends_interleave_whole_lines(tmp_path):
     for t in threads:
         t.join()
     assert sorted(p.read_text(encoding="utf-8").splitlines()) == sorted(rows)
+
+
+@pytest.mark.parametrize("case_alias", [False, True])
+def test_process_appends_keep_every_row(tmp_path, case_alias):
+    """A thread guard alone cannot repair the ledger's process guarantee.
+
+    Both children announce readiness before either receives GO. Each opens
+    its own descriptor per row, as two running backends do; on Windows the
+    CRT's seek-then-write append loses rows even though every write succeeds.
+    The alternate spelling must still serialize the same Windows file.
+    """
+    if case_alias and os.name != "nt":
+        pytest.skip("Windows case-insensitive spelling")
+    root = tmp_path / "store"
+    root.mkdir()
+    p = root / "ledger.jsonl"
+    src = """
+import sys
+from pathlib import Path
+sys.path[:0] = {imports!r}
+from grimoire.store import atomic, proclock
+proclock.lock_dir = lambda: Path({locks!r})
+print("READY", flush=True)
+assert sys.stdin.readline().strip() == "GO"
+for n in range(500):
+    atomic.append_line(Path({target!r}), {who!r} + "-" + str(n) + "-é")
+"""
+    children = []
+    try:
+        for who in "ab":
+            target = p.with_name("LEDGER.JSONL") if who == "b" and case_alias else p
+            child = subprocess.Popen(
+                [sys.executable, "-c", src.format(imports=sys.path,
+                 locks=str(tmp_path / "locks"), target=str(target), who=who)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8")
+            children.append(child)
+            assert child.stdout.readline().strip() == "READY"
+        for child in children:
+            child.stdin.write("GO\n")
+            child.stdin.flush()
+        for child in children:
+            _, errors = child.communicate(timeout=60)
+            assert child.returncode == 0, errors
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+                child.communicate()
+    assert sorted(p.read_text(encoding="utf-8").splitlines()) == sorted(
+        f"{who}-{n}-é" for who in "ab" for n in range(500))
+
+
+def test_append_failure_releases_the_process_lock(tmp_path, monkeypatch):
+    """A failed row must not leave every future appender blocked forever."""
+    root = tmp_path / "store"
+    root.mkdir()
+    monkeypatch.setattr(atomic, "_WINDOWS", True, raising=False)
+    monkeypatch.setattr(proclock, "lock_dir", lambda: tmp_path / "locks")
+    p = root / "ledger.jsonl"
+    p.write_bytes(b"before\n")
+
+    def fail_write(fd, data):
+        raise OSError("disk unavailable")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(atomic.os, "write", fail_write)
+        with pytest.raises(OSError, match="disk unavailable"):
+            atomic.append_line(p, "lost")
+    fd = proclock.acquire(proclock.lock_path(root, "append-line", p.name), proclock.NO_WAIT)
+    assert fd is not None, "failed append retained its OS lock"
+    proclock.release(fd)
+    atomic.append_line(p, "after")
+    assert p.read_text(encoding="utf-8").splitlines() == ["before", "after"]
+
+
+def test_append_refuses_an_unavailable_lock_without_writing(tmp_path, monkeypatch):
+    """Never hide a failed lock acquisition by falling back to unsafe append."""
+    root = tmp_path / "store"
+    root.mkdir()
+    monkeypatch.setattr(atomic, "_WINDOWS", True, raising=False)
+    monkeypatch.setattr(proclock, "lock_dir", lambda: tmp_path / "locks")
+    p = root / "ledger.jsonl"
+    p.write_bytes(b"before\n")
+
+    def fail_acquire(path, deadline):
+        raise OSError("locking unavailable")
+
+    monkeypatch.setattr(proclock, "acquire", fail_acquire)
+    with pytest.raises(OSError, match="locking unavailable"):
+        atomic.append_line(p, "unsafe")
+    assert p.read_bytes() == b"before\n"
+
+
+def test_append_timeout_never_falls_back_to_unlocked_write(tmp_path, monkeypatch):
+    p = tmp_path / "ledger.jsonl"
+    p.write_bytes(b"before\n")
+    monkeypatch.setattr(atomic, "_WINDOWS", True, raising=False)
+    monkeypatch.setattr(proclock, "lock_dir", lambda: tmp_path / "locks")
+    monkeypatch.setattr(proclock, "acquire", lambda path, deadline: None)
+    with pytest.raises(TimeoutError):
+        atomic.append_line(p, "unsafe")
+    assert p.read_bytes() == b"before\n"
+
+
+def test_append_open_failure_releases_the_process_lock(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    root.mkdir()
+    p = root / "ledger.jsonl"
+    monkeypatch.setattr(atomic, "_WINDOWS", True, raising=False)
+    monkeypatch.setattr(proclock, "lock_dir", lambda: tmp_path / "locks")
+    real_open = os.open
+
+    def fail_target(path, flags, mode=0o777):
+        if Path(path) == p:
+            raise PermissionError("ledger unavailable")
+        return real_open(path, flags, mode)
+
+    with monkeypatch.context() as failure:
+        failure.setattr(atomic.os, "open", fail_target)
+        with pytest.raises(PermissionError, match="ledger unavailable"):
+            atomic.append_line(p, "lost")
+    fd = proclock.acquire(proclock.lock_path(root, "append-line", p.name), proclock.NO_WAIT)
+    assert fd is not None, "failed open retained its OS lock"
+    proclock.release(fd)
+    atomic.append_line(p, "kept")
+    assert p.read_text(encoding="utf-8") == "kept\n"
+
+
+def test_posix_append_needs_no_process_lock(tmp_path, monkeypatch):
+    """The repair must not put a machine-local lock on the POSIX fast path."""
+    monkeypatch.setattr(atomic, "_WINDOWS", False, raising=False)
+
+    def unexpected_acquire(path, deadline):
+        raise AssertionError("POSIX append acquired a process lock")
+
+    monkeypatch.setattr(proclock, "acquire", unexpected_acquire)
+    p = tmp_path / "ledger.jsonl"
+    atomic.append_line(p, "kept")
+    assert p.read_text(encoding="utf-8") == "kept\n"

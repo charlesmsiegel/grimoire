@@ -47,6 +47,16 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import proclock
+
+_WINDOWS = os.name == "nt"
+
+# A row takes one small write, not an LLM call. Bound a pathological wait
+# rather than hanging every subsequent usage/log caller behind it; failure
+# propagates to the caller's existing fail-soft boundary, never an unlocked
+# fallback. This is a ceiling, not a retry of the row itself.
+_APPEND_WAIT = 10.0
+
 # Transient Windows sharing failures -- a concurrent reader, an antivirus
 # scanner, or a sync client holding the target for a moment. Everything else
 # (a read-only target, a directory ACL that denies child-create/delete) is
@@ -228,6 +238,28 @@ def write_bytes(path: Path, data: bytes) -> None:
     _write_through_fd(path, "wb", None, data)
 
 
+@contextmanager
+def _append_hold(path: Path):
+    """Windows CRT append is seek-then-write, not the POSIX atomic operation.
+
+    Reuse the OS-lock mechanism, not campaign locks (which depend on atomic
+    writes). The namespace is per parent-directory identity and filename,
+    outside the synced store. Case aliases on Windows share a name; linked
+    records remain unsupported as stated in the module's contract.
+    """
+    if not _WINDOWS:
+        yield
+        return
+    lock = proclock.lock_path(path.parent, "append-line", os.path.normcase(path.name))
+    held = proclock.acquire(lock, time.monotonic() + _APPEND_WAIT)
+    if held is None:
+        raise TimeoutError("Timed out waiting to append a ledger row")
+    try:
+        yield
+    finally:
+        proclock.release(held)
+
+
 def append_line(path: Path, line: str) -> None:
     """Append one complete line to an append-only log, creating it if absent.
 
@@ -237,11 +269,12 @@ def append_line(path: Path, line: str) -> None:
     rather than interleaving them. This is the other crash-safe primitive, for
     the other kind of file — ``store.usage``'s month ledger today.
 
-    **What this guarantees:** the line is published by a single ``write`` on a
-    descriptor opened ``O_APPEND``, so the kernel resolves the offset and the
-    write as one step. Concurrent appenders — a second grimoire process on a
-    synced store, two turns finishing at once — therefore land whole lines in
-    some order, never halves of one row spliced into another.
+    **What this guarantees:** on POSIX the line is published by a single
+    ``write`` on an ``O_APPEND`` descriptor, so the kernel resolves the offset
+    and write as one step. On Windows an OS lock serializes cooperating
+    grimoire appenders on this machine across the whole write. Concurrent
+    appenders therefore land whole small rows in some order, rather than
+    overwriting each other's successfully written rows.
 
     **What it does not:** durability across power loss (no fsync — a ledger row
     is not worth an fsync on the generating path, and the caller's own docstring
@@ -252,24 +285,29 @@ def append_line(path: Path, line: str) -> None:
     few hundred bytes, orders of magnitude under any platform's atomic-write
     floor.
 
-    ``O_APPEND`` is honoured on Windows too — CPython maps it to
-    ``FILE_APPEND_DATA``, which the OS serializes the same way.
+    CPython's Windows CRT uses a seek to EOF followed by a write, not an
+    append-only ``FILE_APPEND_DATA`` handle (CPython issue #86772). A thread
+    lock alone cannot protect another backend process. The machine-local lock
+    does not coordinate devices/sync clients or non-cooperating writers, and
+    a failed/timed-out acquire propagates without writing unlocked.
 
     The parent directory is the caller's to create, exactly as it is for
     ``write_text``: a missing one raises ``FileNotFoundError``, and every caller
     here already knows where its file belongs.
     """
+    path = Path(path)
     data = (line.rstrip("\n") + "\n").encode("utf-8")
     # The mode matters on first creation only, and mirrors what `_carry_metadata`
     # gives a replaced record: the process umask applied to 0666, rather than
     # mkstemp's owner-only 0600.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666 & ~_UMASK)
-    try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view):]
-    finally:
-        os.close(fd)
+    with _append_hold(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666 & ~_UMASK)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
 
 
 @contextmanager
