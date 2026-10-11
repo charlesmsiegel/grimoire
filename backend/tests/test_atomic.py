@@ -12,6 +12,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -554,6 +555,21 @@ def test_concurrent_appends_interleave_whole_lines(tmp_path):
     assert sorted(p.read_text(encoding="utf-8").splitlines()) == sorted(rows)
 
 
+def _wait_for_ready(child, ready, *, timeout=60):
+    """Poll a marker so even a child stuck before import has a bounded wait.
+
+    stdout.readline cannot apply a deadline on Windows; the marker avoids a
+    second reader thread, and the caller still owns terminating/reaping each
+    child on any failure. Monotonic time makes wall-clock changes harmless.
+    """
+    deadline = time.monotonic() + timeout
+    while not ready.exists():
+        assert child.poll() is None, "child exited before readiness"
+        if time.monotonic() >= deadline:
+            pytest.fail("child readiness timed out")
+        time.sleep(0.01)
+
+
 @pytest.mark.parametrize("case_alias", [False, True])
 def test_process_appends_keep_every_row(tmp_path, case_alias):
     """A thread guard alone cannot repair the ledger's process guarantee.
@@ -574,7 +590,7 @@ from pathlib import Path
 sys.path[:0] = {imports!r}
 from grimoire.store import atomic, proclock
 proclock.lock_dir = lambda: Path({locks!r})
-print("READY", flush=True)
+Path({ready!r}).touch()
 assert sys.stdin.readline().strip() == "GO"
 for n in range(500):
     atomic.append_line(Path({target!r}), {who!r} + "-" + str(n) + "-é")
@@ -585,11 +601,12 @@ for n in range(500):
             target = p.with_name("LEDGER.JSONL") if who == "b" and case_alias else p
             child = subprocess.Popen(
                 [sys.executable, "-c", src.format(imports=sys.path,
-                 locks=str(tmp_path / "locks"), target=str(target), who=who)],
+                 locks=str(tmp_path / "locks"), target=str(target), who=who,
+                 ready=str(tmp_path / f"ready-{who}"))],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8")
             children.append(child)
-            assert child.stdout.readline().strip() == "READY"
+            _wait_for_ready(child, tmp_path / f"ready-{who}")
         for child in children:
             child.stdin.write("GO\n")
             child.stdin.flush()
@@ -603,6 +620,18 @@ for n in range(500):
                 child.communicate()
     assert sorted(p.read_text(encoding="utf-8").splitlines()) == sorted(
         f"{who}-{n}-é" for who in "ab" for n in range(500))
+
+
+def test_process_readiness_has_a_deadline(tmp_path):
+    """A stuck child import must not hang the regression or evade its cleanup."""
+    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                             stdin=subprocess.PIPE)
+    try:
+        with pytest.raises(pytest.fail.Exception, match="readiness timed out"):
+            _wait_for_ready(child, tmp_path / "ready", timeout=0.05)
+    finally:
+        child.kill()
+        child.communicate(timeout=10)
 
 
 def test_append_failure_releases_the_process_lock(tmp_path, monkeypatch):
