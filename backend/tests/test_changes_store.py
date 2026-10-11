@@ -196,7 +196,9 @@ def _reconstruct(ops):
     # two runs of the same line, so neither is unique and neither anchors
     ("\n".join(["x", *["d"] * 1500, "s", *["d"] * 1500, "y"]),
      "\n".join(["p", *["d"] * 1500, "s", *["d"] * 1500, "q"])),
-])
+], ids=["empty", "delete", "insert", "equal", "reverse-small", "reverse-large",
+        "rotate-large", "duplicate-tail", "all-duplicates", "repeated-blocks",
+        "same-run", "shorter-run", "repeated-runs"])
 def test_the_diff_always_reconstructs_both_sides(before, after):
     """The invariant a hand-rolled diff lives or dies by, and the one thing the
     per-shape tests below cannot check between them: whatever route the bound

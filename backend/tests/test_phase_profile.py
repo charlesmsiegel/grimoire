@@ -196,7 +196,8 @@ def test_the_sources_the_run_measured_are_recorded(tmp_path, monkeypatch):
     pkg = tmp_path / "lib" / "fakepkg"
     (pkg / "sub").mkdir(parents=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    (pkg / "sub" / "m.py").write_text("x = 1\n", encoding="utf-8")
+    # The hash contract is raw bytes, not platform text-mode line endings.
+    (pkg / "sub" / "m.py").write_bytes(b"x = 1\n")
     monkeypatch.syspath_prepend(str(tmp_path / "lib"))
     got = phase_profile.source_hashes("fakepkg")
     assert got == {"fakepkg/__init__.py": hashlib.sha256(b"").hexdigest(),

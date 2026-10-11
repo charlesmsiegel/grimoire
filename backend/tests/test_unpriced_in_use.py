@@ -377,6 +377,10 @@ def test_a_campaign_write_reads_campaign_md_fresh(client):
     meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     meta[keys.FORMAT_KEY] = str(int(keys.CURRENT_FORMAT) + 1)
     changed = dump_frontmatter(meta, body).encode("utf-8")
+    # Fixture text writes use CRLF on Windows. Keep the on-disk convention so
+    # the restored timestamp really hides a same-size edit from the memo.
+    if b"\r\n" in path.read_bytes():
+        changed = changed.replace(b"\n", b"\r\n")
     assert len(changed) == before.st_size
     with open(path, "r+b") as f:                    # in place: the inode stays
         f.write(changed)
