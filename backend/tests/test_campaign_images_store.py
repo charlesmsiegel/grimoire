@@ -1,6 +1,7 @@
 """The campaign's own image library (`store/campaign_images.py`, #376)."""
 
 import io
+import os
 
 import pytest
 from PIL import Image
@@ -151,10 +152,12 @@ def test_a_name_this_store_would_not_serve_back_is_refused_and_hidden(cid, name)
 
     d = campaigns.campaign_root(cid) / "assets" / "images"
     d.mkdir(parents=True, exist_ok=True)
-    if "/" not in name:                        # a path separator names no file here
+    # A separator cannot name a file here, and Win32 cannot create `*` even
+    # though POSIX can. Both still exercise rejection and lookup below.
+    if "/" not in name and not (os.name == "nt" and "*" in name):
         (d / f"{name}.png").write_bytes(_png())
-        assert [i["name"] for i in campaign_images.list_images(cid)] == []
-        assert campaign_images.image_path(cid, name) is None    # and would not serve
+    assert [i["name"] for i in campaign_images.list_images(cid)] == []
+    assert campaign_images.image_path(cid, name) is None    # and would not serve
 
 
 def test_a_file_that_is_not_ours_is_neither_listed_nor_swept(cid):

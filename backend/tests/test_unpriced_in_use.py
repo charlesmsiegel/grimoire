@@ -26,6 +26,7 @@ import ast
 import inspect
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -347,19 +348,32 @@ def test_an_unreadable_campaign_names_nothing_and_the_rest_still_count(client):
          "uses": [{"kind": "role", "key": "fast", "scope": "campaign", "cid": good}]}]
 
 
-def test_campaign_ids_match_world_refs(client):
+def test_campaign_ids_match_world_refs(client, monkeypatch):
     """`campaign_ids` replaced `world_refs` in `used_by`'s walk: the same ids,
     in the same order, less the ones `used_by` always dropped as unsafe."""
     cid = base._world_and_campaign(client)
     root = store.campaigns.paths.campaign_meta_path(cid).parent.parent
-    (root / "odd.").mkdir()
-    (root / "odd." / "campaign.md").write_text("---\nname: Odd\n---\n", encoding="utf-8")
-    (root / "no-meta").mkdir()
+    if os.name == "nt":
+        # Preserve the literal unsafe id on Win32, rather than silently creating
+        # valid `odd`. Readers need the same extended spelling to probe it.
+        root = Path("\\\\?\\" + str(root))
+        monkeypatch.setenv("GRIMOIRE_HOME", str(root.parent))
+    stray = root / "odd."
+    stray.mkdir()
+    marker = stray / "campaign.md"
+    try:
+        marker.write_text("---\nname: Realm\n---\n", encoding="utf-8")
+        assert marker.is_file()
+        (root / "no-meta").mkdir()
 
-    refs = [c for c, _name, _world in store.campaigns.read.world_refs()]
-    assert "odd." in refs and "no-meta" not in refs
-    assert store.campaigns.paths.campaign_ids() == sorted(
-        c for c in refs if store.paths.safe_id(c)) == [cid]
+        refs = [c for c, _name, _world in store.campaigns.read.world_refs()]
+        assert "odd." in refs and "no-meta" not in refs
+        assert store.campaigns.paths.campaign_ids() == sorted(
+            c for c in refs if store.paths.safe_id(c)) == [cid]
+    finally:
+        # Ordinary Windows cleanup cannot address a literal trailing-dot entry.
+        marker.unlink(missing_ok=True)
+        stray.rmdir()
 
 
 def test_a_campaign_write_reads_campaign_md_fresh(client):

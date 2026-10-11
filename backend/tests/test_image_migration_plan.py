@@ -271,24 +271,48 @@ def test_a_corrupt_file_is_untouched_and_the_rest_plan():
     assert rep["unique_images"] == 1
 
 
-def test_case_aliases_against_refs_and_files_place_nothing():
-    _wid, wroot, _char, wchar = _world()
-    # Two legacy files whose names alias (a case-sensitive filesystem holds
-    # both), and in another directory a placement aliasing a legacy name.
+def test_case_aliases_between_legacy_files_place_nothing(monkeypatch):
+    wid, _wroot, _char, wchar = _world()
     a = _legacy(wchar, "gallery_1.png", _png(1))
-    b = _legacy(wchar, "Gallery_1.png", _png(2))
+    b = wchar / "Gallery_1.png"
+    fine = _legacy(wchar, "gallery_2.png", _png(5))
+    if b.exists():
+        # An insensitive filesystem cannot hold the two case-only siblings:
+        # writing the second would overwrite the first. Feed the planner the
+        # additional inventory entry a sensitive filesystem can return. Alias
+        # rejection must happen before it tries to read either file's bytes.
+        seen = _occurrences()
+        twin = image_surfaces.Occurrence("characters", f"world:{wid}", wchar,
+                                         "Gallery_1", b)
+        monkeypatch.setattr(image_surfaces, "occurrences", lambda root: iter([*seen, twin]))
+    else:
+        _legacy(wchar, b.name, _png(2))
+    plan = _plan()
+    rep = image_migration.report(plan)
+    # `resolve` canonicalizes the spelling of the simulated twin on Windows,
+    # but the report must preserve each occurrence's own inventoried spelling.
+    prefix = _rel(wchar)
+    assert _untouched(rep) == {
+        f"{prefix}/gallery_1.png": "case-alias",
+        f"{prefix}/Gallery_1.png": "case-alias",
+    }
+    assert [i.occurrence.path for i in plan.items] == [fine]
+    assert rep["case_aliases"] == [
+        {"dir": prefix, "names": ["Gallery_1", "gallery_1"]}]
+    assert a.read_bytes() == _png(1)             # the fixture never overwrote it
+
+
+def test_case_aliases_against_refs_place_nothing():
+    _wid, wroot, _char, wchar = _world()
     other = assets.version_dir(wroot, "the-docks", "default", base="locations")
     image_refs.write(other, "Map", image_store.ingest(_png(3), "png").id)
     c = _legacy(other, "map.png", _png(4))
     fine = _legacy(wchar, "gallery_2.png", _png(5))
     plan = _plan()
     rep = image_migration.report(plan)
-    untouched = _untouched(rep)
-    for p in (a, b, c):
-        assert untouched[_rel(p)] == "case-alias"
+    assert _untouched(rep) == {_rel(c): "case-alias"}
     assert [i.occurrence.path for i in plan.items] == [fine]
-    assert sorted(sorted(entry["names"]) for entry in rep["case_aliases"]) == [
-        ["Gallery_1", "gallery_1"], ["Map", "map"]]
+    assert rep["case_aliases"] == [{"dir": _rel(other), "names": ["Map", "map"]}]
 
 
 def test_extra_siblings_and_unsupported_extensions_are_untouched():
