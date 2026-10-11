@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import statcache
+from .. import atomic, statcache
 from ..appearances import cast
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import parse_frontmatter, parse_frontmatter_head
@@ -161,7 +161,7 @@ def read_scene(cid: str, sid: str) -> dict:
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     players = frozenset(cast.player_names(cid, sid))
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta, body = parse_frontmatter(atomic.read_text(p))
     return {"meta": {"id": sid, **_without_identity(meta)},
             "messages": serialize._parse_messages(body, players)}
 
@@ -316,7 +316,7 @@ def get_rolling_summary(cid: str, sid: str) -> dict:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         return {"summary": "", "at": 0, "digest": "", "facts": ""}
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta, _ = parse_frontmatter(atomic.read_text(p))
     return rolling_summary_fields(meta)
 
 
@@ -367,7 +367,7 @@ def get_scene_break(cid: str, sid: str) -> dict:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         return scene_break_fields({})
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta, _ = parse_frontmatter(atomic.read_text(p))
     return scene_break_fields(meta)
 
 
@@ -376,5 +376,5 @@ def get_suggested_date(cid: str, sid: str) -> str:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         return ""
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta, _ = parse_frontmatter(atomic.read_text(p))
     return meta.get("suggested_date", "")

@@ -212,7 +212,8 @@ def test_a_new_record_does_not_inherit_the_0600_temp_mode(tmp_path, monkeypatch)
     assert chmodded == [0o666 & ~live], f"not the umask default: {chmodded!r}"
 
 
-def test_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
+@pytest.mark.parametrize("winerror", [5, 32, 33])
+def test_transient_sharing_violation_is_retried(tmp_path, monkeypatch, winerror):
     """A concurrent reader or a scanner holding the target briefly is the
     normal Windows case; it must not surface as a failed save."""
     p = tmp_path / "rec.md"
@@ -223,7 +224,7 @@ def test_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
         calls["n"] += 1
         if calls["n"] <= 2:
             err = PermissionError("sharing violation")
-            err.winerror = 32
+            err.winerror = winerror
             raise err
         return real(src, dst)
 
@@ -234,10 +235,10 @@ def test_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
     assert calls["n"] == 3
 
 
-def test_permanent_permission_error_is_not_retried(tmp_path, monkeypatch):
-    """A read-only target or a directory ACL denying child-create is permanent.
-    Retrying it only delays the correct error -- and every retry widens the
-    unlocked read-modify-write window."""
+@pytest.mark.parametrize("winerror", [None, 5])
+def test_permanent_permission_error_still_raises(tmp_path, monkeypatch, winerror):
+    """An ambiguous Windows access error gets a bound, never a silent fallback.
+    A permission error without a Windows race code still raises immediately."""
     p = tmp_path / "rec.md"
     _write_prior(p)
     calls = {"n": 0}
@@ -245,15 +246,75 @@ def test_permanent_permission_error_is_not_retried(tmp_path, monkeypatch):
     def denied(src, dst):
         calls["n"] += 1
         err = PermissionError("access denied")
-        err.winerror = 5
+        if winerror is not None:
+            err.winerror = winerror
         raise err
 
     monkeypatch.setattr(atomic.os, "replace", denied)
     with pytest.raises(PermissionError):
         atomic.write_text(p, "never lands")
 
-    assert calls["n"] == 1, "a permanent error was retried"
+    assert calls["n"] == (len(atomic._RETRY_DELAYS) + 1 if winerror == 5 else 1)
     assert p.read_text(encoding="utf-8") == PRIOR
+
+
+@pytest.mark.parametrize("which", ["read_text", "open_text"])
+def test_windows_record_reads_retry_access_denied(tmp_path, monkeypatch, which):
+    """CRT read opens lose winerror; errno EACCES is all a rename race leaves."""
+    p = tmp_path / "rec.md"
+    _write_prior(p)
+    real_open = Path.open
+    calls = []
+    delays = []
+
+    def flaky(path, *args, **kwargs):
+        calls.append(path)
+        if len(calls) <= 2:
+            raise PermissionError(13, "record being replaced", str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(atomic, "_WINDOWS", True)
+    monkeypatch.setattr(Path, "open", flaky)
+    monkeypatch.setattr(atomic.time, "sleep", delays.append)
+    if which == "read_text":
+        assert atomic.read_text(p) == PRIOR
+    else:
+        with atomic.open_text(p) as stream:
+            assert stream.read() == PRIOR
+        assert stream.closed
+    assert len(calls) == 3 and delays == list(atomic._RETRY_DELAYS[:2])
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_read_permission_failure_still_raises_with_a_bound(tmp_path, monkeypatch, windows):
+    calls = []
+    delays = []
+
+    def denied(path, *args, **kwargs):
+        calls.append(path)
+        raise PermissionError(13, "permanent ACL refusal", str(path))
+
+    monkeypatch.setattr(atomic, "_WINDOWS", windows)
+    monkeypatch.setattr(Path, "open", denied)
+    monkeypatch.setattr(atomic.time, "sleep", delays.append)
+    with pytest.raises(PermissionError, match="permanent ACL refusal"):
+        atomic.read_text(tmp_path / "rec.md")
+    assert len(calls) == (len(atomic._RETRY_DELAYS) + 1 if windows else 1)
+    assert delays == (list(atomic._RETRY_DELAYS) if windows else [])
+
+
+def test_windows_read_does_not_retry_absence_or_invalid_utf8(tmp_path, monkeypatch):
+    monkeypatch.setattr(atomic, "_WINDOWS", True)
+    delays = []
+    monkeypatch.setattr(atomic.time, "sleep", delays.append)
+    with pytest.raises(FileNotFoundError):
+        atomic.read_text(tmp_path / "missing.md")
+    p = tmp_path / "rec.md"
+    p.write_bytes(b"\xff")
+    with pytest.raises(UnicodeDecodeError):
+        atomic.read_text(p)
+    assert atomic.read_text(p, errors="replace") == "\ufffd"
+    assert delays == []
 
 
 def test_the_full_publish_order_holds(tmp_path, monkeypatch):
@@ -407,16 +468,18 @@ def test_no_api_hands_out_the_temp_pathname(tmp_path):
     public = sorted(
         n for n, v in vars(atomic).items()
         if not n.startswith("_") and callable(v) and getattr(v, "__module__", "") == atomic.__name__)
-    # Three reviewed additions, none of which hands back a temp's name.
+    # Reviewed additions, none of which hands back a temp's name.
     # `append_line` writes THROUGH a caller-named path (#152's ledger), so it
     # opens no swap window at all; `streaming_write` uses a temp but yields the
     # file OBJECT, which the test below pins directly; `is_write_temp` is a
     # pure predicate over a name a caller already has, and exists so the walks
     # that copy or pack a directory of records (a world export, a world fork)
     # recognize this module's temps from this module rather than from a
-    # pattern of their own that drifts. The list is the shape of the API, and
+    # pattern of their own that drifts. `read_text` and `open_text` only read
+    # the caller's existing record; the latter hands back a stream, not a temp.
+    # The list is the shape of the API, and
     # every entry on it is here because someone argued for it.
-    assert public == ["append_line", "is_write_temp", "streaming_write",
+    assert public == ["append_line", "is_write_temp", "open_text", "read_text", "streaming_write",
                       "write_bytes", "write_text"], \
         f"unexpected public API: {public}"
 

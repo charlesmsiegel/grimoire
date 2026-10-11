@@ -340,7 +340,7 @@ def read_config() -> dict[str, str]:
                 defaults.update(birth_fields())
                 atomic.write_text(path, dump_frontmatter(defaults, ""))
                 return defaults
-    meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta, _ = parse_frontmatter(atomic.read_text(path))
     out = {k: meta.get(k, default) for k, default in defaults.items()}
     # The legacy inference keys (`inference_keys.LEGACY_GLOBAL_KEYS`) are read
     # when the file holds them -- below format 2 they are the planner's input
@@ -778,7 +778,7 @@ def write_config(**fields: str) -> dict[str, str]:
     # `GET /api/config`, so a second tab merely loading the app can race a
     # setting saved in the first (#194 review).
     with locks.config_lock():
-        raw, _ = (parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists()
+        raw, _ = (parse_frontmatter(atomic.read_text(path)) if path.exists()
                   else (birth_fields(), ""))
         for key, value in fields.items():
             if key in _CONFIG_KEYS and value is not None:
