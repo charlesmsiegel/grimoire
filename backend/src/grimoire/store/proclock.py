@@ -32,9 +32,10 @@ import sys
 import time
 from pathlib import Path
 
-_WINDOWS = sys.platform == "win32"
-
-if _WINDOWS:
+# Keep the platform predicate explicit where an OS-only API is used. Mypy
+# recognizes sys.platform, but a boolean alias makes it check both incompatible
+# stdlib stub branches and reports different findings on Windows and Linux.
+if sys.platform == "win32":
     import msvcrt
 else:
     import fcntl
@@ -77,7 +78,7 @@ def _user_home() -> Path:
     both processes of one user evaluate it identically, so falling back stays
     deterministic.
     """
-    if not _WINDOWS and not _on_android():
+    if sys.platform != "win32" and not _on_android():
         try:
             candidate = Path(pwd.getpwuid(os.getuid()).pw_dir)
         except (KeyError, OSError):
@@ -89,7 +90,7 @@ def _user_home() -> Path:
 
 def lock_dir() -> Path:
     base = _user_home()
-    if _WINDOWS:
+    if sys.platform == "win32":
         return base / "AppData" / "Local" / "grimoire" / "locks"
     # ~/.local/state, not ~/.cache: the XDG location for state that persists
     # and is not swept. A cleaner unlinking a held lock file would split two
@@ -147,7 +148,7 @@ def lock_path(root: Path, domain: str, name: str) -> Path:
     # already existed with wider permissions (mkdir's mode is also masked by
     # the umask, so it is not sufficient on its own).
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not _WINDOWS:
+    if sys.platform != "win32":
         try:
             os.chmod(d, 0o700)
         except OSError:
@@ -167,7 +168,7 @@ def _try_lock(fd: int) -> bool:
     the user hunting a process that does not exist.
     """
     try:
-        if _WINDOWS:
+        if sys.platform == "win32":
             # msvcrt.locking works at the CURRENT file position, unlike
             # whole-file flock, so the seek is mandatory in both directions.
             # Byte 0, length 1; locking past EOF is legal, so the file stays
@@ -178,7 +179,7 @@ def _try_lock(fd: int) -> bool:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
     except OSError as e:
-        if _WINDOWS and e.errno in (errno.EACCES, errno.EDEADLOCK):
+        if sys.platform == "win32" and e.errno in (errno.EACCES, errno.EDEADLOCK):
             return False
         # EACCES on POSIX as well as EAGAIN/EWOULDBLOCK: several platforms
         # (and any libc emulating flock over fcntl) report an already-held
@@ -186,13 +187,13 @@ def _try_lock(fd: int) -> bool:
         # contention into a 500 instead of a 409. A genuine permission problem
         # surfaces earlier, at the os.open above, so EACCES *from the lock
         # call* is contention in practice.
-        if not _WINDOWS and e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+        if sys.platform != "win32" and e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
             return False
         raise
 
 
 def _unlock(fd: int) -> None:
-    if _WINDOWS:
+    if sys.platform == "win32":
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
     else:
@@ -232,7 +233,7 @@ def acquire(path: Path, deadline) -> int | None:
         try:
             got = _try_lock(fd)
             if got:
-                if _WINDOWS or _same_file(fd, path):
+                if sys.platform == "win32" or _same_file(fd, path):
                     return fd
                 # Someone replaced the file under us. Defence in depth only --
                 # the chosen directory is not one anything cleans -- and not a

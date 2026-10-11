@@ -495,6 +495,19 @@ def test_an_unprivileged_chown_falls_back_to_the_group(tmp_path, monkeypatch):
     assert attempts == [(4242, 8484), (-1, 8484)], f"no group-only retry: {attempts}"
 
 
+@pytest.mark.parametrize("missing", ["listxattr", "getxattr", "setxattr"])
+def test_partial_xattr_api_never_fails_the_write(tmp_path, monkeypatch, missing):
+    """An optional metadata API is usable only when all its operations exist."""
+    p = tmp_path / "rec.md"
+    p.write_text("before", encoding="utf-8")
+    monkeypatch.setattr(atomic.os, "listxattr", lambda _p: ["user.tag"], raising=False)
+    monkeypatch.setattr(atomic.os, "getxattr", lambda _p, _a: b"v", raising=False)
+    monkeypatch.setattr(atomic.os, "setxattr", lambda *_args: None, raising=False)
+    monkeypatch.delattr(atomic.os, missing)
+    atomic.write_text(p, "after")
+    assert p.read_text(encoding="utf-8") == "after"
+
+
 def test_metadata_failures_never_fail_the_write(tmp_path, monkeypatch):
     """Losing a metadata bit is cosmetic; losing the write is not."""
     p = tmp_path / "rec.md"
