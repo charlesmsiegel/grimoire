@@ -1520,13 +1520,15 @@ def test_a_resumed_pass_with_only_the_strip_left_takes_an_archive(home):
     plan = retire.pass_plan(legacy_plan.lookup(mode="retire"))
     assert {u.conn_id for u in plan.units if u.work} >= {"glm", "glm2"}
     assert retire.needs_archive(plan)
-    before = _conn_meta("glm")
+    # Archives preserve bytes, including native newlines. Parsing a decoded
+    # member would bypass read_text's universal-newline normalization.
+    before = _conn_file("glm").read_bytes()
 
     assert migrate.ensure().state == "done"
     taken = _archives(backups.RETIRE_PREFIX)
     assert len(taken) == 1
     with zipfile.ZipFile(backups.backup_dir() / taken[0]) as z:
-        archived = parse_frontmatter(z.read("llm_connections/glm.md").decode("utf-8"))[0]
+        archived = z.read("llm_connections/glm.md")
     assert archived == before
     assert _held("glm") == []
 

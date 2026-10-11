@@ -6,7 +6,9 @@ into a wizard, so these tests are as interested in the cases that must answer
 """
 
 import importlib
+import os
 import threading
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,14 +59,29 @@ def test_a_directory_the_listing_skips_is_not_a_world(client, tmp_path):
     assert store.worlds.list_worlds() == []
 
 
-def test_a_directory_named_by_an_unusable_id_is_not_a_world(client, tmp_path):
+def test_a_directory_named_by_an_unusable_id_is_not_a_world(client, tmp_path, monkeypatch):
     # `safe_id` rejects the trailing dot, so `list_worlds` refuses to hand this
     # id back; counting it as content would report an unopenable store as set up.
     stray = tmp_path / "worlds" / "realm."
+    if os.name == "nt":
+        # Win32 otherwise trims the dot and creates the valid `realm` folder.
+        # Its extended path syntax preserves the literal name for enumeration.
+        stray = Path("\\\\?\\" + str(stray))
+        # The reader needs the same spelling too: ordinary Win32 paths cannot
+        # probe the literal directory, which would hide a missing id guard.
+        monkeypatch.setenv("GRIMOIRE_HOME", str(stray.parent.parent))
     stray.mkdir(parents=True)
-    (stray / "world.md").write_text("---\nname: Realm\n---\n", encoding="utf-8")
-    assert store.worlds.has_worlds() is False
-    assert store.worlds.list_worlds() == []
+    marker = stray / "world.md"
+    try:
+        marker.write_text("---\nname: Realm\n---\n", encoding="utf-8")
+        assert paths._names_a_record(stray, "world.md")
+        assert store.worlds.has_worlds() is False
+        assert store.worlds.list_worlds() == []
+    finally:
+        # pytest cleans through ordinary Win32 paths, which cannot unlink this
+        # literal trailing-dot name. Remove this fixture via the same spelling.
+        marker.unlink(missing_ok=True)
+        stray.rmdir()
 
 
 def test_any_child_record_treats_a_missing_directory_as_empty(tmp_path):

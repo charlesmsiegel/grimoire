@@ -495,14 +495,15 @@ def test_malformed_plan_json_is_a_structured_error(home, tmp_path, capsys):
 
 def test_module_guard_matches_a_campaign_that_spells_the_world_differently(home, monkeypatch):
     """The guard asks `worlds.references_world`, which answers by filesystem
-    identity: on a case-insensitive filesystem `SALTMARCH` IS this world. The
-    test filesystem is case-sensitive, so that answer is simulated."""
+    identity: on a case-insensitive filesystem `SALTMARCH` IS this world.
+    Simulate both identity answers so the guard is tested on either host."""
     wid = _apply(_plan())["world"]
     cid = campaigns.create_campaign("Silver Oath", wid)
     meta = campaigns.campaign_root(cid) / "campaign.md"
     meta.write_text(meta.read_text(encoding="utf-8").replace(f"world: {wid}",
                                                            f"world: {wid.upper()}"),
                     encoding="utf-8")
+    monkeypatch.setattr(worlds, "references_world", lambda ref, root: ref == root.name)
     assert create_world._world_campaigns(wid) == []     # case-sensitive: another world
     monkeypatch.setattr(worlds, "references_world",
                         lambda ref, root: ref.casefold() == root.name.casefold())
