@@ -279,7 +279,8 @@ def _source_tree(tmp_path: pathlib.Path) -> pathlib.Path:
     pkg = src / "grimoire"
     pkg.mkdir(parents=True)
     for name in ("__init__.py", "a.py", "never_imported.py"):
-        (pkg / name).write_text("x = 1\n", encoding="utf-8")
+        # Hash assertions below name these bytes, including the LF on Windows.
+        (pkg / name).write_bytes(b"x = 1\n")
     return src
 
 

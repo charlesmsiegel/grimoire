@@ -431,9 +431,13 @@ def test_update_read_modify_write():
     image_store.update(obj.id, add)
     assert image_store.read(obj.id).raw["description"] == "A plain test card."
     before = image_store.object_path(obj.id).stat().st_mtime_ns
-    os.utime(image_store.object_path(obj.id), ns=(1, 1))
+    # One nanosecond rounds down on filesystems with coarser timestamp units.
+    # The contract is no publication on None, not nanosecond filesystem support.
+    os.utime(image_store.object_path(obj.id), ns=(1_000_000_000, 1_000_000_000))
+    unchanged = image_store.object_path(obj.id).stat().st_mtime_ns
+    assert unchanged != before
     image_store.update(obj.id, lambda raw: None)
-    assert image_store.object_path(obj.id).stat().st_mtime_ns == 1 != before
+    assert image_store.object_path(obj.id).stat().st_mtime_ns == unchanged
 
 
 def test_update_does_not_mutate_cached_raw():

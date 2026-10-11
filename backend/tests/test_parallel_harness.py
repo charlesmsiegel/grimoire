@@ -142,8 +142,10 @@ def test_a_hung_test_never_reads_green_and_is_named(tmp_path):
     root = synthetic_suite.write(tmp_path / "s", {"test_hang.py": HANG})
     with pytest.raises(subprocess.TimeoutExpired) as stopped:
         synthetic_suite.run(root, "-o", "faulthandler_timeout=1", timeout=8)
-    seen = (stopped.value.stdout or b"") + (stopped.value.stderr or b"")
-    seen = seen.decode() if isinstance(seen, bytes) else seen
+    # TimeoutExpired can hold bytes even with text=True, and one stream can
+    # be absent. Normalize each independently before joining the evidence.
+    seen = "".join(value.decode() if isinstance(value, bytes) else value or ""
+                   for value in (stopped.value.stdout, stopped.value.stderr))
     assert "test_hangs_on_purpose" in seen, seen
     assert "passed" not in seen
 
