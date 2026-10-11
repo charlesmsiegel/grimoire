@@ -46,9 +46,12 @@ superseded.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import errno
 import hashlib
 import json
+import sys
+from pathlib import Path
 
 from . import atomic, locks
 from .paths import now_iso
@@ -92,6 +95,35 @@ def _path(cid: str, sid: str):
     return scenes_paths._review_path(cid, sid)
 
 
+def _windows_name_limit(parent: Path) -> int | None:
+    """The target volume's component limit, or unknown if metadata fails.
+
+    A drive-letter guess would miss a mounted volume or junction inside the
+    store. These queries follow that path and read only volume metadata; no
+    file is opened or created to discover whether the sidecar would fit.
+    """
+    if sys.platform == "win32":
+        kernel = ctypes.WinDLL("kernel32")
+        volume_path = kernel.GetVolumePathNameW
+        volume_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        volume_path.restype = ctypes.c_int
+        volume_info = kernel.GetVolumeInformationW
+        dword_pointer = ctypes.POINTER(ctypes.c_uint32)
+        volume_info.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32,
+                               dword_pointer, dword_pointer, dword_pointer,
+                               ctypes.c_wchar_p, ctypes.c_uint32]
+        volume_info.restype = ctypes.c_int
+        # Win32's extended path capacity, not a guessed filename limit. A
+        # junction can resolve onto a mount point longer than the input path.
+        volume = ctypes.create_unicode_buffer(32768)
+        limit = ctypes.c_uint32()
+        if volume_path(str(parent.absolute()), volume, len(volume)) and \
+                volume_info(volume.value, None, 0, None, ctypes.byref(limit),
+                            None, None, 0):
+            return limit.value or None
+    return None
+
+
 def name_usable(cid: str, sid: str) -> bool:
     """Whether this scene's sidecar name can exist on this filesystem at all.
 
@@ -111,8 +143,16 @@ def name_usable(cid: str, sid: str) -> bool:
     absorb over one would substitute a permanent-sounding refusal for a
     transient failure the write itself reports better.
     """
+    path = _path(cid, sid)
+    # Windows stat can report an over-long component as INVALID_NAME, which
+    # also covers other malformed paths. Ask the actual volume rather than
+    # reclassifying every such error as too long or assuming a limit of 255.
+    # Its W APIs count UTF-16 units, including both halves of a non-BMP point.
+    limit = _windows_name_limit(path.parent)
+    if limit is not None and len(path.name.encode("utf-16-le", "surrogatepass")) // 2 > limit:
+        return False
     try:
-        _path(cid, sid).stat()
+        path.stat()
     except FileNotFoundError:
         return True
     except OSError as exc:

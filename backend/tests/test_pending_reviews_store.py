@@ -9,8 +9,10 @@ and what a rename carries.
 
 from __future__ import annotations
 
+import ctypes
 import importlib
 import json
+import sys
 
 import pytest
 
@@ -494,12 +496,122 @@ def test_a_sid_whose_sidecar_name_cannot_exist_is_reported_before_the_spend(home
     Scene with a failure minutes in, forever."""
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
-    # 250 characters: `<sid>.md` is 252 and fits; `<sid>.review.json` is 262.
+    # 250 characters: `<sid>.md` is 253 and fits; `<sid>.review.json` is 262.
     legacy = "0001--" + "x" * 244
     assert len(legacy) == 250
+    store.scenes.paths._scene_path(cid, legacy).write_text("", encoding="utf-8")
+    # The real writer proves this is an unpublishable name, rather than a
+    # limit guessed from the OS label or Python's count of code points.
+    with pytest.raises(OSError):
+        store.pending_reviews.publish(cid, legacy, "g1", _review(), {})
 
     assert store.pending_reviews.name_usable(cid, legacy) is False
     assert store.pending_reviews.name_usable(cid, "0001--the-tearoom") is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows counts UTF-16 units")
+@pytest.mark.parametrize(("suffix", "usable"), [
+    ("\N{GRINNING FACE}" * 118 + "x", True),
+    ("\N{GRINNING FACE}" * 119, False),
+], ids=["fits", "too-long"])
+def test_windows_review_names_count_utf16_units(home, suffix, usable):
+    """A non-BMP code point occupies two Windows filename units. Counting
+    Python characters would let the second name through before the spend."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = "0001--" + suffix
+    if usable:
+        store.pending_reviews.publish(cid, sid, "g1", _review(), {})
+    else:
+        with pytest.raises(OSError):
+            store.pending_reviews.publish(cid, sid, "g1", _review(), {})
+
+    assert store.pending_reviews.name_usable(cid, sid) is usable
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filename byte limit")
+def test_posix_review_names_still_count_filesystem_bytes(home):
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = "0001--" + "é" * 122
+    store.scenes.paths._scene_path(cid, sid).write_text("", encoding="utf-8")
+    with pytest.raises(OSError):
+        store.pending_reviews.publish(cid, sid, "g1", _review(), {})
+
+    assert store.pending_reviews.name_usable(cid, sid) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows volume metadata")
+@pytest.mark.parametrize("failed_query", ["GetVolumePathNameW", "GetVolumeInformationW"])
+def test_unavailable_volume_metadata_does_not_refuse_a_name(scene, monkeypatch, failed_query):
+    """A denied or temporarily unavailable metadata query proves no limit.
+    The ordinary stat/write error handling must retain that uncertainty."""
+    cid, sid = scene
+    kernel = ctypes.WinDLL("kernel32")
+    setattr(kernel, failed_query, lambda *args: 0)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args: kernel)
+
+    assert store.pending_reviews.name_usable(cid, sid) is True
+
+
+@pytest.mark.parametrize(("limit", "usable"), [(261, False), (262, True), (300, True)])
+def test_a_volume_component_limit_is_not_assumed_to_be_255(home, monkeypatch, limit, usable):
+    """Missing stat results cannot distinguish too long from absent. Only
+    the actual volume's reported limit may reject this 262-unit component."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    monkeypatch.setattr(store.pending_reviews, "_windows_name_limit", lambda parent: limit)
+
+    def _missing(self, *args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("pathlib.Path.stat", _missing)
+    assert store.pending_reviews.name_usable(cid, "0001--" + "x" * 244) is usable
+
+
+def test_a_filename_with_surrogate_units_can_be_probed(home, monkeypatch):
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    monkeypatch.setattr(store.pending_reviews, "_windows_name_limit", lambda parent: 255)
+
+    assert store.pending_reviews.name_usable(cid, "0001--" + "\ud800" * 238) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows long paths")
+def test_a_long_windows_path_is_not_an_overlong_filename(home, monkeypatch):
+    deep = home / ("Realm" * 20) / ("Realm" * 20)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(deep))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "The Tearoom")
+    path = store.scenes._review_path(cid, sid)
+    assert len(str(path)) > 260
+    store.pending_reviews.publish(cid, sid, "g1", _review(), {})
+
+    assert store.pending_reviews.name_usable(cid, sid) is True
+
+
+def test_a_name_probe_does_not_open_or_create_files(scene, home, monkeypatch):
+    """An existing corrupt payload is irrelevant to filename usability, and
+    probing an absent sidecar must not create a placeholder or temp file."""
+    cid, sid = scene
+    path = store.scenes._review_path(cid, sid)
+    path.write_bytes(b"not a review")
+    before = set(home.rglob("*"))
+
+    def _opened(*args, **kwargs):
+        pytest.fail("a filename probe opened a file")
+
+    with monkeypatch.context() as guard:
+        guard.setattr("builtins.open", _opened)
+        guard.setattr("os.open", _opened)
+        guard.setattr("pathlib.Path.open", _opened)
+        assert store.pending_reviews.name_usable(cid, sid) is True
+        assert store.pending_reviews.name_usable(cid, "0001--absent") is True
+        assert store.pending_reviews.name_usable(cid, "0001--" + "x" * 244) is False
+
+    assert path.read_bytes() == b"not a review"
+    assert set(home.rglob("*")) == before
 
 
 def test_an_ordinary_read_failure_is_not_read_as_an_unusable_name(home, monkeypatch):
