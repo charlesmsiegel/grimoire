@@ -147,3 +147,15 @@ def test_many_collection_key_includes_nonfile_params(cache, root, monkeypatch):
         result = request.lookup_many([key, moved])
     assert result.values[key].value == 'Realm' and not result.values[moved].hit
     assert result.counts == {'search': cache.Counts(1, 1)}
+
+
+def test_many_answers_a_refused_key_as_an_uncounted_miss(cache, root, monkeypatch):
+    # make_key returns None when it refuses; lookup(None) is a miss, and so
+    # is that None inside lookup_many -- never an AttributeError.
+    kind = _kind(cache, monkeypatch)
+    hit = _key(cache, kind)
+    _seed(cache, root, [(hit, 'Realm')])
+    with cache.batch(root) as request:
+        result = request.lookup_many([hit, None])
+    assert result.values == {hit: cache.Lookup(True, 'Realm'), None: cache.Lookup(False)}
+    assert result.counts == {'search': cache.Counts(1, 0)}

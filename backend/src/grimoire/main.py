@@ -307,6 +307,11 @@ async def _lifespan(app: FastAPI):
     # or a half-applied migration is exactly the kind of thing that should be
     # visible in the log.
     log = logging.getLogger(__name__)
+    # BUILD names the code serving this process, so it is fingerprinted now,
+    # from the sources just imported -- not at the first cache use, when a
+    # `git pull` or an edited template since would file this code's artifacts
+    # under the new code's BUILD for the next process to trust.
+    compiled.prime_build()
     for step in (migrations.migrate_scene_ids, migrations.bake_char_macros,
                  migrations.backfill_scene_identities, module_edit.recover):
         try:

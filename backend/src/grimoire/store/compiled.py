@@ -306,14 +306,15 @@ class Counts:
 
 @dataclass(frozen=True)
 class BatchLookup:
-    values: dict[Key, Lookup]
+    values: dict[Key | None, Lookup]
     counts: dict[str, Counts]
 
 
-def _lookup_result(values: dict[Key, Lookup]) -> BatchLookup:
+def _lookup_result(values: dict[Key | None, Lookup]) -> BatchLookup:
     counts: dict[str, list[int]] = {}
     for key, lookup in values.items():
-        counts.setdefault(key.kind, [0, 0])[0 if lookup.hit else 1] += 1
+        if key is not None:  # make_key's refusal: answered as a miss, counted nowhere
+            counts.setdefault(key.kind, [0, 0])[0 if lookup.hit else 1] += 1
     return BatchLookup(values, {kind: Counts(*count) for kind, count in counts.items()})
 
 
@@ -373,7 +374,14 @@ def _process_state() -> None:
     if _state.pid != pid:
         _close_inherited_intents()
         _inherited.append(_state)
-        _state = _State(pid=pid)
+        _state = _inherit_build(_State(pid=pid), _state)
+
+
+def _inherit_build(child: _State, parent: _State) -> _State:
+    # A forked child runs its parent's code, so it keeps the parent's BUILD
+    # rather than fingerprinting sources that may have changed on disk since.
+    child.build_checked, child.build = parent.build_checked, parent.build
+    return child
 
 
 def _on_loop() -> bool:
@@ -382,6 +390,18 @@ def _on_loop() -> bool:
     except RuntimeError:
         return False
     return True
+
+
+def prime_build() -> None:
+    """Fingerprint BUILD now, from the code this process has just imported.
+
+    The app calls this at startup. Left to the first cache use, a process
+    that outlives an edit of its own sources (a `git pull` under a running
+    server, a template edited, a dependency upgraded) would fingerprint the
+    NEW files and store what the OLD code derived under that BUILD. Never
+    raises; a disabled or SQLite-less cache computes nothing."""
+    if _sqlite is not None and os.environ.get("GRIMOIRE_COMPILED_CACHE") != "0":
+        _build()
 
 
 def _build() -> str | None:
@@ -1029,7 +1049,7 @@ class Batch:
                 row = session.conn.execute(
                     "SELECT CASE WHEN typeof(payload)='text' "
                     "AND length(CAST(payload AS BLOB))<=? THEN payload END,"
-                    '"check",CASE WHEN typeof(last_used)="integer" THEN last_used END '
+                    '"check",CASE WHEN typeof(last_used)=\'integer\' THEN last_used END '
                     'FROM artifacts WHERE kind=? AND key_digest=?',
                     (MAX_PAYLOAD_BYTES, key.kind, key.digest)).fetchone()
                 session.last_used = _clock()
@@ -1046,13 +1066,15 @@ class Batch:
         return answer if self._usable(key) else Lookup(False)
 
 
-    def lookup_many(self, keys: Sequence[Key]) -> BatchLookup:
-        """Decode only caller-supplied unique keys, with per-kind counts."""
+    def lookup_many(self, keys: Sequence[Key | None]) -> BatchLookup:
+        """Decode only caller-supplied unique keys, with per-kind counts.
+
+        A None key (`make_key` refusing) is a miss, as it is for `lookup`."""
         misses = dict.fromkeys(keys, Lookup(False))
         values = misses.copy()
         groups: dict[str, list[Key]] = {}
         for key in values:
-            if self._usable(key):
+            if key is not None and self._usable(key):
                 groups.setdefault(key.kind, []).append(key)
         for kind, supplied in groups.items():
             for offset in range(0, len(supplied), SOURCE_CHUNK):
@@ -2415,7 +2437,7 @@ def _after_fork_parent() -> None:
 def _after_fork_child() -> None:
     global _state  # noqa: PLW0603 -- replace inherited locks without acquiring them
     _close_inherited_intents()
-    _state = _State()
+    _state = _inherit_build(_State(), _state)
 
 
 if hasattr(os, "register_at_fork"):
@@ -2648,6 +2670,10 @@ def _probe_owned(path: Path) -> bool:
         conn.close()
 
 
+def _unborn(path: Path) -> bool:
+    return path.stat().st_size == 0 and not Path(str(path) + "-journal").exists()
+
+
 def _identity(path: Path) -> tuple[int, int]:
     info = path.stat()
     return info.st_dev, info.st_ino
@@ -2658,7 +2684,11 @@ def _connect_owned(root: Path, path: Path, *, recover: bool, clean_aside: bool) 
         return None
     conn: _sqlite_available.Connection | None = None
     try:
-        existed = path.exists()
+        # A 0-byte file at the owned name with no hot journal beside it is a
+        # first initialisation that never committed (a kill, a full disk):
+        # it holds nothing to preserve, so it initialises like a missing one
+        # rather than reading as foreign forever.
+        existed = path.exists() and not _unborn(path)
         if existed and not _probe_owned(path):
             return None
         conn = _sqlite.connect(path, timeout=0.005, check_same_thread=False,

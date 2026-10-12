@@ -209,6 +209,46 @@ def test_foreign_database_is_preserved(cache, root, application_id):
     assert (path.read_bytes(), _stamp(path)) == before
 
 
+def test_interrupted_first_initialisation_is_retried(cache, root, monkeypatch):
+    # sqlite3.connect creates the file before _initialise commits; a kill or
+    # a failed commit there must not leave a 0-byte file that reads as
+    # foreign at every later open.
+    original = cache._initialise
+
+    def interrupted(conn):
+        raise MemoryError("Realm")
+
+    monkeypatch.setattr(cache, "_initialise", interrupted)
+    assert _open(cache, root) is None
+    path = _path(cache, root)
+    assert path.exists() and path.stat().st_size == 0
+    monkeypatch.setattr(cache, "_initialise", original)
+    assert _open(cache, root) is not None
+
+
+def test_empty_file_beside_a_hot_journal_is_preserved(cache, root):
+    path = _path(cache, root)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"")
+    journal = Path(str(path) + "-journal")
+    journal.write_bytes(b"Saltmarch")
+    assert _open(cache, root) is None
+    assert path.read_bytes() == b"" and journal.read_bytes() == b"Saltmarch"
+
+
+@pytest.mark.skipif(not hasattr(sqlite3, "SQLITE_DBCONFIG_DQS_DML"), reason="setconfig needs Python 3.12+")
+def test_lookup_sql_has_no_double_quoted_string_literals(cache, root, monkeypatch):
+    # SQLite builds with SQLITE_DQS=0 (its own recommendation) read "integer"
+    # as a column name; a single-key lookup must still hit there.
+    key = _key(cache, _kind(cache, monkeypatch))
+    with cache.batch(root) as request:
+        request.put(key, "Realm")
+    session = _open(cache, root)
+    session.conn.setconfig(sqlite3.SQLITE_DBCONFIG_DQS_DML, False)
+    with cache.batch(root) as request:
+        assert request.lookup(key) == cache.Lookup(True, "Realm")
+
+
 def test_unknown_owned_schema_is_preserved(cache, root):
     session = _open(cache, root)
     assert session is not None

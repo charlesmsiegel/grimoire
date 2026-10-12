@@ -230,7 +230,10 @@ def test_pid_change_resets_inherited_state_without_taking_old_lock(cache, key, t
             assert child.lookup(key).value == "Realm"
     assert cache._state is not old and cache._state.lock is not old.lock
     assert cache._state.session is not parent
-    assert not cache._state.build_checked and not cache._state.warned
+    assert not cache._state.warned
+    # A child runs its parent's code: it keeps that BUILD rather than
+    # fingerprinting whatever sources are on disk now.
+    assert (cache._state.build_checked, cache._state.build) == (True, "b" * 64)
     # Simulated child owns a new connection; explicitly clean the real parent.
     parent.conn.close()
 
@@ -285,7 +288,7 @@ def test_fork_reopens_with_fresh_locks(cache, key, tmp_path, monkeypatch, held):
     if pid == 0:
         os.close(reader)
         try:
-            assert not cache._state.build_checked and not cache._state.devices
+            assert cache._state.build == "b" * 64 and not cache._state.devices
             assert not cache._state.warned and cache._state.session is None
             with cache.batch(tmp_path) as request:
                 assert request.lookup(key).value == "Realm"
@@ -446,3 +449,35 @@ def test_idle_reschedule_thread_failure_releases_the_session(cache, tmp_path, mo
     monkeypatch.setattr(cache, '_timer', failed_timer)
     cache._idle(session)
     assert cache._state.session is None
+
+
+def test_build_is_pinned_at_startup_not_at_first_use(monkeypatch, tmp_path):
+    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
+    on_disk = ["a" * 64]
+    monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: on_disk[0])
+    app = main.create_app()
+
+    async def drive():
+        async with main._lifespan(app):
+            # Sources edited after startup (a `git pull` under the server)
+            # do not move the BUILD this process files its artifacts under.
+            on_disk[0] = "b" * 64
+
+    anyio.run(drive)
+    assert compiled._build() == "a" * 64
+
+
+def test_fork_child_keeps_the_parent_build(monkeypatch):
+    monkeypatch.setattr(compiled, "_state", compiled._State())
+    compiled._state.build_checked, compiled._state.build = True, "b" * 64
+    compiled._after_fork_child()
+    assert (compiled._state.build_checked, compiled._state.build) == (True, "b" * 64)
+
+
+def test_disabled_cache_primes_nothing(monkeypatch):
+    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.setenv("GRIMOIRE_COMPILED_CACHE", "0")
+    monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: pytest.fail("fingerprinted"))
+    compiled.prime_build()
+    assert not compiled._state.build_checked
