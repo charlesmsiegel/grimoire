@@ -47,7 +47,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import NoReturn
 
 from .. import compiled_build, template_paths
@@ -909,6 +909,10 @@ def _history_size(row: tuple) -> int:
 # answer (empty), not a failure to ask.
 _OVER_BUDGET: list[tuple] = []
 
+#: `Batch.materialized_answer(..., split=True)`'s answer for a read past the
+#: history budget, compared by identity.
+HISTORY_OVER_BUDGET: Mapping[Path, tuple] = MappingProxyType({})
+
 
 def _history_transfer(cursor: Iterator[tuple]) -> list[tuple] | None:
     # Path count does not bound selectors per path. Reject the complete
@@ -1375,16 +1379,24 @@ class Batch:
     def materialized(self, paths: Sequence[Path]) -> dict[Path, tuple[Materialized, ...]]:
         """Advisory work history for explicit paths, including vanished ones."""
         found = self._read_history(paths, strict=False)
-        return found if found is not None else dict.fromkeys(paths, ())
+        return dict(found) if found is not None else dict.fromkeys(paths, ())
 
-    def materialized_answer(self, paths: Sequence[Path]) -> dict[Path, tuple[Materialized, ...]] | None:
+    def materialized_answer(self, paths: Sequence[Path], *,
+                            split: bool = False) -> Mapping[Path, tuple[Materialized, ...]] | None:
         """`materialized`, or None when the history could not be read at all
-        (a busy exclusion after a short wait, an unusable batch, a read error,
-        or a family past the history budget). Spec 05's sync must not report a
-        hot path `cold` because the question went unanswered."""
-        return self._read_history(paths, strict=True)
+        (a busy exclusion after a short wait, an unusable batch or a read
+        error). Spec 05's sync must not report a hot path `cold` because the
+        question went unanswered.
 
-    def _read_history(self, paths: Sequence[Path], *, strict: bool) -> dict[Path, tuple[Materialized, ...]] | None:
+        A read past the history budget answers every path empty, as
+        `materialized` does -- unless `split`, when it answers
+        `HISTORY_OVER_BUDGET` instead, so a caller that batched many paths
+        into one read can ask again path by path rather than see them all
+        cold."""
+        return self._read_history(paths, strict=True, split=split)
+
+    def _read_history(self, paths: Sequence[Path], *, strict: bool,
+                      split: bool = False) -> Mapping[Path, tuple[Materialized, ...]] | None:
         requested: dict[Path, tuple[Materialized, ...]] = dict.fromkeys(paths, ())
         unanswered = None if strict else requested
         relatives = {path: relative for path in requested if (relative := _relative(self.root, path)) is not None}
@@ -1400,6 +1412,8 @@ class Batch:
             # Past the budget the history is answered as empty in both forms:
             # oversize history stays an optional cold warm-up (S4 contract).
             if rows is _OVER_BUDGET or count > MAX_HISTORY_ROWS or size > MAX_HISTORY_BYTES:
+                if split:
+                    return HISTORY_OVER_BUDGET
                 _warn_once('materialized_budget')
                 return requested
             for row in rows:

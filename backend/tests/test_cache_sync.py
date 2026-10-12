@@ -508,3 +508,21 @@ def test_the_top_level_directory_is_matched_without_case(home):
     item = report.paths[0]
     assert item.reason != "not_syncable"
     assert item.rel == "worlds/realm/lore/pact.md"
+
+
+def test_a_repeated_delete_does_not_use_up_the_quota(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    _write(home, "worlds/realm/lore/a.md", "x")
+    report = cache_sync.sync_paths(["worlds/realm/lore/a.md"], mode="explicit",
+                                   deleted=["worlds/realm/lore/gone.md"] * 3)
+    assert [p.status for p in report.paths] == ["deleted", "cold"] and not report.truncated
+    assert report.ok
+
+
+def test_a_directory_cut_short_by_the_quota_is_refused_not_quietly_partial(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    for name in "abc":
+        _write(home, f"worlds/realm/lore/{name}.md", "x")
+    report = cache_sync.sync_paths(["worlds/realm/lore"], mode="explicit")
+    assert [(p.given, p.reason) for p in report.paths][-1] == ("worlds/realm/lore", "too_many")
+    assert report.truncated and not report.ok

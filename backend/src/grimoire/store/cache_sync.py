@@ -54,7 +54,7 @@ from typing import Literal, Protocol
 from .. import embeddings
 from ..llm_errors import LLMError
 from . import atomic, compiled, embed_space, paths, revision, semsearch, vectors, writeset
-from .context import art, semantic
+from .context import art, layout, semantic
 from .inference import embed
 
 _log = logging.getLogger(__name__)
@@ -326,7 +326,10 @@ def _recall_on() -> bool:
 
 
 def _art_on() -> bool:
-    return art.settings()["depth"] > 0
+    """The catalog spends only where a turn would build it: a depth above
+    zero and the `available_art` section switched on in the prompt layout,
+    which is the layer's off switch (`assemble._section_on`)."""
+    return art.settings()["depth"] > 0 and bool(layout.enabled_ids(("available_art",)))
 
 
 #: The producers' projections. Recall and art run on every turn of a campaign
@@ -848,13 +851,17 @@ def _check(root: Path, given: str) -> _Checked:
     return _Checked(text, rel, reason="not_a_file")
 
 
-def _expand(root: Path, rel: str, limit: int) -> tuple[list[str], bool]:
+def _expand(root: Path, rel: str, limit: int,
+            stop: Callable[[], bool] = lambda: False) -> tuple[list[str], bool]:
     """The files under a directory, as store-relative paths: temps, links and
-    anything `_check` refuses are skipped. Bounded by `limit`; the flag says
-    whether the walk stopped looking."""
+    anything `_check` refuses are skipped. Bounded by `limit`, and asks `stop`
+    before each directory it lists; the flag says whether the walk stopped
+    looking."""
     found: list[str] = []
     pending = [root.joinpath(*rel.split("/"))]
     while pending:
+        if stop():
+            return sorted(found), True
         directory = pending.pop()
         try:
             with os.scandir(directory) as listing:
@@ -968,8 +975,10 @@ def sync_paths(relpaths: Iterable[str], *,
     root = Path(root) if root is not None else paths.home()
     hooks = HOOKS if hooks is None else hooks
     report = SyncReport(root=str(root), root_source=_root_source(root), mode=mode, dry_run=dry_run)
-    # History a turn parked under its lock is what makes its paths hot.
-    vectors.flush_deferred()
+    # History a turn parked under its lock is what makes its paths hot. A dry
+    # run writes nothing, so it leaves the parked rows for the next handoff.
+    if not dry_run:
+        vectors.flush_deferred()
     quiet = mode == "write"               # refusals and missing paths are not news to the queue
     items = _classify_arguments(root, relpaths, deleted, report, quiet=quiet,
                                 renamed=renamed or {}, known=known or {}, listed=listed)
@@ -1070,17 +1079,21 @@ class _Collector:
         self.add(PathReport(os.fspath(given), "refused", "too_many"))
         return True
 
+    def repeats(self, checked: _Checked) -> bool:
+        """A path already in the batch: coalesced before the quota is charged."""
+        return checked.rel is not None and checked.rel in self.seen
+
     def deleted(self, root: Path, given: str) -> None:
-        if self.full(given):
-            return
-        self.accepted += 1
         checked = _check(root, given)
+        if self.repeats(checked) or self.full(given):
+            return
         if checked.reason is not None:
-            self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
+            item = PathReport(checked.given, "refused", checked.reason, rel=checked.rel)
         elif checked.kind != "absent":
-            self.add(PathReport(checked.given, "refused", "not_deleted", rel=checked.rel))
+            item = PathReport(checked.given, "refused", "not_deleted", rel=checked.rel)
         else:
-            self.add(PathReport(checked.given, "deleted", rel=checked.rel))
+            item = PathReport(checked.given, "deleted", rel=checked.rel)
+        self.accepted += self.add(item)
 
     def renamed(self, root: Path, old: str, new: str) -> None:
         """OLD is an intended delete; NEW is a path that inherits OLD's rows.
@@ -1115,18 +1128,20 @@ class _Collector:
             self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
     def argument(self, root: Path, given: str) -> None:
-        if self.full(given):
-            return
         checked = _check(root, given)
+        if self.repeats(checked) or self.full(given):
+            return
         if checked.reason is not None:
             self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
         elif checked.kind == "absent":
             self.add(PathReport(checked.given, "missing", rel=checked.rel))
         elif checked.kind == "dir" and checked.rel is not None:
             files, cut = _expand(root, checked.rel, MAX_PATHS - self.accepted)
-            self.report.truncated = self.report.truncated or cut
             for rel in files:
                 self.accepted += self.add(PathReport(rel, "pending", rel=rel))
+            if cut:                       # the files past the quota were never looked at
+                self.report.truncated = True
+                self.add(PathReport(checked.given, "refused", "too_many"))
         else:
             self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
@@ -1420,12 +1435,9 @@ def expand_scopes(root: Path, *, campaigns: Iterable[str] = (), worlds: Iterable
     card was rebuilt, which is why every row's `built_from` must agree; an
     empty one (a rename copy) never does. Everything else is a candidate."""
     result = ScopeResult()
-    listed: list[str] = []
-    for rel in _scope_dirs(root, campaigns, worlds, all_records, result):
-        files, cut = _expand(root, rel, MAX_SCOPE_FILES - len(listed))
-        listed.extend(f for f in files if f.split("/", 1)[0] in SYNCABLE_ROOTS)
-        result.truncated = result.truncated or cut
-    listed = list(dict.fromkeys(listed))
+    listed = _list_scopes(root, campaigns, worlds, all_records, stop, result)
+    if result.stopped is not None:
+        return result
     if compiled.unavailable_reason() is not None:
         result.known = dict.fromkeys(listed, "cold")
         return result
@@ -1435,24 +1447,56 @@ def expand_scopes(root: Path, *, campaigns: Iterable[str] = (), worlds: Iterable
                 if (halt := _halted(root, stop)) is not None:
                     result.stopped, result.truncated = halt, True
                     break
-                chunk = listed[offset:offset + compiled.SOURCE_CHUNK]
-                absolute = [root.joinpath(*rel.split("/")) for rel in chunk]
-                hashes = request.known_hashes(compiled.SYNC_SOURCES, absolute)
-                for rel, path in zip(chunk, absolute, strict=True):
-                    answer = request.materialized_answer([path])
-                    rows = answer.get(path, ()) if answer is not None else None
-                    digest = hashes.get(path)
-                    if rows is None:
-                        result.candidates.append(rel)   # unanswered: read it, never call it cold
-                    elif not rows:
-                        result.known[rel] = "cold"
-                    elif digest and all(row.built_from == digest for row in rows):
-                        result.known[rel] = "current"
-                    else:
-                        result.candidates.append(rel)
+                _classify_chunk(request, root, listed[offset:offset + compiled.SOURCE_CHUNK], result)
         finally:
             request.disabled = True                       # a listing writes nothing
     return result
+
+
+def _list_scopes(root: Path, campaigns: Iterable[str], worlds: Iterable[str], all_records: bool,
+                 stop: Callable[[], bool], result: ScopeResult) -> list[str]:
+    """The scopes' files, bounded by `MAX_SCOPE_FILES`. A stop or a moved root
+    while listing ends the listing and says so on `result`."""
+    halt: list[str] = []
+
+    def halted() -> bool:
+        if not halt and (reason := _halted(root, stop)) is not None:
+            halt.append(reason)
+        return bool(halt)
+
+    listed: list[str] = []
+    for rel in _scope_dirs(root, campaigns, worlds, all_records, result):
+        files, cut = _expand(root, rel, MAX_SCOPE_FILES - len(listed), halted)
+        listed.extend(f for f in files if f.split("/", 1)[0] in SYNCABLE_ROOTS)
+        result.truncated = result.truncated or cut
+        if halt:
+            result.stopped = halt[0]
+            break
+    return list(dict.fromkeys(listed))
+
+
+def _classify_chunk(request: compiled.Batch, root: Path, chunk: list[str], result: ScopeResult) -> None:
+    """One chunk of a scope listing: one stat-only hash read and one history
+    read for the chunk, path by path only when the chunk's history together
+    is past the read budget."""
+    absolute = [root.joinpath(*rel.split("/")) for rel in chunk]
+    hashes = request.known_hashes(compiled.SYNC_SOURCES, absolute)
+    answer = request.materialized_answer(absolute, split=True)
+    for rel, path in zip(chunk, absolute, strict=True):
+        if answer is compiled.HISTORY_OVER_BUDGET:
+            alone = request.materialized_answer([path])
+            rows = alone.get(path, ()) if alone is not None else None
+        else:
+            rows = answer.get(path, ()) if answer is not None else None
+        digest = hashes.get(path)
+        if rows is None:
+            result.candidates.append(rel)       # unanswered: read it, never call it cold
+        elif not rows:
+            result.known[rel] = "cold"
+        elif digest and all(row.built_from == digest for row in rows):
+            result.known[rel] = "current"
+        else:
+            result.candidates.append(rel)
 
 
 def run(relpaths: Iterable[str] = (), *, campaigns: Iterable[str] = (), worlds: Iterable[str] = (),

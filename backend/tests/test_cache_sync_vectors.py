@@ -612,3 +612,25 @@ def test_write_through_defers_recall_when_recall_is_off(home, fake):
     assert len(fake.calls) == before and list(written.paths[0].kinds.values()) == ["deferred"]
     cache_sync.sync_paths([_rel(home, path)], mode="explicit")   # the user's own request
     assert len(fake.calls) == before + 1
+
+
+def test_the_art_catalog_is_off_where_the_prompt_layout_switches_its_section_off(home):
+    from grimoire.store.context import layout
+
+    assert cache_sync._art_on()
+    layout.write_layout([{"id": "available_art", "label": "", "enabled": False}])
+    assert cache_sync._art_on()                  # a stored layout is a bypass until switched on
+    config.write_config(prompt_layout_enabled="on")
+    assert not cache_sync._art_on()
+    assert not cache_sync.VECTOR_PROJECTIONS[art.PROJECTION].enabled()
+    layout.write_layout([{"id": "available_art", "label": "", "enabled": True}])
+    assert cache_sync._art_on()
+
+
+def test_a_dry_run_leaves_parked_history_parked(home, fake, monkeypatch):
+    flushed = []
+    monkeypatch.setattr(vectors, "flush_deferred", lambda: flushed.append(1) or 0)
+    cache_sync.sync_paths([], mode="explicit", dry_run=True)
+    assert flushed == []
+    cache_sync.sync_paths([], mode="explicit")
+    assert flushed == [1]

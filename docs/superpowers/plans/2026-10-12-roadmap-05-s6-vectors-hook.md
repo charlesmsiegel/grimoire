@@ -138,3 +138,20 @@ Substitute reviews, recorded in the PR; `@codex review` on the PR.
   move drops only paths collected under another root.
 - The operation guard also refuses a `replace(**...)` in the warm-up module
   and any `.network(...)` call outside it or not handed its `ctx`.
+
+## Codex review, second round
+
+- The art catalog's projection is switched off where a turn would not build
+  it: a depth of zero, or the `available_art` section switched off in an
+  applied prompt layout (`layout.enabled_ids`, the check `assemble._section_on`
+  makes).
+- A dry run leaves history a turn parked under its lock parked; only a real
+  batch flushes it.
+- A repeated path (a `--deleted` or an argument) is coalesced before the quota
+  is charged, and a directory the quota cut short is refused `too_many` by
+  name, so the report is not `ok`.
+- A scope listing asks the stop signal before each directory it lists, and
+  reads a chunk's history in one call, path by path only when the chunk
+  together is past the history budget
+  (`Batch.materialized_answer(..., split=True)` answers
+  `compiled.HISTORY_OVER_BUDGET`), so a budget never makes a chunk `cold`.

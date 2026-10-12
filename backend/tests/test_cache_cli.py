@@ -338,3 +338,38 @@ def test_a_stop_while_listing_a_scope_reaches_the_report(home):
         _write(home, f"worlds/realm/lore/{n}.md", "x")
     report = cache_sync.run(worlds=["realm"], stop=lambda: True)
     assert report.stopped == "cancelled" and report.truncated and not report.ok
+
+
+def test_a_stop_is_heard_inside_the_listing_not_only_after_it(home, monkeypatch):
+    for world in ("realm", "saltmarch"):
+        for n in range(3):
+            _write(home, f"worlds/{world}/lore/sub{n}/entry.md", "x")
+    listed = []
+    real = os.scandir
+    monkeypatch.setattr(cache_sync.os, "scandir", lambda p: listed.append(p) or real(p))
+    asked = []
+    report = cache_sync.run(worlds=["realm", "saltmarch"], stop=lambda: len(asked) > 2 or asked.append(1))
+    assert report.stopped == "cancelled" and report.truncated and not report.ok
+    assert len(listed) <= 3
+
+
+def test_a_scoped_sync_reads_history_once_per_chunk(home, upper, monkeypatch):
+    for n in range(5):
+        _write(home, f"worlds/realm/lore/{n}.md", f"entry {n}")
+        _read(home, upper, f"worlds/realm/lore/{n}.md")
+    reads = []
+    real = compiled.Batch.materialized_answer
+    monkeypatch.setattr(compiled.Batch, "materialized_answer",
+                        lambda self, paths, **kw: reads.append(len(paths)) or real(self, paths, **kw))
+    scope = cache_sync.expand_scopes(home, worlds=["realm"])
+    assert reads == [5] and len(scope.candidates) == 5
+
+
+def test_a_chunk_past_the_history_budget_is_asked_path_by_path_never_called_cold(home, upper, monkeypatch):
+    for n in range(3):
+        _write(home, f"worlds/realm/lore/{n}.md", f"entry {n}")
+        _read(home, upper, f"worlds/realm/lore/{n}.md")
+    monkeypatch.setattr(compiled, "MAX_HISTORY_ROWS", 1)     # the chunk together is past it; one path is not
+    scope = cache_sync.expand_scopes(home, worlds=["realm"])
+    assert sorted(scope.candidates) == [f"worlds/realm/lore/{n}.md" for n in range(3)]
+    assert scope.known == {}
