@@ -1,8 +1,8 @@
 """Image garbage collection (stage 4, spec section 12 and rulings M12-M15).
 
-`image_gc.scan` is the dry run: it walks every root strictly, records this
-device's sightings of unreachable objects and blobs, and -- when something is
-collectable and nothing blocked the walk -- hands back a single-use token.
+`image_gc.scan` is the dry run: it walks every root strictly and -- when
+something is collectable and nothing blocked the walk -- hands back a
+single-use token.
 `image_gc.collect(token)` deletes at most what that scan reported, intersected
 with a fresh strict walk, in batches under the ingest/GC lock.
 
@@ -42,8 +42,7 @@ from grimoire.store.worlds import staging as world_staging
 
 DAY = 24 * 3600.0
 T = 1_900_000_000.0          # a fixed "now" for the first scan of each test
-OLD = T - 40 * DAY           # an mtime well past the grace period at T
-LATER = T + 31 * DAY         # a second scan, a grace period after the first
+OLD = T - 2 * 3600           # an mtime past the one-hour grace at T
 
 
 def _never() -> bool:
@@ -117,13 +116,11 @@ def _scan(root, now=T, **kw) -> dict:
 
 
 def _ready(root) -> dict:
-    """Two scans a grace period apart: whatever is unreachable and old is
-    collectable on the second, which is returned."""
-    _scan(root, now=T)
-    return _scan(root, now=LATER)
+    """One scan: whatever is unreachable and an hour old is collectable."""
+    return _scan(root, now=T)
 
 
-def _collect(root, token, now=LATER + 3600, **kw) -> dict:
+def _collect(root, token, now=T + 60, **kw) -> dict:
     return image_gc.collect(root, token, cancel=_never, now=now, **kw)
 
 
@@ -150,15 +147,14 @@ def test_referenced_and_multiply_referenced_images_are_kept(root):
     _place(root, twice, "gallery_1")
     _place(root, twice, "map", root / "campaigns" / "saltmarch" / "locations" / "harbor"
            / "assets" / "default")
-    _ready(root)
-    report = _scan(root, now=LATER + DAY)
+    report = _scan(root, now=T)
     assert report["state"] == "complete"
     assert report["counts"]["placements"] == 3
     assert report["counts"]["objects"] == 3
     assert _ids(report) == {orphan.id}
     assert report["token"]
 
-    done = _collect(root, report["token"], now=LATER + DAY + 60)
+    done = _collect(root, report["token"])
     assert done["state"] == "complete"
     assert {r["id"] for r in done["deleted"]["objects"]} == {orphan.id}
     for kept in (once, twice):
@@ -236,14 +232,14 @@ def test_an_unreadable_dir_an_unknown_format_and_a_symlink_abort(root, monkeypat
         (root / "worlds" / "realm" / "locations").mkdir(parents=True)
         (root / "worlds" / "realm" / "locations" / "harbor").symlink_to(elsewhere)
 
-    blocked = _scan(root, now=LATER + 60)
+    blocked = _scan(root, now=T + 30)
     assert blocked["state"] == "blocked"
     assert blocked["blocking"], "a blocked scan names what blocked it"
     assert blocked["token"] is None
     assert blocked["collectable"] == []
 
     # And the token an earlier, clean scan issued deletes nothing now.
-    done = _collect(root, token, now=LATER + 120)
+    done = _collect(root, token, now=T + 90)
     assert done["state"] == "blocked"
     assert done["blocking"]
     assert done["deleted"]["objects"] == []
@@ -274,8 +270,7 @@ def test_manifests_journals_staging_and_pending_map_entries_are_roots(root, monk
 
     monkeypatch.setattr(image_migration, "pending_ids", pending_ids)
 
-    _scan(root, now=T)
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["state"] == "complete", report["blocking"]
     assert _ids(report) == {orphan.id}
     assert asked and all(r == root for r in asked), "the map is read under the pinned root"
@@ -300,8 +295,7 @@ def test_an_unreadable_manifest_journal_or_map_aborts(root, monkeypatch, what):
         monkeypatch.setattr(image_migration, "pending_ids", garbled)
     p.parent.mkdir(parents=True)
     p.write_text(body, encoding="utf-8")
-    _scan(root, now=T)
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["state"] == "blocked"
     assert report["token"] is None
     assert any(b["path"] == p.relative_to(root).as_posix() for b in report["blocking"])
@@ -313,75 +307,65 @@ def test_an_old_staging_dir_is_walked_and_a_young_one_aborts(root):
     image_refs.write(old / "world" / "lore" / "rumor" / "assets" / "default", "map", staged.id)
     for p in [old, *old.rglob("*")]:
         os.utime(p, (T - DAY, T - DAY))
-    _scan(root, now=T)
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["state"] == "complete"
     assert _ids(report) == {orphan.id}
 
     young = root / ".world-staging" / ("e" * 32) / "world"
     young.mkdir(parents=True)
-    os.utime(young, (LATER + 3000, LATER + 3000))
-    blocked = _scan(root, now=LATER + 3600)
+    os.utime(young, (T + 3000, T + 3000))
+    blocked = _scan(root, now=T + 3600)
     assert blocked["state"] == "blocked"
     assert blocked["token"] is None
     assert any(b["reason"] == "staging-in-progress" for b in blocked["blocking"])
-    done = _collect(root, report["token"], now=LATER + 3600)
+    done = _collect(root, report["token"], now=T + 3600)
     assert done["state"] == "blocked" and done["deleted"]["objects"] == []
     assert _sidecar(orphan).is_file()
 
 
-# ---- grace, sightings and clock skew -------------------------------------------
+# ---- grace and clock skew -------------------------------------------------------
 
-def test_recent_orphans_are_grace_protected(root):
-    fresh = _obj(1, mtime=LATER - DAY)
-    report = _ready(root)
+def test_collectable_on_the_first_scan_after_an_hour(root):
+    orphan = _obj(1, mtime=T - 3601)
+    report = _scan(root, now=T)
+    assert report["state"] == "complete"
+    assert _ids(report) == {orphan.id}
+    assert report["protected"] == []
+    assert report["token"]
+    assert report["grace_hours"] == image_gc.GRACE_HOURS == 1
+
+
+def test_younger_than_an_hour_is_protected_with_a_time(root):
+    fresh = _obj(1, mtime=T - 600)
+    report = _scan(root, now=T)
     assert report["collectable"] == []
     row = next(r for r in report["protected"] if r["id"] == fresh.id)
     assert row["why"] == "grace"
-    assert row["collectable_at"] == pytest.approx(LATER - DAY + 30 * DAY)
+    assert row["collectable_at"] == pytest.approx(T + 3000)
     assert report["token"] is None
+    # An hour on, the same object is offered.
+    assert _ids(_scan(root, now=T + 3000)) == {fresh.id}
 
 
-def test_collectable_only_after_grace_old_first_sighting_and_a_second_scan(root):
-    orphan = _obj(1)
-    first = _scan(root, now=T)
-    assert first["collectable"] == []
-    row = next(r for r in first["protected"] if r["id"] == orphan.id)
-    assert row["why"] == "first-sighting"
-    assert row["collectable_at"] == pytest.approx(T + 30 * DAY)
-    assert first["token"] is None
-
-    almost = _scan(root, now=T + 29 * DAY)
-    assert almost["collectable"] == []
-    assert next(r for r in almost["protected"] if r["id"] == orphan.id)["why"] == "sighting"
-
-    due = _scan(root, now=T + 30 * DAY)
-    assert _ids(due) == {orphan.id}
-    assert due["token"]
-
-
-def test_the_grace_period_has_a_floor(root):
-    with pytest.raises(ValueError):
-        _scan(root, grace_days=image_gc.GRACE_DAYS_MIN - 1, run_id="5" * 32)
-    refused = maintenance_reports.read(root, "5" * 32)
-    assert refused["state"] == "failed" and refused["error"] == "ValueError"
-    orphan = _obj(1)
-    _scan(root, now=T, grace_days=image_gc.GRACE_DAYS_MIN)
-    report = _scan(root, now=T + 7 * DAY, grace_days=image_gc.GRACE_DAYS_MIN)
-    assert _ids(report) == {orphan.id}
-
-
-def test_a_reachable_sighting_resets_the_clock(root):
-    orphan = _obj(1)
+def test_no_sightings_file_is_written(root):
+    _obj(1)
     _scan(root, now=T)
-    d = _place(root, orphan)
-    seen = _scan(root, now=T + 10 * DAY)
-    assert orphan.id not in {r["id"] for r in seen["protected"]}
-    image_refs.delete(d, "avatar")
-    again = _scan(root, now=LATER)
-    assert again["collectable"] == []
-    assert next(r for r in again["protected"] if r["id"] == orphan.id)["why"] == "first-sighting"
-    assert _ids(_scan(root, now=LATER + 30 * DAY)) == {orphan.id}
+    gc_dir = root / ".cache" / "image-store" / "gc"
+    key = maintenance_reports.device_key(root)
+    assert not (gc_dir / f"{key}.json").exists()
+    assert list(gc_dir.glob("*.json")) == []
+
+
+def test_an_older_format_token_is_refused(root):
+    _obj(1)
+    report = _ready(root)
+    rec = image_gc.token_path(root, report["token"])
+    raw = json.loads(rec.read_text(encoding="utf-8"))
+    assert raw["format"] == image_gc.FORMAT == 2 and raw["grace_hours"] == image_gc.GRACE_HOURS
+    raw["format"] = 1
+    rec.write_text(json.dumps(raw), encoding="utf-8")
+    done = _collect(root, report["token"])
+    assert done["state"] == "refused" and done["deleted"]["objects"] == []
 
 
 def test_future_mtimes_are_never_collectable(root):
@@ -393,15 +377,6 @@ def test_future_mtimes_are_never_collectable(root):
     skewed = {r["id"] for r in report["protected"] if r["why"] == "clock-skew"}
     assert skewed == {ahead.id, blob_ahead.id}
     assert {r["id"] for r in report["clock_skew"]} >= {ahead.id, blob_ahead.id}
-
-
-def test_a_future_sighting_is_flagged_and_restarts(root, monkeypatch):
-    orphan = _obj(1)
-    _scan(root, now=LATER + 400 * DAY)      # a clock that ran a year ahead
-    report = _scan(root, now=LATER)
-    assert report["collectable"] == []
-    assert orphan.id in {r["id"] for r in report["clock_skew"]}
-    assert _ids(_scan(root, now=LATER + 30 * DAY)) == {orphan.id}
 
 
 # ---- blob refcounts -----------------------------------------------------------
@@ -444,16 +419,39 @@ def test_an_unreadable_sidecar_keeps_every_blob(root):
     _sidecar(garbled).write_text("{torn", encoding="utf-8")
     os.utime(_sidecar(garbled), (OLD, OLD))
     report = _ready(root)
-    assert _ids(report) == {orphan.id}
-    assert report["collectable_blobs"] == []
+    # The hold protects the object the collection would otherwise skip the
+    # blob of, so the scan offers nothing and issues no token.
+    assert report["collectable"] == [] and report["collectable_blobs"] == []
+    assert report["token"] is None
+    assert {"id": orphan.id, "blob": orphan.blob_sha256 + ".png",
+            "why": "unreadable-sidecars", "collectable_at": None} in report["protected"]
     assert report["unreadable_sidecars"] == [_sidecar(garbled).relative_to(root).as_posix()]
-    assert report["reclaimable_bytes"] == _sidecar_size(orphan.id)
-    done = _collect(root, report["token"])
-    assert done["kept_blobs"] == [{"id": orphan.id, "blob": orphan.blob_sha256 + ".png",
-                                   "reason": "unreadable-sidecars"}]
-    assert not _sidecar(orphan).exists()
-    assert _blob(orphan).is_file() and _blob(stray_blob).is_file() and _blob(garbled).is_file()
-    assert _sidecar(garbled).is_file()
+    assert report["reclaimable_bytes"] == 0
+    assert report["counts"]["collectable"] == 0
+    for kept in (orphan, stray_blob, garbled):
+        assert _blob(kept).is_file()
+    assert _sidecar(orphan).is_file() and _sidecar(garbled).is_file()
+
+
+def test_held_objects_are_protected_not_offered(root):
+    """An otherwise collectable object whose blob is held (an unreadable
+    sidecar, an unarrived object) is protected with that reason and left out
+    of the token; a shared blob does not protect its object."""
+    orphan, garbled = _obj(1), _obj(2)
+    _sidecar(garbled).write_text("{torn", encoding="utf-8")
+    os.utime(_sidecar(garbled), (OLD, OLD))
+    unreadable = _scan(root, now=T)
+    assert unreadable["collectable"] == [] and unreadable["token"] is None
+    row = next(r for r in unreadable["protected"] if r["id"] == orphan.id)
+    assert row["why"] == "unreadable-sidecars" and row["collectable_at"] is None
+
+    os.unlink(_sidecar(garbled))
+    image_refs.write(_char_dir(root), "avatar", "px1-" + "cd" * 32)
+    unarrived = _scan(root, now=T)
+    assert unarrived["collectable"] == [] and unarrived["token"] is None
+    row = next(r for r in unarrived["protected"] if r["id"] == orphan.id)
+    assert row["why"] == "unarrived-objects" and row["collectable_at"] is None
+    assert unarrived["counts"]["protected"] == len(unarrived["protected"])
 
 
 def test_an_orphan_blob_is_a_candidate_after_grace(root):
@@ -529,8 +527,8 @@ def test_an_ingest_that_touched_the_object_after_the_scan_is_skipped(root):
     orphan = _obj(1)
     report = _ready(root)
     image_store.ingest(_png(1), "png")       # touches the sidecar's mtime ...
-    os.utime(_sidecar(orphan), (LATER + 1800, LATER + 1800))   # ... after the scan
-    done = _collect(root, report["token"], now=LATER + 3600)
+    os.utime(_sidecar(orphan), (T + 1800, T + 1800))   # ... after the scan
+    done = _collect(root, report["token"], now=T + 3600)
     assert done["deleted"]["objects"] == []
     assert any(s["id"] == orphan.id and s["reason"] == "grace" for s in done["skipped"])
     assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
@@ -545,21 +543,21 @@ def test_a_token_is_single_use_device_bound_and_expires(root, monkeypatch, tmp_p
     token = report["token"]
 
     # Expired: a day after the scan.
-    late = _collect(root, token, now=LATER + 25 * 3600)
+    late = _collect(root, token, now=T + 25 * 3600)
     assert late["state"] == "refused" and late["deleted"]["objects"] == []
 
-    report = _scan(root, now=LATER + 2 * DAY)
+    report = _scan(root, now=T + 26 * 3600)
     token = report["token"]
     # Another device: the same synced .cache, read by a machine with its own id.
     other = tmp_path_factory.mktemp("machine-b")
     with monkeypatch.context() as m:
         m.setattr(proclock, "lock_dir", lambda: other)
-        elsewhere = _collect(root, token, now=LATER + 2 * DAY + 60)
+        elsewhere = _collect(root, token, now=T + 26 * 3600 + 60)
     assert elsewhere["state"] == "refused" and elsewhere["deleted"]["objects"] == []
 
-    done = _collect(root, token, now=LATER + 2 * DAY + 120)
+    done = _collect(root, token, now=T + 26 * 3600 + 120)
     assert done["state"] == "complete" and len(done["deleted"]["objects"]) == 3
-    again = _collect(root, token, now=LATER + 2 * DAY + 180)
+    again = _collect(root, token, now=T + 26 * 3600 + 180)
     assert again["state"] == "refused"
 
     for bad in ("", "../x", "A" * 32, None):
@@ -580,12 +578,8 @@ def test_collect_deletes_at_most_the_reported_ids(root):
     a, b = _obj(1), _obj(2)
     report = _ready(root)
     assert _ids(report) == {a.id, b.id}
-    # After the scan: a third orphan, as old and as sighted, and `b` placed.
+    # After the scan: a third orphan, as old as the others, and `b` placed.
     c = _obj(3)
-    state = image_gc.sightings_path(root)
-    raw = json.loads(state.read_text(encoding="utf-8"))
-    raw["objects"][c.id] = T - 60 * DAY
-    state.write_text(json.dumps(raw), encoding="utf-8")
     _place(root, b)
     done = _collect(root, report["token"])
     assert {r["id"] for r in done["deleted"]["objects"]} == {a.id}
@@ -623,8 +617,8 @@ def test_a_root_that_is_not_the_live_one_is_refused(root, tmp_path):
     report = _ready(root)
     other = tmp_path / "other-home"
     other.mkdir()
-    assert image_gc.scan(other.resolve(), cancel=_never, now=LATER)["state"] == "root-changed"
-    done = image_gc.collect(other.resolve(), report["token"], cancel=_never, now=LATER)
+    assert image_gc.scan(other.resolve(), cancel=_never, now=T)["state"] == "root-changed"
+    done = image_gc.collect(other.resolve(), report["token"], cancel=_never, now=T + 60)
     assert done["state"] == "root-changed"
     assert _sidecar(orphan).is_file()
 
@@ -726,9 +720,9 @@ def test_scan_and_collect_leave_a_report_on_success_failure_and_cancel(root, mon
             _scan(root, now=T, run_id="3" * 32)
     assert maintenance_reports.read(root, "3" * 32)["state"] == "failed"
 
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     done = image_gc.collect(root, report["token"], cancel=lambda: True,
-                            now=LATER + 60, run_id="4" * 32)
+                            now=T + 60, run_id="4" * 32)
     assert done["state"] == "cancelled" and done["deleted"]["objects"] == []
     assert maintenance_reports.read(root, "4" * 32)["state"] == "cancelled"
     assert done["mode"] == "collect" and ok["mode"] == "scan"
@@ -762,8 +756,7 @@ def test_a_case_variant_image_refs_folder_aborts(root):
     variant.mkdir(parents=True)
     (variant / "avatar.json").write_text(json.dumps({"format": 1, "image": hidden.id}),
                                          encoding="utf-8")
-    _scan(root, now=T)
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["state"] == "blocked" and report["token"] is None
     assert {"path": variant.relative_to(root).as_posix(), "reason": "case-variant"} \
         in report["blocking"]
@@ -783,8 +776,7 @@ def test_a_record_named_image_refs_is_not_a_placement_folder(root, slug):
     # both siblings, and collection must accept either spelling independently.
     (lore / slug).mkdir(parents=True)
     (lore / slug / "entry.md").write_text("# Saltmarch\n", encoding="utf-8")
-    _scan(root, now=T)
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["state"] != "blocked" and report["blocking"] == []
     assert report["token"] is not None
     ids = {row["id"] for row in report["collectable"]}
@@ -801,14 +793,14 @@ def test_an_unarrived_object_keeps_every_orphan_blob(root):
     # A placement synced in whose object has not: its blob may be that one.
     unarrived = "px1-" + "ab" * 32
     image_refs.write(_char_dir(root), "avatar", unarrived)
-    held = _scan(root, now=LATER + 60)
+    held = _scan(root, now=T + 60)
     assert held["state"] == "complete"
     assert held["unarrived_objects"] == [unarrived]
     assert held["collectable_blobs"] == [] and held["token"] is None
     assert {"id": None, "blob": _blob(gone).name, "why": "unarrived-objects",
             "collectable_at": None} in held["protected"]
 
-    done = _collect(root, report["token"], now=LATER + 120)
+    done = _collect(root, report["token"], now=T + 120)
     assert done["deleted"]["blobs"] == []
     assert {"id": None, "blob": _blob(gone).name, "reason": "unarrived-objects"} \
         in done["skipped"]
@@ -820,8 +812,7 @@ def test_blobs_without_an_objects_folder_block(root):
     blob = _blob(gone)
     shutil.rmtree(image_store.store_root() / "objects")
     os.utime(blob, (OLD, OLD))
-    _scan(root, now=T)
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["state"] == "blocked" and report["token"] is None
     assert {"path": "assets/image-store/objects", "reason": "objects-missing"} \
         in report["blocking"]
@@ -905,21 +896,17 @@ def test_blob_keys_are_where_thumbnails_land(root):
 
 def test_a_blob_shared_with_an_unarrived_object_is_kept(root):
     """Object B is placed and shares A's blob, but B's sidecar has not
-    synced in yet: collecting A must not take the blob B will point at."""
+    synced in yet: A is protected rather than offered, so the blob B will
+    point at is never at risk."""
     a = _obj(1)
     b = _share_blob(a, 2)
     d = _char_dir(root)
     image_refs.write(d, "avatar", b)
-    _scan(root, now=T)
     os.unlink(image_store.object_path(b))
-    report = _scan(root, now=LATER)
+    report = _scan(root, now=T)
     assert report["unarrived_objects"] == [b]
-    assert _ids(report) == {a.id}
-    assert report["reclaimable_bytes"] == _sidecar(a).stat().st_size   # the blob not counted
-
-    done = _collect(root, report["token"])
-    assert [r["id"] for r in done["deleted"]["objects"]] == [a.id]
-    assert done["deleted"]["blobs"] == []
-    assert {"id": a.id, "blob": a.blob_sha256 + ".png", "reason": "unarrived-objects"} \
-        in done["kept_blobs"]
-    assert _blob(a).is_file()
+    assert report["collectable"] == [] and report["token"] is None
+    assert report["reclaimable_bytes"] == 0
+    assert {"id": a.id, "blob": a.blob_sha256 + ".png", "why": "unarrived-objects",
+            "collectable_at": None} in report["protected"]
+    assert _sidecar(a).is_file() and _blob(a).is_file()

@@ -6,9 +6,8 @@ stays until this collects it. Two calls, both run as the ``maintenance`` run
 class and both fail closed:
 
 * **`scan`** is the dry run. It walks every root strictly, lists the store,
-  records this device's sightings of what is unreachable, and -- when
-  something is collectable and nothing blocked the walk -- persists a
-  single-use token naming exactly that.
+  and -- when something is collectable and nothing blocked the walk --
+  persists a single-use token naming exactly that.
 * **`collect`** takes such a token and deletes at most what it names,
   intersected with a fresh strict walk, in batches under the ingest/GC lock.
 
@@ -25,31 +24,31 @@ report names each blocking path, and nothing is deleted. So does a staged work
 directory touched within the last hour (`STAGING_MIN_AGE_SECONDS`): a fork or
 an import is still filling it, and what it will place is not on disk yet.
 
-**Candidates** (M13). An object is collectable only when all of these hold:
+**Candidates** (M13; viewer-removal spec 2.1). An object is collectable only
+when all of these hold:
 
 - no root reaches it;
-- its sidecar's and its blob's mtimes are both older than the grace period
-  (ingest touches the sidecar, so an object somebody ingested and has not
-  placed yet -- a Chub gallery mid-import, a harvested member, a staged
-  bundle -- is never collected under them);
-- THIS device first saw it unreachable at least a grace period ago, on an
-  earlier scan, and sees it unreachable again now, at least `SCAN_GAP_HOURS`
-  after that.
+- its sidecar's and its blob's mtimes are both at least one hour old
+  (`GRACE_HOURS`; ingest touches the sidecar, so an object somebody ingested
+  and has not placed yet -- a Chub gallery mid-import, a harvested member, a
+  staged bundle -- is never collected under them);
+- and the collection carries a token from a scan on this device for this
+  root, at most `TOKEN_HOURS` old.
 
-Sightings live in ``.cache/image-store/gc/<device key>.json``. ``.cache``
-syncs, so the file is keyed by `maintenance_reports.device_key` and another
-device's sightings are never this one's evidence. A sighting is dropped the
-moment its object is seen reachable. An mtime or a sighting in the future is
-never collectable and is reported as clock skew; a future sighting restarts.
-The accepted residual risk: a device offline for longer than the grace period
-can bring back a placement whose image was collected meanwhile.
+The decision is made on mtimes alone: there is no per-device sightings file
+(one an older build left under ``.cache/image-store/gc/`` is neither read nor
+written). An mtime in the future is never collectable and is reported as
+clock skew. The scan agrees with the collection: an otherwise collectable
+object whose blob would be held (`_orphan_hold`: an unreadable sidecar, or an
+unarrived object) is protected with that reason and is not offered or named
+by the token.
 
 **Blobs** (M14). A blob goes only when no surviving readable sidecar names it:
 the ``blob -> sidecars`` map is built over every file in ``objects/`` and
 rebuilt under the ingest/GC lock at each batch. One sidecar that does not
 read (or an ``objects/`` folder that does not list) keeps EVERY blob, because
 it may name any of them. A blob nothing names is a candidate under the same
-grace and sighting rules as an object -- except while some placement names an
+grace rule as an object -- except while some placement names an
 object with no readable sidecar (one that has not arrived yet, mid-sync), when
 every orphan blob is kept: the unarrived object's blob may be among them. An
 ``objects/`` folder that is absent beside a ``blobs/`` one blocks outright. A blob-index entry is deleted only if
@@ -112,16 +111,10 @@ from . import (
 
 _log = logging.getLogger(__name__)
 
-GRACE_DAYS_DEFAULT = 30
-"""How old an unreachable object (and this device's first sighting of it) must
-be before it is collected. Long enough for a sync client to deliver a
-placement another device made while this one was away."""
-
-GRACE_DAYS_MIN = 7
-"""No grace period below this is accepted."""
-
-SCAN_GAP_HOURS = 24
-"""How far apart the two scans that saw an object unreachable must be."""
+GRACE_HOURS = 1
+"""How old an unreachable object's sidecar and blob must be before it is
+collected: a structural margin over the longest request or run that ingests a
+picture and has not placed it yet, not a measured one."""
 
 BATCH_OBJECTS = 100
 """The most objects one hold of the ingest/GC lock deletes."""
@@ -140,9 +133,8 @@ STAGING_DIRS = (".world-staging", ".module-staging")
 """Where whole trees are built before they are published
 (`worlds.staging.staging_root`, `module_edit.staging`)."""
 
-FORMAT = 1
+FORMAT = 2
 
-_DAY = 24 * 3600.0
 _GC_DIR = (".cache", "image-store", "gc")
 _THUMBS_DIR = (".cache", "thumbs")
 _TOKEN = re.compile(r"[0-9a-f]{32}")
@@ -177,11 +169,6 @@ class _UnsafePathError(Exception):
 
 def _gc_dir(root: Path) -> Path:
     return Path(root).joinpath(*_GC_DIR)
-
-
-def sightings_path(root: Path) -> Path:
-    """This device's sightings for the store at `root`."""
-    return _gc_dir(root) / f"{maintenance_reports.device_key(root)}.json"
 
 
 def _tokens_dir(root: Path) -> Path:
@@ -658,7 +645,7 @@ def _list_blobs(root: Path, s: _Sidecars) -> dict[str, os.stat_result]:
     return out
 
 
-# ---- sightings ------------------------------------------------------------------
+# ---- judging ---------------------------------------------------------------------
 
 def _number(v: object) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -668,58 +655,19 @@ def _as_number(v: object) -> float | None:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
-def _load_sightings(root: Path) -> dict[str, dict[str, float]]:
-    """This device's first unreachable sightings. Missing or garbled reads as
-    none: every clock restarts, which only ever delays a collection."""
-    out: dict[str, dict[str, float]] = {"objects": {}, "blobs": {}}
-    try:
-        raw = json.loads(sightings_path(root).read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError):
-        return out
-    if not isinstance(raw, dict) or raw.get("format") != FORMAT:
-        return out
-    for kind, valid in (("objects", image_hash.is_image_id),
-                        ("blobs", lambda k: _split_key(k) is not None)):
-        got = raw.get(kind)
-        if isinstance(got, dict):
-            out[kind] = {k: float(v) for k, v in got.items() if valid(k) and _number(v)}
-    return out
-
-
-def _save_sightings(root: Path, sightings: dict[str, dict[str, float]]) -> None:
-    path = sightings_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(path, json.dumps({"format": FORMAT, **sightings},
-                                       indent=1, sort_keys=True) + "\n")
-
-
 @dataclass
 class _Verdict:
-    why: str | None             # None: collectable now
+    why: str | None             # None: collectable now; else "grace" or "clock-skew"
     at: float | None            # when it becomes collectable (None: cannot say)
-    skew: str | None = None     # "mtime" or "sighting"
-    first: float = 0.0          # the sighting to keep
+    skew: str | None = None     # "mtime"
 
 
-def _judge(now: float, grace: float, mtimes: list[float], prior: float | None) -> _Verdict:
-    """M13 for one object or blob, given its mtimes and this device's
-    earlier first sighting of it (None: this scan is the first)."""
-    skew = None
-    if prior is not None and prior > now:
-        prior, skew = None, "sighting"          # a clock that ran ahead: restart
-    first = now if prior is None else prior
+def _judge(now: float, grace: float, mtimes: list[float]) -> _Verdict:
+    """M13 for one object or blob, on its mtimes alone."""
     if any(m > now for m in mtimes):
-        return _Verdict("clock-skew", None, "mtime", first)
-    gap = SCAN_GAP_HOURS * 3600.0
-    if prior is None:
-        due = max([*(m + grace for m in mtimes), now + grace, now + gap])
-        return _Verdict("first-sighting", due, skew, first)
-    th = {"grace": max(m + grace for m in mtimes) if mtimes else 0.0,
-          "sighting": prior + grace, "second-scan": prior + gap}
-    due = max(th.values())
-    if now >= due:
-        return _Verdict(None, due, skew, first)
-    return _Verdict(max(th, key=lambda k: th[k]), due, skew, first)
+        return _Verdict("clock-skew", None, "mtime")
+    due = max((m + grace for m in mtimes), default=0.0)
+    return _Verdict(None if now >= due else "grace", due)
 
 
 # ---- reports and tokens ----------------------------------------------------------
@@ -729,10 +677,10 @@ KIND = "image-gc"
 
 
 def _new_report(mode: str | None, run_id: str, now: float,
-                grace_days: float | None) -> dict:
+                grace_hours: float | None) -> dict:
     return {
         "kind": KIND, "mode": mode, "run_id": run_id, "state": "running",
-        "started_at": now, "finished_at": None, "grace_days": grace_days,
+        "started_at": now, "finished_at": None, "grace_hours": grace_hours,
         "counts": {"placements": 0, "objects": 0, "blobs": 0, "unreferenced": 0,
                    "collectable": 0, "collectable_blobs": 0, "protected": 0},
         "collectable": [], "collectable_blobs": [], "protected": [],
@@ -772,8 +720,7 @@ def _run_id(root: Path, run_id: str | None) -> str:
     return run_id
 
 
-def _issue_token(root: Path, report: dict, device: str, now: float,
-                 grace_days: float) -> None:
+def _issue_token(root: Path, report: dict, device: str, now: float) -> None:
     ids = [row["id"] for row in report["collectable"]]
     blobs = [row["blob"] for row in report["collectable_blobs"]]
     if not ids and not blobs:
@@ -784,7 +731,7 @@ def _issue_token(root: Path, report: dict, device: str, now: float,
     atomic.write_text(path, json.dumps({
         "format": FORMAT, "token": token, "ids": ids, "blobs": blobs,
         "root": str(root), "device": device, "scanned_at": now,
-        "grace_days": grace_days, "run_id": report["run_id"]}, indent=1) + "\n")
+        "grace_hours": GRACE_HOURS, "run_id": report["run_id"]}, indent=1) + "\n")
     report["token"] = token
     report["token_expires_at"] = now + TOKEN_HOURS * 3600.0
     _prune_tokens(root, device, now)
@@ -808,8 +755,8 @@ def _read_token(root: Path, token: object, device: str, now: float
         return None, "issued on another device"
     if rec.get("root") != str(root):
         return None, "issued for another store"
-    at, grace = _as_number(rec.get("scanned_at")), _as_number(rec.get("grace_days"))
-    if at is None or grace is None or grace < GRACE_DAYS_MIN:
+    at, grace = _as_number(rec.get("scanned_at")), _as_number(rec.get("grace_hours"))
+    if at is None or grace != GRACE_HOURS:
         return None, "unknown or already used"
     if at > now:
         return None, "issued in the future (clock skew)"
@@ -862,27 +809,18 @@ def _prune_tokens(root: Path, device: str, now: float) -> None:
 
 # ---- scan --------------------------------------------------------------------------
 
-def _check_grace(grace_days: object) -> float:
-    if not _number(grace_days) or grace_days < GRACE_DAYS_MIN:  # type: ignore[operator]
-        raise ValueError(f"the grace period is at least {GRACE_DAYS_MIN} days")
-    return float(grace_days)                                    # type: ignore[arg-type]
-
-
 def scan(root: Path, *, cancel: Callable[[], bool], run_id: str | None = None,
-         grace_days: float = GRACE_DAYS_DEFAULT, now: float | None = None) -> dict:
+         now: float | None = None) -> dict:
     """The dry run (module docstring): what is collectable now, what will be
     and when, and -- when something is and nothing blocked -- a token for
-    `collect`. Records this device's sightings unless blocked or cancelled.
-    Writes nothing else but its report and the token. `root` is the pinned
-    store root (``paths.home().resolve()`` when the run started)."""
+    `collect`. Writes nothing but its report and the token. `root` is the
+    pinned store root (``paths.home().resolve()`` when the run started)."""
     root = Path(root)
     run_id = _run_id(root, run_id)
     at = time.time() if now is None else now
-    report = _new_report("scan", run_id, at, None)
+    report = _new_report("scan", run_id, at, GRACE_HOURS)
     try:
-        grace = _check_grace(grace_days)       # a refused grace still reports
-        report["grace_days"] = grace
-        report["state"] = _scan(root, report, cancel, grace, at)
+        report["state"] = _scan(root, report, cancel, at)
     except BaseException as exc:
         report["state"], report["error"] = FAILED, type(exc).__name__
         raise
@@ -891,22 +829,18 @@ def scan(root: Path, *, cancel: Callable[[], bool], run_id: str | None = None,
     return report
 
 
-def _classify(root: Path, report: dict, roots: _Roots, side: _Sidecars,
-              blobs: dict[str, os.stat_result], sightings: dict, grace: float,
-              at: float) -> dict[str, dict[str, float]]:
-    """Fill the report's candidate lists; return the sightings to keep."""
-    seen: dict[str, dict[str, float]] = {
-        "objects": _classify_objects(report, roots, side, blobs, sightings["objects"],
-                                     grace, at),
-        "blobs": _classify_blobs(report, side, blobs, sightings["blobs"], grace, at,
-                                 _orphan_hold(side, report["unarrived_objects"]))}
-    return seen
+def _classify(report: dict, roots: _Roots, side: _Sidecars,
+              blobs: dict[str, os.stat_result], grace: float, at: float) -> None:
+    """Fill the report's candidate lists. Both halves ask `_orphan_hold`, the
+    question the collection asks, so the scan offers nothing it will skip."""
+    hold = _orphan_hold(side, report["unarrived_objects"])
+    _classify_objects(report, roots, side, blobs, grace, at, hold)
+    _classify_blobs(report, side, blobs, grace, at, hold)
 
 
 def _classify_objects(report: dict, roots: _Roots, side: _Sidecars,
-                      blobs: dict[str, os.stat_result], sightings: dict[str, float],
-                      grace: float, at: float) -> dict[str, float]:
-    seen: dict[str, float] = {}
+                      blobs: dict[str, os.stat_result], grace: float, at: float,
+                      hold: str | None) -> None:
     collectable: dict[str, Path] = {}
     for image_id, path in sorted(side.ids.items()):
         key = side.names.get(path)
@@ -915,17 +849,18 @@ def _classify_objects(report: dict, roots: _Roots, side: _Sidecars,
         report["counts"]["unreferenced"] += 1
         blob = blobs.get(key)
         mtimes = [side.sigs[path][0] / 1e9, *([blob.st_mtime] if blob else [])]
-        v = _judge(at, grace, mtimes, sightings.get(image_id))
-        seen[image_id] = v.first
+        v = _judge(at, grace, mtimes)
         if v.skew:
             report["clock_skew"].append({"id": image_id, "blob": None, "what": v.skew})
-        if v.why is None:
+        if v.why is None and hold is not None:
+            report["protected"].append({"id": image_id, "blob": key, "why": hold,
+                                        "collectable_at": None})
+        elif v.why is None:
             collectable[image_id] = path
         else:
             report["protected"].append({"id": image_id, "blob": key, "why": v.why,
                                         "collectable_at": v.at})
     _reclaimable(report, side, blobs, collectable)
-    return seen
 
 
 def _reclaimable(report: dict, side: _Sidecars, blobs: dict[str, os.stat_result],
@@ -948,14 +883,11 @@ def _reclaimable(report: dict, side: _Sidecars, blobs: dict[str, os.stat_result]
 
 
 def _classify_blobs(report: dict, side: _Sidecars, blobs: dict[str, os.stat_result],
-                    sightings: dict[str, float], grace: float, at: float,
-                    hold: str | None) -> dict[str, float]:
-    seen: dict[str, float] = {}
+                    grace: float, at: float, hold: str | None) -> None:
     for key, st in sorted(blobs.items()):
         if side.refs.get(key):
             continue
-        v = _judge(at, grace, [st.st_mtime], sightings.get(key))
-        seen[key] = v.first
+        v = _judge(at, grace, [st.st_mtime])
         if v.skew:
             report["clock_skew"].append({"id": None, "blob": key, "what": v.skew})
         if hold is not None:
@@ -967,11 +899,9 @@ def _classify_blobs(report: dict, side: _Sidecars, blobs: dict[str, os.stat_resu
         else:
             report["protected"].append({"id": None, "blob": key, "why": v.why,
                                         "collectable_at": v.at})
-    return seen
 
 
-def _scan(root: Path, report: dict, cancel: Callable[[], bool], grace_days: float,
-          at: float) -> str:
+def _scan(root: Path, report: dict, cancel: Callable[[], bool], at: float) -> str:
     try:
         _check_root(root)
     except _RootChangedError:
@@ -994,8 +924,7 @@ def _scan(root: Path, report: dict, cancel: Callable[[], bool], grace_days: floa
     counts.update(placements=len(roots.placements), objects=len(side.ids), blobs=len(blobs))
     if roots.blocking:
         return BLOCKED
-    seen = _classify(root, report, roots, side, blobs, _load_sightings(root),
-                     grace_days * _DAY, at)
+    _classify(report, roots, side, blobs, GRACE_HOURS * 3600.0, at)
     counts.update(collectable=len(report["collectable"]),
                   collectable_blobs=len(report["collectable_blobs"]),
                   protected=len(report["protected"]))
@@ -1004,8 +933,7 @@ def _scan(root: Path, report: dict, cancel: Callable[[], bool], grace_days: floa
     except _RootChangedError:
         _clear_candidates(report)
         return ROOT_CHANGED
-    _save_sightings(root, seen)
-    _issue_token(root, report, device, at, grace_days)
+    _issue_token(root, report, device, at)
     return COMPLETE
 
 
@@ -1063,7 +991,7 @@ def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
         report["error"] = why or "unknown or already used"
         return REFUSED
     report["token"] = token
-    report["grace_days"] = rec["grace_days"]
+    report["grace_hours"] = rec["grace_hours"]
     roots = _walk_roots(root, at, cancel)          # fresh, and outside the lock
     if roots is None:
         return CANCELLED
@@ -1073,7 +1001,7 @@ def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
     if roots.blocking:
         report["blocking"] = roots.blocking
         return BLOCKED
-    run = _Run(root, report, roots, side, rec["grace_days"] * _DAY, at)
+    run = _Run(root, report, roots, side, rec["grace_hours"] * 3600.0, at)
     queue: list[tuple[str, str]] = []
     for image_id in rec["ids"]:
         if image_id in roots.reachable:

@@ -900,14 +900,12 @@ cannot be sure what is reachable it deletes nothing.
   folder and stops nothing
   (`test_a_record_named_image_refs_is_not_a_placement_folder`). A staged
   tree younger than an hour, or a `.cache` that is a link, stops it too.
-- **A candidate is old and seen twice.** It must be unreachable, with sidecar
-  and blob both older than the **grace period** (30 days by default, never
-  below 7), and **sighted unreachable** by this device at least a grace period
-  ago and again on a later scan; being seen reachable resets the clock
-  (`test_collectable_only_after_grace_old_first_sighting_and_a_second_scan`).
-  A time in the future is never collectable and is reported as clock skew.
-  Sightings are kept per device in `.cache/image-store/gc/`, which travels with
-  a synced store, so one is keyed to the device that made it.
+- **A candidate is an hour old.** It must be unreachable, with sidecar and
+  blob both at least **one hour** old, so a picture ingested moments ago by an
+  import that has not placed it yet is not taken
+  (`test_collectable_on_the_first_scan_after_an_hour`). There is no sighting
+  rule and no per-device sightings file. A time in the future is never
+  collectable and is reported as clock skew.
 - **A blob goes only when nothing names it.** The **refcount** is every
   readable sidecar's blob, rebuilt under the lock; a blob another object still
   names survives

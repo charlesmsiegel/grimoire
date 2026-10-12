@@ -27,7 +27,7 @@ the content-addressed image store, rulings M1-M3):
   "Device" has to be something a synced folder cannot carry, so the id lives
   beside the process locks (``proclock.lock_dir()``), machine-local and outside
   every store. The key used everywhere -- in the marker, and for the collector's
-  per-device sightings -- is ``sha256(device id + "\\0" + pinned root)``, so even
+  per-device tokens -- is ``sha256(device id + "\\0" + pinned root)``, so even
   one machine opening two copies of a library gets two keys.
 
 Nothing here takes a campaign lock or writes campaign state; every path is
