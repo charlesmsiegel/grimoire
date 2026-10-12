@@ -324,7 +324,9 @@ dependency set stays as it is. Availability is one function,
   Send2Trash 2.1.0's `win/legacy.py` and `win/modern.py` flags). So on Windows
   the outbox's volume must pass, before any bin call: `GetDriveTypeW` is
   `DRIVE_FIXED` (a network share, a mapped drive or a removable drive is
-  refused, code `volume_has_no_bin`); `SHQueryRecycleBinW` on that volume
+  refused, code `volume_has_no_bin`: "This library's drive has no Recycle Bin
+  (a network, mapped or removable drive), so pictures can't be sent to it.");
+  `SHQueryRecycleBinW` on that volume
   succeeds (same code); the policy `NoRecycleFiles` (under
   `Software\Microsoft\Windows\CurrentVersion\Policies\Explorer`, read from
   both HKCU and HKLM) is not set, and the volume's
@@ -343,8 +345,11 @@ dependency set stays as it is. Availability is one function,
   drive can hold."). The bin making room by purging its own older items is
   ordinary bin behaviour and is not refused.
 - **Windows backstop.** After each batch's bin calls, the volume's item count
-  is read again; if it rose by less than the number of files sent and the
-  bin's size is not at capacity, the run stops with `recycle-bin-unverified`
+  is read again; if it rose by less than the number of files sent and no
+  purge could have happened — the size before the batch plus the bytes sent
+  fits the capacity (the known `MaxCapacity`, or, when the per-volume key is
+  absent, 5% of the volume as a conservative estimate of Windows' default) —
+  the run stops with `recycle-bin-unverified`
   and names the files it could not confirm: "Windows did not confirm these
   went to the Recycle Bin. Check the bin before collecting again." It says
   *unverified*, not *deleted*, because a purge or a concurrent delete from
