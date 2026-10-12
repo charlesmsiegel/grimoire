@@ -202,3 +202,13 @@ def test_failed_pointer_write_preserves_selection(monkeypatch, tmp_path):
     with pytest.raises(OSError):
         store.set_data_dir(tmp_path / "target")
     assert pointer.read_bytes() == before and store.home() == old
+
+
+def test_clearing_under_an_env_root_does_not_create_the_default(monkeypatch, tmp_path):
+    pointer = isolate(monkeypatch, tmp_path)
+    store.set_data_dir(tmp_path / "old")
+    env = tmp_path / "env"
+    monkeypatch.setenv("GRIMOIRE_HOME", str(env))
+    assert store.set_data_dir(None) == env
+    assert not paths.DEFAULT_HOME.exists()
+    assert (env / "worlds").is_dir() and "data_dir" not in pointer.read_text(encoding="utf-8")

@@ -147,7 +147,7 @@ def _pointer_data_dir() -> Path | None:
 def home() -> Path:
     """Resolve the data root.
 
-    Order: scoped explicit library pin ? ``GRIMOIRE_HOME`` env var (override / test isolation) → the
+    Order: scoped explicit library pin → ``GRIMOIRE_HOME`` env var (override / test isolation) → the
     user-chosen path from the bootstrap pointer → the default ``~/.grimoire``.
     Resolved live on every call so a path change takes effect immediately: the
     pointer is memoized, but only against its own stat signature (see
@@ -203,8 +203,11 @@ def _set_data_dir(path: str | Path | None) -> Path:
     # Publish only after both the selected directory and the effective env
     # override can be used. A failed worlds/campaigns mkdir must leave the
     # old pointer selected, rather than return an error after moving libraries.
-    _ensure_root(resolved)
     env = os.environ.get("GRIMOIRE_HOME")
+    # Clearing under an env override selects nothing this process uses (the
+    # env root stays effective), so the default is not created for it.
+    if "data_dir" in data or not env:
+        _ensure_root(resolved)
     effective = _ensure_root(Path(env)) if env else resolved
     pointer.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(pointer, json.dumps(data, indent=2) + "\n")
