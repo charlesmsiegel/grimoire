@@ -22,6 +22,33 @@ from ..continuity import candidates as continuity_candidates
 from ..continuity import doc as continuity_doc
 from ..continuity import effective as continuity_effective
 from ..continuity import pending as continuity_pending
+from ..frontmatter import parse_frontmatter
+from ..scenes import read as scenes_read
+from ..scenes import serialize as scenes_serialize
+from ..scenes import turns as scenes_turns
+
+
+def scene_turns(data: bytes, players: tuple[str, ...]) -> int | None:
+    """How many of a scene file's transcript blocks are model replies, from
+    its bytes and the display names of its seated players (spec 04 section
+    3.2) -- `None` when the bytes do not decode, which `read_scene` would
+    have raised on. The count is `turns._model_blocks` over the same parse
+    `read_scene` makes, so the shell cannot answer a different question than
+    reroll and drift measurement do."""
+    try:
+        text = ledger_texts.decode(data)
+    except UnicodeDecodeError:
+        return None
+    _meta, body = parse_frontmatter(text)
+    messages = scenes_serialize._parse_messages(body, frozenset(players))
+    return len(scenes_turns._model_blocks(messages))
+
+
+def scene_turns_live(cid: str, sid: str) -> int:
+    """`scene_turns`' live path: `read_scene` and `_model_blocks`, the
+    shell's count before 04. Raises what `read_scene` raises."""
+    messages = scenes_read.read_scene(cid, sid)["messages"]
+    return len(scenes_turns._model_blocks(messages))
 
 
 def continuity_paths(cid: str) -> dict[str, Path]:

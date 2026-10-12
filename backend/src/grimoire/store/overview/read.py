@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 
 from .. import readstats, statcache
+from ..appearances import cast
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..paths import safe_id
@@ -195,3 +196,35 @@ def _continuity(cid: str, root: Path) -> tuple[dict, tuple | None]:
         else:
             stamps.insert(0, here)
     return value, tuple(stamps) if vouched else None
+
+
+def scene_turns(cid: str, sid: str) -> int | None:
+    """`scenes._model_blocks`' count over one scene's transcript, remembered
+    in-process on the scene file's stamp and the sorted names of its seated
+    players (which decide which messages are user-side), so a cast change
+    misses rather than answering for the old cast (spec 04 section 3.6).
+
+    Raises what the shell's read raised -- `SceneNotFound`, `CampaignNotFound`,
+    and the player or scene read's `OSError` -- and the shell keeps mapping
+    each to `None`. A transcript whose bytes do not decode is `None`, a
+    property of those bytes, and remembered as such."""
+    p = scenes_paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise scenes_paths.SceneNotFound(sid)
+    players = tuple(sorted(cast.player_names(cid, sid)))
+    return statcache.memo_stamped(("overview.scene_turns", os.fspath(p), players),
+                                  lambda: _turns(cid, sid, p, players),
+                                  pool=_OVERVIEW_POOL, max_entries=POOL_ENTRIES)
+
+
+def _turns(cid: str, sid: str, p: Path,
+           players: tuple[str, ...]) -> tuple[int | None, tuple | None]:
+    """The live path: `read_scene` and `_model_blocks`, exactly as the shell
+    counted before 04. A read that raises is not remembered."""
+    readstats.bump("overview.computed.scene_turns")
+    observed = statcache.stamp(p)   # before the bytes it vouches for
+    try:
+        value: int | None = kinds.scene_turns_live(cid, sid)
+    except UnicodeDecodeError:
+        value = None   # a property of the bytes: remembered
+    return value, (observed,) if observed is not None else None

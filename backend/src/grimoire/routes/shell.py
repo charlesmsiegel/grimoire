@@ -59,6 +59,7 @@ import json
 from fastapi import APIRouter
 
 from .. import store
+from ..store import overview
 from . import todo as todo_routes
 from .overview_log import overview_read
 
@@ -109,12 +110,16 @@ def _scene_turns(cid: str, sid: str) -> int | None:
     replies, and the rail tells those two apart the way every other count
     here does. A scene that opens cleanly and truly has none -- a fresh scene
     still waiting on its opener -- reports the real `0`.
+
+    Through `store.overview.scene_turns`, which runs that same walk over the
+    scene's bytes and remembers the count on the file's stamp and the seated
+    players' names: an unchanged open scene is not parsed again (spec 04
+    section 4.3).
     """
     try:
-        messages = store.scenes.read.read_scene(cid, sid)["messages"]
+        return overview.scene_turns(cid, sid)
     except (OSError, UnicodeDecodeError, store.CampaignNotFound, store.SceneNotFound):
         return None
-    return len(store.scenes._model_blocks(messages))
 
 
 def _images_undescribed(wid: str) -> int | None:
