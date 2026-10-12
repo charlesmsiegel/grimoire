@@ -244,13 +244,16 @@ def _part(m: dict) -> int | None:
 
 
 def _speaker(m: dict, player_label: str) -> str:
-    """The speaker as `transcript_text` renders it: a transition line has none,
-    an unstamped user post takes the seated player's name."""
+    """The speaker as `transcript_text` renders it: a transition line has none
+    (the spec's ""); an unstamped user post takes the seated player's name; any
+    other unstamped post the template's role label (`Grimoire` for an
+    assistant), so a post's speaker is what its excerpt text says."""
     if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER:
         return ""
     if m.get("role") == "user" and not m.get("speaker"):
         return player_label
-    return str(m.get("speaker") or "")
+    role = str(m.get("role") or "")
+    return str(m.get("speaker") or _ROLE_LABELS.get(role, role))
 
 
 def _label(post: dict) -> str:

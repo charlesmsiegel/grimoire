@@ -194,37 +194,43 @@ def read_level(level: str, key: str = "") -> dict:
     return copy.deepcopy(_load(level, key))
 
 
-def signature(cid: str, connections: Iterable[str] = ()) -> tuple | None:
-    """A stat signature over every file `effective(cid=cid, connection=c)` reads,
-    for each `c` in `connections` -- for a caller that memoizes a derivation of
-    a prompt-phase view (`store/searchdocs`'s intactness memo) rather than
-    re-running the view on every read.
+def files(cid: str, connections: Iterable[str] = ()) -> tuple[Path, ...] | None:
+    """Every file `effective(cid=cid, connection=c)` reads, for each `c` in
+    `connections`, present or not: the campaign's own `campaign.md` (the world
+    the campaign sits on is read from there), the global, world and campaign
+    rule files, and each named connection's record (a deleted connection
+    contributes no rules even while a stale rule file remains) and rule file.
+    `None` when a key does not resolve."""
+    try:
+        out = [campaigns_paths.campaign_meta_path(cid), path("global"),
+               path("campaign", cid)]
+        wid = world_of(cid)
+        if wid:
+            out.append(path("world", wid))
+        for conn in sorted(set(connections)):
+            if not conn or not store_paths.safe_id(conn):
+                continue
+            out += [llm_connections.connection_path(conn), path("connection", conn)]
+    except (worlds_paths.WorldNotFound, campaigns_paths.CampaignNotFound,
+            llm_connections.ConnectionNotFound, OSError):
+        return None
+    return tuple(out)
 
-    The campaign's own `campaign.md` is in it because the world the campaign
-    sits on is read from there; each connection's record is in it because a
-    deleted connection contributes no rules even while a stale rule file
-    remains. A missing file is a cacheable state (`absent_ok`), so creating one
-    invalidates. `None` when a key does not resolve: callers do not memoize.
+
+def signature(cid: str, connections: Iterable[str] = ()) -> tuple | None:
+    """A stat signature over `files(cid, connections)` -- for a caller that
+    memoizes a derivation of a prompt-phase view (`store/searchdocs`'s
+    intactness memo) rather than re-running the view on every read. A missing
+    file is a cacheable state (`absent_ok`), so creating one invalidates.
+    `None` when a key does not resolve: callers do not memoize.
 
     Coarser than `_load`'s byte-hash cache, on purpose and with its residual:
     a same-size rewrite that also restores the file's mtime and inode keeps the
     signature, as everywhere `statcache` is used. That costs a stale memo of a
     derived value, never a wrong rule run, since `view` itself still reads
     bytes."""
-    try:
-        files = [campaigns_paths.campaign_meta_path(cid), path("global"),
-                 path("campaign", cid)]
-        wid = world_of(cid)
-        if wid:
-            files.append(path("world", wid))
-        for conn in sorted(set(connections)):
-            if not conn or not store_paths.safe_id(conn):
-                continue
-            files += [llm_connections.connection_path(conn), path("connection", conn)]
-    except (worlds_paths.WorldNotFound, campaigns_paths.CampaignNotFound,
-            llm_connections.ConnectionNotFound, OSError):
-        return None
-    return statcache.signature(*files, absent_ok=True)
+    read = files(cid, connections)
+    return None if read is None else statcache.signature(*read, absent_ok=True)
 
 
 # --- validation and writing ---------------------------------------------------

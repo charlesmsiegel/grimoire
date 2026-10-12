@@ -567,6 +567,8 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
                    and link.get("scene") == sid and created
                    and isinstance(link.get("created"), str) and link["created"] >= created)
     running = rolling.intact_rolling(inputs.cid, head) if not absorbed else ""
+    if not absorbed:
+        used += rolling.rule_files(inputs.cid, head)
     values = {
         "head": {
             "title": damage.text(head.meta.get("title", sid), CAPS["title"], "head"),

@@ -324,3 +324,13 @@ def test_a_whole_transcript_that_exactly_fits_is_whole(cid):
     exact = expand.expand(cid, sid, phase="prompt", terms=["item"], allow_whole=True,
                           max_bytes=roomy.bytes)
     assert exact.mode == "whole" and exact.bytes == roomy.bytes
+
+
+def test_an_unstamped_assistant_post_is_spoken_by_its_role_label(cid):
+    messages = _plain(3)
+    messages[1] = {"role": "assistant", "content": "The tide turns.", "response_id": "resp01"}
+    sid = _scene(cid, messages)
+    got = expand.expand(cid, sid, phase="prompt", terms=["grimoire"], radius=0)
+    post = got.excerpts[0].posts[0]
+    assert post.index == 1 and post.speaker == "Grimoire"
+    assert "**Grimoire:** The tide turns." in got.excerpts[0].text

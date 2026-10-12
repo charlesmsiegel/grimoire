@@ -315,3 +315,16 @@ def test_a_malformed_appearances_ledger_drops_only_the_running_summary(cid):
     doc = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
     assert doc.doc.meta["summary_source"] == "none"
     assert "appearances.json" in doc.doc.meta["degraded"]
+
+
+def test_rows_already_present_after_a_restart_count_as_recorded(cid, monkeypatch):
+    """After a restart the rows are in the cache and 03 stages nothing for
+    them; that is "already written", not a failure to retry on every call."""
+    _three(cid)
+    live.scene_documents(cid)
+    _restart()
+    live.scene_documents(cid)
+    assert live._RECORDED
+    monkeypatch.setattr(compiled.Batch, "mark_materialized",
+                        lambda *a, **k: pytest.fail("a warm call after a restart re-wrote rows"))
+    live.scene_documents(cid)

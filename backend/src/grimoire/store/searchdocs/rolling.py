@@ -41,6 +41,24 @@ def _connections(cid: str, sid: str) -> tuple[str, ...]:
     return tuple(sorted({c for c in map(regex_view.connection_of, messages) if c}))
 
 
+def rule_files(cid: str, head) -> tuple:
+    """The rule files the intactness test reads for this scene -- the campaign,
+    its world, the global file and each connection that produced one of its
+    messages, with their records -- or () for a scene with no summary to test
+    (or one that will not read). A rule edit can stale the summary and so move
+    the document, so `slices` records these as the document's inputs."""
+    if not scenes_read.rolling_summary_fields(head.meta)["summary"]:
+        return ()
+    try:
+        conns = statcache.memo("searchdocs.rolling.conns", statcache.signature(head.path),
+                               lambda: _connections(cid, head.sid), pool=_POOL,
+                               max_entries=POOL_ENTRIES)
+        return regex_layers.files(cid, conns) or ()
+    except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound,
+            OSError, ValueError, KeyError, TypeError, AttributeError):
+        return ()
+
+
 def intact_rolling(cid: str, head) -> str:
     """The head's rolling summary if, and only if, the app's own intactness test
     passes over the scene as it is now; else "". `head` is a

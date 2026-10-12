@@ -588,3 +588,14 @@ def test_every_group_file_the_snapshot_read_is_an_input(cid):
     sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
     assert sl.values["groups"] == []
     assert campaigns.campaign_root(cid) / "groups" / f"{gid}.md" in sl.paths
+
+
+def test_a_running_summary_records_the_rule_files_it_was_checked_against(cid):
+    sid = _folded_with_word(cid)
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    assert regex.layers.path("campaign", cid) in sl.paths
+    assert regex.layers.path("global") in sl.paths
+    plain = _played(cid, title="Elsewhere")
+    sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, plain))
+    assert regex.layers.path("campaign", cid) not in sl.paths     # no summary, no test
