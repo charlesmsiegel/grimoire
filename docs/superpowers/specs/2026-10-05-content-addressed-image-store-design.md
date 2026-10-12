@@ -1011,6 +1011,16 @@ gives:
 - objects that are collectable, and objects protected by grace;
 - exact reclaimable bytes.
 
+**Amended 2026-10-12** ([viewer removal and recycle-bin
+collection](2026-10-12-viewer-removal-and-recycle-bin-collection-design.md)
+sections 2 and 3): the grace period is one hour, not thirty days, and the
+two-scans-24-hours-apart rule and its sightings file are gone, so an object is
+a candidate on the first scan after an hour. A collected picture is never
+deleted: its blob moves to the device's outbox and then to the operating
+system's recycle bin, and "delete the sidecar first, then the blob" holds only
+for a blob another object still names. The sync risk the thirty days bounded
+is accepted instead (section 3.6 there).
+
 ### 13. Tests
 
 Each invariant in the intent list has a test, and the hashing fixtures are

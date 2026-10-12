@@ -230,9 +230,11 @@ refcount):
 This reverses today's order (sidecar first, then blob) for the recycled case
 only. It is safe for the reason the old order was: the stripe and the
 ingest/GC lock are held across both steps, so an ingest of the same id waits
-and then finds no sidecar and recreates the object with a fresh blob; and
-nothing can newly place an id whose sidecar names a missing blob, because
-placing goes through ingest. `docs/store-guarantees.md` ("delete the sidecar
+and then finds no sidecar and recreates the object with a fresh blob. (A
+placement of the id made through `assets.link_in`, which needs neither ingest
+nor that lock, after the roots walk and before the batch is a race that
+predates this change; its outcome is now a file in the bin rather than a
+deletion.) `docs/store-guarantees.md` ("delete the sidecar
 before the blob") and `image_store.py`'s "never a sidecar naming nothing"
 comment are rewritten to say a *collected* object may briefly be a sidecar
 naming nothing, and only while unreachable; the tests that pin the old order
@@ -268,10 +270,11 @@ thumbnails and tokens are deleted as today.
   `grimoire - <sha8>.<ext>`. An unplaced object has no legacy
   `descriptions.json` key to prefer, so the sidecar's text is the picture's
   description. `<sha8>` is the first eight hex characters of the blob sha256.
-- The outbox is added to the trees the collector may touch (`_DELETABLE`); the
-  existing checks — live root equals the pinned root before every destructive
-  step, no path through a link, regular files only — apply to the move and to
-  the bin call.
+- The outbox is deliberately **not** added to the trees the collector may
+  delete in (`_DELETABLE`), so `_delete_file` can never unlink a waiting
+  picture. The move and the bin call carry their own checks — live root equals
+  the pinned root before every destructive step, no path through a link,
+  regular files only.
 
 ### 3.3 After the lock: to the bin
 

@@ -474,7 +474,7 @@ engineering reason it cannot be fixed at this layer.
 `store/image_scopes.py`, `store/image_usage.py`,
 `store/image_collections.py`, `store/image_collection_imports.py`,
 `store/image_surfaces.py`, `store/image_migration.py`, `store/image_gc.py`,
-`store/maintenance_reports.py` ·
+`store/recycle_bin.py`, `store/maintenance_reports.py` ·
 **Spec:** [the content-addressed image store](superpowers/specs/2026-10-05-content-addressed-image-store-design.md) ·
 **Tests:** `test_image_store.py`, `test_image_refs.py`, `test_assets_store.py`,
 `test_image_surfaces.py`, `test_image_descriptions_store.py`,
@@ -482,7 +482,8 @@ engineering reason it cannot be fixed at this layer.
 `test_image_collections.py`, `test_image_collection_imports.py`,
 `test_image_collection_routes.py`, `test_image_name_locks.py`,
 `test_image_migration_plan.py`, `test_image_migration_run.py`,
-`test_image_gc.py`, `test_maintenance_runs.py`, `test_maintenance_routes.py`
+`test_image_gc.py`, `test_recycle_bin.py`, `test_maintenance_runs.py`,
+`test_maintenance_routes.py`
 
 A picture's bytes are kept once, under `<home>/assets/image-store/`, and
 everything that shows one holds a small placement naming it. Two kinds of file
@@ -604,7 +605,7 @@ while holding one of them. No AST guard holds that rule; `store/locks.py`
 states it beside the code. The one place a caller's code runs under an object
 stripe is an `image_store.update` callback, and it may not call back into the
 store: `ingest`, `update` and `identify` raise `RuntimeError` from inside one
-(`test_update_callback_may_not_reenter_the_store`). The collector deletes under
+(`test_update_callback_may_not_reenter_the_store`). The collector disposes under
 the ingest lock and then each object's stripe, which is ingest's own order.
 
 ### Collections: members by id
@@ -880,13 +881,16 @@ everything and writes only its report, and it has the same shape as a real one
 
 ### Garbage collection
 
-**Module:** `store/image_gc.py`
+**Modules:** `store/image_gc.py`, `store/recycle_bin.py`
 
 Deleting a placement deletes only the placement. An object and its blob go only
 when the collector, run from Settings as the `gc` kind of a maintenance run,
 finds them unreferenced for long enough. A run is a **scan** (a dry run) or a
 **collection** (which needs the scan's token), and it **fails closed**: when it
-cannot be sure what is reachable it deletes nothing.
+cannot be sure what is reachable it collects nothing. **A collected picture is
+never deleted.** Its blob leaves the store only by a move into this device's
+outbox and then into the operating system's recycle bin, and nothing falls back
+to deletion.
 
 - **Roots are strict.** Every file in every `image-refs/` folder below an
   `assets/` component counts, whatever it is called, so a sync client's conflict copy of a placement keeps its image
@@ -901,10 +905,14 @@ cannot be sure what is reachable it deletes nothing.
   (`test_a_record_named_image_refs_is_not_a_placement_folder`). A staged
   tree younger than an hour, or a `.cache` that is a link, stops it too.
 - **A candidate is an hour old.** It must be unreachable, with sidecar and
-  blob both at least **one hour** old, so a picture ingested moments ago by an
-  import that has not placed it yet is not taken
-  (`test_collectable_on_the_first_scan_after_an_hour`). There is no sighting
-  rule and no per-device sightings file. A time in the future is never
+  blob both at least **one hour** old (`GRACE_HOURS`), so a picture ingested
+  moments ago by an import that has not placed it yet is not taken
+  (`test_collectable_on_the_first_scan_after_an_hour`,
+  `test_younger_than_an_hour_is_protected_with_a_time`). The hour is a
+  structural margin over the longest request or run that ingests before it
+  places, not a measured one. The decision is made on file times alone: there
+  is no sighting rule and no per-device sightings file
+  (`test_no_sightings_file_is_written`). A time in the future is never
   collectable and is reported as clock skew.
 - **A blob goes only when nothing names it.** The **refcount** is every
   readable sidecar's blob, rebuilt under the lock; a blob another object still
@@ -913,28 +921,123 @@ cannot be sure what is reachable it deletes nothing.
   keeps every blob, and so does a placement whose object has not arrived yet
   (`test_an_unarrived_object_keeps_every_orphan_blob`). An orphan blob (named by
   no sidecar) is a candidate under the same rules.
+- **Held objects are protected, not offered.** An object whose blob would be
+  held for either of those reasons is classified `protected` by the scan and is
+  left out of the token, so the scan never offers what the collection will
+  skip (`test_held_objects_are_protected_not_offered`). A hold that appears
+  after the scan still keeps the blob and the sidecar
+  (`test_a_hold_that_appears_after_the_scan_keeps_the_blob`): deleting the
+  sidecar of an object whose blob stays would lose its description and recycle
+  nothing.
 - **The token.** A collection takes the token a scan on this device issued. It
   is single-use, good for 24 hours, bound to its device and root, and a report
   that synced in from another device is refused
   (`test_a_token_is_single_use_device_bound_and_expires`). It is spent even if
-  the collection then stops, so a stopped one needs a new scan.
-- **Deletion is ordered against ingest.** Batches run under the ingest lock and
-  then each object's stripe, re-checking mtime, root, reachability and refcount,
-  and delete the sidecar before the blob
-  (`test_a_concurrent_ingest_is_never_left_dangling`). It deletes nothing
-  outside `image-store/` apart from the matching cache entries.
-- **Reporting.** Each deletion is written to the report as it happens, so a
+  the collection then stops, so a stopped one needs a new scan; a token an
+  older build issued is refused as a format mismatch
+  (`test_an_older_format_token_is_refused`).
+- **Disposal commits to the outbox, under the lock.** Batches run under the
+  ingest lock and then each object's stripe, re-checking mtime, root,
+  reachability and refcount. A recycled object's blob is moved with one
+  `os.replace` into `.cache/image-store/recycle/<device key>/`, under a readable
+  name (`grimoire - <description> - <sha8>.<ext>`, the description cut to
+  60 characters, or `grimoire - <sha8>.<ext>` when the object has none), and
+  then its sidecar is deleted. The move is the commit
+  (`test_a_collected_blob_goes_to_the_bin_named_and_its_rest_is_deleted`,
+  `test_a_name_already_waiting_gets_a_suffix`). An object whose blob another
+  sidecar names loses only its sidecar and is reported `released`, as is one
+  whose blob is already gone (`test_a_missing_blob_releases_the_sidecar`).
+- **Blob first, sidecar second, and why that is safe.** For a recycled object
+  this reverses ingest's own order, so a crash between the two leaves a sidecar
+  naming a missing blob. That sidecar is unreachable (the object was
+  unreferenced when it was chosen) and the next collection releases it. A
+  concurrent ingest of the same picture cannot interleave, because both steps
+  run under the lock and stripe ingest takes: it waits, finds no sidecar and
+  recreates the object with a fresh blob
+  (`test_a_concurrent_ingest_is_never_left_dangling`). Nothing guarantees an
+  id cannot be placed in the gap by a path that skips ingest and the lock:
+  `assets.link_in` places an image already in the store without either. A
+  placement made after the roots walk and before the batch is a race that
+  predates the bin, and its outcome is now a file in the bin rather than a
+  deletion.
+- **The bin is called after the lock is released.** Each batch's moved files
+  are then sent to the bin one at a time, the root checked before each, so a
+  slow shell or Finder call never holds up an upload
+  (`test_bin_runs_after_the_ingest_lock_is_released`). A file the bin refuses
+  stays in the outbox under its readable name and stops the run
+  `trash-unavailable`, naming the files waiting
+  (`test_a_refused_bin_leaves_the_file_in_the_outbox`). A cancel or a root
+  change sends nothing; what moved waits in the outbox.
+- **A collection drains the outbox first.** After its token is claimed and
+  before its first batch it sends this device's outbox to the bin, so a refusal
+  there stops it before another picture leaves the store
+  (`test_drain_refusal_stops_before_the_first_batch`,
+  `test_cancel_after_outbox_move_drains_next_time`). A scan reports what waits
+  (`outbox`) and issues a token for that alone. Files in another device's outbox,
+  or this one's under an earlier store path, are counted in `foreign_outboxes`
+  and never touched (`test_another_devices_outbox_is_counted_not_touched`). The
+  outbox syncs with `.cache`, which is accepted traffic.
+- **Nothing is unlinked.** Outside `image-store/` a collection deletes only
+  the matching cache entries (`test_nothing_outside_image_store_is_deleted`).
+  `_delete_file` refuses any path outside its few trees and any path reached
+  through a link, and the outbox is deliberately not among those trees, so it
+  can never unlink a waiting picture. The move and the bin call have their own
+  checks: the live root equals the pinned one before each, the file is a
+  regular file reached through no link
+  (`test_a_symlinked_outbox_blocks`, `test_a_root_flip_before_a_bin_call_stops`).
+- **No bin, no collection.** `recycle_bin.check` answers whether this machine
+  has a real bin. A collection refuses without one, before the token is touched:
+  `POST /api/maintenance/images/gc` with `dry_run: false` answers 409
+  `no_recycle_bin` carrying the code and a sentence, and a direct `collect` call
+  returns a `refused` report (`test_collect_refuses_without_a_bin`). A scan is
+  always allowed and reports the answer as `recycle_bin`. Android has no bin; a
+  desktop whose install lacks the Send2Trash helper (the `desktop` extra) is
+  refused as `not_installed`. macOS and Linux raise, and so refuse, when a
+  volume has no trash.
+- **Windows needs more than the helper's word.** Send2Trash 2.1 calls the
+  shell without the flag that makes Windows warn, so on a volume with no
+  Recycle Bin, or one set to delete immediately, the shell deletes the file
+  permanently and reports success. `recycle_bin.check` therefore refuses before
+  any file is touched unless the outbox's own volume is a fixed drive, answers
+  the bin query, and is covered by neither the `NoRecycleFiles` policy nor the
+  volume's delete-immediately setting (`test_windows_network_drive_refuses`,
+  `test_windows_nuke_on_delete_refuses`). A file larger than a known bin
+  capacity stops the run unsent as `too_large_for_bin`
+  (`test_too_large_for_bin`), because a bin purges to fit and deletes outright a
+  file bigger than all of it. When Windows names no capacity it is estimated as
+  10% of the volume, at or above Windows' own default, so a wrong estimate errs
+  toward saying "unverified"
+  (`test_unknown_capacity_uses_ten_percent_of_the_volume`).
+- **The residual is *unverified*.** After a batch the bin's item count is read
+  again. If it rose by less than the number of files sent and no purge could
+  have happened, the run stops `recycle-bin-unverified` and names the files
+  Windows did not confirm (`test_unverified_when_count_does_not_rise`,
+  `test_unverified_stops_the_run`). It says unverified, not deleted, because a
+  purge or Explorer emptying the bin moves the count too, and it can only
+  notice after the fact. It is the backstop for a configuration none of the
+  checks above recognise, and a person who sees it should check the bin before
+  collecting again.
+- **Reporting.** Each disposal is written to the report as it happens, so a
   stop part-way loses no row. Removing a blob's index entry and thumbnails is
-  best effort and recorded in the report, never a reason to stop.
+  best effort and recorded in the report, never a reason to stop. A report's
+  error text is an exception's class or a code, never its message.
 
-**What it does not promise.** A device that stays offline longer than the grace
-period can bring back a placement whose image the collector has already
-deleted: the grace period is the bound, and nothing here can see an offline
-device. The refcount is rebuilt per batch, so a sidecar a sync client delivers
-mid-batch is a residual risk. A stray non-JSON file inside an `objects/` shard
-keeps every blob until it is removed, which is safe and can be noisy. A case
-variant is checked only for `image-refs`: a folder spelled `Image-Collections`
-stops nothing, and the manifests in it are not counted as references.
+**What it does not promise.** A placement made on another device that has not
+synced here yet does not reach its picture, so this device can bin the picture
+after an hour; the deletion then syncs back and that placement resolves to
+nothing. This is an accepted risk, where a thirty-day grace period used to bound
+it. The recovery is to upload the binned file again on any device: a picture is
+named by its pixels, so on the same decoder it lands under the same object id
+and the placement resolves again, without its description and tags. A JPEG
+uploaded again on another platform may get a new id (see the decoders item
+under [What it does not promise](#what-it-does-not-promise)). On Windows the
+guards above are checks made beforehand, and *unverified* is what remains when
+they miss. The refcount is rebuilt per batch, so a sidecar a sync client
+delivers mid-batch is a residual risk. A stray non-JSON file inside an
+`objects/` shard keeps every blob until it is removed, which is safe and can be
+noisy. A case variant is checked only for `image-refs`: a folder spelled
+`Image-Collections` stops nothing, and the manifests in it are not counted as
+references.
 
 ### Maintenance runs
 
@@ -993,10 +1096,10 @@ exclude.
   never two different pictures merged under one id.
 - **Nothing is collected unless someone asks.** Deleting a placement never
   deletes an object or a blob. They go only when the person starts a collection
-  from Settings, after a scan, and only once they are past the grace period and
-  were seen unreferenced twice; see [Garbage
-  collection](#garbage-collection). Until then an unreferenced image stays on
-  disk.
+  from Settings, after a scan, and only once they are an hour old and
+  unreferenced; the picture then goes to the recycle bin rather than being
+  deleted. See [Garbage collection](#garbage-collection). Until then an
+  unreferenced image stays on disk.
 - **A description is global, so it travels.** A world's bundle carries the
   description of every picture that world holds, including text written while
   the picture was placed in another world. The same sharing means a text typed
@@ -1474,8 +1577,9 @@ Collected, so that nothing here has to be inferred from an absence.
 - **Nothing across devices**, and nothing across OS users.
 - **No mixed-version image writes, and no cross-decoder JPEG identity.** See
   [The image store](#the-image-store).
-- **No automatic image maintenance, and no collection of an image a device
-  outside the grace period still holds.** See [Garbage
+- **No automatic image maintenance, and no protection for a placement another
+  device has not synced yet.** A picture collected on the strength of that gap
+  is in the recycle bin, not deleted. See [Garbage
   collection](#garbage-collection).
 - **No background watcher.** The rebuilt app runs no resident machinery;
   conflict detection is on demand, and nothing notices an external write until
@@ -1502,7 +1606,7 @@ Collected, so that nothing here has to be inferred from an absence.
 | the memo that makes external writes visible | `backend/src/grimoire/store/statcache.py` |
 | what the campaign write token is, and is not | `backend/src/grimoire/store/revision.py` |
 | how an image is stored, placed and resolved | `backend/src/grimoire/store/image_store.py`, `image_refs.py`, `assets.py` |
-| how legacy images migrate, and how unused ones are collected | `backend/src/grimoire/store/image_migration.py`, `image_gc.py`, `routes/maintenance.py` |
+| how legacy images migrate, and how unused ones are collected | `backend/src/grimoire/store/image_migration.py`, `image_gc.py`, `recycle_bin.py`, `routes/maintenance.py` |
 | how model settings move to the new layout, and what is frozen for older builds | `backend/src/grimoire/store/inference/migrate.py`, `store/inference_keys.py` |
 | the rules, as tests | `backend/tests/test_atomic_guard.py`, `test_lock_domain_guard.py`, `test_lock_order_guard.py` |
 | designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md`, `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md` |

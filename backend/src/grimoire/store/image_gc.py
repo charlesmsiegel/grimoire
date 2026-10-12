@@ -83,7 +83,10 @@ reachability by the fresh walk, the blob refcount), and then:
    gone at this step. This reverses ingest's order (blob, then sidecar) and is
    safe for the same reason: both steps happen under the lock and the stripe,
    so an ingest of the same id waits, finds no sidecar and recreates the
-   object with a fresh blob, and nothing places an id except through ingest.
+   object with a fresh blob. A placement of that id made through
+   ``assets.link_in`` (which needs neither ingest nor this lock) after the
+   roots walk and before the batch is a race that predates the bin; its
+   outcome is now a recoverable file in the bin instead of a deletion.
    An orphan blob is moved the same way, with no description.
 
 Only after the lock is released are the batch's moved files sent to the bin
