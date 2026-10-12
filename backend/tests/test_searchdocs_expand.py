@@ -284,3 +284,23 @@ def test_a_hit_is_framed_on_a_term_that_matches_only_by_case_folding(cid):
     post = got.excerpts[0].posts[0]
     assert post.clipped and "Hauptstraße" in post.content
     assert got.excerpts[0].matched == ("hauptstrasse",)
+
+
+def test_damage_under_the_read_is_none_not_an_exception(cid):
+    sid = _scene(cid, _plain(4))
+    path = scenes.paths._scene_path(cid, sid)
+    raw = path.read_bytes()
+    path.write_bytes(raw.replace(b"item 1", b"item \xff\xfe"))
+    assert expand.expand(cid, sid, phase="prompt", terms=["item"]) is None
+    path.write_bytes(raw)
+    (campaigns.campaign_root(cid) / "appearances.json").write_text("[1, 2]", encoding="utf-8")
+    assert expand.expand(cid, sid, phase="prompt", terms=["item"]) is None
+
+
+def test_a_spent_budget_still_reports_that_matches_existed(cid):
+    sid = _scene(cid, _plain(4))
+    for limits in ({"max_bytes": 0}, {"max_posts": 0}, {"max_excerpts": 0}):
+        hit = expand.expand(cid, sid, phase="prompt", terms=["item 1"], **limits)
+        assert hit.mode == "empty" and hit.budget_exhausted is True, limits
+        miss = expand.expand(cid, sid, phase="prompt", terms=["nowhere"], **limits)
+        assert miss.mode == "empty" and miss.budget_exhausted is False, limits

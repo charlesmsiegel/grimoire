@@ -273,3 +273,17 @@ def test_a_warm_call_writes_no_rows(cid, monkeypatch):
     monkeypatch.setattr(compiled.Batch, "mark_materialized",
                         lambda *a, **k: pytest.fail("a warm call wrote a row"))
     live.scene_documents(cid)
+
+
+def test_a_document_wider_than_a_staging_batch_keeps_every_row(cid, monkeypatch):
+    """03 refuses rows past its per-request bound silently, so a document with
+    more input paths than one batch holds is split, never cut short."""
+    monkeypatch.setattr(live, "_STAGED_ROWS", 3)
+    sid, *_ = _three(cid)
+    doc = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
+    assert len(doc.paths) > 3
+    with compiled.batch() as request:
+        rows = request.materialized(list(doc.paths))
+    instance = _instance(cid, doc.doc.meta["identity"])
+    for path in doc.paths:
+        assert (scene.KIND, instance) in [(m.kind, m.instance) for m in rows[path]], path

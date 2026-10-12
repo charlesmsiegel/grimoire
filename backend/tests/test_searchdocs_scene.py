@@ -576,3 +576,15 @@ def test_the_degraded_list_is_bounded(cid):
     d = scene.render(dataclasses.replace(sl, degraded=many))
     assert len(d.meta["degraded"]) == scene.MAX_META_REFS
     assert "degraded" in d.meta["truncated"]
+
+
+def test_every_group_file_the_snapshot_read_is_an_input(cid):
+    """A group none of the cast belongs to today is still a file whose next
+    edit can make it this scene's."""
+    sid = _played(cid)
+    _actor(cid, sid, "Mara")
+    gid = _group(cid, "Harbour Watch")
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    assert sl.values["groups"] == []
+    assert campaigns.campaign_root(cid) / "groups" / f"{gid}.md" in sl.paths

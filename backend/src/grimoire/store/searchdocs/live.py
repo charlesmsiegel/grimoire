@@ -140,32 +140,33 @@ def _recorded(cid: str, sl: slices_mod.Slices, doc: scene_mod.SceneDocument) -> 
 
 def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
                                        scene_mod.SceneDocument, bool]]) -> None:
-    """Put each built document (`put`) and write its `materialized` rows, in
-    batches that fit 03's staging bound. A batch that cannot persist costs a
-    miss next time, never an answer."""
-    chunk: list = []
-    rows = 0
-    for item in built:
-        need = 1 + len(item[1].paths)
-        if chunk and rows + need > _STAGED_ROWS:
-            _flush(cid, chunk)
-            chunk, rows = [], 0
-        chunk.append(item)
-        rows += need
-    if chunk:
-        _flush(cid, chunk)
+    """Put each built document (`put`) and write its `materialized` rows.
+
+    03 stages at most `MAX_STAGED_ROWS` rows per request and refuses the rest
+    silently, so the work is flattened into single rows -- a payload, or one
+    path's row -- and flushed in batches of that size. One document with more
+    input paths than a batch holds (a cast in many groups) is split across
+    batches rather than cut short. A batch that cannot persist costs a miss
+    next time, never an answer."""
+    ops: list[tuple] = []
+    for key, sl, doc, put in built:
+        if put:
+            ops.append(("put", key, _payload(doc)))
+        instance = {"campaign": cid, "identity": sl.identity}
+        ops += [("mark", path, instance) for path in sl.paths]
+    for start in range(0, len(ops), _STAGED_ROWS):
+        _flush(ops[start:start + _STAGED_ROWS])
     for _key, sl, doc, _put in built:
         _fifo(_RECORDED, _recorded(cid, sl, doc), True)
 
 
-def _flush(cid: str, chunk: list) -> None:
+def _flush(ops: list[tuple]) -> None:
     with compiled.batch() as request:
-        for key, sl, doc, put in chunk:
-            if put:
-                request.put(key, _payload(doc))
-            instance = {"campaign": cid, "identity": sl.identity}
-            for path in sl.paths:
-                request.mark_materialized(path, scene_mod.KIND, instance=instance)
+        for op, target, value in ops:
+            if op == "put":
+                request.put(target, value)
+            else:
+                request.mark_materialized(target, scene_mod.KIND, instance=value)
 
 
 def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,

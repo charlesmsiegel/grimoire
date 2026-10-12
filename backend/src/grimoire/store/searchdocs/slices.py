@@ -512,18 +512,19 @@ def _groups(inputs: CampaignInputs, cast: list[dict], used: list[Path]) -> list[
     rendered, so a membership edit moves the key and `meta` and embeds
     nothing. A renderer that puts a group name into a prompt applies
     `membership.prompt_visible` and `SCENE_GROUP_LIMIT` itself."""
-    if inputs.groups_index is None or not cast:
+    if inputs.groups_index is None:
+        return []
+    # Every group file the snapshot read is an input, not only the groups
+    # that list a cast member today: an edit that adds one to a group is a
+    # write to a file this document never named otherwise.
+    used += inputs.group_paths.values()
+    if not cast:
         return []
     rows = membership.scene_groups(inputs.groups_index, [a["ref"] for a in cast],
                                    visible=None, limit=None)
-    out = []
-    for row in rows:
-        if row.group in inputs.group_paths:
-            used.append(inputs.group_paths[row.group])
-        out.append({"group": row.group, "name": clip(" ".join(row.name.split()), CAPS["ref"]),
-                    "secrecy": row.secrecy, "present": list(row.present),
-                    "leader_present": bool(row.leader_present)})
-    return out
+    return [{"group": row.group, "name": clip(" ".join(row.name.split()), CAPS["ref"]),
+             "secrecy": row.secrecy, "present": list(row.present),
+             "leader_present": bool(row.leader_present)} for row in rows]
 
 
 def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:

@@ -388,7 +388,11 @@ def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str
         scene = scenes_read.read_scene(cid, current)
         player_label = appearances_cast.player_label(cid, current)
         after = scenes_identity.scene_identity(cid, current)
-    except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound, OSError):
+    except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound, OSError,
+            ValueError, TypeError, AttributeError, KeyError):
+        # A file that will not decode (UnicodeDecodeError) or parse
+        # (JSONDecodeError) is a ValueError; a ledger of the wrong shape fails
+        # one attribute or key away. Each is "could not read", which is None.
         return None
     if identity is not None and after != identity:
         return None
@@ -415,16 +419,17 @@ def _eligible(shown: list[dict], phase: str, player_label: str) -> list[dict]:
 def _windows(posts: list[dict], wanted: list[str], *, radius: int, max_excerpts: int,
              max_posts: int, max_bytes: int, fallback: str,
              allow_whole: bool) -> tuple[list[_Window], str, bool]:
-    """(windows, mode, budget_exhausted)."""
+    """(windows, mode, budget_exhausted). Matches are found first, so a budget
+    spent before the call (any limit at zero) still says matches existed."""
+    scored = [(_score(p, wanted), pos) for pos, p in enumerate(posts)] if wanted else []
+    ranked = [pos for (distinct, _occ), pos in
+              sorted(scored, key=lambda s: (-s[0][0], -s[0][1], s[1])) if distinct]
     if max_excerpts <= 0 or max_posts <= 0 or max_bytes <= 0:
-        return [], "empty", False
+        return [], "empty", bool(ranked)
     if allow_whole:
         whole = _whole(posts, max_posts=max_posts, max_bytes=max_bytes)
         if whole:
             return whole, "whole", False
-    scored = [(_score(p, wanted), pos) for pos, p in enumerate(posts)] if wanted else []
-    ranked = [pos for (distinct, _occ), pos in
-              sorted(scored, key=lambda s: (-s[0][0], -s[0][1], s[1])) if distinct]
     if ranked:
         found = _plan_matched(posts, ranked, wanted, radius=radius, max_excerpts=max_excerpts,
                               max_posts=max_posts, max_bytes=max_bytes)
