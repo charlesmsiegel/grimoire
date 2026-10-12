@@ -69,6 +69,7 @@ from .models import (
     WorldCreate,
     WorldUpdate,
 )
+from .overview_log import overview_read
 
 router = APIRouter()
 
@@ -82,8 +83,9 @@ def get_worlds():
     # `covers` import and a per-world `stat` in front of every caller --
     # `routes/todo.py`'s chore sweep and `routes/shell.py`'s badge included --
     # which none of them asked for.
-    return [{**w, "cover": store.covers.world_cover_version(w["id"])}
-            for w in store.worlds.list_worlds()]
+    with overview_read("worlds", "library"):
+        return [{**w, "cover": store.covers.world_cover_version(w["id"])}
+                for w in store.worlds.list_worlds()]
 
 
 @router.post("/worlds")

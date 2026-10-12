@@ -91,6 +91,7 @@ from .models import (
     VersionUpdate,
     VoiceAnchorSave,
 )
+from .overview_log import overview_read
 
 router = APIRouter()
 
@@ -160,6 +161,11 @@ def put_campaign_climate(cid: str, body: CampaignClimate):
 # ---- campaigns ----
 @router.get("/campaigns")
 def get_campaigns():
+    with overview_read("campaigns", "library"):
+        return _campaign_cards()
+
+
+def _campaign_cards() -> list[dict]:
     out = []
     for c in store.campaigns.list_campaigns():
         scene_list = store.scenes.list_scenes(c["id"])

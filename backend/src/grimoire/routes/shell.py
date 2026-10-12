@@ -60,6 +60,7 @@ from fastapi import APIRouter
 from .. import store
 from ..store.continuity import effective as continuity_effective
 from . import todo as todo_routes
+from .overview_log import overview_read
 
 router = APIRouter()
 
@@ -294,6 +295,11 @@ def get_shell(campaign: str = ""):
     here as well would be one manifest in two languages with nothing holding
     them level -- a seventh section would ship a badge of six.
     """
+    with overview_read("shell", "campaign" if campaign else "library"):
+        return _shell(campaign)
+
+
+def _shell(campaign: str) -> dict:
     campaigns = store.campaigns.read.list_campaigns()
     cid = campaign or _most_recent(campaigns)
     # One to-do context for the request, built for the campaign the block

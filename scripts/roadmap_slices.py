@@ -30,7 +30,6 @@ holds the Status table's "Slices" count and "Landed" box to the table.
 from __future__ import annotations
 
 import glob
-import itertools
 import os
 import re
 import sys

@@ -34,6 +34,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 
 from .. import store
+from ..store import readstats
 from ..store.continuity import candidates as continuity_candidates
 from ..store.continuity import effective as continuity_effective
 from ..store.continuity import pending as continuity_pending
@@ -42,6 +43,7 @@ from .common import (
     rates_block,
     rates_editable,
 )
+from .overview_log import overview_read
 
 router = APIRouter()
 
@@ -842,10 +844,29 @@ GROUP_ORDER = (
 )
 
 
+def _run(builders: tuple, ctx: _Ctx) -> list[dict]:
+    """`builders` over `ctx`, in order, keeping the chores that answered."""
+    out = []
+    for chore_id, builder in builders:
+        readstats.bump(f"todo.chore.{chore_id}")
+        chore = builder(ctx)
+        if chore:
+            out.append(chore)
+    return out
+
+
+def _campaign_scope(ctx: _Ctx) -> list[dict]:
+    """One campaign's scope (spec 04 section 4.4): `CAMPAIGN_BUILDERS` over a
+    ctx whose history-proportional reads go through the overview projections.
+    A composition, not an artifact: the ignore set is applied after it."""
+    readstats.bump("todo.scope.campaign")
+    return _run(CAMPAIGN_BUILDERS, ctx)
+
+
 def _library_chores() -> list[dict]:
     """Library chores once per global report, independent of an open campaign."""
-    ctx = _Ctx("")
-    return [c for c in (b(ctx) for _i, b in LIBRARY_BUILDERS) if c]
+    readstats.bump("todo.scope.library")
+    return _run(LIBRARY_BUILDERS, _Ctx(""))
 
 
 def badge_count(cid: str, ctx: _Ctx | None = None) -> int:
@@ -1248,7 +1269,7 @@ def live(cid: str) -> dict:
         ctx = _Ctx(cid)
         if not ctx.has_campaign():
             raise HTTPException(404, f"campaign not found: {cid}")
-        every = [c for c in (b(ctx) for _i, b in CAMPAIGN_BUILDERS) if c]
+        every = _campaign_scope(ctx)
         name = store.campaigns.read_campaign(cid)["meta"].get("name") or cid
         for chore in every:
             chore["campaign_id"] = cid
@@ -1260,12 +1281,10 @@ def live(cid: str) -> dict:
             ctx = _Ctx(campaign_id)
             if not ctx.has_campaign():
                 continue
-            for _id, builder in CAMPAIGN_BUILDERS:
-                candidate = builder(ctx)
-                if candidate:
-                    candidate["campaign_id"] = campaign_id
-                    candidate["campaign_name"] = campaign.get("name") or campaign_id
-                    every.append(candidate)
+            for candidate in _campaign_scope(ctx):
+                candidate["campaign_id"] = campaign_id
+                candidate["campaign_name"] = campaign.get("name") or campaign_id
+                every.append(candidate)
     def is_ignored(chore: dict) -> bool:
         campaign_id = chore.get("campaign_id", "")
         key = f"{campaign_id}:{chore['id']}" if campaign_id else chore["id"]
@@ -1304,7 +1323,8 @@ def _groups(chores: list[dict]) -> list[str]:
 
 @router.get("/todo")
 def get_todo(campaign: str = ""):
-    return live(campaign)
+    with overview_read("todo", "campaign" if campaign else "library"):
+        return live(campaign)
 
 
 @router.get("/todo/{chore_id}/items")

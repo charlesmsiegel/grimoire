@@ -51,7 +51,17 @@ from types import ModuleType
 from typing import NoReturn
 
 from .. import compiled_build, template_paths
-from . import atomic, file_stats, locks, logs, maintenance_reports, paths, proclock, statcache
+from . import (
+    atomic,
+    file_stats,
+    locks,
+    logs,
+    maintenance_reports,
+    paths,
+    proclock,
+    readstats,
+    statcache,
+)
 
 _sqlite: ModuleType | None
 try:
@@ -322,6 +332,11 @@ def _lookup_result(values: dict[Key | None, Lookup]) -> BatchLookup:
     for key, lookup in values.items():
         if key is not None:  # make_key's refusal: answered as a miss, counted nowhere
             counts.setdefault(key.kind, [0, 0])[0 if lookup.hit else 1] += 1
+    for kind, (hits, misses) in counts.items():  # 04-C3a: 03-C6's counts, per request
+        if hits:
+            readstats.bump(f"compiled.hit.{kind}", hits)
+        if misses:
+            readstats.bump(f"compiled.miss.{kind}", misses)
     return BatchLookup(values, {kind: Counts(*count) for kind, count in counts.items()})
 
 
@@ -460,6 +475,15 @@ def open_library(root: Path | None = None) -> None:
             request._usable()
     except _CACHE_ERRORS:
         _warn_once('open')
+
+
+def enabled() -> bool:
+    """Whether this process may use the compiled layer at all: SQLite is
+    importable and the kill switch (`GRIMOIRE_COMPILED_CACHE=0`) is not set.
+    A True answer still lets any single request miss (busy, locked, corrupt,
+    on the loop, under a campaign lock); this only says the layer is not off.
+    Reads no file and never raises."""
+    return _sqlite is not None and os.environ.get("GRIMOIRE_COMPILED_CACHE") != "0"
 
 
 def _available() -> bool:
@@ -987,6 +1011,7 @@ class Batch:
             row = rows.get(info.relative)
             decoded = _decode_source(info.relative, row[:7]) if row is not None else None
             if row is not None and decoded is not None and decoded[0][1:] == info.stamp[1:]:
+                readstats.bump("compiled.sources_hit")
                 trusted[info.path] = decoded[1]
                 self._remember_metadata(self._source_known, info.relative, row)
                 self._stage_source(info.relative, info.stamp, decoded[1])
@@ -1025,6 +1050,8 @@ class Batch:
                 except OSError as error:
                     self._abort_input(error)
                 digest = hashlib.sha256(data).hexdigest()
+                readstats.bump("compiled.sources_miss")
+                readstats.bump("compiled.bytes_hashed", len(data))
                 if (info.relative is not None and self._persist_sources(kind)
                         and _eligible(info, self._source_clock)):
                     self._stage_source(info.relative, info.stamp, digest)
@@ -1078,6 +1105,7 @@ class Batch:
         members = self._validate_infos(kind, [Input(collection.role, path) for path in ordered],
                                        infos, with_bytes=with_bytes)
         # Its digest fits a composite key even when the manifest does not.
+        readstats.bump("compiled.collection_digest")
         return CollectionDigest(collection.role, _collection_hash(self.root, members), members)
 
     def validate_one(self, kind: Kind, input: Input, *,  # noqa: A002 -- Spec03 keyword contract
@@ -1097,7 +1125,16 @@ class Batch:
         return {path: trusted.get(path) for path in paths}
 
     def lookup(self, key: Key | None) -> Lookup:
-        if key is None or not self._usable(key) or not _state.lock.acquire(blocking=False):
+        answer = self._lookup(key)
+        if key is not None:  # make_key's refusal is counted nowhere, as in lookup_many
+            readstats.bump(f"compiled.{'hit' if answer.hit else 'miss'}.{key.kind}")
+        return answer
+
+    def _lookup(self, key: Key | None) -> Lookup:
+        if key is not None and not self._usable(key):
+            readstats.bump("compiled.bypass")
+            return Lookup(False)
+        if key is None or not _state.lock.acquire(blocking=False):
             return Lookup(False)
         session = None
         try:
@@ -1546,6 +1583,7 @@ class Batch:
             check = _check(key, payload)
             self._rows[key] = (key.kind, key.digest, payload, check, int(time.time()))
             self._bytes += len(payload) - old_size
+            readstats.bump(f"compiled.store.{key.kind}")
         except _CACHE_ERRORS:
             _warn_once("payload")
 

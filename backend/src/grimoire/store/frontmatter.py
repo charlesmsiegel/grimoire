@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import atomic
+from . import atomic, readstats
 
 #: The closing fence: a line that is exactly `---`. A line, not a prefix --
 #: `----` is a body's first line (or a horizontal rule inside a block nobody
@@ -64,6 +64,7 @@ def _unquote(value: str) -> str:
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """Split `---`-fenced frontmatter from the body. String scalars only."""
+    readstats.bump("frontmatter.parse")
     # Archives/imports decode raw bytes, unlike read_text's universal newlines.
     # Accept CRLF fences there too without rewriting the body's original bytes.
     if text.startswith("---\r\n"):
@@ -101,6 +102,7 @@ def parse_frontmatter_head(path: Path) -> dict[str, str]:
     List endpoints use this so a scene with a megabyte of transcript costs a
     few buffered lines, not a whole-file read. Same shape as the full parser:
     {} when the fence is missing or never terminated."""
+    readstats.bump("frontmatter.parse_head")
     meta: dict[str, str] = {}
     # universal newlines, same as the read_text the full parser sees
     with atomic.open_text(path) as f:

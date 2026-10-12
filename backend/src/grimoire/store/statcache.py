@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from . import file_stats
+from . import file_stats, readstats
 
 T = TypeVar("T")
 
@@ -80,12 +80,17 @@ def memo(kind: str, sig: tuple | None, compute: Callable[[], T],
     cache = _cache if pool is None else pool
     now = time.time_ns()
     if any(len(entry) == 4 and now - entry[1] < RACY_WINDOW_NS for entry in sig):
+        readstats.bump(f"statcache.miss.{kind}")
         return compute()  # too fresh to trust the signature; compute, don't cache
     key = (kind, sig)
     try:
-        return cache[key]  # type: ignore[return-value]
+        val = cache[key]
     except KeyError:
         pass
+    else:
+        readstats.bump(f"statcache.hit.{kind}")
+        return val  # type: ignore[return-value]
+    readstats.bump(f"statcache.miss.{kind}")
     val = compute()
     _put(cache, key, val, MAX_ENTRIES if max_entries is None else max_entries)
     return val
@@ -152,6 +157,14 @@ def vouches(s: Stamp) -> bool:
     return s[2] != UNVOUCHED
 
 
+def _kind_of(key: object) -> str:
+    """The counter name of a `memo_stamped` key: its leading string, by the
+    convention every caller keeps (`("campaign_row", path, ...)`)."""
+    if isinstance(key, tuple) and key and isinstance(key[0], str):
+        return key[0]
+    return "stamped"
+
+
 def _unchanged(stamps: tuple[Stamp, ...]) -> bool:
     if len(stamps) == 1:
         return stamp(stamps[0][0]) == stamps[0]
@@ -198,7 +211,9 @@ def memo_stamped(key: object, compute: Callable[[], tuple[T, tuple[Stamp, ...] |
     """
     entry = pool.get(key)
     if entry is not None and _unchanged(entry[0]):
+        readstats.bump(f"statcache.hit.{_kind_of(key)}")
         return entry[1]
+    readstats.bump(f"statcache.miss.{_kind_of(key)}")
     started = time.time_ns()
     value, stamps = compute()
     if stamps is None or any(not vouches(s) or max(s[1:3]) >= started - RACY_WINDOW_NS
