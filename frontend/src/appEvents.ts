@@ -29,6 +29,19 @@ const shell = channel();
 const notices = channel();
 const storeMoves = channel();
 const art = channel();
+const runEnds = channel();
+
+/** A detached run this client was following reached its end: a send the run
+ *  registry has just settled or recovered.
+ *
+ *  A channel rather than a call into the api client because the registry is
+ *  rendered under suites that replace the client wholesale, and a mock that
+ *  did not list the call would throw from inside a turn's recovery. The api
+ *  client subscribes `noteRunSettled`, which forgets what it remembered and
+ *  retires what it has in flight: the run wrote after the request that
+ *  started it had settled. */
+export const runEnded = runEnds.emit;
+export const onRunEnded = runEnds.subscribe;
 
 /** Art metadata can be shared by many placements in different scopes. A
  *  confirmed write invalidates every visible use, including a shared caption

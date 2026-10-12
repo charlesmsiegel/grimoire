@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { errorText } from "../api/errors";
+import { useRevalidated } from "../api/useRevalidated";
 import { forkNotes } from "../components/forkNotes";
 import { lineage } from "./campaignLineage";
 import { byName } from "../sortByName";
@@ -71,8 +72,27 @@ const sortLabel = (s: Sort) => (s === "name" ? "A–Z" : "LAST PLAYED");
 
 export default function CampaignsView() {
   const navigate = useNavigate();
-  const [campaigns, setCampaigns] = useState<CampaignMeta[]>([]);
-  const [worlds, setWorlds] = useState<WorldMeta[]>([]);
+  // Two reads, each painted from what this tab last had and then re-read
+  // (`useRevalidated`). Each is `undefined` until one of the two is in hand,
+  // and neither empty state is said off one that has not landed: "No worlds
+  // yet" before the worlds read used to tell a reader with ten worlds to go
+  // and create one. Every refresh after a change below goes through
+  // `reloadCampaigns`, which is fresh and sequenced.
+  const campaignsRead = useRevalidated<CampaignMeta[]>(
+    "campaigns", () => api.rememberedCampaigns(), (fresh) => api.listCampaigns(fresh));
+  const worldsRead = useRevalidated<WorldMeta[]>(
+    "worlds", () => api.rememberedWorlds(), (fresh) => api.listWorlds(fresh));
+  const reloadCampaigns = campaignsRead.reload;
+  const campaigns = useMemo(() => campaignsRead.data ?? [], [campaignsRead.data]);
+  const worlds = useMemo(() => worldsRead.data ?? [], [worldsRead.data]);
+  /** A read has LANDED for each: not painted from memory, not failed. The two
+   *  empty states and New campaign wait on these. */
+  const campaignsKnown = campaignsRead.data !== undefined && !campaignsRead.stale;
+  const worldsKnown = worldsRead.data !== undefined && !worldsRead.stale;
+  /** Rename, fork and delete wait out a shelf painted from memory: it can show
+   *  a campaign that is gone, or an id that names another one now. Continue
+   *  and the filter stay live -- they act on nothing. */
+  const stale = campaignsRead.stale;
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   /** What the last fork left behind that the new campaign cannot show: records
    *  a removed scene's absorb wrote that could not be put back, and cleanup
@@ -81,17 +101,12 @@ export default function CampaignsView() {
    *  read as the past exactly. */
   const [forkNote, setForkNote] = useState("");
   // Keyed by id AND version, not id alone: a cover that failed to load must
-  // not keep its replacement hidden after the next listCampaigns() refresh.
+  // not keep its replacement hidden after the next campaigns refresh.
   const [broken, setBroken] = useState<Record<string, boolean>>({});
   /** "" is All worlds. The column's worlds are a filter over the shelf, not a
    *  navigation away from it — picking one must not cost you the page. */
   const [world, setWorld] = useState("");
   const [sort, setSort] = useState<Sort>(loadSort);
-
-  useEffect(() => {
-    api.listCampaigns().then(setCampaigns);
-    api.listWorlds().then(setWorlds);
-  }, []);
 
   // `activity` folds in the newest scene; `updated` alone only moves on
   // metadata writes, so ordering by it ranks a campaign renamed months ago
@@ -166,13 +181,13 @@ export default function CampaignsView() {
     if (!renaming) return;
     await api.renameCampaign(renaming.id, renaming.name);
     setRenaming(null);
-    setCampaigns(await api.listCampaigns());
+    await reloadCampaigns();
   }
 
   async function remove(c: CampaignMeta) {
     if (!window.confirm(`Delete '${c.name}'?`)) return;
     await api.deleteCampaign(c.id);
-    setCampaigns(await api.listCampaigns());
+    await reloadCampaigns();
   }
 
   /** Fork a campaign from where it stands. Cutting one back to an earlier
@@ -200,16 +215,19 @@ export default function CampaignsView() {
       return;
     }
     setForkNote(forkNotes(report));
-    setCampaigns(await api.listCampaigns());
+    await reloadCampaigns();
   }
 
   const column = (
     <>
+      {/* Disabled until the worlds read has landed, not only on an empty
+          list: a campaign is played inside a world, and the wizard is no
+          place to learn there are none. */}
       <button className="column-primary" onClick={() => navigate("/campaigns/new")}
-              disabled={worlds.length === 0}>
+              disabled={!worldsKnown || worlds.length === 0}>
         ＋ New campaign
       </button>
-      <ColumnSection label="Worlds" count={worlds.length}>
+      <ColumnSection label="Worlds" count={worldsRead.data?.length}>
         {worldRows.map((w) => (
           <button key={w.id}
                   className={"column-row" + (world === w.id ? " active" : "")}
@@ -235,13 +253,16 @@ export default function CampaignsView() {
   );
 
   return (
-    <PageShell column={column} footer={footer} columnLabel="Worlds">
+    <PageShell column={column} footer={footer} columnLabel="Worlds"
+               busy={campaignsRead.stale || worldsRead.stale}>
       <div className="page-wide view-anim">
         <div className="shelf-head">
           <div>
             <div className="eyebrow">
               {world ? `${worldName(world).toUpperCase()} · ` : ""}
-              {shown.length} {shown.length === 1 ? "CAMPAIGN" : "CAMPAIGNS"}
+              {/* A zero is a statement, so it waits for a read that landed. */}
+              {(shown.length > 0 || campaignsKnown)
+                && `${shown.length} ${shown.length === 1 ? "CAMPAIGN" : "CAMPAIGNS"}`}
             </div>
             <h1 className="screen-title">Campaigns</h1>
           </div>
@@ -257,14 +278,27 @@ export default function CampaignsView() {
           </div>
         </div>
 
-        {worlds.length === 0 && (
+        {campaignsRead.failed && (
+          <div className="banner error-banner">
+            The campaigns could not be read.{" "}
+            <button className="subtle" onClick={() => { void reloadCampaigns(); }}>Try again</button>
+          </div>
+        )}
+        {worldsRead.failed && (
+          <div className="banner error-banner">
+            The worlds could not be read.{" "}
+            <button className="subtle" onClick={() => { void worldsRead.reload(); }}>Try again</button>
+          </div>
+        )}
+
+        {worldsKnown && worlds.length === 0 && (
           <p className="empty-state">
             <span className="empty-what">No worlds yet.</span> A campaign is played
             inside one, so that is the first thing to make.{" "}
             <Link to="/worlds">Create a world →</Link>
           </p>
         )}
-        {worlds.length > 0 && shown.length === 0 && (
+        {worldsKnown && campaignsKnown && worlds.length > 0 && shown.length === 0 && (
           <p className="empty-state">
             <span className="empty-what">
               {world ? `No campaigns in ${worldName(world)} yet.` : "No campaigns yet."}
@@ -347,15 +381,16 @@ export default function CampaignsView() {
                 </Link>
                 {c.last_scene && <div className="campaign-last">{c.last_scene}</div>}
                 <div className="row-actions">
-                  <button aria-label={`Rename ${c.name}`}
+                  <button aria-label={`Rename ${c.name}`} disabled={stale}
                           onClick={() => setRenaming({ id: c.id, name: c.name })}>✎</button>
                   {/* Fork sits with the other two because it is the third thing
                       you do to a campaign from outside it. Forking from here
                       branches at the campaign as it stands; forking at a chosen
                       turn is on the campaign's own page. */}
                   <button aria-label={`Fork ${c.name}`} title="Fork this campaign"
-                          onClick={() => forkFromNow(c)}>⑂</button>
-                  <button aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>✕</button>
+                          disabled={stale} onClick={() => forkFromNow(c)}>⑂</button>
+                  <button aria-label={`Delete ${c.name}`} disabled={stale}
+                          onClick={() => remove(c)}>✕</button>
                 </div>
               </div>
             </article>

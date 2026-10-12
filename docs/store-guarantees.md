@@ -450,6 +450,35 @@ mount whose directories do not advance their mtime when an entry changes; on
 such a store a new file shows up at the next change to anything else the row
 read, or at restart.
 
+#### What an overview page may show from memory
+
+The Worlds, Campaigns and To do pages paint on their first render from the
+last answer this tab received for the same store and scope, then replace it
+with the answer to a read every visit makes (`frontend/src/api/useRevalidated.ts`,
+over the remembered reads in `frontend/src/api/client.ts`). That memory is
+the browser tab's alone: it is never written to disk, and a page reload starts
+from nothing. What it can show is bounded:
+
+- **After a write this tab made** (any non-GET through the api client), no
+  answer from before that write is painted. The write forgets everything
+  remembered and retires every read in flight, before it is sent and again when
+  it settles, and a page discards an answer whose read was sent before the
+  latest forget and asks again.
+- **After a detached run this tab saw end** (a stream's terminal frame, a
+  draft's completion, the run registry settling a send), the same holds.
+- **Anything else** -- another tab, process or device writing through a sync
+  client; a store move made from another origin or browser; a hand edit or an
+  agent's edit; a detached run nobody watched -- may be shown for exactly one
+  frame of the next visit. That frame is marked `aria-busy`, and delete,
+  rename, fork, Ignore and Restore are disabled on it, until the visit's own
+  read replaces it wholesale. An empty state is never said off such a frame,
+  and a read that fails drops it rather than leaving it up.
+- **Every server answer is current** with respect to the file bytes when it
+  was read, up to the residuals this section states above: a rewrite that
+  keeps size, mtime and change time, and a directory that does not advance its
+  mtime.
+- **After a page reload** nothing is shown from memory at all.
+
 ### Conflicted copies
 
 What no read notices is the wreckage a sync client leaves when two *devices*

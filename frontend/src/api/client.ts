@@ -3,7 +3,11 @@ import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
   type LocalizeEvent, type ChubGalleryEvent, type RunHandle,
   type TaglineBatchEvent } from "./stream";
 import { artChanged, campaignsChanged, configChanged, noticesChanged,
-  shellChanged, storeMovedElsewhere } from "../appEvents";
+  onRunEnded, shellChanged, storeMovedElsewhere } from "../appEvents";
+import { bumpMemoEpoch, issuedEpoch, memoEpoch, noteIssued } from "./memoEpoch";
+// The two a page asks before it paints an answer (`useRevalidated`, which
+// imports them from the leaf so a mock of this module cannot take them away).
+export { issuedEpoch, memoEpoch } from "./memoEpoch";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
 import { THUMB_REV } from "./thumbs";
@@ -185,7 +189,7 @@ async function requestRaw<T>(method: string, path: string, body?: unknown,
                              signal?: AbortSignal, attempt?: string): Promise<T> {
   if (method === "GET") return fetchJson<T>(method, path, body, signal, attempt);
   // Anything else may change what a remembered read says (see `writing`).
-  return writing(path, () => fetchJson<T>(method, path, body, signal, attempt));
+  return writing(() => fetchJson<T>(method, path, body, signal, attempt));
 }
 
 async function fetchJson<T>(method: string, path: string, body?: unknown,
@@ -240,24 +244,29 @@ function retireInflight(path: string): void {
   inflightGets.delete(path);
 }
 
-/** Retire *every* pending GET. Only a store move needs this: it repoints the
- *  root, so each in-flight read is describing a library that is no longer the
- *  one being shown -- the Library hub's five section counts as much as the
- *  campaign list. Retiring by path would mean listing every store-scoped
- *  endpoint here and keeping that list current, which is the enumeration this
- *  file has already been bitten by. */
+/** Retire *every* pending GET. A store move repoints the root, so each
+ *  in-flight read is describing a library that is no longer the one being
+ *  shown -- the Library hub's five section counts as much as the campaign
+ *  list. A write and a run seen to end do it too (`forgetAndRetire`): either
+ *  can change what any store-scoped read answers, and a read started after one
+ *  must not join a read sent before it. Retiring by path would mean listing
+ *  every store-scoped endpoint here and keeping that list current, which is
+ *  the enumeration this file has already been bitten by. */
 function retireAllInflight(): void {
   inflightGets.clear();
 }
 
 // ---- remembered reads ------------------------------------------------------
 //
-// The last good answer to the few reads a world's page paints from -- the
-// world record (`getWorld`), a scope's character rows (`listCharacters`) and a
-// campaign's roster (`listAppearances`) -- so that a page seen once paints on
-// its FIRST render the next time it opens, instead of an empty grid for as
+// The last good answer to the few reads a page paints from -- the world record
+// (`getWorld`), a scope's character rows (`listCharacters`), a campaign's
+// roster (`listAppearances`), and the three overview pages' lists
+// (`listWorlds`, `listCampaigns`, `getTodo`) -- so that a page seen once paints
+// on its FIRST render the next time it opens, instead of an empty grid for as
 // long as the round trip takes, and so that an intent prefetch (`prefetch.ts`)
-// has somewhere to leave what it fetched.
+// has somewhere to leave what it fetched. The overview pages read through
+// `useRevalidated`, which holds them to the rules below on screen as well as
+// in here.
 //
 // This is not a cache anybody reads INSTEAD of asking. Every page that paints
 // from it also issues the read, and the answer replaces what was painted
@@ -283,19 +292,19 @@ function retireAllInflight(): void {
 //   from memory -- another library's cast, under ids that need not exist in
 //   this one.
 // - A read only lands if nothing was forgotten while it was in flight: a
-//   root change or a write (`writing`) bumps `memoEpoch`, and an answer
-//   issued before the bump describes a store that may no longer be the one
-//   being shown. "Issued" is when the request was SENT, not when a caller
-//   asked: the in-flight sharing in `request` hands a caller who asks after a
-//   write the identical GET still on the wire from before it -- exactly what
-//   a grid's reload after its own create or delete does -- and that answer is
-//   as old as its request, however late it was joined (`issuedIn`).
+//   root change, a write (`writing`) or a run seen to end (`noteRunSettled`)
+//   bumps the epoch (`memoEpoch.ts`), and an answer issued before the bump
+//   describes a store that may no longer be the one being shown. "Issued" is
+//   when the request was SENT, not when a caller asked: the in-flight sharing
+//   in `request` can hand a late caller the identical GET still on the wire
+//   from before the bump, and that answer is as old as its request, however
+//   late it was joined (`issuedEpoch`). A write and a run's end also retire
+//   every in-flight GET, so after either nobody can join one sent before it;
+//   a root change noticed by a config read does not, which is one of the ways
+//   a page can still be handed an old answer, and why `useRevalidated` checks
+//   the epoch before it paints one.
 let memoRoot: string | null = null;
-let memoEpoch = 0;
 const memo = new Map<string, unknown>();
-/** The `memoEpoch` each shared GET was sent in, keyed by the promise
- *  `request` hands every caller who joins it. */
-const issuedIn = new WeakMap<Promise<unknown>, number>();
 /** How many answers are kept, the least recently used going first. A reader
  *  moves between a handful of worlds and campaigns at a time, and that
  *  handful is all the memo has to cover; without a bound, a long session
@@ -312,8 +321,30 @@ function memoKey(...parts: string[]): string {
 
 function forgetRemembered(): void {
   memo.clear();
-  memoEpoch += 1;
+  bumpMemoEpoch();
 }
+
+/** Forget everything remembered and retire every in-flight GET: what a write
+ *  does on each side of its request, and what a run this client saw end does
+ *  once. */
+function forgetAndRetire(): void {
+  forgetRemembered();
+  retireAllInflight();
+}
+
+/** A detached run this client observed reaching a terminal state.
+ *
+ *  It wrote after the request that started it had settled -- a turn this tab
+ *  re-attached to, an absorb, a review persisted for later -- so the second
+ *  forget of the `writing` that sent it came too early to cover what it
+ *  wrote. This is that forget, at the moment the run is known to be over:
+ *  `draftRun`'s completion, a stream's terminal frame, and the run registry
+ *  settling a send (through `onRunEnded`, because the registry is rendered
+ *  under suites that mock this module wholesale). */
+export function noteRunSettled(): void {
+  forgetAndRetire();
+}
+onRunEnded(noteRunSettled);
 
 /** The localStorage key a store move writes, which is how every OTHER tab of
  *  this origin hears of it: a `storage` event fires in the tabs that did not
@@ -368,19 +399,24 @@ function noteRoot(root: string | undefined): void {
  *  confirm those rows is no reason to go on painting them on the next visit
  *  (a world deleted elsewhere would flash its old cast every time). */
 function remembering<T>(key: string, read: Promise<T>): Promise<T> {
-  // A read that was not shared (a `fresh` one) is sent by this very call.
-  const epoch = issuedIn.get(read) ?? memoEpoch;
-  return read.then((value) => {
-    if (epoch === memoEpoch && memoRoot !== null) {
+  // Every GET `request` makes is stamped; the fallback is for one that was
+  // not, which is sent by this very call.
+  const epoch = issuedEpoch(read) ?? memoEpoch();
+  const answer = read.then((value) => {
+    if (epoch === memoEpoch() && memoRoot !== null) {
       memo.delete(key);   // re-inserted at the young end
       memo.set(key, value);
       if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value as string);
     }
     return value;
   }, (err: unknown) => {
-    if (epoch === memoEpoch) memo.delete(key);
+    if (epoch === memoEpoch()) memo.delete(key);
     throw err;
   });
+  // The promise the caller holds is the one a page asks about, so it carries
+  // the epoch of the request under it.
+  noteIssued(answer, epoch);
+  return answer;
 }
 
 function recall<T>(key: string): T | undefined {
@@ -392,30 +428,38 @@ function recall<T>(key: string): T | undefined {
   return value as T;
 }
 
-/** A write under a world or a campaign forgets everything remembered, both
- *  when it is sent and when it settles.
+/** Every write this client sends forgets everything remembered and retires
+ *  every in-flight GET, both when it is sent and when it settles.
  *
- *  All of it, rather than the entry for the write's own scope: a campaign's
- *  character rows are an overlay union over its world's, so a write to a
- *  world's roster changes every campaign's that inherits it -- and which
- *  campaigns those are is something this client does not know. The other way
- *  round, a library move from a campaign writes the world. Forgetting is
- *  cheap (the next visit paints after its read, the way every visit did
- *  before anything was remembered); a precise rule would be a list of which
- *  endpoints touch which reads, which is the enumeration `retireAllInflight`
- *  declines for the same reason.
+ *  Every write, and all of it, rather than the entry for the write's own
+ *  scope: a campaign's character rows are an overlay union over its world's,
+ *  so a write to a world's roster changes every campaign's that inherits it --
+ *  and which campaigns those are is something this client does not know. The
+ *  other way round, a library move from a campaign writes the world. And the
+ *  To do list answers from writes under `/api/config`, `/api/llm-connections`,
+ *  `/api/inference`, `/api/todo`, `/api/modules` and the image routes.
+ *  Over-forgetting is the safe direction and it is cheap (the next visit
+ *  paints after its read, the way every visit did before anything was
+ *  remembered); a precise rule would be a list of which endpoints touch which
+ *  reads, which is the enumeration `retireAllInflight` declines for the same
+ *  reason. It does mean a turn forgets too -- `streamPost` comes through here
+ *  -- so nothing is painted from memory on the first visit after play.
+ *
+ *  Retiring is what stops a read asked for after the write from joining one
+ *  sent before it. Whoever already holds the retired promise still gets its
+ *  answer; the epoch keeps that answer out of memory, and `useRevalidated`
+ *  keeps it off the screen.
  *
  *  Twice, because a read issued while the write is on the wire can be
  *  answered from before it and land after the first forget. The second
  *  forget drops that answer too; a page open across the write re-reads for
  *  itself, as it always has. */
-async function writing<T>(path: string, send: () => Promise<T>): Promise<T> {
-  const scoped = path.startsWith("/api/worlds") || path.startsWith("/api/campaigns");
-  if (scoped) forgetRemembered();
+async function writing<T>(send: () => Promise<T>): Promise<T> {
+  forgetAndRetire();
   try {
     return await send();
   } finally {
-    if (scoped) forgetRemembered();
+    forgetAndRetire();
   }
 }
 
@@ -428,7 +472,9 @@ function request<T>(method: string, path: string, body?: unknown,
                              attempt?: string }): Promise<T> {
   if (method !== "GET" || opts?.fresh) {
     if (opts?.fresh) retireInflight(path);
-    return requestRaw<T>(method, path, body, opts?.signal, opts?.attempt);
+    const sent = requestRaw<T>(method, path, body, opts?.signal, opts?.attempt);
+    if (method === "GET") noteIssued(sent);
+    return sent;
   }
   const pending = inflightGets.get(path);
   if (pending) return pending as Promise<T>;
@@ -441,7 +487,7 @@ function request<T>(method: string, path: string, body?: unknown,
     if (inflightGets.get(path) === p) inflightGets.delete(path);
   });
   inflightGets.set(path, p);
-  issuedIn.set(p, memoEpoch);
+  noteIssued(p);
   return p;
 }
 
@@ -662,10 +708,18 @@ async function draftRun<T>(scope: DraftScope,
     if (!live) throw err;
     started = live;
   }
-  const run = await awaitRunAt(draftBase(scope), started,
-                               () => findDraftRun(scope, attempt, opts?.signal)
-                                 .catch(() => null),
-                               opts?.signal);
+  let run: RunHandle;
+  try {
+    run = await awaitRunAt(draftBase(scope), started,
+                           () => findDraftRun(scope, attempt, opts?.signal)
+                             .catch(() => null),
+                           opts?.signal);
+  } finally {
+    // Landed, failed, reaped or abandoned: the run may have written after its
+    // 202 settled (a catalog refresh, a model test's verdict), and forgetting
+    // once more than needed is the safe direction.
+    noteRunSettled();
+  }
   // `landed` is the only way out of `awaitRunAt`, so a result is what this run
   // is. An empty object rather than a throw for a route that legitimately
   // produced nothing -- the caller's own type says which fields it expects.
@@ -1007,7 +1061,7 @@ async function parseReply<T>(res: Response): Promise<T> {
 
 async function requestForm<T>(path: string, form: FormData, method = "POST",
                               attempt?: string, signal?: AbortSignal): Promise<T> {
-  return writing(path, async () => {
+  return writing(async () => {
     const res = await fetch(path, {
       method, body: form,
       headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
@@ -1019,7 +1073,7 @@ async function requestForm<T>(path: string, form: FormData, method = "POST",
 
 /** POST an archive as the whole request body -- the two import endpoints. */
 async function postZip<T>(path: string, file: Blob): Promise<T> {
-  return writing(path, async () => {
+  return writing(async () => {
     const res = await fetch(path, { method: "POST", body: file,
                                     headers: { "content-type": "application/zip" } });
     return parseReply<T>(res);
@@ -1094,7 +1148,9 @@ function withImageQuery(path: string, opts?: ImageOpts): string {
 // instead of running the turn twice.
 //
 // A POST, so it goes through `writing`: a turn, a localize or a tagline batch
-// all write the store as they stream.
+// all write the store as they stream. Its terminal frame is a run seen to end
+// as well (`settlingOn`), which matters when the frame arrives well before the
+// response closes.
 function streamPost<T = ChatEvent>(
   path: string,
   body: unknown,
@@ -1103,7 +1159,31 @@ function streamPost<T = ChatEvent>(
   attempt?: string,
   onIndex?: (index: number) => void,
 ): Promise<void> {
-  return writing(path, () => streamPostRaw(path, body, onEvent, signal, attempt, onIndex));
+  return writing(() => streamPostRaw(path, body, settlingOn(onEvent), signal, attempt,
+                                     onIndex));
+}
+
+/** Whether a stream frame is the last its run will send.
+ *
+ *  A turn ends on `done: true` or an `error`. The batch streams (localize,
+ *  taglines, gallery) count progress in a numeric `done` and end on a
+ *  `summary` or an `error` -- so `done` counts only when it is `true`. */
+function isTerminalFrame(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  const f = e as { done?: unknown; error?: unknown; summary?: unknown };
+  return f.done === true || (f.error !== undefined && f.error !== null)
+    || (f.summary !== undefined && f.summary !== null);
+}
+
+/** `onEvent`, with a terminal frame first noted as a run seen to end
+ *  (`noteRunSettled`). Before the caller hears it, so whatever the caller does
+ *  next -- reload a list, navigate -- reads after the forget rather than from
+ *  before it. */
+function settlingOn<T>(onEvent: (e: T) => void): (e: T) => void {
+  return (e) => {
+    if (isTerminalFrame(e)) noteRunSettled();
+    onEvent(e);
+  };
 }
 
 async function streamPostRaw<T>(
@@ -1325,9 +1405,15 @@ export const api = {
    *  in-flight share would hand it a read issued before that mutation, which
    *  is precisely the answer it is trying to replace. Same trade
    *  `listCampaigns` makes; a fork can run for a minute, so the read it is
-   *  racing is not hypothetical (Codex review). */
+   *  racing is not hypothetical (Codex review).
+   *
+   *  Remembered (see "remembered reads" above), which is what lets the Worlds
+   *  grid paint on its first render; `WorldsView` reads it through
+   *  `useRevalidated`. */
   listWorlds: (fresh = false) =>
-    request<WorldMeta[]>("GET", "/api/worlds", undefined, { fresh }),
+    remembering(memoKey("worlds"),
+                request<WorldMeta[]>("GET", "/api/worlds", undefined, { fresh })),
+  rememberedWorlds: () => recall<WorldMeta[]>(memoKey("worlds")),
   // The config carries `first_run`, which is partly a statement about whether
   // the store holds anything — so creating the first world changes the config
   // response even though nothing wrote to config.md through this client (#194).
@@ -1386,10 +1472,15 @@ export const api = {
       `/api/calendars/${encodeURIComponent(provider)}/year`
       + `?region=${encodeURIComponent(region)}${year ? `&year=${year}` : ""}`),
 
-  /** Everything the app noticed, for the open campaign. */
+  /** Everything the app noticed, for the open campaign. Remembered per scope,
+   *  so a second visit to the same scope paints the last answer while its own
+   *  read is on the wire (`TodoView`, through `useRevalidated`); always sent
+   *  fresh, as it always was. */
   getTodo: (cid?: string | null) =>
-    request<TodoPayload>("GET", `/api/todo${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
-                         undefined, { fresh: true }),
+    remembering(memoKey("todo", cid ?? ""),
+      request<TodoPayload>("GET", `/api/todo${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
+                           undefined, { fresh: true })),
+  rememberedTodo: (cid?: string | null) => recall<TodoPayload>(memoKey("todo", cid ?? "")),
   /** The instances behind one chore's count. A second call rather than part of
    *  the list, because naming every instance of every chore is the cost the
    *  list is built to avoid — the reader expands one. */
@@ -1412,8 +1503,11 @@ export const api = {
   // precisely the answer it is trying to replace. Navigation refetches leave
   // it off, since sharing is free when the caller does not care when the read
   // started (see `request`, and `campaignLedger` for the same trade).
+  // Remembered, for the shelf's first render (`CampaignsView`).
   listCampaigns: (fresh = false) =>
-    request<CampaignMeta[]>("GET", "/api/campaigns", undefined, { fresh }),
+    remembering(memoKey("campaigns"),
+                request<CampaignMeta[]>("GET", "/api/campaigns", undefined, { fresh })),
+  rememberedCampaigns: () => recall<CampaignMeta[]>(memoKey("campaigns")),
   createCampaign: (name: string, world: string, region?: string, calendar?: string, module?: string,
                    climate?: string) =>
     request<{ id: string }>("POST", "/api/campaigns",
@@ -1836,8 +1930,10 @@ export const api = {
   attachRun: (cid: string, sid: string, runId: string, from: number,
               onEvent: (e: ChatEvent) => void, signal?: AbortSignal,
               onIndex?: (i: number) => void) =>
+    // A GET, so nothing here goes through `writing`: the run's terminal frame
+    // is the only word this client gets that what it wrote has landed.
     streamGet(`/api/campaigns/${cid}/scenes/${sid}/runs/${runId}/stream?from=${from}`,
-              onEvent, signal, onIndex),
+              settlingOn(onEvent), signal, onIndex),
 
   // The THIRD hop of the notification tap, after the two the Android shell
   // makes, and it needs the same treatment: `safe_id` permits characters that

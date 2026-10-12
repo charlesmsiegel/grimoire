@@ -5,9 +5,9 @@
 // test therefore starts by pointing the client at a store root of its own --
 // which is itself the behaviour under test: a root the memo has not seen
 // forgets everything remembered under the last one.
-import { api } from "./client";
+import { api, issuedEpoch, memoEpoch, noteRunSettled } from "./client";
 import { prefetchScope, resetPrefetch } from "./prefetch";
-import { onCampaignsChanged, onConfigChanged, onStoreMovedElsewhere } from "../appEvents";
+import { onCampaignsChanged, onConfigChanged, onStoreMovedElsewhere, runEnded } from "../appEvents";
 
 const WORLD = { kind: "world", id: "realm" } as const;
 const OTHER_WORLD = { kind: "world", id: "saltmarch" } as const;
@@ -233,20 +233,27 @@ test("a read answered from before a write does not outlive the write", async () 
   expect(api.rememberedCharacters(WORLD)).toBeUndefined();
 });
 
-test("a read sent before a write is not remembered by a caller who joined it after", async () => {
+test("a read asked for after a write does not join one sent before it", async () => {
   // The grid's reload after a create or a delete asks for the list the moment
-  // the write settles -- and an identical GET still on the wire from before
-  // the write is what the client's in-flight sharing hands it. That answer
-  // predates the write however late it was joined.
+  // the write settles. An identical GET still on the wire from before the
+  // write used to be what the in-flight sharing handed it -- an answer that
+  // predates the write however late it was joined. The write retires it, so
+  // the reload is a request of its own, and only its answer is remembered.
   await freshRoot();
-  const list = held<unknown>();
-  stubFetch((path, init) => (init.method === "GET" ? list.promise : { ok: true }));
-  const early = api.listCharacters(WORLD);
+  const early = held<unknown>();
+  const calls = stubFetch((path, init) => (init.method !== "GET" ? { ok: true }
+    : calls.filter((c) => c.init.method === "GET").length === 1
+      ? early.promise : [row("seraphine", "Seraphine")]));
+  const before = api.listCharacters(WORLD);
   await api.deleteCharacter(WORLD, "mara");
-  const late = api.listCharacters(WORLD);
-  list.resolve([row("seraphine", "Seraphine"), row("mara", "Mara")]);
-  await Promise.all([early, late]);
-  expect(api.rememberedCharacters(WORLD)).toBeUndefined();
+  const after = api.listCharacters(WORLD);
+  expect(calls.filter((c) => c.init.method === "GET")).toHaveLength(2);
+  await after;
+  early.resolve([row("seraphine", "Seraphine"), row("mara", "Mara")]);
+  // The caller already holding the retired promise still gets its answer...
+  await expect(before).resolves.toHaveLength(2);
+  // ...and it is not what is remembered: the read sent after the write is.
+  expect(api.rememberedCharacters(WORLD)?.map((r) => r.id)).toEqual(["seraphine"]);
 });
 
 test("uploads and streamed writes forget as well", async () => {
@@ -267,13 +274,17 @@ test("uploads and streamed writes forget as well", async () => {
   expect(api.rememberedCharacters(WORLD)).toBeUndefined();
 });
 
-test("a write outside worlds and campaigns leaves the memo alone", async () => {
+test("a write anywhere forgets everything, not only one under worlds and campaigns", async () => {
+  // The To do list answers from writes under /api/config and a dozen other
+  // roots; a precise rule would be a list of which endpoints touch which
+  // reads. The old rule -- forget on /api/worlds and /api/campaigns only --
+  // left a remembered To do list standing across a config change.
   await freshRoot();
   stubFetch(() => [row("seraphine", "Seraphine")]);
   await api.listCharacters(WORLD);
   stubFetch(() => ({ sections: [] }));
   await api.putPromptLayout([]);
-  expect(api.rememberedCharacters(WORLD)).toHaveLength(1);
+  expect(api.rememberedCharacters(WORLD)).toBeUndefined();
 });
 
 test("a failed read drops what was remembered under it", async () => {
@@ -353,4 +364,156 @@ test("the memo keeps the answers used most recently, not every roster ever opene
   }
   expect(api.rememberedCharacters({ kind: "world", id: "w40" })).toBeDefined();
   expect(api.rememberedCharacters({ kind: "world", id: "w1" })).toBeUndefined();
+});
+
+// ---- the overview pages' lists (roadmap 04, 6.1) ----
+
+const TODO = { chores: [], ignored: [], count: 0 };
+
+/** Answers each overview read by path. */
+function overviewFetch(worlds: unknown = [{ id: "realm", name: "Realm" }],
+                       campaigns: unknown = [{ id: "run", name: "Saltmarch", world: "realm" }]) {
+  return stubFetch((path, init) => {
+    if (init.method && init.method !== "GET") return { ok: true };
+    if (path === "/api/worlds") return worlds;
+    if (path === "/api/campaigns") return campaigns;
+    if (path.startsWith("/api/todo")) return { ...TODO, count: path.includes("campaign=") ? 1 : 0 };
+    return {};
+  });
+}
+
+test("the worlds, campaigns and To do lists are remembered, each under its own key", async () => {
+  await freshRoot();
+  overviewFetch();
+  expect(api.rememberedWorlds()).toBeUndefined();
+  await api.listWorlds();
+  await api.listCampaigns(true);
+  await api.getTodo("run");
+  await api.getTodo(null);
+  expect(api.rememberedWorlds()?.[0].name).toBe("Realm");
+  expect(api.rememberedCampaigns()?.[0].name).toBe("Saltmarch");
+  // A campaign's list and the library's are two scopes, never one.
+  expect(api.rememberedTodo("run")?.count).toBe(1);
+  expect(api.rememberedTodo(null)?.count).toBe(0);
+  expect(api.rememberedTodo(undefined)?.count).toBe(0);
+  expect(api.rememberedTodo("tidewrack")).toBeUndefined();
+});
+
+test("the overview lists belong to one store root", async () => {
+  await freshRoot();
+  overviewFetch();
+  await api.listWorlds();
+  await api.getTodo("run");
+  await freshRoot();
+  expect(api.rememberedWorlds()).toBeUndefined();
+  expect(api.rememberedTodo("run")).toBeUndefined();
+});
+
+test("a write to the config forgets the overview lists, which the scoped rule did not", async () => {
+  await freshRoot();
+  const root = `/libraries/test-${rootN}`;
+  overviewFetch();
+  await api.listWorlds();
+  await api.listCampaigns();
+  await api.getTodo("run");
+  stubFetch(() => ({ data_dir: root }));
+  await api.putConfig({});
+  expect(api.rememberedWorlds()).toBeUndefined();
+  expect(api.rememberedCampaigns()).toBeUndefined();
+  expect(api.rememberedTodo("run")).toBeUndefined();
+});
+
+test("a write retires every read in flight, whatever its path", async () => {
+  await freshRoot();
+  const worlds = held<unknown>();
+  const calls = stubFetch((path, init) =>
+    (init.method === "GET" && calls.filter((c) => c.path === path).length === 1
+      ? worlds.promise : init.method === "GET" ? [] : { ok: true }));
+  const before = api.listWorlds();
+  const joined = api.listWorlds();   // shared while nothing has been written
+  expect(calls.filter((c) => c.path === "/api/worlds")).toHaveLength(1);
+  await api.putPromptLayout([]);
+  const after = api.listWorlds();
+  expect(calls.filter((c) => c.path === "/api/worlds")).toHaveLength(2);
+  worlds.resolve([{ id: "realm", name: "Realm" }]);
+  await Promise.all([before, joined, after]);
+});
+
+test("a read sent before a write and settling after it is not stored, and says when it was sent", async () => {
+  await freshRoot();
+  const worlds = held<unknown>();
+  stubFetch((path, init) => (init.method === "GET" ? worlds.promise : { ok: true }));
+  const sentAt = memoEpoch();
+  const read = api.listWorlds();
+  expect(issuedEpoch(read)).toBe(sentAt);
+  await api.putPromptLayout([]);
+  expect(memoEpoch()).toBeGreaterThan(sentAt);
+  worlds.resolve([{ id: "realm", name: "Realm" }]);
+  await read;
+  expect(api.rememberedWorlds()).toBeUndefined();
+  // A page that holds this answer can tell it is from before the write.
+  expect(issuedEpoch(read)).toBeLessThan(memoEpoch());
+});
+
+test("a run seen to end forgets everything and retires what is in flight", async () => {
+  await freshRoot();
+  const worlds = held<unknown>();
+  const calls = stubFetch((path) => (path === "/api/worlds"
+    && calls.filter((c) => c.path === path).length === 1
+    ? worlds.promise : [{ id: "run", name: "Saltmarch", world: "realm" }]));
+  await api.listCampaigns();
+  expect(api.rememberedCampaigns()).toHaveLength(1);
+  const before = api.listWorlds();
+  const sentAt = issuedEpoch(before)!;
+  noteRunSettled();
+  expect(api.rememberedCampaigns()).toBeUndefined();
+  expect(memoEpoch()).toBeGreaterThan(sentAt);
+  // Retired: the next caller is sent a request of its own.
+  const after = api.listWorlds();
+  expect(calls.filter((c) => c.path === "/api/worlds")).toHaveLength(2);
+  const remembered = await after;
+  worlds.resolve([]);
+  await before;
+  // The answer sent before the run ended lands last and is not kept.
+  expect(api.rememberedWorlds()).toEqual(remembered);
+});
+
+test("the run registry's settle reaches the same forget", async () => {
+  await freshRoot();
+  overviewFetch();
+  await api.listWorlds();
+  runEnded();
+  expect(api.rememberedWorlds()).toBeUndefined();
+});
+
+test("a re-attached stream's terminal frame forgets", async () => {
+  // A GET, so no `writing` covers it: the frame is the only word this tab gets
+  // that the run has written.
+  await freshRoot();
+  overviewFetch();
+  await api.listWorlds();
+  const frames = [new TextEncoder().encode('id: 3\ndata: {"done": true}\n\n')];
+  globalThis.fetch = vi.fn(async () => ({
+    ok: true,
+    body: { getReader: () => ({ read: async () => (frames.length
+      ? { value: frames.shift(), done: false } : { value: undefined, done: true }) }) },
+  })) as unknown as typeof fetch;
+  const seen: unknown[] = [];
+  await api.attachRun("run", "001--arrival", "r1", 0, () => {
+    // Forgotten before the caller hears the frame, so what it does next reads
+    // after the forget.
+    seen.push(api.rememberedWorlds());
+  });
+  expect(seen).toEqual([undefined]);
+});
+
+test("a failed overview read drops what was remembered under it", async () => {
+  await freshRoot();
+  overviewFetch();
+  await api.getTodo("run");
+  globalThis.fetch = vi.fn(async () => ({
+    ok: false, status: 500, statusText: "Server Error", json: async () => ({ detail: "boom" }),
+  })) as unknown as typeof fetch;
+  await expect(api.getTodo("run")).rejects.toThrow("boom");
+  expect(api.rememberedTodo("run")).toBeUndefined();
 });
