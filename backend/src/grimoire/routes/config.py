@@ -467,6 +467,9 @@ def put_data_dir(update: DataDirUpdate, request: Request):
     # (reading the new tree) reported the new one -- two endpoints disagreeing
     # about one setting, with rows going to disk under the wrong one.
     store.logs.apply_level()
+    # Opening the new library acts on any deletes other devices published to
+    # it while this one was elsewhere (spec 03 section 12), as startup does.
+    compiled.open_library()
     # The new root may be a legacy store: migrate it, in the background, as
     # startup would have (spec 11.2). After the move, outside every hold above.
     request.app.state.start_inference_migration()

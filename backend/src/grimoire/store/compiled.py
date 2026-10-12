@@ -415,10 +415,12 @@ def prime_build() -> None:
     NEW files and store what the OLD code derived under that BUILD. Never
     raises; a disabled or SQLite-less cache computes nothing."""
     if _sqlite is not None and os.environ.get("GRIMOIRE_COMPILED_CACHE") != "0":
-        _build()
+        # Silently: a warning is a log row, and a log row would create the
+        # store at startup. A missing BUILD is reported at the first use.
+        _fingerprint()
 
 
-def _build() -> str | None:
+def _fingerprint() -> None:
     _process_state()
     if not _state.build_checked:
         _state.build_checked = True
@@ -429,9 +431,35 @@ def _build() -> str | None:
                 stamp_path=Path(stamp) if stamp else None, require_stamp=proclock._on_android())
         except _CACHE_ERRORS:
             _state.build = None
-        if _state.build is None:
-            _warn_once("build")
+
+
+def _build() -> str | None:
+    _fingerprint()
+    if _state.build is None:
+        _warn_once("build")
     return _state.build
+
+
+def open_library(root: Path | None = None) -> None:
+    """Act on what other devices published, at this open of the library.
+
+    Spec 03 section 12 has another device purge its own file "at its next
+    open", and a batch is what did that -- but only a consumer opens a batch,
+    and a library with nothing to count may never open one. This opens one
+    with nothing to read: pending deletes finish, this device's files are
+    purged to the marker, and the lease renews, which runs the retention
+    sweep. A library with no `.cache/compiled` has nothing published and is
+    left exactly as it is, so this never creates the store. Off the event
+    loop; never raises."""
+    _process_state()
+    try:
+        root = Path(root) if root is not None else paths.home()
+        if not os.path.isdir(os.path.join(root, '.cache', 'compiled')):
+            return
+        with batch(root) as request:
+            request._usable()
+    except _CACHE_ERRORS:
+        _warn_once('open')
 
 
 def _available() -> bool:

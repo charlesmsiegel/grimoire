@@ -481,3 +481,43 @@ def test_disabled_cache_primes_nothing(monkeypatch):
     monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: pytest.fail("fingerprinted"))
     compiled.prime_build()
     assert not compiled._state.build_checked
+
+
+def test_startup_acts_on_a_delete_published_elsewhere(cache, key, tmp_path, monkeypatch):
+    # Codex (PR 506): a device whose library opens no batch -- no body is long
+    # enough to count through the cache -- must still purge at its next open.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    session = _put(cache, tmp_path, key)
+    path = session.path
+    cache.close()
+    assert cache._publish_marker(tmp_path) is not None   # another device's delete
+    app = main.create_app()
+
+    async def drive():
+        async with main._lifespan(app):
+            pass
+
+    anyio.run(drive)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM artifacts").fetchone() == (0,)
+
+
+def test_opening_a_library_without_a_cache_creates_nothing(cache, tmp_path):
+    root = tmp_path / "Realm"
+    root.mkdir()
+    cache.open_library(root)
+    assert list(root.iterdir()) == []
+
+
+def test_a_missing_build_is_reported_at_first_use_not_at_startup(monkeypatch, tmp_path):
+    # A warning is a log row, and a log row would create the store before the
+    # first request that needs it.
+    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
+    monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: None)
+    rows = []
+    monkeypatch.setattr(compiled.logs, "record", lambda *args, **fields: rows.append(fields.get("failure_kind")))
+    compiled.prime_build()
+    assert rows == []
+    assert compiled._available() is False
+    assert rows == ["build"]

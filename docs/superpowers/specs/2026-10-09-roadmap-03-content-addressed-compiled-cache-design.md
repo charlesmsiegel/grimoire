@@ -1572,4 +1572,11 @@ of a delete. Excluding the whole folder, as section 3 first suggested, would
 leave another device's copy of a deleted record's derived text at rest until
 eviction. The Settings hint and `docs/store-guarantees.md` now say so.
 
+"At its next open" is literal: `compiled.open_library` runs at startup and
+after a data-dir switch. It finishes pending deletes, purges this device's
+files to the marker and runs the lease sweep, whether or not any consumer opens
+a batch. It never creates the store or the cache. A missing BUILD is reported
+at the first cache use, not at startup, because that report is a log row and a
+log row would create the store.
+
 These follow-ups are subject to the final mandatory spec-fidelity gate.

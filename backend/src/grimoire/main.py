@@ -312,6 +312,9 @@ async def _lifespan(app: FastAPI):
     # `git pull` or an edited template since would file this code's artifacts
     # under the new code's BUILD for the next process to trust.
     compiled.prime_build()
+    # Another device's delete reaches this one at its next open (spec 03
+    # section 12), not at whichever cache consumer happens to run first.
+    await anyio.to_thread.run_sync(compiled.open_library)
     for step in (migrations.migrate_scene_ids, migrations.bake_char_macros,
                  migrations.backfill_scene_identities, module_edit.recover):
         try:
