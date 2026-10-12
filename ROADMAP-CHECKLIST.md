@@ -327,6 +327,13 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   memory, then revalidate; a consistency bound.
 - [ ] **04-C3a** Counters and a debug line. **04-C3b** Benchmark harness that
   runs on synthetic libraries only.
+- **Implemented in one PR, a commit per slice** (plans in
+  `docs/superpowers/plans/2026-10-12-roadmap-04-s*.md`). Plan gates, reviews
+  and final gates are owed to the PR's Codex review and stay unticked until
+  its findings are answered. By 03's measured rule only `overview.scene_turns`
+  is registered (above an admission size); the row kinds and
+  `continuity_summary` are declared and unwired, their in-process layers
+  answering (spec 04 section 16). Open question 4 took option (b).
 
 ### 05: Direct-edit cache sync
 - [ ] **05-C1** `cache_sync.sync_paths` through a write-through queue.
@@ -413,7 +420,7 @@ sub-feature. Edges come from each spec's Depends-on table.
   for C2 sampling), 01d-C1..C3 (H for C5a);
   01g-C1..C6 (H for C4 only); 01e-C1..C3 (S)
 - [x] 03 ← 01h-C3 (S)
-- [ ] 04 ← 03-C1, 03-C2, 03-C4 (H); 03-C5 (H for C2a); 03-C6, 03-C9 (S)
+- [x] 04 ← 03-C1, 03-C2, 03-C4 (H); 03-C5 (H for C2a); 03-C6, 03-C9 (S)
 - [ ] 05 ← 03-C2, 03-C3, 03-C4, 03-C5 (H); 04-C2b (H, a property relied
   on); 03-C1, 03-C8, 04-C2a, 08-C2c, 01h-C1/C3/C5 (S)
 - [ ] 06 ← 05-C2 (H); 05-C1/C4, 04-C2b (S)
@@ -568,16 +575,16 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S2 | Client first paint, then revalidate | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S2 | Client first paint, then revalidate | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 
 ### 05
 
@@ -765,13 +772,13 @@ These are not specs, and each needs a decision on whether to fix it.
 - [ ] `claude_agent.py:163` passes `allowed_tools=[]` rather than `tools=[]`,
   so the built-in tool definitions likely ride on every Claude subscription
   call. Verify against the installed SDK (found by 01g).
-- [ ] The shell parses every open scene's full transcript on each navigation,
+- [x] The shell parses every open scene's full transcript on each navigation,
   because the read-path memo never landed (04).
-- [ ] The campaign card's module chip never renders, because the row lacks
+- [x] The campaign card's module chip never renders, because the row lacks
   `module` (04).
-- [ ] `TodoView` blanks on every visit, and `CampaignsView` flashes "No worlds
+- [x] `TodoView` blanks on every visit, and `CampaignsView` flashes "No worlds
   yet" (04).
-- [ ] `characters.roster` re-parses every card without caching; several
+- [x] `characters.roster` re-parses every card without caching; several
   post-write refreshes do not pass `fresh` (04).
 - [ ] The opener's compose step embeds on the event loop
   (`routes/greetings.py:98-106`). 01h-C4a fixes it.

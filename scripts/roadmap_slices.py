@@ -253,7 +253,9 @@ def _status_problems(slices: dict[str, dict], text: str, boxes: dict[str, list[b
     seen = set()
     for m in STATUS_ROW.finditer(text):
         spec, cells = m.group(1), [c.strip() for c in m.group(2).split("|")]
-        if spec not in specs:
+        # The End-to-end readiness table also opens its rows with a spec id;
+        # only the Status table carries the Slices and Landed columns.
+        if spec not in specs or len(cells) < 5:
             continue
         seen.add(spec)
         sids = specs[spec]
