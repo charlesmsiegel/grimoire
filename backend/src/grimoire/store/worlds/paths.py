@@ -28,6 +28,13 @@ def world_root(wid: str) -> Path:
     return _worlds_dir() / wid
 
 
+def world_root_at(store_root: Path, wid: str) -> Path:
+    """Resolve within an already captured store, without rereading its pointer."""
+    if not safe_id(wid):
+        raise WorldNotFound(wid)
+    return store_root / "worlds" / wid
+
+
 def world_meta_path(wid: str) -> Path:
     return meta_path_of(world_root(wid))
 

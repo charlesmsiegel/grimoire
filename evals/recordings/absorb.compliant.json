@@ -39,5 +39,15 @@
   "new_characters": [],
   "new_locations": [],
   "new_lore": [],
-  "weather_edits": []
+  "weather_edits": [],
+  "membership_changes": [
+    {
+      "group": "groups:salt-circle",
+      "actor": "characters:mara",
+      "change": "join",
+      "quote": "I am joining the Salt Circle. Count me among its members.",
+      "speaker": "Mara",
+      "certainty": 1.0
+    }
+  ]
 }

@@ -18,8 +18,10 @@ from .. import (
     entities,
     entity_schema,
     events,
+    group_refs,
     groupstate,
     lore_fields,
+    membership,
     overlay,
     pcs,
     playstate,
@@ -38,7 +40,7 @@ from . import cast as cast_data
 
 #: The ref fields §7.1's structural presence reads, on whichever kind declares
 #: them (`entity_schema.FIELDS`); `activation` applies each to its own kind.
-_STRUCTURAL_FIELDS = ("holder", "leader", "headquarters", "habitat")
+_STRUCTURAL_FIELDS = ("holder", "leader", "members", "headquarters", "habitat")
 
 
 def keyword_hit(keys, text: str) -> bool:
@@ -215,8 +217,23 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
     narrator, filters nothing."""
     entries = []
     names: dict[str, str] = {}
+    # Membership and visibility must describe the SAME group version. Reading
+    # the inverse and then an entity body could combine old GM-only affiliates
+    # with a newly public empty roster and grant presence neither version had.
+    # A campaign that sees no group at all reads no identity ledger, so it
+    # composes exactly as before membership existed (spec 07 section 11.1),
+    # even with a damaged `deleted.json`/`detached.json` beside it.
+    try:
+        group_snapshot = membership.campaign_snapshot(cid)
+    except group_refs.GroupIdentityConflict:
+        if overlay.list_entities(cid, "groups"):
+            raise
+        group_snapshot = membership.GroupSnapshot(index=membership.index_from_rows(()), records=())
+    group_records = {record.id: record for record in group_snapshot.records}
     for kind in ("lore", "locations", "items", "groups", "creatures"):
-        for meta in overlay.list_entities(cid, kind):
+        rows = ([{**record.meta, "id": record.id} for record in group_snapshot.records]
+                if kind == "groups" else overlay.list_entities(cid, kind))
+        for meta in rows:
             ref = f"{kind}:{meta['id']}"
             if ref in excluded_refs:
                 continue
@@ -227,7 +244,8 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                 # honouring the pin here would print its body twice. What the
                 # pin buys it is protection from the packer, in `_assemble`.
                 continue
-            e = overlay.read_entity(cid, kind, meta["id"])
+            e: dict = ({"meta": group_records[meta["id"]].meta, "body": group_records[meta["id"]].body}
+                 if kind == "groups" else overlay.read_entity(cid, kind, meta["id"]))
             keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
             if kind == "locations" and not keys and ref not in pinned_refs:
@@ -242,6 +260,10 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                             "controls": lore_fields.parse(e["meta"]),
                             "refs": {f: entity_schema.parse_refs(e["meta"].get(f))
                                      for f in _STRUCTURAL_FIELDS}})
+            if kind == "groups":
+                roster = group_snapshot.index.groups.get(ref)
+                entries[-1]["refs"]["leader"] = [roster.leader] if roster is not None and roster.leader else []
+                entries[-1]["refs"]["members"] = list(roster.members) if roster is not None else []
     # On an NPC's call only what it knows is a candidate; the room is still
     # the scene's, so structural presence reads every entry (§8.1).
     candidates = (entries if actor_ref in (None, "grimoire")

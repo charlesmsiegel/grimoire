@@ -34,6 +34,10 @@ test("two kinds that write the same file are one drawer", () => {
   expect(groupOf(edit({ kind: "dossier" }))).toBe("state");
 });
 
+test("membership rows have their own drawer, not Relationships (spec 07 9.6)", () => {
+  expect(groupOf(edit({ kind: "membership" }))).toBe("groups");
+});
+
 test("a kind no group claims falls back to World records & cards rather than vanishing", () => {
   // The drawers are the only way to reach a row, so a kind added to the API and
   // not to EDIT_GROUPS must still be reviewable — silently unroutable is the

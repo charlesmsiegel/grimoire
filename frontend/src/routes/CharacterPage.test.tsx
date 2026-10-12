@@ -21,7 +21,7 @@ vi.mock("../api/client", async () => {
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
       readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
       setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
-      readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
+      getActorMembership: vi.fn(), readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
       getCalendarConfig: vi.fn(),
@@ -121,6 +121,7 @@ let storedBirthdate = "";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getActorMembership).mockResolvedValue({ actor: "characters:seraphine", groups: [] });
   storedBirthdate = "";
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => {
     const detail = await vi.mocked(api.readCharacter).mock.results[vi.mocked(api.readCharacter).mock.results.length - 1]?.value as CharacterDetail;
@@ -1219,4 +1220,26 @@ test("phone removed-tile focus returns to the visible main record heading", asyn
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "Seraphine", level: 1 })).toHaveFocus();
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
+});
+
+
+test.each(["world", "campaign"])("%s character Groups use same-scope links and independent leadership", async (kind) => {
+  vi.mocked(api.getActorMembership).mockResolvedValue({ actor: "characters:seraphine", groups: [
+    { ref: "groups:salt-circle", name: "Salt Circle", secrecy: "public", roles: ["leader", "member"] },
+  ] });
+  if (kind === "world") await renderWorld(); else await renderCampaign();
+  const link = await screen.findByRole("link", { name: "Salt Circle (leads)" });
+  expect(document.querySelector(".context-column")).toContainElement(link);
+  expect(api.getActorMembership).toHaveBeenCalledWith({ kind, id: kind === "world" ? "realm" : "run" }, "characters:seraphine");
+  expect(link).toHaveAttribute("href", kind === "world" ? "/worlds/realm/groups/salt-circle" : "/campaigns/run/world/groups/salt-circle");
+  fireEvent.click(link);
+  expect(lastLocation).toBe(kind === "world" ? "/worlds/realm/groups/salt-circle" : "/campaigns/run/world/groups/salt-circle");
+});
+
+test.each(["world", "campaign"])("%s character in no group draws no Groups section", async (kind) => {
+  if (kind === "world") await renderWorld(); else await renderCampaign();
+  await waitFor(() => expect(api.getActorMembership).toHaveBeenCalled());
+  await screen.findByRole("heading", { name: "Seraphine", level: 1 });
+  const labels = [...document.querySelectorAll(".context-column .section-label")].map(el => el.textContent);
+  expect(labels).not.toContain("Groups");
 });

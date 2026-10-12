@@ -86,9 +86,21 @@ Two scopes, and the difference is not cosmetic:
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from pathlib import Path
 
-from . import entities, locks, overlay, record_refs, revision, sheets
+from . import (
+    commits,
+    entities,
+    group_proposals,
+    group_refs,
+    journal,
+    locks,
+    overlay,
+    record_refs,
+    revision,
+    sheets,
+)
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .worlds import paths as worlds_paths
@@ -124,13 +136,18 @@ def _sweep(fn, lost: str, old_ref: str, new_ref: str, cid: str = "") -> None:
     DID happen as having failed, and the retry it invites then 404s. Stale
     display refs are the smaller harm, and the warning names what to look at.
 
+    A collateral first copy can refuse unresolved Members/Leader slots (spec
+    07). That copy grants no consent and stays inherited; the original move
+    already landed. GroupIdentityConflict therefore follows the same warning
+    contract here, without catching pre-move ledger or lifetime fences.
+
     `EntityNotFound` is a miss and not an error because each sweep reads a
     listing and then writes every record it named, with no lock over the gap --
     another process or a sync client deleting one in between is ordinary.
     """
     try:
         fn()
-    except (OSError, ValueError, entities.EntityNotFound) as exc:
+    except (OSError, ValueError, entities.EntityNotFound, group_refs.GroupIdentityConflict) as exc:
         log.warning("reclassified %s to %s%s but %s (%s)", old_ref, new_ref,
                     f" in campaign {cid}" if cid else "", lost, exc)
 
@@ -143,18 +160,26 @@ def campaign_entity(cid: str, kind: str, eid: str, new_kind: str) -> str:
     generic entity kind, and `entities.SameKindError` when the two are the same.
     """
     with locks.campaign_lock(cid):
+        overlay.require_identity_ledgers(cid)
         # Asked FIRST, and written last. Both this and `repoint_record` read
         # `detached.json`, and repointing moves this ref's entry in it -- so a
         # detached record asked afterwards reads as freshly inheriting and gets
         # a tombstone that permanently hides whatever stranger now holds its id
         # in the world. See `overlay.would_inherit`.
+        requested = _ref(kind, eid)
+        # Keep an inherited query in its selected namespace. Its World
+        # canonical spelling might name a different owned original here.
+        with suppress(entities.EntityNotFound):
+            eid = overlay.require_owned_entity(cid, kind, eid).resolve(strict=True).stem
+        source_refs = overlay.capture_record_refs(cid, _ref(kind, eid), extra_refs=(requested,))
         shadowed = overlay.would_inherit(cid, kind, eid)
         new_eid = overlay.reclassify_entity(cid, kind, eid, new_kind)
-        old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
-        overlay.repoint_record(cid, old_ref, new_ref, keep_base=False)
-        if shadowed:
-            overlay.add_deleted(cid, old_ref)   # or the world's shows through
-        _repoint_campaign_side(cid, kind, eid, new_kind, new_eid)
+        with revision.stamp_on_failure(cid):
+            old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
+            overlay.repoint_record(cid, old_ref, new_ref, keep_base=False, source_refs=source_refs)
+            if shadowed:
+                overlay.add_deleted(cid, old_ref)   # or the world's shows through
+            _repoint_campaign_side(cid, kind, eid, new_kind, new_eid)
     # Outside the hold: nothing below reads campaign state, and a `return`
     # inside a `with` reads to the type checker as a path that may not run.
     return new_eid
@@ -183,6 +208,42 @@ def _repoint_campaign_side(cid: str, kind: str, eid: str,
            old_ref, new_ref, cid)
 
 
+
+def _following_campaigns(cids: list[str], kind: str, eid: str, wroot: Path) -> list[str]:
+    """Held followers, with their native source identity checked before effects."""
+    following = [cid for cid in cids if not overlay.independent_owned_record(cid, kind, eid)]
+    # A held lookup can still select a different owned original when the
+    # roots use different native alias policies. Refuse BEFORE fencing,
+    # movement or display repoint rather than seize that original (spec07).
+    overlay.require_world_identity_scope(wroot, kind, eid, following)
+    return following
+
+
+def _suspend_membership_lifetimes(wroot: Path, kind: str, eid: str, new_kind: str,
+                                  captured: tuple[str, ...], following: list[str]
+                                  ) -> tuple[dict, dict, dict]:
+    """Fence both inherited claims and owned followers before the World move."""
+    operations: dict[str, str | None] = {}
+    commit_operations: dict[str, str | None] = {}
+    inherited_operations: dict[str, str | None] = {}
+    source = str(wroot.resolve())
+    for cid in captured:
+        if kind == "groups":
+            refs = group_proposals.matching_refs(overlay.croot_of(cid), wroot, eid, world=source)
+            group_proposals.retire(cid, overlay.croot_of(cid), refs)
+        inherited_operations[cid] = commits.begin_membership_relocation(
+            cid, kind, eid, new_kind, root=wroot, world=source)
+    for cid in following:
+        if not overlay.has_own_copy(cid, kind, eid):
+            continue
+        croot = overlay.croot_of(cid)
+        if kind == "groups":
+            group_proposals.retire(cid, croot, group_proposals.matching_refs(croot, croot, eid))
+        commit_operations[cid] = commits.begin_membership_relocation(cid, kind, eid, new_kind, root=croot)
+        operations[cid] = journal.begin_membership_relocation(cid, kind, eid, new_kind)
+    return operations, commit_operations, inherited_operations
+
+
 def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
     """Reclassify a world record and sweep every campaign that inherits it.
 
@@ -196,60 +257,123 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
     filed against the old ref and materializes from the world as it now stands.
     """
     wroot = worlds_paths.world_root(wid)
-    cids = overlay.dependent_campaigns(wroot)
-    with locks.hold_all(cids):
-        new_eid = entities.reclassify(wroot, kind, eid, new_kind)
-        old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
-        old_owner, new_owner = _owner_ref(kind, eid), _owner_ref(new_kind, new_eid)
-        # Three legs, none of which may cost the other two -- see `_sweep`. And
-        # none of which, together, may cost the campaign loop below: one
-        # unreadable world record must not leave every dependent campaign with
-        # a stale copy under the old kind AND a duplicate under the new one,
-        # which is the failure this whole function exists to prevent.
-        _sweep(lambda: entities.rewrite_owner_refs(wroot, old_owner, new_owner),
-               "an `owners:` line may still name the old kind", old_ref, new_ref)
-        _sweep(lambda: entities.rewrite_ref_fields(wroot, old_owner, new_owner),
-               "a ref field may still name the old kind", old_ref, new_ref)
-        _sweep(lambda: sheets.repoint_world_records(wid, {old_ref: new_ref}),
-               "a sheet may still be keyed to the old kind", old_ref, new_ref)
-        swept = []
+    with overlay.world_identity_scope(wroot) as lifetime:
+        cids = list(lifetime.bound)
+        # The follow rewrites identity ledgers. Refuse a corrupt dependent
+        # before moving the World source (spec 07 independent review).
         for cid in cids:
-            # Whether this campaign may have been WRITTEN, which is not the same
-            # question as whether the follow succeeded (#409). A partial follow
-            # -- the record materialized, an inheritance ledger rewritten, and
-            # then a later repoint raising -- is caught just below and the sweep
-            # carries on, so the bump was never reached while the campaign had
-            # changed underneath it (Codex review). The route then answers 200,
-            # so nothing else was ever going to stamp it.
-            wrote = False
-            try:
-                wrote = _follow_in_campaign(cid, wroot, kind, eid, new_kind, new_eid)
-                if wrote:
-                    swept.append(cid)
-            except (OSError, ValueError, entities.EntityNotFound) as exc:
-                wrote = True    # it may have written before it raised
-                # Per campaign, not per sweep, and for `overlay.forget_world_record`'s
-                # reason: the world record has already moved by the time we get
-                # here, so one campaign with an unreadable ledger must not cost
-                # every later dependent its repoint, nor 500 a move that happened.
-                # `EntityNotFound` is in the list because the copy this is about
-                # to move can go between `has_own_copy` and the move itself --
-                # nothing holds a world-record lock, and there is none to hold.
-                log.warning("could not follow %s -> %s into campaign %s (%s) -- its refs "
-                            "still name the old kind", old_ref, new_ref, cid, exc)
-            # Inside the hold that covers the repoint. A world route reaches
-            # this, so nothing in `/api/campaigns/...` stamps the campaigns it
-            # rewrites -- see `sync.demote`, which makes the same call for the
-            # same reason. A follow that cleanly returned False wrote nothing
-            # and is deliberately not stamped; a failed one cannot say that
-            # about itself, so it is.
-            if wrote:
+            overlay.require_identity_ledgers(cid)
+            journal.require_readable(cid)
+        # Invalid or same-kind requests cannot suspend an otherwise live
+        # offer. These checks have no durable effects (spec 07).
+        if new_kind not in entities.ENTITY_KINDS:
+            raise entities.UnknownKind(new_kind)
+        requested = _ref(kind, eid)
+        eid = entities.require_entity(wroot, kind, eid).resolve().stem
+        if kind == new_kind:
+            raise entities.SameKindError(_ref(kind, eid))
+        # Off identifies an independent campaign original, even when the
+        # World has since reused its slug. That new record cannot capture the
+        # original's file, refs, or membership offers (spec 07 brutal review).
+        following = _following_campaigns(cids, kind, eid, wroot)
+        aliases = {cid: overlay.capture_record_refs(cid, _ref(kind, eid), extra_refs=(requested,))
+                   for cid in following}
+        affected: set[str] = set()
+        try:
+            # Suspend every following owned original before the World move. A
+            # failed completion may not make its vacated slug an Undo target.
+            # Include every attempted fence before its atomic writer: publication
+            # can land and raise before it returns a relocation receipt (spec07).
+            affected.update(lifetime.captured)
+            operations, commit_operations, inherited_operations = _suspend_membership_lifetimes(
+                wroot, kind, eid, new_kind, lifetime.captured, following)
+            affected.update(cids)  # every held view may change when the World moves
+            new_eid = entities.reclassify(wroot, kind, eid, new_kind)
+            for cid, operation in inherited_operations.items():
+                if operation is not None:
+                    commits.complete_membership_relocation(cid, operation, new_kind, new_eid)
+            swept = _sweep_dependents(wid, wroot, following, kind, eid, new_kind, new_eid,
+                                      operations, aliases, commit_operations)
+        except Exception:
+            # Inside this SAME sorted hold, after the last possible effect.
+            # A pre-move suspension failure stamps just the reached campaigns;
+            # an attempted World move includes all dependent effective views.
+            for cid in sorted(affected):
                 revision.bump(cid)
+            raise
     return {"id": new_eid, "campaigns": swept}
 
 
+def _sweep_dependents(wid: str, wroot: Path, cids: list[str], kind: str, eid: str,
+                      new_kind: str, new_eid: str, operations: dict[str, str | None],
+                      aliases: dict[str, overlay.RecordIdentityRefs],
+                      commit_operations: dict[str, str | None]) -> list[str]:
+    """Run the independent display legs and follow each already-fenced original.
+
+    The caller holds every campaign through this entire sweep and owns failure
+    stamping if a lifetime completion interrupts it. Display-only failures
+    retain #119's best-effort contract; suspended Undo targets do not.
+    """
+    old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
+    old_owner, new_owner = _owner_ref(kind, eid), _owner_ref(new_kind, new_eid)
+    # Three legs, none of which may cost the other two -- see `_sweep`. And
+    # none of which, together, may cost the campaign loop below: one
+    # unreadable world record must not leave every dependent campaign with
+    # a stale copy under the old kind AND a duplicate under the new one,
+    # which is the failure this whole function exists to prevent.
+    _sweep(lambda: entities.rewrite_owner_refs(wroot, old_owner, new_owner),
+           "an `owners:` line may still name the old kind", old_ref, new_ref)
+    _sweep(lambda: entities.rewrite_ref_fields(wroot, old_owner, new_owner),
+           "a ref field may still name the old kind", old_ref, new_ref)
+    _sweep(lambda: sheets.repoint_world_records(wid, {old_ref: new_ref}),
+           "a sheet may still be keyed to the old kind", old_ref, new_ref)
+    swept = []
+    for cid in cids:
+        # Whether this campaign may have been WRITTEN, which is not the same
+        # question as whether the follow succeeded (#409). A partial follow
+        # -- the record materialized, an inheritance ledger rewritten, and
+        # then a later repoint raising -- is caught just below and the sweep
+        # carries on, so the bump was never reached while the campaign had
+        # changed underneath it (Codex review). The route then answers 200,
+        # so nothing else was ever going to stamp it.
+        wrote = False
+        try:
+            wrote = _follow_in_campaign(cid, wroot, kind, eid, new_kind, new_eid,
+                                        operation=operations.get(cid), source_refs=aliases[cid],
+                                        commit_operation=commit_operations.get(cid))
+            if wrote:
+                swept.append(cid)
+        except (OSError, ValueError, entities.EntityNotFound) as exc:
+            if operations.get(cid) is not None or commit_operations.get(cid) is not None:
+                # Durable lifetime completion is not a display sweep. Keep
+                # the suspension, stamp the affected scope, and report the
+                # failed operation rather than answering a successful move.
+                raise
+            wrote = True    # it may have written before it raised
+            # Per campaign, not per sweep, and for `overlay.forget_world_record`'s
+            # reason: the world record has already moved by the time we get
+            # here, so one campaign with an unreadable ledger must not cost
+            # every later dependent its repoint, nor 500 a move that happened.
+            # `EntityNotFound` is in the list because the copy this is about
+            # to move can go between `has_own_copy` and the move itself --
+            # nothing holds a world-record lock, and there is none to hold.
+            log.warning("could not follow %s -> %s into campaign %s (%s) -- its refs "
+                        "still name the old kind", old_ref, new_ref, cid, exc)
+        # Inside the hold that covers the repoint. A world route reaches
+        # this, so nothing in `/api/campaigns/...` stamps the campaigns it
+        # rewrites -- see `sync.demote`, which makes the same call for the
+        # same reason. A follow that cleanly returned False wrote nothing
+        # and is deliberately not stamped; a failed one cannot say that
+        # about itself, so it is.
+        if wrote:
+            revision.bump(cid)
+    return swept
+
+
 def _follow_in_campaign(cid: str, wroot: Path, kind: str, eid: str,
-                        new_kind: str, new_eid: str) -> bool:
+                        new_kind: str, new_eid: str, *, operation: str | None = None,
+                        source_refs: overlay.RecordIdentityRefs | None = None,
+                        commit_operation: str | None = None) -> bool:
     """Repoint one dependent campaign at the world record's new kind.
 
     Re-asks which world the campaign belongs to for the reason
@@ -277,6 +401,10 @@ def _follow_in_campaign(cid: str, wroot: Path, kind: str, eid: str,
                         "now the campaign-local record %s",
                         cid, old_ref, new_ref, _ref(new_kind, got))
             landed = _ref(new_kind, got)
-    overlay.repoint_record(cid, old_ref, landed, keep_base=landed == new_ref)
+        if operation is not None:
+            journal.complete_membership_relocation(cid, operation, new_kind, got)
+        if commit_operation is not None:
+            commits.complete_membership_relocation(cid, commit_operation, new_kind, got)
+    overlay.repoint_record(cid, old_ref, landed, keep_base=landed == new_ref, source_refs=source_refs)
     record_refs.repoint(cid, {old_ref: landed})
     return True

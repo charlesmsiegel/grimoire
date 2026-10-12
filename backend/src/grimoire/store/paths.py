@@ -176,6 +176,24 @@ def ensure_home() -> Path:
     return _ensure_root(home())
 
 
+def prepare_data_dir(path: str | Path | None) -> Path:
+    """Prepare the prospective effective root without publishing the pointer.
+
+    A settings owner can fence old review identities after mkdir succeeds and
+    before publication. The environment override has the same precedence as home.
+    """
+    selected = DEFAULT_HOME if not path or not str(path).strip() else Path(str(path).strip()).expanduser()  # paths-ok: the user's configured storage path is resolved here
+    if selected.exists() and not selected.is_dir():
+        raise ValueError(f"{selected} exists but is not a directory")
+    env = os.environ.get("GRIMOIRE_HOME")
+    # Clearing under an env override selects nothing this process uses (the
+    # env root stays effective), so the default is not created for it --
+    # `_set_data_dir`'s rule, which this must agree with.
+    if (path and str(path).strip()) or not env:
+        _ensure_root(selected)
+    return _ensure_root(Path(env)) if env else selected
+
+
 def set_data_dir(path: str | Path | None) -> Path:
     """Publish a chosen data root after cooperative deletions release it."""
     with library_guard():

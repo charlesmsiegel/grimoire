@@ -1,0 +1,1188 @@
+{
+ "additionalProperties": false,
+ "properties": {
+  "authored_edits": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "field": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "id",
+     "field",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "bond_changes": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "type": "string"
+     },
+     "b": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "type": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "a",
+     "b",
+     "type"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "character_state_edits": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "current_state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "knows": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "suspects": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "id",
+     "current_state",
+     "knows",
+     "suspects"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "commitment_movements": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "beat": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "distinguished_from": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "due": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "enum": [
+         "promise",
+         "threat",
+         "foreshadowing"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "status": {
+      "anyOf": [
+       {
+        "enum": [
+         "open",
+         "fulfilled",
+         "broken",
+         "expired"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "why_new": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "id",
+     "title",
+     "beat",
+     "why_new",
+     "distinguished_from",
+     "kind",
+     "status",
+     "due"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "facts": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "supersedes": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "text",
+     "date",
+     "supersedes"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "group_state_edits": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "focus": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "goals": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "public_perception": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "resources": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "secrets": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "id",
+     "goals",
+     "resources",
+     "focus",
+     "public_perception",
+     "secrets"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "keywords": {
+   "items": {
+    "type": "string"
+   },
+   "type": "array"
+  },
+  "lore_edits": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "append": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "id",
+     "append"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "membership_changes": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "actor": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "change": {
+      "enum": [
+       "join",
+       "leave"
+      ],
+      "type": "string"
+     },
+     "group": {
+      "type": "string"
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "group",
+     "actor",
+     "change"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "new_characters": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "confidence": {
+      "enum": [
+       "thin",
+       "sketched",
+       "established"
+      ],
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "evidence": {
+      "type": "string"
+     },
+     "history": {
+      "type": "string"
+     },
+     "mes_example": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "open_questions": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ]
+     },
+     "personality": {
+      "type": "string"
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "sd_prompt": {
+      "type": "string"
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "name",
+     "description",
+     "history",
+     "personality",
+     "mes_example",
+     "evidence",
+     "confidence",
+     "open_questions",
+     "sd_prompt"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "new_locations": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "body": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "current_setting": {
+      "type": "boolean"
+     },
+     "keys": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "sd_prompt": {
+      "type": "string"
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "name",
+     "body",
+     "keys",
+     "sd_prompt",
+     "current_setting"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "new_lore": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "body": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "keys": {
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "lore",
+       "items",
+       "groups",
+       "creatures"
+      ],
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "name",
+     "body",
+     "keys",
+     "kind"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "one_line": {
+   "type": "string"
+  },
+  "plot_movements": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "beat": {
+      "type": "string"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "distinguished_from": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "status": {
+      "enum": [
+       "open",
+       "advanced",
+       "closed"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "why_new": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "id",
+     "title",
+     "beat",
+     "why_new",
+     "distinguished_from",
+     "status"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "relationship_deltas": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "affection": {
+      "type": "integer"
+     },
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "from": {
+      "type": "string"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "tension": {
+      "type": "integer"
+     },
+     "to": {
+      "type": "string"
+     },
+     "trust": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "from",
+     "to",
+     "trust",
+     "affection",
+     "tension",
+     "note"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "summary": {
+   "type": "string"
+  },
+  "timeline_events": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "date": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "date",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "weather_edits": {
+   "items": {
+    "additionalProperties": false,
+    "properties": {
+     "certainty": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "condition": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "duration_blocks": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "quote": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "speaker": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "temperature": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "wind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "quote",
+     "speaker",
+     "certainty",
+     "location",
+     "condition",
+     "temperature",
+     "wind",
+     "duration_blocks",
+     "note"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "one_line",
+  "summary",
+  "keywords",
+  "timeline_events",
+  "facts",
+  "character_state_edits",
+  "group_state_edits",
+  "membership_changes",
+  "lore_edits",
+  "authored_edits",
+  "relationship_deltas",
+  "bond_changes",
+  "plot_movements",
+  "commitment_movements",
+  "new_characters",
+  "new_locations",
+  "new_lore",
+  "weather_edits"
+ ],
+ "type": "object"
+}

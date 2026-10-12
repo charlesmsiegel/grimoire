@@ -1,5 +1,9 @@
 """The reclassify surface (#119): `POST /{scope}/{id}/{kind}/{eid}/reclassify`."""
 
+import pytest
+
+from grimoire.store import campaigns, entities, overlay, record_refs, revision, worlds
+
 
 def _world(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
@@ -121,3 +125,38 @@ def test_reclassify_takes_the_images_with_it(client):
     assert client.get(f"/api/worlds/{wid}/lore/tidewatch/images/avatar").status_code == 404
     assert [e["id"] for e in client.get(f"/api/worlds/{wid}/locations").json()
             if e["has_image"]] == ["tidewatch"]
+
+
+@pytest.mark.parametrize("leg", ["owners", "ref_fields"])
+def test_reclassify_succeeds_when_collateral_group_copy_is_refused(client, monkeypatch, caplog, leg):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = _campaign(client, wid)
+    croot, wroot = campaigns.campaign_root(cid), worlds.world_root(wid)
+    eid = entities.create_entity(croot, "locations", "The counting-house")
+    kind, destination = ("groups", "lore") if leg == "owners" else ("items", "groups")
+    fields = {"members": "characters:mara"}
+    if leg == "ref_fields":
+        fields["holder"] = f"locations:{eid}"
+    other = entities.create_entity(wroot, kind, "Salt Circle", fields=fields,
+        owners=f"locations:{eid}" if leg == "owners" else "")
+    path = wroot / kind / f"{other}.md"
+    before = path.read_bytes()
+    token = revision.current(cid)
+    repointed = []
+    original = record_refs.repoint
+
+    def observed(cid, mapping):
+        repointed.append((cid, mapping))
+        return original(cid, mapping)
+
+    monkeypatch.setattr(record_refs, "repoint", observed)
+    result = client.post(f"/api/campaigns/{cid}/locations/{eid}/reclassify", json={"to": destination})
+    assert result.status_code == 200
+    new_id = result.json()["id"]
+    assert (croot / destination / f"{new_id}.md").exists()
+    assert not (croot / "locations" / f"{eid}.md").exists()
+    assert revision.current(cid) != token
+    assert overlay.record_text(cid, kind, other) is None
+    assert path.read_bytes() == before
+    assert "unresolved Members and Leader" in caplog.text
+    assert repointed == [(cid, {f"locations/{eid}": f"{destination}/{new_id}"})]

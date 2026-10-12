@@ -152,10 +152,14 @@ def delete_world(wid: str, request: Request):
                 root = library_paths.home()
                 with library_paths.pin_library(root):
                     try:
+                        # Refuse a missing or in-use world BEFORE fencing the
+                        # campaigns' inherited membership reviews against it.
                         store.worlds.lifecycle._preflight_delete(wid)
                         intent = compiled.prepare_delete(root)
                         prepared = True
-                        store.worlds.delete_world(wid)
+                        with store.overlay.world_identity_scope(store.worlds.world_root(wid)) as lifetime:
+                            store.overlay.retire_world_scope_reviews(store.worlds.world_root(wid), lifetime.captured)
+                            store.worlds.delete_world(wid)
                     except store.worlds.WorldNotFound:
                         raise HTTPException(status_code=404, detail="world not found")
                     except store.worlds.WorldInUse as exc:
@@ -543,12 +547,13 @@ def put_world_pc(wid: str, pid: str, body: PCUpdate):
 @router.delete("/worlds/{wid}/pcs/{pid}")
 def delete_world_pc(wid: str, pid: str):
     root = _world_root_or_404(wid)
-    try:
-        store.pcs.delete_pc(root, pid)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    store.overlay.forget_world_record(root, "pcs", pid)   # #225
-    return {"ok": True}
+    with store.overlay.world_identity_change(root, record=("pcs", pid)) as cids:
+        try:
+            store.pcs.delete_pc(root, pid)
+        except store.pcs.PCNotFound:
+            raise HTTPException(status_code=404, detail="pc not found")
+        store.overlay.forget_world_record(root, "pcs", pid, cids=cids)   # #225
+        return {"ok": True}
 
 
 @router.post("/worlds/{wid}/pcs/{pid}/versions")

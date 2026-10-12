@@ -21,6 +21,7 @@ import type {
   AnchorRelation, EdgeKind, GraphEdge, GraphFinding, GraphNode, NodePressure, StoryGraph,
 } from "../../api/types";
 import { GROUP_OF, ledgerHref } from "../../ledgerPaths";
+import { sectionHref } from "../../worldPaths";
 import { encodeSegment } from "../../urlSegment";
 import { ACTION_LABELS, whenPhrase } from "../pressureControls";
 import {
@@ -284,6 +285,8 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
             return (from?.kind === "thread" || from?.kind === "commitment") && from.focusable;
           }),
           (e) => e.from, (_e, other) => chip(other))),
+        side("Groups", rows(outOf("member_of"), (e) => e.to, (_e, other) => chip(other))),
+        side("Leads", rows(outOf("leads"), (e) => e.to, (_e, other) => chip(other))),
         side("Relationships", [...both("feeling"), ...both("bond")]),
         side("Birthday", birthdays.map((b) => ({
           key: b.id,
@@ -292,6 +295,15 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
       ];
       break;
     }
+    case "group":
+      facts = nonEmpty([["Type", node.group_type], ["Secrecy", node.secrecy === "gm-only" ? "GM only" : node.secrecy]]);
+      sections = [
+        side("Members", rows(intoOf("member_of"), (e) => e.from, (_e, other) => chip(other))),
+        side("Leader", rows(intoOf("leads"), (e) => e.from, (_e, other) => chip(other))),
+      ];
+      actions = <Link className="btn-outline" to={sectionHref({ kind: "campaign", id: cid },
+        { kind: "record", at: "groups", rid: splitRef(node.id)[1] })}>Open group</Link>;
+      break;
     case "location":
       sections = [side("Scenes", scenesOf(intoOf("occurred_at"), (e) => e.from))];
       break;

@@ -3,9 +3,10 @@
 Each one renders stored state the model must rewrite from rather than recall:
 present-cast feelings and bonds, open plot threads, unresolved commitments,
 standing facts, every group's state, and the present NPCs' and PCs' standing. All are read-only. Every
-one but `state_snapshot` is tolerant of a garbled file -- a broken snapshot
-omits its block instead of failing the absorb; `state_snapshot` catches only a
-missing character record.
+one but `state_snapshot` and `group_snapshot` is tolerant of a garbled file -- a
+broken snapshot omits its block instead of failing the absorb; `state_snapshot`
+catches only a missing character record, and `group_snapshot` lets a group
+identity failure refuse the absorb before anything is paid for (spec 07).
 """
 
 from __future__ import annotations
@@ -13,10 +14,10 @@ from __future__ import annotations
 from ... import prompts
 from .. import (
     characters,
-    entities,
     facts,
+    group_refs,
     groupstate,
-    overlay,
+    membership,
     playstate,
     relationships,
     steering,
@@ -90,31 +91,65 @@ def fact_snapshot(cid: str, sid: str | None = None) -> str:
     return "\n".join(facts.render_active(cid, FACT_SNAPSHOT_LIMIT, sid))
 
 
-def group_snapshot(cid: str) -> str:
-    """Every campaign group with its current state — feeds the absorb prompt so
-    the model uses real ids and rewrites from stored values, not from memory.
+#: The preface the secret block carries (spec 07 section 9.2). Only that block
+#: asks `prompt_visible(..., secret_framed=True)`; without it, the rows go too.
+SECRET_GROUPS_PREFACE = ("GM context: these groups and affiliations are unknown to "
+                         "uninvolved characters; do not have them voice or act on "
+                         "this information.")
 
-    Except `secrecy: gm-only` groups (#49). This is a second prompt, built by a
-    different module from the scene context, so the gate in `context.activate`
-    does not reach it — and this one carries `groupstate`'s `secrets` field
-    verbatim, which makes it the worst place to leave the level unenforced.
-    Absorb is a GM-side pass, but "never sent to the model" has to mean every
-    model or it means nothing.
+
+def _affiliates_here(cid: str, roster: membership.Roster, present: set[str]) -> str:
+    """Present affiliates only, leader first then members in stored order, each
+    spelled as the Present line spells it and with every role it holds."""
+    entries = []
+    if roster.leader is not None and roster.leader in present:
+        roles = "leader, member" if roster.leader in roster.members else "leader"
+        entries.append((roster.leader, roles))
+    entries.extend((actor, "member") for actor in roster.members
+                   if actor in present and actor != roster.leader)
+    return ", ".join(f"{relationships.actor_name(cid, actor)} ({actor.replace(':', '/', 1)}, {roles})"
+                     for actor, roles in entries)
+
+
+def group_snapshot(cid: str, cast=(), *, snapshot: membership.GroupSnapshot | None = None) -> str:
+    """Every campaign group with its current state, and its present affiliates --
+    feeds the absorb prompt so the model uses real ids, rewrites from stored
+    values, and does not re-propose a standing membership.
+
+    Affiliations come from the coupled inverse (`membership.campaign_snapshot`),
+    so the detached rule holds here as on every other reader, and identity
+    failures propagate before any paid generation. Only actors on the `Present:`
+    line (`cast`) are named, so a group's size costs nothing; a group with no
+    present affiliate renders exactly as it did before membership existed.
+
+    `secrecy: gm-only` groups never appear (#49): this is a second prompt, built
+    by a different module from the scene context, so the gate in
+    `context.activate` does not reach it. Secret groups, their state and their
+    affiliations render only in a separate block under `SECRET_GROUPS_PREFACE`.
     """
-    try:
-        croot = campaigns_paths.campaign_root(cid)
-        lines = []
-        for meta in overlay.list_entities(cid, "groups"):
-            if entities.normalize_secrecy(meta.get("secrecy")) == entities.GM_ONLY:
-                continue
-            st = groupstate.read_state(croot, meta["id"])
-            parts = [f"{groupstate.LABELS[k]}: {st[k]}" for k in groupstate.FIELDS
-                     if st and st.get(k, "").strip()] if st else []
-            state = " | ".join(parts) if parts else "(no state)"
-            lines.append(f"- groups/{meta['id']} ({meta.get('name', meta['id'])}): {state}")
-        return "\n".join(lines)
-    except Exception:  # noqa: BLE001 — garbled store: omit, don't fail the extraction
-        return ""
+    snapshot = snapshot if snapshot is not None else membership.campaign_snapshot(cid)
+    croot = campaigns_paths.campaign_root(cid)
+    present = {ref for actor in cast
+               if (ref := group_refs.actor_ref(str(actor).replace("/", ":", 1))) is not None}
+
+    def line(roster: membership.Roster) -> str:
+        try:
+            st = groupstate.read_state(croot, roster.ref.partition(":")[2])
+        except (OSError, ValueError):   # a garbled state file costs its state, not the absorb
+            st = None
+        parts = [f"{groupstate.LABELS[key]}: {st[key]}" for key in groupstate.FIELDS
+                 if st and st.get(key, "").strip()] if st else []
+        text = f"- {roster.ref.replace(':', '/', 1)} ({roster.name}): {' | '.join(parts) or '(no state)'}"
+        here = _affiliates_here(cid, roster, present)
+        return f"{text} | Affiliates here: {here}" if here else text
+
+    rosters = list(snapshot.index.groups.values())
+    public = [line(r) for r in rosters if membership.prompt_visible(r)]
+    secret = [line(r) for r in rosters
+              if not membership.prompt_visible(r) and membership.prompt_visible(r, secret_framed=True)]
+    if secret:
+        public += ["Secret groups:", SECRET_GROUPS_PREFACE, *secret]
+    return "\n".join(public)
 
 
 def steering_snapshot(cid: str, sid: str) -> str:

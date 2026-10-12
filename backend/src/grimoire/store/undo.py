@@ -78,6 +78,7 @@ delegates to are each classified in their own right.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 from . import (
@@ -86,7 +87,9 @@ from . import (
     chronicle,
     commitments,
     dossiers,
+    entities,
     facts,
+    group_refs,
     groupstate,
     journal,
     locks,
@@ -97,8 +100,10 @@ from . import (
     provenance,
     relationship_history,
     relationships,
+    revision,
     voice_drift,
 )
+from . import paths as store_paths
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
@@ -269,6 +274,149 @@ def _require_owner(cid: str, target: dict) -> None:
             "the record this belonged to no longer exists in this campaign") from exc
 
 
+def _membership_scope(cid: str) -> dict:
+    """Host identifiers only; no persisted path is opened to resolve a scope."""
+    return {"store_root": str(store_paths.home().resolve()),
+            "campaign_root": str(campaigns_paths.campaign_root(cid).resolve()),
+            "layer": "campaign"}
+
+
+def _actor_list(value) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(r, str) and group_refs.actor_ref(r) == r for r in value)
+
+
+def _require_members_target(cid: str, target: dict):
+    """An available, sealed OWNED group; never overlay's World fallback.
+
+    Scope metadata is checked against host identifiers, not resolved as an
+    arbitrary saved pathname. Native leaf spelling comes from the actual
+    owned file when sealing, so a case alias cannot mint a second target id.
+    """
+    if target.get("retired") or "relocating" in target:
+        raise UndoConflict("this membership offer was retired or its record move is incomplete")
+    if target.get("kind") != "groups":
+        raise UndoConflict("this record is no longer a group")
+    rid = target.get("id")
+    if (not isinstance(rid, str) or not store_paths.safe_id(rid)
+            or target.get("scope") != _membership_scope(cid)):
+        raise UndoConflict("this membership offer belongs to a different owned campaign scope")
+    if not _actor_list(target.get("bindings")) or not _actor_list(target.get("inherited")):
+        raise UndoConflict("this membership offer's recorded consent cannot be read")
+    origin = target.get("actor_world_root")
+    if origin is not None and (not isinstance(origin, str) or not origin):
+        raise UndoConflict("this membership offer's World origin cannot be read")
+    if target["inherited"] and origin is None:
+        raise UndoConflict("this membership offer lost its original World origin")
+    croot = campaigns_paths.campaign_root(cid)
+    try:
+        path = overlay.require_owned_entity(cid, "groups", rid)
+        if not path.resolve().is_relative_to(croot.resolve()):
+            raise UndoConflict("this group is outside its recorded owned campaign scope")
+    except (entities.EntityNotFound, OSError) as exc:
+        raise UndoConflict("the owned group this belonged to no longer exists in this campaign") from exc
+    return croot
+
+
+def _members_state(meta: dict, effective, unresolved) -> dict:
+    return {"raw": meta.get("members"), "effective": list(effective),
+            "unresolved": list(unresolved)}
+
+
+def _read_members(cid: str, target: dict) -> dict:
+    croot = _require_members_target(cid, target)
+    # Current identity must be readable even for a recorded opt-in. A corrupt
+    # ledger is never evidence of continuity (spec 07); owned diagnostics stay
+    # empty because the raw refs themselves are authored.
+    try:
+        overlay.require_identity_ledgers(cid)
+        meta = entities.read_entity(croot, "groups", target["id"])["meta"]
+    except (group_refs.GroupIdentityConflict, entities.EntityNotFound, OSError) as exc:
+        raise UndoConflict(str(exc)) from exc
+    return _members_state(meta, group_refs.parse_members(meta), ())
+
+
+def _checked_members_state(value) -> dict:
+    if (not isinstance(value, dict) or set(value) != {"raw", "effective", "unresolved"}
+            or (value["raw"] is not None and not isinstance(value["raw"], str))
+            or not _actor_list(value["effective"]) or not _actor_list(value["unresolved"])):
+        raise UndoConflict("this membership snapshot cannot be read")
+    return value
+
+
+def _restore_members(cid: str, target: dict, value) -> None:
+    _require_members_target(cid, target)
+    value = _checked_members_state(value)
+    try:
+        overlay.require_identity_ledgers(cid)
+        raw = value["raw"]
+        effective, unresolved = set(value["effective"]), set(value["unresolved"])
+        for actor in group_refs.parse_members({"members": raw}):
+            if actor not in effective or actor in unresolved:
+                raw = group_refs.edited_line(raw, actor, "leave")
+        retained = set(group_refs.parse_members({"members": raw})) & set(target["inherited"])
+        if retained:
+            missing = {actor for _, actor in overlay.group_unresolved(cid, {"members": raw})}
+            if str(overlay.wroot_of(cid).resolve()) != target["actor_world_root"]:
+                missing.update(retained)
+            if (retained & (missing | unresolved)) - set(target["bindings"]):
+                raise UndoConflict("explicitly add or bind these World references in the group editor first")
+        overlay.update_entity(cid, "groups", target["id"], fields={"members": raw or ""})
+    except group_refs.GroupIdentityConflict as exc:
+        raise UndoConflict(str(exc)) from exc
+
+
+def _display_members(value: dict) -> str:
+    """Human diff text, including identity-only changes whose raw line matches."""
+    return (f"Recorded members: {value['raw'] or '(none)'}\n"
+            f"Effective members: {', '.join(value['effective']) or '(none)'}\n"
+            f"Unresolved World references: {', '.join(value['unresolved']) or '(none)'}")
+
+
+@contextmanager
+def journalled_group_members(cid: str, eid: str, *,
+                              bindings: frozenset[tuple[str, str]],
+                              label: str) -> Iterator[None]:
+    """Capture inherited identity before a save, then seal the actual owned group.
+
+    Copy/ledger errors propagate; only the post-write manual history append is
+    best effort, as for journalled. No unsealed World target reaches disk.
+    Both snapshots are JSON-native so persisted CAS equals its next read.
+    """
+    with locks.campaign_lock(cid):
+        overlay.require_identity_ledgers(cid)
+        v = overlay.view(cid)
+        record, context = overlay.read_group_membership(cid, eid, v=v)
+        before = _members_state(record["meta"], context.members, context.unresolved_members)
+        scope = _membership_scope(cid)
+        inherited = list(group_refs.parse_members(record["meta"])) if context.layer == "world" else []
+        origin = str(v.wroot.resolve()) if context.layer == "world" else None
+        yield
+        # The edit has returned, but sealing can still fail after its bytes
+        # landed. Stamp that error under this same hold, including readback or
+        # scope verification; the successful-write middleware cannot see it.
+        with revision.stamp_on_failure(cid):
+            # Derive the target from the actual owned path, not the request's meta
+            # or an inherited record with coincidentally matching bytes.
+            if _membership_scope(cid) != scope:
+                raise group_refs.GroupIdentityConflict("the campaign scope changed during this edit; reload the group")
+            path = entities.require_entity(v.croot, "groups", eid)
+            target = {"w": "group_members", "kind": "groups", "id": path.resolve().stem,
+                      "bindings": sorted(actor for field, actor in bindings if field == "members"),
+                      "inherited": inherited, "actor_world_root": origin, "scope": scope}
+            after = _read_members(cid, target)
+            if after == before:
+                return
+            plan = {"target": target, "restore": before, "expect": after}
+            try:
+                journal.append(cid, [{"scene": "", "source": "manual", "kind": "lore",
+                    "ref": {"kind": "groups", "id": target["id"]}, "field": "members", "label": label,
+                    "before": _display_members(before), "after": _display_members(after),
+                    "undo": plan, "why": ""}])
+            except Exception:  # edit landed; its manual history append remains best effort
+                log.warning("could not journal a manual members edit to %s in %s", eid, cid, exc_info=True)
+
+
 def read_value(cid: str, target: dict):
     """What the named record holds right now, as a JSON-comparable value.
 
@@ -284,6 +432,15 @@ def read_value(cid: str, target: dict):
     croot = campaigns_paths.campaign_root(cid)
     _require_owner(cid, target)
     w = target.get("w")
+    if w == "membership":
+        root = _require_members_target(cid, target)
+        actor = group_refs.actor_ref(target.get("actor"))
+        if actor is None:
+            raise UndoConflict("this membership actor cannot be read")
+        overlay.require_identity_ledgers(cid)
+        return actor in group_refs.parse_members(entities.read_entity(root, "groups", target["id"])["meta"])
+    if w == "group_members":
+        return _read_members(cid, target)
     if w == "state":
         st = playstate.read_state(croot, target["id"], target.get("kind", "characters"))
         return playstate.compose_body(st["current_state"], st["knows"], st["suspects"]) if st else ""
@@ -343,7 +500,23 @@ def write_value(cid: str, target: dict, value) -> None:
     croot = campaigns_paths.campaign_root(cid)
     _require_owner(cid, target)
     w = target.get("w")
-    if w == "state":
+    if w == "membership":
+        _require_members_target(cid, target)
+        if type(value) is not bool or group_refs.actor_ref(target.get("actor")) is None:
+            raise UndoConflict("this membership snapshot cannot be read")
+        actor = target["actor"]
+        if value and actor in target["inherited"] and actor not in target["bindings"]:
+            missing = {ref for _field, ref in overlay.group_unresolved(cid, {"members": actor})}
+            if actor in missing or str(overlay.wroot_of(cid).resolve()) != target["actor_world_root"]:
+                raise UndoConflict("explicitly bind this original World reference in the group editor first")
+        # `_require_members_target` proved the group is the campaign's own copy,
+        # so the overlay answers with exactly that file.
+        record = overlay.read_entity(cid, "groups", target["id"])
+        raw = group_refs.edited_line(record["meta"].get("members"), actor, "join" if value else "leave")
+        overlay.update_entity(cid, "groups", target["id"], fields={"members": raw})
+    elif w == "group_members":
+        _restore_members(cid, target, value)
+    elif w == "state":
         playstate.write_state(croot, target["id"], value or "",
                               kind=target.get("kind", "characters"))
     elif w == "group_state":
@@ -501,29 +674,40 @@ def undo(cid: str, jid: str) -> dict:
         if stored != plan.get("expect"):
             raise UndoConflict(CONFLICT)
         write_value(cid, target, plan.get("restore"))
-        # The reversal is itself a change, journalled like any other -- and its
-        # own reversal is the pair read backwards, which is what makes redo fall
-        # out rather than needing a second mechanism.
-        row = {"scene": entry.get("scene", ""), "source": "undo",
-               "kind": entry.get("kind", ""), "ref": entry.get("ref"),
-               "field": entry.get("field", ""),
-               "label": entry.get("label", ""),
-               "before": entry.get("after", ""), "after": entry.get("before", ""),
-               "reverted": jid,
-               "undo": seal(cid, target, plan.get("expect"))}
-        row["why"] = "" if row["undo"] else UNREADABLE
-        # The write first, then the history, in that order and not the other
-        # way round: a crash between them leaves an entry that reads as
-        # undoable over a record that has already moved back, and the next
-        # attempt is refused by the compare-and-swap rather than reverting
-        # twice. Stamping first would instead let a failed write leave an entry
-        # claiming a reversal that never happened, which nothing downstream can
-        # detect.
-        written = journal.append(cid, [row])[0]
-        journal.mark_undone(cid, jid, written["id"])
-        _roll_back_panels(cid, entry, row)
-        _log_relationship_reversal(cid, target, row, stored)
-        return written
+        with revision.stamp_on_failure(cid):
+            # The reversal is itself a change, journalled like any other -- and its
+            # own reversal is the pair read backwards, which is what makes redo fall
+            # out rather than needing a second mechanism.
+            row = {"scene": entry.get("scene", ""), "source": "undo",
+                   "kind": entry.get("kind", ""), "ref": entry.get("ref"),
+                   "field": entry.get("field", ""),
+                   "label": entry.get("label", ""),
+                   "before": entry.get("after", ""), "after": entry.get("before", ""),
+                   "reverted": jid,
+                   "undo": seal(cid, target, plan.get("expect"))}
+            if target.get("w") == "group_members":
+                inverse = row["undo"]
+                # Conservative restoration can remove unresolved raw tokens;
+                # swapping the original labels would describe a value we did
+                # not write. The sealed expect is the actual owned readback.
+                # If reading stopped AFTER restoration, retain the ordinary
+                # non-undoable reversal fallback: the write still happened and
+                # the original offer must be marked done (spec 07 native review).
+                row["before"] = _display_members(stored)
+                row["after"] = _display_members(inverse["expect"]) if inverse else UNREADABLE
+            row["why"] = "" if row["undo"] else UNREADABLE
+            # The write first, then the history, in that order and not the other
+            # way round: a crash between them leaves an entry that reads as
+            # undoable over a record that has already moved back, and the next
+            # attempt is refused by the compare-and-swap rather than reverting
+            # twice. Stamping first would instead let a failed write leave an entry
+            # claiming a reversal that never happened, which nothing downstream can
+            # detect.
+            written = journal.append(cid, [row])[0]
+            journal.mark_undone(cid, jid, written["id"])
+            _roll_back_panels(cid, entry, row)
+            _log_relationship_reversal(cid, target, row, stored)
+            return written
 
 
 def _log_relationship_reversal(cid: str, target: dict, row: dict, stored) -> None:

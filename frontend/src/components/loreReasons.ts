@@ -67,6 +67,7 @@ function describePresence(p: OwnerPresence | undefined, name: (ref: string) => s
   switch (p.type) {
     case "held_by": return via ? `held by ${via}` : "held";
     case "led_by": return via ? `led by ${via}` : "led";
+    case "member_present": return via ? `member here: ${via}` : "member here";
     case "headquarters": return "headquartered here";
     case "habitat": return "lives here";
     case "current_location": return "here";

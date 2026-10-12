@@ -92,12 +92,17 @@ def test_world_move_follows_a_campaign_tombstone(monkeypatch, tmp_path):
     assert [e["id"] for e in overlay.list_entities(cid, "lore")] == []
 
 
-def test_world_move_follows_a_detached_campaign_copy(monkeypatch, tmp_path):
+def test_world_move_preserves_a_detached_campaign_original(monkeypatch, tmp_path):
     wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
     overlay.update_entity(cid, "lore", "tidewatch", body="mine")
     overlay.add_detached(cid, "lore/tidewatch")
     reclassify.world_entity(wid, "lore", "tidewatch", "locations")
-    assert overlay.detached(cid) == {"locations/tidewatch"}
+    # Off says the campaign original is independent of the current World
+    # holder. Following the new World holder would capture that original and
+    # its journal offers (spec 07), even when the two currently share a slug.
+    assert overlay.detached(cid) == {"lore/tidewatch"}
+    assert overlay.read_entity(cid, "lore", "tidewatch")["body"].strip() == "mine"
+    assert not overlay.has_own_copy(cid, "locations", "tidewatch")
 
 
 def test_world_move_repoints_per_asset_tombstones(monkeypatch, tmp_path):

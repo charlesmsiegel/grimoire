@@ -118,7 +118,7 @@ def test_parse_output_extracts_knowledge_fields():
 def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [], "facts": [],
-        "character_state_edits": [], "group_state_edits": [], "lore_edits": [], "authored_edits": [],
+        "character_state_edits": [], "group_state_edits": [], "membership_changes": [], "lore_edits": [], "authored_edits": [],
         "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
         "commitment_movements": [],
         "new_characters": [], "new_locations": [], "new_lore": [], "weather_edits": []}
@@ -828,8 +828,7 @@ def test_created_outcome_names_the_new_record(monkeypatch, tmp_path):
 
 
 def test_absorb_prompt_asks_for_kind():
-    from grimoire import prompts
-    text = prompts.render("absorb/system.j2", steering=False)
+    text = absorb.build_prompt("", {})[0]["content"]
     line = next(ln for ln in text.splitlines() if ln.lstrip().startswith('"new_lore"'))
     assert '"kind"' in line and '"items"' in line
 
@@ -2301,6 +2300,8 @@ _LIST_SECTIONS = [k for k, v in absorb.parse_output("{}").items() if isinstance(
 #: One row each list section accepts: a dict everywhere but `keywords`, which
 #: is a list of strings.
 def _one_row(section: str) -> list:
+    if section == "membership_changes":
+        return [{"group": "groups:salt-circle", "actor": "characters:mara", "change": "join"}]
     return ["salt"] if section == "keywords" else [{"id": "x"}]
 
 
@@ -3149,6 +3150,7 @@ def test_parse_output_rejects_a_non_finite_certainty():
 _CITED_SECTIONS = {
     "character_state_edits": {"id": "seraphine", "current_state": "hurt"},
     "group_state_edits": {"id": "salt-circle", "goals": "burn the ledger"},
+    "membership_changes": {"group": "groups:salt-circle", "actor": "characters:mara", "change": "join"},
     "lore_edits": {"id": "the-ledger", "append": "It names him."},
     "authored_edits": {"id": "seraphine", "field": "personality", "text": "colder"},
     "relationship_deltas": {"from": "characters:a", "to": "characters:b", "trust": 4},
@@ -3231,7 +3233,7 @@ def test_identity_fields_live_inside_rows_not_the_top_level():
     # fields ride inside rows and must not widen it.
     assert set(absorb.parse_output("{}")) == {
         "one_line", "summary", "keywords", "timeline_events", "facts",
-        "character_state_edits", "group_state_edits", "lore_edits",
+        "character_state_edits", "group_state_edits", "membership_changes", "lore_edits",
         "authored_edits", "relationship_deltas", "bond_changes",
         "plot_movements", "commitment_movements", "new_characters",
         "new_locations", "new_lore", "weather_edits"}

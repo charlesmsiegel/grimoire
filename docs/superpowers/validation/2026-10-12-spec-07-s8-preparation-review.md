@@ -1,0 +1,40 @@
+﻿# S8 preparation: dependency and contract audit
+
+Read-only audit of spec07 at `7f21b9a245bf4524a2e868f5cbc8cbf47db8f998` and the public tracked sibling `.worktrees/spec-03-compiled-cache` at `cccb5ac55a7e3af3805c61055ad655d03aedca45`. Sibling source was read through `git show`, not its working changes. No implementation, private-store access or tests. This is planning input, not a plan approval or completed S8 review.
+
+## Reuse these interfaces
+
+`store.compiled` owns SQLite, checksums, generation/deletion fences, bounded staging, corruption handling and optional failure. Register a `compiled.Kind` in `compiled.KINDS`: fields are `name`, `version`, `path_inputs`, `params`, `allow_persisted_sources`, optional `absent_ok_roles` and `member_filter`. Use `membership_index`, version 1; explicitly enumerate every parameter. `make_key` requires exact parameter-key agreement and includes kind/version/BUILD plus separate file and collection input categories. Digests must be SHA-256 strings, or `ABSENT` only for declared absent roles. Path-dependent output needs declared path parameters.
+
+`with compiled.batch(root) as request` selects a library and owns flush/discard. `request.begin_compute()` captures the durable boundary before caller capture/hashing; do not begin only after membership computation. `lookup(key)` returns `Lookup(hit,value)`; `put(key,value)` is bounded optional storage. `derive(kind, inputs, params=..., compute=..., collections=..., instance=...)` supplies `DerivationInputs` with captured bytes and hashes; `Uncached(value)` explicitly declines storage. Latest commit `cccb5ac55` adds the essential zero-input derive fence, so do not transplant an older foundation without its subsequent safety repairs. `store_written` is a writer-snapshot API, not permission to pretend a membership read authored files.
+
+The provider disables SQL on the event loop, while campaign locks are held, with `GRIMOIRE_COMPILED_CACHE=0`, without SQLite, or without a trustworthy BUILD. Cache failure must preserve the uncached answer; strict membership input failure must still raise. Payloads are JSON-like objects, capped at 1 MiB; keys at 64 KiB. Plain Pydantic models require explicit compatible serialization/reconstruction and returned deep copies. Oversize or invalid optional payloads must compute normally rather than change membership behavior.
+
+## Dependency integration boundary
+
+The feature does not yet contain `compiled.py`, `compiled_build.py`, `file_stats.py` or `template_paths.py`. Reuse the current public provider rather than create a second cache implementation. Its direct import closure includes existing atomic/proclock/statcache/logs/maintenance_reports/paths and requires `locks.campaign_locks_held()` with correct physical hold tracking. Include the sibling's log/device-lock fork resets for its fork-safe degradation path. BUILD uses the dependency-light template resolver and packaged source stamp contract; missing identity disables persistence.
+
+Operational ownership also matters: preserve the provider's data-dir `root_change` integration, shutdown close, and deletion intent/purge wiring. Relevant public corrections include `f38753f55` (root/process lifecycle), `190d4e5ce` (pinned deletes), `7cdabed39` (HTTP bookkeeping/intent retention), `e65443c05` (unsynchronized sessions), and `cccb5ac55` (early derive fence/owned corruption replacement). Their exact dependency closure should be carried as a reviewed provider integration, not cherry-pick those tips alone. Root pinning in paths, deletion preflights/routes and response stamping must compose with spec07's newer identity/lifetime work; copying old whole route files would regress it.
+
+Token-count admission, vector consumer changes, search memo experiments and ordinary record-list optimizations are not required to add membership persistence. Do not import them merely because they share the dependency branch. Materialized reverse dependency registration is a soft S8 dependency: `derive` maintains source-to-artifact rows, whereas plain `lookup/put` does not. A capture-based adapter may deliberately remain lazy initially, but must record that it cannot yet promise eager rebuild registration. Provider cost/admission evidence for other consumers is not evidence that membership benefits; measure this consumer before claiming a performance improvement.
+
+## Capture and key hazards the plan must address
+
+Keep S2's owning `entities.group_capture` / `overlay.group_capture`; never read campaign group paths from a higher-level raw bypass. Strictly read both complete ledgers on every hit before any payload can be delivered. Couple roots, ledger sets, exact selected bytes, IDs and source layers to the same rows. Hashing later files to certify earlier parsed data is forbidden. Preserve the one fresh uncached result on mismatch, with no retry loop.
+
+`compiled.Collection` is not interchangeable with that inventory. It lists with `os.scandir`, rejects unavailable/absent collection directories, skips directory entries, applies its filter to store-relative strings and may reuse persisted source hashes. S2 treats genuinely absent groups directories as empty, accepts native Windows `Path.match('*.md')` spellings such as `.MD`, uses safe stems, applies captured-ID plus native-alias owned precedence, and propagates attempted record reads. A new lowercase-only suffix filter or fresh second enumeration can change answers. Use captured bytes, with persisted-source trust disabled for membership, and keep current content preflight even on artifact hits. A provider collection adapter, if chosen, must explicitly prove all these equivalences.
+
+Neither group bytes nor ledger bytes alone capture native alias changes. Include or revalidate the inherited raw refs and the effective native detachment signature without actor-body reads. Retain logical-store provenance before resolving campaign junctions, root-switch checks and separation of owned versus World namespaces. Do not infer the library root from a physically relocated campaign directory.
+
+Current `_MemoValue` also contains `records` (body and ordinary metadata), used by `campaign_snapshot` for context. An artifact containing only `Index` cannot replace that wrapper or attach freshly read body/visibility to an older Index. Choose explicitly between caching the complete coupled projection and caching only the inverse while deriving other data from the same capture. Bodies can change the artifact input while leaving `Index.digest` unchanged; that is correct.
+
+## Focused on/off equivalence matrix for the plan
+
+Compare complete responses, digests, ordering and exceptions with persistence disabled, cold, warm and in a fresh process:
+
+- World/campaign membership API, pure lookup/co-affiliation/scene projections, `campaign_snapshot`, and its context/activation consumers; include graph/snapshot consumers that cache derived payloads. Full output parity includes prose, controls, names, secrecy and leadership, not just Members.
+- Strict malformed/denied/undecodable ledgers and group reads after a warm artifact; valid unrelated markers, empty/missing collections, first owned copy, tombstones, detachment and native alias changes.
+- Same-size edits with every stat restored, body-only edits, `.MD` on a physical case-sensitive directory, both mixed namespace directions, forged frontmatter IDs/layers, root switches during capture and logical campaign junctions.
+- Concurrent publication of a contrary artifact, capture/compute mismatch, mutated returned models, damaged/oversize payloads, disabled/unavailable SQLite/BUILD, held-lock/event-loop opt-out and generation purge/root switch during pre-capture-to-flush work. None may serve stale or partial identity data or republish pre-delete work.
+
+Spec location note: S8 explicitly names 17.2 equivalence; section 17.8 is UI acceptance, not a replacement for that contract. S8 remains optional at spec level and must change cost only. A native plan gate and final independent implementation gate remain required.

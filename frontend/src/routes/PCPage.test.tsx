@@ -10,7 +10,7 @@ vi.mock("../api/client", async () => {
   return { ...actual, api: {
     readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
     setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
-    readPC: vi.fn(), updatePCVersion: vi.fn(), updatePC: vi.fn(),
+    getActorMembership: vi.fn(), readPC: vi.fn(), updatePCVersion: vi.fn(), updatePC: vi.fn(),
     listPCImages: vi.fn(), listAppearances: vi.fn(), listEntities: vi.fn(),
     putPCImage: vi.fn(), promotePCImage: vi.fn(), deletePCImage: vi.fn(),
     setPCImageDescription: vi.fn(), draftPCImageDescription: vi.fn(), setPCAvatarFocus: vi.fn(),
@@ -34,6 +34,7 @@ beforeEach(() => {
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, []));
   vi.mocked(api.appendRecordArt).mockResolvedValue({ name: "avatar", ext: "png", v: "new", image_id: "new" });
 
+  vi.mocked(api.getActorMembership).mockResolvedValue({ actor: "pcs:mara", groups: [] });
   (api.readPC as any).mockResolvedValue(DETAIL);
   (api.listPCImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
@@ -442,3 +443,22 @@ test.each((["world", "campaign"] as const).flatMap(scope => (["ok", "partial"] a
     } else expect(screen.getByText("Saved")).toBeInTheDocument();
     confirm.mockRestore();
   });
+
+test.each(["world", "campaign"])("%s PC Groups use same-scope links", async (kind) => {
+  vi.mocked(api.getActorMembership).mockResolvedValue({ actor: "pcs:mara", groups: [
+    { ref: "groups:salt-circle", name: "Salt Circle", secrecy: "secret", roles: ["member"] },
+  ] });
+  renderPC(kind === "world" ? "/worlds/realm/pcs/mara" : "/campaigns/saltmarch/world/pcs/mara");
+  const link = await screen.findByRole("link", { name: "Salt Circle" });
+  expect(document.querySelector(".context-column")).toContainElement(link);
+  expect(api.getActorMembership).toHaveBeenCalledWith({ kind, id: kind === "world" ? "realm" : "saltmarch" }, "pcs:mara");
+  expect(link).toHaveAttribute("href", kind === "world" ? "/worlds/realm/groups/salt-circle" : "/campaigns/saltmarch/world/groups/salt-circle");
+});
+
+test.each(["world", "campaign"])("%s PC in no group draws no Groups section", async (kind) => {
+  renderPC(kind === "world" ? "/worlds/realm/pcs/mara" : "/campaigns/saltmarch/world/pcs/mara");
+  await waitFor(() => expect(api.getActorMembership).toHaveBeenCalled());
+  expect(document.querySelector(".context-column")).not.toBeNull();
+  const labels = [...document.querySelectorAll(".context-column .section-label")].map(el => el.textContent);
+  expect(labels).not.toContain("Groups");
+});

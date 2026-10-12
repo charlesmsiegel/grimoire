@@ -28,14 +28,14 @@ export const LENS_LABELS: Record<Lens, string> = {
 };
 
 /** The Show toggles: what a lens adds on top of its own kinds. */
-export type Show = { actors: boolean; locations: boolean; merged: boolean; candidates: boolean };
+export type Show = { actors: boolean; locations: boolean; groups: boolean; merged: boolean; candidates: boolean };
 
 export const SHOW_LABELS: Record<keyof Show, string> = {
-  actors: "Actors", locations: "Locations", merged: "Merged records",
+  actors: "Actors", locations: "Locations", groups: "Groups", merged: "Merged records",
   candidates: "Review candidates",
 };
 
-const OFF: Show = { actors: false, locations: false, merged: false, candidates: false };
+const OFF: Show = { actors: false, locations: false, groups: false, merged: false, candidates: false };
 
 /** Decision 20's table. Cast lists no actor kinds of its own: its actors come
  *  only from the Actors toggle, which it turns on, so unchecking Actors there
@@ -52,7 +52,7 @@ export const PRESETS: Record<Lens, {
   cast: {
     nodes: ["scene", "thread", "commitment"],
     edges: [],
-    show: { ...OFF, actors: true }, axis: "play",
+    show: { ...OFF, actors: true, groups: true }, axis: "play",
   },
   calendar: {
     nodes: ["scene", "event", "holiday", "birthday", "commitment"],
@@ -147,7 +147,8 @@ function lensKeeps(n: GraphNode, lens: Lens, show: Show): boolean {
   const kinds = PRESETS[lens].nodes;
   const shown = kinds.includes(n.kind)
     || (show.actors && ACTOR_KINDS.includes(n.kind))
-    || (show.locations && n.kind === "location");
+    || (show.locations && n.kind === "location")
+    || (show.groups && n.kind === "group");
   if (!shown) return false;
   // §19.4: the Story lens is about what is still ahead.
   if (lens === "story" && isReached(n)) {
@@ -162,6 +163,7 @@ function lensDraws(e: GraphEdge, lens: Lens, show: Show): boolean {
   return PRESETS[lens].edges.includes(e.kind)
     || (show.actors && ACTOR_EDGES.includes(e.kind))
     || (show.locations && e.kind === "occurred_at")
+    || (show.groups && (e.kind === "member_of" || e.kind === "leads"))
     || (show.merged && e.kind === "merged_into")
     || (show.candidates && e.source === "candidate");
 }
@@ -174,7 +176,13 @@ function lensDraws(e: GraphEdge, lens: Lens, show: Show): boolean {
 export function visible(g: StoryGraph, ix: GraphIndex, lens: Lens, show: Show,
                         arc: string | null): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const hood = arc !== null && ix.byId.has(arc) ? arcNeighbourhood(ix, arc) : null;
-  const nodes = g.nodes.filter((n) => (hood ? hood.has(n.id) : lensKeeps(n, lens, show)));
+  const kept = g.nodes.filter((n) => (hood ? hood.has(n.id) : lensKeeps(n, lens, show)));
+  const keptIds = new Set(kept.map((n) => n.id));
+  // A group is drawn only beside a visible member or leader (07 §10.2, "do
+  // not dump"): with Actors off, Groups alone would draw every group orphaned.
+  const nodes = hood ? kept : kept.filter((n) => n.kind !== "group"
+    || (ix.into.get(n.id) ?? []).some((e) => (e.kind === "member_of" || e.kind === "leads")
+      && keptIds.has(e.from)));
   const shown = new Set(nodes.map((n) => n.id));
   const edges = g.edges.filter((e) => {
     if (!shown.has(e.from) || !shown.has(e.to)) return false;
@@ -187,7 +195,7 @@ export function visible(g: StoryGraph, ix: GraphIndex, lens: Lens, show: Show,
 }
 
 export const KIND_NOUN: Record<NodeKind, string> = {
-  scene: "scene", character: "character", pc: "player character", location: "location",
+  scene: "scene", character: "character", pc: "player character", location: "location", group: "group",
   thread: "thread", commitment: "commitment", event: "event", idea: "scene idea",
   birthday: "birthday", holiday: "holiday",
 };
@@ -203,7 +211,7 @@ export const PART_LABELS: Record<GraphPart, string> = {
   calendar: "the calendar", scenes: "scenes", chronicle: "the chronicle", plot: "threads",
   commitments: "commitments", events: "events", continuity: "reviewed links and merges",
   candidates: "review findings", relationships: "relationships",
-  scene_ideas: "saved scene ideas", names: "names",
+  scene_ideas: "saved scene ideas", groups: "groups", names: "names",
 };
 
 /** A reviewed link read from either end: `out` from the link's `from`, `in`
@@ -264,6 +272,8 @@ export function statusOf(n: GraphNode, ix: GraphIndex): string {
       return scenes(edgeCount(ix.out.get(n.id), "appeared_in"));
     case "location":
       return scenes(edgeCount(ix.into.get(n.id), "occurred_at"));
+    case "group":
+      return [n.group_type, n.secrecy === "gm-only" ? "GM only" : n.secrecy].filter(Boolean).join(", ");
     case "thread":
     case "commitment": {
       if (n.merged_into !== null) {

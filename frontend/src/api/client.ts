@@ -18,7 +18,7 @@ import type { ArtCreated, ArtLinkResult, ArtSourceRef, ImageDescriptionGuards, I
 // imported by name for the ones the calls below actually mention.
 export * from "./types";
 import {
-  type Actor, type AdvanceDigest, type AuthorsNote, type AuthorsNotes, type AuthorsNotesNext, type AdvanceRequest, type Appearance, type Availability,
+  type Actor, type ActorMembershipResponse, type AdvanceDigest, type AuthorsNote, type AuthorsNotes, type AuthorsNotesNext, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type ImageBackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
   type CampaignMeta, type CampaignDefaultPrompt, type PromptField, type PromptFieldStatuses,
@@ -33,9 +33,9 @@ import {
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type ImageMaintenanceReport, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
-  type EntityScope,
+  type EntityScope, type GroupRefBinding,
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
-  type GroupState, type HealthCheckResult,
+  type GroupState, type MembershipResponse, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
   type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
   type ContinuityApplied, type ReconcileResult,
@@ -1047,6 +1047,12 @@ function expectedImageQuery(path: string, expectedV?: string): string {
   return expectedV === undefined ? path : `${path}?${new URLSearchParams({ expected_v: expectedV })}`;
 }
 
+// Hand-managed/restored scope ids may contain a URL fragment or query delimiter.
+// Membership uses a path segment, never the raw browser URL spelling.
+function membershipBase(scope: EntityScope): string {
+  return entityBase({ ...scope, id: encodeSegment(scope.id) });
+}
+
 /** What an image URL can ask of the route that serves it: `w`, a downscale
  *  (`api/thumbs.ts` says which), and `v`, the store's token for the bytes,
  *  which makes the response cache immutable. Either left out, or empty, is
@@ -1991,6 +1997,12 @@ export const api = {
    *  dropdown is the store's list rather than a copy of it (#138). */
   entityKinds: () => request<{ kinds: string[] }>("GET", "/api/entity-kinds"),
 
+  // Membership queries report stored refs, including a well-formed dangling actor.
+  getMembership: (scope: EntityScope) =>
+    request<MembershipResponse>("GET", `${membershipBase(scope)}/membership`),
+  getActorMembership: (scope: EntityScope, actor: string) =>
+    request<ActorMembershipResponse>("GET", `${membershipBase(scope)}/membership?actor=${encodeURIComponent(actor)}`),
+
   // entities, world or campaign scope
   listEntities: (scope: EntityScope, kind: EntityKind, fresh = false) =>
     request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`, undefined, { fresh }),
@@ -2002,7 +2014,8 @@ export const api = {
     request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
   updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
                  patch: { name?: string; body?: string; keys?: string; owners?: string;
-                          secrecy?: string; fields?: Record<string, string>; rev?: string }) =>
+                          secrecy?: string; fields?: Record<string, string>; rev?: string;
+                          group_ref_bindings?: GroupRefBinding[] }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   /** What a record's stashed SillyTavern settings would still add: the native
    *  fields they map to, and the stash keys that map to nothing. Read-only.

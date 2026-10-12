@@ -126,6 +126,8 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from . import atomic
 from .campaigns import paths as campaigns_paths
@@ -292,3 +294,19 @@ def require(cid: str, expected: str) -> None:
     now = stored or INITIAL
     if expected != now:
         raise RevisionMismatchError(cid, expected, now)
+
+
+@contextmanager
+def stamp_on_failure(cid: str) -> Iterator[None]:
+    """Invalidate expectations when an attempted durable effect reports failure.
+
+    Enter only AFTER pure validation, immediately before the first effect, and
+    inside the campaign hold that covers it. Atomic publication can land before
+    its owner reports an error; success-only middleware cannot stamp that path
+    (spec 07). This is conservative activity, not a multi-file transaction.
+    """
+    try:
+        yield
+    except Exception:
+        bump(cid)
+        raise

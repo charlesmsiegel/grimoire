@@ -52,6 +52,9 @@ test("an owner is appended to the main reason", () => {
 
 test.each([
   [{ type: "led_by", via: "characters:mara" }, "owner present: the lantern (led by Mara)"],
+  [{ type: "member_present", via: "characters:mara" }, "owner present: the lantern (member here: Mara)"],
+  [{ type: "member_present", via: null }, "owner present: the lantern (member here)"],
+  [{ type: "member_present", via: "characters:winifred" }, "owner present: the lantern (member here: characters:winifred)"],
   [{ type: "headquarters", via: "locations:saltmarch" }, "owner present: the lantern (headquartered here)"],
   [{ type: "habitat", via: "locations:saltmarch" }, "owner present: the lantern (lives here)"],
   [{ type: "current_location", via: null }, "owner present: the lantern (here)"],

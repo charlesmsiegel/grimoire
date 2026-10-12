@@ -71,6 +71,7 @@ vi.mock("../api/client", () => ({
     listUndescribedImages: vi.fn(), countUndescribedImages: vi.fn(),
     rememberedWorld: vi.fn(), rememberedCharacters: vi.fn(), rememberedAppearances: vi.fn(),
     listPCs: vi.fn(), readPC: vi.fn(),
+    getActorMembership: vi.fn().mockResolvedValue({ actor: "", groups: [] }),
     // the PC page asks for the selected version's history (#67)
     listPCRevisions: vi.fn(() => Promise.resolve([])),
     listPCImages: vi.fn(), getCalendarMonths: vi.fn(),

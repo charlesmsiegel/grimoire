@@ -95,6 +95,19 @@ south bank...
 Multi-paragraph is right when the group has a roster — the second paragraph is where each
 member gets a clause saying what they do. `keys` is optional and many entries omit it.
 
+Record explicit membership alongside that prose, using the group's typed fields:
+
+```markdown
+name: Salt Circle
+leader: characters:seraphine
+members: characters:mara, pcs:winifred
+```
+
+Only characters and PCs belong in `members`; leadership is separate and does not
+imply membership. Existing roster prose remains prose until membership is
+explicitly recorded; import and startup do not infer the field from names.
+
+
 ## Locations and items
 
 `entities.create_entity(root, "locations" | "items", name, body=..., owners=...)`

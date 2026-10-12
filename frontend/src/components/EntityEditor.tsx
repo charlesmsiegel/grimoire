@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
-import { ACTIVATION_FIELDS, ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
+import { ACTIVATION_FIELDS, ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type GroupMembershipContext, type GroupRefBinding, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
 import { errorText } from "../api/errors";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
 import { THUMB, thumbSet } from "../api/thumbs";
@@ -289,7 +289,11 @@ function numberInputCanShow(value: string): boolean {
   return value === "" || HTML_FLOAT.test(value);
 }
 
-function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete }: {
+const worldRefLabel = (ref: string) => `World reference: ${ref}`;
+const WORLD_BINDING_HINT = "Binding uses the present or future campaign actor with this reference.";
+const SEVERAL_REFS_HINT = "This field holds more than one reference; choose one (or None) to bind it or to save.";
+
+function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete, foreignRefs = [] }: {
   spec: EntityFieldSpec;
   options: RecordRef[];
   value: string;
@@ -302,8 +306,12 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
    *  flight or after one failed, and it is what stops an empty picker from
    *  claiming the store is empty. */
   optionsComplete: boolean;
+  /** Server identity diagnostics override even a matching campaign option.
+   *  Candidate names are presentation, not evidence that a World ref binds. */
+  foreignRefs?: string[];
 }) {
   const selected = parseRefs(value);
+  const candidates = options.filter((o) => !selected.includes(o.ref) || !foreignRefs.includes(o.ref));
   const shown = displayLabels(options);
   const labelOf = (o: RecordRef) => shown.get(o.ref) ?? o.label;
   // A stored ref that no candidate answers to — the record was deleted, or it
@@ -311,7 +319,7 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
   // is VISIBLE and clearable. Leaving it out was the tempting shortcut and the
   // wrong one: the field would look unset while still saving the old ref, and
   // the one thing the user cannot then do is remove it.
-  const dangling = selected.filter((r) => !options.some((o) => o.ref === r));
+  const dangling = selected.filter((r) => !candidates.some((o) => o.ref === r));
   // Only what this field is allowed to name, in the words the field uses. A
   // picker that offered nothing and said nothing reads as a broken control.
   //
@@ -323,9 +331,11 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
     ? `No ${spec.kinds?.map((k) => KIND_NOUNS[k].many).join(" or ")} yet.`
     : "Could not load the list of records to choose from.";
   const danglingRow = (ref: string, type: "radio" | "checkbox", onClear: () => void) => (
-    <label key={ref} className="owner-option dangling" title={unresolvedHint}>
-      <input type={type} name={spec.key} aria-label={ref} checked onChange={onClear} />
-      {ref}
+    <label key={ref} className="owner-option dangling"
+           title={foreignRefs.includes(ref) ? WORLD_BINDING_HINT : unresolvedHint}>
+      <input type={type} name={spec.key}
+             aria-label={foreignRefs.includes(ref) ? worldRefLabel(ref) : ref} checked onChange={onClear} />
+      {foreignRefs.includes(ref) ? worldRefLabel(ref) : ref}
     </label>
   );
   if (spec.multi) {
@@ -333,7 +343,7 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
       <div className="field">
         <label>{spec.label}</label>
         <div className="chips owner-picker" role="group" aria-label={spec.label}>
-          {options.map((o) => (
+          {candidates.map((o) => (
             <label key={o.ref} className="owner-option">
               <input type="checkbox" aria-label={labelOf(o)} checked={selected.includes(o.ref)}
                      onChange={(e) => onChange(
@@ -362,7 +372,7 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
                  onChange={() => onChange("")} />
           None
         </label>
-        {options.map((o) => (
+        {candidates.map((o) => (
           <label key={o.ref} className="owner-option">
             <input type="radio" name={spec.key} aria-label={labelOf(o)}
                    checked={selected[0] === o.ref} onChange={() => onChange(o.ref)} />
@@ -450,6 +460,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // Initial loads, writes and shared-art invalidation all feed the same rail.
   // Order them together so a pre-write response cannot undo fresh thumbnails.
   const summaryReads = useRef(0);
+  // Every completion that can reload, reset, or navigate must still belong to
+  // the view that started it. A record change matters within one scope too.
+  const captureViewGuard = () => {
+    const reading = readReq.current;
+    const generation = scopeGen.current;
+    return () => reading === readReq.current && generation === scopeGen.current;
+  };
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
@@ -461,6 +478,27 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // land on top of an edit made outside the app (#35); `stale` holds the
   // refusal, with the on-disk rev an overwrite would have to be based on.
   const [rev, setRev] = useState<string | null>(null);
+  // Consent belongs to this loaded record/rev. Scope keys invalidate it on
+  // the first render of navigation, before an effect or late reply can run.
+  // Never infer foreign identity from actor options (spec 07).
+  const [membership, setMembership] = useState<{
+    key: string; rev: string; context: GroupMembershipContext;
+  } | null>(null);
+  const [bindings, setBindings] = useState<GroupRefBinding[]>([]);
+  const [identityConflict, setIdentityConflict] = useState(false);
+  const recordKey = JSON.stringify([scope.kind, scope.id, kind, selected ?? editing]);
+  const groupContext = membership?.key === recordKey && membership.rev === rev ? membership.context : null;
+  const requiresGroupContext = kind === "groups" && scope.kind === "campaign" && editing !== null;
+  const groupNeedsReload = requiresGroupContext && (!groupContext || identityConflict);
+  const unresolvedFor = (spec: EntityFieldSpec): string[] => {
+    if (kind !== "groups" || scope.kind !== "campaign" || groupContext?.layer !== "world") return [];
+    if (spec.key === "members") return groupContext.unresolved_members;
+    // Every guarded Leader slot, not only the one display names: a legacy
+    // line holding two Leader tokens is refused on either (spec 07 7.7).
+    if (spec.key === "leader") return groupContext.unresolved_leaders
+      ?? (groupContext.unresolved_leader ? [groupContext.unresolved_leader] : []);
+    return [];
+  };
   // `to` is set only when the refusal came from a reclassify, and it is what
   // makes "do it anyway" repeat the right write rather than turning a move into
   // a save.
@@ -651,6 +689,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   function resetForm(owner = "") {
     setEditing(null);
     setRev(null);
+    setMembership(null);
+    setBindings([]);
+    setIdentityConflict(false);
     setStale(null);
     setName("");
     setBody("");
@@ -671,6 +712,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   }
 
   async function select(id: string, req = ++readReq.current) {
+    setMembership(null);
+    setBindings([]);
+    setIdentityConflict(false);
     setError(null);
     setStale(null);
     setContentPreview(null);
@@ -680,6 +724,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     if (id !== editing) setAdoptAllNote(null);   // a different record: the note was about the last
     setEditing(id);
     setRev(e.rev);
+    setMembership(e.membership_context ? {
+      key: JSON.stringify([scope.kind, scope.id, kind, id]), rev: e.rev, context: e.membership_context,
+    } : null);
     setName(e.meta.name);
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
@@ -800,7 +847,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
    *  is how "keep mine anyway" stays a deliberate second click rather than a
    *  silent retry without the precondition. */
   async function save(base: string | null = rev) {
-    if (!name.trim()) return;
+    if (!name.trim() || groupNeedsReload) return;
+    const stillHere = captureViewGuard();
     setError(null);
     setStale(null);
     const ownerStr = owners.join(", ");
@@ -813,22 +861,40 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     // they noticed and cleared it. A field nobody edited is left exactly as it
     // was found, which is what it did before this table named the key.
     const patch = changedFields(fields, loadedFields);
+    const reviewed = requiresGroupContext ? bindings.filter((binding) =>
+      parseRefs(fields[binding.field]).includes(binding.actor)) : [];
+    // An opt-in reviews the unchanged raw field too. Omitting it would make the
+    // backend reject the binding as consent for a slot not submitted.
+    for (const binding of reviewed) patch[binding.field] = fields[binding.field] ?? "";
     try {
       if (editing) {
         await api.updateEntity(scope, kind, editing,
           { name, body, keys, owners: ownerStr,
             secrecy, ...(Object.keys(patch).length ? { fields: patch } : {}),
-            ...(base ? { rev: base } : {}) });
+            ...(base ? { rev: base } : {}),
+            ...(reviewed.length ? { group_ref_bindings: reviewed } : {}) });
+        if (!stillHere()) return;
+        setBindings([]);
         await reload();
+        if (!stillHere()) return;
         await select(editing); // back to the read-only view
       } else {
         await api.createEntity(scope, kind,
           { name, body, keys, owners: ownerStr,
             secrecy, ...(Object.keys(patch).length ? { fields: patch } : {}) });
+        if (!stillHere()) return;
         await reload();
+        if (!stillHere()) return;
         resetForm();
       }
     } catch (err: any) {
+      if (!stillHere()) return;
+      if (err instanceof ApiError && err.kind === "group_identity_conflict") {
+        setBindings([]);
+        setIdentityConflict(true);
+        setError(err.detail);
+        return;
+      }
       if (err instanceof ApiError && err.kind === "stale_record") {
         // The form keeps the user's text; nothing is discarded without a click.
         setStale({ rev: (err.body?.rev as string | null) ?? null });
@@ -839,13 +905,26 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   }
 
   async function discardAndReload() {
+    const stillHere = captureViewGuard();
+    const generation = scopeGen.current;
     setStale(null);
+    setBindings([]);
+    setMembership(null);
     if (!editing) return;
-    await reload();
     try {
-      await select(editing);
+      await reload();
+    } catch (err) {
+      if (stillHere()) setError(errorText(err));
+      return;
+    }
+    if (!stillHere()) return;
+    const req = ++readReq.current;
+    try {
+      await select(editing, req);
     } catch {
-      resetForm(); // the record is gone from disk entirely
+      if (req === readReq.current && generation === scopeGen.current) {
+        resetForm(); // the record is gone from disk entirely
+      }
     }
   }
 
@@ -883,14 +962,18 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
 
   async function reclassify(to: EntityKind, base: string | null = rev) {
     if (!editing || !to) return;
+    const stillHere = captureViewGuard();
     setError(null);
     setStale(null);
     try {
       const { id } = await api.reclassifyEntity(scope, kind, editing, to, base);
+      if (!stillHere()) return;
       resetForm();
       await reload();
+      if (!stillHere()) return;
       onReclassified?.(to, id);
     } catch (err) {
+      if (!stillHere()) return;
       if (err instanceof ApiError && err.kind === "stale_record") {
         setStale({ rev: (err.body?.rev as string | null) ?? null, to });
         return;
@@ -901,7 +984,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
 
   async function remove(e: EntitySummary) {
     if (!window.confirm(`Delete '${e.name}'?`)) return;
+    const stillHere = captureViewGuard();
     await api.deleteEntity(scope, kind, e.id);
+    if (!stillHere()) return;
     if (editing === e.id) resetForm();
     await reload();
   }
@@ -1093,14 +1178,46 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   /** One declared field as its control -- the kind's own fields and the
    *  Activation disclosure's both go through here. */
   const renderSpec = (f: EntityFieldSpec) => {
-    const set = (v: string) => setFields({ ...fields, [f.key]: v });
+    const set = (v: string) => {
+      setFields({ ...fields, [f.key]: v });
+      // Once removed, a slot loses its opt-in. Re-adding it cannot revive a
+      // consent captured against the earlier form value.
+      setBindings((current) => current.filter((binding) =>
+        binding.field !== f.key || parseRefs(v).includes(binding.actor)));
+    };
     const value = fields[f.key] ?? "";
     switch (f.widget) {
       case "ref":
         return (
-          <RefField key={f.key} spec={f} options={optionsFor(f)} value={value}
-                    unresolvedHint={completeFor(f) ? DANGLING_HINT : UNLOADED_HINT}
-                    optionsComplete={completeFor(f)} onChange={set} />
+          <div key={f.key}>
+            <RefField spec={f} options={optionsFor(f)} value={value}
+                      foreignRefs={unresolvedFor(f)}
+                      unresolvedHint={completeFor(f) ? DANGLING_HINT : UNLOADED_HINT}
+                      optionsComplete={completeFor(f)} onChange={set} />
+            {unresolvedFor(f).filter((actor) => parseRefs(value).includes(actor)).map((actor) => (
+              // A single-valued field still holding a legacy second ref cannot
+              // be resent as it stands (the save boundary refuses two Leaders),
+              // so no opt-in could reach the store: say how to resolve it.
+              !f.multi && parseRefs(value).length > 1 ? (
+                <div className="field-hint" key={actor}>{worldRefLabel(actor)}. {SEVERAL_REFS_HINT}</div>
+              ) : (
+              <div className="field" key={actor}>
+                <label>
+                  <input type="checkbox" aria-label={`Bind ${f.label} reference ${actor}`}
+                         checked={bindings.some((b) => b.field === f.key && b.actor === actor)}
+                         onChange={(event) => {
+                           const binding: GroupRefBinding = { field: f.key === "leader" ? "leader" : "members", actor };
+                           const checked = event.target.checked;
+                           setBindings((current) => checked ? [...current, binding]
+                             : current.filter((b) => b.field !== binding.field || b.actor !== actor));
+                         }} />
+                  Bind {f.label} reference {actor}
+                </label>
+                <div className="field-hint">{WORLD_BINDING_HINT}</div>
+              </div>
+              )
+            ))}
+          </div>
         );
       case "choice":
         return (
@@ -1217,6 +1334,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
       <div className="editor-body">
         <RecordArtViewer controller={art} />
         {error && <div className="banner">{error}</div>}
+        {groupNeedsReload && (
+          <div className="banner">
+            Reload the group to review its current World references before saving.
+            <button onClick={() => { if (editing) void select(editing).catch((err: unknown) => setError(errorText(err))); }}>
+              Reload group (discard edits)
+            </button>
+          </div>
+        )}
         {stale && (
           <StaleRecordBanner label={label} rev={stale.rev} onReload={discardAndReload}
                              overwriteLabel={stale.to ? "Reclassify anyway" : undefined}
@@ -1362,7 +1487,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                   <h4>{f.label}</h4>
                   <div className="chips">
                     {parseRefs(fields[f.key]).map((ref) => {
-                      const hit = resolveRef(f, ref);
+                      if (unresolvedFor(f).includes(ref)) return (
+                        <span key={ref} className="chip dangling" title={WORLD_BINDING_HINT}>{worldRefLabel(ref)}</span>
+                      );
+                      const hit = requiresGroupContext && !groupContext && (f.key === "members" || f.key === "leader")
+                        ? null : resolveRef(f, ref);
                       return hit === null ? (
                         // Not a button: there is nothing to navigate to. It is
                         // shown at all because a delete does not scrub the refs
@@ -1545,7 +1674,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             <div className="form-actions">
               {editing && <button className="subtle" onClick={() => remove(items.find((x) => x.id === editing)!)}>Delete</button>}
               {editing && <button className="subtle" onClick={() => select(editing)}>Cancel</button>}
-              <button className="primary" onClick={() => save()} disabled={!name.trim()}>
+              <button className="primary" onClick={() => save()} disabled={!name.trim() || groupNeedsReload}>
                 {editing ? "Save" : `Create ${label}`}
               </button>
             </div>

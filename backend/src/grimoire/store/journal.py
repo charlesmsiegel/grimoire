@@ -52,11 +52,12 @@ becoming the largest thing in ``~/.grimoire``.
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
-from . import atomic, locks
+from . import atomic, entities, group_refs, locks
 from .campaigns import paths as campaigns_paths
-from .paths import now_iso
+from .paths import now_iso, safe_id
 
 #: How many entries are kept. Everything older is dropped on the next append.
 RETENTION = 500
@@ -105,6 +106,116 @@ def _load(cid: str) -> dict:
     seq = data.get("seq")
     seq = seq if isinstance(seq, int) and not isinstance(seq, bool) else 0
     return {"seq": max(seq, _high_water(entries)), "entries": entries}
+
+
+def _load_lifetime(cid: str) -> dict:
+    """Identity fences cannot use the display reader's empty-on-error policy.
+
+    A malformed journal may contain the only offer naming an original record.
+    Treating it as empty before deleting or moving that record would leave the
+    offer available against the next record to reuse its slug (spec 07).
+    """
+    try:
+        data = json.loads(_path(cid).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"seq": 0, "entries": []}
+    except (OSError, ValueError) as exc:
+        raise group_refs.GroupIdentityConflict("journal.json cannot be read; repair it before changing record identity") from exc
+    if (not isinstance(data, dict) or not isinstance(data.get("seq"), int)
+            or isinstance(data["seq"], bool) or data["seq"] < 0
+            or not isinstance(data.get("entries"), list)
+            or any(not isinstance(entry, dict) for entry in data["entries"])):
+        raise group_refs.GroupIdentityConflict("journal.json has an invalid document or entry; repair it before changing record identity")
+    return {"seq": max(data["seq"], _high_water(data["entries"])), "entries": data["entries"]}
+
+
+def require_readable(cid: str) -> None:
+    """Preflight the entire journal before any lifetime effect."""
+    _load_lifetime(cid)
+
+
+def _membership_targets(doc: dict):
+    # Both the whole-field editor and the later join/leave writer use these
+    # fences. Display refs are not authority for which record an offer owns.
+    for entry in doc["entries"]:
+        plan = entry.get("undo")
+        target = plan.get("target") if isinstance(plan, dict) else None
+        if isinstance(target, dict) and target.get("w") in {"group_members", "membership"}:
+            yield entry, target
+
+
+def _names_owned(cid: str, target: dict, kind: str, rid: str) -> bool:
+    if target.get("kind") != kind or not safe_id(target.get("id")):
+        return False
+    if target["id"] == rid:
+        return True
+    root = campaigns_paths.campaign_root(cid)
+    try:
+        return (root / kind / f"{target['id']}.md").samefile(root / kind / f"{rid}.md")
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise group_refs.GroupIdentityConflict("cannot verify the journal's owned record identity; repair access before changing it") from exc
+
+
+def retire_membership_targets(cid: str, kind: str, rid: str) -> None:
+    """Durably retire offers BEFORE their owned original can disappear.
+
+    Retirement is permanent: generic ref repoints and redo retain the flag.
+    An interrupted unlink can leave a live record with retired offers, which is
+    conservative; an available offer against a replacement is not.
+    """
+    with locks.campaign_lock(cid):
+        doc = _load_lifetime(cid)
+        targets = [target for _, target in _membership_targets(doc)
+                   if _names_owned(cid, target, kind, rid)]
+        if any(target.get("retired") is not True for target in targets):
+            for target in targets:
+                target["retired"] = True
+            _write(cid, doc)
+
+
+def begin_membership_relocation(cid: str, kind: str, rid: str,
+                                new_kind: str) -> str | None:
+    """Suspend offers before the move; only this operation can resume them."""
+    with locks.campaign_lock(cid):
+        doc = _load_lifetime(cid)
+        targets = [target for _, target in _membership_targets(doc)
+                   if _names_owned(cid, target, kind, rid)
+                   and not target.get("retired") and "relocating" not in target]
+        if not targets:
+            return None
+        operation = uuid.uuid4().hex
+        for target in targets:
+            target["relocating"] = {"operation": operation, "kind": kind,
+                                    "id": target["id"], "new_kind": new_kind}
+        _write(cid, doc)
+        return operation
+
+
+def complete_membership_relocation(cid: str, token: str,
+                                   new_kind: str, new_id: str) -> None:
+    """Follow only this move's offers to the actual landed (possibly suffixed) id.
+
+    A failed completion leaves the durable suspension intact. It is never
+    inferred from equal bytes, the vacated slug, or a later generic repoint.
+    """
+    if new_kind not in entities.ENTITY_KINDS or not safe_id(new_id):
+        raise ValueError("invalid membership relocation destination")
+    with locks.campaign_lock(cid):
+        doc = _load_lifetime(cid)
+        hit = False
+        for entry, target in _membership_targets(doc):
+            move = target.get("relocating")
+            if (not isinstance(move, dict) or move.get("operation") != token
+                    or move.get("new_kind") != new_kind or target.get("retired")):
+                continue
+            target["kind"], target["id"] = new_kind, new_id
+            del target["relocating"]
+            entry["ref"] = {"kind": new_kind, "id": new_id}
+            hit = True
+        if hit:
+            _write(cid, doc)
 
 
 def read(cid: str) -> list[dict]:
@@ -230,8 +341,9 @@ def repoint_records(cid: str, mapping: dict[str, str]) -> None:
     record sitting right there under its new kind. Reclassifying a record would
     otherwise quietly retire every undo offer standing against it.
 
-    Only `w == "entity"` targets carry a kind at all. The sidecar writers name
-    their owner's kind implicitly, and the honest answer differs by owner:
+    Entity and membership targets carry an explicit kind; membership targets
+    retain retirement and operation suspension through this generic repoint
+    (spec 07). The sidecar writers name their owner's kind implicitly, and the honest answer differs by owner:
     `state`, `dossier` and `voice_drift` belong to a character, which is not a
     kind a reclassify can move; `group_state` belongs to a GROUP, which is. A
     group that has stopped being a group has no group state to put back, and
@@ -248,7 +360,7 @@ def repoint_records(cid: str, mapping: dict[str, str]) -> None:
         for entry in doc["entries"]:
             undo = entry.get("undo")
             target = undo.get("target") if isinstance(undo, dict) else None
-            if not isinstance(target, dict) or target.get("w") != "entity":
+            if not isinstance(target, dict) or target.get("w") not in {"entity", "group_members", "membership"}:
                 target = None
             for named in (entry.get("ref"), target):
                 if not isinstance(named, dict):

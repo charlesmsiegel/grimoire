@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
-import { api, type IncomingBlob, type IncomingItem, type IncomingRef } from "../api/client";
+import { api, type IncomingBlob, type IncomingField, type IncomingItem, type IncomingRef } from "../api/client";
 import { CARD_TEXT_FIELDS, PERSONA_FIELDS } from "./cardFields";
 
 /** What a ref's kind is called in a sentence. A campaign syncs nine kinds and
@@ -37,7 +37,8 @@ function statusHint(item: IncomingItem): string {
   return "both sides changed — accepting replaces this campaign's copy";
 }
 
-type Row = { key: string; label: string; value: string };
+type Row = IncomingField;
+const plain = (key: string, label: string, value: string): Row => ({ key, label, value, shown: value });
 
 /** The fields one side of a change is read as.
  *
@@ -49,11 +50,11 @@ function rowsOf(blob: IncomingBlob | undefined, kind: string): Row[] {
   if (!blob) return [];
   if (blob.card) {
     const data = blob.card.data as Record<string, unknown>;
-    return CARD_TEXT_FIELDS.map((f) => ({ ...f, value: String(data[f.key] ?? "") }));
+    return CARD_TEXT_FIELDS.map((f) => plain(f.key, f.label, String(data[f.key] ?? "")));
   }
   if (blob.persona) {
     const persona = blob.persona as unknown as Record<string, unknown>;
-    return PERSONA_FIELDS.map((f) => ({ ...f, value: String(persona[f.key] ?? "") }));
+    return PERSONA_FIELDS.map((f) => plain(f.key, f.label, String(persona[f.key] ?? "")));
   }
   // The name is compared, not just printed as the heading. `entity_hash` covers
   // the whole file -- front matter included -- so a world-side *rename* is a
@@ -61,18 +62,27 @@ function rowsOf(blob: IncomingBlob | undefined, kind: string): Row[] {
   // as a change with nothing in it. The exception is a plot map, whose name is
   // the constant "Plot map" on both sides and so is never news.
   const name: Row[] = kind === "plotmap"
-    ? [] : [{ key: "name", label: "Name", value: blob.name }];
-  return [...name, { key: "body", label: "Body", value: blob.body ?? "" }];
+    ? [] : [plain("name", "Name", blob.name)];
+  return [...name, ...(blob.fields ?? []), plain("body", "Body", blob.body ?? "")];
 }
 
 /** The two sides of every field, lined up. Both sides are the same kind, so
  *  they yield the same keys; a field neither side fills is dropped rather than
  *  framed and left blank, the way the character view drops an empty one. */
-function pairs(item: IncomingItem): { key: string; label: string; world: string; mine: string }[] {
-  const mine = new Map(rowsOf(item.mine, item.ref.kind).map((r) => [r.key, r.value]));
-  return rowsOf(item.world, item.ref.kind)
-    .map((r) => ({ key: r.key, label: r.label, world: r.value, mine: mine.get(r.key) ?? "" }))
-    .filter((r) => r.world.trim() || r.mine.trim());
+function pairs(item: IncomingItem): { key: string; label: string; world: string; mine: string; worldShown: string; mineShown: string }[] {
+  const worldRows = rowsOf(item.world, item.ref.kind);
+  const mineRows = rowsOf(item.mine, item.ref.kind);
+  const world = new Map(worldRows.map((row) => [row.key, row]));
+  const mine = new Map(mineRows.map((row) => [row.key, row]));
+  // Old/mixed payloads may carry a mine-only field. It still belongs between
+  // Name and Body, with an empty World cell; starting from World alone loses it.
+  const order = [...worldRows.filter((row) => row.key !== "body"),
+    ...mineRows.filter((row) => !world.has(row.key) && row.key !== "body"),
+    ...worldRows.filter((row) => row.key === "body")];
+  return order.map((row) => ({ key: row.key, label: row.label,
+    world: world.get(row.key)?.value ?? "", mine: mine.get(row.key)?.value ?? "",
+    worldShown: world.get(row.key)?.shown ?? "", mineShown: mine.get(row.key)?.shown ?? "",
+  })).filter((row) => row.world || row.mine || row.worldShown || row.mineShown);
 }
 
 /** Entity, greeting and actor-summary bodies are markdown and render as it;
@@ -86,8 +96,8 @@ function isMarkdown(item: IncomingItem): boolean {
 /** What a change this view cannot show could have been, per kind. The hashes
  *  behind a pending item cover the whole record, and these blobs do not: a card
  *  carries greetings, tags, an embedded lorebook and `extensions` beyond its
- *  prose, and an entity blob is only `{name, body}` -- so once the name is
- *  compared too, what is left unreachable is the rest of the front matter. When
+ *  prose, and an entity blob carries Name, declared typed fields and Body -- leaving
+ *  keys, owners and secrecy outside this comparison. When
  *  every compared field matches, the change is in there somewhere, and saying
  *  nothing would let it read as no change at all. */
 function invisibleChangeHint(item: IncomingItem): string {
@@ -96,7 +106,7 @@ function invisibleChangeHint(item: IncomingItem): string {
   if (item.world.persona) return "the persona's birthdate, which this view does not compare";
   if (item.ref.kind === "greetings")
     return "the greeting's presence list, its required tags, or its edges to other greetings";
-  return "the record's keys, owners, or secrecy — front matter this view is not sent";
+  return "the record's keys, owners, or secrecy";
 }
 
 function Value({ text, markdown, documentKey }: { text: string; markdown: boolean; documentKey: string }) {
@@ -139,7 +149,7 @@ function Detail({ item, busy, onResolve, cid }: {
             <div className="incoming-cols">
               <div className="incoming-col">
                 <div className="eyebrow">From the world</div>
-                <Value text={f.world} markdown={markdown} documentKey={"world/" + f.key} />
+                <Value text={f.worldShown} markdown={markdown && f.key === "body"} documentKey={"world/" + f.key} />
               </div>
               {/* No campaign copy means one column, not a column paired with an
                   empty frame claiming a copy exists. Keyed off `mine` rather
@@ -147,7 +157,7 @@ function Detail({ item, busy, onResolve, cid }: {
               {item.mine && (
                 <div className="incoming-col">
                   <div className="eyebrow">In this campaign</div>
-                  <Value text={f.mine} markdown={markdown} documentKey={"campaign/" + f.key} />
+                  <Value text={f.mineShown} markdown={markdown && f.key === "body"} documentKey={"campaign/" + f.key} />
                 </div>
               )}
             </div>

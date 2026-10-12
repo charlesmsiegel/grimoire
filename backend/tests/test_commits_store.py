@@ -3,7 +3,9 @@ commit journal and its per-scene epoch (#271)."""
 
 import json
 
-from grimoire.store import campaigns, commits, scene_refs, worlds
+import pytest
+
+from grimoire.store import campaigns, commits, group_refs, scene_refs, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -100,10 +102,11 @@ def test_a_recorded_token_keeps_its_fingerprint(monkeypatch, tmp_path):
     assert commits.lookup(cid, "tok")["fingerprint"] == "fp1"
 
 
-def test_a_garbled_ledger_reads_as_empty(monkeypatch, tmp_path):
+def test_a_garbled_ledger_requires_repair(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     (campaigns.campaign_root(cid) / "commits.json").write_text("{ not json", encoding="utf-8")
-    assert commits.lookup(cid, "tok") is None
+    with pytest.raises(group_refs.GroupIdentityConflict):
+        commits.lookup(cid, "tok")
 
 
 def test_a_pre_journal_ledger_still_answers_its_tokens(monkeypatch, tmp_path):

@@ -24,12 +24,13 @@ from .. import (
     plot,
     relationships,
 )
+from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..continuity import effective as continuity_effective
 from ..paths import slugify
-from . import conflicts, parse, routing, weather
+from . import conflicts, membership, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
 
@@ -873,6 +874,7 @@ def materialize(cid: str, sid: str, parsed: dict,
                 messages: list[dict] | None = None,
                 player_label: str | None = None, *,
                 on_identity_error: Callable[[BaseException], None] | None = None,
+                membership_capture: membership.Capture | None = None,
                 ) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
@@ -968,14 +970,12 @@ def materialize(cid: str, sid: str, parsed: dict,
             # current_state from silently erasing established knowledge.
             knows = e["knows"] if "knows" in e else cur_knows
             suspects = e["suspects"] if "suspects" in e else cur_suspects
-        after = playstate.compose_body(e.get("current_state", ""), knows, suspects)
+        after = playstate.compose_body(e.get("current_state", st["current_state"] if st else ""), knows, suspects)
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
-        # An empty result is dropped for a character, whose state the play
-        # loop also feeds. A PC's state.md is written by absorb and nothing
-        # else, so an explicit "" (the state is over) is the only way it ever
-        # stops standing: staged when there is a state to clear. An omitted
-        # current_state stays "nothing to say", as knows/suspects' omission is.
-        clears = kind == "pcs" and "current_state" in e and bool(before)
+        # Explicit empty strings clear even the last standing field (spec07).
+        # Raw parsing removes null/omitted state fields before this boundary,
+        # so a generated nullable contract cannot erase a snapshot by silence.
+        clears = any(field in e for field in ("current_state", "knows", "suspects")) and bool(before)
         if not after and not clears:
             continue
         if before == after:
@@ -999,8 +999,6 @@ def materialize(cid: str, sid: str, parsed: dict,
         cur = {k: (st[k] if st else "") for k in groupstate.FIELDS}
         new = {k: (e[k] if k in e else cur[k]) for k in groupstate.FIELDS}
         after = groupstate.compose_body(new)
-        if not after:
-            continue
         before = groupstate.compose_body(cur) if st else ""
         if before == after:
             continue
@@ -1008,6 +1006,38 @@ def materialize(cid: str, sid: str, parsed: dict,
                             "target": {"kind": "groups", "id": gid},
                             "label": f"{name} — group state", "field": "group_state",
                             "before": before, "after": after, "authored": False}, e))
+
+    if membership_capture is not None:
+        # Spec 07 section 9.3. Every drop is tolerated, not an error: a group
+        # this review did not capture (or that is gm-only), an actor that is not
+        # a referenceable, existing character or PC, a no-op, a repeat.
+        seen_memberships = set()
+        # Only an actor on the scene's Present line can be proposed (9.7): the
+        # transcript can give evidence about nobody else.
+        present = {f"{a['kind']}:{a['id']}" for a in appearances_cast.scene_cast(cid, sid)}
+        for row in parsed.get("membership_changes", []):
+            ref = membership.group_ref(row.get("group"))
+            actor = membership.actor_ref(row.get("actor"))
+            if ref is None or ref not in membership_capture.leases or actor is None:
+                continue
+            if (actor not in membership_capture.actors or actor not in present
+                    or (ref, actor) in seen_memberships):
+                continue
+            seen_memberships.add((ref, actor))
+            roster = membership_capture.snapshot.index.groups[ref]
+            before = membership.PRESENT if actor in roster.members else membership.ABSENT
+            after = membership.PRESENT if row["change"] == "join" else membership.ABSENT
+            if before == after:
+                continue
+            gid = ref.partition(":")[2]
+            verb = "joins" if row["change"] == "join" else "leaves"
+            out.append(_staged({"id": f"membership:{gid}:{actor}", "kind": "membership",
+                "target": {"kind": "groups", "id": gid},
+                "label": f"{roster.name} — {relationships.actor_name(cid, actor)} {verb}",
+                "field": f"members:{actor}",
+                "before": before, "after": after, "authored": False,
+                "payload": {"group": gid, "actor": actor, "change": row["change"],
+                            "group_lifecycle_token": membership_capture.leases[ref].token}}, row, actor))
 
     for e in parsed.get("lore_edits", []):
         raw_id, append = e.get("id", ""), (e.get("append", "") or "").strip()

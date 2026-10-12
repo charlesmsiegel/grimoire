@@ -402,3 +402,38 @@ test("non-greeting incoming prose opts into the shared image viewer", async () =
   fireEvent.click(await screen.findByRole("button", { name: "Enlarge Saltmarch" }));
   expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
 });
+
+
+test.each(["changed", "display-only", "mine-only"])("typed incoming %s compares raw and displays friendly fields", async (state) => {
+  const field = { key: "members", label: "Members", value: "characters:mara", shown: "Mara" };
+  const world = state === "mine-only" ? [] : [state === "display-only"
+    ? { ...field, shown: "Mara (this campaign's own; not the library's)" }
+    : { ...field, value: "characters:seraphine" }];
+  vi.mocked(api.getIncoming).mockResolvedValue([{
+    ref: { kind: "groups", id: "salt-circle" }, status: "conflict",
+    world: { name: "Salt Circle", body: "The roster.", fields: world },
+    mine: { name: "Salt Circle", body: "The roster.", fields: [field] },
+  }]);
+  await renderPanel();
+  expect(screen.getByRole("heading", { name: "Members", level: 4 })).toBeInTheDocument();
+  const labels = screen.getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent);
+  expect(labels.indexOf("Name")).toBeLessThan(labels.indexOf("Members"));
+  expect(labels.indexOf("Members")).toBeLessThan(labels.indexOf("Body"));
+  if (state === "display-only") {
+    expect(screen.getByText(/this campaign's own; not the library's/)).toBeInTheDocument();
+    expect(screen.getByText(/Every field below is identical/)).toBeInTheDocument();
+  } else expect(screen.queryByText(/Every field below is identical/)).not.toBeInTheDocument();
+  expect(screen.getAllByText("Mara").length).toBeGreaterThan(0);
+});
+
+
+test("typed incoming whitespace remains a stored change", async () => {
+  vi.mocked(api.getIncoming).mockResolvedValue([{
+    ref: { kind: "groups", id: "salt-circle" }, status: "conflict",
+    world: { name: "Salt Circle", body: "", fields: [{ key: "members", label: "Members", value: " ", shown: "" }] },
+    mine: { name: "Salt Circle", body: "", fields: [{ key: "members", label: "Members", value: "", shown: "" }] },
+  }]);
+  await renderPanel();
+  expect(screen.getByRole("heading", { name: "Members", level: 4 })).toBeInTheDocument();
+  expect(screen.queryByText(/Every field below is identical/)).not.toBeInTheDocument();
+});

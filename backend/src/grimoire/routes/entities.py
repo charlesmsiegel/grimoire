@@ -9,6 +9,8 @@ registered before these. That is the one ordering rule the package has, and
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,6 +26,7 @@ from ..llm import LLMClient
 from . import runs
 from .common import (
     _campaign_root_or_404,
+    _dump,
     _fresh_or_409,
     _serve_image,
     _upload_image_ext,
@@ -127,6 +130,8 @@ def _entity_read(root, kind: str, eid: str):
 
 
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
+    if body.group_ref_bindings:
+        raise HTTPException(status_code=400, detail="actor bindings apply only to campaign groups")
     _check_fields(kind, body.fields)
     _check_secrecy(body.secrecy)
     # Kind first: `entity_hash` answers None for a kind it has never heard of,
@@ -185,11 +190,28 @@ def _campaign_entity_create(cid: str, kind: str, body: EntityCreate):
 
 def _campaign_entity_read(cid: str, kind: str, eid: str):
     try:
+        if kind == "groups":
+            record, context = store.overlay.read_group_membership(cid, eid)
+            return {**record, "membership_context": _dump(context)}
         return store.overlay.read_entity_rev(cid, kind, eid)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="entity not found")
+
+
+def _checked_group_bindings(kind: str, body: EntityUpdate) -> frozenset[tuple[str, str]]:
+    """Only explicit, submitted actor slots can review a first-copy binding."""
+    if body.group_ref_bindings and kind != "groups":
+        raise HTTPException(status_code=400, detail="actor bindings apply only to campaign groups")
+    slots = set()
+    for binding in body.group_ref_bindings:
+        actor = store.group_refs.actor_ref(binding.actor)
+        if actor is None or binding.field not in (body.fields or {}):
+            raise HTTPException(status_code=400,
+                detail="each actor binding needs a valid actor ref and its submitted field")
+        slots.add((binding.field, actor))
+    return frozenset(slots)
 
 
 def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
@@ -205,20 +227,29 @@ def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
     label = f"{body.name or eid} — {kind}"
     # Before the journal opens, so a refused write leaves no undo entry
     # offering to restore a state it never replaced.
-    _entity_kind_or_404(kind)
-    _fresh_or_409(body.rev, store.overlay.entity_rev(cid, kind, eid))
-    try:
-        with store.undo.journalled(cid, {"w": "entity", "kind": kind, "id": eid},
-                                   kind="lore", ref={"kind": kind, "id": eid},
-                                   field="body", label=label):
-            store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
-                                        keys=body.keys, owners=body.owners,
-                                        fields=body.fields, secrecy=body.secrecy)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
-    return {"ok": True}
+    # Group revision checking, source capture, write and both journal stages
+    # share one hold (spec 07). Other kinds retain their existing route-level
+    # revision race; their store copy/write now has its own reentrant hold.
+    with store.locks.campaign_lock(cid) if kind == "groups" else nullcontext():
+        bindings = _checked_group_bindings(kind, body)
+        _entity_kind_or_404(kind)
+        _fresh_or_409(body.rev, store.overlay.entity_rev(cid, kind, eid))
+        try:
+            members = (store.undo.journalled_group_members(cid, eid, bindings=bindings,
+                        label=f"{body.name or eid} -- members")
+                       if kind == "groups" and "members" in (body.fields or {}) else nullcontext())
+            with (store.undo.journalled(cid, {"w": "entity", "kind": kind, "id": eid},
+                                       kind="lore", ref={"kind": kind, "id": eid},
+                                       field="body", label=label), members):
+                store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
+                                            keys=body.keys, owners=body.owners,
+                                            fields=body.fields, secrecy=body.secrecy,
+                                            reviewed_slots=bindings)
+        except store.entities.UnknownKind:
+            raise HTTPException(status_code=404, detail="unknown kind")
+        except store.entities.EntityNotFound:
+            raise HTTPException(status_code=404, detail="entity not found")
+        return {"ok": True}
 
 
 def _campaign_entity_delete(cid: str, kind: str, eid: str):
@@ -433,11 +464,12 @@ def put_world_entity(wid: str, kind: str, eid: str, body: EntityUpdate):
 @router.delete("/worlds/{wid}/{kind}/{eid}")
 def delete_world_entity(wid: str, kind: str, eid: str):
     root = _world_root_or_404(wid)
-    out = _entity_delete(root, kind, eid)
-    # After the delete, so a crash between the two leaves the pre-#225 state
-    # rather than state stripped off a record that is still there.
-    store.overlay.forget_world_record(root, kind, eid)
-    return out
+    with store.overlay.world_identity_change(root, record=(kind, eid)) as cids:
+        out = _entity_delete(root, kind, eid)
+        # After the delete, so a crash between the two leaves the pre-#225 state
+        # rather than state stripped off a record that is still there.
+        store.overlay.forget_world_record(root, kind, eid, cids=cids)
+        return out
 
 
 # ---- entity images (locations/lore) — assets keyed <kind>/<eid>/assets/default ----

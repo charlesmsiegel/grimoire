@@ -547,3 +547,12 @@ def test_pc_profile_fields_are_written(home):
     problems = create_world.validate_plan(
         {"pcs": [{"name": "Winifred", "goals": "a\nb"}]}, root, wid)
     assert any("goals must be one line" in p for p in problems), problems
+
+
+def test_create_world_resolves_members_names_to_actor_refs(home):
+    plan = _plan()
+    plan["groups"][0]["fields"]["members"] = ["characters:Mara", "pcs:Winifred"]
+    result = _apply(plan)
+    root = worlds.world_root(result["world"])
+    assert entities.read_entity(root, "groups", "salt-circle")["meta"]["members"] == (
+        "characters:mara,pcs:winifred")

@@ -11,6 +11,7 @@ import { BirthdateDisplay, BirthdatePicker } from "../components/BirthdatePicker
 import { Field } from "../components/Field";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
+import { ActorGroups } from "../components/ActorGroups";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import SheetPanel from "../components/SheetPanel";
 import { sectionHref } from "../worldPaths";
@@ -290,6 +291,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     {persona.player_notes && <ColumnSection label="Notes for the narrator">
       <div className="field-hint">{persona.player_notes}</div></ColumnSection>}
     {persona.birthdate && <ColumnSection label="Birthdate"><BirthdateDisplay scope={scope} value={persona.birthdate} /></ColumnSection>}
+    {detail && <ActorGroups scope={scope} actor={`pcs:${pid}`} />}
     {detail && <ColumnSection label="Tags"><div className="chips">
       {detail.meta.tags.map((t) => <span key={t} className="chip on">{campaign ? t : tags[t] ?? t}</span>)}
       {!detail.meta.tags.length && <span className="field-hint">no tags</span>}

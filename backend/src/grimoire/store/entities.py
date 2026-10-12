@@ -11,7 +11,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from . import atomic, entity_schema, statcache, tokens
+from . import atomic, entity_schema, group_inventory, statcache, tokens
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
@@ -122,6 +122,21 @@ def list_entities(root: Path, kind: str) -> list[dict]:
     return out
 
 
+def group_capture(wroot: Path, *, store_root: Path | None = None) -> group_inventory.GroupCapture:
+    """One World group collection, with stamps preceding every input read."""
+    root = wroot.resolve()
+    sources, stamps = group_inventory.collect(root, "world")
+    return group_inventory.GroupCapture(
+        sources=sources, stamps=stamps, roots=(root,), deleted=frozenset(),
+        detached=frozenset(), ledger_digest="", groups_digest=group_inventory.content_digest(sources),
+        store_root=store_root.resolve() if store_root is not None else None)
+
+
+def group_listing(wroot: Path) -> tuple[list[dict], tuple[statcache.Stamp, ...] | None, str]:
+    capture = group_capture(wroot)
+    return group_inventory.rows(capture.sources), capture.stamps, capture.groups_digest
+
+
 def entity_ids(root: Path, kind: str) -> list[str]:
     """The ids `list_entities` lists, in its order, without opening a record.
 
@@ -226,17 +241,17 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
     return eid
 
 
-def update_entity(
-    root: Path, kind: str, eid: str, name: str | None = None,
-    body: str | None = None, keys: str | None = None, owners: str | None = None,
-    sd_prompt: str | None = None, fields: dict[str, str] | None = None,
-    secrecy: str | None = None,
-) -> None:
-    _check_kind(kind)
-    p = _entity_path(root, kind, eid)
-    if not safe_id(eid) or not p.exists():
-        raise EntityNotFound(f"{kind}/{eid}")
-    meta, cur_body = parse_frontmatter(p.read_text(encoding="utf-8"))
+def updated_text(text: str, *, name: str | None = None, body: str | None = None,
+                 keys: str | None = None, owners: str | None = None,
+                 sd_prompt: str | None = None, fields: dict[str, str] | None = None,
+                 secrecy: str | None = None) -> str:
+    """Compose a save without publishing an intermediate inherited copy.
+
+    This is the existing editor transformation, shared with overlay's first
+    copy (spec 07). The caller selects and hashes its original source bytes;
+    this pure step can remove unresolved actor slots before any own file exists.
+    """
+    meta, cur_body = parse_frontmatter(text)
     if name is not None:
         meta["name"] = name
     if keys is not None:
@@ -257,7 +272,23 @@ def update_entity(
         else:
             meta.pop(k, None)
     new_body = cur_body if body is None else body
-    atomic.write_text(p, dump_frontmatter(meta, new_body))
+    return dump_frontmatter(meta, new_body)
+
+
+def update_entity(
+    root: Path, kind: str, eid: str, name: str | None = None,
+    body: str | None = None, keys: str | None = None, owners: str | None = None,
+    sd_prompt: str | None = None, fields: dict[str, str] | None = None,
+    secrecy: str | None = None,
+) -> None:
+    _check_kind(kind)
+    p = _entity_path(root, kind, eid)
+    if not safe_id(eid) or not p.exists():
+        raise EntityNotFound(f"{kind}/{eid}")
+    text = updated_text(p.read_text(encoding="utf-8"), name=name, body=body,
+                        keys=keys, owners=owners, sd_prompt=sd_prompt,
+                        fields=fields, secrecy=secrecy)
+    atomic.write_text(p, text)
 
 
 def delete_entity(root: Path, kind: str, eid: str) -> None:
@@ -410,16 +441,17 @@ def rewrite_ref_fields(root: Path, old: str, new: str) -> list[tuple[str, str]]:
     same rewrite here would be worse than the residue it avoids: a
     `headquarters` accepts locations only, so writing `lore:tidewatch` into one
     stores a value `entity_schema.invalid_values` then rejects -- and since the
-    editor sends every declared field on every save, the referring record could
-    not be saved again at all until somebody cleared that field. A record made
+    editor sends only changed fields, a later edit to that field would be
+    refused until somebody corrected it. A record made
     unsaveable by a move somewhere else is a worse failure than a stale chip.
 
     So the ref is left as it stands, where it dangles exactly as a delete makes
     one dangle -- which is the truth from the field's side: the thing it named
     is no longer something it can name. The residue `rewrite_owner_refs` is
-    afraid of is real but cheap here: these fields never reach a prompt (the
-    entity-kinds design settled that), so the worst a reused slug costs is a
-    wrong name on a chip, not a leaked gate.
+    afraid of remains real. Actor refs such as Members/Leader are never moved,
+    while a stale non-actor ref can name a reused slug. Typed group membership
+    now feeds derived views (spec 07); these field categories therefore cannot
+    share the earlier blanket claim that typed fields never reach prompts.
     """
     touched: list[tuple[str, str]] = []
     new_kind = new.split(":", 1)[0]

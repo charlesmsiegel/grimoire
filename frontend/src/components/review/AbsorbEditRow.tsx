@@ -208,7 +208,7 @@ export default function AbsorbEditRow({ e, i, review }: {
             <p className="field-hint">{e.payload.note}</p>
           )}
         </>
-      ) : e.kind === "relationship" || e.kind === "bond" ? (
+      ) : e.kind === "relationship" || e.kind === "bond" || e.kind === "membership" ? (
         <div className="absorb-diff">
           {e.before && <span className="absorb-before">{e.before}</span>}
           <span className="absorb-after">{e.after}</span>

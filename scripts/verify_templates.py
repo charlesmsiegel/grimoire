@@ -641,6 +641,8 @@ for label, snap, cands, off, direction, controls in (
           render("scene_suggestions/user.j2", s=snap, offscreen=off,
                  greeting_candidates=cands, direction=direction, drivers=True, view=view))
 
+from grimoire.store.absorb import prompt as absorb_prompt  # noqa: E402
+
 #: The scene tracker's final state as `routes.scenes._absorb_tracked` hands it
 #: over (`tracker.view.lines_for` for the narrator, empty lines dropped).
 TRACKED = [{"ref": "characters:seraphine-vale", "id": "characters/seraphine-vale",
@@ -666,7 +668,8 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
     exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg,
                               tracked_snapshot=trk)
     check(f"absorb system ({label})", exp[0]["content"],
-          render("absorb/system.j2", steering=bool(strg)))
+          render("absorb/system.j2", steering=bool(strg),
+                 schema=absorb_prompt.extraction_schema()))
     assert '"why_new"' in exp[0]["content"], \
         f"absorb system ({label}) no longer asks new-record rows for \"why_new\""
     if strg:

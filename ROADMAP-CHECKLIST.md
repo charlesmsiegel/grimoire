@@ -61,7 +61,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | 10 | [ ] |
 | 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | 7 | [ ] |
 | 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | 2 | [ ] |
-| 07 | Explicit group membership | now | [x] | [~] substitute | 8 | [ ] |
+| 07 | Explicit group membership | now | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [ ] |
 | 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [~] substitute | 6 | [ ] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
@@ -572,14 +572,14 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 07-S1 | The members field, its reader and writer, and the editor | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S2 | The inverse index, its routes and the actor pages | L | 2 | 07-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S3 | Sync shows fields; push and promote refuse strangers | M | 2 | 07-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S4 | Structural presence through members | S | 3 | 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S5 | Absorb membership proposals | L | 3 | 07-S1, 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S6 | Story Graph group nodes and edges | M | 3 | 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S7 | Retrieval projections | S | 3 | 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 07-S8 | Persistent tier of the inverse index | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S1 | The members field, its reader and writer, and the editor | M | 1 | — | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S2 | The inverse index, its routes and the actor pages | L | 2 | 07-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S3 | Sync shows typed fields | M | 2 | 07-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S4 | Structural presence through members | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S5 | Absorb membership proposals | L | 3 | 07-S1, 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S6 | Story Graph group nodes and edges | M | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S7 | Retrieval projections | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 07-S8 | Persistent tier of the inverse index | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [x] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 08
 

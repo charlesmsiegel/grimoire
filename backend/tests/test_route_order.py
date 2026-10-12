@@ -427,3 +427,14 @@ def test_the_image_maintenance_routes_are_mounted_and_cross_nothing():
                 for b in [table_path]
                 if not b.startswith("/api/maintenance/") and
                 (_intersects(a, b) or _generalizes(b, a))]
+
+
+
+def test_membership_routes_precede_entity_catchalls():
+    table = _table()
+    for scope, param in (("worlds", "wid"), ("campaigns", "cid")):
+        literal = f"/api/{scope}/{{{param}}}/membership"
+        catchall = f"/api/{scope}/{{{param}}}/{{kind}}"
+        order = {path: i for i, (methods, path) in enumerate(table) if "GET" in methods}
+        assert literal in order, "membership must register its own typed read route"
+        assert order[literal] < order[catchall]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 from .. import atomic
@@ -38,13 +39,30 @@ def campaign_root(cid: str) -> Path:
     return _campaigns_dir() / cid
 
 
-def campaign_ids() -> list[str]:
+def campaign_ids(*, strict: bool = False) -> list[str]:
     """Every campaign directory that holds a `campaign.md`, by id, sorted --
     the set `read.world_refs` walks, less the ids `campaign_root` refuses,
     and without reading a file. For a caller that reads each campaign through
     a memo of its own (`inference.in_use`): enumerating through `world_refs`
     would parse every `campaign.md` on every call for the listing alone."""
     base = _campaigns_dir()
+    if strict:
+        # Lifecycle discovery must distinguish absence from unavailable roots
+        # and metadata; Path.exists/is_dir can suppress access errors.
+        try:
+            base.stat()
+        except FileNotFoundError:
+            return []
+        found = []
+        for child in base.iterdir():
+            if not safe_id(child.name):
+                continue
+            try:
+                if stat.S_ISDIR(child.stat().st_mode) and (child / "campaign.md").stat():
+                    found.append(child.name)
+            except FileNotFoundError:
+                continue
+        return sorted(found)
     if not base.exists():
         return []
     return sorted(d.name for d in base.iterdir()

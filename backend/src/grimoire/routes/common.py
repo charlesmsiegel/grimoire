@@ -403,7 +403,9 @@ def get_embeddings(request: Request) -> embeddings.AsyncEmbeddingsClient:
 def _dump(model: BaseModel) -> dict:
     """model_dump() on pydantic v2, dict() on v1. The Android build may pin the
     pure-python pydantic 1.x wheel (docs/android-architecture.md §7); this is
-    the only v2-specific API the codebase uses."""
+    the only v2-specific dump the codebase uses. Its one sibling is
+    `model_schema.structured`, which asks `model_json_schema` or v1's `schema`
+    for a model's JSON Schema (spec 07 section 9.1.1) -- never a dump."""
     dump = getattr(model, "model_dump", None)
     return dump() if dump is not None else model.dict()
 

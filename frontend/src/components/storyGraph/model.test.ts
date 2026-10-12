@@ -30,8 +30,8 @@ const WINIFRED = "characters:winifred";
 const SERAPHINE = "pcs:seraphine";
 const HARBOUR = "locations:saltmarch-harbour";
 
-const NONE: Show = { actors: false, locations: false, merged: false, candidates: false };
-const ALL: Show = { actors: true, locations: true, merged: true, candidates: true };
+const NONE: Show = { actors: false, locations: false, groups: false, merged: false, candidates: false };
+const ALL: Show = { actors: true, locations: true, groups: true, merged: true, candidates: true };
 
 function setup(g: StoryGraph = graphFixture()) {
   const ix = indexGraph(g);
@@ -63,7 +63,7 @@ describe("lens presets", () => {
     expect(LENSES).toEqual(["story", "cast", "calendar", "continuity"]);
     expect(LENSES.map((l) => LENS_LABELS[l])).toEqual(["Story", "Cast", "Calendar", "Continuity"]);
     expect(SHOW_LABELS).toEqual({
-      actors: "Actors", locations: "Locations", merged: "Merged records",
+      actors: "Actors", locations: "Locations", groups: "Groups", merged: "Merged records",
       candidates: "Review candidates",
     });
     expect(LENSES.map((l) => PRESETS[l].axis)).toEqual(["play", "play", "calendar", "play"]);
@@ -86,7 +86,7 @@ describe("lens presets", () => {
       ["birthday", "commitment", "event", "holiday", "idea", "scene", "thread"]);
     expect([...kinds("continuity")].sort()).toEqual(["commitment", "event", "thread"]);
     expect(PRESETS.story.show).toEqual(NONE);
-    expect(PRESETS.cast.show).toEqual({ ...NONE, actors: true });
+    expect(PRESETS.cast.show).toEqual({ ...NONE, actors: true, groups: true });
     expect(PRESETS.calendar.show).toEqual(NONE);
     expect(PRESETS.continuity.show).toEqual({ ...NONE, merged: true, candidates: true });
   });
@@ -173,6 +173,8 @@ describe("lens presets", () => {
       feeling: [ACTORS, ACTORS],
       bond: [ACTORS, ACTORS],
       birthday_of: [["birthday"], ACTORS],
+      member_of: [ACTORS, ["group"]],
+      leads: [ACTORS, ["group"]],
       link: [[...ARCS, "event"], [...ARCS, "event"]],
       merged_into: [ARCS, ARCS],
       possible_duplicate: [ARCS, ARCS],
@@ -294,6 +296,7 @@ describe("the arc filter", () => {
 describe("names", () => {
   it("statusOf and accessibleName include the label and the status", () => {
     const g = graphFixture();
+    g.nodes.push({ id: "groups:realm", kind: "group", label: "Realm", group_type: "circle", secrecy: "gm-only" });
     g.nodes.push({ id: "commitment:winifred-s-gift", kind: "commitment",
                    label: "Winifred's gift", commitment_kind: "promise", due: "",
                    status: "open", live: true, merged_into: "commitment:mara-s-oath",
@@ -301,6 +304,7 @@ describe("names", () => {
                    findings: [], native: "", friendly: "", fixed: null, in_days: null });
     const { ix, node } = setup(g);
     const cases: [string, string, string][] = [
+      ["groups:realm", "group", "circle, GM only"],
       [S1, "scene", "absorbed"],
       [S3, "scene", "in play"],
       [MARA, "character", "2 scenes"],
@@ -423,7 +427,7 @@ describe("names", () => {
       calendar: "the calendar", scenes: "scenes", chronicle: "the chronicle", plot: "threads",
       commitments: "commitments", events: "events", continuity: "reviewed links and merges",
       candidates: "review findings", relationships: "relationships",
-      scene_ideas: "saved scene ideas", names: "names",
+      scene_ideas: "saved scene ideas", groups: "groups", names: "names",
     });
     expect(STATE_WORDS.due_soon).toBe("due soon");
     expect(FINDING_PHRASE.possible_thread_closure).toBe("May be finished");
