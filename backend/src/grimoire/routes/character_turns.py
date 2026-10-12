@@ -1101,11 +1101,15 @@ async def _play_tool(cid, sid, client, round_record, actor, response_id):
         scope = await stack.enter_async_context(
             decision_capture.capturing(cid, sid, "turn-tool-decision"))
         asked: dict = {}
-        spec, why = tool_decision.decision_tool(
-            "turn-tool-decision", resolved, client, cid=cid, scene=sid,
-            round_id=round_record["id"], response_id=response_id, shape=PLAY_TOOL_SHAPE,
-            context=context, select=lambda result: _tool_selection(record, asked, result),
-            capture=scope.hook())
+        try:
+            spec, why = tool_decision.decision_tool(
+                "turn-tool-decision", resolved, client, cid=cid, scene=sid,
+                round_id=round_record["id"], response_id=response_id, shape=PLAY_TOOL_SHAPE,
+                context=context, select=lambda result: _tool_selection(record, asked, result),
+                capture=scope.hook())
+        except Exception:
+            await stack.aclose()
+            raise
         if spec is None:
             await stack.aclose()
             return None, {**record, "skipped": why or "unresolved"}
@@ -1316,6 +1320,11 @@ async def _stream_contribution(client, messages, resolved, meter, watcher, run, 
             for frame in await display.frames(watcher.finish(), last=True):
                 yield frame
         raise
+    finally:
+        if tool is not None:
+            # A loop closed before its first event never ran `_tool_events`'s
+            # own close; a second close is a no-op.
+            await tool.scope.aclose()
     visible = watcher.finish()
     for frame in await display.frames(visible, last=True):
         yield frame
@@ -2239,6 +2248,8 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
         meter.done("aborted")
         raise
     finally:
+        if tool is not None:
+            await tool.scope.aclose()   # a no-op once the stream closed it
         with anyio.CancelScope(shield=True):
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
