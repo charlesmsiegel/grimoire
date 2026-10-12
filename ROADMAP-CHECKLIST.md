@@ -36,12 +36,22 @@ is tracked in the [slice checklist](#slice-checklist):
 
 A spec has landed when every one of its slices has.
 
+**Actual merges and review debt.** `Landed` records that a slice is on `main`,
+not that every gate ran before it was merged. Never tick a missing plan gate,
+review or final gate merely because the PR merged. The checker allows such
+outstanding gates while preserving the evidence of which stages happened.
+07-S8 is a documented measured-and-withheld outcome: the persistent tier
+lost its cost gate, so the benchmark and decision close the slice without
+shipping that tier. All other landed slices require completed code.
+
 ## Status
 
-"Can start when" means the earliest point at which the spec's **first** slice
-can start. Later slices may wait on more: the slice checklist names each
-one's needs. "Slices" counts the spec's slices, and "Landed" is ticked when
-all of them have landed. `check` holds both to the slice checklist.
+"Can start when" means the earliest technical point at which the spec's
+**first** slice can start. Later slices may wait on more: the slice
+checklist names each one's needs. "Slices" counts the spec's slices;
+"Landed" is ticked when all of them have landed. Spec 13 is **scheduled
+last**, an ordering preference rather than a fabricated technical edge.
+`check` holds slice counts and landed flags to the slice checklist.
 
 | ID | Spec | Can start when | Drafted | Spec gate | Slices | Landed |
 |----|------|----------------|:-:|:-:|:-:|:-:|
@@ -56,37 +66,46 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01g | Tool calling, Decision as a tool, run budgets | now (01f has landed) | [x] | [~] substitute | 8 | [x] |
 | 01h | Embedding options, async embed, embedding evals | now (01a has landed, so C6 too) | [x] | [~] substitute | 7 | [x] |
 | 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
-| 02 | Decision integration (what 01's slices F–H did not land) | now (01a, 01b landed); 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
-| 03 | Content-addressed compiled cache | now | [x] | [x] CLI Codex (2026-10-11) | 6 | [ ] |
-| 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | 10 | [ ] |
-| 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | 7 | [ ] |
+| 02 | Decision integration (what 01's slices F–H did not land) | merged in PR #509 | [x] | [~] substitute | 8 | [x] |
+| 03 | Content-addressed compiled cache | merged in PR #506 | [x] | [x] CLI Codex (2026-10-11) | 6 | [x] |
+| 04 | Instant Worlds, Campaigns, Todo and shell | 03 merged; all slices can now run to completion | [x] | [~] substitute | 10 | [ ] |
+| 05 | Direct-edit cache sync | 03 merged; S5 still waits for 04-S9 | [x] | [~] substitute | 7 | [ ] |
 | 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | 2 | [ ] |
-| 07 | Explicit group membership | now | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [ ] |
-| 08 | Derived history SearchDocuments | 03 (C2c waits for 05) | [x] | [~] substitute | 6 | [ ] |
+| 07 | Explicit group membership | merged in PR #507; S8 measured and withheld | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [x] |
+| 08 | Derived history SearchDocuments | 03 merged; S5 still waits for 05-S6 | [x] | [~] substitute | 6 | [ ] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
-| 11 | Epistemic history retrieval | 09 (the Decision stage waits for 02-C5a) | [x] | [~] substitute | 6 | [ ] |
+| 11 | Epistemic history retrieval | S1 now; later slices wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
 | 12 | Bounded agentic investigation | 01g, 08, 09 (01i has landed; RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
-| 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | now for II-A..II-D; C3 waits for 01c | [x] | [~] substitute | 16 | [ ] |
+| 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | **SCHEDULED LAST:** only after all other roadmap specs land (technical S1 is ready) | [x] | [~] substitute | 16 | [ ] |
 
 ## Parallel lanes
 
-- **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01g, 01h, 01i. 01s was ticked after the fact:
-  every task of its plan is in the tree and its tests pass, but the history
-  that would show its Codex review gates was not available to check.
-- **Now:** 02 (S6, behind ratified play-gate reports), 03, 07, 13 (II-A to
-  II-D). No task goes native-first or escalates yet: each is switched on by
-  the change that carries its live evidence (`evals/README.md`). Four tasks
-  may sample (02), each only behind a play-decision switch, all off.
-- **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → 02 → 11 (Decision stage).
-  01e (landed) feeds 02, 09 and 13.
+- **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)) and 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
+- **One spec that can run end-to-end now:** 04. All external hard needs are met by merged 03.
+- **Parallel partial implementations:** 05 (S1 and S2 now; S5 waits for 04-S9), 08 (S1 and S4 now; S5 waits for 05-S6), 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
+- **Scheduled LAST:** 13 (Mechanics II). Do not dispatch it until **every other** roadmap spec, including 04, 05, 06, 08, 09, 10, 11 and 12, has landed. This is a scheduling hold only: the technical slice dependency graph and waves remain unchanged. `ready` hides 13 until then; `ready --include-deferred` displays technical readiness without the scheduling hold.
+- **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. No missing gate is inferred from a merged PR.
+- **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → ~~02~~ → 11 (Decision stage). 01e feeds 09 and the deferred 13.
 - **Generate lane:** ~~01f~~ → ~~01g~~ → 12.
-- **Cache lane:** 03 → 04 → 05 → 06. 03 + 05 + 01h → 08.
-- **Retrieval lane:** 08 + 01h-C4 + 01i → 09 → 10 (with 01f) → 11 → 12.
+- **Cache lane:** ~~03~~ → 04 → 05 → 06; ~~03~~ + 05 + ~~01h~~ → 08.
+- **Retrieval lane:** 08 + ~~01h-C4~~ + ~~01i~~ → 09 → 10 → 11 → 12.
 
-These lanes are spec-level. At slice level a lane is narrower: `python3
-scripts/roadmap_slices.py ready` lists every slice that can start now, and the
-slice checklist's **Wave** column says how deep each one sits.
+No task goes native-first or escalates without its per-task evidence (`evals/README.md`). Spec 02's speaker-sampling switch defaults **on**; turn planning and decide-as-tool default **off**, as ratified in PR #509.
+
+These lanes are spec-level. For work assignment, run `python3 scripts/roadmap_slices.py ready` after checking `main`. The slice checklist's **Wave** column is technical depth, not scheduling priority.
+
+### End-to-end readiness
+
+| Spec | Can start now? | Can finish without another spec? | Last external hard dependency |
+|---|---|---|---|
+| 04 | Yes | **Yes** | 03 is merged |
+| 05 | Yes | No | 04-S9 for 05-S5 |
+| 08 | Yes | No | 05-S6 for 08-S5 |
+| 11 | Yes | No | 09-S1 and 09-S2 for 11-S2/S3 |
+| 13 | Technically yes | **Held by scheduling** | All other roadmap specs must finish first |
+
+The primary completion chain is **04 → 05 → 08 → 09 → 10/11 → 12 → 13 (last)**; 06 follows 05. Slices within adjacent specs may overlap where the checklist has no hard edge.
 
 ## Contracts
 
@@ -266,14 +285,8 @@ These are headlines. The owning spec's Contract section is authoritative.
 - [x] **02-C5a** Epistemic access, as a kit for 11.
 - [x] **02-C5b** History relevance (`history_check` route), as a kit for 09
   and 10.
-- [ ] **02-C6** Play-decision rules and the play gate. Everything is off by
-  default.
-- S1-S5, S7 and S8 in one PR, each slice its own commit (plans in
-  `docs/superpowers/plans/2026-10-12-roadmap-02-s*.md`). Every plan gate,
-  review and final gate was a **substitute** review (no Codex CLI); the
-  Codex gates are owed. C6 waits on S6, which needs each switch's live
-  play-gate report and the user's explicit yes (spec §4.3): until then every
-  switch stays dark, honoured by the backend and shown by no UI.
+- [x] **02-C6** Play-decision rules, ratified live gate and user-facing controls. Speaker sampling defaults on; turn plan and decide-as-tool default off.
+- **Landed in [PR #509](https://github.com/charlesmsiegel/grimoire/pull/509):** S1-S8, including S6's Settings/campaign UI, were merged. The live play-gate report is `docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md`; the user ratified the three controls, with only speaker sampling on by default. Recorded substitute reviews do not discharge the outstanding CLI Codex gates.
 - Readings: `decide(response_id=)` had already landed with 01g-S3, so S1
   adds only `responses.mint_id()` and `prepare(response_id=, intent=)`.
   `routing.NO_LEGACY` and `NO_LEGACY_TASKS` land with 02-S2. Since 01e-C1 has
@@ -288,7 +301,7 @@ These are headlines. The owning spec's Contract section is authoritative.
 Gates: the 03 plan gates ran as CLI Codex adversarial reviews on 2026-10-11
 (03-S3's after 03-S2's amendment). 03-S1's code review and final gate ran the
 same way, with their findings fixed before the slices were squashed into one
-PR. The other slices' review and final gate are still open.
+PR. The other slices' review and final gates remain open even though S1-S6 were merged in [PR #506](https://github.com/charlesmsiegel/grimoire/pull/506). The cost gate admitted supplied-body token counts and withheld losing cache consumers.
 
 - [x] **03-C1** Composite keys over collection digests and inputs that are not
   files. A collection can take a member filter.
@@ -328,13 +341,14 @@ PR. The other slices' review and final gate are still open.
   an `.agents/` adapter, and `test_skills_guard.py`.
 
 ### 07: Explicit group membership
-- [ ] **07-C1** `members` on the group record, with overlay and sync
+- [x] **07-C1** `members` on the group record, with overlay and sync
   semantics.
-- [ ] **07-C2** Inverse membership, with a digest and routes.
-- [ ] **07-C3a** Absorb join/leave proposals. **07-C3b** Graph group nodes.
+- [x] **07-C2** Inverse membership, with a digest and routes.
+- [x] **07-C3a** Absorb join/leave proposals. **07-C3b** Graph group nodes.
   **07-C3c** Retrieval projections (`scene_groups`, `co_affiliates`,
   `prompt_visible`). **07-C3d** A present member makes their group present
   for lore.
+- **Landed in [PR #507](https://github.com/charlesmsiegel/grimoire/pull/507):** S1-S7 implemented. S8's persistent inverse-index tier was **measured and withheld** under the Spec 03 cost gate; its benchmark harness and report were merged, and the in-process memo remains. This closes S8 as a documented negative result, not a shipped persistent tier. Outstanding review and final gates remain unticked.
 
 ### 08: History SearchDocuments
 - [ ] **08-C1** A bounded `SceneDocument` with no transcript text, keyed by
@@ -530,25 +544,25 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 02-S1 | Record and plumbing | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S2 | Turn intent, dark (answers only) | L | 3 | 01b-S2, 02-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S3 | Sampling (speaker and stance) | M | 4 | 01c-S1, 01c-S2, 01d-S1, 02-S2 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S4 | Turn plan, dark | M | 5 | 01e-S4 (S), 02-S3 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S5 | Play gate harness | L | 4 | 01a-S2, 01a-S3, 01a-S4, 02-S2 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S6 | Exposure of ratified features | M | 5 | 02-S5 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S7 | Decide kits for 11 and 09 | M | 3 | 01d-S3, 01e-S5 (S), 02-S1 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S8 | Decision as a tool from play, dark | L | 7 | 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 02-S1 | Record and plumbing | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S2 | Turn intent, dark (answers only) | L | 3 | 01b-S2, 02-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S3 | Sampling (speaker and stance) | M | 4 | 01c-S1, 01c-S2, 01d-S1, 02-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S4 | Turn plan, dark | M | 5 | 01e-S4 (S), 02-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S5 | Play gate harness | L | 4 | 01a-S2, 01a-S3, 01a-S4, 02-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S6 | Exposure of ratified features | M | 5 | 02-S5 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S7 | Decide kits for 11 and 09 | M | 3 | 01d-S3, 01e-S5 (S), 02-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
+| 02-S8 | Decision as a tool from play, dark | L | 7 | 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 03
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [x] | [x] | [x] | [ ] | [ ] | [x] |
 
 ### 04
 
@@ -588,14 +602,14 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 07-S1 | The members field, its reader and writer, and the editor | M | 1 | — | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S2 | The inverse index, its routes and the actor pages | L | 2 | 07-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S3 | Sync shows typed fields | M | 2 | 07-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S4 | Structural presence through members | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S5 | Absorb membership proposals | L | 3 | 07-S1, 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S6 | Story Graph group nodes and edges | M | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S7 | Retrieval projections | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S8 | Persistent tier of the inverse index (measured; withheld) | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [x] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S1 | The members field, its reader and writer, and the editor | M | 1 | — | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S2 | The inverse index, its routes and the actor pages | L | 2 | 07-S1 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S3 | Sync shows typed fields | M | 2 | 07-S1 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S4 | Structural presence through members | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S5 | Absorb membership proposals | L | 3 | 07-S1, 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S6 | Story Graph group nodes and edges | M | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S7 | Retrieval projections | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 07-S8 | Persistent tier of the inverse index (measured; withheld) | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [x] | [ ] | [ ] | [ ] | [ ] | [x] |
 
 ### 08
 

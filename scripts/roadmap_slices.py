@@ -13,12 +13,17 @@ tracks each slice through its stages in the "Slice checklist" table.
     python3 scripts/roadmap_slices.py ready            # not landed, hard needs all landed
     python3 scripts/roadmap_slices.py status           # each spec's slices, per stage
 
+`ready` respects the explicit hold on Spec 13 until every other spec lands;
+`ready --include-deferred` shows its technical eligibility anyway.
+
 `check` first checks the graph: every contract item in the checklist's
 Contracts section delivered in full by exactly one slice, every need
 resolved, no slice defined twice or named without its spec, no cycle. Then
 it holds the table to the specs (run `sync` after a spec's slices change),
-and holds the ticks to two rules: a slice's stages are ticked in
-order, and a slice is landed only after every slice it hard-needs. It also
+and checks the recorded stage facts: plan gates need a plan, review needs
+code, final gate needs review; merging can precede unfinished quality gates.
+Landed requires code (or the recorded 07-S8 measured-and-withheld outcome)
+and every hard prerequisite landed. It also
 holds the Status table's "Slices" count and "Landed" box to the table.
 """
 
@@ -211,18 +216,36 @@ INTRO = [
 
 
 def _tick_problems(slices: dict[str, dict], boxes: dict[str, list[bool]]) -> list[str]:
+    """Audit real milestones without pretending a merged PR passed missing gates.
+
+    The review columns are evidence of actual review, not prerequisites
+    fabricated retroactively by a merge. 07-S8 was closed by the recorded
+    measurement that withheld its losing persistent cache tier.
+    """
     problems = []
     for sid, b in boxes.items():
         if sid not in slices:
             continue
-        if any(later and not earlier for earlier, later in itertools.pairwise(b)):
-            problems.append(f"{sid}: a stage is ticked before an earlier one")
+        if b[1] and not b[0]:
+            problems.append(f"{sid}: plan gate ticked without a plan")
+        if b[2] and not b[0]:
+            problems.append(f"{sid}: code ticked without a plan")
+        if b[3] and not b[2]:
+            problems.append(f"{sid}: review ticked without code")
+        if b[4] and not b[3]:
+            problems.append(f"{sid}: final gate ticked without review")
+        measured_withheld = (
+            sid == "07-S8"
+            and "measured; withheld" in slices[sid]["title"]
+            and b[0]
+        )
+        if b[LANDED] and not (b[2] or measured_withheld):
+            problems.append(f"{sid}: landed without code or an approved withheld outcome")
         if b[LANDED]:
             problems += [f"{sid}: landed before its hard need {t}"
                          for t, hs in slices[sid]["needs"]
                          if hs == "H" and not boxes.get(t, [False] * len(STAGES))[LANDED]]
     return problems
-
 
 def _status_problems(slices: dict[str, dict], text: str, boxes: dict[str, list[bool]]) -> list[str]:
     """The Status table's Slices count and Landed box follow the slice table."""
@@ -335,11 +358,18 @@ def _trace(slices: dict[str, dict], argv: list[str]) -> int:
 def _ready(slices: dict[str, dict], argv: list[str]) -> int:
     done = {sid for sid, b in ticks().items() if b[LANDED]}
     wave = waves(slices)
+    # User scheduling priority, not a technical prerequisite edge: Mechanics II
+    # starts only when every other roadmap spec has finished.
+    hold_13 = (
+        "--include-deferred" not in argv
+        and any(sid not in done for sid in slices if not sid.startswith("13-S"))
+    )
     for sid in sorted(slices, key=_key):
-        if sid not in done and all(t in done for t, hs in slices[sid]["needs"] if hs == "H"):
+        if sid in done or (hold_13 and sid.startswith("13-S")):
+            continue
+        if all(t in done for t, hs in slices[sid]["needs"] if hs == "H"):
             print(f"{sid:8} wave {wave[sid]}  {slices[sid]['title']}")
     return 0
-
 
 def _sync(slices: dict[str, dict], argv: list[str]) -> int:
     problems = graph_problems(slices)
