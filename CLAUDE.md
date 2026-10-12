@@ -725,6 +725,15 @@ would answer neither question.
   under `store/absorb/` calls either. That guard resolves import bindings
   rather than comparing spellings — an alias walked past three earlier
   versions of it.
+- **Knowledge overrides are the user's word, and only theirs.**
+  `store/knowledge.py` (roadmap 11) holds who knows, suspects or never heard
+  what happened in a scene, addressed by scene identity and fingerprinted
+  content; a grant stops matching when its text changes, an `unaware` never
+  does. Its writers are the ledger routes, the actor and group delete hooks,
+  undo and the branch copy -- `test_knowledge_writer_guard.py` fails anything
+  else, absorb and continuity included -- and a grant is only stored about
+  text the client was shown (`expect`, 409 `moved`). Scene reads for it live
+  in `store/knowledge_scene.py`, because `overlay` imports `knowledge`.
 - **Hand edits to the ledger go through `routes/ledger.py`**, which takes the
   campaign lock the absorb save already holds across its whole sequence and
   wraps every write in `store.undo.journalled` so it lands in the journal as

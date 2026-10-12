@@ -75,7 +75,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 08 | Derived history SearchDocuments | merged in PR #510 | [x] | [~] substitute | 6 | [x] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [x] CLI Codex (2026-10-13) | 6 | [x] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
-| 11 | Epistemic history retrieval | S1 now; later slices wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
+| 11 | Epistemic history retrieval | S1 and S4 landed; S2/S3 wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
 | 12 | Bounded agentic investigation | 01g, 08, 09 (01i has landed; RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
 | 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | **SCHEDULED LAST:** only after all other roadmap specs land (technical S1 is ready) | [x] | [~] substitute | 16 | [ ] |
 
@@ -83,7 +83,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 
 - **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)), 04 ([#513](https://github.com/charlesmsiegel/grimoire/pull/513)), 05 ([#512](https://github.com/charlesmsiegel/grimoire/pull/512)), 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)), 08 ([#510](https://github.com/charlesmsiegel/grimoire/pull/510)) and 09 ([#515](https://github.com/charlesmsiegel/grimoire/pull/515)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
 - **Specs that can run end-to-end now:** 06, whose one external hard need (05-C2) is on main.
-- **Parallel partial implementations:** 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
+- **Parallel partial implementations:** 11 (S1 and S4 landed; S2 and S3 are now ready, and S5/S6 follow S3). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
 - **Scheduled LAST:** 13 (Mechanics II). Do not dispatch it until **every other** roadmap spec, including 04, 05, 06, 08, 09, 10, 11 and 12, has landed. This is a scheduling hold only: the technical slice dependency graph and waves remain unchanged. `ready` hides 13 until then; `ready --include-deferred` displays technical readiness without the scheduling hold.
 - **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. For 05-S1 through S7 (merged in #512), plan gates, and the review and final gates the table leaves open, remain unticked. No missing gate is inferred from a merged PR.
 - **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → ~~02~~ → 11 (Decision stage). 01e feeds 09 and the deferred 13.
@@ -410,7 +410,22 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   Decision pass that is off by default.
 - [ ] **11-C2** Narrator and actor prompt separation, refused on a mismatched
   perspective.
-- [ ] **11-C3** `knowledge.json` overrides through `routes/ledger.py`.
+- [x] **11-C3** `knowledge.json` overrides through `routes/ledger.py`.
+- **Landed (11-S1, 11-S4):** `store/knowledge.py` and the read-side
+  `store/knowledge_scene.py` (split so `overlay` can import the delete hook
+  without a cycle), the delete hooks, branch copy/discard, undo, the writer
+  guard, the four ledger routes plus `GET .../knowledge/scenes/{sid}`, and
+  the ledger's Knowledge section. Plan gates and the review were substitute
+  reviews (no Codex CLI), recorded in each plan; `@codex review` on the PR
+  stands in for the Codex gates. **Spec amendments:** a branch carries
+  `unaware` entries (narrowed to the kept posts, and whole-scene ones) since
+  withholding never consults a fingerprint; `forget_audience` retires
+  journalled Undos that would re-grant a pruned audience; a grant carries the
+  fingerprints the client was shown (`expect`, 409 `moved`); the Knowledge
+  rows live in the ledger's context column (the ledger owns the screen); and
+  the capture view's accept button moves to 11-S3 (classified parts) and
+  11-S6 (Decision answers) -- 11-S4 ships the route side (`source:
+  "accepted"`, `unkeyed`).
 - [ ] **11-C4** A leakage eval suite.
 
 ### 12: Bounded agentic investigation
@@ -676,10 +691,10 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 11-S1 | The knowledge store | M | 1 | 07-S2 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S1 | The knowledge store | M | 1 | 07-S2 (S) | [x] | [x] | [x] | [ ] | [ ] | [x] |
 | 11-S2 | The deterministic classifier | L | 6 | 08-S4 (S), 09-S1, 11-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 11-S3 | Perspective-aware retrieval and prompt separation | L | 7 | 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [x] | [x] | [x] | [ ] | [ ] | [x] |
 | 11-S5 | Live leakage evals | S | 8 | 01a-S2 (S), 01a-S3 (S), 11-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 11-S6 | The Decision stage | L | 8 | 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 

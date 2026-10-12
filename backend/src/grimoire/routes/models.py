@@ -1272,6 +1272,58 @@ class FactSave(BaseModel):
     scene: str | None = None
 
 
+class KnowledgePost(BaseModel):
+    """One post a knowledge statement is about, by its key (`r-<response_id>`
+    with its part, or `p-<post_id>`). An empty key names a post that has none,
+    which only an `unaware` may be about (roadmap 11 §7.4)."""
+    key: str = ""
+    part: str = ""
+
+
+class KnowledgeFingerprint(BaseModel):
+    """What the client was shown of one post: a precondition, never what is
+    stored. A grant is refused 409 `moved` when the post no longer reads so."""
+    key: str = ""
+    part: str = ""
+    variant: str = ""
+    digest: str = ""
+
+
+class KnowledgeSave(BaseModel):
+    """A knowledge statement written by hand, or accepted from a capture.
+    `scene` is the sid. Exactly one of `posts` and `whole_scene`. A grant
+    (`knows`/`suspects`) carries what the user was shown -- `expect` for
+    posts, `expect_digest` for the whole scene -- and the route refuses it
+    when the text moved since; the stored fingerprint is computed here."""
+    audience: str = ""
+    status: str = ""
+    scene: str = ""
+    posts: list[KnowledgePost] | None = None
+    whole_scene: bool = False
+    expect: list[KnowledgeFingerprint] | None = None
+    expect_digest: str = ""
+    note: str = ""
+    source: str = "manual"
+
+
+class KnowledgeEdit(BaseModel):
+    """A correction to a stored statement; each field None leaves it alone.
+    A new subject is `scene` with `posts` or `whole_scene`. `restamp`
+    re-fingerprints the stored subject -- the ledger's "confirm against the
+    current text" -- and, for a grant, needs `expect`/`expect_digest` as a POST
+    does. Without either the stored fingerprint is kept, so a note edit never
+    revalidates a stale grant."""
+    audience: str | None = None
+    status: str | None = None
+    note: str | None = None
+    scene: str | None = None
+    posts: list[KnowledgePost] | None = None
+    whole_scene: bool = False
+    expect: list[KnowledgeFingerprint] | None = None
+    expect_digest: str = ""
+    restamp: bool = False
+
+
 class FactRecord(BaseModel):
     """A fact recorded by hand. `supersedes` retires the named fact and points
     the two at each other in one write, exactly as an extracted one does."""

@@ -951,6 +951,12 @@ listed as a member is still someone "the Watch knows" plainly includes.
     computes the variant and digest itself; a client never supplies a
     fingerprint.
   - A malformed audience, status or subject is 400; an unknown scene is 404.
+- **Grants are about text the user saw (11-S4).** A `knows`/`suspects`
+  write carries the fingerprints the client displayed (`expect`, read from
+  `GET .../ledger/knowledge/scenes/{sid}`) as a precondition, and is refused
+  409 `moved` when the text changed between the read and the save; a re-stamp
+  is the same. A note edit keeps the stored fingerprint, and an `unaware`
+  becomes a grant only with a newly named subject.
 - **Accept from a capture.** The turn's prompt-log capture view offers, on a
   captured Decision answer or a classified part, "Mark as known / suspected
   / unaware to {name}". It posts the same `POST` with `source: "accepted"`.
@@ -971,7 +977,10 @@ listed as a member is still someone "the Watch knows" plainly includes.
   `store/continuity/` and 12's investigation package explicitly.
 
 The ledger UI follows the list/detail page pattern (CLAUDE.md, Frontend): a
-"Knowledge" section with `.editor-list` rows, a read-only detail view (the
+"Knowledge" section whose rows sit in the ledger's context column (**amended
+by 11-S4**: the ledger owns the screen, so its records go in a
+`ColumnSection` rather than an `.editor-list` rail beside the column), a
+read-only detail view in main (the
 audience as a clickable chip, the scene as a chip to the scene, the status as
 a plain chip, the stale flag as a field hint, the note rendered as markdown),
 and an explicit Edit step. Tests cover row → view, Edit → form, and `+ New` →
@@ -1001,8 +1010,14 @@ form.
   `knowledge.copy_for_branch(cid, src_identity, dst_identity, rid_map,
   copied_keys)` copies post entries whose posts are all among the copied
   posts, re-keying `r-` ids through `rid_map` and keeping variant and digest.
-  Whole-scene entries are not copied: the branch's transcript hash differs
-  by construction. `branch.discard` drops the branch's entries.
+  Whole-scene grants are not copied: the branch's transcript hash differs
+  by construction. **Amended by 11-S1:** an `unaware` never consults its
+  fingerprint, so it travels narrowed to the kept posts, and a whole-scene
+  `unaware` travels as it is -- dropping one would show the branch a post
+  the user said nobody heard. `branch.discard` drops the branch's entries.
+- **Undo after a prune (11-S1):** `forget_audience` also retires every
+  journalled Undo that would restore an entry about the deleted audience,
+  so a same-named actor that later takes the id is not granted it.
 - **Campaign fork**: the file is campaign-local and travels with the fork
   copy, which keeps scene identities (`store/fork.py`).
 - **The frozen campaign** has no `knowledge.json`. An absent file is no
@@ -1152,7 +1167,10 @@ stays off behind its switch until its gates pass.
   with `history_view`. Adds the three new sections and their templates, the
   annotation lines in `history_recall.j2`, the blanking-list entries, the
   perspective-mismatch refusal, the layout coupling, per-item shed hooks and
-  09's updated pin test, and the classify-only inspector rows. History stays
+  09's updated pin test, and the classify-only inspector rows. Adds the
+  capture view's "Mark as known / suspected / unaware to {name}" on each
+  classified part, posting 11-S4's route with `source: "accepted"` and
+  showing `unkeyed` (moved here from 11-S4, which landed first). History stays
   behind 09's `history_recall_depth` (off by default), so the golden is
   byte-identical off. This is the slice that ends the "no history in NPC
   prompts" rule.
@@ -1166,18 +1184,22 @@ stays off behind its switch until its gates pass.
 - **Delivers:** 11-C3 (full)
 - **Needs (this spec):** 11-S1 (H); 11-S3 (S: classified parts in the
   capture view — until then there is nothing to accept from, and the ledger's
-  `+ New` form is the only writer)
+  `+ New` form is the only writer). **Amended when 11-S4 landed before
+  11-S3:** this slice delivers the route side of accept (`source:
+  "accepted"`, `unkeyed`, the keyless `unaware` stored whole-scene); the
+  capture view's "Mark as known / suspected / unaware" button moves to 11-S3
+  for classified parts and to 11-S6 for Decision answers, each posting this
+  slice's route
 - **Needs (other specs):** none
 - **Needs (slices):** 11-S1 (H), 11-S3 (S)
 - **Scope:** Adds the three `routes/ledger.py` routes: `ensure_identity`
   under the campaign lock, 409 `busy` on `UnreadableError`, server-side post
   key validation and fingerprinting, 400 `unkeyed`, and journalling as
   `manual`. Adds the frontend Knowledge section on the list/detail pattern,
-  with the stale-entry flag and re-stamp. Adds "Mark as known / suspected /
-  unaware" on classified parts in the capture view.
+  with the stale-entry flag and re-stamp.
 - **Acceptance:** section 11's route tests (legacy scene, `busy`, invalid key,
-  `unkeyed`, unknown scene, journal and undo), the frontend list/detail tests,
-  and the accept posting the right subject.
+  `unkeyed`, unknown scene, journal and undo) and the frontend list/detail
+  tests.
 - **Size:** M
 
 ### 11-S5: Live leakage evals
@@ -1224,7 +1246,9 @@ stays off behind its switch until its gates pass.
   caps (`RoundBudget` on the round record), `EPISTEMIC_CEILING_S`, the replay
   skip, and the `history_view` stored on the response record for a roll
   resume. Adds the `epistemic_decide` key (default `off`, hidden in the UI
-  until the play gate is ratified) and seeds the `--gate` corpus.
+  until the play gate is ratified) and seeds the `--gate` corpus. Adds the
+  capture view's accept on a captured Decision answer (moved here from
+  11-S4).
   The `epistemic` route lands here with its call site if 02 has not already
   landed it: `test_routing_guard` fails a route whose task nothing calls, and
   `test_operation_guard` requires the flip to `decide` in the change whose

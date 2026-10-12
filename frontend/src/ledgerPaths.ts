@@ -18,7 +18,7 @@ import { encodeSegment } from "./urlSegment";
 /** Every section, in the order the column lists them. */
 export const LEDGER_SECTIONS = [
   "facts", "threads", "commitments", "relationships", "standings", "changes", "timeline",
-  "continuity",
+  "knowledge", "continuity",
 ] as const;
 export type LedgerSection = (typeof LEDGER_SECTIONS)[number];
 

@@ -19,6 +19,9 @@ import {
   blankSpec, chronicleSpec, commitmentSpec, factSpec, relationshipSpec, threadSpec,
   type EditSpec,
 } from "../components/ledger/specs";
+import {
+  KnowledgePane, KnowledgeRows, useKnowledge,
+} from "../components/ledger/Knowledge";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -326,8 +329,10 @@ export default function LedgerView() {
   const target = parseLedgerTail(
     location.pathname.split("/").filter(Boolean).slice(3).join("/"));
   const section = target?.section ?? "facts";
-  /** The ledger table on screen, or null while the continuity review is. */
-  const tableSection: SectionKey | null = section === "continuity" ? null : section;
+  /** The ledger table on screen, or null while the continuity review or the
+   *  Knowledge section (a record page of its own, not a table) is. */
+  const tableSection: SectionKey | null =
+    section === "continuity" || section === "knowledge" ? null : section;
   const addressedRow = target && target.section !== "continuity" ? target.row ?? null : null;
   const [showRetired, setShowRetired] = useState(false);
   const [name, setName] = useState("");
@@ -373,6 +378,9 @@ export default function LedgerView() {
    *  ledger -- a closure applied moves the Threads count, and a thread closed
    *  in the table drops its closure finding. */
   const review = useContinuityReview(cid, epoch, bump);
+  /** Roadmap 11's knowledge statements: read only while their section is
+   *  open, and on the same epoch as everything else here. */
+  const knowledge = useKnowledge(cid, epoch, section === "knowledge");
   const activeGroup = target?.section === "continuity" ? target.group : null;
   const matching = matchingLine(review);
 
@@ -679,6 +687,20 @@ export default function LedgerView() {
           </button>
         ))}
       </ColumnSection>
+      <ColumnSection label="Who knows what">
+        {section !== "knowledge" ? (
+          <button className="column-row"
+                  onClick={() => navigate(ledgerHref(cid, { section: "knowledge" }))}>
+            <span className="column-row-label">Knowledge</span>
+          </button>
+        ) : (
+          <KnowledgeRows
+            entries={knowledge?.data?.entries ?? (knowledge?.error ? [] : null)}
+            selected={addressedRow}
+            onNew={() => navigate(ledgerHref(cid, { section: "knowledge", row: "new" }))}
+            onOpen={(kid) => navigate(ledgerHref(cid, { section: "knowledge", row: kid }))} />
+        )}
+      </ColumnSection>
       <ColumnSection label="Continuity review">
         {CONTINUITY_GROUPS.map((g) => (
           <button key={g}
@@ -731,6 +753,17 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
+        {section === "knowledge" && (
+          <KnowledgeSection cid={cid} list={knowledge} row={addressedRow}
+                            onSaved={(kid) => {
+                              bump();
+                              navigate(ledgerHref(cid, { section: "knowledge", row: kid }));
+                            }}
+                            onDeleted={() => {
+                              bump();
+                              navigate(ledgerHref(cid, { section: "knowledge" }));
+                            }} />
+        )}
         {activeGroup && (
           <ContinuityReview cid={cid} group={activeGroup} review={review}
                             candidate={target?.section === "continuity"
@@ -891,5 +924,43 @@ export default function LedgerView() {
         )}
       </div>
     </PageShell>
+  );
+}
+
+/** Main for the Knowledge section: the statement the address names, the form
+ *  for `new`, or what the section is for when nothing is chosen. */
+function KnowledgeSection({ cid, list, row, onSaved, onDeleted }: {
+  cid: string; list: ReturnType<typeof useKnowledge>; row: string | null;
+  onSaved: (kid: string) => void; onDeleted: () => void;
+}) {
+  const entry = list?.data?.entries.find((e) => e.id === row) ?? null;
+  return (
+    <>
+      <div className="shelf-head">
+        <div>
+          <div className="eyebrow">WHO KNOWS WHAT · YOUR WORD BEATS ANYTHING DERIVED</div>
+          <h1 className="screen-title">Knowledge</h1>
+        </div>
+      </div>
+      {list?.error && <p className="ledger-editor-error" role="status">{list.error}</p>}
+      {list?.data && !list.data.intact && (
+        <p className="ledger-editor-error" role="status">
+          Part of knowledge.json could not be read, so some statements are not listed.
+        </p>
+      )}
+      {row === "new" || entry ? (
+        <KnowledgePane cid={cid} entry={entry} creating={row === "new"}
+                       onSaved={onSaved} onDeleted={onDeleted} />
+      ) : (
+        <p className="empty-state">
+          <span className="empty-what">
+            {row && list?.data ? "That statement is gone. "
+              : "Say who knows, suspects or never heard what happened in a scene. "
+                + "A statement beats everything retrieval would derive, and a grant stops "
+                + "counting the moment the text it was about changes."}
+          </span>
+        </p>
+      )}
+    </>
   );
 }

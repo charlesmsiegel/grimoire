@@ -59,12 +59,18 @@ from .. import store
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
 from ..store.continuity import review as continuity_review
+from ..store.regex import view as regex_view
+from ..store.scenes import identity as scenes_identity
 from .models import (
     ChronicleLineSave,
     CommitmentSave,
     FactRecord,
     FactRetire,
     FactSave,
+    KnowledgeEdit,
+    KnowledgeFingerprint,
+    KnowledgePost,
+    KnowledgeSave,
     RelationshipSave,
     ThreadSave,
 )
@@ -600,4 +606,317 @@ def put_chronicle_line(cid: str, sid: str, body: ChronicleLineSave):
                                    field="one_line",
                                    label=_label(sid, "chronicle line")):
             store.chronicle.set_line(cid, sid, body.one_line, body.date)
+    return {"ok": True}
+
+
+# --------------------------------------------------------------- the knowledge
+#
+# Roadmap 11's overrides (`store/knowledge.py`): the user's word on who knows,
+# suspects or never heard what happened in a scene, which beats every derived
+# classification. So the routes hold to one rule above the others: a GRANT is
+# only ever stored about text the user was shown. The server computes every
+# fingerprint it stores, and a grant carries what the client displayed
+# (`expect`) as a precondition -- a swipe or an edit landing between the read
+# and the save is 409 `moved`, never a grant of text nobody saw. An `unaware`
+# needs no such care: withholding more is the safe direction.
+
+
+def _busy() -> HTTPException:
+    return HTTPException(status_code=409, detail={
+        "kind": "busy",
+        "detail": "the campaign's scenes could not all be read just now; try again"})
+
+
+def _malformed() -> HTTPException:
+    return HTTPException(status_code=409, detail={
+        "kind": "malformed",
+        "detail": "knowledge.json cannot be read; repair it before editing statements"})
+
+
+def _bad(kind: str, detail: str, status: int = 400) -> HTTPException:
+    return HTTPException(status_code=status, detail={"kind": kind, "detail": detail})
+
+
+def _knowledge_audience(cid: str, audience: str) -> str:
+    """The audience's current display name, or 400 for one that is not a
+    character or group of this campaign. Read through the door the matcher
+    reads (`knowledge_scene.audiences_for`), so the name stored is the name a
+    grant is later checked against."""
+    if audience == store.knowledge.EVERYONE:
+        return ""
+    if not store.knowledge.valid_audience(audience):
+        raise _bad("bad_audience", "an audience is a character, a group, or everyone")
+    name = _audience_now(store.knowledge_scene.audiences_for(cid), audience)
+    if not name:
+        raise _bad("bad_audience", "that character or group is not in this campaign")
+    return name
+
+
+def _audience_now(who, audience: str) -> str | None:
+    if audience == store.knowledge.EVERYONE:
+        return "Everyone"
+    if audience.startswith("characters:"):
+        return who.names.get(audience) or None
+    return (who.groups.get(audience) or (None,))[0] or None
+
+
+def _scene_posts(cid: str, sid: str) -> tuple[list[dict], dict, list[dict]]:
+    """A scene's raw messages, its response variants, and the display text."""
+    try:
+        messages = store.scenes.read_scene(cid, sid)["messages"]
+    except store.scenes.SceneNotFound as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
+    token = scenes_identity.scene_identity(cid, sid)
+    variants = store.responses.variants_by_response(cid, sid, token=token) if token else {}
+    return messages, variants, regex_view.view(messages, cid=cid, phase="display")
+
+
+def _knowledge_subject(cid: str, sid: str, posts: list[KnowledgePost] | None,
+                       whole_scene: bool, status: str,
+                       expect: list[KnowledgeFingerprint] | None, expect_digest: str,
+                       *, gone_is: int = 400) -> dict:
+    """The subject a statement about `sid` stores, fingerprinted from the scene
+    as it reads under the caller's hold. Everything is validated before the
+    scene is given an identity, so a refused request writes nothing.
+
+    A post with no key cannot be named by itself: a grant about it is 400
+    `unkeyed` (as a whole-scene grant it would also cover the summary, which
+    the user did not judge), and an `unaware` is stored about the whole
+    scene, which only withholds more (spec 11 §7.4).
+    """
+    grant = status in store.knowledge.GRANTS
+    if posts is not None and whole_scene:
+        raise _bad("bad_subject", "name posts or the whole scene, not both")
+    if posts is not None and any(not p.key for p in posts):
+        if grant:
+            raise _bad("unkeyed", "a post with no key can only be marked unaware; knowing "
+                                  "it would have to grant the whole scene, summary included")
+        posts, whole_scene = None, True
+    if posts is None and not whole_scene:
+        raise _bad("bad_subject", "name the posts, or say it is the whole scene")
+    messages, variants, _shown = _scene_posts(cid, sid)
+    if whole_scene:
+        digest = store.responses.transcript_hash(messages)
+        if grant and expect_digest != digest:
+            raise _bad("moved", "the scene changed since it was shown; look again", 409)
+        subject_posts = None
+    else:
+        if not posts:
+            raise _bad("bad_subject", "name at least one post, or the whole scene")
+        shown = {(e.key, e.part): (e.variant, e.digest) for e in expect or []}
+        subject_posts = []
+        for p in posts:
+            found = [m for m in messages if store.knowledge.post_key(m) == p.key
+                     and store.knowledge.post_part(m) == p.part]
+            if len(found) != 1:
+                raise (_bad("gone", "that post is no longer in the scene", 409) if gone_is == 409
+                       else _bad("unknown_post", "the scene holds no single post with that key"))
+            fp = store.knowledge.fingerprint(found[0], variants)
+            if grant:
+                if store.scenes.serialize.is_excluded(found[0]):
+                    raise _bad("hidden", "a hidden post reaches no one, so it cannot be known")
+                if shown.get((p.key, p.part)) != (fp["variant"], fp["digest"]):
+                    raise _bad("moved", "that post changed since it was shown; look again", 409)
+            subject_posts.append(fp)
+    try:
+        token = scenes_identity.ensure_identity(cid, sid)
+    except scenes_identity.UnreadableError as exc:
+        raise _busy() from exc
+    if subject_posts is None:
+        return {"kind": "scene", "scene": token, "digest": digest}
+    return {"kind": "posts", "scene": token, "posts": subject_posts}
+
+
+def _knowledge_write(cid: str, kid: str, entry: dict, write) -> None:
+    who = entry.get("audience_name") or "Everyone"
+    with store.undo.journalled(cid, {"w": "knowledge", "id": kid}, kind="knowledge",
+                               ref={"kind": "knowledge", "id": kid}, field="status",
+                               label=_label(who, "knowledge")):
+        try:
+            write()
+        except store.knowledge.KnowledgeError as exc:
+            raise _malformed() from exc
+
+
+@router.get("/campaigns/{cid}/ledger/knowledge/scenes/{sid}")
+def get_knowledge_scene(cid: str, sid: str):
+    """What a statement about `sid` could name: each keyed post, as it reads
+    now (display text) with the fingerprint a grant must send back as
+    `expect`, and the whole scene's `digest`. Writes nothing."""
+    _campaign_or_404(cid)
+    messages, variants, shown = _scene_posts(cid, sid)
+    posts = []
+    for i, (m, view) in enumerate(zip(messages, shown, strict=True)):
+        fp = store.knowledge.fingerprint(m, variants)
+        if fp["key"]:
+            posts.append({**fp, "index": i, "speaker": str(m.get("speaker") or ""),
+                          "text": str(view.get("content") or ""),
+                          "hidden": store.scenes.serialize.is_excluded(m)})
+    return {"sid": sid, "digest": store.responses.transcript_hash(messages),
+            "keyless": sum(1 for m in messages if not store.knowledge.post_key(m)),
+            "posts": posts}
+
+
+@router.get("/campaigns/{cid}/ledger/knowledge")
+def get_knowledge(cid: str):
+    """Every statement, with what the ledger needs to show it: the scene it is
+    about (null when deleted; `unverifiable` when the scan could not finish),
+    the current text of each named post (display phase), and why a grant no
+    longer grants -- `stale` with `stale_reason` `changed`, `hidden`, `gone`
+    (its scene or post was deleted) or `audience` (the audience was renamed
+    or no longer resolves, §7.3/§7.5)."""
+    _campaign_or_404(cid)
+    entries, intact = store.knowledge.read_checked(cid)
+    who = store.knowledge_scene.audiences_for(cid)
+    scenes: dict[str, tuple | str | None] = {}
+    out = []
+    for kid, entry in sorted(entries.items(), key=lambda kv: kv[1].get("created", ""),
+                             reverse=True):
+        identity = entry["subject"]["scene"]
+        if identity not in scenes:
+            try:
+                sid = scenes_identity.find_by_identity(cid, identity)
+            except scenes_identity.UnreadableError:
+                scenes[identity] = "unverifiable"
+            else:
+                if sid is None:
+                    scenes[identity] = None
+                else:
+                    messages, variants, shown = _scene_posts(cid, sid)
+                    title = store.scenes.read_scene(cid, sid)["meta"].get("title") or sid
+                    scenes[identity] = (sid, str(title), shown,
+                                        store.knowledge_scene.scene_facts(messages, variants))
+        held = scenes[identity]
+        scene = held if isinstance(held, tuple) else None
+        posts = []
+        if entry["subject"]["kind"] == "posts":
+            for p in entry["subject"]["posts"]:
+                row = {"key": p["key"], "part": p["part"], "index": None,
+                       "speaker": "", "text": "", "missing": True}
+                for i, m in enumerate(scene[2] if scene else ()):
+                    if (store.knowledge.post_key(m) == p["key"]
+                            and store.knowledge.post_part(m) == p["part"]):
+                        variant, digest, _hidden = scene[3].posts.get(
+                            (p["key"], p["part"]), ("", "", False))
+                        # What a re-stamp sends back as `expect`: the text
+                        # this row shows, fingerprinted.
+                        row.update(index=i, speaker=str(m.get("speaker") or ""),
+                                   text=str(m.get("content") or ""), missing=False,
+                                   variant=variant, digest=digest)
+                        break
+                posts.append(row)
+        now = _audience_now(who, entry["audience"])
+        reason = None
+        if entry["status"] in store.knowledge.GRANTS:
+            if entry["audience"] != store.knowledge.EVERYONE and now != entry["audience_name"]:
+                reason = "audience"
+            elif scene is None or any(p["missing"] for p in posts):
+                reason = "gone"
+            elif not store.knowledge.holds(entry, scene[3]):
+                hidden = entry["subject"]["kind"] == "posts" and any(
+                    (scene[3].posts.get((p["key"], p["part"])) or ("", "", False))[2]
+                    for p in entry["subject"]["posts"])
+                reason = "hidden" if hidden else "changed"
+        out.append({
+            "id": kid, **entry,
+            "scene": ({"sid": scene[0], "title": scene[1], "digest": scene[3].digest}
+                      if scene else None),
+            "unverifiable": held == "unverifiable",
+            "posts": posts,
+            "stale": reason is not None, "stale_reason": reason,
+            "audience_now": None if entry["audience"] == store.knowledge.EVERYONE else now,
+        })
+    return {"entries": out, "intact": intact}
+
+
+@router.post("/campaigns/{cid}/ledger/knowledge")
+def post_knowledge(cid: str, body: KnowledgeSave):
+    """Write a statement by hand, or accept one from a capture
+    (`source: "accepted"`). Both are authoritative (spec 11 §7.1)."""
+    _campaign_or_404(cid)
+    if body.status not in store.knowledge.STATUSES:
+        raise _bad("bad_status", "a status is knows, suspects or unaware")
+    if body.source not in store.knowledge.SOURCES:
+        raise _bad("bad_source", "a source is manual or accepted")
+    with store.locks.campaign_lock(cid):
+        name = _knowledge_audience(cid, body.audience)
+        subject = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene, body.status,
+                                     body.expect, body.expect_digest)
+        entry = {"audience": body.audience, "audience_name": name, "status": body.status,
+                 "subject": subject, "note": body.note, "source": body.source}
+        try:
+            kid = store.knowledge.mint_id(cid)
+        except store.knowledge.KnowledgeError as exc:
+            raise _malformed() from exc
+        _knowledge_write(cid, kid, entry, lambda: store.knowledge.add(cid, entry, kid=kid))
+    return {"id": kid}
+
+
+@router.put("/campaigns/{cid}/ledger/knowledge/{kid}")
+def put_knowledge(cid: str, kid: str, body: KnowledgeEdit):
+    """Correct a statement. Only what the body names moves: the audience (its
+    current name is recorded again), the status, the note, a new subject, or
+    `restamp`. Without a new subject or a restamp the stored fingerprint is
+    kept, so a note edit never confirms a stale grant -- and an `unaware`
+    cannot become a grant that way at all, since a keyless part's `unaware`
+    is stored about the whole scene and flipping it would be the whole-scene
+    grant `unkeyed` refuses. A new audience or subject is a new statement for
+    recency (§7.2), so it is dated now."""
+    _campaign_or_404(cid)
+    with store.locks.campaign_lock(cid):
+        try:
+            stored = store.knowledge.get_strict(cid, kid)
+        except store.knowledge.KnowledgeError as exc:
+            raise _malformed() from exc
+        if stored is None:
+            raise HTTPException(status_code=404, detail="statement not found")
+        entry = dict(stored)
+        if body.status is not None:
+            if body.status not in store.knowledge.STATUSES:
+                raise _bad("bad_status", "a status is knows, suspects or unaware")
+            entry["status"] = body.status
+        renew = False
+        if body.audience is not None:
+            entry["audience"] = body.audience
+            entry["audience_name"] = _knowledge_audience(cid, body.audience)
+            renew = body.audience != stored["audience"]
+        if body.note is not None:
+            entry["note"] = body.note
+        grant = entry["status"] in store.knowledge.GRANTS
+        if body.scene is not None:
+            entry["subject"] = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene,
+                                                  entry["status"], body.expect, body.expect_digest)
+            renew = True
+        elif body.restamp:
+            subject = stored["subject"]
+            try:
+                sid = scenes_identity.find_by_identity(cid, subject["scene"])
+            except scenes_identity.UnreadableError as exc:
+                raise _busy() from exc
+            if sid is None:
+                raise _bad("gone", "the scene this is about was deleted", 409)
+            posts = (None if subject["kind"] == "scene" else
+                     [KnowledgePost(key=p["key"], part=p["part"]) for p in subject["posts"]])
+            entry["subject"] = _knowledge_subject(
+                cid, sid, posts, posts is None, entry["status"], body.expect,
+                body.expect_digest, gone_is=409)
+        elif grant and stored["status"] == store.knowledge.UNAWARE:
+            raise _bad("bad_subject", "name the posts again to turn this into knowing or "
+                                      "suspecting it")
+        _knowledge_write(cid, kid, entry,
+                         lambda: store.knowledge.update(cid, kid, entry, renew=renew))
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/ledger/knowledge/{kid}")
+def delete_knowledge(cid: str, kid: str):
+    _campaign_or_404(cid)
+    with store.locks.campaign_lock(cid):
+        try:
+            stored = store.knowledge.get_strict(cid, kid)
+        except store.knowledge.KnowledgeError as exc:
+            raise _malformed() from exc
+        if stored is None:
+            raise HTTPException(status_code=404, detail="statement not found")
+        _knowledge_write(cid, kid, stored, lambda: store.knowledge.remove(cid, kid))
     return {"ok": True}

@@ -55,6 +55,16 @@ export function installLedgerMocks() {
                    "ledgerSaveChronicleLine"] as const) {
     mocked(api[k]).mockResolvedValue({ ok: true, id: "new" });
   }
+  mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [], intact: true });
+  mocked(api.ledgerKnowledgeScene).mockResolvedValue(
+    { sid: "", digest: "", keyless: 0, posts: [] });
+  for (const k of ["ledgerCreateKnowledge", "ledgerSaveKnowledge",
+                   "ledgerDeleteKnowledge"] as const) {
+    mocked(api[k]).mockResolvedValue({ ok: true, id: "k-00000001" });
+  }
+  mocked(api.listCharacters).mockResolvedValue([]);
+  mocked(api.listEntities).mockResolvedValue([]);
+  mocked(api.listScenes).mockResolvedValue([]);
   mocked(api.continuityCandidates).mockResolvedValue(EMPTY_CANDIDATES);
   mocked(api.getContinuity).mockResolvedValue(EMPTY_CONTINUITY);
   mocked(api.reconcileContinuity).mockResolvedValue({

@@ -2809,6 +2809,61 @@ export type RelationshipSave = {
 };
 export type ChronicleLineSave = { one_line?: string; date?: string };
 
+/** Roadmap 11's knowledge overrides (`routes/ledger.py`, `store/knowledge.py`):
+ *  the user's word on who knows, suspects or never heard what happened. */
+export type KnowledgeStatus = "knows" | "suspects" | "unaware";
+export type KnowledgePostRef = { key: string; part: string };
+export type KnowledgeEntry = {
+  id: string;
+  /** `characters:<id>`, `groups:<id>` or `*`. */
+  audience: string;
+  /** The audience's name when the statement was written ("" for everyone). */
+  audience_name: string;
+  /** Its name now; null when it no longer resolves (deleted, reclassified). */
+  audience_now: string | null;
+  status: KnowledgeStatus;
+  note: string;
+  source: "manual" | "accepted";
+  created?: string;
+  updated?: string;
+  subject: { kind: "posts"; scene: string; posts: (KnowledgePostRef & { variant: string; digest: string })[] }
+         | { kind: "scene"; scene: string; digest: string };
+  /** The scene it is about, by its current id, with its transcript digest as
+   *  this read saw it; null when that scene was deleted or `unverifiable`. */
+  scene: { sid: string; title: string; digest: string } | null;
+  /** The scan for its scene could not finish (a synced folder mid-write). */
+  unverifiable: boolean;
+  /** Each named post as it reads now (display phase), with the fingerprint of
+   *  that text -- what a re-stamp sends back as `expect`. */
+  posts: { key: string; part: string; index: number | null; speaker: string; text: string;
+           missing: boolean; variant?: string; digest?: string }[];
+  /** A grant that no longer grants, and why. */
+  stale: boolean;
+  stale_reason: "changed" | "hidden" | "gone" | "audience" | null;
+};
+/** What a statement about one scene could name (`.../knowledge/scenes/{sid}`). */
+export type KnowledgeScene = {
+  sid: string; digest: string; keyless: number;
+  posts: { key: string; part: string; variant: string; digest: string; index: number;
+           speaker: string; text: string; hidden: boolean }[];
+};
+export type KnowledgeFingerprint = { key: string; part: string; variant: string; digest: string };
+export type KnowledgeList = { entries: KnowledgeEntry[]; intact: boolean };
+/** A grant carries what the reader was shown (`expect` / `expect_digest`);
+ *  the server refuses it 409 `moved` when the text changed since. */
+export type KnowledgeSave = {
+  audience: string; status: KnowledgeStatus; scene: string;
+  /** null with `whole_scene`. */
+  posts: KnowledgePostRef[] | null; whole_scene: boolean;
+  expect: KnowledgeFingerprint[] | null; expect_digest: string;
+  note?: string; source?: "manual" | "accepted";
+};
+export type KnowledgeEdit = {
+  audience?: string; status?: KnowledgeStatus; note?: string;
+  scene?: string; posts?: KnowledgePostRef[] | null; whole_scene?: boolean;
+  expect?: KnowledgeFingerprint[] | null; expect_digest?: string; restamp?: boolean;
+};
+
 export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
   retired: RetiredFact[]; relationships: LedgerRelationship[];
