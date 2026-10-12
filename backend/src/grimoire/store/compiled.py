@@ -208,7 +208,13 @@ class Kind:
     member_filter: Callable[[str], bool] | None = None
 
 
-KINDS: dict[str, Kind] = {}
+# The registry (spec 03 section 4): every kind that persists is declared
+# here, so one place lists what the file can hold. A consumer imports its kind
+# from this module rather than declaring one of its own. Search extraction and
+# the world and campaign rows are absent on purpose: they lost section 14's
+# warm-after-restart measurement, so they are not wired.
+TOKENS_RECORD_BODY = Kind('tokens:record_body', 1, (), ('text_hash', 'encoding'), False)
+KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY}
 
 
 @dataclass(frozen=True)

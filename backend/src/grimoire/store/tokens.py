@@ -303,13 +303,16 @@ def record_tokens(path: Path, body: str) -> int:
         if entry is not None and entry[1] is encoder and entry[0] == text:
             _last.counter = ENCODING
             return entry[2]
-    try:
-        digest = _record_digest(text)
-    except (UnicodeEncodeError, MemoryError):
-        # The existing counter repairs lone surrogates and handles allocation
-        # failures. Optional UTF8 hashing must not turn those into failed reads.
-        return count_tokens(text)
-    value = _record_measure(text, digest)
+    if len(text) < PERSIST_MIN_CHARS:
+        value = count_tokens(text)  # below the cutoff no persistent key is needed
+    else:
+        try:
+            digest = _record_digest(text)
+        except (UnicodeEncodeError, MemoryError):
+            # The existing counter repairs lone surrogates and handles allocation
+            # failures. Optional UTF8 hashing must not turn those into failed reads.
+            return count_tokens(text)
+        value = _record_measure(text, digest)
     if last_counter() == ENCODING:
         _remember_record(key, text, encoder, value)
     return value
@@ -378,15 +381,16 @@ if hasattr(os, 'register_at_fork'):
     os.register_at_fork(after_in_child=_after_record_fork)
 
 
-_RECORD_KIND = compiled.Kind('tokens:record_body', 1, (), ('text_hash', 'encoding'), False)
-compiled.KINDS[_RECORD_KIND.name] = _RECORD_KIND
+_RECORD_KIND = compiled.TOKENS_RECORD_BODY
 
 
-# The synthetic inequality fails for short bodies: the indexed lookup costs
-# more than encoding them, especially with fresh-process BUILD initialization.
-# The measured cutoff is eight MiB of supplied characters; ordinary record
-# badges still use the safe outer memo without paying for SQLite.
-PERSIST_MIN_CHARS = 8_388_608
+# Below this many supplied characters, encoding costs less than a persisted
+# lookup: a hit pays a fixed batch (the fence, one indexed read, the row's
+# checksum) while encoding grows with the body. On the synthetic benchmark
+# the two cross between 8,000 and 32,000 characters once BUILD is primed at
+# startup, so admission starts at twice the crossover. Tune against real
+# prompts later, in conversation; shorter bodies keep the in-memory memo.
+PERSIST_MIN_CHARS = 16_384
 
 
 def _record_measure(text: str, digest: str) -> int:

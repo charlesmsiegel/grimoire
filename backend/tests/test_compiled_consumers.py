@@ -137,18 +137,37 @@ def test_frozen_copy_readers_match_cold_warm_off_restart(cache, tmp_path, monkey
     root = frozen_copy.copy_home(tmp_path / 'Realm')
     monkeypatch.setenv('GRIMOIRE_HOME', str(root))
     store.migrations.migrate_scene_ids()
+    # Token counts are the kind spec 03 wires; every frozen body is admitted
+    # so the cold, warm, off and restarted states each read or write SQLite.
+    encoder = _Enc()
+    monkeypatch.setattr(tokens, '_encoder', lambda: encoder)
+    monkeypatch.setattr(tokens, 'PERSIST_MIN_CHARS', 0)
+    bodies = [(path, path.read_text(encoding='utf-8', errors='replace'))
+              for path in sorted(root.rglob('*.md'))]
+    def counts():
+        return [tokens.record_tokens(path, body) for path, body in bodies]
     def snapshot():
         return {'sweep': sweep.sweep(root), 'worlds': world_read.list_worlds(),
-                'campaigns': campaign_read.list_campaigns(), 'search': list(search.walk())}
+                'campaigns': campaign_read.list_campaigns(), 'search': list(search.walk()),
+                'tokens': counts()}
+    def restart():
+        cache.close()
+        tokens._RECORD_POOL.clear()
+        search._POOL.clear()
+        statcache._cache.clear()
     expected = snapshot()
+    assert any(expected['tokens'])
     assert snapshot() == expected
     monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
+    restart()
     assert snapshot() == expected
     monkeypatch.delenv('GRIMOIRE_COMPILED_CACHE')
-    cache.close()
-    tokens._RECORD_POOL.clear()
-    search._POOL.clear()
-    statcache._cache.clear()
+    restart()
+    # The sweep counts tokens live itself; only the persisted kind must not.
+    with monkeypatch.context() as patched:
+        patched.setattr(encoder, 'encode', lambda text: pytest.fail('a persisted count was re-encoded'))
+        assert counts() == expected['tokens']
+    restart()
     assert snapshot() == expected
     assert frozen_copy.digest() == original
 
@@ -181,12 +200,12 @@ def test_supplied_surrogate_keeps_existing_encoder_fallback(root, encoder):
     assert tokens.last_counter() == tokens.ENCODING
 
 
-def test_medium_encoder_body_does_not_pay_restart_bootstrap(cache, root, monkeypatch):
+def test_body_below_the_cutoff_does_not_pay_restart_bootstrap(cache, root, monkeypatch):
     monkeypatch.setenv('GRIMOIRE_HOME', str(root))
     monkeypatch.setattr(tokens, '_encoder', _Enc)
-    # The former 256KiB admission failed the fresh-process cost inequality.
-    body = 'Mara ' * 60000
-    assert tokens.record_tokens(root / 'Realm.md', body) == 60000
+    # Encoding a body this short costs less than opening the cache for it.
+    body = 'Mara ' * ((tokens.PERSIST_MIN_CHARS - 1) // 5)
+    assert tokens.record_tokens(root / 'Realm.md', body) == len(body.split())
     assert not (root / '.cache').exists()
 
 
@@ -227,13 +246,22 @@ def test_optional_digest_allocation_failure_keeps_encoder_fallback(root, monkeyp
     assert tokens.last_counter() == tokens.ENCODING
 
 
-def test_below_persistent_cutoff_warm_text_does_not_repeat_hash(root, monkeypatch):
+def test_warm_text_above_the_cutoff_does_not_repeat_hash(root, monkeypatch):
     monkeypatch.setattr(tokens, '_encoder', _Enc)
     tokens._large_body_digest.cache_clear()
-    body = 'Mara ' * 60000
-    assert tokens.record_tokens(root / 'Realm.md', body) == 60000
-    monkeypatch.setattr(tokens.hashlib, 'sha256', lambda *args: pytest.fail('below-cutoff warm body rehashed'))
-    assert tokens.record_tokens(root / 'Realm.md', body) == 60000
+    body = 'Mara ' * (tokens.PERSIST_MIN_CHARS // 5 + 1)
+    count = len(body.split())
+    assert tokens.record_tokens(root / 'Realm.md', body) == count
+    real = tokens.hashlib.sha256
+
+    def sha256(data=b'', *args, **kwargs):
+        # Keys are hashed on every lookup; it is the BODY that must not be.
+        if len(data) >= tokens.PERSIST_MIN_CHARS:
+            pytest.fail('warm body rehashed')
+        return real(data, *args, **kwargs)
+
+    monkeypatch.setattr(tokens.hashlib, 'sha256', sha256)
+    assert tokens.record_tokens(root / 'Realm.md', body) == count
 
 
 def test_warm_record_sweep_matches_new_equal_bodies_without_hashing(root, monkeypatch, encoder):
@@ -312,3 +340,55 @@ def test_cached_count_survives_optional_history_refresh_allocation_failure(cache
     monkeypatch.setattr(encoder, 'encode', lambda text: pytest.fail('cached exact count was re-encoded'))
     assert tokens.record_tokens(root / 'Realm.md', 'Mara Seraphine') == 2
     assert tokens.last_counter() == tokens.ENCODING
+
+
+def test_the_shipped_cutoff_persists_long_bodies_and_never_hashes_short_ones(cache, root, monkeypatch):
+    # The real PERSIST_MIN_CHARS, not the fixture's zero: a transcript-sized
+    # body survives a restart without re-encoding, and a badge-sized one is
+    # counted live without paying for a SHA-256 or opening SQLite.
+    encoder = _Enc()
+    monkeypatch.setattr(tokens, '_encoder', lambda: encoder)
+    monkeypatch.setenv('GRIMOIRE_HOME', str(root))
+    words = ('Realm', 'Saltmarch', 'Seraphine', 'Mara', 'Winifred')
+    long_body = ' '.join(words[i % 5] for i in range(tokens.PERSIST_MIN_CHARS // 4))
+    assert len(long_body) >= tokens.PERSIST_MIN_CHARS
+    short_body = long_body[:tokens.PERSIST_MIN_CHARS - 1].strip()
+    hashed = []
+    original = tokens._record_digest
+    monkeypatch.setattr(tokens, '_record_digest', lambda text: hashed.append(len(text)) or original(text))
+
+    expected = tokens.record_tokens(root / 'Realm.md', short_body)
+    assert hashed == [] and not (root / '.cache').exists()
+
+    expected = tokens.record_tokens(root / 'Realm.md', long_body)
+    assert hashed == [len(long_body)]
+    cache.close()
+    tokens._RECORD_POOL.clear()
+    monkeypatch.setattr(encoder, 'encode', lambda text: pytest.fail('persisted count was re-encoded'))
+    assert tokens.record_tokens(root / 'Saltmarch.md', long_body) == expected
+
+
+@pytest.mark.parametrize('shape', ['crlf', 'non_utf8', 'two_stems'])
+def test_wired_token_kind_is_equal_cold_warm_off_and_restarted(cache, root, monkeypatch, encoder, shape):
+    # Spec 03 section 14's equivalence fixtures, through the kind it wires.
+    monkeypatch.setenv('GRIMOIRE_HOME', str(root))
+    raw = {'crlf': b'Mara\r\nSeraphine\r\n\r\nWinifred',
+           'non_utf8': b'Mara \xff\xfe Saltmarch',
+           'two_stems': b'Realm and Saltmarch'}[shape]
+    names = ('Realm.md', 'Saltmarch.md') if shape == 'two_stems' else ('Realm.md',)
+    for name in names:
+        (root / name).write_bytes(raw)
+    def counts():
+        return [tokens.record_tokens(root / name, (root / name).read_bytes().decode('utf-8', 'surrogateescape'))
+                for name in names]
+    def restart():
+        cache.close()
+        tokens._RECORD_POOL.clear()
+    expected = counts()
+    assert counts() == expected
+    monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
+    restart()
+    assert counts() == expected
+    monkeypatch.delenv('GRIMOIRE_COMPILED_CACHE')
+    restart()
+    assert counts() == expected
