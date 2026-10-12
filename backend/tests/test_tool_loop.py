@@ -442,13 +442,16 @@ def test_an_unreadable_answer_after_the_wall_gets_no_repair_turn(monkeypatch):
     """The repair turn is a send like any other: admitted on the wall too,
     not on `max_turns` alone."""
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
-    fake = FakeToolTurns(ToolTurn(deltas=("Mara, ", "I think."), pause=0.4),
+    # The wall leaves the run's setup (a store read, the root check, both in
+    # worker threads) most of a second before turn 1 could be refused, so a
+    # loaded runner still sends it; the turn itself outlasts the wall.
+    fake = FakeToolTurns(ToolTurn(deltas=("Mara, ", "I think."), pause=1.2),
                          ('{"keeper": "Mara"}', []))
 
     async def go():
         return [e async for e in inference.stream_tools(
             "chat", PROMPT, toolset=_toolset(), execute=tool_calls.registered(_toolset()),
-            client=fake, resolved=_resolved(), budget=RunBudget(wall_seconds=0.2),
+            client=fake, resolved=_resolved(), budget=RunBudget(wall_seconds=1.0),
             run_id=RUN, final_schema=ANSWER)]
     result = asyncio.run(go())[-1].result
     assert fake.calls == 1
