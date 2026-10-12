@@ -199,6 +199,9 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
         return kept
 
     cast = values["cast"]
+    threads = bounded("threads", (r["ref"] for r in values["threads"]))
+    commitments = bounded("commitments", (r["ref"] for r in values["commitments"]))
+    ref = slices_mod.CAPS["ref"]
     meta = {
         "kind": "scene",
         "version": SEARCH_DOCUMENT_VERSION,
@@ -213,13 +216,18 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
                     "last": head["moments"][-1] if head["moments"] else ""},
         "chronicle_date": chron.get("date", ""),
         "locations": bounded("locations", (f"locations/{x}" for x in head["locations"])),
-        "cast": bounded("cast", (a["ref"] for a in cast)),
-        "players": bounded("players", (a["ref"] for a in cast if a["role"] == "player")),
-        "departed": bounded("departed", (a["ref"] for a in cast
+        # Actor refs are capped here, in the metadata, and never in the slice:
+        # the slice's full ref is what 07's membership index joins on.
+        "cast": bounded("cast", (slices_mod.clip(a["ref"], ref) for a in cast)),
+        "players": bounded("players", (slices_mod.clip(a["ref"], ref) for a in cast
+                                       if a["role"] == "player")),
+        "departed": bounded("departed", (slices_mod.clip(a["ref"], ref) for a in cast
                                          if not a["present"] and a["role"])),
-        "threads": bounded("threads", (r["ref"] for r in values["threads"])),
-        "commitments": bounded("commitments", (r["ref"] for r in values["commitments"])),
-        "current_status": dict(sorted(values["status"].items())[:2 * MAX_META_REFS]),
+        "threads": threads,
+        "commitments": commitments,
+        # The statuses of exactly the refs the two lists kept.
+        "current_status": {r: values["status"][r] for r in threads + commitments
+                           if r in values["status"]},
         "links": bounded("links", values["links"]),
         "facts": {"recorded": bounded("facts.recorded",
                                       (f["id"] for f in values["facts"]["recorded"])),

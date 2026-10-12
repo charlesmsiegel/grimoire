@@ -328,3 +328,12 @@ def test_rows_already_present_after_a_restart_count_as_recorded(cid, monkeypatch
     monkeypatch.setattr(compiled.Batch, "mark_materialized",
                         lambda *a, **k: pytest.fail("a warm call after a restart re-wrote rows"))
     live.scene_documents(cid)
+
+
+def test_a_partly_refused_batch_is_not_remembered_as_written(cid, monkeypatch):
+    """Rows 03 turned away while staging (here: past its byte bound) are not
+    written, so the batch is not committed even though what fit was."""
+    _three(cid)
+    monkeypatch.setattr(compiled, "MAX_STAGED_BYTES", 2000)
+    live.scene_documents(cid)
+    assert not live._RECORDED

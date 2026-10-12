@@ -1813,7 +1813,9 @@ class Batch:
                     marker = _read_marker(self.root)
                     _purge_connection(session.conn, marker if marker is not None else self._generation or '')
                     return
-                self.committed = True
+                # Committed only if nothing asked for was turned away while
+                # staging: a partly staged request is a partly written one.
+                self.committed = not self.refused
                 _maintain(session)
                 session.last_used = _clock()
         except _CACHE_ERRORS as error:

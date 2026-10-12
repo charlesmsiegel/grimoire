@@ -534,13 +534,18 @@ def test_every_consulted_ledger_is_an_input_even_when_empty(cid):
         assert root / name in sl.paths, name
 
 
-def test_an_open_scene_records_only_what_it_consulted(cid):
+def test_an_open_scene_records_every_campaign_input_too(cid):
+    """The absorbed gate keeps the untimed ledgers out of an open scene's
+    TEXT, not out of its inputs: absorbing it, or repairing a ledger named in
+    `degraded`, is a write to one of them. The overlay's control files are
+    inputs as well."""
     sid = _played(cid)
     inputs = slices.CampaignInputs.load(cid)
     sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
     root = campaigns.campaign_root(cid)
-    assert root / "appearances.json" in sl.paths and root / "continuity.json" in sl.paths
-    assert root / "facts.json" not in sl.paths
+    for name in ("facts.json", "plot.json", "appearances.json", "continuity.json",
+                 "campaign.md", "deleted.json", "detached.json"):
+        assert root / name in sl.paths, name
 
 
 def test_an_unreadable_location_is_named_in_degraded(cid):
@@ -599,3 +604,38 @@ def test_a_running_summary_records_the_rule_files_it_was_checked_against(cid):
     plain = _played(cid, title="Elsewhere")
     sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, plain))
     assert regex.layers.path("campaign", cid) not in sl.paths     # no summary, no test
+
+
+def test_a_summary_with_moved_facts_reads_no_transcript_and_no_rules(cid):
+    sid = _folded_with_word(cid)
+    _location(cid, sid, "Saltmarch harbour")          # the first location: facts move
+    slices._POOL.clear()
+    rolling._POOL.clear()
+    count = rolling.parses["count"]
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    assert rolling.parses["count"] == count
+    assert regex.layers.path("global") not in sl.paths
+    assert sl.values["rolling"] == ""
+
+
+def test_statuses_follow_the_refs_the_metadata_kept(cid):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    for i in range(70):
+        plot.set_movement(cid, f"a{i:02d}", f"Thread {i}", "open", f"beat {i}", sid)
+        commitments.set_movement(cid, f"z{i:02d}", f"Promise {i}", "promise", "open", None,
+                                 f"vow {i}", sid)
+    meta = doc(cid, sid).meta
+    assert len(meta["threads"]) == len(meta["commitments"]) == scene.MAX_META_REFS
+    assert set(meta["current_status"]) == set(meta["threads"]) | set(meta["commitments"])
+
+
+def test_a_long_actor_ref_still_joins_its_groups(cid):
+    sid = _played(cid)
+    aid, _vid = _actor(cid, sid, "m" * 170)
+    assert len(f"characters:{aid}".encode()) > slices.CAPS["ref"]
+    gid = _group(cid, "Harbour Watch", members=f"characters:{aid}")
+    meta = doc(cid, sid).meta
+    assert [g["group"] for g in meta["groups"]] == [f"groups:{gid}"]
+    assert all(len(r.encode()) <= slices.CAPS["ref"] for r in meta["cast"])

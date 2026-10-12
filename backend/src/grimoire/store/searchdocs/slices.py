@@ -205,6 +205,11 @@ class CampaignInputs:
         if not campaigns_paths.campaign_meta_path(cid).exists():
             raise campaigns_paths.CampaignNotFound(cid)
         self.damage = _Damage()
+        # What the overlay reads to resolve a location's layer and a group's
+        # membership: the world (campaign.md), the tombstones and detachments.
+        self.control_paths: tuple[Path, ...] = (campaigns_paths.campaign_meta_path(cid),
+                                                overlay._deleted_path(cid),
+                                                overlay._detached_path(cid))
         self.ledger_paths: dict[str, Path] = {
             "chronicle": chronicle._chronicle_path(cid),
             "appearances": appearances_paths._path(cid),
@@ -455,8 +460,7 @@ def _chronicle(inputs: CampaignInputs, head: Head, damage: _Damage) -> dict | No
                          if isinstance(k, str) and k.strip()],
             "date": damage.text(rec.get("date"), CAPS["date"], src),
             "location": damage.text(rec.get("location"), CAPS["location"], src),
-            "cast": sorted({damage.text(canon.actor_ref(t), CAPS["ref"], src)
-                            for t in (cast if isinstance(cast, list) else ())
+            "cast": sorted({canon.actor_ref(t) for t in (cast if isinstance(cast, list) else ())
                             if isinstance(t, str) and t}),
             "source": "chronicle",
         }
@@ -489,7 +493,7 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
             used.append(name.source)
         if name.unreadable:
             damage.add(token)
-        ref = damage.text(canon.actor_ref(token), CAPS["ref"], token)
+        ref = canon.actor_ref(token)      # full: the membership join needs it
         out[ref] = {"ref": ref, "kind": kind, "id": aid,
                     "name": damage.text(name.text, CAPS["name"], token),
                     "role": rec.get("role") if isinstance(rec.get("role"), str) else "",
@@ -535,16 +539,13 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
     damage = _Damage()
     absorbed = head.absorbed
     hist = scenes_read.histories(head.meta)
-    # Every store file a slice CONSULTED, whether or not it contributed: a
-    # ledger that holds nothing for this scene today is still the file whose
-    # next write can (03-C3's rows are how 05's sync finds the document).
-    # The cast and the timed links are read for every scene; the untimed
-    # joins only behind the absorbed gate.
-    used: list[Path] = [head.path, inputs.ledger_paths["appearances"],
-                        inputs.ledger_paths["continuity"]]
-    if absorbed:
-        used += [inputs.ledger_paths[name] for name in
-                 ("chronicle", "plot", "commitments", "facts", "relationships")]
+    # Every store file the campaign's inputs read, for every document, whether
+    # or not it contributed to this one: a ledger that holds nothing for this
+    # scene today -- or that the absorbed gate keeps out until absorb, or that
+    # would not parse and is named in `degraded` -- is still the file whose
+    # next write can change the document, and 03-C3's rows are how 05's sync
+    # finds it. So are the overlay's control files.
+    used: list[Path] = [head.path, *inputs.ledger_paths.values(), *inputs.control_paths]
     chron = _chronicle(inputs, head, damage) if absorbed else None
     locations = []
     for lid in hist["locations"]:
@@ -566,9 +567,9 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
                    if isinstance(lid, str) and isinstance(link, dict)
                    and link.get("scene") == sid and created
                    and isinstance(link.get("created"), str) and link["created"] >= created)
-    running = rolling.intact_rolling(inputs.cid, head) if not absorbed else ""
-    if not absorbed:
-        used += rolling.rule_files(inputs.cid, head)
+    running = rolling.intact_rolling(inputs.cid, head) if not absorbed \
+        else rolling.Running("", ())
+    used += running.paths
     values = {
         "head": {
             "title": damage.text(head.meta.get("title", sid), CAPS["title"], "head"),
@@ -580,7 +581,7 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
             "locations": [damage.text(x, CAPS["ref"], "head") for x in hist["locations"]],
             "moments": [damage.text(x, CAPS["moment"], "head") for x in hist["times"]],
         },
-        "rolling": damage.text(running, CAPS["summary"], "rolling_summary"),
+        "rolling": damage.text(running.text, CAPS["summary"], "rolling_summary"),
         "chronicle": chron,
         "cast": cast,
         "locations": locations,
