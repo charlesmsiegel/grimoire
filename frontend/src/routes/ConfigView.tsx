@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  api, type Config, type ConfigUpdate, type PromptLayoutSection, type SceneContext,
+  api, type Config, type ConfigUpdate, type PlayDecisionsInfo, type PromptLayoutSection,
+  type SceneContext,
 } from "../api/client";
 import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
@@ -67,6 +68,7 @@ const DRAFT_FIELDS = [
   "log_level",
   "tracker", "perception_rider",
   "send_images", "send_images_limit",
+  "decide_speaker_sampling", "decide_turn_plan", "decide_play_tool",
   // `theme` is deliberately NOT here. The look is persisted the moment it is
   // picked, by `useThemeSetting`, because three controls now offer it (this
   // page, the first-run wizard, the header toggle) and a draft field would let
@@ -95,7 +97,7 @@ function draftOf(c: Config): Draft {
 type SectionId =
   | "storage" | "backups" | "logging" | "timeouts"
   | "setup"
-  | "context" | "layout" | "tracker" | "system-prompt" | "response"
+  | "context" | "layout" | "tracker" | "decisions" | "system-prompt" | "response"
   | "transcript" | "output" | "playing" | "appearance";
 
 /** Ids of panes that became pages of their own (Settings → Inference), and
@@ -145,6 +147,8 @@ const SECTIONS: SectionDef[] = [
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
     fields: ["tracker", "perception_rider"] },
+  { id: "decisions", group: "What the model sees", label: "Play decisions",
+    fields: ["decide_speaker_sampling", "decide_turn_plan", "decide_play_tool"] },
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
     fields: ["system_prompt"] },
   { id: "response", group: "What the model sees", label: "Response targets", fields: [] },
@@ -311,6 +315,8 @@ export default function ConfigView() {
   const [layoutSaved, setLayoutSaved] = useState<PromptLayoutSection[] | null>(null);
   const [layoutFailed, setLayoutFailed] = useState(false);
   const layoutStarted = useRef(false);
+  const [decisionsInfo, setDecisionsInfo] = useState<PlayDecisionsInfo | null>(null);
+  const decisionsStarted = useRef(false);
 
   useEffect(() => {
     api.getConfig().then((c) => {
@@ -341,6 +347,15 @@ export default function ConfigView() {
     api.getPromptLayout()
       .then((l) => { setLayout(l.sections); setLayoutSaved(l.sections); })
       .catch(() => setLayoutFailed(true));
+  }, [section]);
+
+  // Whether the Decision model reports a distribution, read when Play
+  // decisions is first opened: it resolves a route, which nine sections
+  // never need.
+  useEffect(() => {
+    if (section !== "decisions" || decisionsStarted.current) return;
+    decisionsStarted.current = true;
+    api.getPlayDecisionsInfo().then(setDecisionsInfo).catch(() => setDecisionsInfo(null));
   }, [section]);
 
   const saved = config ? draftOf(config) : null;
@@ -376,6 +391,9 @@ export default function ConfigView() {
       case "layout": return draft?.prompt_layout_enabled === "on" ? "on" : "off";
       // Unset reads as on, like the checkbox: the shipped default is on.
       case "tracker": return draft?.tracker === "off" ? "off" : "on";
+      // The turn decision is the one that costs a call per reply, so it is
+      // the one worth reading at a glance.
+      case "decisions": return draft?.decide_turn_plan || "off";
       // Deliberately blank: the rate table, the presets and the response
       // preset are each a document of their own, and "12 entries" is a size
       // rather than a setting.
@@ -964,6 +982,65 @@ export default function ConfigView() {
               The second switch adds a short instruction to each character's turn, asking it to
               note what it perceived before it replies. Turn it off to keep the tracker's record
               while shedding that prompt cost.
+            </p>
+          </>
+        )}
+
+        {draft && section === "decisions" && (
+          <>
+            <p className="config-copy">
+              Small closed questions asked during play, answered by the <em>Decision</em> model
+              from <Link to="/models">Models</Link>. A campaign can set each of these for itself.
+              What a decision reads is text the turn already sends, plus the replying
+              character's own card summary, which goes to the Decision model's provider.
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Draw the next speaker from the pick's odds"
+                checked={draft.decide_speaker_sampling === "on"}
+                onChange={(e) => edit("decide_speaker_sampling", e.target.checked ? "on" : "off")}
+              />
+              Draw the next speaker from the pick's odds
+            </label>
+            <p className="config-copy">
+              Adds no call: the speaker pick is already asked. A Decision model that reports
+              odds has the speaker drawn from them, with anyone the last post addressed
+              favoured; one that does not has its answer taken as before.{" "}
+              {decisionsInfo?.pick_samples === false
+                && "With this Decision model the pick is always the most likely speaker."}
+              {decisionsInfo?.pick_samples === true
+                && "This Decision model reports odds, so the pick is drawn."}
+            </p>
+            <div className="config-field">
+              <label htmlFor="cfg-turn-plan">Turn decision before each reply</label>
+              <div className="config-input">
+                <select id="cfg-turn-plan" value={draft.decide_turn_plan || "off"}
+                        onChange={(e) => edit("decide_turn_plan", e.target.value)}>
+                  <option value="off">Off</option>
+                  <option value="intent">Intent: the character's stance</option>
+                  <option value="plan">Plan: stance, what to reveal, tension</option>
+                </select>
+              </div>
+              <p className="config-caption">
+                One extra call before every character's reply, on the <em>Turn planning</em>
+                route, adding up to twenty seconds before the first word. Its answer is a short
+                note in that reply's prompt; if it fails, the reply plays on without it.
+              </p>
+            </div>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Let a character ask one closed question mid-reply"
+                checked={draft.decide_play_tool === "on"}
+                onChange={(e) => edit("decide_play_tool", e.target.checked ? "on" : "off")}
+              />
+              Let a character ask one closed question mid-reply
+            </label>
+            <p className="config-copy">
+              Offers the scene model a decide tool it may call once, before it writes any of
+              its reply. A call costs a Decision call and a second scene turn, which re-sends
+              the whole prompt; a reply that never calls it costs nothing extra.
             </p>
           </>
         )}

@@ -39,14 +39,22 @@ def _set_campaign_meta(cid, **fields):
 # --- the switches (§3.6) ------------------------------------------------------
 
 
-def test_every_switch_is_off_by_default(monkeypatch, tmp_path):
+def test_the_speaker_draw_is_on_by_default_and_the_rest_off(monkeypatch, tmp_path):
+    """The user's ratification (02-S6): the pick is sampled by default -- it
+    adds no call -- and the two switches that each add a call stay off."""
     cid = _campaign(monkeypatch, tmp_path)
-    assert play_decisions.speaker_sampling(cid) is False
+    assert play_decisions.speaker_sampling(cid) is True
     assert play_decisions.turn_plan_mode(cid) == "off"
     assert play_decisions.play_tool(cid) is False
     cfg = store.read_config()
     assert (cfg["decide_speaker_sampling"], cfg["decide_turn_plan"],
-            cfg["decide_play_tool"]) == ("off", "off", "off")
+            cfg["decide_play_tool"]) == ("on", "off", "off")
+
+
+def test_a_global_value_no_switch_knows_reads_as_off(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    store.config.write_config(decide_speaker_sampling="maybe")
+    assert play_decisions.speaker_sampling(cid) is False
 
 
 def test_the_global_switch_reaches_a_campaign_with_no_opinion(monkeypatch, tmp_path):
@@ -271,3 +279,64 @@ def test_a_value_the_vocabulary_does_not_know_sends_nothing():
     text = turn_plan.block(plan, "Mara")
     assert turn_plan.disclosure_description("hint") in text
     assert turn_plan.tension_description(2) in text
+
+
+
+# --- exposure (02-S6) --------------------------------------------------------
+
+
+def test_the_campaign_route_round_trips_inherits_and_refuses(client):
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    base = f"/api/campaigns/{cid}/play-decisions"
+    body = client.get(base).json()
+    assert body == {"speaker_sampling": "", "turn_plan": "", "play_tool": "",
+                    "effective": {"speaker_sampling": "on", "turn_plan": "off",
+                                  "play_tool": "off"}}
+    body = client.put(base, json={"speaker_sampling": "off", "turn_plan": "plan"}).json()
+    assert (body["speaker_sampling"], body["turn_plan"], body["play_tool"]) == ("off", "plan", "")
+    assert body["effective"] == {"speaker_sampling": "off", "turn_plan": "plan",
+                                 "play_tool": "off"}
+    assert play_decisions.turn_plan_mode(cid) == "plan"
+    # A field left out is left as it is; "" follows the global again.
+    body = client.put(base, json={"turn_plan": ""}).json()
+    assert (body["speaker_sampling"], body["turn_plan"]) == ("off", "")
+    meta = campaigns.read_campaign(cid)["meta"]
+    assert "decide_turn_plan" not in meta and meta["decide_speaker_sampling"] == "off"
+    assert client.put(base, json={"turn_plan": "maybe"}).status_code == 400
+    assert client.put(base, json={"play_tool": "plan"}).status_code == 400
+    assert client.get("/api/campaigns/nowhere/play-decisions").status_code == 404
+    assert client.put("/api/campaigns/nowhere/play-decisions",
+                      json={"play_tool": "on"}).status_code == 404
+
+
+def test_a_write_that_changes_nothing_leaves_the_file_alone(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    play_decisions.set_campaign(cid, {play_decisions.PLAY_TOOL_KEY: "on"})
+    mp = store.campaigns.campaign_meta_path(cid)
+    before = mp.read_bytes()
+    play_decisions.set_campaign(cid, {play_decisions.PLAY_TOOL_KEY: "on"})
+    assert mp.read_bytes() == before
+    with pytest.raises(ValueError):
+        play_decisions.set_campaign(cid, {"tracker": "on"})
+
+
+def test_the_global_route_says_whether_the_pick_samples(client, monkeypatch):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    assert client.get("/api/play-decisions").json() == {"pick_samples": False}
+    monkeypatch.setattr(inference, "reports_distribution", lambda _resolved: True)
+    assert client.get("/api/play-decisions").json() == {"pick_samples": True}
+
+
+@pytest.mark.parametrize("intent,line", [
+    ({"stance": "deflect", "draw": {"basis": "sampled", "selected": "deflect",
+                                    "distribution": [["engage", 0.4], ["deflect", 0.38]]}},
+     "deflect (sampled, 38%)"),
+    ({"stance": "press", "draw": {"basis": "answer", "selected": "press"}},
+     "press (most likely)"),
+    ({"stance": "deflect", "disclosure": "hint", "tension": 1}, "deflect · hint · hold steady"),
+    ({"task": "turn-intent", "skipped": "missing_key"}, ""),
+    (None, ""),
+])
+def test_the_approach_line(intent, line):
+    assert turn_plan.approach(intent) == line

@@ -689,6 +689,12 @@ export type Config = {
    *  "off" (setting off), "yes", "no" (text only) or "unknown" (the catalog
    *  does not say). Read-only. */
   send_images_reach?: SendImagesReach;
+  /** The play decisions (roadmap 02 §3.6), each global with a campaign
+   *  override (`getCampaignPlayDecisions`): the speaker draw "on" | "off",
+   *  the turn decision "off" | "intent" | "plan", the decide tool "on" | "off". */
+  decide_speaker_sampling: string;
+  decide_turn_plan: string;
+  decide_play_tool: string;
 };
 export type SendImagesReach = "off" | "yes" | "no" | "unknown" | "none";
 /**
@@ -710,7 +716,8 @@ export type ConfigUpdate = Partial<Pick<Config,
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level" |
-  "tracker" | "perception_rider" | "send_images" | "send_images_limit">>;
+  "tracker" | "perception_rider" | "send_images" | "send_images_limit" |
+  "decide_speaker_sampling" | "decide_turn_plan" | "decide_play_tool">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
@@ -995,6 +1002,9 @@ export type ResponseVariant = {
   };
 };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
+  /** The inspector's "Approach" line (roadmap 02 §6.5), worded by the server;
+   *  "" when no turn decision was read. */
+  approach?: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
   variants: ResponseVariant[];
   settings?: ResponseSettingsRecord; resume_settings?: ResponseSettingsRecord };
@@ -3652,6 +3662,14 @@ export type TrackerScope =
 /** A campaign's own switch: "" follows the global one. */
 export type TrackerSetting = "" | "on" | "off";
 export type CampaignTrackerSetting = { setting: TrackerSetting; enabled: boolean };
+
+/** A campaign's own play-decision switches: "" follows the global one, and
+ *  `effective` is what each one comes to. */
+export type PlayDecisionValues = { speaker_sampling: string; turn_plan: string; play_tool: string };
+export type CampaignPlayDecisions = PlayDecisionValues & { effective: PlayDecisionValues };
+/** Whether the global Decision model reports a distribution for the speaker
+ *  pick (null: the pick resolves to nothing). */
+export type PlayDecisionsInfo = { pick_samples: boolean | null };
 
 /** One output-processing regex rule (spec section 2). `id` is minted on create
  *  and unique across every level, because an `off` list elsewhere names it. */

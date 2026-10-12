@@ -92,10 +92,11 @@ DEFAULT_TRACKER = "on"
 DEFAULT_PERCEPTION_RIDER = "on"
 # The three play-decision switches (roadmap 02 §3.6, `store/play_decisions.py`
 # reads them): sampling the next speaker, a pre-generation turn intent or
-# plan, and Decision as a tool from play. Each adds a call or changes who
-# speaks, so each is off until a play gate has measured it and the user said
-# yes -- and a cost may not arrive by upgrade.
-DEFAULT_DECIDE_SPEAKER_SAMPLING = "off"
+# plan, and Decision as a tool from play. The user ratified the speaker draw
+# on (02-S6): the pick is asked anyway, so drawing from its report adds no
+# call. The other two each add a call per reply, and a cost may not arrive by
+# upgrade, so they stay off.
+DEFAULT_DECIDE_SPEAKER_SAMPLING = "on"
 DEFAULT_DECIDE_TURN_PLAN = "off"
 DEFAULT_DECIDE_PLAY_TOOL = "off"
 DEFAULT_USER_LABEL = "You"

@@ -28,6 +28,7 @@ from .. import (
     tool_calls,
     wire,
 )
+from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store import inference_retired as retired
@@ -42,15 +43,18 @@ from .common import (
     _dump,
     _llm_http_error,
     _response_body,
+    _soft_resolved,
     _write_response,
     get_health,
     get_llm,
     legacy_refused,
     refuse_newer,
     refuse_unmigrated,
+    require_inference,
     run_error,
 )
 from .models import (
+    CampaignPlayDecisions,
     CatalogProbe,
     ConfigUpdate,
     ConnectionCreate,
@@ -421,6 +425,56 @@ def _layout_body(stored: list[dict]) -> dict:
     """
     return {"enabled": store.context.layout.enabled(),
             "sections": store.context.layout.describe(store.context.SECTIONS, stored)}
+
+
+# --- play decisions (roadmap 02 §3.6) -----------------------------------------
+
+#: The campaign route's field for each switch's config key.
+_PLAY_FIELDS = {"speaker_sampling": store.play_decisions.SPEAKER_SAMPLING_KEY,
+                "turn_plan": store.play_decisions.TURN_PLAN_KEY,
+                "play_tool": store.play_decisions.PLAY_TOOL_KEY}
+
+
+@router.get("/play-decisions")
+def get_play_decisions():
+    """What the Settings section says beside the switches: whether the global
+    Decision model reports a distribution for the speaker pick (§5.6), None
+    when the pick resolves to nothing. Soft and free: nothing is sent."""
+    resolved, _why, _kind = _soft_resolved(
+        lambda: require_inference("response-selector", operation="decide"))
+    return {"pick_samples": (None if resolved is None
+                             else operations.reports_distribution(resolved))}
+
+
+def _play_body(cid: str) -> dict:
+    try:
+        own = store.play_decisions.own(cid)
+        effective = store.play_decisions.effective(cid)
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    return {field: own[key] for field, key in _PLAY_FIELDS.items()} | {
+        "effective": {field: effective[key] for field, key in _PLAY_FIELDS.items()}}
+
+
+@router.get("/campaigns/{cid}/play-decisions")
+def get_campaign_play_decisions(cid: str):
+    return _play_body(cid)
+
+
+@router.put("/campaigns/{cid}/play-decisions")
+def put_campaign_play_decisions(cid: str, body: CampaignPlayDecisions):
+    # The campaign first, as the tracker's route: a 400 about a value is an
+    # answer about a campaign, and one that does not exist is a 404.
+    _play_body(cid)
+    values = {key: value for field, key in _PLAY_FIELDS.items()
+              if (value := getattr(body, field)) is not None}
+    try:
+        store.play_decisions.set_campaign(cid, values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    return _play_body(cid)
 
 
 @router.get("/prompt-layout")

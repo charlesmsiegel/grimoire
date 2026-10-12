@@ -1110,12 +1110,18 @@ would answer neither question.
   sample (`routing.TASK_POLICY`): the speaker pick, the turn intent and plan's
   stance, and the play decide tool's selection -- each only behind its play
   decision switch, all off by default (below).
-- **Play decisions (roadmap 02) are dark, soft and off by default.** Three
-  switches (`decide_speaker_sampling`, `decide_turn_plan` = `off` | `intent` |
-  `plan`, `decide_play_tool`), each a `config.md` key with a `campaign.md`
-  override, are read through `store/play_decisions.py` alone, and no UI shows
-  one until its play gate (`evals/run.py --live --play`, `evals/play.py`) is
-  ratified. Off is byte-identical: nothing is resolved, called or written.
+- **Play decisions (roadmap 02) are soft, and only the speaker draw is on
+  by default.** Three switches (`decide_speaker_sampling`, `decide_turn_plan`
+  = `off` | `intent` | `plan`, `decide_play_tool`), each a `config.md` key
+  with a `campaign.md` override (`PUT /campaigns/{cid}/play-decisions`), are
+  read through `store/play_decisions.py` alone and shown in Settings, Play
+  decisions. The user ratified all three for the UI (02-S6) with the speaker
+  draw `on` (it adds no call: the pick was already asked) and the two that
+  each add a call `off`. A global value a switch does not know reads as off.
+  The live play gate (`evals/run.py --live --play`, `evals/play.py`) measures
+  them; its first report is
+  `docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md`. A turn
+  decision off is byte-identical: nothing is resolved, called or written.
   On, a turn decision is asked before the contribution is composed
   (`character_turns._turn_plan`), resolved through `_soft_resolved`, bounded
   by one `common.plan_deadline()` for the whole decision (a spent one is

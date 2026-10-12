@@ -177,6 +177,34 @@ def drawn_stance(item: decisions.Item, result: decisions.ItemResult,
     return stance, "", drawn.record
 
 
+def approach(intent: Mapping | None) -> str:
+    """The inspector's line for a response's `intent` (roadmap 02 §6.5),
+    without its "Approach:" label: the stance, how it was chosen -- "sampled,
+    38%" (the weight the report gave it) or "most likely" (the answer itself)
+    -- and, for a plan, the disclosure and tension that were read. "" when
+    nothing was read (skipped, abstained, or no intent at all)."""
+    if not intent or intent.get("stance") not in STANCES:
+        return ""
+    stance = str(intent["stance"])
+    drawn = intent.get("draw") or {}
+    how = ""
+    if drawn.get("basis") == "sampled":
+        weights = {str(key): weight for key, weight in drawn.get("distribution") or ()}
+        weight = weights.get(stance)
+        how = (f" (sampled, {round(weight * 100)}%)" if isinstance(weight, (int, float))
+               else " (sampled)")
+    elif drawn.get("basis") == "answer":
+        how = " (most likely)"
+    parts = [stance + how]
+    if intent.get("disclosure") in DISCLOSURES:
+        parts.append(str(intent["disclosure"]))
+    tension = intent.get("tension")
+    if isinstance(tension, int) and not isinstance(tension, bool) \
+            and 0 <= tension < len(TENSION_LEVELS):
+        parts.append(TENSION_LEVELS[tension])
+    return " · ".join(parts)
+
+
 # --- the turn plan (02-C3) ---------------------------------------------------
 
 

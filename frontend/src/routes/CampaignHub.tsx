@@ -13,6 +13,7 @@ import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
 import { CampaignTrackerSwitch } from "../components/tracker/CampaignTrackerSwitch";
+import { CampaignPlayDecisions } from "../components/CampaignPlayDecisions";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
 import { QuickReplyEditor } from "../components/QuickReplyEditor";
@@ -167,7 +168,8 @@ export default function CampaignHub() {
    *  the campaign, not to whichever scene you happen to have open, so they are
    *  here. */
   const [panel, setPanel] = useState<
-    "mechanics" | "calendar" | "cover" | "tracker" | "output" | "quick-replies" | "default-prompts" | null>(null);
+    "mechanics" | "calendar" | "cover" | "tracker" | "decisions" | "output" | "quick-replies"
+    | "default-prompts" | null>(null);
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -329,7 +331,7 @@ export default function CampaignHub() {
       </ColumnSection>
       <ColumnSection label="Settings">
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
-           ["cover", "Cover"], ["tracker", "Tracker"],
+           ["cover", "Cover"], ["tracker", "Tracker"], ["decisions", "Play decisions"],
            ["default-prompts", "Default prompts"],
            ["output", "Output processing"], ["quick-replies", "Quick replies"]] as const).map(([id, label]) => (
           <button key={id} type="button"
@@ -406,6 +408,7 @@ export default function CampaignHub() {
                 <TrackerFieldsEditor key={`${cid}:fields`} scope={{ kind: "campaign", cid }} />
               </>
             )}
+            {panel === "decisions" && <CampaignPlayDecisions key={cid} cid={cid} />}
             {panel === "quick-replies" && (
               <QuickReplyEditor key={`${cid}:qr`} scope={{ kind: "campaign", cid }} />
             )}

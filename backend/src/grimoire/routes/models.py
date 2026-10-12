@@ -298,6 +298,16 @@ class TrackerLayer(BaseModel):
     off: list[str] = []
 
 
+class CampaignPlayDecisions(BaseModel):
+    """A campaign's own play-decision switches (roadmap 02 §3.6): each one a
+    value of its switch, or "" to follow the global one. A field left out is
+    left as it is."""
+
+    speaker_sampling: str | None = None
+    turn_plan: str | None = None
+    play_tool: str | None = None
+
+
 class CampaignTracker(BaseModel):
     """A campaign's own scene-tracker setting: "on", "off", or "" to follow the
     global one."""

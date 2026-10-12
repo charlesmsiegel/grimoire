@@ -181,6 +181,7 @@ def _reply(client, text):
 
 def test_off_stores_no_pick_and_takes_the_answer(client, monkeypatch):
     cid, sid, base = seed(client)
+    store.write_config(decide_speaker_sampling="off")   # on by default since 02-S6
     _decided(monkeypatch, _native(MARA, SPREAD))
     _reply(client, "Winifred answers.")
     client.post(base + "/chat", json={"content": "Hello"})

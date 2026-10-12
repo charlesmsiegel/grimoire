@@ -2032,9 +2032,12 @@ def put_group(cid: str, sid: str, body: GroupSettings):
 def get_response(cid: str, sid: str, rid: str):
     _require_scene(cid, sid)
     try:
-        return store.responses.get(cid, sid, rid)
+        record = store.responses.get(cid, sid, rid)
     except store.responses.ResponseNotFound as exc:
         raise _public_error(exc) from exc
+    # The inspector's "Approach" line (roadmap 02 §6.5), worded here so the
+    # client keeps no copy of the stance and tension vocabularies.
+    return {**record, "approach": store.turn_plan.approach(record.get("intent"))}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/responses/{rid}/swipe")

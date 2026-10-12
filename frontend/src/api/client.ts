@@ -76,7 +76,8 @@ import {
   type WeatherSpan,
   type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
-  type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
+  type CampaignTrackerSetting, type CampaignPlayDecisions, type PlayDecisionValues,
+  type PlayDecisionsInfo, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
   type QuickReply, type QuickReplyDraft, type QuickReplyEntry, type QuickReplyScope, type QuickReplySet,
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
   type RegexBundle, type RegexImportRow, type RegexLayer, type RegexRule, type RegexScope,
@@ -3698,4 +3699,10 @@ export const api = {
     request<CampaignTrackerSetting>("GET", `/api/campaigns/${cid}/tracker`),
   setCampaignTracker: (cid: string, setting: TrackerSetting) =>
     request<CampaignTrackerSetting>("PUT", `/api/campaigns/${cid}/tracker`, { setting }),
+  getPlayDecisionsInfo: () => request<PlayDecisionsInfo>("GET", "/api/play-decisions"),
+  getCampaignPlayDecisions: (cid: string) =>
+    request<CampaignPlayDecisions>("GET", `/api/campaigns/${cid}/play-decisions`),
+  /** Only the fields given are written; "" follows the global one again. */
+  setCampaignPlayDecisions: (cid: string, values: Partial<PlayDecisionValues>) =>
+    request<CampaignPlayDecisions>("PUT", `/api/campaigns/${cid}/play-decisions`, values),
 };

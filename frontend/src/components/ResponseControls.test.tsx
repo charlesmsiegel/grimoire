@@ -173,6 +173,17 @@ describe("individual response controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use variant 2" }));
     expect(actions.onActivate).toHaveBeenCalledWith("response-a", "v2");
   });
+  it("shows the response's approach as a plain chip, and nothing without one", async () => {
+    vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
+      approach: "deflect (sampled, 38%) · hint · hold steady",
+      variants: [{ id: "v1", content: "First", status: "complete" }] } as Awaited<ReturnType<typeof api.getResponse>>);
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
+    const chip = await screen.findByText("deflect (sampled, 38%) · hint · hold steady");
+    expect(chip.tagName).toBe("SPAN");
+    expect(chip).toHaveClass("chip", "on");
+    expect(chip.parentElement).toHaveTextContent(/^Approach:/);
+  });
   it("shows what made each variant under its text, and nothing for one with no record", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
       settings: { words: 120, paragraphs: 3, style_id: "", phase: "play" },
