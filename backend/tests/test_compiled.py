@@ -637,6 +637,32 @@ def test_unproved_corruption_preserves_main_and_unrelated_aside(cache, root, gar
     assert unrelated.read_bytes() == b"Realm"
 
 
+def test_a_truncated_database_degrades_to_computed_answers(cache, root, monkeypatch):
+    # Spec 03 section 14: a truncated file degrades to a computed answer and
+    # logs once per failure kind, however many reads meet it.
+    kind = _kind(cache, monkeypatch)
+    keys = [_key(cache, kind, f"realm-{n}") for n in range(40)]
+    with cache.batch(root) as request:
+        for key in keys:
+            request.put(key, "Saltmarch " * 400)
+    path = _open(cache, root).path
+    cache.close()
+    size = path.stat().st_size
+    assert size > 3 * 4096
+    with path.open("r+b") as stream:
+        stream.truncate(size // 2)
+    warnings = []
+    monkeypatch.setattr(cache.logs, "record", lambda *args, **fields: warnings.append(fields.get("failure_kind")))
+    for _ in range(3):
+        with cache.batch(root) as request:
+            for key in keys:
+                found = request.lookup(key)
+                # A hit may only ever carry the value that was stored.
+                assert not found.hit or found.value == "Saltmarch " * 400
+    assert warnings, "the truncation was never noticed"
+    assert len(warnings) == len(set(warnings)), f"repeated warnings: {warnings}"
+
+
 def test_corruption_recovery_never_waits_for_process_lock(cache, root, monkeypatch):
     path = _path(cache, root)
     path.parent.mkdir(parents=True)

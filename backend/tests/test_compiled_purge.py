@@ -108,6 +108,31 @@ def test_foreign_intent_is_never_retired_locally(cache, root, monkeypatch):
         assert conn.execute('SELECT count(*) FROM artifacts').fetchone() == (0,)
 
 
+@pytest.mark.parametrize('owner', ['foreign', 'own'])
+def test_only_another_devices_intent_expires_past_retention(cache, root, monkeypatch, owner):
+    # A device that crashed mid-delete and was then retired must not keep the
+    # cache off on every other device forever: past RETENTION_S its intent is
+    # the dormant device section 10 already retires. This device's own
+    # intent is durable erasure work and never ages out.
+    key = _seed(cache, root, monkeypatch)
+    parent = _open(cache, root).path.parent / 'delete-intents'
+    parent.mkdir(exist_ok=True)
+    token = 'b' * 32
+    path = parent / token
+    path.write_text(json.dumps({'token': token, 'owner': 'b' * 64 if owner == 'foreign' else 'a' * 64}),
+                    encoding='ascii')
+    old = os.stat(path).st_mtime - cache.RETENTION_S - 86400
+    os.utime(path, (old, old))
+    with cache.batch(root) as request:
+        request.put(key, 'Seraphine')
+    with cache.batch(root) as request:
+        found = request.lookup(key)
+    if owner == 'foreign':
+        assert found.value == 'Seraphine' and path.exists()   # ignored, never deleted
+    else:
+        assert not path.exists()                               # honoured: recovered and retired
+
+
 def test_reverse_completion_retires_only_matching_intent(cache, root, monkeypatch):
     _seed(cache, root, monkeypatch)
     first, second = cache.prepare_delete(root), cache.prepare_delete(root)

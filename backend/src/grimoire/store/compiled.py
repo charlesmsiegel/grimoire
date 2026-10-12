@@ -1908,6 +1908,17 @@ def _read_intent(parent: Path, token: str) -> list[tuple[str, str]] | None:
             or value['token'] != token or not isinstance(value['owner'], str)
             or not _DEVICE_KEY.fullmatch(value['owner'])):
         return None
+    # Another device's intent fences every device until its owner finishes
+    # it. An owner silent past RETENTION_S is the dormant device section 10
+    # already retires (its database file is swept by then), so its intent
+    # stops fencing too; this device's own intents never age out.
+    mine = _state.owners.get(parent.parents[2])  # <root>/.cache/compiled/delete-intents
+    if mine is not None and value['owner'] != mine:
+        try:
+            if time.time() - path.stat().st_mtime > RETENTION_S:
+                return []
+        except FileNotFoundError:
+            return []
     return [(token, value['owner'])]
 
 

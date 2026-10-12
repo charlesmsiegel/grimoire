@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -851,3 +852,26 @@ def test_optional_read_memo_failure_preserves_validated_derivation(cache, root, 
         assert answer == 'Realm'
     with cache.batch(root) as request:
         assert not request.lookup(discarded).hit
+
+
+@pytest.mark.parametrize("skew", ["local_ahead", "local_behind"])
+def test_the_filesystem_clock_decides_trust_whatever_the_local_clock_says(cache, root, monkeypatch, skew):
+    # Spec 03 section 14: a filesystem clock skewed against the local one.
+    # Only the filesystem's own time can age a stamp into persisted trust.
+    kind = _kind(cache, monkeypatch)
+    path = root / "Realm.md"
+    path.write_bytes(b"Realm")
+    info = path.stat()
+    newest = max(info.st_mtime_ns, info.st_ctime_ns)
+    hour = 3_600_000_000_000
+    if skew == "local_ahead":    # local says old; the filesystem says fresh
+        fs_now, local_shift, persisted = newest + 1_000_000_000, hour, 0
+    else:                        # local says the file is from the future
+        fs_now, local_shift, persisted = newest + 10 * 1_000_000_000, -hour, 1
+    real = time.time_ns
+    monkeypatch.setattr(cache.time, "time_ns", lambda: real() + local_shift)
+    monkeypatch.setattr(cache, "filesystem_clock", lambda r: cache.FilesystemClock(fs_now, r.stat().st_dev))
+    with cache.batch(root) as request:
+        request.validate(kind, [cache.Input("document", path)])
+    session = cache_tests._open(cache, root)
+    assert session.conn.execute("SELECT count(*) FROM sources").fetchone() == (persisted,)
