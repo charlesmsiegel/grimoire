@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.store import (
     actor_names,
+    cache_sync,
     calendars,
     campaigns,
     characters,
@@ -1084,6 +1085,13 @@ def _print(data) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _sync_note(synced: cache_sync.Collected) -> None:
+    """One line on stderr, so stdout stays the JSON a caller parses."""
+    if synced.report is not None:
+        counts = " ".join(f"{k}={v}" for k, v in synced.report.counts().items() if v)
+        print(f"cache sync: {counts or 'nothing written'}", file=sys.stderr)
+
+
 def cmd_apply(args: argparse.Namespace) -> int:
     try:
         plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
@@ -1100,7 +1108,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
             _print({"world": wid or f"(new) {plan.get('world', '')}", "ok": not problems,
                     "problems": problems})
             return 1 if problems else 0
-        _print(apply_plan(plan, args.world_id))
+        # Warm what the apply rewrote that was already hot (spec 05 section
+        # 5.5). A brand-new world has nothing hot, so this is then a no-op.
+        with cache_sync.collecting() as synced:
+            result = apply_plan(plan, args.world_id)
+        _print(result)
+        _sync_note(synced)
     except PlanError as exc:
         _print({"ok": False, "problems": exc.problems})
         return 1

@@ -39,18 +39,19 @@ data-dir move while a batch runs (the sync hold, `routes/runs.py`).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import stat
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
-from . import atomic, compiled, embed_space, paths, revision
+from . import atomic, compiled, embed_space, paths, revision, writeset
 
 _log = logging.getLogger(__name__)
 
@@ -313,6 +314,8 @@ class PathReport:
     reason: str | None = None
     kinds: dict[str, str] = field(default_factory=dict)
     rel: str | None = None
+    #: For the NEW side of a stated rename, OLD's store-relative path.
+    renamed_from: str | None = None
 
     def as_dict(self) -> dict:
         out: dict[str, object] = {"path": self.given, "status": self.status}
@@ -533,33 +536,47 @@ def sync_paths(relpaths: Iterable[str], *,
                embed: bool = True,
                dry_run: bool = False,
                verify: bool = False,
+               renamed: Mapping[str, str] | None = None,
                deleted: Iterable[str] = (),
                root: Path | None = None,
                stop: Callable[[], bool] = lambda: False,
-               hooks: tuple[WarmHook, ...] | None = None) -> SyncReport:
+               hooks: tuple[WarmHook, ...] | None = None,
+               known: Mapping[str, str] | None = None) -> SyncReport:
     """Warm what was hot for `relpaths` (spec 05 section 3.3). Never raises
     for one path's failure -- that is its status; raises only for a
-    programming error, such as an unknown mode."""
+    programming error, such as an unknown mode.
+
+    `renamed` maps OLD to NEW for renames the caller states (section 7.5): OLD's
+    `materialized` rows are copied to NEW before it is classified, and OLD is
+    an intended delete. `deleted` names removals the caller intended (7.4); a
+    world or campaign root among them that is gone purges the cache (7.6).
+    `known` carries paths a scope listing already classified as `cold` or
+    `current` (7.3), which are reported and bump their campaign's token but
+    are not read again."""
     if mode not in MODES:
         raise ValueError(f"unknown sync mode {mode!r}")
     root = Path(root) if root is not None else paths.home()
     hooks = HOOKS if hooks is None else hooks
     report = SyncReport(root=str(root), root_source=_root_source(root), mode=mode, dry_run=dry_run)
     quiet = mode == "write"               # refusals and missing paths are not news to the queue
-    items = _classify_arguments(root, relpaths, deleted, report, quiet=quiet)
+    items = _classify_arguments(root, relpaths, deleted, report, quiet=quiet,
+                                renamed=renamed or {}, known=known or {})
 
     reason = compiled.unavailable_reason()
     if reason is not None:
         report.cache, report.cache_reason = "off", reason
         _warn_once(f"cache_off:{reason}")
 
-    hot = _find_hot(root, items, report, stop)
+    copied = _copy_renames(root, items, hooks, dry_run=dry_run) if report.cache == "on" else {}
+    hot = _find_hot(root, items, report, stop, copied)
     if not dry_run and mode == "explicit" and report.stopped is None:
         _bump(root, report, stop)
 
     if report.cache == "on" and hot and report.stopped is None:
         _run_hooks(root, mode, hooks, hot, report, embed=embed, dry_run=dry_run,
                    verify=verify, stop=stop)
+    if not dry_run and mode == "explicit":
+        _purge_roots(root, report, stop)
     for item in report.paths:
         if item.status == "pending":      # the batch stopped before reaching it
             item.status = "unsynced"
@@ -568,10 +585,11 @@ def sync_paths(relpaths: Iterable[str], *,
     return report
 
 
-def _find_hot(root: Path, items: list[PathReport], report: SyncReport,
-              stop: Callable[[], bool]) -> dict[str, tuple[compiled.Materialized, ...]]:
+def _find_hot(root: Path, items: list[PathReport], report: SyncReport, stop: Callable[[], bool],
+              copied: Mapping[str, tuple[compiled.Materialized, ...]]) -> dict[str, tuple[compiled.Materialized, ...]]:
     """Each pending path's `materialized` rows, read by its own path; a path
-    with none is `cold`, and costs nothing more."""
+    with none is `cold`, and costs nothing more. `copied` holds a dry run's
+    rename rows, which were never written."""
     hot: dict[str, tuple[compiled.Materialized, ...]] = {}
     for item in items:
         if item.status != "pending" or item.rel is None:
@@ -579,7 +597,10 @@ def _find_hot(root: Path, items: list[PathReport], report: SyncReport,
         if (halt := _halted(root, stop)) is not None:
             report.stopped = halt
             break
-        rows = _rows(root, item.rel) if report.cache == "on" else ()
+        if item.rel in copied:
+            rows = copied[item.rel]
+        else:
+            rows = _rows(root, item.rel) if report.cache == "on" else ()
         if rows:
             hot[item.rel] = rows
         else:
@@ -616,6 +637,23 @@ class _Collector:
         else:
             self.add(PathReport(checked.given, "deleted", rel=checked.rel))
 
+    def renamed(self, root: Path, old: str, new: str) -> None:
+        """OLD is an intended delete; NEW is a path that inherits OLD's rows."""
+        before = len(self.items)
+        self.deleted(root, old)
+        gone = self.items[before:] and self.items[-1].status == "deleted"
+        checked = _check(root, new)
+        if checked.reason is not None:
+            self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
+        elif checked.kind == "absent":
+            self.add(PathReport(checked.given, "missing", rel=checked.rel))
+        elif checked.kind != "file":
+            self.add(PathReport(checked.given, "refused", "not_a_file", rel=checked.rel))
+        else:
+            self.accepted += 1
+            self.add(PathReport(checked.given, "pending", rel=checked.rel,
+                                renamed_from=self.items[before].rel if gone else None))
+
     def argument(self, root: Path, given: str) -> None:
         if self.accepted >= MAX_PATHS:
             self.report.truncated = True
@@ -638,13 +676,79 @@ class _Collector:
 
 
 def _classify_arguments(root: Path, relpaths: Iterable[str], deleted: Iterable[str],
-                        report: SyncReport, *, quiet: bool) -> list[PathReport]:
+                        report: SyncReport, *, quiet: bool, renamed: Mapping[str, str],
+                        known: Mapping[str, str]) -> list[PathReport]:
     collector = _Collector(report, quiet)
+    for old, new in renamed.items():
+        collector.renamed(root, old, new)
     for given in deleted:
         collector.deleted(root, given)
     for given in relpaths:
         collector.argument(root, given)
+    for rel, status in known.items():
+        if status in ("cold", "current"):
+            collector.add(PathReport(rel, status, rel=rel))
     return collector.items
+
+
+def _remapper(hooks: tuple[WarmHook, ...], old: str, new: str) -> Callable[[str, str], object]:
+    """The instance map a stated rename copies rows through: each hook remaps
+    the path-dependent part of its own kinds' instances (`remap`, optional),
+    and keeps independent unit selectors such as a passage position."""
+    def remap(kind: str, instance: str) -> object:
+        for hook in hooks:
+            if hook.owns(kind) and hasattr(hook, "remap"):
+                return hook.remap(kind, instance, old, new)
+        return instance
+    return remap
+
+
+def _copy_renames(root: Path, items: list[PathReport], hooks: tuple[WarmHook, ...], *,
+                  dry_run: bool) -> dict[str, tuple[compiled.Materialized, ...]]:
+    """Give each stated rename's NEW path OLD's rows (03-C3's
+    `copy_materialized`: same kinds and units, empty `built_from`, no
+    artifact). A dry run writes nothing, so it returns the rows instead."""
+    copied: dict[str, tuple[compiled.Materialized, ...]] = {}
+    for item in items:
+        if item.status != "pending" or item.renamed_from is None or item.rel is None:
+            continue
+        old, new = root.joinpath(*item.renamed_from.split("/")), root.joinpath(*item.rel.split("/"))
+        remap = _remapper(hooks, item.renamed_from, item.rel)
+        try:
+            if dry_run:
+                rows = []
+                for row in _rows(root, item.renamed_from):
+                    mapped = remap(row.kind, row.instance)
+                    text = mapped if isinstance(mapped, str) else _canonical(mapped)
+                    rows.append(compiled.Materialized(new, row.kind, text, "", row.last_used))
+                copied[item.rel] = tuple(rows)
+            else:
+                with compiled.batch(root) as request:
+                    request.copy_materialized(old, new, instance_map=remap)
+        except Exception as exc:                          # noqa: BLE001 -- a lost copy is a cold path
+            _warn_once(f"rename:{type(exc).__name__}")
+    return copied
+
+
+_ROOT_SCOPES = ("worlds", "campaigns")
+
+
+def _purge_roots(root: Path, report: SyncReport, stop: Callable[[], bool]) -> None:
+    """Section 7.6: a world or campaign root named in `deleted` and gone means
+    a whole record left the store outside the app, so its derived text must
+    not outlive it. Only an explicit `deleted` root ever purges -- a scope flag
+    or a plain path naming a missing root is `not_found` or `missing` -- since
+    03-C8's purge makes every device start cold."""
+    named = [item for item in report.paths if item.status == "deleted" and item.rel is not None
+             and len(parts := item.rel.split("/")) == 2 and parts[0] in _ROOT_SCOPES]
+    if not named:
+        return
+    if (halt := _halted(root, stop)) is not None:
+        report.stopped = report.stopped or halt
+        report.purged = False
+        return
+    compiled.purge_for_delete(root)
+    report.purged = True
 
 
 def _bump(root: Path, report: SyncReport, stop: Callable[[], bool]) -> None:
@@ -778,3 +882,163 @@ def _status(item: PathReport) -> str:
     if words & {"built", "planned"}:
         return "refreshed"
     return "current"
+
+
+# -- scoped modes (section 7.3) ----------------------------------------------
+
+#: Most files one scoped sync lists. A listing costs a stat per file and no
+#: read, so this is far above `MAX_PATHS`; past it the report says
+#: `truncated`. Structural, and to be tuned later.
+MAX_SCOPE_FILES = 200_000
+
+
+@dataclass
+class ScopeResult:
+    """A scope's files: those to sync, those already classified (`cold` or
+    `current`), the scopes refused, and whether the listing stopped looking."""
+
+    candidates: list[str] = field(default_factory=list)
+    known: dict[str, str] = field(default_factory=dict)
+    refused: list[PathReport] = field(default_factory=list)
+    truncated: bool = False
+
+
+def _scope_dirs(root: Path, campaigns: Iterable[str], worlds: Iterable[str], all_records: bool,
+                result: ScopeResult) -> list[str]:
+    dirs: list[str] = []
+    for top, ids in (("campaigns", campaigns), ("worlds", worlds)):
+        for given in ids:
+            if not paths.safe_id(given):
+                result.refused.append(PathReport(str(given), "refused", "bad_id"))
+                continue
+            rel = f"{top}/{given}"
+            refusal, info = _walk(root, [top, given])
+            if refusal is not None:
+                result.refused.append(PathReport(rel, "refused", refusal, rel=rel))
+            elif info is None or not stat.S_ISDIR(info.st_mode):
+                result.refused.append(PathReport(rel, "refused", "not_found", rel=rel))
+            else:
+                dirs.append(rel)
+    if all_records:
+        for top in sorted(SYNCABLE_ROOTS):
+            refusal, info = _walk(root, [top])
+            if refusal is None and info is not None and stat.S_ISDIR(info.st_mode):
+                dirs.append(top)
+    return dirs
+
+
+def expand_scopes(root: Path, *, campaigns: Iterable[str] = (), worlds: Iterable[str] = (),
+                  all_records: bool = False, stop: Callable[[], bool] = lambda: False) -> ScopeResult:
+    """The files under `--campaign`, `--world` and `--all` that may have
+    changed, found from a live listing and never from the cache.
+
+    A file with no `materialized` rows is `cold` and is not read. A file whose
+    stamp a `sources` row vouches for (`known_hashes`, which stats and never
+    reads) and every one of whose rows was built from that hash is `current`
+    and is not read either. A `sources` row alone proves only that SOME read
+    hashed the file since the edit, not that recall's vector or the overview
+    card was rebuilt, which is why every row's `built_from` must agree; an
+    empty one (a rename copy) never does. Everything else is a candidate."""
+    result = ScopeResult()
+    listed: list[str] = []
+    for rel in _scope_dirs(root, campaigns, worlds, all_records, result):
+        files, cut = _expand(root, rel, MAX_SCOPE_FILES - len(listed))
+        listed.extend(f for f in files if f.split("/", 1)[0] in SYNCABLE_ROOTS)
+        result.truncated = result.truncated or cut
+    listed = list(dict.fromkeys(listed))
+    if compiled.unavailable_reason() is not None:
+        result.known = dict.fromkeys(listed, "cold")
+        return result
+    with compiled.batch(root) as request:
+        try:
+            for offset in range(0, len(listed), compiled.SOURCE_CHUNK):
+                if _halted(root, stop) is not None:
+                    break
+                chunk = listed[offset:offset + compiled.SOURCE_CHUNK]
+                absolute = [root.joinpath(*rel.split("/")) for rel in chunk]
+                hashes = request.known_hashes(compiled.SYNC_SOURCES, absolute)
+                for rel, path in zip(chunk, absolute, strict=True):
+                    rows = request.materialized([path]).get(path, ())
+                    digest = hashes.get(path)
+                    if not rows:
+                        result.known[rel] = "cold"
+                    elif digest and all(row.built_from == digest for row in rows):
+                        result.known[rel] = "current"
+                    else:
+                        result.candidates.append(rel)
+        finally:
+            request.disabled = True                       # a listing writes nothing
+    return result
+
+
+def run(relpaths: Iterable[str] = (), *, campaigns: Iterable[str] = (), worlds: Iterable[str] = (),
+        all_records: bool = False, renamed: Mapping[str, str] | None = None,
+        deleted: Iterable[str] = (), embed: bool = True, dry_run: bool = False,
+        verify: bool = False, root: Path | None = None,
+        stop: Callable[[], bool] = lambda: False) -> SyncReport:
+    """One explicit batch over named paths and scopes: the CLI's and the API's
+    door. The batch is the union of what was named."""
+    root = Path(root) if root is not None else paths.home()
+    campaigns, worlds = list(campaigns), list(worlds)
+    scoped = bool(campaigns or worlds or all_records)
+    scope = expand_scopes(root, campaigns=campaigns, worlds=worlds, all_records=all_records,
+                          stop=stop) if scoped else ScopeResult()
+    report = sync_paths([*relpaths, *scope.candidates], mode="explicit", embed=embed,
+                        dry_run=dry_run, verify=verify, renamed=renamed, deleted=deleted,
+                        root=root, stop=stop, known=scope.known)
+    report.paths.extend(scope.refused)
+    report.truncated = report.truncated or scope.truncated
+    if scoped:
+        report.listed = "notable"
+    return report
+
+
+# -- scripts (section 5.5) ----------------------------------------------------
+
+
+@dataclass
+class Collected:
+    """What `collecting()` yields: the batch's report, once the block ends."""
+
+    report: SyncReport | None = None
+
+
+def _relative_to(root: Path, written: Iterable[str]) -> list[str]:
+    """The write set's absolute paths as store-relative ones; an entry that is
+    relative or outside `root` is dropped."""
+    base = os.path.normcase(os.path.abspath(root)).rstrip(os.sep)
+    out = []
+    for text in written:
+        if not os.path.isabs(text):
+            continue
+        full = os.path.normpath(text)
+        if os.path.normcase(full).startswith(base + os.sep):
+            out.append(Path(os.path.relpath(full, os.path.abspath(root))).as_posix())
+    return sorted(out)
+
+
+@contextlib.contextmanager
+def collecting(*, embed: bool = True, deleted: Iterable[str] = ()) -> Iterator[Collected]:
+    """Sync what the block wrote through `grimoire.store`, once it ends.
+
+    For a script, which has no app and so no write-through queue. Opens an
+    ISOLATED write-set scope, and on exit closes it and runs one explicit
+    batch over the paths written (under the root read at entry), leaving the
+    report on the yielded object to print. On an exception it syncs what was
+    written anyway -- a half-applied batch still changed those files -- and
+    re-raises. Deletes are not in the write set: pass them as `deleted`."""
+    root = paths.home()
+    held = Collected()
+    deleted = list(deleted)
+    with writeset.collecting(isolated=True) as scope:
+        try:
+            yield held
+        except BaseException:
+            try:
+                held.report = sync_paths(_relative_to(root, scope.close()), mode="explicit",
+                                         embed=embed, deleted=deleted, root=root)
+            except Exception:                             # noqa: BLE001 -- never mask the real failure
+                _warn_once("collecting")
+            raise
+        held.report = sync_paths(_relative_to(root, scope.close()), mode="explicit",
+                                 embed=embed, deleted=deleted, root=root)

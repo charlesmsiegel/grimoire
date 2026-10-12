@@ -23,6 +23,7 @@ from grimoire.store import (
     absorb,
     appearances,
     atomic,
+    cache_sync,
     campaigns,
     characters,
     chronicle,
@@ -743,8 +744,14 @@ def main() -> int:
               file=sys.stderr)
         return 1
     client = LLMClient()
-    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, resolved))
+    # An ingest into a campaign whose derived caches are hot warms them now,
+    # once the scene has landed (spec 05 section 5.5); stdout stays the JSON.
+    with cache_sync.collecting() as synced:
+        result = asyncio.run(ingest_one_scene(args.campaign, scene, client, resolved))
     print(json.dumps(result, indent=2))
+    if synced.report is not None:
+        counts = " ".join(f"{k}={v}" for k, v in synced.report.counts().items() if v)
+        print(f"cache sync: {counts or 'nothing written'}", file=sys.stderr)
     if result["status"] == "incomplete":
         # Nonzero, because the caller is a batch driver working through a log in
         # strict scene order and its only signal is this exit status. Scene N+1's

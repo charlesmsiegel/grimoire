@@ -251,8 +251,15 @@ OVERVIEW_CONTINUITY = Kind(
 OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
     OVERVIEW_WORLD_ROW, OVERVIEW_CAMPAIGN_ROW, OVERVIEW_SCENE_TURNS, OVERVIEW_CONTINUITY)}
 
+# Spec 05's scoped sync asks `known_hashes` which listed files a `sources` row
+# vouches for, and that policy is per kind. This kind is never keyed and holds
+# no artifact: it names the trust policy alone, so a file proved current by
+# its stamp is not read again (05 section 7.3).
+SYNC_SOURCES = Kind('sync:sources', 1, (), (), True)
+
 KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
-                          OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS}
+                          OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS,
+                          SYNC_SOURCES.name: SYNC_SOURCES}
 
 
 @dataclass(frozen=True)
