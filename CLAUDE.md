@@ -207,6 +207,14 @@ If a gate surfaces findings, address them (or explicitly note why not) before
 moving on. Don't skip a gate because a change feels small — ask the user
 first if you think one should be skipped.
 
+**A Codex review on the pull request suffices in lieu of the Codex CLI
+gates.** Commenting `@codex review` on the PR asks Codex's GitHub reviewer
+(`chatgpt-codex-connector`) to review its current head, specs and plans
+included, since they ride the same diff. When every finding it raises is
+fixed or answered on its thread, the gates above are met, whether or not the
+CLI commands were run. Request a new review after a push that changes code it
+has not seen.
+
 ## Costs: three money columns, and no two of them may be added
 
 The monthly Costs trend has one narrowly scoped projection named **Estimated
