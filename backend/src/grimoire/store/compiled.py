@@ -332,6 +332,11 @@ class _Session:
     maintained: float = 0
     retained: float = 0
     trimming: bool = False
+    # The control snapshot and marker of the last `_synchronize` that finished
+    # every file; see `_control_snapshot`.
+    synced: tuple | None = None
+    synced_marker: str | None = None
+    leased: float = -math.inf  # time.time() of the last lease check
 
 
 @dataclass
@@ -351,6 +356,7 @@ class _State:
     epoch: int = 0
     devices: dict[Path, str] = field(default_factory=dict)
     owners: dict[Path, str] = field(default_factory=dict)
+    locations: dict[tuple[Path, str], tuple[tuple, Path]] = field(default_factory=dict)
     intents: dict[str, DeleteIntent] = field(default_factory=dict)
     finished_intents: deque[DeleteIntent] = field(default_factory=deque)
     intent_lock: LockType = field(default_factory=threading.Lock)
@@ -488,20 +494,21 @@ def _canonical(value: object, limit: int) -> str | None:
         return None
 
 
-# Skip whole JSON strings in the regex engine. Walking every prose character
-# in Python made bounded cached search payloads slower than their extraction
-# (S6 synthetic cost probe). json.loads still validates the complete syntax.
-_JSON_STRUCTURE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[][{}"]')
+# Strings, then everything but brackets, are removed in the regex engine, so
+# Python walks only the nesting. Visiting each string token in Python made a
+# payload of many short strings cost more to check than to decode (S6 cost
+# probe). json.loads still validates the complete syntax.
+_JSON_STRING = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"')
+_JSON_NOT_STRUCTURE = re.compile(r'[^][{}"]+')
 
 
 def _json_depth(text: str) -> bool:
+    structure = _JSON_NOT_STRUCTURE.sub('', _JSON_STRING.sub('', text))
+    if '"' in structure:
+        return False  # a string that never closes
     depth = 0
-    for match in _JSON_STRUCTURE.finditer(text):
-        token = match.group()
-        if token.startswith('"'):
-            if len(token) == 1:
-                return False
-        elif token in '[{':
+    for token in structure:
+        if token in '[{':
             depth += 1
             if depth > MAX_JSON_DEPTH:
                 return False
@@ -808,14 +815,15 @@ class Batch:
         self._maintenance_checked = False
         self._marker: str | None = None
         self._generation: str | None = None
+        self._fence_snapshot: tuple | None = None
 
-    def _usable(self, key: Key | None = None) -> bool:
+    def _usable(self, key: Key | None = None, *, strict: bool = False) -> bool:
         self._maintenance()
         self._remember_boundary()
         lifecycle = (not self.disabled and not _state.transitions and self.pid == os.getpid()
                      and self.epoch == _state.epoch and _available()
                      and (key is None or (key.kind in KINDS and bool(_DEVICE_KEY.fullmatch(key.digest)))))
-        return lifecycle and self._fence()
+        return lifecycle and self._fence(strict=strict)
 
     def _maintenance(self) -> None:
         if not self._maintenance_checked:
@@ -841,9 +849,26 @@ class Batch:
             self._marker = _read_marker(self.root)
             self._attempt_pending = _read_intents(self.root) != []
 
-    def _fence(self) -> bool:
+    def _fence(self, *, strict: bool = False) -> bool:
+        """Whether no purge or delete intent has arrived since the boundary.
+
+        Reads may reuse this batch's last passing answer while the control
+        snapshot stands (`_control_snapshot`); a commit (`strict`) always
+        reads the marker and the intents again."""
         if self._attempt_pending:
             return False
+        if not strict and self._fence_snapshot is not None:
+            if _control_snapshot(self.root) == self._fence_snapshot:
+                return not self.disabled
+            self._fence_snapshot = None
+        taken = _wall_ns()
+        snapshot = _control_snapshot(self.root)
+        passed = self._fence_read()
+        if passed and snapshot is not None and _settled(snapshot, taken):
+            self._fence_snapshot = snapshot
+        return passed
+
+    def _fence_read(self) -> bool:
         marker = _read_marker(self.root)
         # A busy first access still establishes the temporal boundary. A
         # retry may recover the same generation, but cannot adopt a purge that
@@ -869,8 +894,8 @@ class Batch:
         return (not self.disabled and self._marker is not None and self._generation is not None
                 and _read_marker(self.root) == self._marker and _read_intents(self.root) == [])
 
-    def _session_current(self, session: _Session) -> bool:
-        return self._usable() and _read_generation(session.conn) == self._generation
+    def _session_current(self, session: _Session, *, strict: bool = False) -> bool:
+        return self._usable(strict=strict) and _read_generation(session.conn) == self._generation
 
     def _persist_sources(self, kind: Kind) -> bool:
         return KINDS.get(kind.name) == kind and kind.allow_persisted_sources and self._usable()
@@ -1495,17 +1520,17 @@ class Batch:
         self._source_sizes.clear()
         self._materialized_sizes.clear()
         self._bytes = 0
-        if (not rows and not sources and not metadata and not touches) or not self._usable() or not _state.lock.acquire(timeout=WRITE_LOCK_SECONDS):
+        if (not rows and not sources and not metadata and not touches) or not self._usable(strict=True) or not _state.lock.acquire(timeout=WRITE_LOCK_SECONDS):
             return
         session = None
         try:
-            if not self._usable():
+            if not self._usable(strict=True):
                 return
             with _database(self.root, expected_generation=self._generation) as session:
-                if session is None or not self._session_current(session):
+                if session is None or not self._session_current(session, strict=True):
                     return
                 session.conn.execute("BEGIN IMMEDIATE")
-                if not self._session_current(session):
+                if not self._session_current(session, strict=True):
                     session.conn.rollback()
                     return
                 session.conn.executemany(
@@ -1531,14 +1556,14 @@ class Batch:
                     'VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path,kind,instance) DO UPDATE SET '
                     'built_from=excluded.built_from,last_used=excluded.last_used,"check"=excluded."check",'
                     'artifact_kind=excluded.artifact_kind,artifact_key=excluded.artifact_key', metadata.values())
-                if not self._session_current(session):
+                if not self._session_current(session, strict=True):
                     session.conn.rollback()
                     return
                 session.conn.commit()
                 # Publication cannot wait for this SQL exclusion. If it lands
                 # after our last pre-commit check, erase the just-committed
                 # snapshot before releasing that exclusion (S5 Codex gate).
-                if not self._session_current(session):
+                if not self._session_current(session, strict=True):
                     marker = _read_marker(self.root)
                     _purge_connection(session.conn, marker if marker is not None else self._generation or '')
                     return
@@ -1605,6 +1630,23 @@ def _leaf(path: Path) -> bool:
 
 
 def _location(root: Path, device: str) -> Path | None:
+    # Every path _location proves lives in .cache/compiled or above it, so
+    # nothing it checks can change without moving the control snapshot: a
+    # sidecar or a link arriving moves the directory, a marker or intent its
+    # own entry. A proved location stands while the snapshot does.
+    taken = _wall_ns()
+    snapshot = _control_snapshot(root)
+    memo = _state.locations.get((root, device))
+    if snapshot is not None and memo is not None and memo[0] == snapshot:
+        return memo[1]
+    _state.locations.pop((root, device), None)
+    path = _prove_location(root, device)
+    if path is not None and snapshot is not None and _settled(snapshot, taken):
+        _state.locations[(root, device)] = (snapshot, path)
+    return path
+
+
+def _prove_location(root: Path, device: str) -> Path | None:
     try:
         parent = root / ".cache"
         if not _directory(parent) or not _directory(parent / "compiled"):
@@ -1644,9 +1686,17 @@ def _cache_file_safe(path: Path) -> bool:
                      for suffix in ('-journal', '-wal', '-shm', '.corrupt'))]))
 
 
+LEASE_CHECK_S = 60.0
+
+
 def _renew_lease(session: _Session) -> None:
-    lease = session.path.with_suffix('.alive')
+    # The lease needs a touch a day; a check per operation re-proved every
+    # sidecar on the hot path. Skipping one only ever skips a write.
     now = time.time()
+    if 0 <= now - session.leased < LEASE_CHECK_S:
+        return
+    session.leased = now
+    lease = session.path.with_suffix('.alive')
     try:
         if not _cache_file_safe(session.path):
             return
@@ -2140,31 +2190,37 @@ def _purge_if_needed(conn: _sqlite_available.Connection, token: str) -> None:
         _purge_connection(conn, token)
 
 
-def _purge_file(root: Path, path: Path, token: str, current: _Session | None) -> None:
+def _purge_file(root: Path, path: Path, token: str, current: _Session | None) -> bool:
+    """Erase one owned file up to `token`. True only when this pass leaves
+    nothing for a later one: the file is at `token`, or is not ours to touch."""
     if _sqlite is None:
-        return
+        return False
     fd, conn = None, None
     recognized = False
     try:
-        if not _cache_file_safe(path) or not _probe_recognized(path):
-            return
+        if not _cache_file_safe(path):
+            return False
+        if not _probe_recognized(path):
+            return True  # foreign or unreadable: no pass ever erases it
         recognized = True
         if current is not None and current.path == path:
             _purge_if_needed(current.conn, token)
-            return
+            return True
         fd = _recovery_lock(root, path)
         if fd is None or not _cache_file_safe(path):
-            return
+            return False
         conn = _sqlite.connect(path, timeout=0.005, isolation_level=None)
         conn.setlimit(_sqlite.SQLITE_LIMIT_LENGTH, 2 * MAX_PAYLOAD_BYTES)
         conn.execute('PRAGMA busy_timeout=5')
         _purge_if_needed(conn, token)
+        return True
     except _CACHE_ERRORS as error:
         if recognized and _corruption(error) and (fd is not None or (current is not None and current.path == path)):
             _erase_owned_corrupt(path, conn)
             conn = None
         else:
             _warn_once('purge')
+        return False
     finally:
         if conn is not None:
             with contextlib.suppress(*_CACHE_ERRORS):
@@ -2190,7 +2246,7 @@ def _erase_owned_corrupt(path: Path, conn: _sqlite_available.Connection | None) 
         path.unlink()
 
 
-def _purge_corrupt_aside(root: Path, path: Path) -> None:
+def _purge_corrupt_aside(root: Path, path: Path) -> bool:
     # Failed ordinary recovery can leave the only payload copy in an aside.
     # Durable delete maintenance must erase it even with BUILD/cache0 off.
     # Re-prove ownership under the original file's operation exclusion;
@@ -2198,33 +2254,37 @@ def _purge_corrupt_aside(root: Path, path: Path) -> None:
     original = path.with_name(_cache_filename(path).removesuffix('.corrupt'))
     fd = _recovery_lock(root, original)
     if fd is None:
-        return
+        return False
     try:
-        if _cache_file_safe(original):
-            _erase_recognized_aside(path)
+        # An aside that survives this pass is retried by the next one.
+        return _cache_file_safe(original) and _erase_recognized_aside(path)
     except _CACHE_ERRORS:
         # One unproved neighbour must not strand owned copies after every delete.
         _warn_once('purge_aside')
+        return False
     finally:
         with contextlib.suppress(*_CACHE_ERRORS):
             proclock.release(fd)
 
 
-def _purge_local_files(root: Path, token: str, current: _Session | None = None) -> None:
+def _purge_local_files(root: Path, token: str, current: _Session | None = None) -> bool:
+    """Erase this device's files up to `token`; True when none is left behind."""
     device = _device(root)
     parent = _cache_parent(root)
     if _sqlite is None:
         _warn_once('purge_sqlite_unavailable')
-        return
+        return False
     if device is None or parent is None:
-        return
+        return False
+    done = True
     for path in parent.iterdir():
         match = _CACHE_FILE.fullmatch(_cache_filename(path).removesuffix('.corrupt'))
         if match is not None and match[1] == device:
             if _cache_filename(path).endswith('.corrupt'):
-                _purge_corrupt_aside(root, path)
+                done = _purge_corrupt_aside(root, path) and done
             else:
-                _purge_file(root, path, token, current)
+                done = _purge_file(root, path, token, current) and done
+    return done
 
 
 def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> None:
@@ -2330,7 +2390,55 @@ def _pending_maintenance(root: Path) -> None:
         _state.lock.release()
 
 
+def _control_snapshot(root: Path) -> tuple | None:
+    """One lstat of each control path, or None when one cannot be read.
+
+    What a fence or a synchronize pass reads -- the marker, the intents and
+    which files sit beside the database -- cannot change without moving one of
+    these: the marker is replaced by rename (a new inode and ctime), and an
+    intent or a cache file arriving or leaving moves its directory's mtime.
+    So an unchanged snapshot lets a pass that already succeeded stand, at the
+    cost of four lstats instead of the reads, the listing and a probe
+    connection per file. SQLite's own journal coming and going moves the
+    directory too, which only costs one full pass after each write."""
+    cache = root / '.cache'
+    compiled = cache / 'compiled'
+    parts: list[tuple | None] = []
+    for path in (cache, compiled, compiled / 'purge', compiled / 'delete-intents'):
+        try:
+            info = path.lstat()
+            parts.append((info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                          info.st_mtime_ns, info.st_ctime_ns))
+        except FileNotFoundError:
+            parts.append(None)
+        except (*_CACHE_ERRORS, AttributeError):
+            return None  # no snapshot: every caller takes its full path
+    return tuple(parts)
+
+
+def _settled(snapshot: tuple, taken_ns: int) -> bool:
+    # statcache's racy-clean rule: a timestamp within one coarse tick of when
+    # the snapshot was taken could hide a second change landing in that tick.
+    newest = max((max(part[4], part[5]) for part in snapshot if part is not None), default=0)
+    return newest < taken_ns - statcache.RACY_WINDOW_NS
+
+
+_wall_ns = time.time_ns  # injectable for the settle rule's tests
+
+
 def _synchronize(session: _Session) -> bool:
+    # A pass that finished every file, over control paths that have not moved
+    # since and had settled before it began, has nothing new to find.
+    snapshot = _control_snapshot(session.root)
+    if snapshot is not None and snapshot == session.synced:
+        try:
+            if _read_generation(session.conn) == session.synced_marker:
+                return True
+        except _CACHE_ERRORS:
+            pass  # a damaged handle is the full pass's to close and recover
+    session.synced = session.synced_marker = None
+    taken = _wall_ns()
+    snapshot = _control_snapshot(session.root)
     if not _recover_pending(session.root, session):
         # A foreign fence records its own completed erasure generation.
         # Normalizing it to the local marker would force another VACUUM on
@@ -2342,8 +2450,11 @@ def _synchronize(session: _Session) -> bool:
         return False
     # Retry obsolete versions too: a busy old file remains durable work even
     # when the current schema has already recorded this marker.
-    _purge_local_files(session.root, marker, session)
-    return _read_generation(session.conn) == marker
+    done = _purge_local_files(session.root, marker, session)
+    current = _read_generation(session.conn) == marker
+    if current and done and snapshot is not None and _settled(snapshot, taken):
+        session.synced, session.synced_marker = snapshot, marker
+    return current
 
 
 def _device(root: Path) -> str | None:

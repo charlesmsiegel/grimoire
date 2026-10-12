@@ -24,12 +24,23 @@ from grimoire import compiled_build
 from grimoire.store import maintenance_reports, proclock
 
 
-@pytest.fixture
-def cache(monkeypatch):
+@pytest.fixture(params=["fresh", "settled"])
+def cache(monkeypatch, request):
+    """The module, under each of the two clocks its control-snapshot memos see.
+
+    "fresh" is a test's natural state: every control file was just written, so
+    no snapshot has settled and every fence, synchronize and location check
+    takes its full path. "settled" puts the wall clock an hour ahead, so every
+    snapshot qualifies and every memo engages -- and each scenario below must
+    still give the same answer, which is what proves a memo never hides a
+    change it should have seen."""
     if importlib.util.find_spec("grimoire.store.compiled") is None:
         yield None
         return
     module = importlib.import_module("grimoire.store.compiled")
+    if request.param == "settled":
+        real = time.time_ns
+        monkeypatch.setattr(module, "_wall_ns", lambda: real() + 3_600_000_000_000)
     monkeypatch.setattr(module, "_state", module._State())
     monkeypatch.setattr(maintenance_reports, "device_key", lambda root: "a" * 64)
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
