@@ -19,7 +19,9 @@ test("the storage hint states the cache's sharing boundary and residuals", async
   const text = container.textContent ?? "";
   expect(text).toContain("Derived text, thumbnails, and embeddings share this folder too.");
   expect(text).toContain("Dormant caches can remain for 90 days.");
-  expect(text).toContain("Text-keyed vectors remain until you clear the embeddings folder.");
-  expect(text).toContain(".cache/compiled/");
-  expect(text).toContain("exclude that folder from sync");
+  expect(text).toContain("Thumbnails and text-keyed vectors remain until you clear their folders");
+  // Only the per-device databases may skip sync: the purge marker and the
+  // delete intents beside them are how other devices learn of a delete.
+  expect(text).toContain(".cache/compiled/*.sqlite");
+  expect(text).toContain("keep the rest of .cache/compiled/ syncing");
 });

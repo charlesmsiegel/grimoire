@@ -1362,9 +1362,12 @@ It lives at `<home>/.cache/compiled/<device>-v<SCHEMA>.sqlite`, inside the root
 the user chose, because it holds derived private text and that root is where
 they decided such text may live. Each device writes only its own file, so a
 sync client copies files that each have one owner and two devices never open
-one database. Excluding `.cache/compiled/` from sync is safe: a device without
-it rebuilds what it needs. Backups, bundle exports and the external-change scan
-skip `.cache/` entirely.
+one database. Excluding the database files (`*.sqlite`, and their `.alive`
+leases) from sync is safe: a device without them rebuilds what it needs. The
+rest of `.cache/compiled/` must keep syncing, because the purge marker and
+`delete-intents/` are how other devices learn of a delete: excluding them leaves
+another device's copy of a deleted record's derived text at rest until eviction.
+Backups, bundle exports and the external-change scan skip `.cache/` entirely.
 
 ### Deleting a world or campaign
 

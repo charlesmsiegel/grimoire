@@ -119,7 +119,8 @@ android/                          ← new top-level Gradle project
 ```
 
 - **`android_entry.py`** sets `HOME` (store root, §Storage), `GRIMOIRE_TEMPLATES`
-  and `GRIMOIRE_DIST` (§6), binds a loopback socket *before* importing the app,
+  and `GRIMOIRE_DIST` (§6), and `GRIMOIRE_COMPILED_BUILD` (the compiled cache's
+  source stamp, staged beside `templates/`; without it the cache stays off), binds a loopback socket *before* importing the app,
   and reports its port back to Kotlin via a callback so the WebView knows what to
   load. The port is drawn once per install and recorded beside the store, so the
   WebView's origin -- and with it its HTTP cache and localStorage -- survives a
@@ -226,7 +227,11 @@ The Android app has **no copies** of backend or frontend code:
 - `chaquopy.srcDirs` includes `../../backend/src` — the APK packages the *working-tree*
   Python sources at build time.
 - A Gradle task (`:app:buildFrontend`) shells out to `npm --prefix ../../frontend run build`
-  and copies `frontend/dist` + `templates/` into assets before `mergeAssets`.
+  and copies `frontend/dist` + `templates/` into assets before `mergeAssets`, beside
+  `compiled-build.json`, the source fingerprint `:app:generateCompiledBuild` writes
+  with `scripts.compiled_build` (spec 03). The APK's Python cannot hash a source tree
+  it does not ship, so a packaging change that drops this stamp builds fine and
+  silently turns the compiled cache off.
 - Version skew is impossible: an APK is always built from one git revision of the
   whole monorepo.
 

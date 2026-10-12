@@ -1565,4 +1565,11 @@ fencing once its file has not moved for `RETENTION_S`. By then section 10's
 lease sweep has removed that device's database too. Such an intent is ignored
 and never deleted, and this device's own intents never age out.
 
+Section 3 correction: only a device's database files (`*.sqlite`, with their
+`.alive` leases) may be excluded from sync. The purge marker and
+`delete-intents/` share `.cache/compiled/` and are how every other device learns
+of a delete. Excluding the whole folder, as section 3 first suggested, would
+leave another device's copy of a deleted record's derived text at rest until
+eviction. The Settings hint and `docs/store-guarantees.md` now say so.
+
 These follow-ups are subject to the final mandatory spec-fidelity gate.
