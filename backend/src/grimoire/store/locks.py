@@ -134,7 +134,7 @@ import os
 import threading
 import time
 from collections.abc import Iterable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 from typing import Literal
 
@@ -297,6 +297,8 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # only way back. New module (#31), so it starts inside the exclusion rather
     # than joining the frozen `UNREVIEWED` backlog `changes` sits in.
     "store.journal",
+    # Host membership lease RMWs take the same campaign domain (spec07).
+    "store.group_proposals",
     # `clock.json` is rewritten whole by every advance -- the moment and the log
     # row that explains it land in one write, so two unserialized advances can
     # leave the clock at a moment whose reason was never recorded. New module
@@ -437,17 +439,14 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "removes the tree under one hold of the campaign lock "
         "(`worlds.staging.remove_published`), so a failed strip can put the "
         "tree back without a holder's write in the way. "
-        "`ensure_campaign_slim` rewrites that same meta file and is unlocked "
-        "for the same reason as the frontmatter writers above -- its META "
-        "write, that is. Its TOMBSTONE phase is locked now: the world image "
-        "library made `overlay.add_deleted` load-bearing, so that function "
-        "takes the campaign lock and the migration takes one hold spanning "
-        "both of its tombstone call sites (the second opens by reading "
-        "`deleted.json`, so two holds would leave that read outside one of "
-        "them). The cost is that the lazy slim on read paths can now answer "
-        "`CampaignBusy`. What is left unlocked here is the meta rewrite in "
-        "`_finish`. Fixing the rest is a concurrency "
-        "change that needs its own review, which is why this guard classifies "
+        "`ensure_campaign_slim` now holds the campaign lock from its meta "
+        "read through tombstones, manifest reservations, pruning and the "
+        "`_finish` meta rewrite (spec 07). Its earlier hold covered only the "
+        "two tombstone call sites; strict identity preflight must precede "
+        "every associated effect in the same hold. Lazy migration can still "
+        "answer `CampaignBusy`. The ordinary frontmatter writers above stay "
+        "outside the domain; fixing those is a separate concurrency change, "
+        "which is why this guard classifies "
         "them rather than closing them. `set_campaign_routing` (#142) writes "
         "the same file and does NOT join them: it takes the lock, as does "
         "`set_campaign_tracker` (the scene tracker's switch). Inheriting a "
@@ -562,11 +561,11 @@ UNREVIEWED: frozenset[str] = frozenset({
     "store.commits",
     "store.dossiers",
     "store.modules.binding",           # was store.modules
-    "store.overlay",
+    "store.overlay",                 # identity-ledger RMW/lifecycle locked; remaining writers unreviewed
     "store.playstate",
     "store.plot",
     "store.relationships",
-    "store.sync",
+    "store.sync",                    # advance/publication locked; remaining writers unreviewed
     "store.taglines",
     "store.weather.overrides",
 })
@@ -632,16 +631,16 @@ def _remaining(deadline) -> float:
 _campaign_holds_local = threading.local()
 
 
-def _campaign_holds() -> set[_ProcessScopedLock]:
-    if getattr(_campaign_holds_local, 'pid', None) != os.getpid():
+def _domain_holds(domain: str) -> set[int]:
+    if getattr(_campaign_holds_local, "pid", None) != os.getpid():
         _campaign_holds_local.pid = os.getpid()
-        _campaign_holds_local.held = set()
-    return _campaign_holds_local.held
+        _campaign_holds_local.held = {}
+    return _campaign_holds_local.held.setdefault(domain, set())
 
 
 def campaign_locks_held() -> bool:
-    """Any campaign-domain hold on this thread, including reentrant/no-wait."""
-    return bool(_campaign_holds())
+    """Physical campaign holds on this thread, including reentrant callers."""
+    return bool(_domain_holds("campaign"))
 
 
 class _ProcessScopedLock:
@@ -702,10 +701,8 @@ class _ProcessScopedLock:
             self._fd = fd                   # installed BEFORE depth becomes 1
             fd = None                       # ownership transferred to self
             self._depth = 1
-            if self._domain == 'campaign':
-                # Track the outermost physical hold; reentrant releases keep
-                # the same entry, so nested/no-wait/hold_all paths agree.
-                _campaign_holds().add(self)
+            if self._domain in {"campaign", "world-actors"}:
+                _domain_holds(self._domain).add(id(self))
             return True
         except BaseException:
             # Three windows, and the handler has to tell them apart. `depth`
@@ -748,8 +745,8 @@ class _ProcessScopedLock:
                 proclock.release(fd)
         finally:                            # even if the unlock raises
             self._depth = 0
-            if self._domain == 'campaign':
-                _campaign_holds().discard(self)
+            if self._domain in {"campaign", "world-actors"}:
+                _domain_holds(self._domain).discard(id(self))
             self._rlock.release()
 
     def __enter__(self):
@@ -982,6 +979,85 @@ def image_sidecar_locks(keyed: Iterable[tuple[Path, str]]) -> list[StripeLock]:
     """The sidecar stripes of `(d, filename)` pairs, deduplicated and in stripe
     order, for a caller that rewrites sidecars in more than one directory."""
     return _stripe_set(_SIDECAR_DOMAIN, list(keyed))
+
+
+class WorldLifecycleBusy(StoreBusy):
+    def __init__(self, name: str):
+        super().__init__(name, "World lifecycle")
+
+
+class _WorldLifecycleLock(_ProcessScopedLock):
+    """A source identity's pinned store, never a later global home pointer."""
+    def __init__(self, store: Path, world: str):
+        self.store = store
+        self._pid = os.getpid()
+        name = hashlib.sha256(world.encode("utf-8")).hexdigest()
+        super().__init__("world-lifecycle", name, WorldLifecycleBusy)
+
+    def _process(self) -> None:
+        if self._pid == os.getpid():
+            return
+        # Old references can survive fork as well as the registry. Closing a
+        # duplicated fd is safe; issuing an unlock would release the parent.
+        if self._fd is not None:
+            with suppress(OSError):
+                os.close(self._fd)
+        self._fd, self._depth = None, 0
+        self._rlock = threading.RLock()
+        self._pid = os.getpid()
+
+    def _path(self):
+        return proclock.lock_path(self.store, self._domain, self._name)
+
+    def _is_owned(self) -> bool:
+        self._process()
+        return super()._is_owned()
+
+    def release(self) -> None:
+        self._process()
+        super().release()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if not self._is_owned() and (campaign_locks_held() or _domain_holds("world-actors")):
+            raise RuntimeError("World lifecycle barrier must be held before campaign or world-actor locks")
+        return super().acquire(blocking=blocking, timeout=timeout)
+
+
+_world_lifecycle_locks: dict[tuple[str, str], _WorldLifecycleLock] = {}
+_world_lifecycle_pid = os.getpid()
+
+
+def _world_lifecycle_process() -> None:
+    global _world_lifecycle_pid, _registry_guard  # noqa: PLW0603 -- child registries cannot retain parent-owned guards
+    if _world_lifecycle_pid == os.getpid():
+        return
+    # Close child descriptor copies without unlocking the parent's advisory
+    # lock. Do not retain parent RLocks or a guard owned by a vanished thread.
+    for lock in _world_lifecycle_locks.values():
+        lock._process()
+    _world_lifecycle_locks.clear()
+    _registry_guard = threading.Lock()
+    _world_lifecycle_pid = os.getpid()
+
+
+def world_lifecycle_lock(store: Path, world: Path) -> _WorldLifecycleLock:
+    _world_lifecycle_process()
+    pinned, source = store.resolve(), str(world.resolve())
+    key = (str(pinned), source)
+    with _registry_guard:
+        lock = _world_lifecycle_locks.get(key)
+        if lock is None:
+            lock = _world_lifecycle_locks[key] = _WorldLifecycleLock(pinned, source)
+        return lock
+
+
+def world_lifecycle_held(store: str, world: str | None) -> bool:
+    # Stored provenance is an equality key, never a filesystem path to open.
+    _world_lifecycle_process()
+    if world is None:
+        return False
+    lock = _world_lifecycle_locks.get((store, world))
+    return lock is not None and lock._is_owned()
 
 
 def world_actor_lock(wid: str) -> _ProcessScopedLock:

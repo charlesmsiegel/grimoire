@@ -34,6 +34,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``regex_rules`` /regex, the output-processing rule files and their test pane
   ``quick_replies`` /worlds/{wid}/quick-replies and /campaigns/{cid}/quick-replies,
                   the composer's one-tap buttons
+  ``membership`` read-only /worlds/{wid}/membership and /campaigns/{cid}/membership
   ``entities``    the generic /{kind} entity surface for both scopes
 
 ORDERING: FastAPI matches in registration order and never backtracks, so the
@@ -83,6 +84,7 @@ from . import (
     ledger,
     maintenance,
     mechanics,
+    membership,
     models,
     modules,
     observability,
@@ -194,4 +196,5 @@ for _domain in (config, inference, modules, record_art, worlds, characters, worl
                 default_prompts):
     _compose(_domain.router)
 
+_compose(membership.router)  # literal /membership must precede the generic kind
 _compose(entities.router)  # keep last: generic /{kind} catch-alls

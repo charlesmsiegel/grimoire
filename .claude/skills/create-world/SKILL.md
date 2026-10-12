@@ -136,7 +136,9 @@ A complete example, with every key shown. Omit anything you don't need.
   ],
   "groups": [
     {"name": "Salt Circle", "body": "...", "keys": ["Salt Circle", "guild"],
-     "fields": {"leader": "characters:Seraphine", "headquarters": "locations:The Counting House"}}
+     "fields": {"leader": "characters:Seraphine",
+                "members": ["characters:Mara", "pcs:Winifred"],
+                "headquarters": "locations:The Counting House"}}
   ],
   "items": [
     {"name": "Salt Knife", "body": "...", "owners": ["characters:Seraphine"],
@@ -176,9 +178,14 @@ is refused as ambiguous rather than guessed.
 
 `fields` are the per-kind typed fields in `store/entity_schema.py`: a location's
 `climate`/`persistence`/`weather_zone`, an item's `item_type`/`rarity`/`holder`, a
-group's `group_type`/`leader`/`headquarters`, and a creature's
+group's `group_type`/`leader`/`members`/`headquarters`, and a creature's
 `creature_type`/`threat`/`habitat`. Lore has none. Game stats are not fields. They
 are sheets, owned by the bound module (`create-mechanics-module`).
+
+A group's `members` is an explicit list of character/PC refs; its `leader` is
+independent and need not be listed as a member. Keep the prose roster for what
+each actor does, and record membership in `fields.members`; prose is not mined.
+
 
 Put the NPCs' opening scenes in **greetings**, not in a card's `first_mes`. A world
 greeting carries its cast, location, tags and plot-map edges, and a card's

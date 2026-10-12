@@ -11,8 +11,11 @@
                       snippets/commitment_line/absorb.j2) | None
       fact_snapshot — rendered standing-fact lines, "\n"-joined (see
                       snippets/fact_line.j2) | None
-      group_snapshot — rendered "- groups/<gid> (<Name>): <state>" lines,
-                        "\n"-joined (see absorb.group_snapshot) | None
+      group_snapshot — rendered "- groups/<gid> (<Name>): <state>" lines, each
+                        ending " | Affiliates here: ..." when a present actor
+                        belongs to or leads the group, then a framed
+                        "Secret groups:" block; "\n"-joined (see
+                        absorb.group_snapshot) | None
       steering_snapshot — rendered "- <text>" reroll-steering lines,
                         "\n"-joined (see absorb.steering_snapshot) | None
       tracked_snapshot — the scene tracker's final state as the narrator reads

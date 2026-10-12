@@ -48,29 +48,41 @@ what `forget_world_record` (at the bottom) exists to get in front of.
 from __future__ import annotations
 
 import filecmp
+import hashlib
 import json
 import logging
 import shutil
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+
+from pydantic import BaseModel
 
 from . import (
     assets,
     atomic,
     cards,
     characters,
+    commits,
     entities,
     entity_schema,
     failsoft,
     greetings,
+    group_inventory,
+    group_proposals,
+    group_refs,
     image_descriptions,
     image_refs,
     image_store,
+    journal,
     locks,
     pcs,
+    revision,
+    statcache,
     taglines,
     voice_anchors,
 )
+from . import paths as library_paths
 from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
@@ -106,6 +118,13 @@ def wroot_of(cid: str) -> Path:
     Either way, nothing here raises for it — every resolver below just reads
     a path that doesn't hold the expected records as holding none."""
     return campaigns_read.world_root_of(cid)
+
+
+class RecordIdentityRefs(BaseModel):
+    """Pre-effect identity keys, separated by the namespace that owns them."""
+
+    owned: frozenset[str]
+    world: frozenset[str]
 
 
 class View:
@@ -205,6 +224,64 @@ def _refs_in(refs) -> set[str]:
     return {r for r in (refs or []) if isinstance(r, str)}
 
 
+def _valid_ledger_ref(ref: object, *, visibility: bool) -> bool:
+    """The existing record/asset/library spellings, without actor-ref restrictions.
+
+    A ledger names filesystem records, including ids a comma-separated actor
+    field cannot carry. Safe ids therefore apply here, not referenceable ids.
+    """
+    if not isinstance(ref, str):
+        return False
+    parts = ref.split("/")
+    if len(parts) == 2:
+        return ((parts[0] in INHERITED_KINDS and safe_id(parts[1]))
+                or parts == ["plotmap", "plotmap"])
+    if not visibility:
+        return False
+    if ref == "plotmap":
+        return True
+    if len(parts) == 3 and parts[:2] == ["assets", "library"]:
+        return safe_id(parts[2])
+    return (len(parts) == 5 and parts[0] == "assets"
+            and parts[1] in INHERITED_KINDS and all(safe_id(part) for part in parts[2:]))
+
+
+def _strict_ledger(path: Path, *, visibility: bool) -> set[str]:
+    """An empty ledger means actual absence, never unreadable identity (spec 07).
+
+    Ordinary overlay display remains fail-soft. Mutation and membership identity
+    boundaries cannot use that fallback: overwriting an empty fallback destroys
+    markers for unrelated records and can bind a future stranger by slug.
+    """
+    try:
+        refs = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(refs, list) or not all(
+                _valid_ledger_ref(ref, visibility=visibility) for ref in refs):
+            raise ValueError("invalid identity ledger structure or reference")
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError) as exc:
+        raise group_refs.GroupIdentityConflict(
+            f"Cannot verify group identity: {path.name} is unreadable or invalid. "
+            "Repair that ledger before editing or changing linked records.") from exc
+    return set(refs)
+
+
+def detached_strict(cid: str) -> set[str]:
+    """Complete validated detachments for an identity read or mutation."""
+    return _strict_ledger(_detached_path(cid), visibility=False)
+
+
+def deleted_strict(cid: str) -> set[str]:
+    """Complete validated tombstones, preserving record/asset/library markers."""
+    return _strict_ledger(_deleted_path(cid), visibility=True)
+
+
+def require_identity_ledgers(cid: str) -> tuple[set[str], set[str]]:
+    """Preflight both before associated effects; caller holds the campaign lock."""
+    return detached_strict(cid), deleted_strict(cid)
+
+
 def _deleted_path(cid: str) -> Path:
     return campaigns_paths.campaign_root(cid) / "deleted.json"
 
@@ -237,16 +314,20 @@ def add_deleted(cid: str, ref: str) -> None:
     already locked.
     """
     with locks.campaign_lock(cid):
+        gone = deleted_strict(cid)
+        if not _valid_ledger_ref(ref, visibility=True):
+            raise group_refs.GroupIdentityConflict("Cannot record an invalid visibility reference.")
         atomic.write_text(_deleted_path(cid),
-                          json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n")
+                          json.dumps(sorted(gone | {ref}), indent=2) + "\n")
 
 
 def _drop_deleted(cid: str, refs: set[str]) -> None:
     """Untombstone, under the same lock and for the same reason -- it is the
     same whole-file rewrite read backwards."""
     with locks.campaign_lock(cid):
-        keep = deleted(cid) - refs
-        if keep != deleted(cid):
+        gone = deleted_strict(cid)
+        keep = gone - refs
+        if keep != gone:
             atomic.write_text(_deleted_path(cid),
                               json.dumps(sorted(keep), indent=2) + "\n")
 
@@ -316,7 +397,7 @@ def detached(cid: str) -> set[str]:
 
 
 def add_detached(cid: str, ref: str) -> None:
-    """Mark `ref` detached. UNDER `campaign_lock`, unlike its two siblings.
+    """Mark `ref` detached under the shared campaign lock.
 
     Read-modify-replace, so two unserialized writers each read this file and
     each replace it, losing one marker. This used to be left open, and the
@@ -335,20 +416,23 @@ def add_detached(cid: str, ref: str) -> None:
     that common is not one to leave standing on the grounds that its neighbours
     share it.
 
-    So the asymmetry is real and deliberate: `detached.json` is serialized;
-    `deleted.json` and the manifest keep their documented gap. Stated here
-    rather than left to be discovered, and it does NOT take `overlay` out of
-    `locks.UNREVIEWED` -- that review is still owed, and this is one file of
-    the three it has to settle.
+    Both detachment and visibility writers now serialize their complete
+    read-modify-write, and use strict reads to preserve identity (spec 07).
+    The manifest's other writers retain their documented residual. These
+    changes do NOT claim that the whole overlay backlog has been reviewed;
+    the remaining scope in `locks.UNREVIEWED` is still owed.
 
     Reentrant, so `create_character`, which holds the lock across the create
     and this mark to make the pair atomic, pays nothing for it."""
     with locks.campaign_lock(cid):
+        severed = detached_strict(cid)
+        if not _valid_ledger_ref(ref, visibility=False):
+            raise group_refs.GroupIdentityConflict("Cannot record an invalid detachment reference.")
         atomic.write_text(_detached_path(cid),
-                          json.dumps(sorted(detached(cid) | {ref}), indent=2) + "\n")
+                          json.dumps(sorted(severed | {ref}), indent=2) + "\n")
 
 
-def _undetach(cid: str, ref: str) -> None:
+def _undetach(cid: str, ref: str, *, source_refs: RecordIdentityRefs | None = None) -> None:
     """Drop a detachment when the record it describes goes.
 
     Detachment is a statement about a *record*, not about an id: it says this
@@ -364,14 +448,17 @@ def _undetach(cid: str, ref: str) -> None:
     only the writers that ADD would leave the file racing the ones that
     subtract."""
     with locks.campaign_lock(cid):
-        keep = detached(cid) - {ref}
-        if keep != detached(cid):
+        severed, gone = require_identity_ledgers(cid)
+        refs = capture_record_refs(cid, ref) if source_refs is None else source_refs
+        keep = severed - refs.owned
+        if keep != severed:
             atomic.write_text(_detached_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
-    # Images deleted while detached tombstoned SLOTS of a record that is now
-    # gone. Reattaching without clearing them inherits the world's replacement
-    # with its avatar still hidden (Codex review) -- the same reasoning as the
-    # sweep's own clearing, at the other end of a detachment.
-    _drop_deleted(cid, {r for r in deleted(cid) if r.startswith(f"assets/{ref}/")})
+        # Images deleted while detached tombstoned SLOTS of a record that is now
+        # gone. Reattaching without clearing them inherits the world's replacement
+        # with its avatar still hidden (Codex review) -- the same reasoning as the
+        # sweep's own clearing, at the other end of a detachment.
+        _drop_deleted(cid, {r for r in gone
+                            if any(r.startswith(f"assets/{source}/") for source in refs.world)})
 
 
 # ---- flat records (locations / lore; greetings + plotmap join in Task 2) ----
@@ -389,7 +476,12 @@ def _inherits_world(cid: str, ref: str) -> bool:
     holds the id now is a stranger. Tombstoning on its way out would hide that
     stranger from the campaign permanently, which deleting an un-detached
     campaign-local record never does (Codex review)."""
-    return ref not in deleted(cid) and ref not in detached(cid)
+    gone, severed = deleted(cid), detached(cid)
+    if ref in gone or ref in severed:
+        return False
+    kind, _, eid = ref.partition("/")
+    return (not record_is_marked(cid, kind, eid, gone, roots=(wroot_of(cid), wroot_of(cid)))
+            and not record_is_marked(cid, kind, eid, severed))
 
 
 def _flat_path(root: Path, kind: str, eid: str) -> Path:
@@ -566,38 +658,39 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
     The promotion journal (``image-refs/.promote.json``) is never copied: it
     describes a swap in progress in the WORLD's folder.
     """
-    if kind not in INHERITED_KINDS or not safe_id(rid):
-        return
-    src = _record_dir(wroot_of(cid), kind, rid)
-    if not src.is_dir():
-        return
-    dst = _record_dir(croot_of(cid), kind, rid)
-    gone = deleted(cid)
-    # The images, per logical NAME (`assets.copy_slots`): a slot is a
-    # placement or a legacy file, and which of them the campaign already holds
-    # under that name is what decides -- never whether one particular FILE of
-    # the world's exists here.
-    assets_dir = src / "assets"
-    if assets_dir.is_dir():
-        for src_v in sorted(p for p in assets_dir.iterdir() if p.is_dir()):
-            _copy_slots_down(kind, rid, src_v, dst / "assets" / src_v.name, gone)
-    for p in sorted(src.rglob("*")):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(src)
-        if _image_slot_file(rel) or _tombstoned_asset(kind, rid, rel, gone):
-            continue
-        target = dst / rel
-        if target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Through the helper, not `shutil.copy2`, for the reason
-        # `sheets/tally.py` gives at the identical world->campaign copy: a
-        # partial copy must never appear under a real name. Here that name is
-        # an image slot the overlay resolves campaign-first, so a truncated
-        # file would not merely be broken -- it would SHADOW the world's intact
-        # one for as long as it sat there.
-        atomic.write_bytes(target, p.read_bytes())
+    with locks.campaign_lock(cid):
+        if kind not in INHERITED_KINDS or not safe_id(rid):
+            return
+        src = _record_dir(wroot_of(cid), kind, rid)
+        if not src.is_dir():
+            return
+        dst = _record_dir(croot_of(cid), kind, rid)
+        _, gone = require_identity_ledgers(cid)
+        # The images, per logical NAME (`assets.copy_slots`): a slot is a
+        # placement or a legacy file, and which of them the campaign already holds
+        # under that name is what decides -- never whether one particular FILE of
+        # the world's exists here.
+        assets_dir = src / "assets"
+        if assets_dir.is_dir():
+            for src_v in sorted(p for p in assets_dir.iterdir() if p.is_dir()):
+                _copy_slots_down(kind, rid, src_v, dst / "assets" / src_v.name, gone)
+        for p in sorted(src.rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(src)
+            if _image_slot_file(rel) or _tombstoned_asset(kind, rid, rel, gone):
+                continue
+            target = dst / rel
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Through the helper, not `shutil.copy2`, for the reason
+            # `sheets/tally.py` gives at the identical world->campaign copy: a
+            # partial copy must never appear under a real name. Here that name is
+            # an image slot the overlay resolves campaign-first, so a truncated
+            # file would not merely be broken -- it would SHADOW the world's intact
+            # one for as long as it sat there.
+            atomic.write_bytes(target, p.read_bytes())
 
 
 def _copy_slots_down(kind: str, rid: str, src_v: Path, dst_v: Path, gone: set[str]) -> None:
@@ -647,26 +740,163 @@ def _put_base(cid: str, ref: str, base: str) -> None:
     campaigns_paths.write_manifest(cid, manifest)
 
 
-def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
-    """Copy an inherited flat record into the campaign and record its sync
-    base. True if the campaign file exists afterwards. Assets are never
-    copied — they overlay per file. Tombstoned records don't materialize."""
-    croot = croot_of(cid)
-    if _flat_path(croot, kind, eid).exists():
-        return True
-    wroot = wroot_of(cid)
-    src = _flat_path(wroot, kind, eid)
-    if not src.exists() or _flat_ref(kind, eid) in deleted(cid):
+def _same_actor_slot(root: Path, kind: str, aid: str, other: str) -> bool:
+    """Native identity proof, never a guessed case-folded id comparison."""
+    try:
+        return (root / kind / aid).samefile(root / kind / other)
+    except FileNotFoundError:
         return False
-    dst = _flat_path(croot, kind, eid)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    text = src.read_text(encoding="utf-8")
-    # hashed from `text`, not re-read from the world: a world edit between the
-    # two would otherwise record a base for content the campaign never got, and
-    # sync would see world == base and skip the record forever (Codex review)
-    with _recorded_base(cid, _flat_ref(kind, eid), entities.content_hash(text), dst):
-        atomic.write_text(dst, text)
-    return True
+    except OSError as exc:
+        raise group_refs.GroupIdentityConflict(
+            "Cannot determine detached actor identity; repair or restore the actor paths.") from exc
+
+
+def actor_detachments(croot: Path, wroot: Path, actor_refs: Iterable[str],
+                      severed: set[str]) -> set[str]:
+    """Augment detachments with proven native aliases of the queried raw refs.
+
+    Preserve stored ids and raw field spelling. Windows may resolve MARA to
+    mara, but a case-sensitive directory may hold distinct actors: samefile,
+    like World reference matching (#259), is the proof. Only directory identity
+    is probed, never actor content. The shared group_refs filter stays pure.
+    Exact markers keep their meaning even while both actor paths are absent.
+    """
+    matched = set(severed)
+    for actor in actor_refs:
+        parsed = group_refs.actor_ref(actor)
+        if parsed is None:
+            continue
+        ref = parsed.replace(":", "/", 1)
+        if ref in matched:
+            continue
+        kind, aid = parsed.split(":", 1)
+        other_ids = (r.split("/", 1)[1] for r in severed if r.startswith(f"{kind}/"))
+        # An owned source's namespace is authoritative. Another root may alias
+        # two files that are distinct here (mixed native policies, spec 07).
+        roots = (croot,) if _record_present(croot, kind, aid) else (croot, wroot)
+        if any(_same_actor_slot(root, kind, aid, other)
+               for other in other_ids for root in roots):
+            matched.add(ref)
+    return matched
+
+
+def _unresolved_group_slots(croot: Path, wroot: Path, meta: Mapping[str, object],
+                            severed: set[str]) -> frozenset[tuple[str, str]]:
+    """Foreign actor identities, including every valid dormant Leader token.
+
+    Existence is the ordinary World actor resolver's meta-file boundary, not
+    directory occupancy: a stranded image directory is not an actor. This
+    one-group check deliberately does not build the later inverse index.
+    """
+    return frozenset((field, actor) for field, actor in group_refs.group_slots(meta)
+        if actor.replace(":", "/", 1) in severed
+        or not _record_present(wroot, *actor.split(":", 1))
+        or not _world_identity_matches_owned(croot, wroot, *actor.split(":", 1)))
+
+
+def group_unresolved(cid: str, meta: Mapping[str, object]) -> frozenset[tuple[str, str]]:
+    """Slots needing explicit review before these World bytes become owned."""
+    severed, _ = require_identity_ledgers(cid)
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    severed = actor_detachments(croot, wroot,
+        (actor for _, actor in group_refs.group_slots(meta)), severed)
+    return _unresolved_group_slots(croot, wroot, meta, severed)
+
+
+def _require_group_copy(croot: Path, wroot: Path, source: str, final: str, severed: set[str],
+                        reviewed_slots: frozenset[tuple[str, str]]) -> None:
+    original_meta, _ = entities.parse_frontmatter(source)
+    final_meta, _ = entities.parse_frontmatter(final)
+    severed = actor_detachments(croot, wroot,
+        (actor for _, actor in group_refs.group_slots(original_meta)), severed)
+    # Consent is per retained slot. Removing a token resolves it; adding a new
+    # authored token does not review an old slot elsewhere in the same field.
+    blocked = (_unresolved_group_slots(croot, wroot, original_meta, severed)
+               & group_refs.group_slots(final_meta)) - reviewed_slots
+    if blocked:
+        raise group_refs.GroupIdentityConflict(
+            "Review unresolved Members and Leader references before making a campaign copy.",
+            slots=tuple(sorted(blocked)))
+
+
+def require_group_materialization(cid: str, kind: str, eid: str, *,
+                                  source_text: str | None = None) -> None:
+    """Preflight a default no-consent copy, without publishing anything.
+
+    Demotion uses this for every actual first copy before its first asset or
+    record effect. Frozen source_text is also passed to the subsequent copy,
+    so validation cannot accidentally approve different World bytes.
+    """
+    with locks.campaign_lock(cid):
+        if _flat_path(croot_of(cid), kind, eid).exists():
+            return   # already owned: its dangling refs are authored
+        severed, gone = require_identity_ledgers(cid)
+        if record_is_marked(cid, kind, eid, gone):
+            raise entities.EntityNotFound(f"{kind}/{eid}")
+        wroot = wroot_of(cid)
+        # Greetings share the flat overlay layout but have their own reader;
+        # entities.require_entity deliberately excludes their kind (#119).
+        if kind not in entities.SYNCED_KINDS:
+            raise entities.UnknownKind(kind)
+        src = _flat_path(wroot, kind, eid)
+        if not safe_id(eid) or not src.exists():
+            raise entities.EntityNotFound(f"{kind}/{eid}")
+        text = src.read_text(encoding="utf-8") if source_text is None else source_text
+        _require_group_copy(croot_of(cid), wroot, text, text, severed, frozenset())
+
+
+def _materialize_flat(cid: str, kind: str, eid: str, *,
+                      prepare: Callable[[str], str] | None = None,
+                      source_text: str | None = None,
+                      reviewed_slots: frozenset[tuple[str, str]] = frozenset()) -> bool:
+    """Publish one final safe copy and its original World sync base.
+
+    The campaign hold spans identity validation and publication, so an actor
+    birth cannot claim a missing World slug between them (spec 07). Assets
+    continue to overlay per file. Already-owned records grant no new binding.
+    """
+    # Prepared publication bypasses the root CRUD writer, so it must retain
+    # that writer's kind/id boundary BEFORE any native path probe (spec 07).
+    if kind not in entities.SYNCED_KINDS:
+        raise entities.UnknownKind(kind)
+    if not safe_id(eid):
+        raise entities.EntityNotFound(f"{kind}/{eid}")
+    with locks.campaign_lock(cid):
+        croot = croot_of(cid)
+        if _flat_path(croot, kind, eid).exists():
+            return True
+        severed, gone = require_identity_ledgers(cid)
+        wroot = wroot_of(cid)
+        src = _flat_path(wroot, kind, eid)
+        if not src.exists() or record_is_marked(cid, kind, eid, gone):
+            return False
+        copy_refs: set[str] = set()
+        source_identity = owned_identity = None
+        if kind == "groups":
+            group_proposals.require_readable(croot)
+            commits.require_readable(cid)
+            source_identity = group_proposals.GroupIdentity(store=str(library_paths.home().resolve()),
+                campaign=str(croot.resolve()), layer="world", world=str(wroot.resolve()))
+            owned_identity = group_proposals.GroupIdentity(store=source_identity.store,
+                campaign=source_identity.campaign, layer="campaign", world=None)
+            copy_refs = group_proposals.matching_refs(croot, wroot, eid, world=source_identity.world)
+        text = src.read_text(encoding="utf-8") if source_text is None else source_text
+        final = text if prepare is None else prepare(text)
+        _require_group_copy(croot, wroot, text, final, severed, reviewed_slots)
+        with revision.stamp_on_failure(cid):
+            dst = _flat_path(croot, kind, eid)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            # Hash the ORIGINAL selected bytes, not the prepared edit or a second
+            # World read. Otherwise the edit could look like its own common base,
+            # or a World race could hide an update (the earlier Codex review).
+            with _recorded_base(cid, _flat_ref(kind, eid), entities.content_hash(text), dst):
+                atomic.write_text(dst, final)
+            if source_identity is not None and owned_identity is not None:
+                group_proposals.retained_copy(cid, croot, copy_refs, source_identity, owned_identity)
+                commits.retain_membership_copy(cid, eid, world_root=wroot, receipt={
+                    "source": group_proposals.identity_data(source_identity),
+                    "owned": group_proposals.identity_data(owned_identity)})
+            return True
 
 
 def dematerialize(cid: str, ref: str) -> None:
@@ -674,19 +904,27 @@ def dematerialize(cid: str, ref: str) -> None:
     the ref-level inverse of materialization, over all three shapes sync.md
     names. The manifest is the caller's: drop the ref before calling this while
     `campaigns.read.slim_pending` holds, and after it otherwise (#247, #270)."""
-    kind, _, eid = ref.partition("/")
-    if ref == "plotmap":
-        (croot_of(cid) / "plotmap.json").unlink(missing_ok=True)
-    elif kind in appearances_paths.ACTOR_KINDS:
-        dematerialize_actor(cid, kind, eid)
-    else:
-        _flat_path(croot_of(cid), kind, eid).unlink(missing_ok=True)
+    with locks.campaign_lock(cid):
+        require_identity_ledgers(cid)
+        journal.require_readable(cid)
+        kind, _, eid = ref.partition("/")
+        with revision.stamp_on_failure(cid):
+            if ref == "plotmap":
+                (croot_of(cid) / "plotmap.json").unlink(missing_ok=True)
+            elif kind in appearances_paths.ACTOR_KINDS:
+                dematerialize_actor(cid, kind, eid)
+            else:
+                _retire_owned_reviews(cid, kind, eid)
+                journal.retire_membership_targets(cid, kind, eid)
+                _flat_path(croot_of(cid), kind, eid).unlink(missing_ok=True)
 
 
-def _drop_manifest_ref(cid: str, ref: str) -> None:
+def _drop_manifest_ref(cid: str, ref: str, *, source_refs: RecordIdentityRefs | None = None) -> None:
     manifest = campaigns_paths.read_manifest(cid)
-    if manifest.pop(ref, None) is not None:
-        campaigns_paths.write_manifest(cid, manifest)
+    refs = {ref} if source_refs is None else source_refs.owned
+    keep = {r: base for r, base in manifest.items() if r not in refs}
+    if keep != manifest:
+        campaigns_paths.write_manifest(cid, keep)
 
 
 def materialize_entity(cid: str, kind: str, eid: str) -> None:
@@ -701,6 +939,69 @@ def list_entities(cid: str, kind: str, *, v: View | None = None) -> list[dict]:
     inherited = [e for e in entities.list_entities(v.wroot, kind)
                  if e["id"] not in have and _flat_ref(kind, e["id"]) not in v.gone]
     return sorted(mine + inherited, key=lambda e: e["id"])
+
+
+def group_capture(cid: str) -> group_inventory.GroupCapture:
+    """Fresh, strict membership inputs; never attach new stamps to an old View.
+
+    Campaign metadata and both ledgers are stamped before world resolution or
+    ledger loading. The frozen sets and selected roots then belong to this sweep.
+    Ordinary entity listings retain their fail-soft display contract.
+    """
+    v = view(cid)
+    # Preserve the logical store container before following a campaign symlink.
+    # A pointer switch after this point cannot redirect either binding or bytes.
+    store_root = v.croot.parent.parent
+    v._croot = v.croot.resolve()
+    root_stamp = statcache.stamp(v.croot)
+    meta_stamps = group_inventory.pre_stamps(v.croot / "campaign.md", v.croot)
+    gone_path, off_path = v.croot / "deleted.json", v.croot / "detached.json"
+    gone_stamps = group_inventory.pre_stamps(gone_path, v.croot)
+    off_stamps = group_inventory.pre_stamps(off_path, v.croot)
+    v._wroot = campaigns_read.world_root_from(v.croot, store_root=store_root).resolve()
+    v._gone = frozenset(_strict_ledger(gone_path, visibility=True))
+    v._off = frozenset(_strict_ledger(off_path, visibility=False))
+    mine, mine_stamps = group_inventory.collect(v.croot, "campaign")
+    theirs, their_stamps = group_inventory.collect(v.wroot, "world")
+    # A native alias may resolve to an owned file with a differently spelled
+    # stem. That file wins just as it does in the one-group editor; no casefold
+    # may collapse two real files in a case-sensitive collection.
+    owned_ids = {source.id for source in mine}
+    inherited = tuple(source for source in theirs
+        if source.id not in owned_ids and not _flat_path(v.croot, "groups", source.id).exists()
+        and not record_is_marked(cid, "groups", source.id, set(v.gone), roots=(v.wroot, v.wroot)))
+    sources = tuple(sorted((*mine, *inherited), key=lambda source: source.id))
+    ledger_digest = hashlib.sha256(json.dumps(
+        (sorted(v.gone), sorted(v.off)), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    stamps = group_inventory.combined_stamps(
+        None if root_stamp is None else (root_stamp,), meta_stamps, gone_stamps,
+        off_stamps, mine_stamps, their_stamps)
+    return group_inventory.GroupCapture(
+        sources=sources, stamps=stamps, roots=(v.croot, v.wroot), deleted=v.gone,
+        detached=v.off, ledger_digest=ledger_digest,
+        groups_digest=group_inventory.content_digest(sources), store_root=store_root.resolve())
+
+
+def group_rows(capture: group_inventory.GroupCapture, *, include_body: bool = False
+               ) -> tuple[list[dict], tuple[str, ...], tuple[str, ...]]:
+    """Effective metadata plus the native proofs needed to validate a memo hit."""
+    rows = group_inventory.rows(capture.sources, include_body=include_body)
+    raw_refs = tuple(sorted({actor for source, row in zip(capture.sources, rows, strict=True)
+        if source.layer == "world" for _, actor in group_refs.group_slots(row)}))
+    severed = actor_detachments(capture.roots[0], capture.roots[1], raw_refs, set(capture.detached))
+    for source, row in zip(capture.sources, rows, strict=True):
+        if source.layer == "world":
+            members, leader = group_refs.effective_refs(row, inherited=True, detached=severed)
+            row["members"] = ", ".join(members)
+            row["leader"] = leader or ""
+    return rows, raw_refs, tuple(sorted(severed))
+
+
+def group_listing(cid: str) -> tuple[list[dict], tuple[statcache.Stamp, ...] | None,
+                                    tuple[Path, Path], str, str]:
+    capture = group_capture(cid)
+    rows, _, _ = group_rows(capture)
+    return rows, capture.stamps, (capture.roots[0], capture.roots[1]), capture.ledger_digest, capture.groups_digest
 
 
 def read_entity(cid: str, kind: str, eid: str, *, v: View | None = None) -> dict:
@@ -721,6 +1022,46 @@ def read_entity_rev(cid: str, kind: str, eid: str) -> dict:
         if _flat_ref(kind, eid) in deleted(cid):
             raise
         return entities.read_entity_rev(wroot_of(cid), kind, eid)
+
+
+def read_group_membership(cid: str, eid: str, *, v: View | None = None
+                          ) -> tuple[dict, group_refs.GroupMembershipContext]:
+    """The ordinary group payload and membership context from one source read.
+
+    Owned diagnostics are empty, including authored dangling refs; they do not
+    need readable identity ledgers. Inherited diagnostics use one complete
+    ledger snapshot and the selected World root, never a second group read.
+    """
+    v = _view(cid, v)
+    try:
+        record = entities.read_entity_rev(v.croot, "groups", eid)
+    except entities.EntityNotFound:
+        severed, gone = require_identity_ledgers(cid)
+        if record_is_marked(cid, "groups", eid, gone, roots=(v.croot, v.wroot)):
+            raise
+        wroot = v.wroot
+        record = entities.read_entity_rev(wroot, "groups", eid)
+        meta = record["meta"]
+        raw_members, raw_leader = group_refs.parse_members(meta), group_refs.parse_leader(meta)
+        severed = actor_detachments(v.croot, wroot,
+            (actor for _, actor in group_refs.group_slots(meta)), severed)
+        members, leader = group_refs.effective_refs(meta, inherited=True, detached=severed)
+        unresolved = _unresolved_group_slots(v.croot, wroot, meta, severed)
+        context = group_refs.GroupMembershipContext(
+            layer="world", members=members, leader=leader,
+            filtered_members=tuple(r for r in raw_members if r not in members),
+            filtered_leader=raw_leader if raw_leader != leader else None,
+            unresolved_members=tuple(r for r in raw_members if ("members", r) in unresolved),
+            unresolved_leader=raw_leader if ("leader", raw_leader) in unresolved else None,
+            unresolved_leaders=tuple(r for r in group_refs.leader_tokens(meta)
+                                     if ("leader", r) in unresolved))
+    else:
+        context = group_refs.GroupMembershipContext(
+            layer="campaign", members=group_refs.parse_members(record["meta"]),
+            leader=group_refs.parse_leader(record["meta"]), filtered_members=(),
+            filtered_leader=None, unresolved_members=(), unresolved_leader=None)
+    return record, context
+
 
 
 def entity_rev(cid: str, kind: str, eid: str) -> str | None:
@@ -786,12 +1127,27 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
 def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
                   body: str | None = None, keys: str | None = None,
                   owners: str | None = None, fields: dict | None = None,
-                  secrecy: str | None = None) -> None:
-    croot = croot_of(cid)
-    if not _flat_path(croot, kind, eid).exists():
-        materialize_entity(cid, kind, eid)
-    entities.update_entity(croot, kind, eid, name=name, body=body, keys=keys, owners=owners,
-                           fields=fields, secrecy=secrecy)
+                  secrecy: str | None = None,
+                  reviewed_slots: frozenset[tuple[str, str]] = frozenset()) -> None:
+    if kind not in entities.ENTITY_KINDS:
+        raise entities.UnknownKind(kind)
+    if not safe_id(eid):
+        raise entities.EntityNotFound(f"{kind}/{eid}")
+    with locks.campaign_lock(cid):
+        croot = croot_of(cid)
+        if _flat_path(croot, kind, eid).exists():
+            # Already-owned refs are authored; an ordinary edit needs no World
+            # identity inference. Lifecycle and membership journal owners keep
+            # their own stricter preflights (spec 07).
+            with revision.stamp_on_failure(cid):
+                entities.update_entity(croot, kind, eid, name=name, body=body, keys=keys,
+                                       owners=owners, fields=fields, secrecy=secrecy)
+            return
+        if not _materialize_flat(cid, kind, eid,
+                prepare=lambda text: entities.updated_text(text, name=name, body=body,
+                    keys=keys, owners=owners, fields=fields, secrecy=secrecy),
+                reviewed_slots=reviewed_slots):
+            raise entities.EntityNotFound(f"{kind}/{eid}")
 
 
 def would_inherit(cid: str, kind: str, eid: str) -> bool:
@@ -813,18 +1169,37 @@ def would_inherit(cid: str, kind: str, eid: str) -> bool:
 
 
 def delete_entity(cid: str, kind: str, eid: str) -> None:
-    ref = _flat_ref(kind, eid)
-    in_world = would_inherit(cid, kind, eid)
-    try:
-        entities.delete_entity(croot_of(cid), kind, eid)
-        _drop_manifest_ref(cid, ref)
-    except entities.EntityNotFound:
-        if not in_world:
-            raise
-    if in_world:
-        add_deleted(cid, ref)   # keep the world's copy from showing through
-    _drop_record_dir(croot_of(cid), kind, eid)
-    _undetach(cid, ref)
+    with locks.campaign_lock(cid):
+        require_identity_ledgers(cid)
+        journal.require_readable(cid)
+        eid = _canonical_record_id(cid, kind, eid)
+        ref = _flat_ref(kind, eid)
+        source_refs = capture_record_refs(cid, ref)
+        in_world = would_inherit(cid, kind, eid)
+        with revision.stamp_on_failure(cid):
+            _retire_owned_reviews(cid, kind, eid)
+            commits.retire_membership_targets(cid, kind, eid, root=wroot_of(cid), world=str(wroot_of(cid).resolve()))
+            journal.retire_membership_targets(cid, kind, eid)
+            try:
+                entities.delete_entity(croot_of(cid), kind, eid)
+                _drop_manifest_ref(cid, ref, source_refs=source_refs)
+            except entities.EntityNotFound:
+                if not in_world:
+                    raise
+            if in_world:
+                add_deleted(cid, ref)   # keep the world's copy from showing through
+            _drop_record_dir(croot_of(cid), kind, eid)
+            _undetach(cid, ref, source_refs=source_refs)
+
+
+def require_owned_entity(cid: str, kind: str, eid: str) -> Path:
+    """Resolve an existing owned entity only, with no inherited fallback.
+
+    Membership Undo seals an owned original; resolving a World replacement
+    after its copy disappears would grant that replacement the offer. Keep the
+    raw-root lookup here, where campaign record resolution is owned (spec 07).
+    """
+    return entities.require_entity(croot_of(cid), kind, eid)
 
 
 def has_own_copy(cid: str, kind: str, eid: str) -> bool:
@@ -834,6 +1209,154 @@ def has_own_copy(cid: str, kind: str, eid: str) -> bool:
     nothing to move, and materializing one now would fork it off the world for
     a change it agreed with."""
     return kind in entities.ENTITY_KINDS and safe_id(eid) and _flat_path(croot_of(cid), kind, eid).exists()
+
+
+def _identity_path(root: Path, kind: str, eid: str) -> Path:
+    if kind == "plotmap":
+        return root / "plotmap.json"
+    if kind in appearances_paths.ACTOR_KINDS:
+        return _record_dir(root, kind, eid)
+    return _flat_path(root, kind, eid)
+
+
+def record_is_marked(cid: str, kind: str, eid: str, marks: set[str], *,
+                     roots: tuple[Path, Path] | None = None) -> bool:
+    """Match a retained-copy marker by exact ref or proven native identity.
+
+    A submitted uppercase id may reach the same file on Windows. Casefolding
+    would also merge distinct files on case-sensitive stores; samefile is the
+    narrower proof, shared by World moves and take-world/pin protection. Only
+    identity is probed, never actor bodies or a full roster (spec 07).
+    A same-read View may supply its captured roots so matching a tombstone
+    cannot resolve another World halfway through that read's diagnostics.
+    """
+    if _flat_ref(kind, eid) in marks:
+        return True
+    if (kind not in INHERITED_KINDS and kind != "plotmap") or not safe_id(eid):
+        return False
+    roots = (croot_of(cid), wroot_of(cid)) if roots is None else roots
+    identity_roots = roots[:1] if _record_present(roots[0], kind, eid) else roots
+    # A World alias cannot merge distinct owned sources.
+    for ref in marks:
+        other_kind, _, other_id = ref.partition("/")
+        if other_kind != kind or not safe_id(other_id):
+            continue
+        for root in identity_roots:
+            try:
+                if _identity_path(root, kind, eid).samefile(_identity_path(root, kind, other_id)):
+                    return True
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as exc:
+                raise group_refs.GroupIdentityConflict("cannot verify retained record identity; repair access before changing it") from exc
+    return False
+
+
+
+def world_identity_matches_owned(cid: str, kind: str, eid: str, wroot: Path) -> bool:
+    """Verify a held campaign's source identity against its selected World."""
+    return _world_identity_matches_owned(croot_of(cid), wroot, kind, eid)
+
+
+def _world_identity_matches_owned(croot: Path, wroot: Path, kind: str, eid: str) -> bool:
+    """A native alias may not select a different original across namespaces.
+
+    Copies have different inodes, so compare canonical IDs within each root,
+    never the copy's inode to its World ancestor. The forward proof protects
+    an insensitive campaign over a sensitive World; the reverse proof keeps a
+    distinct sensitive campaign actor from collapsing into a World alias.
+    No owned candidate means there is no authored identity to change (spec07).
+    """
+    if kind not in INHERITED_KINDS or not safe_id(eid):
+        return False
+    if not _record_present(croot, kind, eid):
+        return True
+    owned, world = _identity_path(croot, kind, eid), _identity_path(wroot, kind, eid)
+    try:
+        owned_path, world_path = owned.resolve(strict=True), world.resolve(strict=True)
+        owned_id = owned_path.name if kind in appearances_paths.ACTOR_KINDS else owned_path.stem
+        world_id = world_path.name if kind in appearances_paths.ACTOR_KINDS else world_path.stem
+        if not world.samefile(_identity_path(wroot, kind, owned_id)):
+            return False
+        return (not _record_present(croot, kind, world_id)
+                or owned.samefile(_identity_path(croot, kind, world_id)))
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        raise group_refs.GroupIdentityConflict(
+            "Cannot verify this record's World identity; repair access before changing it.") from exc
+
+
+
+def require_world_identity_scope(wroot: Path, kind: str, rid: str, cids: Iterable[str]) -> None:
+    """Validate held cleanup/adoption identities while the World source exists.
+
+    After removal there is no native proof left. Let the actual owner diagnose
+    invalid/absent targets; a real source must be unambiguous in every reached
+    campaign before publication, suspension, copy-down or removal (spec07).
+    """
+    if kind not in INHERITED_KINDS or not safe_id(rid) or not _record_present(wroot, kind, rid):
+        return
+    for cid in cids:
+        if not world_identity_matches_owned(cid, kind, rid, wroot):
+            raise group_refs.GroupIdentityConflict(
+                "This World operation would select a different campaign record through an alias.")
+
+
+def _canonical_record_id(cid: str, kind: str, eid: str) -> str:
+    """Native spelling of an owned source, before a locked removal.
+
+    Validate BEFORE probing. An inherited source retains its submitted id:
+    canonicalizing its World spelling could reselect a distinct owned file in
+    another namespace. Missing ids retain the owning NotFound refusal (spec 07).
+    """
+    if kind not in INHERITED_KINDS:
+        raise entities.UnknownKind(kind)
+    if not safe_id(eid):
+        if kind in appearances_paths.ACTOR_KINDS:
+            raise _actor_not_found(kind, eid)
+        if kind == "greetings":
+            raise greetings.GreetingNotFound(eid)
+        raise entities.EntityNotFound(f"{kind}/{eid}")
+    croot = croot_of(cid)
+    if _record_present(croot, kind, eid):
+        path = _identity_path(croot, kind, eid).resolve(strict=True)
+        return path.name if kind in appearances_paths.ACTOR_KINDS else path.stem
+    return eid
+
+
+def capture_record_refs(cid: str, ref: str, *, extra_refs: Iterable[str] = ()) -> RecordIdentityRefs:
+    """Freeze keys in the namespace that gives each ledger its meaning.
+
+    Off and sync bases describe the owned original; Gone hides the World
+    original. Neither namespace may collapse identities proved distinct in the
+    other. Keep both pre-effect sets: movement destroys the source paths that
+    proved them, and their union would lose this ownership distinction (spec 07).
+    """
+    extras = set(extra_refs)
+    if not all(_valid_ledger_ref(r, visibility=False) for r in extras | {ref}):
+        raise group_refs.GroupIdentityConflict("invalid record reference for identity capture")
+    severed, gone = require_identity_ledgers(cid)
+    owned = severed | extras | {r for r in campaigns_paths.read_manifest(cid)
+                               if _valid_ledger_ref(r, visibility=False)}
+    world = extras | {r for r in gone if not r.startswith("assets/")}
+    world.update("/".join(r.split("/")[1:3]) for r in gone
+                 if r.startswith("assets/") and not r.startswith("assets/library/"))
+    kind, _, eid = ref.partition("/")
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    return RecordIdentityRefs(
+        owned=frozenset({ref} | {r for r in owned
+            if record_is_marked(cid, kind, eid, {r}, roots=(croot, croot))}),
+        world=frozenset({ref} | {r for r in world
+            if record_is_marked(cid, kind, eid, {r}, roots=(wroot, wroot))}))
+
+
+def independent_owned_record(cid: str, kind: str, eid: str) -> bool:
+    """A detached owned original cannot follow a new World holder of its slug."""
+    if not has_own_copy(cid, kind, eid):
+        return False
+    severed, _ = require_identity_ledgers(cid)
+    return record_is_marked(cid, kind, eid, severed)
 
 
 def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
@@ -865,18 +1388,33 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
         raise entities.UnknownKind(new_kind)
     if kind == new_kind:
         raise entities.SameKindError(_flat_ref(kind, eid))
-    croot, wroot = croot_of(cid), wroot_of(cid)
-    materialize_entity(cid, kind, eid)
+    with locks.campaign_lock(cid):
+        _, gone = require_identity_ledgers(cid)
+        croot, wroot = croot_of(cid), wroot_of(cid)
+        journal.require_readable(cid)
+        require_group_materialization(cid, kind, eid)
+        def taken(c: str) -> bool:
+            # the destination's namespace as this campaign sees it: what the world
+            # holds there (which the campaign inherits), plus what it has tombstoned
+            # (which `create_entity` already counts, for #225's reason)
+            return (_flat_path(wroot, new_kind, c).exists()
+                    or _record_dir(wroot, new_kind, c).is_dir()
+                    or _flat_ref(new_kind, c) in gone)
 
-    def taken(c: str) -> bool:
-        # the destination's namespace as this campaign sees it: what the world
-        # holds there (which the campaign inherits), plus what it has tombstoned
-        # (which `create_entity` already counts, for #225's reason)
-        return (_flat_path(wroot, new_kind, c).exists()
-                or _record_dir(wroot, new_kind, c).is_dir()
-                or _flat_ref(new_kind, c) in deleted(cid))
-
-    return entities.reclassify(croot, kind, eid, new_kind, taken=taken, prefer=prefer)
+        with revision.stamp_on_failure(cid):
+            group_proposals.require_readable(croot)
+            commits.require_readable(cid)
+            materialize_entity(cid, kind, eid)
+            if kind == "groups":
+                group_proposals.retire(cid, croot, group_proposals.matching_refs(croot, croot, eid))
+            commit_move = commits.begin_membership_relocation(cid, kind, eid, new_kind, root=croot)
+            token = journal.begin_membership_relocation(cid, kind, eid, new_kind)
+            landed = entities.reclassify(croot, kind, eid, new_kind, taken=taken, prefer=prefer)
+            if token is not None:
+                journal.complete_membership_relocation(cid, token, new_kind, landed)
+            if commit_move is not None:
+                commits.complete_membership_relocation(cid, commit_move, new_kind, landed)
+            return landed
 
 
 def rewrite_owner_refs(cid: str, old: str, new: str) -> list[tuple[str, str]]:
@@ -946,7 +1484,18 @@ def rewrite_ref_fields(cid: str, old: str, new: str) -> list[tuple[str, str]]:
     return touched
 
 
-def repoint_record(cid: str, old_ref: str, new_ref: str, *, keep_base: bool) -> None:
+def _moved_identity_marker(ref: str, sources: frozenset[str], destination: str) -> str:
+    """A whole-record or asset-slot marker follows its proven moved original."""
+    if ref in sources:
+        return destination
+    parts = ref.split("/", 3)
+    if len(parts) == 4 and parts[0] == "assets" and "/".join(parts[1:3]) in sources:
+        return f"assets/{destination}/{parts[3]}"
+    return ref
+
+
+def repoint_record(cid: str, old_ref: str, new_ref: str, *, keep_base: bool,
+                   source_refs: RecordIdentityRefs | None = None) -> None:
     """Follow a reclassified record through the three ledgers that say what this
     campaign's copy *is* relative to its world: `sync.md`, `deleted.json` and
     `detached.json` (#119).
@@ -969,25 +1518,36 @@ def repoint_record(cid: str, old_ref: str, new_ref: str, *, keep_base: bool) -> 
     the one it was hidden under. A detachment moves for the same reason -- it is
     a statement about a record, and the record is still here.
     """
-    if old_ref == new_ref:
-        return
-    manifest = campaigns_paths.read_manifest(cid)
-    base = manifest.pop(old_ref, None)
-    if base is not None:
-        if keep_base:
-            manifest[new_ref] = base
-        campaigns_paths.write_manifest(cid, manifest)
-    old_assets, new_assets = f"assets/{old_ref}/", f"assets/{new_ref}/"
-    gone = deleted(cid)
-    moved = {r for r in gone if r == old_ref or r.startswith(old_assets)}
-    if moved:
-        kept = (gone - moved) | {new_ref if r == old_ref else new_assets + r[len(old_assets):]
-                                 for r in moved}
-        atomic.write_text(_deleted_path(cid), json.dumps(sorted(kept), indent=2) + "\n")
-    severed = detached(cid)
-    if old_ref in severed:
-        atomic.write_text(_detached_path(cid),
-                          json.dumps(sorted((severed - {old_ref}) | {new_ref}), indent=2) + "\n")
+    with locks.campaign_lock(cid):
+        # Repoint is also a ledger writer: validate its input even when no
+        # current marker happens to name it (spec 07 review).
+        if not all(_valid_ledger_ref(r, visibility=False) for r in (old_ref, new_ref)):
+            raise group_refs.GroupIdentityConflict("invalid record reference for repoint")
+        if old_ref == new_ref:
+            return
+        severed, gone = require_identity_ledgers(cid)
+        manifest = campaigns_paths.read_manifest(cid)
+        # These aliases were proven BEFORE movement, under this same hold.
+        # The vacated paths can no longer establish which keys belonged to it.
+        captured = (RecordIdentityRefs(owned=frozenset({old_ref}), world=frozenset({old_ref}))
+                    if source_refs is None else source_refs)
+        refs = captured.owned
+        if not all(_valid_ledger_ref(r, visibility=False) for r in refs | captured.world):
+            raise group_refs.GroupIdentityConflict("invalid captured record reference for repoint")
+        bases = {r: manifest[r] for r in refs if r in manifest}
+        if bases:
+            base = bases.get(old_ref, bases[min(bases)])
+            manifest = {r: value for r, value in manifest.items() if r not in refs}
+            if keep_base:
+                manifest[new_ref] = base
+            campaigns_paths.write_manifest(cid, manifest)
+        kept = {_moved_identity_marker(r, captured.world, new_ref) for r in gone}
+        if kept != gone:
+            atomic.write_text(_deleted_path(cid), json.dumps(sorted(kept), indent=2) + "\n")
+        moved = severed & refs
+        if moved:
+            atomic.write_text(_detached_path(cid),
+                              json.dumps(sorted((severed - moved) | {new_ref}), indent=2) + "\n")
 
 
 # ---- greetings + plot map ----
@@ -1082,21 +1642,25 @@ def update_greeting(cid: str, gid: str, **kwargs) -> None:
 
 
 def delete_greeting(cid: str, gid: str) -> None:
-    ref = _flat_ref("greetings", gid)
-    in_world = _inherits_world(cid, ref) and _flat_path(wroot_of(cid), "greetings", gid).exists()
-    if in_world:
-        materialize_plotmap(cid)   # edge cleanup must land campaign-side
-    try:
-        greetings.delete_greeting(croot_of(cid), gid)
-        _drop_manifest_ref(cid, ref)
-    except greetings.GreetingNotFound:
-        if not in_world:
-            raise
-        greetings.remove_from_plotmap(croot_of(cid), gid)
-    if in_world:
-        add_deleted(cid, ref)
-    _drop_record_dir(croot_of(cid), "greetings", gid)
-    _undetach(cid, ref)
+    with locks.campaign_lock(cid):
+        require_identity_ledgers(cid)
+        gid = _canonical_record_id(cid, "greetings", gid)
+        ref = _flat_ref("greetings", gid)
+        source_refs = capture_record_refs(cid, ref)
+        in_world = _inherits_world(cid, ref) and _flat_path(wroot_of(cid), "greetings", gid).exists()
+        if in_world:
+            materialize_plotmap(cid)   # edge cleanup must land campaign-side
+        try:
+            greetings.delete_greeting(croot_of(cid), gid)
+            _drop_manifest_ref(cid, ref, source_refs=source_refs)
+        except greetings.GreetingNotFound:
+            if not in_world:
+                raise
+            greetings.remove_from_plotmap(croot_of(cid), gid)
+        if in_world:
+            add_deleted(cid, ref)
+        _drop_record_dir(croot_of(cid), "greetings", gid)
+        _undetach(cid, ref, source_refs=source_refs)
 
 
 def read_plotmap(cid: str) -> dict:
@@ -1574,7 +2138,8 @@ def create_character(cid: str, name: str, version_name: str = "default",
         # Inside the hold, all of it: the id is allocated against what `taken`
         # sees, so reading the world dir and the tombstones outside the lock
         # would be the same check-then-act the lock is here to close.
-        wroot, gone = wroot_of(cid), deleted(cid)
+        _, gone = require_identity_ledgers(cid)
+        wroot = wroot_of(cid)
 
         def taken(aid: str) -> bool:
             return ((wroot / "characters" / aid).is_dir()
@@ -1607,25 +2172,30 @@ def delete_actor(cid: str, kind: str, aid: str) -> None:
     `_actor_incoming` reads that record in preference to sync.md -- left
     behind, it offers updates for a deleted actor forever.
     """
-    ref = _flat_ref(kind, aid)
-    in_world = _inherits_world(cid, ref) and _record_present(wroot_of(cid), kind, aid)
-    mine = _record_dir(croot_of(cid), kind, aid)
-    if not _record_present(croot_of(cid), kind, aid) and not in_world:
-        raise _actor_not_found(kind, aid)
-    if mine.is_dir():
-        shutil.rmtree(mine, ignore_errors=True)
-    _drop_manifest_ref(cid, ref)
-    appearances_paths.forget(cid, kind, aid)
-    if in_world:
-        add_deleted(cid, ref)
-    _undetach(cid, ref)
+    with locks.campaign_lock(cid):
+        require_identity_ledgers(cid)
+        aid = _canonical_record_id(cid, kind, aid)
+        ref = _flat_ref(kind, aid)
+        source_refs = capture_record_refs(cid, ref)
+        in_world = _inherits_world(cid, ref) and _record_present(wroot_of(cid), kind, aid)
+        mine = _record_dir(croot_of(cid), kind, aid)
+        if not _record_present(croot_of(cid), kind, aid) and not in_world:
+            raise _actor_not_found(kind, aid)
+        if mine.is_dir():
+            shutil.rmtree(mine, ignore_errors=True)
+        _drop_manifest_ref(cid, ref, source_refs=source_refs)
+        appearances_paths.forget(cid, kind, aid)
+        if in_world:
+            add_deleted(cid, ref)
+        _undetach(cid, ref, source_refs=source_refs)
 
 
 def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default",
               persona: dict | None = None) -> tuple[str, str]:
     """The PC counterpart of `create_character`, lock and all."""
     with locks.campaign_lock(cid):
-        wroot, gone = wroot_of(cid), deleted(cid)
+        _, gone = require_identity_ledgers(cid)
+        wroot = wroot_of(cid)
 
         def taken(pid: str) -> bool:
             return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
@@ -1897,9 +2467,11 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
 
 
 def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
-    assets.delete_image(croot_of(cid), aid, vid, name, base)   # no-op when absent
-    if assets.image_path(wroot_of(cid), aid, vid, name, base) is not None:
-        add_deleted(cid, _asset_ref(base, aid, vid, name))
+    with locks.campaign_lock(cid):
+        require_identity_ledgers(cid)
+        assets.delete_image(croot_of(cid), aid, vid, name, base)   # no-op when absent
+        if assets.image_path(wroot_of(cid), aid, vid, name, base) is not None:
+            add_deleted(cid, _asset_ref(base, aid, vid, name))
 
 
 def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
@@ -1916,15 +2488,18 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
     (PR review). A read-modify-write needs the lock the other writer takes, and
     for campaign-scoped state that is this one.
     """
-    croot, wroot = croot_of(cid), wroot_of(cid)
     with locks.campaign_lock(cid):
-        inherits = _flat_ref(base, aid) not in detached(cid)
+        # Image publication selects the current binding with its target (spec 07):
+        # a campaign recreated while waiting cannot carry its former World art.
+        croot, wroot = croot_of(cid), wroot_of(cid)
+        severed, gone = require_identity_ledgers(cid)
+        inherits = not record_is_marked(cid, base, aid, severed, roots=(croot, wroot))
         cdir = assets.version_dir(croot, aid, vid, base)
         wdir = assets.version_dir(wroot, aid, vid, base)
         _check_promote_arrived(cid, aid, vid, name, base, inherits, cdir, wdir)
         for n in (name, assets.AVATAR):
             if not (inherits and assets.image_path(croot, aid, vid, n, base) is None
-                    and _asset_ref(base, aid, vid, n) not in deleted(cid)):
+                    and _asset_ref(base, aid, vid, n) not in gone):
                 continue
             # Belt and braces for the check above: never link over an
             # image-bearing campaign placement, arrived or not. An image-less
@@ -2404,6 +2979,105 @@ def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
                     "%r will inherit what is still in it", d, exc, rid)
 
 
+class WorldIdentityScope(BaseModel):
+    captured: tuple[str, ...]
+    bound: tuple[str, ...]
+
+
+@contextmanager
+def world_identity_scope(wroot: Path) -> Iterator[WorldIdentityScope]:
+    """Capture the complete current/historical domain under the source barrier.
+
+    Root came from a host World resolver, never ledger metadata. Registration
+    uses this same outer barrier, so a newly created campaign cannot claim the
+    old source between discovery and its removal (spec07 section4.5).
+    """
+    with library_paths.library_guard(), library_paths.pin_library(wroot.parent.parent), locks.world_lifecycle_lock(library_paths.home(), wroot):
+        source = str(wroot.resolve())
+        try:
+            current = set(dependent_campaigns(wroot))
+            historical = {cid for cid in campaigns_paths.campaign_ids(strict=True)
+                if group_proposals.references_world(croot_of(cid), source) or commits.references_world(cid, source)}
+        except OSError as exc:
+            raise group_refs.GroupIdentityConflict("cannot enumerate complete membership source claims before changing the World") from exc
+        captured = tuple(sorted(current | historical))
+        with locks.hold_all(captured):
+            bound = tuple(bound_dependents(wroot, captured))
+            for cid in captured:
+                # Strict account reads also reach historical claims whose
+                # campaign now binds elsewhere. Only bound records are moved.
+                group_proposals.require_readable(croot_of(cid))
+                commits.require_readable(cid)
+                require_identity_ledgers(cid)
+                journal.require_readable(cid)
+            yield WorldIdentityScope(captured=captured, bound=bound)
+
+
+def retire_world_scope_reviews(wroot: Path, captured: Iterable[str]) -> None:
+    source = str(wroot.resolve())
+    for cid in captured:
+        group_proposals.retire_world(cid, croot_of(cid), source)
+        commits.retire_world_claims(cid, source)
+
+
+def retire_world_reviews(wroot: Path, kind: str, rid: str, captured: Iterable[str]) -> None:
+    """Fence inherited work before removal; independent owned copies survive."""
+    source = str(wroot.resolve())
+    for cid in captured:
+        if kind == "groups":
+            refs = group_proposals.matching_refs(croot_of(cid), wroot, rid, world=source)
+            group_proposals.retire(cid, croot_of(cid), refs)
+        commits.retire_membership_targets(cid, kind, rid, root=wroot, world=source)
+
+
+@contextmanager
+def world_identity_change(wroot: Path, *, record: tuple[str, str] | None = None
+                          ) -> Iterator[tuple[str, ...]]:
+    """Preflight every dependent before a World operation's first effect.
+
+    The outer barrier closes registration/discovery races; the sorted campaign
+    domain covers account fencing, removal and cleanup. External editors are
+    outside the cooperative process-lock promise (spec07).
+    """
+    with world_identity_scope(wroot) as scope:
+        if record is not None:
+            require_world_identity_scope(wroot, *record, scope.bound)
+            kind, rid = record
+            if kind in entities.ENTITY_KINDS:
+                rid = entities.require_entity(wroot, kind, rid).resolve().stem
+                retire_world_reviews(wroot, kind, rid, scope.captured)
+        yield scope.bound
+
+
+def _retire_owned_reviews(cid: str, kind: str, rid: str) -> None:
+    croot = croot_of(cid)
+    group_proposals.require_readable(croot)
+    commits.require_readable(cid)
+    if kind == "groups":
+        group_proposals.retire(cid, croot, group_proposals.matching_refs(croot, croot, rid))
+    commits.retire_membership_targets(cid, kind, rid, root=croot)
+
+
+
+def bound_dependents(wroot: Path, captured: Iterable[str]) -> list[str]:
+    """Current members of an already held dependent domain, before any effects.
+
+    Campaign ids can be reused while the sorted hold is waiting. Even strict
+    preflight of a replacement bound elsewhere would let that stranger block
+    this World's operation; cleanup or suspension would mutate it (spec 07).
+    Callers hold the captured domain and never rediscover or acquire outsiders.
+    """
+    bound = []
+    for cid in captured:
+        try:
+            world = campaigns_read.read_campaign(cid)["meta"].get("world", "")
+        except campaigns_paths.CampaignNotFound:
+            continue
+        if worlds_paths.references_world(world, wroot):
+            bound.append(cid)
+    return bound
+
+
 def dependent_campaigns(wroot: Path) -> list[str]:
     """Ids of the campaigns that inherit from `wroot`.
 
@@ -2431,7 +3105,8 @@ def dependent_campaigns(wroot: Path) -> list[str]:
     return out
 
 
-def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
+def forget_world_record(wroot: Path, kind: str, rid: str, *,
+                        cids: Iterable[str] | None = None) -> None:
     """Sweep what a world-side delete of `<kind>/<rid>` leaves reachable only
     by its id. Call it *after* the delete, from every world route that removes
     an inheritable record.
@@ -2475,6 +3150,11 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     creation nonce stamped into the record and its state -- which is a store
     format change, and a much larger one than the bug in front of us.
 
+    World operation owners pass the campaign set captured by their sorted hold.
+    Re-enumerating under that hold could acquire a newly created campaign in
+    reverse lock order (spec 07 native review). Standalone cleanup retains its
+    historical best-effort discovery; it holds no surrounding campaign set.
+
     The enumeration is best-effort for the same reason the removal is: a store
     holding one campaign nobody can read must not make a world record
     undeletable, and the delete has already happened by the time we get here.
@@ -2491,13 +3171,14 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
                     "record, and it may re-attach to the new one", kind, rid)
         return
     _drop_record_dir(wroot, kind, rid)
-    try:
-        cids = dependent_campaigns(wroot)
-    except (OSError, UnicodeDecodeError) as exc:
-        log.warning("could not enumerate the campaigns of %s (%s) -- state they "
-                    "filed against %s/%s stays, and a record recreated under that "
-                    "id will inherit it", wroot, exc, kind, rid)
-        return
+    if cids is None:
+        try:
+            cids = dependent_campaigns(wroot)
+        except (OSError, UnicodeDecodeError) as exc:
+            log.warning("could not enumerate the campaigns of %s (%s) -- state they "
+                        "filed against %s/%s stays, and a record recreated under that "
+                        "id will inherit it", wroot, exc, kind, rid)
+            return
     for cid in cids:
         try:
             _forget_in_campaign(cid, kind, rid, wroot)
@@ -2525,42 +3206,44 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
 
 
 def _forget_in_campaign(cid: str, kind: str, rid: str, wroot: Path) -> None:
-    # Campaign ids are reusable, and the sweep mutates one campaign at a time:
-    # between the enumeration and this call the campaign could have been deleted
-    # and its slug taken by a new one on a different world, which never depended
-    # on `wroot` at all (Codex review). Re-asking is cheap; being wrong deletes
-    # a stranger's state.
-    try:
-        world = campaigns_read.read_campaign(cid)["meta"].get("world", "")
-    except campaigns_paths.CampaignNotFound:
-        return   # deleted between the enumeration and its turn: nothing to sweep
-    if not worlds_paths.references_world(world, wroot):
-        return
-    croot, ref = croot_of(cid), _flat_ref(kind, rid)
-    if _record_present(croot, kind, rid):
-        # The campaign owns a copy. It keeps it -- and stops sharing an identity
-        # with whatever claims the slug next, in BOTH directions the id reaches:
-        # the per-file overlays `detached` governs, and the sync base.
-        #
-        # Marker first, base second, the same ordering argument `_recorded_base`
-        # makes for #247: the two writes cannot be made one, so a crash between
-        # them has to land on the harmless side. *Marker, no base drop* -- sync
-        # already ignores a detached ref, so the stale base is inert. *Base
-        # dropped, no marker* -- the record looks campaign-local to sync while
-        # every per-file resolver still reads the world, so the next slug owner
-        # supplies its images, tagline and voice anchor with nothing to notice
-        # (Codex review).
-        add_detached(cid, ref)
-        _drop_manifest_ref(cid, ref)
-        return
-    _drop_record_dir(croot, kind, rid)
-    # Per-asset tombstones outlive the record they hid, and they hide by slot:
-    # `assets/characters/mara/default/avatar` would blank the NEXT Mara's avatar
-    # in this campaign, for a deletion aimed at a record that is gone (Codex
-    # review). The whole-record tombstone keeps its meaning and stays.
-    _drop_deleted(cid, {r for r in deleted(cid) if r.startswith(f"assets/{kind}/{rid}/")})
-    if kind == "greetings":
-        _drop_plotmap_edges(cid, croot, rid)
+    with locks.campaign_lock(cid):
+        # Campaign ids are reusable, and the sweep mutates one campaign at a time:
+        # between the enumeration and this call the campaign could have been deleted
+        # and its slug taken by a new one on a different world, which never depended
+        # on `wroot` at all (Codex review). Re-asking is cheap; being wrong deletes
+        # a stranger's state.
+        try:
+            world = campaigns_read.read_campaign(cid)["meta"].get("world", "")
+        except campaigns_paths.CampaignNotFound:
+            return   # deleted between the enumeration and its turn: nothing to sweep
+        if not worlds_paths.references_world(world, wroot):
+            return
+        _, gone = require_identity_ledgers(cid)
+        croot, ref = croot_of(cid), _flat_ref(kind, rid)
+        if _record_present(croot, kind, rid):
+            # The campaign owns a copy. It keeps it -- and stops sharing an identity
+            # with whatever claims the slug next, in BOTH directions the id reaches:
+            # the per-file overlays `detached` governs, and the sync base.
+            #
+            # Marker first, base second, the same ordering argument `_recorded_base`
+            # makes for #247: the two writes cannot be made one, so a crash between
+            # them has to land on the harmless side. *Marker, no base drop* -- sync
+            # already ignores a detached ref, so the stale base is inert. *Base
+            # dropped, no marker* -- the record looks campaign-local to sync while
+            # every per-file resolver still reads the world, so the next slug owner
+            # supplies its images, tagline and voice anchor with nothing to notice
+            # (Codex review).
+            add_detached(cid, ref)
+            _drop_manifest_ref(cid, ref)
+            return
+        _drop_record_dir(croot, kind, rid)
+        # Per-asset tombstones outlive the record they hid, and they hide by slot:
+        # `assets/characters/mara/default/avatar` would blank the NEXT Mara's avatar
+        # in this campaign, for a deletion aimed at a record that is gone (Codex
+        # review). The whole-record tombstone keeps its meaning and stays.
+        _drop_deleted(cid, {r for r in gone if r.startswith(f"assets/{kind}/{rid}/")})
+        if kind == "greetings":
+            _drop_plotmap_edges(cid, croot, rid)
 
 
 def _record_present(root: Path, kind: str, rid: str) -> bool:

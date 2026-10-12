@@ -214,37 +214,36 @@ def delete_image(wid: str, name: str) -> None:
     nothing.
     """
     d = images_dir(wid)
-    with locks.image_collection_lock(wid):
-        image_collections.guard_write(wid, name)
-        assets.delete_in(d, name, supported_only=True)
-        if assets.path_in(d, name, supported_only=True) is not None:
-            raise OSError(f"image could not be removed: {name}")
-    # The description goes with the bytes, as it does on every other image
-    # surface: a kept entry would caption the next image uploaded under this
-    # name, which is different art and immediately eligible for the narrator.
-    assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
-    _forget_in_dependents(wid, name)
+    with overlay.world_identity_change(worlds_paths.world_root(wid)) as cids:
+        with locks.image_collection_lock(wid):
+            image_collections.guard_write(wid, name)
+            assets.delete_in(d, name, supported_only=True)
+            if assets.path_in(d, name, supported_only=True) is not None:
+                raise OSError(f"image could not be removed: {name}")
+        # The description goes with the bytes, as it does on every other image
+        # surface: a kept entry would caption the next image uploaded under this
+        # name, which is different art and immediately eligible for the narrator.
+        assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
+        _forget_in_dependents(wid, name, cids=cids)
 
 
-def _forget_in_dependents(wid: str, name: str) -> None:
+def _forget_in_dependents(wid: str, name: str, *, cids: tuple[str, ...]) -> None:
     """Drop this image's tombstone wherever a campaign hid it.
 
-    Per campaign and best-effort, ``overlay.forget_world_record``'s shape and for
-    the reason its comment gives: aborting the sweep on one busy campaign would
-    500 a delete that has already happened, and abandon every campaign after it.
-    Holding all the locks up front instead would refuse the delete outright
-    whenever any campaign in the world is mid-turn -- a minutes-long absorb is an
-    ordinary hold here -- which turns housekeeping into a routine failure.
+    The public delete holds and preflights every current dependent before the
+    image collection/name/sidecar locks (spec 07). This sweep still catches a
+    cleanup failure per campaign: a delete whose bytes already went cannot be
+    rolled back by abandoning every later dependent. The up-front hold may
+    refuse a delete when a campaign is busy, before any image effect.
 
     A skipped campaign keeps a stale tombstone. That is survivable ONLY because
     ``campaign_images.list_hidden`` surfaces it with a Restore beside it, so the
     reader can clear what the sweep could not. The two halves are one decision.
     """
-    try:
-        root = worlds_paths.world_root(wid)
-    except worlds_paths.WorldNotFound:
-        return
-    for cid in overlay.dependent_campaigns(root):
+    # Reuse the sorted hold's captured discovery. A campaign born after that
+    # hold must not be acquired individually while older campaign locks remain
+    # held; it has no pre-delete tombstone for this image (spec 07 review).
+    for cid in cids:
         try:
             overlay.drop_library_tombstone(cid, name)
         except (OSError, ValueError, locks.StoreBusy) as exc:

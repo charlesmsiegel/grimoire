@@ -82,6 +82,22 @@ def world_root_of(cid: str) -> Path:
         return paths.campaign_meta_path(cid) / _NO_WORLD
 
 
+def world_root_from(croot: Path, *, store_root: Path) -> Path:
+    """Bind captured campaign metadata to the store that selected that root.
+
+    The store is captured before resolving campaign symlinks: a physical
+    campaign directory alone cannot identify its logical library container.
+    """
+    meta_path = croot / "campaign.md"
+    if not meta_path.exists():
+        raise paths.CampaignNotFound(croot.name)
+    meta, _ = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
+    try:
+        return worlds_paths.world_root_at(store_root, meta.get("world", ""))
+    except worlds_paths.WorldNotFound:
+        return meta_path / _NO_WORLD
+
+
 def has_campaigns() -> bool:
     """Whether the store holds at least one campaign, without reading any.
 

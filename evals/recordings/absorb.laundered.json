@@ -15,5 +15,6 @@
   "plot_movements": [],
   "commitment_movements": [],
   "new_characters": [],
-  "new_locations": []
+  "new_locations": [],
+  "membership_changes": []
 }

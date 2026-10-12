@@ -208,9 +208,9 @@ def parse_output(text: str) -> dict:
     for e in _rows(obj, "character_state_edits"):
         if not isinstance(e, dict):
             continue
-        row = {"id": _str(e, "id"), "current_state": _str(e, "current_state")}
-        for k in ("knows", "suspects"):
-            if k in e:
+        row = {"id": _str(e, "id")}
+        for k in ("current_state", "knows", "suspects"):
+            if isinstance(e.get(k), str):
                 row[k] = _str(e, k)
         cs_edits.append(row | _cite(e))
 
@@ -221,7 +221,7 @@ def parse_output(text: str) -> dict:
             continue
         row = {"id": _str(e, "id")}
         for k in groupstate.FIELDS:
-            if k in e:
+            if isinstance(e.get(k), str):
                 row[k] = _str(e, k)
         gs_edits.append(row | _cite(e))
 
@@ -318,6 +318,10 @@ def parse_output(text: str) -> dict:
         "facts": _list("facts", ("text", "date", "supersedes")),
         "character_state_edits": cs_edits,
         "group_state_edits": gs_edits,
+        "membership_changes": [row | _cite(e) for e in _rows(obj, "membership_changes")
+            if isinstance(e, dict) and all(isinstance(e.get(key), str) for key in ("group", "actor", "change"))
+            and (row := {key: e[key].strip().lower() if key == "change" else e[key].strip() for key in ("group", "actor", "change")})
+            and row["change"] in {"join", "leave"}],
         "lore_edits": _list("lore_edits", ("id", "append")),
         "authored_edits": _list("authored_edits", ("id", "field", "text")),
         "relationship_deltas": rel_deltas,

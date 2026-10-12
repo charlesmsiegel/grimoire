@@ -6,7 +6,7 @@ from grimoire.store import entities, entity_schema
 def test_descriptor_shape():
     assert [f["key"] for f in entity_schema.FIELDS["items"]] == ["item_type", "rarity", "holder"]
     assert [f["key"] for f in entity_schema.FIELDS["groups"]] == [
-        "group_type", "leader", "headquarters"]
+        "group_type", "leader", "members", "headquarters"]
     assert [f["key"] for f in entity_schema.FIELDS["creatures"]] == [
         "creature_type", "threat", "habitat"]
     assert all(f["widget"] in ("text", "ref", "number", "choice")
@@ -339,3 +339,14 @@ def test_referenceable_agrees_with_what_frontmatter_can_carry():
         value = f"locations:{eid}"
         back = parse_frontmatter(dump_frontmatter({"name": "X", "habitat": value}, "b"))[0]
         assert entity_schema.referenceable(eid) == (back.get("habitat") == value), eid
+
+
+def test_members_field_accepts_only_multi_actor_refs():
+    assert entity_schema.invalid_values("groups", {"members": "characters:mara, pcs:winifred"}) == []
+    assert entity_schema.invalid_values("groups", {"members": ""}) == []
+    # Duplicates pass the boundary (17.1): the reader keeps the first, and a
+    # refusal here would make a hand-typed repeat unsaveable for no reason.
+    assert entity_schema.invalid_values("groups", {"members": "characters:mara, characters:mara"}) == []
+    for value in ("groups:salt-circle", "Mara", ["characters:mara"], True,
+                  "characters:mara, locations:saltmarch", "pcs:../winifred"):
+        assert entity_schema.invalid_values("groups", {"members": value}) == ["members"]

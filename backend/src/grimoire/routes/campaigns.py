@@ -1278,6 +1278,12 @@ def _journal_row(cid: str, entry: dict, scenes_by_id: dict, chron: dict,
     # journal.json is hand-editable, and a row whose plan lost its target would
     # otherwise render an enabled button that 400s.
     reversible = isinstance(plan, dict) and isinstance(plan.get("target"), dict)
+    reason = entry.get("why", "") if isinstance(entry.get("why"), str) else ""
+    target = plan.get("target") if isinstance(plan, dict) else None
+    if (isinstance(target, dict) and target.get("w") in {"group_members", "membership"}
+            and (target.get("retired") or "relocating" in target or target.get("kind") != "groups")):
+        reversible = False
+        reason = "This membership offer is retired, its move is incomplete, or its record is no longer a group."
     return {
         "id": entry.get("id", "") if isinstance(entry.get("id"), str) else "",
         "ts": entry.get("ts", "") if isinstance(entry.get("ts"), str) else "",
@@ -1294,7 +1300,7 @@ def _journal_row(cid: str, entry: dict, scenes_by_id: dict, chron: dict,
         # `undoable` is the server's answer, never the client's inference: the
         # button must not offer what the store would refuse.
         "undoable": reversible and not undone,
-        "why": entry.get("why", "") if isinstance(entry.get("why"), str) else "",
+        "why": reason,
         "undone": undone if isinstance(undone, dict) else None,
     }
 

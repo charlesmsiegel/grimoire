@@ -838,6 +838,38 @@ test("relationship rows are read-only and sent with payload on save", async () =
         payload: expect.objectContaining({ trust: 4 }) })]) })));
 });
 
+test("membership rows sit in the Group membership drawer, read-only, and save with payload", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbs({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
+    dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    voice: { status: "skipped", reason: null, checked: [], flagged: [], unjudged: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
+    edits: [{ id: "membership:salt-circle:characters:mara", kind: "membership",
+      target: { kind: "groups", id: "salt-circle" }, label: "Salt Circle — Mara joins",
+      field: "members:characters:mara", before: "not a member", after: "member", authored: false,
+      review: { certainty: 0.95, quote: "I swear myself to the Circle.", speaker: "Mara",
+                authority: "self", score: 0.95, band: "high" },
+      payload: { group: "salt-circle", actor: "characters:mara", change: "join",
+                 group_lifecycle_token: "0123456789abcdef0123456789abcdef" } }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Salt Circle — Mara joins");
+  expect(screen.getByText("Group membership", { selector: ".column-row-label" })).toBeTruthy();
+  expect(screen.queryByText("Relationships", { selector: ".column-row-label" })).toBeNull();
+  expect(screen.queryByLabelText("After Salt Circle — Mara joins")).toBeNull();
+  expect(screen.getByText("not a member")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /accept all .* & save|save \d+ decisions/i }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({ edits: expect.arrayContaining([
+      expect.objectContaining({ id: "membership:salt-circle:characters:mara",
+        payload: expect.objectContaining({ actor: "characters:mara", change: "join" }) })]) })));
+});
+
 const SHEET_EDIT = { id: "sheet:characters:mara:hp", kind: "sheet",
   target: { kind: "characters", id: "mara" }, label: "Mara — HP", field: "hp",
   before: "hp 6/10", after: "hp 4/10", authored: false, payload: { note: "took a hit" } };

@@ -9887,7 +9887,10 @@ def test_absorb_phases_name_the_steps_the_budget_stopped(client, npc_module_scen
     comes back looking like one the model had nothing to add to. The phase rows
     say which step the clock stopped, and that the clock is why."""
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "0.20"})
+    # Real wall-clock: the budget has to outlast the work before the dossier
+    # loop on a slow shared runner (or the tail is dropped before any request
+    # goes out, `attempted` False) while still cutting the 2s dossier short.
+    client.put("/api/config", json={"absorb_budget": "1.0"})
     fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 

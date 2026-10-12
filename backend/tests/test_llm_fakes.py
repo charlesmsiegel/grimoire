@@ -18,6 +18,7 @@ import pytest
 from grimoire import decisions, inference, prompts, tool_calls
 from grimoire.llm_errors import LLMError
 from grimoire.store import routing, suggest, voice_drift
+from grimoire.store.absorb import prompt as absorb_prompt
 from grimoire.store.continuity import identity, reconcile
 from tests import llm_fakes, wire_kit
 from tests.llm_fakes import (
@@ -245,7 +246,8 @@ _THREAD_DRIVER = {"ref": "thread:the-debt", "kind": "thread", "label": "The debt
 
 
 def _generate_prompts() -> list[str]:
-    return [prompts.render("absorb/system.j2", steering=True)] + \
+    return [prompts.render("absorb/system.j2", steering=True,
+                           schema=absorb_prompt.extraction_schema())] + \
            [prompts.render(t) for t in ("audit/system.j2",
                                         "dossier/system.j2", "voice_anchor/system.j2",
                                         "tagline/system.j2")] + [

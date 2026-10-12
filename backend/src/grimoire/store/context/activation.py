@@ -106,7 +106,7 @@ _NO_CONTROLS = lore_fields.Controls()
 # being in the scene, never by being mentioned.
 _STRUCTURAL: dict[str, tuple[tuple[str, str, bool], ...]] = {
     "items": (("holder", "held_by", True),),
-    "groups": (("leader", "led_by", True), ("headquarters", "headquarters", False)),
+    "groups": (("leader", "led_by", True), ("members", "member_present", True), ("headquarters", "headquarters", False)),
     "creatures": (("habitat", "habitat", False),),
 }
 _ACTIVATED = {"type": "activated", "via": None}
@@ -361,7 +361,7 @@ def _structural_reason(entry: dict, present: Mapping[str, dict],
 def structural_presence(entries: list[dict], base: Mapping[str, dict],
                         current_location: str | None) -> dict[str, dict]:
     """`base` grown by what it structurally implies, to a fixed point: an item
-    whose holder is present, a group whose leader is present or whose
+    whose holder is present, a group whose leader or explicit member is present or whose
     headquarters is here, a creature whose habitat is here.
 
     Each pass reads the set as the previous pass left it, so the result does

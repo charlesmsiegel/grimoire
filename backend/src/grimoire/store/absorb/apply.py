@@ -21,6 +21,7 @@ from .. import (
     dossiers,
     entities,
     facts,
+    group_refs,
     groupstate,
     overlay,
     playstate,
@@ -44,7 +45,7 @@ from ..campaigns import paths as campaigns_paths
 from ..scenes import moment as scenes_moment
 from ..scenes import read as scenes_read
 from ..sheets import paths as sheets_paths
-from . import conflicts, materializer, parse, weather
+from . import conflicts, materializer, membership, parse, weather
 
 #: Kept as a name here because `absorb` re-exports it, but the list itself now
 #: lives with the log it describes (`changes.BROWSABLE_KINDS`) -- `store.undo`
@@ -135,6 +136,15 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                 "reason": verdict["reason"]}
     eid = e.get("id", "")
     eid = eid if isinstance(eid, str) else ""
+    if e.get("kind") == "membership":
+        try:
+            return membership.apply(cid, e, e.get("_membership_neutral", set()), sid=sid, undo_store=undo_store)
+        except OSError as exc:
+            if e.get("_membership_attempted"):
+                return {"state": "pending", "id": eid}
+            return {"state": "failed", "id": eid, "kind": "error", "reason": str(exc)}
+        except (entities.EntityNotFound, group_refs.GroupIdentityConflict, ValueError) as exc:
+            return {"state": "failed", "id": eid, "kind": "conflict", "reason": str(exc)}
     if e.get("kind") == "sheet":
         if not eid:
             # rejected before apply_delta runs: a nameless mutation can never land
@@ -799,8 +809,18 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
         # against, so a recomputation there is judging the same store anyway.
         journal["verdicts"], journal["readings"] = verdicts, readings
     landed: set[tuple] = set()
-    for i, e in enumerate(edits):
+    neutral = membership.neutral_actors(cid, edits)
+    for i in membership.apply_order(cid, edits):
+        e = edits[i]
         slot = str(i)
+        if isinstance(e, dict) and e.get("kind") == "membership":
+            saved = journal.get("membership_targets", {}).get(slot)
+            if isinstance(saved, dict) and "_membership_target" in e:
+                e["_membership_target"] = saved
+                e["target"] = {"kind": saved["kind"], "id": saved["id"]}
+            target = e.get("target")
+            e["_membership_neutral"] = (neutral.get((str(target.get("kind")), str(target.get("id"))), set())
+                                        if isinstance(target, dict) else set())
         prior = outcomes.get(slot)
         if not isinstance(prior, dict):
             verdict = verdicts[i]
@@ -811,6 +831,11 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
             if checkpoint:
                 checkpoint()
             prior = outcomes[slot] = _apply_one(cid, croot, e, sid, verdict)
+            copy_receipt = prior.pop("membership_copy", None)
+            if copy_receipt:
+                for saved in journal.get("membership_targets", {}).values():
+                    if saved.get("kind") == e["target"]["kind"] and saved.get("id") == e["target"]["id"] and saved.get("source") == copy_receipt["source"]:
+                        saved["copy_receipt"] = {**copy_receipt, "token": saved.get("token")}
             for ref, rows in prior.pop("recorded", {}).items():
                 recorded.setdefault(ref, []).extend(rows)
             row = prior.pop("journalled", None)
@@ -878,6 +903,9 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
         journal["changes"] = "pending"
     if checkpoint:
         checkpoint()      # the last edit's outcome, so a crash before `record` resumes clean
+    membership.fence_publication(cid, journal)
+    recorded = {ref: rows for ref, rows in recorded.items() if rows}
+    logs = bool(recorded or cited or journalled or timeline)
     if logs:
         if isinstance(prior_changes, dict):
             # An earlier attempt tried and got a definite answer. changes.record

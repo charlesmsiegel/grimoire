@@ -29,6 +29,7 @@ from .store import (
     campaigns,
     compiled,
     config,
+    group_refs,
     inference_keys,
     locks,
     logs,
@@ -705,6 +706,15 @@ def create_app() -> FastAPI:
         # One handler rather than a try/except at every one of the ~35 call
         # sites that can take a campaign or module-edit lock (#234).
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(group_refs.GroupIdentityConflict)
+    async def group_identity_handler(request: Request, exc: group_refs.GroupIdentityConflict):
+        # The app flattens structured details: keep a displayable detail string
+        # beside the machine-readable kind/message/slots, as ApiError expects.
+        message = str(exc)
+        return JSONResponse(status_code=409, content={
+            "kind": "group_identity_conflict", "detail": message, "message": message,
+            "slots": [{"field": field, "actor": actor} for field, actor in exc.slots]})
 
     @app.exception_handler(config.NewerFormatError)
     async def newer_format_handler(request: Request, exc: config.NewerFormatError):

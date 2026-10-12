@@ -71,6 +71,7 @@ from .. import weather as weather_store
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
+from . import membership
 
 #: Why each kind is conflicted, in the reviewer's words. Membership *is* the set
 #: of kinds this module can judge: a kind absent here is never reported, which
@@ -80,6 +81,7 @@ from ..campaigns import paths as campaigns_paths
 _REASONS: dict[str, str] = {
     "character_state": "this character's state changed since the scene was absorbed",
     "group_state": "this group's state changed since the scene was absorbed",
+    "membership": "this actor's explicit membership changed since the review was prepared",
     "lore": "this record changed since the scene was absorbed",
     "authored": "this card field changed since the scene was absorbed",
     "relationship": "this relationship changed since the scene was absorbed",
@@ -268,6 +270,8 @@ def current_value(cid: str, edit: dict) -> str | None:
             if not st:
                 return ""
             return groupstate.compose_body({k: st[k] for k in groupstate.FIELDS})
+        if kind == "membership":
+            return membership.current(cid, edit)
         if kind == "lore":
             return overlay.read_entity(cid, target.get("kind", ""), tid)["body"].strip()
         if kind == "authored":
@@ -350,8 +354,11 @@ def target_key(edit: dict) -> tuple | None:
         # with a reading.
         if kind in ("character_state", "group_state", "plot", "commitment", "fact"):
             return (kind, str(target.get("id", "")))
-        if kind == "lore":
-            return (kind, str(target.get("kind", "")), str(target.get("id", "")))
+        if kind in ("lore", "membership"):
+            # A membership edit addresses one actor's slot on the group, so two
+            # actors' edits on one group are two records.
+            key = (kind, str(target.get("kind", "")), str(target.get("id", "")))
+            return (*key, str(payload.get("actor", ""))) if kind == "membership" else key
         if kind == "authored":
             return (kind, str(target.get("id", "")), field)
         if kind == "relationship":
@@ -437,7 +444,7 @@ def survey(cid: str, edit: dict) -> tuple[dict | None, str | None]:
     if after is None:
         return None, None   # malformed: nothing to diff, and apply cannot write it either
     stored = current_value(cid, edit)
-    if stored is None or stored == basis:
+    if stored is None or stored == basis or (kind == "membership" and stored == after):
         return None, stored
     mergeable = kind in MERGEABLE
     return {"id": edit.get("id", ""), "label": edit.get("label", ""), "kind": kind,

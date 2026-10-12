@@ -36,15 +36,17 @@ than in an entry the mint would have to create.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from . import atomic
+from . import atomic, entities, group_proposals, group_refs, locks
 from .campaigns import paths as campaigns_paths
-from .paths import now_iso
+from .paths import now_iso, safe_id
 
 #: How long a completed entry stays retryable. Deliberately time, not count: a
 #: review sits open on someone's screen for as long as they leave it there, and
@@ -77,29 +79,88 @@ def _write(cid: str, tokens: dict, scenes: dict) -> None:
         {"v": SCHEMA, "tokens": tokens, "scenes": scenes}, indent=2) + "\n")
 
 
-def _read(cid: str) -> dict:
-    """``{"tokens": {token: entry}, "scenes": {sid: epoch}}``.
+def _valid_targets(value) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(position, str) and position.isascii() and position.isdigit()
+        and isinstance(target, dict)
+        # Every field a later fence or Undo reads as text must BE text, so a
+        # damaged account refuses here rather than raising mid-operation.
+        and all(key not in target or isinstance(target[key], str)
+                for key in ("kind", "id", "ref", "actor", "token"))
+        and ("retired" not in target or type(target["retired"]) is bool)
+        and ("suspended" not in target or isinstance(target["suspended"], str))
+        and ("source" not in target or group_proposals.valid_identity(target["source"]))
+        and ("copy_receipt" not in target or (isinstance(target["copy_receipt"], dict)
+             and group_proposals.valid_identity(target["copy_receipt"].get("source"))
+             and group_proposals.valid_identity(target["copy_receipt"].get("owned"))))
+        and ("relocating" not in target or (isinstance(target["relocating"], dict)
+             and set(target["relocating"]) == {"operation", "kind", "id", "new_kind"}
+             and all(isinstance(value, str) and value for value in target["relocating"].values())))
+        for position, target in value.items())
 
-    Tolerates the pre-#271 shape, where the file *was* the token map: an upgrade
-    must not read as a garbled ledger and forget every open review's token,
-    because forgetting one is what lets its retry replay the appends.
+
+def _valid_membership_progress(progress: dict) -> bool:
+    """The deferred views `_fence_membership_progress` walks, in the shapes
+    apply's journal writes them, so a damaged account refuses here rather than
+    raising halfway through a lifecycle fence."""
+    journalled = progress.get("journalled", [])
+    recorded = progress.get("recorded", {})
+    return (isinstance(journalled, list)
+            and all(isinstance(row, dict) and isinstance(row.get("ref", {}), dict) for row in journalled)
+            and isinstance(recorded, dict)
+            and all(isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+                    for rows in recorded.values())
+            and isinstance(progress.get("cited", {}), dict))
+
+
+def _valid_entry(entry) -> bool:
+    if not isinstance(entry, dict) or type(entry.get("done")) is not bool:
+        return False
+    for key in ("result", "progress", "membership_targets"):
+        if key in entry and not (isinstance(entry[key], dict) or (key == "result" and entry[key] is None)):
+            return False
+    for key in ("fingerprint", "sid", "at"):
+        if key in entry and not isinstance(entry[key], str):
+            return False
+    progress = entry.get("progress", {})
+    if ("membership_targets" in progress and not _valid_targets(progress["membership_targets"])) or (
+            "membership_targets" in entry and not _valid_targets(entry["membership_targets"])):
+        return False
+    if ("membership_targets" in progress or "membership_targets" in entry) and not _valid_membership_progress(progress):
+        return False
+    claimed = entry.get("claimed")
+    return claimed is None or (type(claimed) is int and claimed >= 0)
+
+
+def _read(cid: str) -> dict:
+    """Complete strict account, retaining valid pre-#271 token maps (spec07).
+
+    Absence alone is empty. Losing a malformed/denied account can replay appends
+    and erase pending membership fences, so every RMW shares this refusal.
+    Dictionary-valued legacy tokens named v/tokens/scenes are not schema markers.
     """
-    p = _path(cid)
-    empty: dict = {"tokens": {}, "scenes": {}}
-    if not p.exists():
-        return empty
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return empty           # a garbled ledger forgets, it never blocks a save
+        data = json.loads(_path(cid).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"tokens": {}, "scenes": {}}
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise group_refs.GroupIdentityConflict("commits.json cannot be read; repair it before saving or changing identity.") from exc
     if not isinstance(data, dict):
-        return empty
-    if data.get("v") != SCHEMA:
-        return {"tokens": {t: e for t, e in data.items() if isinstance(e, dict)},
-                "scenes": {}}
-    tokens, scenes = data.get("tokens"), data.get("scenes")
-    return {"tokens": tokens if isinstance(tokens, dict) else {},
-            "scenes": scenes if isinstance(scenes, dict) else {}}
+        raise group_refs.GroupIdentityConflict("commits.json must be a complete account object; repair it before saving.")
+    version = data.get("v")
+    if version is not None and not isinstance(version, dict):
+        if type(version) is not int or version != SCHEMA:
+            raise group_refs.GroupIdentityConflict("commits.json has an unsupported account version; repair it before saving.")
+        if set(data) != {"v", "tokens", "scenes"}:
+            raise group_refs.GroupIdentityConflict("commits.json has unsupported account fields; repair it before saving.")
+        tokens, scenes = data.get("tokens"), data.get("scenes")
+    else:
+        tokens, scenes = data, {}
+    if (not isinstance(tokens, dict) or not isinstance(scenes, dict)
+            or any(not _valid_entry(entry) for entry in tokens.values())
+            or any(type(epoch) is not int or epoch < 0 for epoch in scenes.values())):
+        raise group_refs.GroupIdentityConflict("commits.json has invalid entries or scene epochs; repair the complete account before saving.")
+    return {"tokens": tokens, "scenes": scenes}
 
 
 def fingerprint(body: dict) -> str:
@@ -271,13 +332,110 @@ def lookup(cid: str, token: str) -> dict | None:
             "journalled": isinstance(progress, dict)}
 
 
+def _expired(entry: dict, cutoff: datetime) -> bool:
+    if not entry.get("done") or not isinstance(entry.get("at"), str):
+        return False
+    try:
+        stamp = datetime.fromisoformat(entry["at"])
+    except ValueError:
+        return False
+    # An undated legacy entry is still a spent token. Unknown timezone/date
+    # cannot be treated as expired merely because its text sorts before today.
+    return stamp.tzinfo is not None and stamp < cutoff
+
+
 def _prune(tokens: dict) -> dict:
-    """Drop completed entries past RETAIN_DAYS. Reservations are kept."""
-    cutoff = (datetime.now(UTC)
-              - timedelta(days=RETAIN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {t: e for t, e in tokens.items()
-            if not (isinstance(e, dict) and e.get("done")
-                    and str(e.get("at", "")) < cutoff)}
+    """Drop unambiguously dated completed entries; reservations never expire."""
+    cutoff = datetime.now(UTC) - timedelta(days=RETAIN_DAYS)
+    return {token: entry for token, entry in tokens.items() if not _expired(entry, cutoff)}
+
+
+def _membership_targets(entry: dict) -> dict:
+    progress = entry.get("progress", {})
+    return progress.get("membership_targets", entry.get("membership_targets", {}))
+
+
+def _preserve_targets(previous: dict, incoming: dict) -> dict:
+    """A stale worker cannot overwrite durable identity or lifecycle fences.
+
+    Targets originate in the first reservation. Checkpoints advance receipts,
+    while the durable target's provenance, relocation and retirement win over
+    a worker copy made before a lifecycle operation (spec07 section4.5).
+    """
+    targets = dict(incoming)
+    for position, target in previous.items():
+        fresh = targets.get(position, {})
+        targets[position] = {**fresh, **target}
+        for receipt in ("receipt", "copy_receipt"):
+            if receipt in fresh and not target.get(receipt):
+                targets[position][receipt] = fresh[receipt]
+    return targets
+
+
+def retarget_journal_row(row: dict, target: dict) -> None:
+    """Point one journalled membership row, and its Undo plan, at `target`."""
+    row["ref"] = {"kind": target["kind"], "id": target["id"]}
+    plan = row.get("undo")
+    if isinstance(plan, dict) and isinstance(plan.get("target"), dict):
+        plan["target"].update({key: target[key] for key in ("kind", "id", "retired") if key in target})
+        plan["target"].pop("relocating", None)
+        if "relocating" in target:
+            plan["target"]["relocating"] = copy.deepcopy(target["relocating"])
+
+
+def move_actor_deltas(progress: dict, refs: set[str], field: str, landed: str,
+                      available: bool) -> None:
+    """Move one actor field's recorded diff and citation from any of `refs` to
+    `landed`, or drop them when the target is no longer available. Every other
+    field (another actor, Leader) stays where it is."""
+    selected: list[dict] = []
+    for ref in sorted(refs):
+        deltas = progress.get("recorded", {}).get(ref, [])
+        selected.extend(row for row in deltas if row.get("field") == field)
+        if deltas:
+            progress["recorded"][ref] = [row for row in deltas if row.get("field") != field]
+    if available and selected:
+        progress["recorded"].setdefault(landed, []).extend(selected)
+    citations = [progress.get("cited", {}).pop(f"{ref}#{field}", None) for ref in sorted(refs)]
+    citation = next((row for row in citations if row is not None), None)
+    if available and citation is not None:
+        progress["cited"][f"{landed}#{field}"] = citation
+
+
+def _fence_membership_progress(progress: dict, previous: dict | None = None) -> dict:
+    """Follow the durable actor slot in every deferred view of an unfinished save.
+
+    A lifecycle operation and a stale checkpoint use this same transformation.
+    Only the actor field belonging to that original position moves; another
+    actor's diff and Leader remain untouched. Completed results are historical.
+    """
+    progress = copy.deepcopy(progress)
+    for position, target in progress.get("membership_targets", {}).items():
+        old = (previous or {}).get(position, {})
+        landed = f"{target.get('kind')}/{target.get('id')}"
+        refs = {landed, f"{old.get('kind')}/{old.get('id')}",
+                target.get("ref", "").replace(":", "/", 1)}
+        rows = [row for row in progress.get("journalled", [])
+                if row.get("membership_position") == position]
+        for row in rows:
+            ref = row.get("ref", {})
+            refs.add(f"{ref.get('kind')}/{ref.get('id')}")
+            retarget_journal_row(row, target)
+        available = not target.get("retired") and "relocating" not in target and target.get("kind") == "groups"
+        move_actor_deltas(progress, refs, f"members:{target.get('actor', '')}", landed, available)
+        if target.get("retired"):
+            for row in rows:
+                row["undo"] = None
+                row["why"] = "The original membership target is no longer available."
+    return progress
+
+
+def _preserve_progress(previous: dict, incoming: dict) -> dict:
+    if "membership_targets" not in previous and "membership_targets" not in incoming:
+        return incoming
+    return _fence_membership_progress({**incoming, "membership_targets": _preserve_targets(
+        previous.get("membership_targets", {}), incoming.get("membership_targets", {}))},
+        previous.get("membership_targets", {}))
 
 
 def _put(cid: str, token: str, entry: dict, bump_sid: str = "") -> None:
@@ -287,6 +445,13 @@ def _put(cid: str, token: str, entry: dict, bump_sid: str = "") -> None:
     data = _read(cid)
     tokens = _prune(data["tokens"])
     if token:
+        prior = data["tokens"].get(token, {})
+        targets = _preserve_targets(_membership_targets(prior), _membership_targets(entry))
+        entry = {**prior, **entry, "progress": _preserve_progress(prior.get("progress", {}), entry.get("progress", {}))}
+        if targets:
+            entry["membership_targets"] = targets
+        if entry.get("done"):
+            entry["progress"] = {}
         tokens[token] = {**entry, "at": now_iso()}
     scenes = dict(data["scenes"])
     if bump_sid:
@@ -347,7 +512,7 @@ def checkpoint(cid: str, token: str, progress: dict) -> None:
     entry = data["tokens"].get(token)
     if not isinstance(entry, dict) or "done" not in entry or entry.get("done"):
         return                 # a settled outcome is not reopened by a late journal
-    data["tokens"][token] = {**entry, "progress": progress, "at": now_iso()}
+    data["tokens"][token] = {**entry, "progress": _preserve_progress(entry.get("progress", {}), progress), "at": now_iso()}
     _write(cid, data["tokens"], data["scenes"])
 
 
@@ -362,3 +527,153 @@ def record(cid: str, token: str, result: dict, fp: str = "", sid: str = "") -> N
     """
     _put(cid, token, {"done": True, "result": result, "fingerprint": fp, "sid": sid,
                       "progress": {}})
+
+
+def require_readable(cid: str) -> None:
+    """Preflight the complete account before a lifetime owner's first effect."""
+    _read(cid)
+
+
+def references_world(cid: str, world: str) -> bool:
+    """Historical unfinished source claims, compared without opening provenance."""
+    return any(not target.get("retired") and not target.get("copy_receipt")
+        and isinstance(target.get("source"), dict)
+        and target["source"].get("layer") == "world" and target["source"].get("world") == world
+        for entry in _read(cid)["tokens"].values() if not entry["done"]
+        for target in _membership_targets(entry).values())
+
+
+def _target_matches(target: dict, root: Path, kind: str, rid: str, world: str | None) -> bool:
+    if target.get("kind") != kind or not isinstance(target.get("id"), str) or not safe_id(target["id"]):
+        return False
+    source = target.get("source", {})
+    inherited = source.get("layer") == "world" and not target.get("copy_receipt")
+    if world is not None:
+        if not inherited or source.get("world") != world:
+            return False
+    elif inherited:
+        return False
+    if target["id"] == rid:
+        return True
+    try:
+        return (root / kind / f"{target['id']}.md").samefile(root / kind / f"{rid}.md")
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise group_refs.GroupIdentityConflict("cannot verify an unfinished membership target before changing record identity") from exc
+
+
+def _change_membership_targets(cid: str, change) -> bool:
+    """Publish lifecycle fences to both durable mirrors without dropping receipts.
+
+    Completed results stay historical. Deferred output is fenced by the same
+    original-position account when its publication owner resumes (spec07).
+    """
+    data = _read(cid)
+    changed = False
+    for entry in data["tokens"].values():
+        if entry["done"]:
+            continue
+        previous = _membership_targets(entry)
+        targets = copy.deepcopy(previous)
+        touched = False
+        for target in targets.values():
+            touched = change(target) or touched
+        if touched:
+            entry["membership_targets"] = targets
+            progress = {**entry.get("progress", {}), "membership_targets": targets}
+            entry["progress"] = _fence_membership_progress(progress, previous)
+            changed = True
+    if changed:
+        _write(cid, data["tokens"], data["scenes"])
+    return changed
+
+
+def retire_membership_targets(cid: str, kind: str, rid: str, *, root: Path,
+                              world: str | None = None) -> None:
+    with locks.campaign_lock(cid):
+        def retire(target):
+            if target.get("retired") or not _target_matches(target, root, kind, rid, world):
+                return False
+            target["retired"] = True
+            return True
+        _change_membership_targets(cid, retire)
+
+
+def begin_membership_relocation(cid: str, kind: str, rid: str, new_kind: str, *, root: Path,
+                                world: str | None = None) -> str | None:
+    with locks.campaign_lock(cid):
+        operation = uuid.uuid4().hex
+        def suspend(target):
+            if target.get("retired") or "relocating" in target or not _target_matches(target, root, kind, rid, world):
+                return False
+            target["relocating"] = {"operation": operation, "kind": kind,
+                                    "id": target["id"], "new_kind": new_kind}
+            return True
+        return operation if _change_membership_targets(cid, suspend) else None
+
+
+def complete_membership_relocation(cid: str, operation: str, new_kind: str, new_id: str) -> None:
+    if new_kind not in entities.ENTITY_KINDS or not safe_id(new_id):
+        raise ValueError("invalid unfinished membership relocation destination")
+    with locks.campaign_lock(cid):
+        def complete(target):
+            move = target.get("relocating")
+            if not isinstance(move, dict) or move.get("operation") != operation or move.get("new_kind") != new_kind or target.get("retired"):
+                return False
+            target["kind"], target["id"] = new_kind, new_id
+            del target["relocating"]
+            return True
+        _change_membership_targets(cid, complete)
+
+
+def retain_membership_copy(cid: str, rid: str, *, world_root: Path, receipt: dict) -> None:
+    with locks.campaign_lock(cid):
+        def retain(target):
+            if (target.get("retired") or target.get("source") != receipt.get("source")
+                    or not _target_matches(target, world_root, "groups", rid, str(world_root.resolve()))):
+                return False
+            target["copy_receipt"] = {**copy.deepcopy(receipt), "token": target.get("token")}
+            return True
+        _change_membership_targets(cid, retain)
+
+
+def retire_world_claims(cid: str, world: str) -> None:
+    with locks.campaign_lock(cid):
+        def retire(target):
+            source = target.get("source", {})
+            if target.get("retired") or target.get("copy_receipt") or source.get("layer") != "world" or source.get("world") != world:
+                return False
+            target["retired"] = True
+            return True
+        _change_membership_targets(cid, retire)
+
+
+def retire_inherited_claims(cid: str) -> None:
+    """Fence unresolved World sources before the library pointer leaves them."""
+    with locks.campaign_lock(cid):
+        def retire(target):
+            if target.get("retired") or target.get("copy_receipt") or target.get("source", {}).get("layer") != "world":
+                return False
+            target["retired"] = True
+            return True
+        _change_membership_targets(cid, retire)
+
+
+def retire_membership_position(cid: str, token: str, position: str) -> None:
+    """A resume's observed source mismatch is permanent, even after A->B->A."""
+    with locks.campaign_lock(cid):
+        data = _read(cid)
+        entry = data["tokens"].get(token)
+        if entry is None or entry["done"]:
+            return
+        previous = _membership_targets(entry)
+        targets = copy.deepcopy(previous)
+        target = targets.get(position)
+        if target is None or target.get("retired"):
+            return
+        target["retired"] = True
+        entry["membership_targets"] = targets
+        entry["progress"] = _fence_membership_progress(
+            {**entry.get("progress", {}), "membership_targets": targets}, previous)
+        _write(cid, data["tokens"], data["scenes"])

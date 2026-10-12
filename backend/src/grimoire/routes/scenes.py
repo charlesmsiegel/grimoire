@@ -10,7 +10,6 @@ import logging
 import threading
 import time
 import uuid
-from typing import NamedTuple
 
 from fastapi import (
     APIRouter,
@@ -22,12 +21,14 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from .. import decisions, llm_sampling, prompts, store, wire
 from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store.absorb import membership as absorb_membership
 from ..store.continuity import identity as continuity_identity
 from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
@@ -2881,7 +2882,7 @@ def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
 #   destroy the absorb's prose, its staged edits and its commit token.
 
 
-class _Prepared(NamedTuple):
+class _Prepared(BaseModel):
     """Everything an absorb decides before it starts generating.
 
     One value rather than seven parameters, and it is not only tidiness: these
@@ -2911,6 +2912,7 @@ class _Prepared(NamedTuple):
     #: `transcript` was rendered from, so the citations are judged against the
     #: text the model was shown rather than the raw text the rules cleaned.
     shown: list
+    groups: absorb_membership.Capture | None = None
 
 
 class _ReviewCancelledError(Exception):
@@ -3079,44 +3081,46 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     `running` for the life of the process -- refusing every later turn and
     review on the scene.
     """
-    epoch, scene, tracked = _absorb_snapshot(cid, sid, run.scene_identity)
-    # Counted in context: an all-hidden scene has nothing a review could read,
-    # and a director note left beside it is dropped from the transcript too.
-    if not store.scenes.in_context(scene["messages"]):
-        raise HTTPException(status_code=400, detail="nothing to absorb")
-    # Absorb is not idempotent: lore edits append and plot movements add a beat,
-    # so a second pass over the same scene duplicates both. Refuse by default
-    # (before spending a token) and make the re-run an explicit choice (#235).
-    if _already_absorbed(scene) and not force:
-        raise HTTPException(
-            status_code=409,
-            detail={"detail": "this scene has already been absorbed", "kind": "already_absorbed"})
-    # The same snapshot the review is built from, digested. Validated again
-    # when the review is retrieved and again at save: once this run lands its
-    # exclusion slot is released and the composer re-enables, so the player can
-    # keep playing while the review sits on disk -- and none of that advances
-    # the commit epoch (`commits.reserve` is called from exactly one place),
-    # so the token alone would let a summary of a transcript that has moved
-    # save with every check returning green.
-    facts = store.chronicle.scene_facts(cid, sid)
-    player_label = store.appearances.player_label(cid, sid)
-    # The prompt view, computed once: the transcript the model is shown and the
-    # one its citations are judged against are the same text. The watermark
-    # below stays on the raw scene -- it is about what is stored.
-    shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
-    transcript = store.chronicle.transcript_text(shown, player_label)
-    prepared = _Prepared(
-        epoch=epoch, scene=scene, tracked=tracked, facts=facts, transcript=transcript,
-        player_label=player_label, shown=shown,
-        messages=store.absorb.build_prompt(
-            transcript, facts,
-            store.absorb.state_snapshot(cid, sid),
-            store.absorb.relationships_snapshot(cid, sid),
-            store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
-            store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid),
-            store.absorb.steering_snapshot(cid, sid),
-            tracked_snapshot=tracked),
-        watermark=store.pending_reviews.watermark(scene["messages"]))
+    with absorb_membership.held(cid):
+        epoch, scene, tracked = _absorb_snapshot(cid, sid, run.scene_identity)
+        # Counted in context: an all-hidden scene has nothing a review could read,
+        # and a director note left beside it is dropped from the transcript too.
+        if not store.scenes.in_context(scene["messages"]):
+            raise HTTPException(status_code=400, detail="nothing to absorb")
+        # Absorb is not idempotent: lore edits append and plot movements add a beat,
+        # so a second pass over the same scene duplicates both. Refuse by default
+        # (before spending a token) and make the re-run an explicit choice (#235).
+        if _already_absorbed(scene) and not force:
+            raise HTTPException(
+                status_code=409,
+                detail={"detail": "this scene has already been absorbed", "kind": "already_absorbed"})
+        # The same snapshot the review is built from, digested. Validated again
+        # when the review is retrieved and again at save: once this run lands its
+        # exclusion slot is released and the composer re-enables, so the player can
+        # keep playing while the review sits on disk -- and none of that advances
+        # the commit epoch (`commits.reserve` is called from exactly one place),
+        # so the token alone would let a summary of a transcript that has moved
+        # save with every check returning green.
+        facts = store.chronicle.scene_facts(cid, sid)
+        player_label = store.appearances.player_label(cid, sid)
+        # The prompt view, computed once: the transcript the model is shown and the
+        # one its citations are judged against are the same text. The watermark
+        # below stays on the raw scene -- it is about what is stored.
+        shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
+        transcript = store.chronicle.transcript_text(shown, player_label)
+        groups = absorb_membership.capture(cid)
+        prepared = _Prepared(
+            epoch=epoch, scene=scene, tracked=tracked, facts=facts, transcript=transcript,
+            player_label=player_label, shown=shown, groups=groups,
+            messages=store.absorb.build_prompt(
+                transcript, facts,
+                store.absorb.state_snapshot(cid, sid),
+                store.absorb.relationships_snapshot(cid, sid),
+                store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid, facts.get("cast", ()), snapshot=groups.snapshot),
+                store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid),
+                store.absorb.steering_snapshot(cid, sid),
+                tracked_snapshot=tracked),
+            watermark=store.pending_reviews.watermark(scene["messages"]))
 
     async def work():
         return await _absorb_work(cid, sid, client, resolved, run, generation, prepared)
@@ -3190,7 +3194,8 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, resolved: UsableIn
                 _extract_and_identify(
                     budget.run(operations.generate("absorb", prepared.messages,
                                                    client=client, resolved=resolved,
-                                                   usage=m.usage, stream=False),
+                                                   usage=m.usage, stream=False,
+                                                   schema=store.absorb.prompt.extraction_schema()),
                                on_timeout=_noting(client, resolved, m.usage)),
                     cid, sid, client, prepared, budget, ident_resolved, ident_why),
                 _stage_dossiers(cid, sid, prepared.transcript, client, dossier_resolved,
@@ -3222,7 +3227,8 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, resolved: UsableIn
         # it never saw.
         edits = store.absorb.materialize(cid, sid, parsed, prepared.shown,
                                          player_label=prepared.player_label,
-                                         on_identity_error=identity_staging_failed)
+                                         on_identity_error=identity_staging_failed,
+                                         membership_capture=prepared.groups)
         # Unpacked in the order the phases were listed, not the order they
         # finished, so `edits` reads the same way every time.
         dossier_edits, dossiers = _phase_or_raise(dossier_result)
@@ -4808,6 +4814,14 @@ def _merged_detail(cid: str, merged: list[dict]) -> str:
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
 def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                   client: LLMClient = Depends(get_llm)):
+    body.edits = absorb_membership.strip_private(body.edits)
+    has_membership = any(isinstance(edit, dict) and edit.get("kind") == "membership" for edit in body.edits)
+    if has_membership and not body.commit_token:
+        raise HTTPException(status_code=409, detail={"kind": "membership_commit_token",
+            "detail": "Membership changes need a durable review commit token; prepare a new review."})
+    # Filled when this request reserves fresh membership identities: a row whose
+    # group or lease could not be reached fails alone, with its own reason.
+    membership_failures: dict[str, str] = {}
     _require_scene(cid, sid)
     facts = store.chronicle.scene_facts(cid, sid)
     # One hold across the whole persistence sequence (#234). These are four
@@ -4827,7 +4841,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
     fp = store.commits.fingerprint({
         "one_line": body.one_line, "summary": body.summary, "keywords": body.keywords,
         "timeline_events": body.timeline_events, "edits": body.edits})
-    with store.locks.campaign_lock(cid):
+    with (absorb_membership.held(cid) if has_membership else contextlib.nullcontext()), store.locks.campaign_lock(cid):
         # A review save writes back into the scene and marks it absorbed, so it
         # reshapes what a live turn is generating into. Inside the hold that
         # already covers the whole sequence, so nothing reserves a turn between
@@ -4911,6 +4925,13 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
             # step it marked attempted without confirming is reported rather
             # than repeated.
             progress = prior["progress"]
+            if has_membership:
+                progress["membership_targets"] = absorb_membership.observe_targets(
+                    cid, body.commit_token, progress.get("membership_targets", {}))
+                # Lifecycle retirement also fences the durable deferred views.
+                refreshed = store.commits.lookup(cid, body.commit_token)
+                if refreshed is not None:
+                    progress = refreshed["progress"]
         else:
             # The transcript watermark, and it does NOT overlap with the epoch
             # check below. The epoch guards against another REVIEW committing;
@@ -4964,7 +4985,12 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
             # mutator -- what `sheets.write(expected=...)` already does, and what the
             # other seven would need -- which is the concurrency change `locks.py`
             # says those modules are waiting on, not something to bolt on here.
-            drifted = store.absorb.check_conflicts(cid, body.edits)
+            if has_membership:
+                progress["membership_targets"], membership_failures = absorb_membership.initial_targets(
+                    cid, body.edits)
+            reviewed_edits = absorb_membership.resumed_edits(
+                body.edits, progress.get("membership_targets", {}), membership_failures)
+            drifted = store.absorb.check_conflicts(cid, reviewed_edits)
             if drifted:
                 raise HTTPException(
                     status_code=409,
@@ -4983,9 +5009,8 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                     status_code=409,
                     detail={"detail": _merged_detail(cid, merged),
                             "kind": "edits_target_merged", "edits": merged})
-        record = store.chronicle.absorb(cid, {
-            "id": sid, "one_line": body.one_line, "summary": body.summary,
-            "keywords": body.keywords, **facts})
+        reviewed_edits = absorb_membership.resumed_edits(
+            body.edits, progress.get("membership_targets", {}), membership_failures)
         # The one step of the four that appends -- the other three overwrite (the
         # chronicle entry is keyed by scene id, the frontmatter below is a
         # rewrite, and each edit has its own slot in the journal). So it is the
@@ -4998,6 +5023,9 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
         if timeline is None:
             progress["timeline"] = "pending"
         store.commits.reserve(cid, body.commit_token, fp, sid, progress)
+        record = store.chronicle.absorb(cid, {
+            "id": sid, "one_line": body.one_line, "summary": body.summary,
+            "keywords": body.keywords, **facts})
         started: list[dict] = []
         if timeline is None:
             try:
@@ -5027,9 +5055,13 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
         def checkpoint() -> None:
             store.commits.checkpoint(cid, body.commit_token, progress)
+            if has_membership:
+                current = store.commits.lookup(cid, body.commit_token)
+                if current is not None:
+                    progress["membership_targets"] = current["progress"].get("membership_targets", {})
 
         applied, failures = store.absorb.apply_edits(
-            cid, body.edits, sid, progress=progress, checkpoint=checkpoint)
+            cid, reviewed_edits, sid, progress=progress, checkpoint=checkpoint)
         # Rows the reviewer sent to the world library, promoted as a journalled
         # step of THIS commit rather than after it (spec §9.4): a retry after a
         # lost response must find its own world record in the journal, not

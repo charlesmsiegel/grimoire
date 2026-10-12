@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, PositiveInt, StrictStr
 
+from ..store import membership
+
 
 # ---- models ----
 class ConfigUpdate(BaseModel):
@@ -653,7 +655,15 @@ class EntityReclassify(BaseModel):
     rev: str | None = None
 
 
+class GroupRefBinding(BaseModel):
+    field: Literal["members", "leader"]
+    actor: str
+
+
 class EntityUpdate(BaseModel):
+    # A submitted field alone grants no review of retained World actor refs.
+    # Defaults are copied per Pydantic instance, across both supported versions.
+    group_ref_bindings: list[GroupRefBinding] = []
     name: str | None = None
     body: str | None = None
     keys: str | None = None
@@ -1367,3 +1377,23 @@ class ImageGcStart(BaseModel):
     otherwise; a real run (the collection) carries the token a scan issued."""
     dry_run: bool = True
     token: str | None = None
+
+
+# Membership is read-only: share the store's roster and affiliation models,
+# rather than maintaining a second serializer that can drop roles or secrecy.
+class MembershipResponse(BaseModel):
+    digest: str
+    groups: tuple[membership.Roster, ...]
+    by_actor: dict[str, tuple[membership.Affiliation, ...]]
+
+
+class ActorGroup(BaseModel):
+    ref: str
+    name: str
+    secrecy: str
+    roles: tuple[str, ...]
+
+
+class ActorMembershipResponse(BaseModel):
+    actor: str
+    groups: tuple[ActorGroup, ...]

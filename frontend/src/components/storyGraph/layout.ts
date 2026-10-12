@@ -42,8 +42,8 @@ type View = { nodes: GraphNode[]; edges: GraphEdge[] };
 /** `NODE_KINDS` order: within a column, nodes stack by kind and then id.
  *  A Record, so a kind added to the union cannot be left unranked. */
 const KIND_RANK: Record<NodeKind, number> = {
-  scene: 0, character: 1, pc: 2, location: 3, thread: 4, commitment: 5, event: 6, idea: 7,
-  birthday: 8, holiday: 9,
+  scene: 0, character: 1, pc: 2, location: 3, group: 4, thread: 5, commitment: 6, event: 7, idea: 8,
+  birthday: 9, holiday: 10,
 };
 
 /** Left to right: a column's group on its axis, then its `rank`. */
@@ -69,6 +69,10 @@ const MOVEMENT = new Set<GraphEdge["kind"]>([
 
 function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function byNameThenId(a: GraphNode, b: GraphNode): number {
+  return compare(a.label, b.label) || compare(a.id, b.id);
 }
 
 function byKindThenId(a: GraphNode, b: GraphNode): number {
@@ -155,6 +159,8 @@ function playSlot(n: GraphNode, ix: GraphIndex, scenes: Map<string, Slot>,
     case "character":
     case "pc":
       return reached(new Set(["appeared_in"]), ix.out.get(n.id), "to")[0] ?? UNPLACED;
+    case "group":
+      return UNPLACED;
     case "location":
       return reached(new Set(["occurred_at"]), ix.into.get(n.id), "from")[0] ?? UNPLACED;
   }
@@ -189,6 +195,7 @@ function calendarSlot(n: GraphNode): Slot {
     case "character":
     case "pc":
     case "location":
+    case "group":
       return bucket("people", "People and places");
     case "thread":
       return bucket("not-dated", "Not dated");
@@ -277,6 +284,7 @@ function playLayout(g: StoryGraph, ix: GraphIndex, view: View): Layout {
   row += stack(view.nodes.filter((n) => n.kind === "character" || n.kind === "pc").sort(byId),
                colOf, row, placed);
   row += stack(view.nodes.filter((n) => n.kind === "location").sort(byId), colOf, row, placed);
+  row += stack(view.nodes.filter((n) => n.kind === "group").sort(byNameThenId), colOf, row, placed);
   return finish(view, placed, cols, row);
 }
 
@@ -297,7 +305,9 @@ function calendarLayout(g: StoryGraph, view: View): Layout {
   const now = nowFixed === null ? null : { ...bucket("now", "Now"), rank: nowFixed };
   const cols = columnsOf(slots.values(), now, (k) => CALENDAR_GROUP[k] ?? 0);
   const placed = new Map<string, Placed>();
-  const rows = stack(sorted, columnOf(slots, cols), 0, placed);
+  const colOf = columnOf(slots, cols);
+  let rows = stack(sorted.filter((n) => n.kind !== "group"), colOf, 0, placed);
+  rows += stack(sorted.filter((n) => n.kind === "group").sort(byNameThenId), colOf, rows, placed);
   return finish(view, placed, cols, rows);
 }
 

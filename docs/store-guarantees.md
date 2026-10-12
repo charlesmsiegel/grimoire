@@ -200,6 +200,43 @@ which is why `store/scenes` serializes its whole mutator surface through
   back. A crash mid-sequence leaves each individual record whole (see [Atomic
   writes](#atomic-writes)) but the sequence half-applied.
 
+### Identity ledgers before associated effects
+
+`overlay.detached_strict` and `deleted_strict` read the complete identity and
+visibility ledgers. Only a missing file means an empty set. Unreadable bytes,
+invalid JSON, wrong shapes or unknown reference spellings refuse a mutation
+with `GroupIdentityConflict`; a writer never repairs them by publishing an
+empty replacement. Supported record, plot-map, record-asset and library-asset
+markers are preserved, including unrelated entries and harmless duplicates.
+Ordinary display readers retain their fail-soft behavior.
+
+Ledger read-modify-writes use atomic replacement under the campaign lock.
+Actor creation, record movement/deletion, reattachment, campaign image removal,
+sync advance/publication and lazy slimming preflight both ledgers before their
+associated effects. Slimming holds the lock across classification, reservations,
+pruning and its final campaign marker. Repointing validates both record refs
+before changing a manifest or marker.
+
+Actor detachment checks preserve raw ref spelling and compare exact markers
+first, then use native directory identity for relevant campaign/World aliases.
+They do not guess case behavior: a differently-cased ref reaching the same
+actor directory must not bypass a detachment, while distinct case-sensitive
+entries remain distinct. These probes read identity metadata, not actor content.
+The shared effective-ref filter remains pure.
+
+World record delete routes, World reclassification and World library image removal enumerate current
+dependents, take `hold_all` and preflight every ledger before deleting anything.
+Demotion uses the same sorted hold, including campaigns that already hide the
+record because its cleanup sweep can still change their markers. Campaign holds
+precede image collection, name and sidecar holds. A busy or corrupt dependent can
+therefore refuse a World removal before it changes records, assets or manifests.
+
+These holds serialize participating writers on this machine. They neither stop
+an external editor/sync client nor create a transaction across files. A failure
+after a preflight and an earlier durable effect can leave a partial operation;
+unreadable campaign World references remain subject to the existing tolerant
+sweep enumeration. This is not a World lifecycle barrier.
+
 ### Ordering, and why `hold_all` is the only way to hold two
 
 ```
@@ -254,6 +291,7 @@ a stale field; refusing would cost the turn.
 | Lock | Scope | Notes |
 |---|---|---|
 | `locks.world_actor_lock(wid)` | world actor name claims | serializes character and PC creation against the same name in one World |
+| `locks.world_lifecycle_lock(store, world)` | one World's group identities in one pinned store (spec 07) | cross-process; taken **before** the campaign locks of the campaigns that inherit from that World, so an absorb's membership capture and save, a World delete and a storage move see one group lifetime; raises `WorldLifecycleBusy` |
 | `locks.config_lock()` | global `config.md`, and every model-settings read-modify-write (`llm_connections.LOCK` is this same lock; `config.format_hold()` is it with the format check) | cross-process; taken inside a campaign lock (a campaign settings write), never around one, and the only lock under it is `inference.facts`' process-local file lock; see [Model settings across processes](#model-settings-across-processes) |
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
@@ -272,7 +310,8 @@ apart.** The archive is a coarse restore point, not a transactional snapshot.
 Entering any of the five locks — campaign, world actor roster, config, backup,
 module-edit — raises that lock's subclass of `locks.StoreBusy` after
 `LOCK_TIMEOUT` (30 seconds): `CampaignBusy`, `WorldActorBusy`, `ConfigBusy`,
-`BackupBusy`, `ModuleEditBusy`. One handler in
+`BackupBusy`, `ModuleEditBusy` (and the World lifecycle lock's
+`WorldLifecycleBusy`). One handler in
 `main.create_app` turns any of them into **HTTP 409** with a message naming
 what is busy, so the failure is retryable rather than a wedged server. (The two
 non-blocking variants above never raise — they report with a boolean instead,

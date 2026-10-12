@@ -64,7 +64,7 @@ equal.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from typing import Any, TypeVar
 
 from .. import (
@@ -72,7 +72,9 @@ from .. import (
     chronicle,
     events,
     fieldtext,
+    group_refs,
     locks,
+    membership,
     overlay,
     relationships,
     scene_ideas,
@@ -81,15 +83,15 @@ from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 from . import candidates, canon, doc, drivers, effective, involvement, pending, pressure
 
-#: §20's node kinds: `canon.KIND_OF_PREFIX`'s kinds minus the two §19.2 leaves
-#: optional (groups, standing facts). The order is the payload's node order.
-NODE_KINDS = ("scene", "character", "pc", "location", "thread", "commitment", "event",
+#: §20's node kinds: `canon.KIND_OF_PREFIX`'s kinds minus standing facts, which §19.2 leaves
+#: optional; spec07 adds the group family. The order is the payload's node order.
+NODE_KINDS = ("scene", "character", "pc", "location", "group", "thread", "commitment", "event",
               "idea", "birthday", "holiday")
 
 #: §20's edge kinds; the order is the payload's edge order.
 EDGE_KINDS = ("appeared_in", "occurred_at", "opened_in", "advanced_in", "touched_in",
               "closed_in", "resolved_in", "involves", "serves", "anchored_to", "feeling",
-              "bond", "birthday_of", "link", "merged_into", "possible_duplicate",
+              "bond", "birthday_of", "member_of", "leads", "link", "merged_into", "possible_duplicate",
               "possible_relation")
 
 #: Where an edge comes from: derived from the files, a reviewed link, a pending
@@ -101,7 +103,7 @@ EVENT_STATUSES = ("scheduled", "fired", "passed", "undated")
 
 #: The sources `omitted` may name, in the order it lists them.
 PARTS = ("calendar", "scenes", "chronicle", "plot", "commitments", "events", "continuity",
-         "candidates", "relationships", "scene_ideas", "names")
+         "candidates", "relationships", "scene_ideas", "groups", "names")
 
 T = TypeVar("T")
 
@@ -144,6 +146,10 @@ def _attempt(omitted: set[str], part: str | None, fn: Callable[..., T], fallback
     raises anything at all. `part=None` softens without recording."""
     try:
         return fn(*args)
+    except group_refs.GroupIdentityConflict:
+        # Spec07 identity ambiguity cannot become a plausible partial graph.
+        # This strict refusal applies even when the inverse memo was warm.
+        raise
     except Exception:  # noqa: BLE001 -- a source may be a hand-edited file or user calendar plugin code, which can raise anything; one source failing must cost only its own nodes and edges
         if part is not None:
             omitted.add(part)
@@ -789,8 +795,31 @@ def _edge_key(edge: dict) -> tuple:
     return (EDGE_KINDS.index(edge["kind"]), edge["from"], edge["to"], edge["id"])
 
 
+def _group_parts(index: membership.Index | None, live: Mapping[str, dict]) -> tuple[list, list]:
+    """Structural affiliations over existing actors only (spec07 §10).
+
+    Groups neither manufacture actor nodes nor imply model visibility. This
+    GM page keeps secrecy marked, including GM-only, and roles independent.
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    if index is None:
+        return nodes, edges
+    for roster in index.groups.values():
+        affiliated = [("member_of", actor) for actor in roster.members]
+        if roster.leader:
+            affiliated.append(("leads", roster.leader))
+        kept = [_edge(kind, actor, roster.ref) for kind, actor in affiliated
+                if live.get(actor, {}).get("kind") in _ACTOR_KINDS]
+        if kept:
+            nodes.append({"id": roster.ref, "kind": "group", "label": roster.name,
+                          "group_type": roster.group_type, "secrecy": roster.secrecy})
+            edges.extend(kept)
+    return nodes, edges
+
+
 def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
-              omitted: set[str]) -> dict:
+              omitted: set[str], group_index: membership.Index | None = None) -> dict:
     nodes: dict[str, dict] = {}
     edges: dict[str, dict] = {}
     # Families run in order, and `nodes.keys()` is a live view: a family that
@@ -801,6 +830,8 @@ def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
         ("chronicle", _actor_parts, (files, names)),
         ("plot", _record_parts, (files, temporal, names)),
         ("events", _temporal_parts, (temporal, names, omitted)),
+        # All actor-producing families have run, including plot and birthdays.
+        ("groups", _group_parts, (group_index, nodes)),
         ("scene_ideas", _idea_parts, (files, temporal, files["live"], nodes.keys(), omitted)),
     )
     for part, builder, args in families:
@@ -829,10 +860,11 @@ def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
 
 def build(cid: str) -> dict:
     """`{now, nodes, edges, omitted}` for one campaign. Never raises for an
-    existing campaign: a source that fails costs its own part, named in
-    `omitted`."""
+    existing campaign unless group identity is ambiguous (spec07). An ordinary
+    source failure costs its own part, named in `omitted`."""
     omitted: set[str] = set()
     temporal = _temporal(cid, omitted)
     files = _files(cid, omitted)
     names = _names(cid, omitted)
-    return _assemble(cid, temporal, files, names, omitted)
+    group_index = _attempt(omitted, "groups", membership.campaign_index, None, cid)
+    return _assemble(cid, temporal, files, names, omitted, group_index)

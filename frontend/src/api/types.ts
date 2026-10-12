@@ -1123,6 +1123,20 @@ export type RecordArtRead = {
 };
 export type ImagePromoteGuards = { expected_v?: string; expected_primary_v?: string | null };
 export type ImageDescriptionGuards = { expected_v?: string; expected_description_rev?: string; cleanup_only?: boolean };
+// Group files author membership; these are read-only inverse projections.
+export type MembershipRole = "leader" | "member";
+export type MembershipRoster = {
+  ref: string; name: string; secrecy: Secrecy; group_type: string;
+  leader: string | null; members: string[]; headquarters: string | null;
+};
+export type MembershipAffiliation = { group: string; roles: MembershipRole[] };
+export type MembershipResponse = {
+  digest: string;
+  groups: MembershipRoster[];
+  by_actor: Record<string, MembershipAffiliation[]>;
+};
+export type ActorGroup = { ref: string; name: string; secrecy: Secrecy; roles: MembershipRole[] };
+export type ActorMembershipResponse = { actor: string; groups: ActorGroup[] };
 
 // ---- library moves (#52, #53, #60) ----
 //
@@ -1206,6 +1220,7 @@ export const ENTITY_FIELDS: Record<EntityKind, EntityFieldSpec[]> = {
   groups: [
     { key: "group_type", label: "Type", widget: "text" },
     { key: "leader", label: "Leader", widget: "ref", kinds: ["characters", "pcs"] },
+    { key: "members", label: "Members", widget: "ref", kinds: ["characters", "pcs"], multi: true },
     { key: "headquarters", label: "Headquarters", widget: "ref", kinds: ["locations"] },
   ],
   creatures: [
@@ -1264,7 +1279,24 @@ export const SECRECY_LABELS: Record<Secrecy, string> = {
 // costs nothing because it is never sent, not because it is short.
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
   secrecy?: string; has_image?: boolean; image_v?: string | null; image_focus?: number | null; tokens?: number } & Record<string, unknown>;
+/** Effective one-group refs and inherited identity diagnostics (spec 07). */
+export type GroupMembershipContext = {
+  layer: "world" | "campaign";
+  members: string[];
+  leader: string | null;
+  filtered_members: string[];
+  filtered_leader: string | null;
+  unresolved_members: string[];
+  unresolved_leader: string | null;
+  /** Every retained Leader token needing review, dormant legacy extras
+   *  included: the copy guard checks each one, so each needs its own opt-in.
+   *  Absent from an older server, where `unresolved_leader` is all there is. */
+  unresolved_leaders?: string[];
+};
+export type GroupRefBinding = { field: "members" | "leader"; actor: string };
+
 export type EntityDetail = {
+  membership_context?: GroupMembershipContext;
   meta: { id: string; name: string; keys?: string; owners?: string; secrecy?: string;
     sd_prompt?: string } & Record<string, unknown>;
   body: string;
@@ -1406,8 +1438,10 @@ export type IncomingStatus = "new" | "update" | "conflict";
 /** One side of an incoming change. `card` for a locked character version,
  *  `persona` for a locked PC version, `body` for everything else — an entity, a
  *  plot map, or the version list of an actor with no locked version. */
+export type IncomingField = { key: string; label: string; value: string; shown: string };
 export type IncomingBlob = {
   name: string; version?: string; body?: string; card?: Card; persona?: Persona;
+  fields?: IncomingField[];
 };
 export type IncomingItem = {
   ref: IncomingRef; status: IncomingStatus; world: IncomingBlob;
@@ -1821,7 +1855,7 @@ export type Climate = { id: string; name: string; persistence: number; seasons: 
  *  presence came through (a holder, a leader, a location), null when there is
  *  none to name. */
 export type OwnerPresence = {
-  type: "cast" | "current_location" | "held_by" | "led_by" | "headquarters" | "habitat" | "activated";
+  type: "cast" | "current_location" | "held_by" | "led_by" | "member_present" | "headquarters" | "habitat" | "activated";
   via?: string | null;
 };
 /** An entry's owner and how it is present, carried by any reason that passed
@@ -2275,7 +2309,7 @@ export type EditReview = {
   score: number; band: "high" | "medium" | "low";
 };
 export type StagedEdit = {
-  id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
+  id: string; kind: "character_state" | "group_state" | "membership" | "lore" | "authored" | "relationship" | "bond" | "plot"
     | "commitment" | "fact" | "new_character" | "new_location" | "new_lore" | "sheet"
     | "dossier" | "voice_drift";
   target: { kind: string; id: string }; label: string; field: string;
@@ -2916,12 +2950,12 @@ export type ContinuityState = {
 // review's `CandidateKind` are reused, never redeclared.
 
 export type NodeKind =
-  | "scene" | "character" | "pc" | "location" | "thread" | "commitment" | "event" | "idea"
+  | "scene" | "character" | "pc" | "location" | "group" | "thread" | "commitment" | "event" | "idea"
   | "birthday" | "holiday";
 export type EdgeKind =
   | "appeared_in" | "occurred_at" | "opened_in" | "advanced_in" | "touched_in" | "closed_in"
   | "resolved_in" | "involves" | "serves" | "anchored_to" | "feeling" | "bond"
-  | "birthday_of" | "link" | "merged_into" | "possible_duplicate" | "possible_relation";
+  | "birthday_of" | "member_of" | "leads" | "link" | "merged_into" | "possible_duplicate" | "possible_relation";
 export type EdgeSource = "structural" | "reviewed" | "candidate" | "alias";
 /** A reviewed link's relation (`effective.LINK_RELATIONS`). */
 export type LinkRelation =
@@ -2932,7 +2966,7 @@ export type EventStatus = "scheduled" | "fired" | "passed" | "undated";
  *  looks like an empty campaign. */
 export type GraphPart =
   | "calendar" | "scenes" | "chronicle" | "plot" | "commitments" | "events" | "continuity"
-  | "candidates" | "relationships" | "scene_ideas" | "names";
+  | "candidates" | "relationships" | "scene_ideas" | "groups" | "names";
 
 /** A dated node's four fields. A null `fixed` is undated (no calendar, or a
  *  date the calendar cannot read), never day zero. */
@@ -2952,6 +2986,7 @@ export type GraphNode = { id: string; label: string } & (
   | ({ kind: "scene"; order: number; done: boolean; pcless: boolean; place: string }
      & GraphDate)
   | { kind: "character" | "pc" | "location" }
+  | { kind: "group"; group_type: string; secrecy: Secrecy }
   | ({ kind: "thread" } & ArcFields)
   | ({ kind: "commitment"; commitment_kind: string; due: string } & ArcFields & GraphDate)
   | ({ kind: "event"; status: EventStatus; pressure: NodePressure | null; anchorable: boolean;

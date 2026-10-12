@@ -78,6 +78,7 @@ from grimoire.store import (
     voice_drift,
     worlds,
 )
+from grimoire.store.absorb import membership as absorb_membership
 from grimoire.store.absorb import parse as absorb_parse
 from grimoire.store.continuity import canon, identity, pending, pressure, reconcile
 from grimoire.store.continuity import drivers as continuity_drivers
@@ -391,8 +392,12 @@ def build_absorb() -> dict:
     mara, _ = characters.create_character(wroot, "Mara", "default", mcard)
     entities.create_entity(wroot, "lore", "The Ledger",
                            "The ledger lists a decade of harbour bribes.", keys="ledger")
+    # Seraphine leads the Circle and is present, so the absorb prompt renders
+    # the "Affiliates here" segment (spec 07 section 9.2); Mara is not yet a
+    # member, so her explicit join below is a proposal rather than a no-op.
     circle = entities.create_entity(wroot, "groups", "Salt Circle",
-                                    "A quiet cabal moving contraband.")
+                                    "A quiet cabal moving contraband.",
+                                    fields={"leader": f"characters:{sera}"})
 
     cid = campaigns.create_campaign("Saltmarch Nights", wid)
     croot = campaigns.campaign_root(cid)
@@ -428,7 +433,13 @@ def build_absorb() -> dict:
     # A reroll's steering prompt, so the extraction is primed with the one
     # correction the player had to make mid-scene.
     steering.record(cid, sid, "Seraphine already knows Winifred saw the ledger — she was there.")
-    return {"cid": cid, "sid": sid}
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content":
+        "I am joining the Salt Circle. Count me among its members."}])
+    with absorb_membership.held(cid):
+        membership_capture = absorb_membership.capture(cid)
+    return {"cid": cid, "sid": sid, "membership_capture": membership_capture,
+            "membership_group": circle, "membership_actor": f"characters:{mara}",
+            "membership_leader": f"characters/{sera}"}
 
 
 def grade_absorb(ctx: dict, output: str) -> list[Check]:
@@ -461,7 +472,13 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
            # Inside each new_lore row, so the derived contract cannot see it:
            # without the ask every suggestion defaults to plain lore.
            "asks_new_lore_kind": '"kind" is one of '
-                                 + ", ".join(f'"{k}"' for k in absorb_parse.NEW_LORE_KINDS)})
+                                 + ", ".join(f'"{k}"' for k in absorb_parse.NEW_LORE_KINDS),
+           # The membership paragraph's distinctive rule, and the snapshot
+           # segment that lets the model see a standing affiliation.
+           "asks_membership_contract": "Working beside a group, helping it once, or being "
+                                       "taken for one of its members is not joining it",
+           "shows_affiliates_here": f"| Affiliates here: Seraphine Vale "
+                                    f"({ctx['membership_leader']}, leader)"})
 
     out, parsed = graders.grade_absorb(output)
     if not all(c.ok for c in out):
@@ -474,14 +491,22 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
     # absorb.materialize with a red absorb.applicable says "the schema is fine,
     # the model had nothing to say about a scene that plainly did".
     try:
-        edits = absorb_store.materialize(ctx["cid"], ctx["sid"], parsed)
+        edits = absorb_store.materialize(ctx["cid"], ctx["sid"], parsed,
+                                         membership_capture=ctx["membership_capture"])
     except Exception as exc:                                    # noqa: BLE001
         return prompt + out + [
             Check("absorb.materialize", False, f"{type(exc).__name__}: {exc}")]
     return prompt + out + [
         Check("absorb.materialize", True),
         Check("absorb.applicable", bool(edits),
-              "parsed cleanly but produced no edits this fixture can apply")]
+              "parsed cleanly but produced no edits this fixture can apply"),
+        Check("absorb.membership_proposal", any(
+            edit.get("kind") == "membership"
+            and edit.get("target") == {"kind": "groups", "id": ctx["membership_group"]}
+            and edit.get("payload", {}).get("actor") == ctx["membership_actor"]
+            and edit.get("payload", {}).get("change") == "join" for edit in edits),
+            "Mara's explicit join did not produce the host-captured actor proposal")]
+
 
 
 # ----------------------------------------------- case 4: owned-lore containment
@@ -2096,7 +2121,9 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
                                      absorb_store.state_snapshot(cid, sid),
                                      absorb_store.relationships_snapshot(cid, sid),
                                      absorb_store.plot_snapshot(cid),
-                                     absorb_store.group_snapshot(cid),
+                                     absorb_store.group_snapshot(
+                                         cid, chronicle.scene_facts(cid, sid).get("cast", ()),
+                                         snapshot=ctx["membership_capture"].snapshot),
                                      absorb_store.commitment_snapshot(cid),
                                      absorb_store.fact_snapshot(cid),
                                      absorb_store.steering_snapshot(cid, sid))
@@ -2137,7 +2164,8 @@ CASES: tuple[Case, ...] = (
              # those is visible.
              Recording("laundered", ("absorb.summary", "absorb.keywords",
                                      "absorb.bond_changes", "absorb.new_lore",
-                                     "absorb.weather_edits"), "json"))),
+                                     "absorb.weather_edits"), "json"),
+             Recording("null-membership", ("absorb.membership_changes",), "json"))),
     Case(id="turn-taking",
          hypothesis="in a four-hander with turn-taking on, the reply is carried "
                     "by the nominated speaker rather than by whoever has been "

@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import time
@@ -5,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import entities, statcache, tokens
+from grimoire.store import entities, entity_schema, statcache, tokens
 from tests.test_token_counting import _Enc
 
 REPO = Path(__file__).resolve().parents[2]
@@ -467,3 +468,73 @@ def test_owner_refs_parses_the_frontmatter_line(tmp_path: Path):
         "characters:mara", "locations:tidewatch"]
     assert entities.owner_refs("") == []
     assert entities.owner_refs(None) == []
+
+
+def _frontend_field_table(src: str) -> dict:
+    """Read the controlled literal table; unfamiliar TS fails instead of vanishing.
+
+    A JSON token stream handles quoted labels without rewriting their contents.
+    No JS execution or checkout-specific Node environment is needed by this guard.
+    """
+    match = re.search(r"export const ENTITY_FIELDS:[^=]+=[ \t]*(\{.*?\n\});", src, re.DOTALL)
+    assert match, "ENTITY_FIELDS literal declaration not found"
+    text = match.group(1)
+    token = re.compile(r'\s+|//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?|[A-Za-z_]\w*|[\[\]{},:]', re.DOTALL)
+    tokens = []
+    pos = 0
+    while pos < len(text):
+        item = token.match(text, pos)
+        assert item is not None, f"unsupported field-table syntax near {text[pos:pos + 30]!r}"
+        value = item.group()
+        if not value.isspace() and not value.startswith(("//", "/*")):
+            tokens.append(value)
+        pos = item.end()
+    position = 0
+
+    def literal():
+        nonlocal position
+        value = tokens[position]
+        position += 1
+        if value in ("{", "["):
+            result = {} if value == "{" else []
+            end = "}" if value == "{" else "]"
+            while tokens[position] != end:
+                if value == "{":
+                    key = tokens[position]
+                    position += 1
+                    assert re.fullmatch(r'[A-Za-z_]\w*|"(?:\\.|[^"\\])*"', key)
+                    key = json.loads(key) if key.startswith('"') else key
+                    assert tokens[position] == ":"
+                    position += 1
+                    assert key not in result, f"duplicate field-table key {key}"
+                    result[key] = literal()
+                else:
+                    result.append(literal())
+                if tokens[position] != end:
+                    assert tokens[position] == ","
+                    position += 1
+            position += 1
+            return result
+        assert value.startswith('"') or value in ("true", "false") or re.fullmatch(r'-?\d+(?:\.\d+)?', value), value
+        return json.loads(value)
+
+    result = literal()
+    assert position == len(tokens), "trailing field-table syntax"
+    return result
+
+
+def test_the_frontend_ships_the_same_field_table():
+    """Every picker/constraint mirrors the save boundary, not just the kind union."""
+    src = (REPO / "frontend/src/api/types.ts").read_text(encoding="utf-8")
+    table = _frontend_field_table(src)
+    assert set(table) == set(entities.ENTITY_KINDS)
+    expected = {kind: [dict(spec) for spec in entity_schema.FIELDS.get(kind, ())]
+                for kind in entities.ENTITY_KINDS}
+    for fields in expected.values():
+        for field in fields:
+            for key in ("kinds", "options"):
+                if key in field:
+                    field[key] = list(field[key])
+    assert table == expected
+    assert [field["key"] for field in table["groups"]] == [
+        "group_type", "leader", "members", "headquarters"]

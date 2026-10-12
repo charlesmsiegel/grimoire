@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from . import (
@@ -30,8 +30,11 @@ from . import (
     atomic,
     characters,
     entities,
+    entity_schema,
     greetings,
+    group_refs,
     image_refs,
+    journal,
     locks,
     overlay,
     pcs,
@@ -59,12 +62,131 @@ def _entity_blob(root: Path, kind: str, eid: str) -> dict:
         g = greetings.read_greeting(root, eid)
         return {"name": g["meta"].get("name", eid), "body": g["body"]}
     e = entities.read_entity(root, kind, eid)
-    return {"name": e["meta"].get("name", eid), "body": e["body"]}
+    return {"name": e["meta"].get("name", eid), "body": e["body"], "fields": [
+        {"key": field["key"], "label": field["label"], "value": e["meta"][field["key"]],
+         "shown": e["meta"][field["key"]]}
+        for field in entity_schema.FIELDS.get(kind, ()) if field["key"] in e["meta"]]}
+
+
+def _align_entity_fields(world: dict, mine: dict, kind: str) -> None:
+    left = {row["key"]: row for row in world.get("fields", ())}
+    right = {row["key"]: row for row in mine.get("fields", ())}
+    fields = [field for field in entity_schema.FIELDS.get(kind, ())
+              if field["key"] in left or field["key"] in right]
+    for blob, values in ((world, left), (mine, right)):
+        blob["fields"] = [values.get(field["key"], {
+            "key": field["key"], "label": field["label"], "value": "", "shown": ""}) for field in fields]
+
+
+def _incoming_identity(path: Path) -> tuple[int, int] | None:
+    # samefile's native device/inode proof, indexed once rather than probing
+    # every pair. A missing alias stays unresolved; denied proof is not absence.
+    try:
+        result = path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise group_refs.GroupIdentityConflict("Cannot determine campaign reference identity; repair actor or record access.") from exc
+    return result.st_dev, result.st_ino
+
+
+def _incoming_native_names(v: overlay.View, kind: str, owned: set[str], refs: set[str],
+                           names: dict[str, str]) -> None:
+    needed = {ref: aid for ref in refs for prefix, sep, aid in [ref.partition(":")]
+              if sep and prefix == kind and entity_schema.referenceable(aid) and aid not in owned}
+    if not owned or not needed:
+        return
+    actor = kind in group_refs.ACTOR_KINDS
+
+    def path(eid):
+        return v.croot / kind / eid if actor else overlay._flat_path(v.croot, kind, eid)
+
+    aliases = {ref: identity for ref, aid in needed.items()
+               if (identity := _incoming_identity(path(aid))) is not None}
+    if not aliases:
+        return
+    # Owned directory/file names, not inherited raw IDs that happen to resolve
+    # through them. One identity read per owned slot and per queried alias.
+    identities = {identity: eid for eid in sorted(owned)
+                  if (identity := _incoming_identity(path(eid))) is not None}
+    for ref, identity in aliases.items():
+        own = identities.get(identity)
+        if own is not None:
+            names[ref] = names.get(f"{kind}:{own}", ref)
+
+
+def _incoming_names(cid: str, v: overlay.View, kinds: set[str], refs: set[str]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for kind in sorted(kinds):
+        if kind == "characters":
+            rows = overlay.character_roster(cid, v=v)
+            owned = set(characters.listed_ids(v.croot))
+        elif kind == "pcs":
+            rows = overlay.pc_roster(cid, v=v)
+            owned = set(pcs.listed_ids(v.croot))
+        else:
+            rows = overlay.list_entities(cid, kind, v=v)
+            owned = set(entities.entity_ids(v.croot, kind))
+        names.update({f"{kind}:{row['id']}": row.get("name", row["id"]) for row in rows})
+        # Exact owned IDs already have the correct name. Native alias matching
+        # applies to actors AND flat records, without another content/card read.
+        _incoming_native_names(v, kind, owned, refs, names)
+    return names
+
+
+def _incoming_ref_rows(items: list[dict]) -> list[tuple[str, dict, list[str]]]:
+    entries: list[tuple[str, dict, list[str]]] = []
+    for item in items:
+        descriptors = {field["key"]: field for field in entity_schema.FIELDS.get(item["ref"]["kind"], ())}
+        entries.extend((side, row, entity_schema.parse_refs(row["value"]))
+            for side in ("world", "mine") for row in item.get(side, {}).get("fields", ())
+            if descriptors[row["key"]]["widget"] == entity_schema.REF)
+    return entries
+
+
+def _show_incoming_fields(cid: str, items: list[dict], v: overlay.View) -> None:
+    entries = _incoming_ref_rows(items)
+    kinds: set[str] = set()
+    actors: set[str] = set()
+    needed_refs = {ref for _, _, refs in entries for ref in refs}
+    for ref in needed_refs:
+        kind, _, rid = ref.partition(":")
+        if kind in entity_schema.REF_KINDS and entity_schema.referenceable(rid):
+            kinds.add(kind)
+        actor = group_refs.actor_ref(ref)
+        if actor is not None:
+            actors.add(actor)
+    severed: set[str] = set()
+    if actors:
+        # These proofs and the display roster use the same captured roots and,
+        # when they read, complete strict sets: a changed data directory cannot
+        # pair another store's detachments with this sweep's names (spec 07).
+        # But `shown` is display text nothing compares (5.3) and `incoming` is
+        # an ordinary read (7.7), so a ledger that cannot be verified degrades
+        # to the fail-soft sets -- at worst a stranger loses its marker -- and
+        # never takes the whole sync panel down with a 409.
+        with suppress(group_refs.GroupIdentityConflict):
+            v._off = frozenset(overlay._strict_ledger(v.croot / "detached.json", visibility=False))
+        with suppress(group_refs.GroupIdentityConflict):
+            v._gone = frozenset(overlay._strict_ledger(v.croot / "deleted.json", visibility=True))
+        try:
+            severed = overlay.actor_detachments(v.croot, v.wroot, actors, set(v.off))
+        except group_refs.GroupIdentityConflict:
+            severed = set(v.off)   # alias proof denied: exact markers only
+    names = _incoming_names(cid, v, kinds, needed_refs)
+    for side, row, refs in entries:
+        shown = []
+        for ref in refs:
+            value = names.get(ref, ref)
+            if side == "world" and group_refs.actor_ref(ref) is not None and ref.replace(":", "/", 1) in severed:
+                value += " (this campaign's own; not the library's)"
+            shown.append(value)
+        row["shown"] = ", ".join(shown)
 
 
 def incoming(cid: str) -> list[dict]:
-    wroot = campaigns_read.world_root_of(cid)  # raises CampaignNotFound if the campaign is missing
-    croot = campaigns_paths.campaign_root(cid)
+    v = overlay.view(cid)
+    wroot, croot = v.wroot, v.croot  # raises CampaignNotFound if the campaign is missing
     # read campaign.md / sync.md / appearances.json once and thread them through
     # the passes -- each used to re-read all three per pass
     manifest = campaigns_paths.read_manifest(cid)
@@ -93,6 +215,8 @@ def incoming(cid: str) -> list[dict]:
         out.append({"ref": {"kind": kind, "id": eid}, "status": status,
                     "world": _entity_blob(wroot, kind, eid),
                     "mine": _entity_blob(croot, kind, eid)})
+        if kind in entities.ENTITY_KINDS:
+            _align_entity_fields(out[-1]["world"], out[-1]["mine"], kind)
     items = (out + _plotmap_incoming(wroot, croot, manifest)
              + _actor_incoming(wroot, croot, locked, gone)
              + _unpicked_incoming(wroot, croot, manifest, locked, gone))
@@ -100,9 +224,10 @@ def incoming(cid: str) -> list[dict]:
     # pass: a pinned ref is simply not offered (#71). The composition view is
     # where a pinned ref still reports the state this filter is hiding.
     pins = pinned_refs(cid)
-    if not pins:
-        return items
-    return [i for i in items if _ref_str(i["ref"]["kind"], i["ref"]["id"]) not in pins]
+    if pins:
+        items = [i for i in items if _ref_str(i["ref"]["kind"], i["ref"]["id"]) not in pins]
+    _show_incoming_fields(cid, items, v)
+    return items
 
 
 def _plotmap_blob(root: Path) -> dict:
@@ -212,79 +337,100 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
-    # Migrate first, so accept only ever runs against the overlay layout (#270).
-    # Accepting drops a copy and its manifest ref, and to a campaign the
-    # migration has not reached a ref whose copy is gone is a record the user
-    # deleted -- so an interruption between the two writes would have it
-    # tombstone an inherited record. Ordering the writes the other way round
-    # there is not enough on its own: the stranded copy is then a record that
-    # reads correctly and never syncs again, and no rule can tell it from one
-    # the campaign owns. Getting the migration out of the way first leaves
-    # neither. Nothing is lost when it cannot run (the world dir is missing):
-    # every `world_h` below is then None and this function does nothing at all.
-    # Cheap besides -- a migrated campaign costs one campaign.md read -- and the
-    # sync routes already call it, so this only closes the gap between theirs
-    # and ours.
-    campaigns_lifecycle.ensure_campaign_slim(cid)
-    # `incoming` filters detached refs, but accept/reject take theirs from the
-    # request body -- a stale one submitted after the slug was recreated would
-    # dematerialize the very copy detaching preserved (Codex review).
-    gone = overlay.detached(cid)
-    refs = [r for r in refs if _ref_str(r["kind"], r["id"]) not in gone]
-    # Pinned refs are dropped for the same reason detached ones are: `incoming`
-    # no longer offers them, but accept/reject take their refs from the request
-    # body, and a stale submission must not advance a base hash the pin exists
-    # to hold still (#71). Unpinning restores the offer untouched.
-    pins = pinned_refs(cid)
-    refs = [r for r in refs if _ref_str(r["kind"], r["id"]) not in pins]
-    wroot = campaigns_read.world_root_of(cid)
-    croot = campaigns_paths.campaign_root(cid)
-    manifest = campaigns_paths.read_manifest(cid)
-    manifest_changed = False  # loc/lore manifest write
-    touched = False           # any ref advanced → bump campaign.updated
-    for ref in refs:
-        kind, eid = ref["kind"], ref["id"]
-        if kind == "plotmap":
-            world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
-            pending = ("plotmap" in manifest and world_h is not None
-                       and manifest["plotmap"] != world_h)
-            if not pending:
-                continue
-            if copy:   # take world: drop our copy, revert to inherited
-                (croot / "plotmap.json").unlink(missing_ok=True)
-                manifest.pop("plotmap", None)
-            else:
-                manifest["plotmap"] = world_h
-            manifest_changed = touched = True
-            continue
-        if kind in appearances_paths.ACTOR_KINDS:
-            if appearances_paths.record(cid).get(_ref_str(kind, eid)) is not None:
-                if _advance_actor(cid, kind, eid, copy=copy):   # locked flow: unchanged
-                    touched = True
-                continue
-            world_h = _dir_hash(wroot, kind, eid) if wroot.exists() else None
-            if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
-                continue
-            if copy:
-                overlay.dematerialize_actor(cid, kind, eid)
-                manifest.pop(_ref_str(kind, eid), None)
-            else:
-                manifest[_ref_str(kind, eid)] = world_h
-            manifest_changed = touched = True
-            continue
-        world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None
-        if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
-            continue
-        if copy:
-            (croot / kind / f"{eid}.md").unlink(missing_ok=True)
-            manifest.pop(_ref_str(kind, eid), None)
-        else:
-            manifest[_ref_str(kind, eid)] = world_h
-        manifest_changed = touched = True
-    if manifest_changed:
-        campaigns_paths.write_manifest(cid, manifest)
-    if touched:
-        campaigns_read.touch(cid)
+    with locks.campaign_lock(cid):
+        severed, _ = overlay.require_identity_ledgers(cid)
+        journal.require_readable(cid)
+        # Migrate first, so accept only ever runs against the overlay layout (#270).
+        # Accepting drops a copy and its manifest ref, and to a campaign the
+        # migration has not reached a ref whose copy is gone is a record the user
+        # deleted -- so an interruption between the two writes would have it
+        # tombstone an inherited record. Ordering the writes the other way round
+        # there is not enough on its own: the stranded copy is then a record that
+        # reads correctly and never syncs again, and no rule can tell it from one
+        # the campaign owns. Getting the migration out of the way first leaves
+        # neither. Nothing is lost when it cannot run (the world dir is missing):
+        # every `world_h` below is then None and this function does nothing at all.
+        # Cheap besides -- a migrated campaign costs one campaign.md read -- and the
+        # sync routes already call it, so this only closes the gap between theirs
+        # and ours.
+        campaigns_lifecycle.ensure_campaign_slim(cid)
+        # `incoming` filters detached refs, but accept/reject take theirs from the
+        # request body -- a stale one submitted after the slug was recreated would
+        # dematerialize the very copy detaching preserved (Codex review).
+        gone = severed
+        refs = [r for r in refs if not overlay.record_is_marked(cid, r["kind"], r["id"], gone)]
+        # Pinned refs are dropped for the same reason detached ones are: `incoming`
+        # no longer offers them, but accept/reject take their refs from the request
+        # body, and a stale submission must not advance a base hash the pin exists
+        # to hold still (#71). Unpinning restores the offer untouched.
+        pins = pinned_refs(cid)
+        refs = [r for r in refs if not overlay.record_is_marked(cid, r["kind"], r["id"], pins)]
+        wroot = campaigns_read.world_root_of(cid)
+        croot = campaigns_paths.campaign_root(cid)
+        # A requested World alias must not advance/delete another owned
+        # original. Validate the whole batch before its first effect (spec07).
+        for ref in refs:
+            overlay.require_world_identity_scope(wroot, ref["kind"], ref["id"], (cid,))
+        manifest = campaigns_paths.read_manifest(cid)
+        manifest_changed = False  # loc/lore manifest write
+        touched = False           # any ref advanced → bump campaign.updated
+        effect_attempted = False
+        try:
+            for ref in refs:
+                kind, eid = ref["kind"], ref["id"]
+                if kind == "plotmap":
+                    world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
+                    pending = ("plotmap" in manifest and world_h is not None
+                               and manifest["plotmap"] != world_h)
+                    if not pending:
+                        continue
+                    if copy:   # take world: drop our copy, revert to inherited
+                        effect_attempted = True
+                        (croot / "plotmap.json").unlink(missing_ok=True)
+                        manifest.pop("plotmap", None)
+                    else:
+                        manifest["plotmap"] = world_h
+                    manifest_changed = touched = True
+                    continue
+                if kind in appearances_paths.ACTOR_KINDS:
+                    if appearances_paths.record(cid).get(_ref_str(kind, eid)) is not None:
+                        if _advance_actor(cid, kind, eid, copy=copy):   # locked flow: unchanged
+                            touched = True
+                        continue
+                    world_h = _dir_hash(wroot, kind, eid) if wroot.exists() else None
+                    if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
+                        continue
+                    if copy:
+                        effect_attempted = True
+                        overlay.dematerialize_actor(cid, kind, eid)
+                        manifest.pop(_ref_str(kind, eid), None)
+                    else:
+                        manifest[_ref_str(kind, eid)] = world_h
+                    manifest_changed = touched = True
+                    continue
+                world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None
+                if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
+                    continue
+                if copy:
+                    effect_attempted = True
+                    overlay.dematerialize(cid, _ref_str(kind, eid))
+                    manifest.pop(_ref_str(kind, eid), None)
+                else:
+                    manifest[_ref_str(kind, eid)] = world_h
+                manifest_changed = touched = True
+            if manifest_changed:
+                effect_attempted = True
+                campaigns_paths.write_manifest(cid, manifest)
+            if touched:
+                campaigns_read.touch(cid)
+        except Exception:
+            if effect_attempted:
+                # A take-world unlink may have returned successfully before the
+                # final manifest writer failed. Stamp after that last possible
+                # effect, under the same hold as retirement/removal (spec 07).
+                revision.bump(cid)
+            raise
+
 
 
 def accept(cid: str, refs: list[dict]) -> None:
@@ -620,7 +766,8 @@ def _reattaching_on_failure(cid: str, ref: str):
     Only on the way out through an exception. A kill still lands on the
     documented residue, which is the harmless one and self-heals on retry.
     """
-    was_detached = ref in overlay.detached(cid)
+    severed, _ = overlay.require_identity_ledgers(cid)
+    was_detached = severed & overlay.capture_record_refs(cid, ref).owned
     try:
         # Inside the try, not before it. `undetach` is itself two writes -- the
         # marker, then the asset tombstones the detachment kept -- so a failure
@@ -631,7 +778,8 @@ def _reattaching_on_failure(cid: str, ref: str):
     except BaseException:
         if was_detached:
             try:
-                overlay.add_detached(cid, ref)
+                for marker in sorted(was_detached):
+                    overlay.add_detached(cid, marker)
             except Exception:  # noqa: BLE001 - the copy's failure is the one worth raising
                 log.warning("could not restore the detachment on %s after a failed "
                             "promotion; a world record reusing that id would be "
@@ -733,13 +881,17 @@ def promote(cid: str, kind: str, eid: str) -> None:
     """
     campaigns_lifecycle.ensure_campaign_slim(cid)   # only ever run against the overlay layout
     _safe_ref(kind, eid)
-    wroot = _require_world(campaigns_read.world_root_of(cid))
     # sync.md is rewritten WHOLE, so two library moves on the same campaign can
     # each read it and each republish it, and the later write drops the other's
     # ref -- leaving a promoted record no manifest names, which no world edit
     # ever reaches again (Codex review). One lock, held across the read and the
     # write, and the same one demote takes.
     with locks.campaign_lock(cid):
+        # Resolve the destination with the source under this same hold. A
+        # recreated/rebound campaign cannot publish into its former World
+        # using a root captured while waiting for this lock (spec 07 review).
+        wroot = _require_world(campaigns_read.world_root_of(cid))
+        overlay.require_identity_ledgers(cid)
         if kind in appearances_paths.ACTOR_KINDS:
             _promote_actor(cid, kind, eid, wroot)
         else:
@@ -749,6 +901,10 @@ def promote(cid: str, kind: str, eid: str) -> None:
 
 
 def _promote_flat(cid: str, kind: str, eid: str, wroot: Path) -> None:
+    # Publish the owned source's actual identity, as the actor path does.
+    # With no owned source, preserve the existing World-only conflict order.
+    with suppress(FileNotFoundError, NotADirectoryError):
+        eid = _world_file(campaigns_paths.campaign_root(cid), kind, eid).resolve(strict=True).stem
     # Collision before existence, on purpose. A record the campaign merely
     # inherits has no campaign-side file either, and answering *that* with "not
     # found" would be a lie about a record the user is looking at: it exists,
@@ -758,6 +914,7 @@ def _promote_flat(cid: str, kind: str, eid: str, wroot: Path) -> None:
     text = overlay.record_text(cid, kind, eid)
     if text is None:
         raise entities.EntityNotFound(_ref_str(kind, eid))
+    _require_world_members(cid, wroot, text, kind, eid)
     if kind == "greetings":
         _require_world_character(cid, wroot, text, eid)
     ref = _ref_str(kind, eid)
@@ -817,6 +974,42 @@ def promoted_intact(cid: str, kind: str, eid: str) -> bool:
     return entities.content_hash(text) == base
 
 
+def _publishes_membership(kind: str, text: str) -> bool:
+    """Whether publishing these bytes adopts World actor identities (spec 07 5.5).
+
+    A group always does; any other flat kind only while it carries a
+    well-formed dormant Members or Leader ref. A record with neither -- a
+    location, a lore entry -- publishes no membership, so it takes on no new
+    strict ledger-read prerequisite and keeps the publication it had.
+    """
+    return kind == "groups" or bool(group_refs.group_slots(parse_frontmatter(text)[0]))
+
+
+def _require_world_members(cid: str, wroot: Path, text: str, kind: str, eid: str) -> None:
+    """Publishing Members and Leader adopts the destination World identities.
+
+    Force resolves a text conflict, never a missing or detached actor. Dormant
+    actor fields on other flat kinds get the same check before their bytes can
+    later become a group through reclassification (spec 07). A non-group
+    record with no well-formed actor ref is a no-op here: no ledger is read.
+    """
+    if not _publishes_membership(kind, text):
+        return
+    ref = _ref_str(kind, eid)
+    severed, _ = overlay.require_identity_ledgers(cid)
+    meta, _ = parse_frontmatter(text)
+    slots = group_refs.group_slots(meta)
+    severed = overlay.actor_detachments(overlay.croot_of(cid), wroot,
+                                       (actor for _, actor in slots), severed)
+    for field, actor in sorted(slots):
+        akind, aid = actor.split(":", 1)
+        if (_ref_str(akind, aid) in severed or not _world_holds_actor(wroot, akind, aid)
+                or not overlay.world_identity_matches_owned(cid, akind, aid, wroot)):
+            raise DanglingReferenceError(
+                f"{ref} {field} names {actor}, which is not this campaign's World actor "
+                "— promote that actor into the library first, or remove them from the group")
+
+
 def _require_world_character(cid: str, wroot: Path, text: str, gid: str) -> None:
     """A greeting names the character it belongs to, so the library needs that
     character too -- otherwise promoting publishes a greeting pointing at
@@ -870,6 +1063,14 @@ def _require_world_actor(wroot: Path, detached_here: set[str], char: str,
 
 
 def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
+    if not safe_id(aid):
+        raise _actor_missing(kind, aid)
+    # Only the owned source resolves this id, under promote's hold. Its
+    # spelling also keys the appearance lock and every sync leg (spec 07).
+    # Without an owned path, retain conflict-first behavior for World-only
+    # actors; the snapshot below diagnoses an absent source otherwise.
+    with suppress(FileNotFoundError, NotADirectoryError):
+        aid = overlay.record_dir(cid, kind, aid).resolve(strict=True).name
     if _world_holds_actor(wroot, kind, aid):     # see `_promote_flat` on the order
         raise PromoteConflictError(f"the library already has {kind}/{aid}")
     taken = overlay.actor_snapshot(cid, kind, aid)
@@ -887,6 +1088,16 @@ def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
     for name in names:
         actor_names.require_unique(name, scope="world", scope_id=world_id,
                                    actor_ref=f"{kind}:{aid}", ignore_campaign=cid)
+    # A lock stored under another spelling cannot safely be rekeyed here:
+    # historical role refs retain it, and a different World namespace may map
+    # that spelling to another actor. Refuse before publication (spec 07).
+    croot = campaigns_paths.campaign_root(cid)
+    ref = _ref_str(kind, aid)
+    for locked_ref in appearances_paths.record(cid):
+        if locked_ref != ref and overlay.record_is_marked(
+                cid, kind, aid, {locked_ref}, roots=(croot, croot)):
+            raise group_refs.GroupIdentityConflict(
+                "This actor's saved version lock uses an alias; resolve that alias before promoting it.")
     base, files = taken
     meta_name = _actor_meta_name(kind)
     ref = _ref_str(kind, aid)
@@ -1062,8 +1273,8 @@ def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
     _flat_kind(kind)
     _safe_ref(kind, eid)
     campaigns_lifecycle.ensure_campaign_slim(cid)
-    wroot = _require_world(campaigns_read.world_root_of(cid))
     with locks.campaign_lock(cid):      # see `promote` on why the manifest needs it
+        wroot = _require_world(campaigns_read.world_root_of(cid))
         _push_locked(cid, kind, eid, wroot, force=force)
 
 
@@ -1079,12 +1290,20 @@ def _push_locked(cid: str, kind: str, eid: str, wroot: Path, *, force: bool) -> 
     # retry then recreates it around the dead record's images (Codex review).
     if not _world_file(wroot, kind, eid).exists():
         raise NotInLibraryError(f"{ref} is campaign-local; promote it into the library instead")
-    if ref in overlay.detached(cid):
+    # Strict only where membership is published (5.5): there an unreadable
+    # ledger is a GroupIdentityConflict before any write. A record that
+    # publishes no actor ref keeps #225's ordinary fail-soft read, so a corrupt
+    # detached.json does not newly block pushing an unrelated location.
+    severed = (overlay.require_identity_ledgers(cid)[0] if _publishes_membership(kind, text)
+               else overlay.detached(cid))
+    if overlay.record_is_marked(cid, kind, eid, severed):
         # Its world original was deleted and something else took the slug. The
         # two records share nothing but an id, and overwriting a stranger is
         # the exact harm detaching exists to prevent (#225).
         raise NotInLibraryError(
             f"{ref} no longer belongs to the library record of that name")
+    overlay.require_world_identity_scope(wroot, kind, eid, (cid,))
+    _require_world_members(cid, wroot, text, kind, eid)
     if kind == "greetings":
         # The same referential check promote runs. A campaign can edit an
         # inherited greeting's cast to name an emergent character, and pushing
@@ -1177,6 +1396,47 @@ def _require_world_record(wid: str, kind: str, eid: str) -> Path:
     return wroot
 
 
+def _demote_scope(wroot: Path, kind: str, eid: str, captured: list[str]) -> tuple[list[str], list[dict]]:
+    """Current bound scope and copy candidates, inside its one sorted hold."""
+    bound: list[str] = []
+    deps: list[dict] = []
+    for cid in captured:
+        try:
+            meta = campaigns_read.read_campaign(cid)["meta"]
+        except campaigns_paths.CampaignNotFound:
+            continue
+        if not worlds_paths.references_world(meta.get("world", ""), wroot):
+            continue
+        severed, gone = overlay.require_identity_ledgers(cid)
+        journal.require_readable(cid)
+        bound.append(cid)  # hidden/detached campaigns still need cleanup preflight
+        if (overlay.record_is_marked(cid, kind, eid, gone)
+                or overlay.record_is_marked(cid, kind, eid, severed)):
+            continue
+        deps.append({"id": cid, "name": meta.get("name", cid),
+                     "has_copy": overlay.record_text(cid, kind, eid) is not None})
+    return bound, deps
+
+
+def _prepare_demote(wroot: Path, kind: str, eid: str, held: list[str],
+                    deps: list[dict], *, copy_down: bool) -> str | None:
+    """Validate the whole mutation scope and freeze its copy source.
+
+    Called inside the sorted campaign hold, before the effect/stamp span.
+    A refusal here must leave every earlier dependent and the World untouched.
+    """
+    for cid in held:
+        overlay.require_identity_ledgers(cid)
+        journal.require_readable(cid)
+    overlay.require_world_identity_scope(wroot, kind, eid, held)
+    if not copy_down:
+        return None
+    text = _world_file(wroot, kind, eid).read_text(encoding="utf-8")
+    for dep in deps:
+        overlay.require_group_materialization(dep["id"], kind, eid, source_text=text)
+    return text
+
+
 def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
            target: str | None = None) -> dict:
     """Take a record out of the library, optionally leaving each dependent
@@ -1202,17 +1462,6 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
     to every dependent.
     """
     wroot = _require_world_record(wid, kind, eid)
-    every = dependents(wid, kind, eid)
-    deps = every
-    if target is not None:
-        # Refused, not filtered to nothing. The delete below runs whatever
-        # `target` matched, so a typo used to mean "copy this down nowhere,
-        # then take it away from every campaign" -- the most destructive
-        # reading of the request, chosen silently.
-        if not any(d["id"] == target for d in every):
-            raise UnknownTargetError(
-                f"{target} is not a campaign that depends on {kind}/{eid}")
-        deps = [d for d in every if d["id"] == target]
     copied: list[str] = []
     # `every`, not `deps`: the copy-down may be narrowed to one campaign, but
     # the sweep below rewrites sync.md and detached.json in ALL of them, and a
@@ -1220,7 +1469,24 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
     # several campaigns is exactly the shape `hold_all` exists for -- it is the
     # only sanctioned way to hold more than one campaign lock, and it sorts, so
     # this cannot be the holder that wedges against another (#267, Codex review).
-    with locks.hold_all([d["id"] for d in every]):
+    # The sweep also reaches campaigns already hiding this record, which
+    # `dependents` deliberately omits from copy-down. Their markers still
+    # change, so the hold and preflight must include them (spec 07).
+    with overlay.world_identity_scope(wroot) as lifetime:
+        # Discovery is a preview, not a publication scope. A campaign may be
+        # deleted/recreated or rebound while this operation waits for its hold.
+        # Recheck its World and every copy/marker inside that same hold; never
+        # process an earlier dependency outside the one captured set (spec 07).
+        held, every = _demote_scope(wroot, kind, eid, list(lifetime.bound))
+        deps = every
+        if target is not None:
+            # Refused, not filtered to nothing. A typo or retired target must
+            # not mean "copy down nowhere, then delete the World record".
+            if not any(d["id"] == target for d in every):
+                raise UnknownTargetError(
+                    f"{target} is not a campaign that depends on {kind}/{eid}")
+            deps = [d for d in every if d["id"] == target]
+        source_text = _prepare_demote(wroot, kind, eid, held, deps, copy_down=copy_down)
         # Every dependent's write token (#409), inside the hold that covers the
         # writes and in a `finally` so the failure path reaches it too. This is
         # a WORLD route, so nothing in `/api/campaigns/...` stamps these
@@ -1255,18 +1521,22 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
                         # unlock itself, which is the opposite of keeping it
                         # (Codex review). Its own map, taken before the delete.
                         overlay.materialize_plotmap(dep["id"])
-                    if dep["has_copy"]:
-                        continue     # already its own; materializing is a no-op anyway
-                    overlay.materialize_entity(dep["id"], kind, eid)
-                    copied.append(dep["id"])
+                    # Even an owned preview must pass through the locked
+                    # materializer: take-world may have removed it before this
+                    # hold, and the copy is what survives World deletion.
+                    if not overlay._materialize_flat(dep["id"], kind, eid, source_text=source_text):
+                        raise entities.EntityNotFound(_ref_str(kind, eid))
+                    if not dep["has_copy"]:
+                        copied.append(dep["id"])
+            overlay.retire_world_reviews(wroot, kind, eid, lifetime.captured)
             if kind == "greetings":
                 greetings.delete_greeting(wroot, eid)   # also unwires the world's plot map
             else:
                 entities.delete_entity(wroot, kind, eid)
-            overlay.forget_world_record(wroot, kind, eid)
+            overlay.forget_world_record(wroot, kind, eid, cids=held)
         finally:
-            for dep in every:
-                revision.bump(dep["id"])
+            for cid in held:
+                revision.bump(cid)
     _touch_world(wroot)
     return {"copied_down": sorted(copied),
             "dependents": [d["id"] for d in deps]}

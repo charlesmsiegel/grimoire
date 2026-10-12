@@ -31,8 +31,10 @@ from .. import (
 from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store import compiled
+from ..store import compiled, group_refs
 from ..store import inference_retired as retired
+from ..store import paths as library_paths
+from ..store.absorb import membership as absorb_membership
 from ..store.inference import capabilities, controls, facts, limits, providers
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
@@ -517,8 +519,15 @@ def put_data_dir(update: DataDirUpdate, request: Request):
                 "detail": "the model settings are being upgraded; try again when "
                           "that has finished"})
         try:
-            with compiled.root_change():
+            with compiled.root_change(), library_paths.library_guard():
+                previous = library_paths.home()
+                prospective = library_paths.prepare_data_dir(update.data_dir)
+                if str(previous.resolve()) != str(prospective.resolve()):
+                    absorb_membership.retire_library_inherited(previous)
                 store.set_data_dir(update.data_dir)
+        except group_refs.GroupIdentityConflict as exc:
+            raise HTTPException(status_code=409,
+                                detail={"detail": str(exc), "kind": "group_identity"}) from exc
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400,
                                 detail={"detail": str(exc), "kind": "data_dir"})

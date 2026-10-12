@@ -146,6 +146,8 @@ FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
         {"key": "group_type", "label": "Type", "widget": TEXT},
         {"key": "leader", "label": "Leader", "widget": REF,
          "kinds": ("characters", "pcs")},
+        {"key": "members", "label": "Members", "widget": REF,
+         "kinds": ("characters", "pcs"), "multi": True},
         {"key": "headquarters", "label": "Headquarters", "widget": REF,
          "kinds": ("locations",)},
     ),

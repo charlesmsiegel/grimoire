@@ -38,6 +38,7 @@ export const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
 export const EDIT_GROUPS: { key: string; label: string; kinds: StagedEdit["kind"][] }[] = [
   { key: "state", label: "Character state", kinds: ["character_state", "dossier"] },
   { key: "relationships", label: "Relationships", kinds: ["relationship", "bond"] },
+  { key: "groups", label: "Group membership", kinds: ["membership"] },
   { key: "facts", label: "Facts", kinds: ["fact"] },
   { key: "plot", label: "Plot & commitments", kinds: ["plot", "commitment"] },
   { key: "new", label: "New records", kinds: ["new_character", "new_location", "new_lore"] },

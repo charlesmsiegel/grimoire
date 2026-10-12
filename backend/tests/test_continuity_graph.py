@@ -22,6 +22,8 @@ from grimoire.store import (
     clock,
     commitments,
     events,
+    group_inventory,
+    membership,
     overlay,
     plot,
     relationships,
@@ -110,24 +112,24 @@ def _set_updated(cid: str, sid: str, stamp: str) -> None:
 
 
 def test_graph_tuples_are_pinned():
-    assert graph.NODE_KINDS == ("scene", "character", "pc", "location", "thread",
+    assert graph.NODE_KINDS == ("scene", "character", "pc", "location", "group", "thread",
                                 "commitment", "event", "idea", "birthday", "holiday")
     assert graph.EDGE_KINDS == ("appeared_in", "occurred_at", "opened_in", "advanced_in",
                                 "touched_in", "closed_in", "resolved_in", "involves",
-                                "serves", "anchored_to", "feeling", "bond", "birthday_of",
+                                "serves", "anchored_to", "feeling", "bond", "birthday_of", "member_of", "leads",
                                 "link", "merged_into", "possible_duplicate",
                                 "possible_relation")
     assert graph.EDGE_SOURCES == ("structural", "reviewed", "candidate", "alias")
     assert graph.EVENT_STATUSES == ("scheduled", "fired", "passed", "undated")
     assert graph.PARTS == ("calendar", "scenes", "chronicle", "plot", "commitments",
                            "events", "continuity", "candidates", "relationships",
-                           "scene_ideas", "names")
+                           "scene_ideas", "groups", "names")
     relations = ("continues", "subthread_of", "pays_off", "before", "on", "after", "by",
                  "related_to")
     assert effective.LINK_RELATIONS == relations == tuple(effective.RELATIONS)
     # The kind->prefix table is stated once; the graph's kinds are its kinds
     # minus the two §19.2 leaves optional.
-    assert set(graph.NODE_KINDS) == set(canon.KIND_OF_PREFIX.values()) - {"group", "fact"}
+    assert set(graph.NODE_KINDS) == set(canon.KIND_OF_PREFIX.values()) - {"fact"}
     # §20 as one set: B's and E's tuples, re-pinned beside the graph's.
     assert drivers.DRIVER_KINDS == ("thread", "commitment", "event", "birthday", "holiday")
     assert drivers.DRIVER_ACTIONS == ("advance", "close_candidate", "address",
@@ -1286,6 +1288,48 @@ def test_reads_do_not_grow_with_the_node_count(monkeypatch, tmp_path):
     assert len(_records(graph.build(five), "thread")) == 5
     assert few[0] > 0 and few[1] > 0     # the recorders see the reads at all
     assert many == few
+
+
+#: The two sizes `test_continuity_read_cost.SIZES` builds, so this sits beside
+#: `test_the_graph_reads_location_names_once` at the same scale.
+_GROUP_SIZES = (1, 12)
+
+
+def test_the_graph_reads_the_group_listing_once(monkeypatch, tmp_path):
+    """Spec07 §10.3 / §17.5: the group family is one whole-kind listing per
+    build -- one `campaign_index`, never a per-group or per-actor read -- at
+    both sizes, so it cannot become the N+1 §19.7 forbids."""
+    seen: dict[int, tuple[list, list, list]] = {}
+    for n in _GROUP_SIZES:
+        cid = _campaign(monkeypatch, tmp_path / str(n))
+        sids = _scenes(cid, *(f"Saltmarch harbour {i}" for i in range(n)))
+        for i, sid in enumerate(sids):
+            _cast(cid, sid, [f"characters/mara-{i}"])
+            overlay.create_entity(cid, "groups", f"Salt Circle {i}", fields={"members": f"characters:mara-{i}"})
+        indexes: list = []
+        captures: list = []
+        listings: list = []
+        with monkeypatch.context() as m:
+            _recorded(m, membership, "campaign_index", indexes, note=lambda: "index")
+            _recorded(m, group_inventory, "collect", captures)
+            real = overlay.list_entities
+
+            def listed(*args, _real=real, _out=listings, **kwargs):
+                _out.append(args[1:2])
+                return _real(*args, **kwargs)
+
+            m.setattr(overlay, "list_entities", listed)
+            g = graph.build(cid)
+        # The control: the family really drew a node per group at this size.
+        assert len([node for node in g["nodes"] if node["kind"] == "group"]) == n
+        assert "groups" not in g["omitted"]
+        seen[n] = (indexes, captures, listings)
+    for n, (indexes, captures, listings) in seen.items():
+        assert indexes == ["index"], (n, indexes)
+        assert ("groups",) not in listings, (n, listings)
+        assert captures, n
+    small, large = (seen[n][1] for n in _GROUP_SIZES)
+    assert len(small) == len(large), (small, large)
 
 
 def test_graph_calls_no_card_image_or_blocking_lock():

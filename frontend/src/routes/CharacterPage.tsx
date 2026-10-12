@@ -10,6 +10,7 @@ import { BirthdateDisplay, BirthdatePicker } from "../components/BirthdatePicker
 import { ErrorNote } from "../components/ErrorNote";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
+import { ActorGroups } from "../components/ActorGroups";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { useEntityKinds } from "../components/useEntityKinds";
 import { RecordArtEntry, RecordArtViewer } from "../components/art/RecordArtEntry";
@@ -615,6 +616,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
           </button>
         </>}
     </ColumnSection>
+
+    <ActorGroups scope={scope} actor={`characters:${eid}`} />
 
     {/* An emergent NPC's way into the library (#60). Only promote can apply to
         an actor, and `libraryStatus` is what says so, so this renders nothing

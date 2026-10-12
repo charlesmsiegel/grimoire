@@ -437,6 +437,7 @@ def delete_image(cid: str, name: str) -> None:
     """
     d = images_dir(cid)
     with locks.campaign_lock(cid):
+        overlay.require_identity_ledgers(cid)
         assets.delete_in(d, name, supported_only=True)
         if assets.path_in(d, name, supported_only=True) is not None:
             raise OSError(f"image could not be removed: {name}")
