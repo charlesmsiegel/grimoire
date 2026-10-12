@@ -152,6 +152,10 @@ def sweep(home: Path) -> dict:
                 store.greetings.read_greeting(wroot, g["id"])
 
     out["campaigns.list_campaigns"] = store.campaigns.list_campaigns()
+    # The overview's card compositions (roadmap 04) over files an older
+    # version wrote: the rows the Worlds and Campaigns shelves render.
+    out["overview.world_rows"] = overview.world_rows()
+    out["overview.campaign_cards"] = overview.campaign_cards()
     for c in out["campaigns.list_campaigns"]:
         _campaign(out, c["id"])
     return normalize(out, home)

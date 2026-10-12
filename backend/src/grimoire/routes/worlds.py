@@ -28,7 +28,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient
-from ..store import compiled
+from ..store import compiled, overview
 from ..store import paths as library_paths
 from . import runs
 from .common import (
@@ -83,9 +83,12 @@ def get_worlds():
     # `covers` import and a per-world `stat` in front of every caller --
     # `routes/todo.py`'s chore sweep and `routes/shell.py`'s badge included --
     # which none of them asked for.
+    #
+    # Composed by `store.overview.world_rows` (spec 04 section 4.1): each
+    # world's card row (remembered on `world.md`'s stamp), its nine counts
+    # (live listings) and the cover token.
     with overview_read("worlds", "library"):
-        return [{**w, "cover": store.covers.world_cover_version(w["id"])}
-                for w in store.worlds.list_worlds()]
+        return overview.world_rows()
 
 
 @router.post("/worlds")

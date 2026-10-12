@@ -72,6 +72,12 @@ def _oracle_cards() -> list[dict]:
     return out
 
 
+def _sans_module(cards: list[dict]) -> list[dict]:
+    """The cards without `module`, the S7 expected difference that
+    `test_overview_card_rows.py` holds on its own."""
+    return [{k: v for k, v in c.items() if k != "module"} for c in cards]
+
+
 def _oracle_open(cid: str) -> list[dict]:
     return [{"sid": s["id"], "title": s["title"]} for s in store.scenes.list_scenes(cid)
             if not s["done"] and not s.get("closed_by")]
@@ -92,7 +98,7 @@ def _library(client, wid):
 
 def test_campaigns_payload_equals_the_pre_04_oracle(client, world):
     _library(client, world)
-    assert client.get("/api/campaigns").json() == _oracle_cards()
+    assert _sans_module(client.get("/api/campaigns").json()) == _oracle_cards()
 
 
 def test_shell_and_todo_scene_fields_equal_the_oracle(client, world):
@@ -158,7 +164,7 @@ def test_a_body_bad_byte_past_8kib_lists_exactly_as_today(client, world):
     sid = _scene(cid, "Saltmarch Gate", updated="2026-03-01T10:00:00Z")
     p = _path(cid, sid)
     p.write_bytes(p.read_bytes() + b"**Mara:** " + b"Realm " * 2000 + b"\xff\n")
-    assert client.get("/api/campaigns").json() == _oracle_cards()
+    assert _sans_module(client.get("/api/campaigns").json()) == _oracle_cards()
     block = client.get("/api/shell", params={"campaign": cid}).json()["campaign"]
     assert block["open"] == [{"sid": sid, "title": "Saltmarch Gate", "turns": None}]
 

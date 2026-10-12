@@ -161,48 +161,16 @@ def put_campaign_climate(cid: str, body: CampaignClimate):
 # ---- campaigns ----
 @router.get("/campaigns")
 def get_campaigns():
+    # Composed by `store.overview.campaign_cards` (spec 04 section 4.2): the
+    # campaign row, the scene summary (head-only, remembered in-process) and
+    # three small live reads. `activity` is the campaign's high-water mark
+    # (campaign.md's `updated` only moves on a metadata write, so playing a
+    # scene would not rank it), folded through `best_stamp` over every scene
+    # stamp so one bad stamp cannot win; `absorbed` is how much of the
+    # chronicle is caught up, a count rather than a high-water mark so a gap
+    # in the middle shows.
     with overview_read("campaigns", "library"):
-        return _campaign_cards()
-
-
-def _campaign_cards() -> list[dict]:
-    out = []
-    for c in store.campaigns.list_campaigns():
-        # The scene half of the card is the overview's scene summary, folded
-        # from head-only reads and remembered in-process (spec 04 section 3.4):
-        # one undecodable scene degrades that scene's row, never the shelf.
-        scenes = overview.scene_summary(c["id"])
-        # `updated` is campaign.md's, which only metadata writes advance --
-        # playing a scene touches the scene file and nothing else, so ordering
-        # by it ranks a campaign renamed months ago above one played into last
-        # night. `activity` is the whole campaign's high-water mark, for
-        # anything answering "what was I last working on".
-        #
-        # Through `best_stamp` rather than a bare `max`, and over EVERY scene
-        # stamp rather than the first row's. The fold is lexical, so one
-        # unparseable or far-future value anywhere in it outranks every genuine
-        # timestamp and then blocks its own replacement -- and the rows are
-        # sorted by the very field that may be the bad one, so the first is
-        # only the newest if the sort key can be trusted. The summary keeps
-        # the clock-free half (well-formed, de-duplicated); the future check
-        # reads the clock, so it is applied here, live.
-        # How many scenes carry an absorb mark, which is how much of the
-        # chronicle, the ledger and every dossier is caught up. It is not the
-        # same question as "how many scenes are there" and a campaign answers
-        # them differently the moment you play one scene ahead of the absorb --
-        # which is the normal state of a campaign being played. A count rather
-        # than the newest absorbed title because the shelf line reads it as a
-        # fraction of the scene count, and a gap in the middle (an older scene
-        # left unabsorbed under a newer one that was) shows up in a count and
-        # is invisible in a high-water mark.
-        out.append({**c, "scenes": scenes["count"],
-                    "cover": store.covers.cover_version(c["id"]),
-                    "last_scene": scenes["rows"][0]["title"] if scenes["rows"] else "",
-                    "absorbed": scenes["absorbed"],
-                    "activity": store.campaigns.best_stamp(
-                        c["updated"], store.campaigns.read_activity(c["id"]),
-                        *scenes["stamps"])})
-    return out
+        return overview.campaign_cards()
 
 
 @router.get("/campaigns/{cid}/calendar")

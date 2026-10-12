@@ -15,14 +15,26 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .. import readstats, statcache
+from .. import (
+    characters,
+    compiled,
+    covers,
+    entities,
+    greetings,
+    ledger_texts,
+    pcs,
+    readstats,
+    statcache,
+)
 from ..appearances import cast
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
-from ..paths import safe_id
+from ..paths import ensure_home, safe_id
 from ..scenes import paths as scenes_paths
 from ..scenes import read as scenes_read
-from . import kinds
+from ..worlds import paths as worlds_paths
+from ..worlds import read as worlds_read
+from . import kinds, persist
 
 #: One entry per campaign per projection, so sized like the scene-head pool
 #: it sits beside rather than the shared FIFO of 4096. A structural bound, to
@@ -228,3 +240,116 @@ def _turns(cid: str, sid: str, p: Path,
     except UnicodeDecodeError:
         value = None   # a property of the bytes: remembered
     return value, (observed,) if observed is not None else None
+
+
+# ---- card rows (04-C1a) ----------------------------------------------------
+
+def _row(kind: compiled.Kind, mp: Path, parse) -> dict:
+    """One meta file's row, remembered in-process on its stamp (taken before
+    the read) and answered through the persisted layer below that. A file that
+    cannot be read raises exactly as the live read does, remembering nothing."""
+    def compute() -> tuple[dict, tuple | None]:
+        observed = statcache.stamp(mp)
+        value = persist.derive(kind, [compiled.Input("meta", mp)], {},
+                               lambda files: parse(ledger_texts.decode(files["meta"] or b"")),
+                               lambda: parse(mp.read_text(encoding="utf-8")))
+        return value, (observed,) if observed is not None else None
+    return dict(statcache.memo_stamped((kind.name, os.fspath(mp)), compute,
+                                       pool=_OVERVIEW_POOL, max_entries=POOL_ENTRIES))
+
+
+def world_row(mp: Path) -> dict:
+    """`world.md`'s card row (`kinds.world_row`), `name` None when absent."""
+    return _row(compiled.OVERVIEW_WORLD_ROW, mp, kinds.world_row)
+
+
+def campaign_row(mp: Path) -> dict:
+    """`campaign.md`'s card row (`kinds.campaign_row`), `name` None when absent."""
+    return _row(compiled.OVERVIEW_CAMPAIGN_ROW, mp, kinds.campaign_row)
+
+
+def _named(row: dict, dirname: str) -> dict:
+    """The row with the directory-name fallback applied, outside the cache --
+    so a present-but-empty name stays "" as `meta.get("name", d.name)` kept it."""
+    return {**row, "name": dirname if row["name"] is None else row["name"]}
+
+
+def world_rows() -> list[dict]:
+    """`GET /worlds`' rows: the live listing (`worlds.read._listed`), each
+    world's card row, its nine LIVE counts (spec 03 section 7: member counts
+    are listings, and caching a listing saves nothing) and its live cover
+    token, newest first as the shelf reads."""
+    out = []
+    for d, mp in worlds_read._listed():
+        row = _named(world_row(mp), d.name)
+        out.append({"id": d.name, "name": row["name"], "created": row["created"],
+                    "updated": row["updated"], "genre": row["genre"], "module": row["module"],
+                    "counts": {**entities.entity_counts(d), "characters": characters.character_count(d),
+                               "pcs": pcs.pc_count(d), "greetings": greetings.greeting_count(d)},
+                    "cover": covers.world_cover_version(d.name)})
+    return worlds_read._newest_first(out)
+
+
+def campaign_rows() -> list[dict]:
+    """Every campaign's row with its id, in `list_campaigns`' enumeration and
+    order (newest `updated` first, directory order under a tie). The store's
+    `list_campaigns` is left exactly as it is: it feeds a write (spec 04
+    section 3.8)."""
+    ensure_home()
+    base = campaigns_paths._campaigns_dir()   # paths-ok: the resolver itself
+    out: list[dict] = []
+    if base.exists():
+        for d in sorted(base.iterdir()):
+            mp = d / "campaign.md"
+            if not d.is_dir() or not mp.exists() or not safe_id(d.name):
+                continue
+            out.append({"id": d.name, **_named(campaign_row(mp), d.name)})
+    out.sort(key=lambda m: m["updated"], reverse=True)
+    return out
+
+
+def campaign_meta(cid: str) -> dict:
+    """One campaign's row, named. Raises `CampaignNotFound` as `read_campaign`
+    does for an id that names no campaign."""
+    if not campaigns_paths.campaign_exists(cid):
+        raise campaigns_paths.CampaignNotFound(cid)
+    return {"id": cid, **_named(campaign_row(campaigns_paths.campaign_meta_path(cid)), cid)}
+
+
+def world_name(wid: str) -> str | None:
+    """`worlds.read.world_name` off the world's card row: the display name,
+    or None for an id that names no world."""
+    if not worlds_paths.world_exists(wid):
+        return None
+    return _named(world_row(worlds_paths.world_meta_path(wid)), wid)["name"]
+
+
+def _world_module(wid: str) -> str:
+    """The world's raw `module` default, or "" when the world cannot be read."""
+    try:
+        mp = worlds_paths.world_meta_path(wid)
+        return world_row(mp)["module"] if mp.exists() else ""
+    except (worlds_paths.WorldNotFound, OSError, UnicodeDecodeError):
+        return ""
+
+
+def campaign_cards() -> list[dict]:
+    """`GET /campaigns`' cards: each campaign's row, its scene summary, and
+    three small live reads (the activity stamp, `best_stamp` over it, the cover
+    token). `module` is the chip the card draws (`kinds.card_module`)."""
+    out = []
+    for c in campaign_rows():
+        # One undecodable scene degrades that scene's row, never the shelf.
+        scenes = scene_summary(c["id"])
+        setting = c.pop("module")
+        out.append({**c, "module": kinds.card_module(setting, _world_module(c["world"]) if not setting else ""),
+                    "scenes": scenes["count"],
+                    "cover": covers.cover_version(c["id"]),
+                    "last_scene": scenes["rows"][0]["title"] if scenes["rows"] else "",
+                    "absorbed": scenes["absorbed"],
+                    # Every scene stamp through `best_stamp`, live: the
+                    # summary keeps the clock-free half, and the future check
+                    # reads the clock.
+                    "activity": campaigns_read.best_stamp(
+                        c["updated"], campaigns_read.read_activity(c["id"]), *scenes["stamps"])})
+    return out

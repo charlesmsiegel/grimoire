@@ -224,6 +224,24 @@ class Kind:
 # the world and campaign rows are absent on purpose: they lost section 14's
 # warm-after-restart measurement, so they are not wired.
 TOKENS_RECORD_BODY = Kind('tokens:record_body', 1, (), ('text_hash', 'encoding'), False)
+
+# Roadmap 04's overview projections (`store/overview/`). Each is byte-fed,
+# keyed on whole files (no path-derived params: a name fallback is applied
+# outside the cache), and may use persisted sources (spec 04 section 3.2, rule
+# 5): a stale answer is a stale card line or badge, never a decision. Declared
+# here, as every persisted kind is; REGISTERED below only when it won spec
+# 03's section 14 measurement, which the overview benchmark (04-C3b) takes. An
+# unregistered one is never looked up or stored: its reader takes its live
+# path at today's cost.
+OVERVIEW_WORLD_ROW = Kind('overview.world_row', 1, (), (), True)
+OVERVIEW_CAMPAIGN_ROW = Kind('overview.campaign_row', 1, (), (), True)
+OVERVIEW_SCENE_TURNS = Kind('overview.scene_turns', 1, (), ('players',), True)
+OVERVIEW_CONTINUITY = Kind(
+    'overview.continuity_summary', 1, (), (), True,
+    absent_ok_roles=('plot', 'commitments', 'events', 'continuity', 'candidates'))
+OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
+    OVERVIEW_WORLD_ROW, OVERVIEW_CAMPAIGN_ROW, OVERVIEW_SCENE_TURNS, OVERVIEW_CONTINUITY)}
+
 KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY}
 
 
@@ -484,6 +502,16 @@ def enabled() -> bool:
     on the loop, under a campaign lock); this only says the layer is not off.
     Reads no file and never raises."""
     return _sqlite is not None and os.environ.get("GRIMOIRE_COMPILED_CACHE") != "0"
+
+
+def available() -> bool:
+    """Whether a batch opened now could use the layer at all: `enabled`, not
+    on the event loop, not under a campaign lock, and BUILD known. A True
+    answer still lets one lookup miss (busy, locked, corrupt). Never raises."""
+    try:
+        return _available()
+    except _CACHE_ERRORS:
+        return False
 
 
 def _available() -> bool:

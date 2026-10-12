@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from .. import commitments, events, ledger_texts, plot
+from ..campaigns import read as campaigns_read
 from ..continuity import candidates as continuity_candidates
 from ..continuity import doc as continuity_doc
 from ..continuity import effective as continuity_effective
@@ -26,6 +27,41 @@ from ..frontmatter import parse_frontmatter
 from ..scenes import read as scenes_read
 from ..scenes import serialize as scenes_serialize
 from ..scenes import turns as scenes_turns
+
+
+def world_row(text: str) -> dict:
+    """A world card's row off `world.md`'s text: `{name, created, updated,
+    genre, module}`, with `name` None when the key is absent so the caller
+    applies the directory-name fallback (path-derived fields stay outside the
+    cache; spec 04 section 3.2). `module` is the world's raw default, the
+    campaign card's chip falls back to it (Open question 4, option b)."""
+    meta, _ = parse_frontmatter(text)
+    return {"name": meta.get("name"), "created": meta.get("created", ""),
+            "updated": meta.get("updated", ""), "genre": meta.get("genre", ""),
+            "module": (meta.get("module") or "").strip()}
+
+
+def campaign_row(text: str) -> dict:
+    """`campaigns.read._campaign_row_value`'s row off `campaign.md`'s text,
+    with `name` None when absent (see `world_row`) and the campaign's raw
+    `module` setting ("" inherit, "none" off, else a module id)."""
+    meta, body = parse_frontmatter(text)
+    return {"name": meta.get("name"), "world": meta.get("world", ""),
+            "created": meta.get("created", ""), "updated": meta.get("updated", ""),
+            "parent": meta.get(campaigns_read.PARENT_KEY, ""),
+            "forked_from_scene": meta.get(campaigns_read.FORKED_AT_KEY, ""),
+            "blurb": campaigns_read._first_paragraph(body),
+            "module": (meta.get("module") or "").strip()}
+
+
+def card_module(campaign_setting: str, world_default: str) -> str:
+    """The chip a campaign card draws: the campaign's own setting over its
+    world's default, with no pack loaded (spec 04 Open question 4, option b).
+    `"none"` means mechanics off, and draws no chip whatever the world says."""
+    if campaign_setting == "none":
+        return ""
+    chosen = campaign_setting or world_default
+    return "" if chosen == "none" else chosen
 
 
 def scene_turns(data: bytes, players: tuple[str, ...]) -> int | None:

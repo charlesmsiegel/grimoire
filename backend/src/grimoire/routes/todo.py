@@ -1387,6 +1387,17 @@ def get_todo_items(chore_id: str, campaign: str = ""):
             "truncated": len(items) > ITEM_CAP}
 
 
+def _campaign_readable(cid: str) -> bool:
+    """`_Ctx.has_campaign`'s mapping, read live: a write never reaches an
+    overview projection (spec 04 section 3.8), so the ignore route asks the
+    store's own listing whether `cid` is a campaign it could answer about."""
+    try:
+        store.scenes.read.list_scenes(cid)
+    except (store.CampaignNotFound, OSError):
+        return False
+    return True
+
+
 @router.put("/todo/{chore_id}/ignored")
 def put_todo_ignored(chore_id: str, body: dict):
     """Wave a chore off, or take it back.
@@ -1399,7 +1410,7 @@ def put_todo_ignored(chore_id: str, body: dict):
         raise HTTPException(400, f"unknown chore: {chore_id}")
     campaign = str(body.get("campaign") or "")
     if chore_id in CAMPAIGN_IDS:
-        if not campaign or not _Ctx(campaign).has_campaign():
+        if not campaign or not _campaign_readable(campaign):
             raise HTTPException(404, f"campaign not found: {campaign}")
     elif campaign:
         raise HTTPException(400, "library chores cannot have a campaign")

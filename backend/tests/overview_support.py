@@ -94,3 +94,63 @@ def clear_memos() -> None:
     except ImportError:
         return
     overview_read._OVERVIEW_POOL.clear()
+
+
+def register_overview_kinds(monkeypatch, *names: str) -> None:
+    """Register overview candidate kinds in the compiled registry for a test,
+    whatever the measured registration in `compiled.KINDS` says, so the
+    persisted layer is exercised either way. No names: all four."""
+    from grimoire.store import compiled
+    chosen = names or tuple(compiled.OVERVIEW_CANDIDATES)
+    kinds = dict(compiled.KINDS)
+    for name in chosen:
+        kinds[name] = compiled.OVERVIEW_CANDIDATES[name]
+    monkeypatch.setattr(compiled, "KINDS", kinds)
+
+
+def unregister_overview_kinds(monkeypatch) -> None:
+    from grimoire.store import compiled
+    monkeypatch.setattr(compiled, "KINDS", {k: v for k, v in compiled.KINDS.items()
+                                            if k not in compiled.OVERVIEW_CANDIDATES})
+
+
+def cache_clock_forward(monkeypatch, seconds: float = 30.0) -> None:
+    """Move the compiled layer's filesystem clock past `PERSIST_WINDOW_NS`,
+    so a source just written is old enough to be recorded (spec 03 section 5;
+    POSIX ctime cannot be backdated, the `migrations._clock` precedent)."""
+    from grimoire.store import compiled
+    real = compiled.filesystem_clock
+
+    def ahead(root):
+        clock = real(root)
+        if clock is None:
+            return None
+        return compiled.FilesystemClock(clock.now_ns + int(seconds * 1e9), clock.device)
+    monkeypatch.setattr(compiled, "filesystem_clock", ahead)
+
+
+def restart() -> None:
+    """What a process restart forgets: the compiled layer's handles and every
+    in-process memo. The cache file itself is kept."""
+    from grimoire.store import compiled
+    compiled.close()
+    clear_memos()
+
+
+@contextmanager
+def database_locked(home: os.PathLike | str) -> Iterator[None]:
+    """Hold every compiled cache file of `home` under an exclusive SQLite
+    transaction from another connection: lookups miss, flushes store nothing."""
+    import sqlite3
+    from pathlib import Path
+    conns = []
+    for path in sorted(Path(home, ".cache", "compiled").glob("*.sqlite")):
+        conn = sqlite3.connect(path, timeout=0, isolation_level=None)
+        conn.execute("BEGIN EXCLUSIVE")
+        conns.append(conn)
+    try:
+        yield
+    finally:
+        for conn in conns:
+            conn.rollback()
+            conn.close()

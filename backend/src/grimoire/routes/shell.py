@@ -158,7 +158,9 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
     count so the sheet tally both of them need is swept once.
     """
     try:
-        meta = store.campaigns.read.read_campaign(cid)["meta"]
+        # The card row (remembered on campaign.md's stamp), not the whole
+        # record: the block reads its name and world and nothing else.
+        meta = overview.campaign_meta(cid)
     except store.CampaignNotFound:
         return None
 
@@ -201,7 +203,7 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         # world's own pages (`/worlds/{wid}?section=images` for the row
         # below), and `world_name` alone cannot address one.
         "world": wid,
-        "world_name": store.worlds.read.world_name(wid) or wid,
+        "world_name": overview.world_name(wid) or wid,
         "scenes": summary["count"],
         "open": open_scenes,
         "ledger_open": ctx.continuity()["ledger_open"],
@@ -295,7 +297,7 @@ def get_shell(campaign: str = ""):
 
 
 def _shell(campaign: str) -> dict:
-    campaigns = store.campaigns.read.list_campaigns()
+    campaigns = overview.campaign_rows()
     cid = campaign or _most_recent(campaigns)
     # One to-do context for the request, built for the campaign the block
     # answers about and handed to both halves: the rail's sheet row and the
