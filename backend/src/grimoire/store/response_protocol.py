@@ -100,7 +100,7 @@ def observable_conversation(messages: list[dict], view: View) -> list[dict]:
 
 
 def selector_item(roster: list[dict], conversation: list[dict],
-                  note: str = "") -> decisions.Item:
+                  note: str = "", player: str = "") -> decisions.Item:
     """The speaker pick as a decision item: the observable transcript (and the
     round's user direction, when there is one) as its context, and one choice
     over the eligible refs -- each described by its name -- and `grimoire`,
@@ -111,7 +111,9 @@ def selector_item(roster: list[dict], conversation: list[dict],
     player, so an explicit null is `abstained` rather than unreadable. The
     roster is not repeated in the context, because the options are the
     roster. `roster` is the round record's `eligible` (dicts with `ref` and
-    `name`)."""
+    `name`). The null is described to a native endpoint as the player taking
+    the turn (`scene/response_selector_none.j2`), named when `player` -- the
+    scene's player character names -- is given."""
     context = prompts.render("scene/response_selector_context.j2",
                              conversation=conversation, note=note)
     options = (*(decisions.Option(entry["ref"], entry["name"]) for entry in roster),
@@ -119,7 +121,8 @@ def selector_item(roster: list[dict], conversation: list[dict],
                                 prompts.render("scene/response_selector_grimoire.j2")))
     return decisions.Item(context, (decisions.Choice(
         SELECTOR_QUESTION, prompts.render("scene/response_selector_question.j2"),
-        options, allow_none=True),))
+        options, allow_none=True,
+        none_text=prompts.render("scene/response_selector_none.j2", player=player).strip()),))
 
 
 def selection_of(result: decisions.ItemResult) -> tuple[str | None, str | None]:

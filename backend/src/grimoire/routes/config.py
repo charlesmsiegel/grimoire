@@ -209,8 +209,8 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "perception_rider": cfg.get("perception_rider",
                                         store.config.DEFAULT_PERCEPTION_RIDER),
             # The play-decision switches (roadmap 02 §3.6), reported as
-            # stored so a write reads back; no page shows them until a
-            # switch's play gate is ratified (02-S6).
+            # stored so a write reads back; Settings, Play decisions edits
+            # them (02-S6).
             "decide_speaker_sampling": cfg.get("decide_speaker_sampling",
                                                store.config.DEFAULT_DECIDE_SPEAKER_SAMPLING),
             "decide_turn_plan": cfg.get("decide_turn_plan",

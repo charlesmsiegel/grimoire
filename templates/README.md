@@ -797,6 +797,11 @@ context, each through the prompt-phase regex view the caller hands in, as
   (`response_protocol.GRIMOIRE_REF`), described by
   `response_selector_grimoire.j2` (no vars): the retired prompt's words for what
   grimoire is chosen for.
+- Its null is described to a native decisions endpoint by
+  `response_selector_none.j2` (`decisions.Choice.none_text`; var `player`, the
+  scene's player character names, "" for none): the player taking the turn,
+  rather than the generic "None of the other options fits.". The structured
+  prompt already says null returns control to the player.
 
 No rationale is asked for. `store/response_protocol.py:selection_of` maps the answer
 back to the `(next, issue)` pair `_round_state` stores, with the two issue strings

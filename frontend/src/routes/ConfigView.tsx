@@ -1005,12 +1005,12 @@ export default function ConfigView() {
             </label>
             <p className="config-copy">
               Adds no call: the speaker pick is already asked. A Decision model that reports
-              odds has the speaker drawn from them, with anyone the last post addressed
-              favoured; one that does not has its answer taken as before.{" "}
+              odds has the speaker drawn from them, limited to whoever the last post addressed;
+              one that does not has its answer taken as before.{" "}
               {decisionsInfo?.pick_samples === false
-                && "With this Decision model the pick is always the most likely speaker."}
+                && "With the global Decision model the pick is always the most likely speaker."}
               {decisionsInfo?.pick_samples === true
-                && "This Decision model reports odds, so the pick is drawn."}
+                && "The global Decision model reports odds, so the pick is drawn."}
             </p>
             <div className="config-field">
               <label htmlFor="cfg-turn-plan">Turn decision before each reply</label>
@@ -1039,8 +1039,10 @@ export default function ConfigView() {
             </label>
             <p className="config-copy">
               Offers the scene model a decide tool it may call once, before it writes any of
-              its reply. A call costs a Decision call and a second scene turn, which re-sends
-              the whole prompt; a reply that never calls it costs nothing extra.
+              its reply. The tool's definition is sent with every character's reply, a few more
+              prompt tokens each; a reply that calls it adds one Decision call on the{" "}
+              <em>Turn planning</em> route and a second scene turn, which re-sends the whole
+              prompt.
             </p>
           </>
         )}

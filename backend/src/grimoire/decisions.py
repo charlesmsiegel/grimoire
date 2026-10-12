@@ -238,6 +238,16 @@ class Choice:
     instructions: str
     options: tuple[Option, ...]
     allow_none: bool = False
+    #: What the null means for THIS question, as a native endpoint describes
+    #: its reserved none option (`none_text`); "" is `NATIVE_NONE_TEXT`.
+    none_text: str = ""
+
+
+def none_text(q: Choice) -> str:
+    """The description a native endpoint is sent for `q`'s reserved none
+    option: the question's own (the speaker pick's "control returns to the
+    player"), else `NATIVE_NONE_TEXT`."""
+    return q.none_text or NATIVE_NONE_TEXT
 
 
 @dataclass(frozen=True)

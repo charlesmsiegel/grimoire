@@ -57,13 +57,35 @@ These show in **off** and **on** configurations alike:
   on 7 to 14 runs per feature, out of 24 (36 for the speaker). It also
   sometimes returns no prose at all (`empty_response`). Both are
   reply-format failures of the scene model.
-- **Luna Decisions does not hand the pending-decision fixture back to the
-  player.** It picks Mara, so `speaker.hand_back` fails, off and on: sampling
+- **Luna Decisions did not hand the pending-decision fixture back to the
+  player** (a wording problem, fixed since: see "Follow-up" below). It picked
+  Mara, so `speaker.hand_back` failed, off and on: sampling
   never turns a null into a speaker (§5.2 rule 1), and this pick was not
   null. It does hand the open remark back (an abstained pick, `basis: none`).
   It reports a spread such as Mara 0.39, Winifred 0.26, narrator 0.19, none
   0.16 on the addressed fixture. The addressed narrowing then makes Mara
   certain, which is why mass on intended reads 1.000.
+
+## Follow-up: the hand-back's wording
+
+The pending-decision miss was a wording problem. A native decisions endpoint
+saw the pick's null as the generic "None of the other options fits.", which
+read as "nobody". The speaker pick alone was re-asked of GPT-6 Luna Decisions
+on the pending-decision fixture, with only that option's description changed:
+
+| null described as | answer | weight on the hand-back |
+|---|---|---|
+| "None of the other options fits." (before) | Mara | 0.36 to 0.40 |
+| "The player: no NPC takes this turn, ..." | the player | 0.50 to 0.62 |
+| "The player." | the player | 0.51 |
+| "Seraphine (the player): ... returns to Seraphine ..." | the player | 0.63 |
+
+On the addressed fixture, asked with its post, Mara was still chosen. The
+endpoint answered the same each time it was asked.
+
+The pick now names the scene's player character
+(`scene/response_selector_none.j2`). The structured prompt already said that
+null returns control to the player.
 
 ## Reported figures (for you to judge)
 

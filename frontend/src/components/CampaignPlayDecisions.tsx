@@ -9,11 +9,17 @@ type Key = keyof PlayDecisionValues;
 
 /** Each switch, its label, and the values a campaign may choose besides
  *  Inherit (roadmap 02 §3.6). */
-const SWITCHES: { key: Key; label: string; options: [string, string][] }[] = [
-  { key: "speaker_sampling", label: "Speaker draw", options: [["on", "On"], ["off", "Off"]] },
+const SWITCHES: { key: Key; label: string; cost: string; options: [string, string][] }[] = [
+  { key: "speaker_sampling", label: "Speaker draw",
+    cost: "No extra call: the pick is asked anyway.",
+    options: [["on", "On"], ["off", "Off"]] },
   { key: "turn_plan", label: "Turn decision",
+    cost: "One extra call before every character's reply, on the Turn planning route.",
     options: [["off", "Off"], ["intent", "Intent"], ["plan", "Plan"]] },
-  { key: "play_tool", label: "Decide tool", options: [["on", "On"], ["off", "Off"]] },
+  { key: "play_tool", label: "Decide tool",
+    cost: "Its definition rides every character's reply; a call adds a Decision call and a "
+      + "second scene turn.",
+    options: [["on", "On"], ["off", "Off"]] },
 ];
 
 /** The campaign's own play-decision switches. "Inherit" follows the global
@@ -51,9 +57,13 @@ export function CampaignPlayDecisions({ cid }: { cid: string }) {
   return (
     <div className="tracker-switch">
       {error && <div className="banner" role="alert">{error}</div>}
-      {SWITCHES.map(({ key, label, options }) => (
+      <p className="field-hint">
+        Each decision is answered by the Decision model, and reads the replying character's own
+        card summary, which goes to that model's provider. Settings, Play decisions says more.
+      </p>
+      {SWITCHES.map(({ key, label, cost, options }) => (
         <Field key={key} label={label}
-               hint={state ? `Currently ${state.effective[key]}${state[key] === "" ? " (following the global setting)" : ""}.` : undefined}>
+               hint={(state ? `Currently ${state.effective[key]}${state[key] === "" ? " (following the global setting)" : ""}. ` : "") + cost}>
           <select aria-label={label} value={state?.[key] ?? ""} disabled={!state || saving}
                   onChange={(e) => void choose(key, e.target.value)}>
             <option value="">Inherit</option>

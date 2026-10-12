@@ -1109,7 +1109,7 @@ would answer neither question.
   outcome is never re-drawn, and a reroll mints a new seed. Four tasks may
   sample (`routing.TASK_POLICY`): the speaker pick, the turn intent and plan's
   stance, and the play decide tool's selection -- each only behind its play
-  decision switch, all off by default (below).
+  decision switch, and only the speaker draw is on by default (below).
 - **Play decisions (roadmap 02) are soft, and only the speaker draw is on
   by default.** Three switches (`decide_speaker_sampling`, `decide_turn_plan`
   = `off` | `intent` | `plan`, `decide_play_tool`), each a `config.md` key

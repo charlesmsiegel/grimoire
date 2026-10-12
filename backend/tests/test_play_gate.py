@@ -305,3 +305,18 @@ def test_a_send_that_raises_is_a_failed_run_the_caller_still_drains(real, monkey
     monkeypatch.setattr(runner, "drain", lambda ctx: drained.append(ctx) or real_drain(ctx))
     _results, graded = _run("intent", _Scripted(), fixtures=play.FIXTURES[:1])
     assert drained and all(g.run.error == "the send raised RuntimeError" for g in graded)
+
+
+def test_each_gate_measures_one_switch_with_the_others_off(real):
+    """The speaker draw is on by default (02-S6): an intent gate must not
+    sample its speakers too, so every switch not under test is written off."""
+    from grimoire.store import play_decisions
+
+    conf = play.matrix("intent", [SCENE], [DECIDER])[1]
+    selected = play.read_selected([conf])
+    with run_cli.temp_home():
+        play.seed(conf, selected)
+        cfg = store.read_config()
+        assert (cfg["decide_turn_plan"], cfg["decide_speaker_sampling"],
+                cfg["decide_play_tool"]) == ("intent", "off", "off")
+        assert play_decisions.speaker_sampling("") is False

@@ -1,0 +1,14 @@
+{#- What the speaker pick's null means, sent as the description of a native
+    decisions endpoint's reserved "none" option (`response_protocol.selector_item`,
+    `decisions.none_text`) in place of the generic "None of the other options
+    fits.". Read as "nobody", the generic wording let a decisions model hand
+    an NPC a turn that was the player's to take; naming the player, by their
+    character's name where the scene has one, moved those picks to the
+    hand-back (roadmap 02's live play gate, the pending-decision fixture).
+    Vars: player (str, the scene's player character names joined with ", ";
+    "" when it has none). -#}
+{%- if player -%}
+{{ player }} (the player): no NPC takes this turn, and control returns to {{ player }}, whose decision or move it is.
+{%- else -%}
+The player: no NPC takes this turn, and control returns to the player, whose decision or move it is.
+{%- endif %}

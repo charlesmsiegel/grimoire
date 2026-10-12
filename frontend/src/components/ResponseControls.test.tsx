@@ -175,11 +175,11 @@ describe("individual response controls", () => {
   });
   it("shows the response's approach as a plain chip, and nothing without one", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
-      approach: "deflect (sampled, 38%) · hint · hold steady",
+      approach: "deflect (sampled, reported 38%) · hint · hold steady",
       variants: [{ id: "v1", content: "First", status: "complete" }] } as Awaited<ReturnType<typeof api.getResponse>>);
     show();
     fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
-    const chip = await screen.findByText("deflect (sampled, 38%) · hint · hold steady");
+    const chip = await screen.findByText("deflect (sampled, reported 38%) · hint · hold steady");
     expect(chip.tagName).toBe("SPAN");
     expect(chip).toHaveClass("chip", "on");
     expect(chip.parentElement).toHaveTextContent(/^Approach:/);

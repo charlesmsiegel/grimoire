@@ -248,3 +248,44 @@ def test_a_draw_defect_leaves_the_answer_standing(client, monkeypatch):
     client.post(base + "/chat", json={"content": "Hello"})
     record = _round(cid, sid)
     assert "pick" not in record and record["used"] == [WINI]
+
+
+def test_the_hand_back_is_described_to_a_native_endpoint_as_the_players_turn():
+    """The live play gate (2026-10-12) found a decisions model choosing an NPC
+    on a turn that was the player's when the null read as the generic "None
+    of the other options fits."; named as the player's turn, it handed back.
+    Both native adapters send the pick's own wording; any other choice keeps
+    the generic one."""
+    from grimoire import decisions, openai_compatible, openrouter
+
+    named = rp.selector_item([{"ref": MARA, "name": "Mara"}], [], "", "Seraphine")
+    (q,) = named.questions
+    assert q.none_text.startswith("Seraphine (the player):")
+    assert "control returns to Seraphine" in q.none_text
+    assert rp.selector_item([{"ref": MARA, "name": "Mara"}], []).questions[0] \
+        .none_text.startswith("The player:")
+    assert openrouter._criteria(q)["none"] == q.none_text
+    (choice,) = openai_compatible._question(q)["choices"][-1:]
+    assert choice == {"value": "none", "description": q.none_text}
+    generic = decisions.Choice("c", "Which?", (decisions.Option("a", "a"),), allow_none=True)
+    assert decisions.none_text(generic) == decisions.NATIVE_NONE_TEXT
+    assert openrouter._criteria(generic)["none"] == decisions.NATIVE_NONE_TEXT
+
+
+def test_the_pick_names_the_scenes_player_character(monkeypatch):
+    from grimoire.routes import character_turns
+
+    seen = {}
+    real = rp.selector_item
+
+    def spy(roster, conversation, note="", player=""):
+        seen["player"] = player
+        return real(roster, conversation, note, player)
+
+    monkeypatch.setattr(rp, "selector_item", spy)
+    monkeypatch.setattr(store.context.macros, "scene_substitutions",
+                        lambda cid, sid: {"{{user}}": "Seraphine"})
+    monkeypatch.setattr(store.scenes, "read_scene", lambda cid, sid: {"messages": []})
+    character_turns._selector_inputs("saltmarch", "s1",
+                                      {"eligible": [{"ref": MARA, "name": "Mara"}]})
+    assert seen["player"] == "Seraphine"

@@ -490,8 +490,11 @@ def _selector_inputs(cid, sid, round_record):
     conversation = store.response_protocol.observable_conversation(
         messages, lambda posts, offset, total: store.regex.view.view(
             posts, cid=cid, phase="prompt", offset=offset, total=total))
+    # The hand-back is described to a native endpoint as the player's turn,
+    # by their character's name (the scene's {{user}}).
+    player = store.context.macros.scene_substitutions(cid, sid).get("{{user}}", "")
     item = store.response_protocol.selector_item(
-        round_record["eligible"], conversation, round_record.get("note", ""))
+        round_record["eligible"], conversation, round_record.get("note", ""), player)
     if round_record.get("typed_note"):
         return item, round_record["typed_note"], None
     newest = next((m for m in reversed(messages)

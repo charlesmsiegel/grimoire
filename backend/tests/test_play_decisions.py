@@ -331,7 +331,7 @@ def test_the_global_route_says_whether_the_pick_samples(client, monkeypatch):
 @pytest.mark.parametrize("intent,line", [
     ({"stance": "deflect", "draw": {"basis": "sampled", "selected": "deflect",
                                     "distribution": [["engage", 0.4], ["deflect", 0.38]]}},
-     "deflect (sampled, 38%)"),
+     "deflect (sampled, reported 38%)"),
     ({"stance": "press", "draw": {"basis": "answer", "selected": "press"}},
      "press (most likely)"),
     ({"stance": "deflect", "disclosure": "hint", "tension": 1}, "deflect · hint · hold steady"),

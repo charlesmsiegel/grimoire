@@ -240,9 +240,9 @@ def read_selected(configs: Sequence[PlayConfig]) -> Selected:
 
 def seed(conf: PlayConfig, selected: Selected) -> None:
     """Seed the ACTIVE store (an isolate) with exactly `conf`'s providers and
-    preset, its Primary and Decision selections, and the feature's switch;
-    the tracker, the rolling summary and the scene-break check off. Writes
-    nothing else."""
+    preset, its Primary and Decision selections, the feature's switch and
+    every other play-decision switch off; the tracker, the rolling summary and
+    the scene-break check off. Writes nothing else."""
     for provider in {conf.scene.provider, conf.decision.provider}:
         folder = llm_connections._dir()
         folder.mkdir(parents=True, exist_ok=True)
@@ -259,9 +259,13 @@ def seed(conf: PlayConfig, selected: Selected) -> None:
         "primary": {"selection": primary},
         "decision": {"selection": {"provider": conf.decision.provider,
                                    "model": conf.decision.model}}}})
-    store_config.write_config(**{FEATURES[conf.feature]["key"]: conf.setting,
-                                 "tracker": "off", "rolling_summary_every": "0",
-                                 "scene_break_every": "0"})
+    # Every switch, not only the feature's: one under test, the others off,
+    # whatever the shipped defaults (the speaker draw is on by default since
+    # 02-S6), so each gate measures one decision at a time.
+    switches = {spec["key"]: "off" for spec in FEATURES.values()}
+    switches[FEATURES[conf.feature]["key"]] = conf.setting
+    store_config.write_config(**switches, tracker="off", rolling_summary_every="0",
+                              scene_break_every="0")
 
 
 def seeded_providers() -> set[str]:

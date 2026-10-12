@@ -16,9 +16,12 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 test("each switch says what Inherit comes to", async () => {
   (api.getCampaignPlayDecisions as any).mockResolvedValue(inherited);
   render(<CampaignPlayDecisions cid="saltmarch" />);
-  expect(await screen.findByText("Currently on (following the global setting)."))
+  expect(await screen.findByText(/^Currently on \(following the global setting\)\. No extra call/))
     .toBeInTheDocument();
-  expect(screen.getAllByText("Currently off (following the global setting).")).toHaveLength(2);
+  expect(screen.getAllByText(/^Currently off \(following the global setting\)\./)).toHaveLength(2);
+  // The switch's text is the disclosure (§3.6, §3.7): what it costs, and where its input goes.
+  expect(screen.getByText(/One extra call before every character's reply/)).toBeInTheDocument();
+  expect(screen.getByText(/card summary, which goes to that model's provider/)).toBeInTheDocument();
   expect(screen.getByLabelText("Turn decision")).toHaveValue("");
 });
 
@@ -32,7 +35,7 @@ test("choosing a value writes only that switch and shows the answer", async () =
   fireEvent.change(select, { target: { value: "plan" } });
   await waitFor(() => expect(api.setCampaignPlayDecisions)
     .toHaveBeenCalledWith("saltmarch", { turn_plan: "plan" }));
-  expect(await screen.findByText("Currently plan.")).toBeInTheDocument();
+  expect(await screen.findByText(/^Currently plan\. One extra call/)).toBeInTheDocument();
 });
 
 test("a failed read says why", async () => {
