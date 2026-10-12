@@ -109,13 +109,38 @@ test("find unused images shows the time objects become collectable", async () =>
   expect(api.startImageGc).toHaveBeenCalledWith({ dry_run: true }, expect.any(String));
   // The two that are not yet collectable, and the time they become so: a time,
   // not a date, because the wait is an hour.
-  expect(screen.getByText(new RegExp(`2 more .*${DUE_TEXT.replace(/[/.:]/g, "\\$&")}`)))
+  expect(screen.getByText(new RegExp(`2 more .*by ${DUE_TEXT.replace(/[/.:]/g, "\\$&")}`)))
     .toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Send 3 unused images to the recycle bin" }))
     .toBeEnabled();
   // "Two scans a grace period apart" is gone: unused and an hour old is the rule.
   expect(screen.queryByText(/two scans/)).toBeNull();
   expect(screen.getByText(/at least an hour old/)).toBeInTheDocument();
+});
+
+test("a burst of too-new images is one line, naming the latest time", async () => {
+  const times = [DUE, DUE + 7, DUE + 61, DUE + 600];
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    protected: times.map((t, i) => (
+      { id: `p${i}`, blob: `q${i}`, why: "grace", collectable_at: t })),
+  }));
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  const latest = new Date((DUE + 600) * 1000).toLocaleTimeString();
+  const lines = await screen.findAllByText(/more (becomes|become) collectable/);
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toHaveTextContent(`4 more become collectable by ${latest}, if still unused.`);
+});
+
+test("a single too-new image reads in the singular", async () => {
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    protected: [{ id: "p", blob: "q", why: "grace", collectable_at: DUE }],
+  }));
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  expect(await screen.findByText(/1 more becomes collectable by/)).toBeInTheDocument();
 });
 
 test("nothing collectable offers no delete", async () => {

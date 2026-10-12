@@ -338,13 +338,16 @@ function GcReport({ report }: { report: ImageGcReport }) {
   const now = (r.counts?.collectable ?? 0) + (r.counts?.collectable_blobs ?? 0);
   const skew = r.clock_skew ?? [];
   const unreadable = r.unreadable_sidecars ?? [];
-  const dated = new Map<string, number>();
+  // One line for every too-new image, naming when the last of them is due: each
+  // upload has its own due second, so a line per time is a wall after a burst.
+  let dated = 0;
+  let latest = 0;
   let undated = 0;
   for (const row of r.protected ?? []) {
     if (row.collectable_at === null) undated += 1;
     else {
-      const when = clock(row.collectable_at);
-      dated.set(when, (dated.get(when) ?? 0) + 1);
+      dated += 1;
+      latest = Math.max(latest, row.collectable_at);
     }
   }
   return (
@@ -363,12 +366,12 @@ function GcReport({ report }: { report: ImageGcReport }) {
           {plural(r.counts?.unreferenced ?? 0, "image is", "images are")} not used by anything.
         </p>
       )}
-      {[...dated.entries()].map(([when, n]) => (
-        <p key={when} className="field-hint">
-          {n} more {n === 1 ? "becomes" : "become"} collectable at {when}, if still unused
-          on a scan then.
+      {dated > 0 && (
+        <p className="field-hint">
+          {dated} more {dated === 1 ? "becomes" : "become"} collectable by{" "}
+          {clock(latest)}, if still unused.
         </p>
-      ))}
+      )}
       {undated > 0 && (
         <p className="field-hint">
           {plural(undated, "image", "images")} cannot be dated: see the notes below.
