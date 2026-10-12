@@ -395,13 +395,18 @@ it("controls are disabled while pending", () => {
   expect(onClose).toHaveBeenCalledWith();
 });
 
-it("a removal resolving after the viewer closed does nothing", async () => {
-  const onSelectionChange = vi.fn();
-  const { view, onClose, pending } = viewer({ onSelectionChange });
-  confirmRemoval();
-  view.unmount();
-  onSelectionChange.mockClear();
-  await settle(pending, "removed");
-  expect(onClose).not.toHaveBeenCalled();
-  expect(onSelectionChange).not.toHaveBeenCalled();
-});
+// One image, so a settle that ignored the unmount would reach the `!next`
+// branch and call `onClose()` a second time.
+it.each([["resolving", "removed" as const], ["rejecting", new Error(EDIT_FIRST)]])(
+  "a removal %s after the viewer closed does nothing", async (_how, outcome) => {
+    const onSelectionChange = vi.fn();
+    const { view, onClose, pending } = viewer({ images: [removable[0]], onSelectionChange });
+    confirmRemoval();
+    fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    view.unmount();
+    onSelectionChange.mockClear();
+    await settle(pending, outcome);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });
