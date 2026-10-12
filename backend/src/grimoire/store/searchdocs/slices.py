@@ -39,6 +39,7 @@ from .. import (
     chronicle,
     commitments,
     facts,
+    membership,
     overlay,
     paths,
     pcs,
@@ -236,6 +237,19 @@ class CampaignInputs:
         for name in sorted(bad_records):
             self.damage.add(name)
         self._view = overlay.view(cid)
+        self.groups_index, self.group_paths = self._groups(cid)
+
+    def _groups(self, cid: str) -> tuple[membership.Index | None, dict[str, Path]]:
+        """07's effective inverse (detached rule applied) and each group's
+        source file, from one capture. A capture that fails is no groups at
+        all, and `groups` is named in `degraded`."""
+        try:
+            capture = overlay.group_capture(cid)
+            snapshot = membership.campaign_snapshot(cid, capture=capture)
+        except Exception:  # noqa: BLE001 -- groups are metadata; the document still renders
+            self.damage.add("groups")
+            return None, {}
+        return snapshot.index, {f"groups:{src.id}": src.path for src in capture.sources}
 
     # --- names --------------------------------------------------------------
 
@@ -473,6 +487,28 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
     return sorted(out.values(), key=lambda a: (a["role"] != "player", a["kind"], a["id"]))
 
 
+def _groups(inputs: CampaignInputs, cast: list[dict], used: list[Path]) -> list[dict]:
+    """07-C3c's `scene_groups` over the FULL cast (not the 64-ref metadata
+    list): every group one of whose affiliated actors -- members or leader --
+    is in the cast, uncapped and unfiltered, gm-only rows included and marked by
+    their `secrecy`. Current affiliation, never history: metadata only, never
+    rendered, so a membership edit moves the key and `meta` and embeds
+    nothing. A renderer that puts a group name into a prompt applies
+    `membership.prompt_visible` and `SCENE_GROUP_LIMIT` itself."""
+    if inputs.groups_index is None or not cast:
+        return []
+    rows = membership.scene_groups(inputs.groups_index, [a["ref"] for a in cast],
+                                   visible=None, limit=None)
+    out = []
+    for row in rows:
+        if row.group in inputs.group_paths:
+            used.append(inputs.group_paths[row.group])
+        out.append({"group": row.group, "name": clip(" ".join(row.name.split()), CAPS["ref"]),
+                    "secrecy": row.secrecy, "present": list(row.present),
+                    "leader_present": bool(row.leader_present)})
+    return out
+
+
 def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
     """One scene's slices of `inputs`, gated as the module docstring says."""
     sid = head.sid
@@ -537,7 +573,7 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
         "facts": fact_slice,
         "relationships": rels,
         "links": [damage.text(x, CAPS["ref"], "continuity.json") for x in links],
-        "groups": [],
+        "groups": _groups(inputs, cast, used),
     }
     mine = tuple(sorted(damage.names | set(inputs.degraded)))
     return Slices(sid=sid, identity=head.identity, values=values,

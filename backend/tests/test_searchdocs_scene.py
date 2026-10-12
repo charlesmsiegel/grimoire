@@ -463,3 +463,55 @@ def test_the_key_holds_across_a_re_pad(cid):
     data[padded] = data.pop(sid)               # what scene_refs.repoint does on a re-pad
     chronicle_path.write_text(json.dumps(data), encoding="utf-8")
     assert doc(cid, padded) == before
+
+
+# --- groups (08-S6) ---------------------------------------------------------------
+
+def _group(cid, name, *, members="", leader="", secrecy=""):
+    return entities.create_entity(campaigns.campaign_root(cid), "groups", name,
+                                  secrecy=secrecy, fields={"members": members, "leader": leader})
+
+
+def test_a_membership_edit_moves_the_key_and_meta_not_the_text(cid, monkeypatch):
+    sid = _played(cid)
+    aid, _vid = _actor(cid, sid, "Mara")
+    _absorb(cid, sid)
+    gid = _group(cid, "Salt Circle")
+    before = doc(cid, sid)
+    assert before.meta["groups"] == []
+    sent = []
+    from grimoire.store.inference import embed as inference_embed
+    monkeypatch.setattr(inference_embed, "embed_sync", lambda *a, **k: sent.append(a))
+    entities.update_entity(campaigns.campaign_root(cid), "groups", gid,
+                           fields={"members": f"characters:{aid}"})
+    after = doc(cid, sid)
+    assert after.text == before.text
+    assert after.key != before.key
+    assert [g["group"] for g in after.meta["groups"]] == [f"groups:{gid}"]
+    assert not sent
+
+
+def test_a_leader_only_group_is_listed(cid):
+    sid = _played(cid)
+    aid, _vid = _actor(cid, sid, "Seraphine", role="player")
+    gid = _group(cid, "Harbour Watch", leader=f"characters:{aid}")
+    groups = doc(cid, sid).meta["groups"]
+    assert [(g["group"], g["leader_present"]) for g in groups] == [(f"groups:{gid}", True)]
+
+
+def test_more_than_sixty_four_groups_are_all_listed(cid):
+    sid = _played(cid)
+    aid, _vid = _actor(cid, sid, "Mara")
+    for i in range(70):
+        _group(cid, f"Circle {i:02d}", members=f"characters:{aid}")
+    d = doc(cid, sid)
+    assert len(d.meta["groups"]) == 70 and "groups" not in d.meta["truncated"]
+
+
+def test_a_gm_only_group_is_listed_and_marked(cid):
+    sid = _played(cid)
+    aid, _vid = _actor(cid, sid, "Mara")
+    gid = _group(cid, "The Quiet Hand", members=f"characters:{aid}", secrecy="gm-only")
+    d = doc(cid, sid)
+    assert [(g["group"], g["secrecy"]) for g in d.meta["groups"]] == [(f"groups:{gid}", "gm-only")]
+    assert "Quiet Hand" not in d.text
