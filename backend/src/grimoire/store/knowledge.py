@@ -23,8 +23,9 @@ what it says beats every derived signal.
 sid moves on rename and is reissued after a delete; an index moves on every
 cut. A post is named by its key (`post_key`: ``r-<response_id>`` with its
 ``response_part``, else ``p-<post_id>``), the response's active variant and a
-digest of its raw text, all at write time; a whole scene by its transcript
-hash (`responses.transcript_hash`, which covers the hidden flag).
+digest of its raw text, all at write time; a whole scene by
+`knowledge_scene.scene_digest`: the transcript hash (which covers the hidden
+flag) with the title and chronicle summary a whole-scene grant exposes.
 
 **A grant fails closed, a withholding does not.** A ``knows`` or ``suspects``
 entry matches only while its fingerprint holds (`holds`): a swipe, Keep
@@ -404,7 +405,17 @@ def _restores(ref: str):
     return matches
 
 
-def forget_audience(cid: str, ref: str) -> dict[str, dict]:
+class Forgotten(dict):
+    """What `forget_audience` pruned, plus how many journalled Undo offers it
+    withdrew. True when either was written -- a caller outside the activity
+    middleware bumps the campaign's revision on that."""
+    retired: int = 0
+
+    def __bool__(self) -> bool:
+        return len(self) > 0 or self.retired > 0
+
+
+def forget_audience(cid: str, ref: str) -> Forgotten:
     """Remove every entry whose audience is `ref`, a deleted actor or group,
     and return what went.
 
@@ -424,14 +435,14 @@ def forget_audience(cid: str, ref: str) -> dict[str, dict]:
     nothing is removed before that is known.
     """
     if not valid_audience(ref) or ref == EVERYONE:
-        return {}
+        return Forgotten()
     with locks.campaign_lock(cid):
         doc = _load_strict(cid)
-        journal.retire_offers(cid, _restores(ref), FORGOTTEN_WHY)
-        gone = {kid: e for kid, e in doc["entries"].items()
-                if isinstance(e, dict) and e.get("audience") == ref}
-        if not gone:
-            return {}
+        gone = Forgotten({kid: e for kid, e in doc["entries"].items()
+                          if isinstance(e, dict) and e.get("audience") == ref})
+        gone.retired = journal.retire_offers(cid, _restores(ref), FORGOTTEN_WHY)
+        if not len(gone):
+            return gone
         for kid in gone:
             del doc["entries"][kid]
         _write(cid, doc)

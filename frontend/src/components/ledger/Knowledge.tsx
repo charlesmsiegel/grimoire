@@ -393,7 +393,9 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
                              posts: e.target.checked ? [...form.posts, id]
                                : form.posts.filter((x) => x !== id),
                            })} />
-                    <span>{`${p.speaker || "—"}: ${p.text.slice(0, 160)}`}</span>
+                    {/* The whole post, never a prefix: a grant fingerprints all
+                        of it, so all of it is what the reader is agreeing to. */}
+                    <span className="knowledge-post-text">{`${p.speaker || "—"}: ${p.text}`}</span>
                   </label>
                 );
               })}

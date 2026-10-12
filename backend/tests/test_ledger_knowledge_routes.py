@@ -331,3 +331,75 @@ def test_an_empty_edit_writes_nothing(client, world):
     assert client.put(world["base"] + f"/{kid}", json={}).status_code == 200
     assert store.knowledge._path(world["cid"]).read_text(encoding="utf-8") == before
     assert len(store.journal.read(world["cid"])) == rows
+
+
+def test_a_repeated_post_is_refused_before_any_identity_is_written(client, world):
+    sid = store.scenes.create_scene(world["cid"], "Old")
+    pid = _hex()
+    store.scenes.append_message(world["cid"], sid, "user", "Long ago.", post_id=pid)
+    path = store.scenes.paths._scene_path(world["cid"], sid)
+    path.write_text("\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                              if not line.startswith("identity:")) + "\n", encoding="utf-8")
+    twice = [{"key": f"p-{pid}", "part": ""}] * 2
+    r = _post(client, world, scene=sid, posts=twice, status="unaware")
+    assert r.status_code == 400 and r.json()["kind"] == "bad_subject"
+    assert scenes_identity.scene_identity(world["cid"], sid) is None
+
+
+def test_an_unreadable_transcript_is_busy_not_a_500(client, world, monkeypatch):
+    expect = _expect(client, world, f"r-{world['rid']}")
+
+    def unreadable(cid, sid):
+        raise OSError("mid-sync")
+    monkeypatch.setattr(store.scenes, "read_scene", unreadable)
+    r = _post(client, world, expect=expect)
+    assert r.status_code == 409 and r.json()["kind"] == "busy"
+
+
+def test_a_partly_cut_unaware_still_applies_but_a_grant_is_gone(client, world):
+    cid, sid = world["cid"], world["sid"]
+    rnd = store.responses.new_round(cid, sid, eligible=[], automatic=False, post=None,
+                                    run_id="test")
+    later = store.responses.prepare(cid, sid, rnd["id"], f"characters:{world['aid']}", "Mara", {})
+    store.responses.save_variant(cid, sid, later["id"], "Mara leaves.", "complete")
+    keys = [f"r-{world['rid']}", f"r-{later['id']}"]
+    shown = {p["key"]: p for p in _shown(client, world)["posts"]}
+    expect = [{k: shown[key][k] for k in ("key", "part", "variant", "digest")} for key in keys]
+    posts = [{"key": k, "part": ""} for k in keys]
+    _post(client, world, posts=posts, expect=expect, status="unaware")
+    _post(client, world, posts=posts, expect=expect, status="knows")
+    last = next(i for i, m in enumerate(store.scenes.read_scene(cid, sid)["messages"])
+                if m.get("response_id") == later["id"])
+    store.scenes.delete_from(cid, sid, last)
+    rows = {r["status"]: r for r in _entries(client, world)}
+    assert not rows["unaware"]["stale"]
+    assert rows["knows"]["stale_reason"] == "gone"
+
+
+def test_a_whole_scene_grant_stops_when_the_title_or_chronicle_changes(client, world):
+    cid = world["cid"]
+    kid = _whole(client, world).json()["id"]
+    assert not _entries(client, world)[0]["stale"]
+    # An absorb writing the chronicle summary the grant would expose.
+    store.chronicle.restore(cid, world["sid"], {"id": world["sid"], "summary": "Mara knew.",
+                                                "one_line": "Mara knew."})
+    assert _entries(client, world)[0]["stale_reason"] == "changed"
+    store.chronicle.restore(cid, world["sid"], None)
+    assert not _entries(client, world)[0]["stale"]
+    # A rename changes the title it would expose.
+    store.scenes.rename_scene(cid, world["sid"], "The Long Pier")
+    row = next(r for r in _entries(client, world) if r["id"] == kid)
+    assert row["stale"] and row["stale_reason"] == "changed"
+
+
+def test_the_list_parses_the_response_ledger_once(client, world, monkeypatch):
+    for title in ("Dock", "Harbour", "Quay"):
+        sid = store.scenes.create_scene(world["cid"], title)
+        store.scenes.append_message(world["cid"], sid, "user", f"{title}.", post_id=_hex())
+        _post(client, world, scene=sid, posts=None, whole_scene=True,
+              expect_digest=_shown(client, world, sid)["digest"])
+    calls = []
+    real = store.responses._read
+    monkeypatch.setattr(store.responses, "_read", lambda cid: calls.append(cid) or real(cid))
+    assert len(_entries(client, world)) == 3
+    assert len(calls) == 1

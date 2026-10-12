@@ -874,7 +874,11 @@ by".
     this reason, `store/tracker/paths.py:44-47`), and a digest of the stored
     (raw) post text at write time.
   - `scene`: the whole scene, with `responses.transcript_hash` of the scene's
-    messages at write time (`store/responses.py:118`).
+    messages at write time (`store/responses.py:118`). **Amended by 11-S4:**
+    the digest also covers the scene's title and its chronicle summary and
+    line (`knowledge_scene.scene_digest`), because a whole-scene grant is what
+    makes those visible to an actor (4.3): an absorb, a rename or a corrected
+    line after the grant is text the user never confirmed.
 - **A `knows` or `suspects` entry matches only while its fingerprint holds**:
   the post's current variant and raw-text digest, or the scene's current
   transcript hash. A swipe, a message edit, a retcon or a hidden-post toggle

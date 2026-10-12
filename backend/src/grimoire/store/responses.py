@@ -115,6 +115,16 @@ def variants_by_response(
             for rid, record in records.items()}
 
 
+def variants_by_scene(cid: str) -> dict[str, dict[str, tuple[str | None, list[str]]]]:
+    """`variants_by_response` for every scene, keyed by scene identity, from
+    ONE read of the ledger -- for a caller that would otherwise re-parse the
+    whole campaign file once per scene. Raises as `_read` does."""
+    return {token: {rid: (record.get("active_variant"),
+                          [v["id"] for v in record.get("variants", [])])
+                    for rid, record in scope.get("responses", {}).items()}
+            for token, scope in _read(cid)["scenes"].items() if isinstance(scope, dict)}
+
+
 def transcript_hash(messages):
     # A hidden post changes what the round's next prompt holds, so the flag is
     # hashed -- but only when present, so an unflagged transcript hashes exactly

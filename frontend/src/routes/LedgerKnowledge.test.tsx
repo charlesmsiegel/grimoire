@@ -179,3 +179,17 @@ test("an unchanged edit cannot be saved, and an orphaned never-heard offers Remo
   fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "x" } });
   expect(screen.getByRole("button", { name: "Save statement" })).toBeEnabled();
 });
+
+test("the form shows each post whole, since a grant covers all of it", async () => {
+  const long = "Winifred whispers the code. " + "She keeps talking. ".repeat(20) + "THE END.";
+  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
+  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+    sid: "0001-pier", digest: "e".repeat(64), keyless: 0,
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), index: 1,
+              speaker: "Winifred", text: long, hidden: false }],
+  });
+  renderLedger("/campaigns/run/ledger/knowledge/new");
+  fireEvent.change(await screen.findByRole("combobox", { name: "Scene" }),
+                   { target: { value: "0001-pier" } });
+  expect(await screen.findByText(/THE END\.$/)).toBeInTheDocument();
+});

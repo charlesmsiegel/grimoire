@@ -661,23 +661,44 @@ def _audience_now(who, audience: str) -> str | None:
     return (who.groups.get(audience) or (None,))[0] or None
 
 
-def _scene_posts(cid: str, sid: str) -> tuple[list[dict], dict, list[dict]]:
-    """A scene's raw messages, its response variants, and the display text."""
+class _ScenePosts(NamedTuple):
+    """One read of a scene: its raw messages, response variants, display
+    text, and the digest a whole-scene statement is fingerprinted with."""
+    messages: list[dict]
+    variants: dict
+    shown: list[dict]
+    digest: str
+    title: str
+
+
+def _scene_posts(cid: str, sid: str, variants: dict | None = None) -> _ScenePosts:
+    """Read a scene for a statement about it; every read failure is a 409 the
+    reader can act on, never a 500. `variants` is the scene's slice of a
+    ledger the caller already read (`responses.variants_by_scene`)."""
     try:
-        messages = store.scenes.read_scene(cid, sid)["messages"]
+        scene = store.scenes.read_scene(cid, sid)
         token = scenes_identity.scene_identity(cid, sid)
     except store.scenes.SceneNotFound as exc:
         raise HTTPException(status_code=404, detail="scene not found") from exc
-    except scenes_identity.UnreadableError as exc:
-        raise _busy() from exc
-    try:
-        variants = store.responses.variants_by_response(cid, sid, token=token) if token else {}
-    except ValueError as exc:   # responses.json is not a response ledger
-        raise _bad("malformed", "responses.json cannot be read; repair it and try again",
+    except UnicodeDecodeError as exc:
+        raise _bad("malformed", "the scene file cannot be read; repair it and try again",
                    409) from exc
-    except OSError as exc:
+    except (scenes_identity.UnreadableError, OSError) as exc:
         raise _busy() from exc
-    return messages, variants, regex_view.view(messages, cid=cid, phase="display")
+    messages = scene["messages"]
+    if variants is None:
+        try:
+            variants = (store.responses.variants_by_response(cid, sid, token=token)
+                        if token else {})
+        except ValueError as exc:   # responses.json is not a response ledger
+            raise _bad("malformed", "responses.json cannot be read; repair it and try again",
+                       409) from exc
+        except OSError as exc:
+            raise _busy() from exc
+    title, record = store.knowledge_scene.whole_scene(cid, sid, scene["meta"])
+    return _ScenePosts(messages, variants, regex_view.view(messages, cid=cid, phase="display"),
+                       store.knowledge_scene.scene_digest(messages, title, record),
+                       title or sid)
 
 
 def _subject_form(posts: list[KnowledgePost] | None, whole_scene: bool,
@@ -700,6 +721,8 @@ def _subject_form(posts: list[KnowledgePost] | None, whole_scene: bool,
         raise _bad("bad_subject", "name the posts, or say it is the whole scene")
     if posts is not None and not posts:
         raise _bad("bad_subject", "name at least one post, or the whole scene")
+    if posts is not None and len({(p.key, p.part) for p in posts}) != len(posts):
+        raise _bad("bad_subject", "name each post once")
     return posts
 
 
@@ -734,15 +757,14 @@ def _knowledge_subject(cid: str, sid: str, posts: list[KnowledgePost] | None,
     scene is given an identity, so a refused request writes nothing."""
     grant = status in store.knowledge.GRANTS
     named = _subject_form(posts, whole_scene, grant)
-    messages, variants, _shown = _scene_posts(cid, sid)
+    read = _scene_posts(cid, sid)
     if named is None:
-        digest = store.responses.transcript_hash(messages)
-        if grant and expect_digest != digest:
+        if grant and expect_digest != read.digest:
             raise _bad("moved", "the scene changed since it was shown; look again", 409)
-        subject: dict = {"kind": "scene", "digest": digest}
+        subject: dict = {"kind": "scene", "digest": read.digest}
     else:
-        subject = {"kind": "posts",
-                   "posts": _fingerprinted(messages, variants, named, grant, expect, gone_is)}
+        subject = {"kind": "posts", "posts": _fingerprinted(
+            read.messages, read.variants, named, grant, expect, gone_is)}
     try:
         subject["scene"] = scenes_identity.ensure_identity(cid, sid)
     except scenes_identity.UnreadableError as exc:
@@ -767,16 +789,16 @@ def get_knowledge_scene(cid: str, sid: str):
     now (display text) with the fingerprint a grant must send back as
     `expect`, and the whole scene's `digest`. Writes nothing."""
     _campaign_or_404(cid)
-    messages, variants, shown = _scene_posts(cid, sid)
+    read = _scene_posts(cid, sid)
     posts = []
-    for i, (m, view) in enumerate(zip(messages, shown, strict=True)):
-        fp = store.knowledge.fingerprint(m, variants)
+    for i, (m, view) in enumerate(zip(read.messages, read.shown, strict=True)):
+        fp = store.knowledge.fingerprint(m, read.variants)
         if fp["key"]:
             posts.append({**fp, "index": i, "speaker": str(m.get("speaker") or ""),
                           "text": str(view.get("content") or ""),
                           "hidden": store.scenes.serialize.is_excluded(m)})
-    return {"sid": sid, "digest": store.responses.transcript_hash(messages),
-            "keyless": sum(1 for m in messages if not store.knowledge.post_key(m)),
+    return {"sid": sid, "digest": read.digest,
+            "keyless": sum(1 for m in read.messages if not store.knowledge.post_key(m)),
             "posts": posts}
 
 
@@ -789,24 +811,29 @@ class _SceneView(NamedTuple):
     facts: store.knowledge.SceneFacts
 
 
-def _scene_view(cid: str, identity: str) -> _SceneView | str | None:
+def _scene_view(cid: str, identity: str, ledger) -> _SceneView | str | None:
     """The scene a statement is about, None when it was deleted, or
-    ``"unverifiable"`` when the scan could not finish (a synced folder
-    mid-write) -- which marks that one entry rather than failing the list."""
+    ``"unverifiable"`` when it could not be read just now (a synced folder
+    mid-write, a damaged response ledger) -- which marks that one entry rather
+    than failing the list. `ledger` is `responses.variants_by_scene`, read
+    once per request, or an exception when that read failed."""
     try:
         sid = scenes_identity.find_by_identity(cid, identity)
     except scenes_identity.UnreadableError:
         return "unverifiable"
     if sid is None:
         return None
-    try:
-        messages, variants, shown = _scene_posts(cid, sid)
-        title = store.scenes.read_scene(cid, sid)["meta"].get("title") or sid
-    except (HTTPException, ValueError, OSError):
-        # One damaged scene or response ledger marks its entries, never the list.
+    if isinstance(ledger, Exception):
         return "unverifiable"
-    return _SceneView(sid, str(title), shown,
-                      store.knowledge_scene.scene_facts(messages, variants))
+    try:
+        read = _scene_posts(cid, sid, variants=ledger.get(identity, {}))
+    except HTTPException:
+        return "unverifiable"
+    # The posts from `scene_facts`, the whole-scene digest from the same read
+    # a subject is fingerprinted with (title and chronicle included).
+    posts = store.knowledge_scene.scene_facts(read.messages, read.variants).posts
+    return _SceneView(sid, read.title, read.shown,
+                      store.knowledge.SceneFacts(posts=posts, digest=read.digest))
 
 
 def _listed_posts(entry: dict, scene: _SceneView | None) -> list[dict]:
@@ -839,7 +866,13 @@ def _stale_reason(entry: dict, held, posts: list[dict], now: str | None) -> str 
         # Not "gone": the scene could not be read just now, and the statement
         # may well be fine.
         return "unverifiable"
-    if not isinstance(held, _SceneView) or any(p["missing"] for p in posts):
+    if not isinstance(held, _SceneView):
+        return "gone"
+    # A grant needs every post it names; an `unaware` withholds whichever of
+    # its posts remain, so it is gone only when none does.
+    lost = (all(p["missing"] for p in posts) if entry["status"] == store.knowledge.UNAWARE
+            else any(p["missing"] for p in posts))
+    if posts and lost:
         return "gone"
     if entry["status"] not in store.knowledge.GRANTS:
         return None
@@ -865,13 +898,17 @@ def get_knowledge(cid: str):
     _campaign_or_404(cid)
     entries, intact = store.knowledge.read_checked(cid)
     who = store.knowledge_scene.audiences_for(cid)
+    try:   # one parse of the campaign-wide ledger for every scene below
+        ledger: dict | Exception = store.responses.variants_by_scene(cid)
+    except (ValueError, OSError) as exc:
+        ledger = exc
     scenes: dict[str, _SceneView | str | None] = {}
     out = []
     for kid, entry in sorted(entries.items(), key=lambda kv: kv[1].get("created", ""),
                              reverse=True):
         identity = entry["subject"]["scene"]
         if identity not in scenes:
-            scenes[identity] = _scene_view(cid, identity)
+            scenes[identity] = _scene_view(cid, identity, ledger)
         held = scenes[identity]
         scene = held if isinstance(held, _SceneView) else None
         posts = _listed_posts(entry, scene)

@@ -246,8 +246,9 @@ def _suspend_membership_lifetimes(wroot: Path, kind: str, eid: str, new_kind: st
 
 
 def _knowledge_preflight(kind: str, cids) -> None:
-    """A group's statements are pruned by the move: refuse first if a bound
-    campaign's knowledge file cannot be read (spec 11 §7.5)."""
+    """A group's statements are pruned by the move in every campaign that
+    follows the World record: refuse first if one of those campaigns'
+    knowledge files cannot be read (spec 11 §7.5)."""
     if kind == "groups":
         for cid in cids:
             knowledge.require_readable(cid)
@@ -281,7 +282,6 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
         for cid in cids:
             overlay.require_identity_ledgers(cid)
             journal.require_readable(cid)
-        _knowledge_preflight(kind, cids)
         # Invalid or same-kind requests cannot suspend an otherwise live
         # offer. These checks have no durable effects (spec 07).
         if new_kind not in entities.ENTITY_KINDS:
@@ -294,6 +294,7 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
         # World has since reused its slug. That new record cannot capture the
         # original's file, refs, or membership offers (spec 07 brutal review).
         following = _following_campaigns(cids, kind, eid, wroot)
+        _knowledge_preflight(kind, following)
         aliases = {cid: overlay.capture_record_refs(cid, _ref(kind, eid), extra_refs=(requested,))
                    for cid in following}
         affected: set[str] = set()

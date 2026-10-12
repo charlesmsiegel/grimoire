@@ -634,3 +634,26 @@ def test_an_unreadable_file_does_not_block_a_world_delete_of_what_it_cannot_name
     with pytest.raises(group_refs.GroupIdentityConflict), \
             overlay.world_identity_change(wroot, record=("groups", gid)):
         pass
+
+
+def test_retiring_only_undo_offers_still_reports_a_write(cid):
+    aid, _vid = overlay.create_character(cid, "Mara")
+    kid = knowledge.add(cid, _entry(audience=f"characters:{aid}"))
+    with undo.journalled(cid, {"w": "knowledge", "id": kid}, kind="knowledge",
+                         ref={"kind": "knowledge", "id": kid}, field="status",
+                         label="Mara — knowledge removed"):
+        knowledge.remove(cid, kid)
+    gone = knowledge.forget_audience(cid, f"characters:{aid}")
+    assert len(gone) == 0 and gone.retired == 1 and gone
+    assert not knowledge.forget_audience(cid, f"characters:{aid}")
+
+
+def test_a_campaign_keeping_its_own_copy_does_not_block_a_world_delete(cid):
+    from grimoire.store import entities
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    wroot = worlds.world_root(wid)
+    gid = entities.create_entity(wroot, "groups", "The Saltmarch Watch")
+    overlay.materialize_entity(cid, "groups", gid)
+    knowledge._path(cid).write_text("{not json", encoding="utf-8")
+    with overlay.world_identity_change(wroot, record=("groups", gid)):
+        pass

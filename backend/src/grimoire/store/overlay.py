@@ -3082,15 +3082,18 @@ def world_identity_change(wroot: Path, *, record: tuple[str, str] | None = None
         if record is not None:
             require_world_identity_scope(wroot, *record, scope.bound)
             kind, rid = record
-            if kind in ("characters", "groups"):
-                # Only an actor or a group can be a knowledge audience, and
-                # only a campaign bound to this World is swept: preflight
-                # exactly those, before anything is removed (spec 11 §7.5).
-                for cid in scope.bound:
-                    knowledge.require_readable(cid)
             if kind in entities.ENTITY_KINDS:
                 rid = entities.require_entity(wroot, kind, rid).resolve().stem
                 retire_world_reviews(wroot, kind, rid, scope.captured)
+            if kind in ("characters", "groups"):
+                # Only an actor or a group can be a knowledge audience, and
+                # `_forget_in_campaign` prunes only a bound campaign that
+                # inherits the record (one holding its own copy keeps its
+                # statements): preflight exactly those, before anything is
+                # removed (spec 11 §7.5).
+                for cid in scope.bound:
+                    if not _record_present(croot_of(cid), kind, rid):
+                        knowledge.require_readable(cid)
         yield scope.bound
 
 
