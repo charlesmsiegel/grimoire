@@ -165,10 +165,30 @@ def test_windows_nuke_on_delete_refuses(windows, tmp_path):
 
 
 def test_windows_absent_volume_key_is_ok(windows, tmp_path):
-    windows(registry={}, guid=None)
-    assert recycle_bin.check(tmp_path) == Availability(True)
+    """The volume's GUID resolves and its BitBucket key is absent: Windows'
+    defaults apply (the bin on, its default capacity)."""
     windows(registry={})
     assert recycle_bin.check(tmp_path) == Availability(True)
+
+
+def test_windows_unresolved_volume_guid_refuses(windows, tmp_path):
+    """No GUID means the per-volume key cannot even be named, so NukeOnDelete
+    and MaxCapacity are unread -- never the same as absent, since a fixed
+    volume set to delete immediately would then pass."""
+    windows(registry={("HKCU", VOLUME_KEY, "NukeOnDelete"): 1}, guid=None)
+    assert recycle_bin.check(tmp_path) == Availability(
+        False, "bin_settings_unreadable", MESSAGES["bin_settings_unreadable"])
+    windows(registry={}, guid=None)
+    assert recycle_bin.check(tmp_path).code == "bin_settings_unreadable"
+
+
+def test_an_unresolved_volume_guid_refuses_the_batch(windows, monkeypatch, tmp_path):
+    _, paths, log = _windows_batch(windows, monkeypatch, tmp_path, [1, 1],
+                                   registry={}, guid=None)
+    result = recycle_bin.send_batch(tmp_path, paths, lambda p: pytest.fail("before ran"))
+    assert result.sent == [] and log == []
+    assert result.refused == paths[0] and result.code == "bin_settings_unreadable"
+    assert all(p.exists() for p in paths)
 
 
 # --- a registry value that cannot be read is not an unset one -----------------
@@ -477,6 +497,10 @@ def _flip_volume(w):
     w.volume = None
 
 
+def _flip_guid(w):
+    w.guid = None
+
+
 def _unreadable(*setting):
     def flip(w):
         w.registry[setting] = recycle_bin.UNREADABLE
@@ -490,6 +514,7 @@ def _unreadable(*setting):
     (_flip_nuke, "bin_deletes_immediately"),
     (_flip_query, "volume_has_no_bin"),
     (_flip_volume, "volume_has_no_bin"),
+    (_flip_guid, "bin_settings_unreadable"),
     (_unreadable("HKCU", POLICY, "NoRecycleFiles"), "bin_settings_unreadable"),
     (_unreadable("HKLM", POLICY, "NoRecycleFiles"), "bin_settings_unreadable"),
     (_unreadable("HKCU", VOLUME_KEY, "NukeOnDelete"), "bin_settings_unreadable"),

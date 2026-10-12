@@ -345,7 +345,11 @@ dependency set stays as it is. Availability is one function,
   exists but cannot be read (access denied, or not a DWORD), for either
   policy or for `MaxCapacity`, is not taken as unset: it refuses with
   `bin_settings_unreadable` ("Windows' Recycle Bin settings for this drive
-  couldn't be read, so pictures won't be sent to it."). An absent per-volume key
+  couldn't be read, so pictures won't be sent to it."). So does a volume
+  whose GUID cannot be resolved (`GetVolumeNameForVolumeMountPointW` fails):
+  its per-volume key cannot even be named, so `NukeOnDelete` and
+  `MaxCapacity` are unread, not absent. An absent per-volume key (the GUID
+  resolved, `BitBucket\Volume\{GUID}` not there)
   means Windows' defaults — the bin is on, with its default capacity — and is
   not a refusal; `MaxCapacity` is then unknown and the size check below is
   skipped.
@@ -465,7 +469,8 @@ tests that are about availability override it.
 - `recycle_bin.check`: `android`, `not_installed`, and on Windows (through
   seams over `ctypes` and `winreg`) a non-fixed drive, a failing
   `SHQueryRecycleBinW`, `NoRecycleFiles` in HKCU and in HKLM, `NukeOnDelete`,
-  an absent per-volume key (not a refusal), a file over `MaxCapacity`
+  an absent per-volume key (not a refusal), an unresolvable volume GUID
+  (`bin_settings_unreadable`), a file over `MaxCapacity`
   (`too_large_for_bin`), and a batch whose item count rose by less than the
   files sent with the bin below capacity (`recycle-bin-unverified`) versus one
   at capacity (not a stop);

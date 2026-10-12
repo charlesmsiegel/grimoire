@@ -27,7 +27,8 @@ error says nothing about the setting, and reading it as absent is the one
 answer that can turn a send into a permanent delete. So `_reg_value` keeps the
 three apart (a DWORD, None for absent, `UNREADABLE`), and an unreadable
 `NoRecycleFiles`, `NukeOnDelete` or `MaxCapacity` refuses with
-`bin_settings_unreadable`.
+`bin_settings_unreadable`. So does a volume whose GUID cannot be resolved: its
+per-volume key cannot be named, so those two are unread, not absent.
 
 **Capacity.** A bin at capacity purges its oldest items to fit a new one, and a
 file larger than the whole bin is deleted outright. The capacity is the
@@ -311,15 +312,20 @@ def _windows(root: Path) -> _WindowsReading:
     if state is None:
         return _WindowsReading(_refusal("volume_has_no_bin"), volume)
     key = _volume_key(volume)
+    if key is None:
+        # No GUID, so the per-volume key cannot even be named: NukeOnDelete
+        # and MaxCapacity are unread, which is not the same as absent -- a
+        # volume set to delete immediately would pass.
+        return _WindowsReading(_refusal("bin_settings_unreadable"), volume, state)
     flags = [_win.reg_dword(hive, _POLICY_KEY, "NoRecycleFiles") for hive in ("HKCU", "HKLM")]
-    flags.append(_win.reg_dword("HKCU", key, "NukeOnDelete") if key is not None else None)
+    flags.append(_win.reg_dword("HKCU", key, "NukeOnDelete"))
     # Windows reads each flag as on when it is nonzero, and an unexpected
     # value is safest read as on: any nonzero DWORD refuses, not only 1.
     if any(isinstance(flag, int) and flag != 0 for flag in flags):
         return _WindowsReading(_refusal("bin_deletes_immediately"), volume, state)
     if any(flag is UNREADABLE for flag in flags):
         return _WindowsReading(_refusal("bin_settings_unreadable"), volume, state)
-    megabytes = _win.reg_dword("HKCU", key, "MaxCapacity") if key is not None else None
+    megabytes = _win.reg_dword("HKCU", key, "MaxCapacity")
     if megabytes is UNREADABLE:
         # The capacity rule (`too_large_for_bin`, the backstop) stands on it.
         return _WindowsReading(_refusal("bin_settings_unreadable"), volume, state)

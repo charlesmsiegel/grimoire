@@ -1036,7 +1036,11 @@ operating system's; on Windows that is the residual stated below.
   `NukeOnDelete` or the volume's `MaxCapacity`, or a value there that is not a
   DWORD, refuses as `bin_settings_unreadable`
   (`test_an_unreadable_bin_setting_refuses_the_check`,
-  `test_reg_value_tells_absent_from_unreadable`). Because any of those can change after
+  `test_reg_value_tells_absent_from_unreadable`). So does a volume whose GUID
+  cannot be resolved, because its per-volume key cannot even be named
+  (`test_windows_unresolved_volume_guid_refuses`); a resolved volume with no
+  per-volume key keeps Windows' defaults
+  (`test_windows_absent_volume_key_is_ok`). Because any of those can change after
   that answer, `send_batch` asks the whole question again at the start of every
   batch and sends nothing when it fails
   (`test_a_guard_that_flips_after_check_refuses_the_batch`). A file that has
