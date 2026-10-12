@@ -1154,13 +1154,11 @@ async def _play_tool(cid, sid, client, round_record, actor, response_id):
 
 
 def _visibility(perception):
-    """A fresh predicate per loop turn (§8.2): does this delta show the
-    reader anything? Its own `ResponseWatcher`, so a hidden perception fence
-    is not visible text and a tool call after it is still honoured."""
-    def fresh():
-        watcher = store.response_protocol.ResponseWatcher(perception=perception)
-        return lambda delta: bool(watcher.feed(delta).strip())
-    return fresh
+    """A fresh predicate per loop turn (§8.2): has this turn begun its reply?
+    Only a leading hidden perception fence is not, so a tool call after one
+    is still honoured; anything past it -- prose, or a state, roll or handoff
+    fence -- is final (`response_protocol.opens_reply`)."""
+    return lambda: store.response_protocol.opens_reply(perception)
 
 
 class _LoopMeter:
@@ -1258,20 +1256,20 @@ async def _loop_or_plain(tool, watcher, task, messages, client, resolved):
     metered as a plain contribution is, its holder joining the loop's so the
     contribution's meter reads it, and recorded on the variant as
     `fell_back` (the failure's kind, or `empty`). Visible text already shown
-    is final: a failure after it is the contribution's, as any stream's."""
-    sees = _visibility(tool.perception)()
-    shown = False
+    is final: a failure after it is the contribution's, as any stream's.
+    "Shown" is the reply's own watcher's (`ResponseWatcher.opened`), which
+    the consumer has fed every delta yielded, each loop turn's leading
+    preparation fence excluded."""
     try:
         async with aclosing(_tool_events(tool, watcher)) as events:
             async for event in events:
-                shown = shown or sees(event.get("delta") or "")
                 yield event
     except LLMError as exc:
-        if shown:
+        if watcher.opened:
             raise
         tool.record["fell_back"] = exc.kind
     else:
-        if shown:
+        if watcher.opened:
             return
         tool.record["fell_back"] = "empty"
     _log.error("play tool loop for %s fell back to a plain generation: %s", task,

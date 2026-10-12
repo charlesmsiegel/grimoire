@@ -255,3 +255,45 @@ def test_an_uncapped_run_takes_no_spend_ceiling():
     assert tool_calls.RunBudget(max_output_tokens=None).max_output_tokens is None
     with pytest.raises(ValueError):
         tool_calls.RunBudget(max_output_tokens=None, spend_ceiling_usd=1.0)
+
+
+def test_a_second_turn_holding_only_its_hidden_fence_falls_back_to_a_plain_generation(client):
+    """Each loop turn has its own preparation fence: the second turn's is as
+    hidden as the first's, so a second turn holding nothing else has shown
+    the reader nothing and the contribution is generated plainly."""
+    cid, sid, base = seed(client)
+    store.write_config(decide_play_tool="on")
+    fake = _install(client, FakeToolTurns(
+        ToolTurn(deltas=("```perception\nThe ink.\n```\n",), calls=(("decide_choice", ASK),)),
+        ToolTurn(decision_reply({"choice": "truth"})),
+        ToolTurn(deltas=("```perception\nStill the ink.\n```\n",)),
+        ToolTurn(deltas=("Mara answers.", _HANDOFF))))
+    result = _send(client, base)
+    assert '"error"' not in result.text, result.text
+    assert fake.calls == 4 and _replies(cid, sid) == ["Mara answers."]
+    _record, variant = _variant(cid, sid)
+    assert variant["tool"]["fell_back"] == "empty"
+
+
+@pytest.mark.parametrize("opening", [
+    pytest.param("```state\nmood: wary\n```\n", id="a state fence"),
+    pytest.param("```handoff\n{\"next\":null}\n```\n", id="a handoff fence"),
+    pytest.param("```roll\n", id="an open roll fence"),
+])
+def test_a_call_after_any_fence_but_perception_is_declined(client, opening):
+    """Only a leading perception fence leaves a turn unbegun (§8.2): after a
+    state, handoff or roll fence the reply's controls are under way, so a
+    call is declined rather than carried into a second turn the controls
+    would misread."""
+    from grimoire.store import response_protocol
+
+    sees = response_protocol.opens_reply(True)
+    assert not sees("```perception\nShe waits.\n```\n") and not sees("\n")
+    assert response_protocol.opens_reply(True)(opening)
+    cid, _sid, base = seed(client)
+    store.write_config(decide_play_tool="on")
+    fake = _install(client, FakeToolTurns(ToolTurn(deltas=(opening,),
+                                                   calls=(("decide_choice", ASK),)),
+                                          ("never", [])))
+    client.post(base + "/chat", json={"content": "Mara, the ledger?", "speaker_ref": MARA})
+    assert fake.calls == 1 and _rows(cid, "turn-tool-decision") == []

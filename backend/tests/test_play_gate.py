@@ -102,6 +102,15 @@ def test_play_needs_its_selections():
         run_cli.main(["--live", "--play", "intent", "--scene", "a/b"])
 
 
+def test_play_refuses_another_mode_beside_it():
+    """A paid play run never stands in for another mode, offline or not."""
+    for other in (["--gate"], ["--compare", "a.json"], ["--embed"], ["--escalation-sweep"]):
+        with pytest.raises(SystemExit) as refused:
+            run_cli.main(["--live", "--play", "intent", "--scene", "a/b",
+                          "--decision", "a/c", *other])
+        assert refused.value.code == 2, other
+
+
 def test_the_matrices():
     speaker = play.matrix("speaker", [SCENE], [DECIDER])
     assert [(c.setting, c.cutoff) for c in speaker] == [("off", "1/(2n)"), ("on", "1/(2n)"),
@@ -197,6 +206,21 @@ def test_one_configuration_that_always_regresses_is_not_masked_by_another():
                                              graded(bad, False), graded(bad, False)])}
     assert not verdict["gate.no_turn_regression"].ok
     assert bad.id in verdict["gate.no_turn_regression"].detail
+
+
+def test_a_failed_run_fails_the_gate():
+    """A run that failed measures nothing: an "on" run that errored is not
+    on, and any failed run fails `gate.played`, so a feature whose every run
+    broke can never pass."""
+    off, on = play.matrix("intent", [SCENE], [DECIDER])
+    broken = play.PlayRun(play.FIXTURES[0], on, 0)
+    broken.error = "status 500"
+    fine = play.PlayRun(play.FIXTURES[0], off, 0)
+    verdict = {c.name: c for c in play.gate([play.Graded(fine, ()), play.Graded(broken, ())])}
+    assert not verdict["gate.played"].ok and "status 500" in verdict["gate.played"].detail
+    assert not verdict["gate.on_is_on"].ok
+    _text, passed = play.report([play.Graded(fine, ()), play.Graded(broken, ())])
+    assert not passed
 
 
 def test_a_speaker_draw_stored_with_sampling_off_fails_off_is_free():

@@ -269,6 +269,17 @@ class _PreparationPrefix:
         return out
 
 
+def opens_reply(perception: bool):
+    """A predicate fed one reply turn's deltas, in order: True once the turn
+    has written anything past its leading preparation fence -- prose, but
+    also a state, roll or handoff fence, each of which is hidden yet sets a
+    reply's course (roadmap 02 §8.2). A tool loop honours a call only before
+    this, so a turn whose call it honoured fed `ResponseWatcher` nothing but
+    that fence, and `next_turn` has only the preparation parser to reset."""
+    prefix = _PreparationPrefix(perception)
+    return lambda delta: bool(prefix.feed(delta).strip())
+
+
 def preparation_note(body: str) -> str:
     """The reasoning note a perception body is kept as -- `""` for none."""
     return "\n\n[Perception preparation]\n" + body if body else ""
@@ -303,6 +314,7 @@ class ResponseWatcher:
         self.handoff = None
         self.issue = None
         self._narration = ""
+        self._opened = False
 
     def _emit(self, text):
         # Everything before `visible` is decided, so the searches start there
@@ -326,10 +338,12 @@ class ResponseWatcher:
 
     def next_turn(self):
         """A tool loop's next turn begins (roadmap 02-C4): the turn before it
-        ended in a tool call with nothing visible, so the next turn opens its
-        reply afresh -- and may open its own leading preparation fence, which
-        stays hidden as the first one did. What both fences held is kept as
-        one preparation note."""
+        ended in a tool call having written nothing past its leading
+        preparation fence (`opens_reply`), so the roll watcher, the redactor
+        and the handoff scan have seen nothing yet and only the preparation
+        parser restarts. The next turn may open its own leading preparation
+        fence, which stays hidden as the first one did. What both fences held
+        is kept as one preparation note."""
         self.preparation.finish()
         body = self.preparation.body
         self.preparation = _PreparationPrefix(self._perception)
@@ -341,10 +355,14 @@ class ResponseWatcher:
         # one per SSE line -- so it is answered before any of them runs.
         if not text:
             return ""
-        return self._emit(self.roll.feed(self.preparation.feed(text)))
+        return self._emit(self.roll.feed(self._past_preparation(self.preparation.feed(text))))
+
+    def _past_preparation(self, text):
+        self._opened = self._opened or bool(text.strip())
+        return text
 
     def finish(self):
-        out = self._emit(self.roll.feed(self.preparation.finish()))
+        out = self._emit(self.roll.feed(self._past_preparation(self.preparation.finish())))
         out += self._emit(self.roll.finish())
         match = _HANDOFF.search(self.raw)
         self._narration = self.raw[: match.start()] if match else self.raw
@@ -360,6 +378,13 @@ class ResponseWatcher:
             out += self.redactor.feed(self.raw[self.visible :])
         out += self.redactor.finish()
         return out
+
+    @property
+    def opened(self):
+        """Whether the reply has written anything past its preparation fence:
+        prose, or a fence of any other kind, hidden or not (`opens_reply`'s
+        test, on what this watcher was fed)."""
+        return self._opened
 
     @property
     def preparation_note(self):

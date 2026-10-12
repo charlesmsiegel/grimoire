@@ -448,7 +448,13 @@ def run_play(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                                    ("--provider", bool(args.provider)),
                                    ("--model", bool(args.model)),
                                    ("--decide-backend", args.decide_backend is not None),
-                                   ("--escalation", bool(args.escalation)))
+                                   ("--escalation", bool(args.escalation)),
+                                   # Another mode, offline ones included: a paid
+                                   # run never stands in for what was asked.
+                                   ("--gate", args.gate), ("--compare", bool(args.compare)),
+                                   ("--embed", args.embed),
+                                   ("--embed-options", bool(args.embed_options)),
+                                   ("--escalation-sweep", args.escalation_sweep))
              if on]
     if clash:
         ap.error(f"--play plays its own matrix; it takes no {', '.join(clash)}")

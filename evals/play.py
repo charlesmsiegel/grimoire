@@ -537,6 +537,10 @@ def gate(graded: Sequence[Graded]) -> list[Check]:
                 if passes_off and fails_on:
                     regressions.append(f"{fx} [{conf}]: {name}")
     out.append(Check("gate.no_turn_regression", not regressions, "; ".join(regressions)))
+    # A failed run measures nothing: the gate never passes over one, off or on.
+    failed = sorted({f"{g.run.config.id} {g.run.fixture.id} #{g.run.repeat + 1}: "
+                     f"{g.run.error}" for g in graded if g.run.error})
+    out.append(Check("gate.played", not failed, "; ".join(failed[:3])))
     off_rows = [g.run.config.id for g in graded if not g.run.config.on and _not_off(g.run)]
     out.append(Check("gate.off_is_free", not off_rows,
                      f"configs {sorted(set(off_rows))} ran the feature with it off"))
@@ -562,11 +566,12 @@ def _not_off(run: PlayRun) -> bool:
 
 
 def _not_on(run: PlayRun) -> bool:
-    """Whether a run labelled "on" did not run its feature: the turn decision
-    skipped or filed no call, or -- for the speaker draw, which adds no call
-    -- a pick was asked (a `response-selector` row) and no draw was stored."""
+    """Whether a run labelled "on" did not run its feature: the run failed,
+    the turn decision skipped or filed no call, or -- for the speaker draw,
+    which adds no call -- a pick was asked (a `response-selector` row) and no
+    draw was stored."""
     if run.error:
-        return False
+        return True     # a run that failed ran nothing it could be graded on
     if run.config.feature == "speaker":
         picked = any(r.get("task") == "response-selector" for r in run.rows)
         return picked and not run.picks
