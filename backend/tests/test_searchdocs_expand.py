@@ -334,3 +334,15 @@ def test_an_unstamped_assistant_post_is_spoken_by_its_role_label(cid):
     post = got.excerpts[0].posts[0]
     assert post.index == 1 and post.speaker == "Grimoire"
     assert "**Grimoire:** The tide turns." in got.excerpts[0].text
+
+
+def test_a_hit_first_placed_as_a_neighbour_is_reframed_on_its_own_term(cid):
+    filler = " ".join(f"word{k}" for k in range(500))
+    messages = _plain(10)
+    messages[5] = _reply("The tide tax, and the tide tax again.", 5)
+    messages[6] = _user(f"{filler} and at last the tide tax.", 6)
+    sid = _scene(cid, messages)
+    got = expand.expand(cid, sid, phase="prompt", terms=["tide tax"], radius=1,
+                        max_bytes=8000, max_posts=8)
+    posts = {p.index: p for e in got.excerpts for p in e.posts}
+    assert "tide tax" in posts[6].content.casefold()

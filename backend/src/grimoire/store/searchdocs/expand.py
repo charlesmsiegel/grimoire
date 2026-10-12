@@ -306,6 +306,24 @@ class _Plan:
                                    keep="tail" if p < hit else "head")
         return contents, sum(_cost(self.posts[p], c[0]) for p, c in contents.items())
 
+    def reframe(self, hit: int) -> None:
+        """A hit first placed as another hit's neighbour was cut from the end
+        nearer THAT hit, which can leave its own term out. Cut it again,
+        framed on its own rarest term, if that fits what is left once its
+        current cost is given back; otherwise it keeps the cut it has."""
+        window = next(w for w in self.windows if hit in w.contents)
+        text, clipped = window.contents[hit]
+        if not clipped or any(t in text.casefold() for t in self.terms):
+            return
+        post = self.posts[hit]
+        available = self.remaining + _cost(post, text)
+        room = min(MESSAGE_BYTES, available - _cost(post, ""))
+        if room < MIN_POST_BYTES:
+            return
+        framed = _cut(post["content"], room, keep="frame", terms=self.terms)
+        window.contents[hit] = framed
+        self.remaining = available - _cost(post, framed[0])
+
     def place(self, hit: int, lo: int, hi: int) -> bool:
         """Add the window `lo..hi` around `hit`, merging any it touches, if it
         fits every limit; whether it did. A hit another window already holds
@@ -341,6 +359,7 @@ def _plan_matched(posts: list[dict], ranked: list[int], terms: list[str], *,
         for hit in ranked:
             lo, hi = max(0, hit - radius), min(len(posts) - 1, hit + radius)
             if hit in plan.placed():
+                plan.reframe(hit)         # its own term in view, if the budget allows
                 plan.place(hit, lo, hi)   # its own context, or nothing if it no longer fits
                 continue
             if not plan.place(hit, lo, hi) and not plan.place(hit, hit, hit) \

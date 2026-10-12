@@ -93,7 +93,10 @@ def _encodable(text: str) -> bool:
 
 def clip(text: str, cap: int) -> str:
     """`text` within `cap` UTF-8 bytes, cut at a character boundary and marked
-    with `…` (three bytes, inside the cap) when anything was dropped."""
+    with `…` (three bytes, inside the cap) when anything was dropped. A lone
+    surrogate (a hand-edited escape) is replaced first, so this never raises."""
+    if not _encodable(text):
+        text = text.encode("utf-8", "replace").decode("utf-8")
     raw = text.encode("utf-8")
     if len(raw) <= cap:
         return text
@@ -116,6 +119,14 @@ class _Damage:
             out = out.encode("utf-8", "replace").decode("utf-8")
             self.add(source)
         return clip(out, cap)
+
+    def clean(self, value: str, source: str) -> str:
+        """`value` with a lone surrogate replaced (and `source` named), whole:
+        for a ref, which is capped where it is emitted, not where it is kept."""
+        if _encodable(value):
+            return value
+        self.add(source)
+        return value.encode("utf-8", "replace").decode("utf-8")
 
     def add(self, name: str) -> None:
         self.names.add(name)
@@ -281,7 +292,9 @@ class CampaignInputs:
         got = statcache.memo("searchdocs.actor", statcache.signature(card), compute,
                              pool=_POOL, max_entries=POOL_ENTRIES)
         if not got:
-            return Name(aid, None, unreadable=True)
+            # The card is there and will not read: still the file whose repair
+            # changes this name, so it stays an input.
+            return Name(aid, card, unreadable=True)
         return Name(got, card)
 
     def location_files(self, lid: str) -> tuple[Path, ...]:
@@ -493,8 +506,9 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
             used.append(name.source)
         if name.unreadable:
             damage.add(token)
-        ref = canon.actor_ref(token)      # full: the membership join needs it
-        out[ref] = {"ref": ref, "kind": kind, "id": aid,
+        join = canon.actor_ref(token)     # full and raw: the membership join needs it
+        ref = damage.clean(join, token)
+        out[ref] = {"ref": ref, "join": join, "kind": kind, "id": aid,
                     "name": damage.text(name.text, CAPS["name"], token),
                     "role": rec.get("role") if isinstance(rec.get("role"), str) else "",
                     "present": listed}
@@ -502,8 +516,8 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
         if ref in out:
             continue
         kind, _, aid = ref.partition(":")
-        out[ref] = {"ref": ref, "kind": kind, "id": aid,
-                    "name": damage.text(aid, CAPS["name"], "chronicle.json"),
+        out[ref] = {"ref": damage.clean(ref, "chronicle.json"), "join": ref, "kind": kind,
+                    "id": aid, "name": damage.text(aid, CAPS["name"], "chronicle.json"),
                     "role": "", "present": False}
     return sorted(out.values(), key=lambda a: (a["role"] != "player", a["kind"], a["id"]))
 
@@ -524,7 +538,7 @@ def _groups(inputs: CampaignInputs, cast: list[dict], used: list[Path]) -> list[
     used += inputs.group_paths.values()
     if not cast:
         return []
-    rows = membership.scene_groups(inputs.groups_index, [a["ref"] for a in cast],
+    rows = membership.scene_groups(inputs.groups_index, [a["join"] for a in cast],
                                    visible=None, limit=None)
     return [{"group": row.group, "name": clip(" ".join(row.name.split()), CAPS["ref"]),
              "secrecy": row.secrecy, "present": list(row.present),

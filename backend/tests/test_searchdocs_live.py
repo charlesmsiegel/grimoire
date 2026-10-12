@@ -337,3 +337,17 @@ def test_a_partly_refused_batch_is_not_remembered_as_written(cid, monkeypatch):
     monkeypatch.setattr(compiled, "MAX_STAGED_BYTES", 2000)
     live.scene_documents(cid)
     assert not live._RECORDED
+
+
+def test_a_scenes_directory_that_cannot_be_listed_raises(cid, monkeypatch):
+    """"Could not look" is not "no history": an unlistable directory raises
+    rather than answering an empty live set."""
+    _three(cid)
+
+    def unreadable(*_a, **_k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(scenes, "list_scenes", unreadable)
+    monkeypatch.setattr(live.scenes_read, "list_scenes", unreadable)
+    monkeypatch.setattr(live.os, "scandir", unreadable)
+    with pytest.raises(OSError):
+        live.scene_documents(cid)

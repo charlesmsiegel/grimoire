@@ -38,6 +38,7 @@ Called from threadpool workers and detached runs, never the event loop.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,14 +80,26 @@ class LiveSet:
 
 
 def _walk(cid: str) -> tuple[list[dict], list[str]]:
-    """`list_scenes` rows (id, closed_by), tolerant of an unreadable head."""
+    """`list_scenes` rows (id, closed_by), tolerant of an unreadable HEAD.
+
+    A scenes directory that cannot be listed is not tolerated: `glob` and
+    `exists` would read it as empty, and "this campaign has no history" is a
+    wrong answer where "could not look" is the true one. So the listing goes
+    through `os.scandir`, which raises; only a directory that is not there
+    reads as no scenes."""
     try:
         return scenes_read.list_scenes(cid), []
     except (OSError, ValueError):     # UnicodeDecodeError is a ValueError
         pass
     rows, skipped = [], []
     d = scenes_paths._scenes_dir(cid)
-    for p in sorted(d.glob("*.md")) if d.exists() else ():
+    try:
+        with os.scandir(d) as listing:
+            names = sorted(e.name for e in listing if e.name.endswith(".md"))
+    except FileNotFoundError:
+        names = []
+    for name in names:
+        p = d / name
         if not paths.safe_id(p.stem):
             continue
         try:
@@ -236,7 +249,8 @@ def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
                     only: frozenset[str] | None = None) -> LiveSet:
     """The campaign's live scene documents, in play order. `exclude` drops
     sids (09 excludes the scene being played); `only` restricts (05's hook).
-    Never raises for store damage; raises `CampaignNotFound`."""
+    Never raises for damage to a scene or a ledger; raises `CampaignNotFound`,
+    and `OSError` when the scenes directory itself cannot be listed."""
     rows, skipped = _walk(cid)
     inputs = slices_mod.CampaignInputs.load(cid)
     wanted = _wanted(cid, rows, inputs, exclude, only, skipped)

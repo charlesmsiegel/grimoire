@@ -639,3 +639,25 @@ def test_a_long_actor_ref_still_joins_its_groups(cid):
     meta = doc(cid, sid).meta
     assert [g["group"] for g in meta["groups"]] == [f"groups:{gid}"]
     assert all(len(r.encode()) <= slices.CAPS["ref"] for r in meta["cast"])
+    assert all(len(r.encode()) <= slices.CAPS["ref"]
+               for g in meta["groups"] for r in [g["group"], *g["present"]])
+
+
+def test_an_unreadable_card_stays_an_input(cid):
+    sid = _played(cid)
+    aid, vid = _actor(cid, sid, "Mara")
+    card = characters.require_version(campaigns.campaign_root(cid), aid, vid)
+    card.write_text("{ nope", encoding="utf-8")
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    assert card in sl.paths and f"characters/{aid}" in sl.degraded
+
+
+def test_a_lone_surrogate_in_an_actor_ref_degrades_instead_of_raising(cid):
+    sid = _played(cid)
+    p = campaigns.campaign_root(cid) / "appearances.json"
+    p.write_text('{"characters/x\\ud800": {"version": "default", "role": "npc", "scenes": ["'
+                 + sid + '"]}}', encoding="utf-8")
+    d = doc(cid, sid)
+    assert d.meta["degraded"] and len(d.meta["cast"]) == 1
+    d.text.encode("utf-8")

@@ -83,10 +83,10 @@ class SceneDocument:
 
 
 def _clip(text: str, cap: int) -> str:
-    """`text` within `cap` bytes; a cut one ends in `…`, inside the cap."""
-    if len(text.encode("utf-8")) <= cap:
-        return text
-    return embed_space.clip(text, cap - 3) + "…"
+    """`text` within `cap` bytes; a cut one ends in `…`, inside the cap. Every
+    rendered item passes through here, so a lone surrogate that reached a slice
+    (an id from a hand-edited ledger) is replaced rather than raising."""
+    return slices_mod.clip(text, cap)
 
 
 def _line(label: str, items: list[str], count: int, item_cap: int, line_cap: int) -> str:
@@ -235,7 +235,11 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
                                      (f["id"] for f in values["facts"]["retired"]))},
         "relationship_pairs": bounded("relationship_pairs", sorted(
             {tuple(r["pair"]) for r in values["relationships"] if len(r["pair"]) == 2})),
-        "groups": list(values["groups"]),           # current affiliation; never truncated
+        # Current affiliation; never truncated, but every ref in it is capped
+        # like any other metadata ref (the slice keeps them whole).
+        "groups": [{**g, "group": slices_mod.clip(g["group"], ref),
+                    "present": [slices_mod.clip(p, ref) for p in g["present"]]}
+                   for g in values["groups"]],
         "keywords": bounded("keywords", _dedupe_folded(
             [k.casefold() for k in chron.get("keywords", [])])),
         "degraded": bounded("degraded", degraded),
