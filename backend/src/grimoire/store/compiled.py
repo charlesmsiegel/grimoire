@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import itertools
 import json
@@ -357,6 +358,7 @@ class _State:
     devices: dict[Path, str] = field(default_factory=dict)
     owners: dict[Path, str] = field(default_factory=dict)
     locations: dict[tuple[Path, str], tuple[tuple, Path]] = field(default_factory=dict)
+    controls: dict[Path, tuple[tuple, str, bool]] = field(default_factory=dict)
     intents: dict[str, DeleteIntent] = field(default_factory=dict)
     finished_intents: deque[DeleteIntent] = field(default_factory=deque)
     intent_lock: LockType = field(default_factory=threading.Lock)
@@ -846,8 +848,8 @@ class Batch:
         # boundary before availability can short-circuit the SQLite fence.
         if not self._attempt_started:
             self._attempt_started = True
-            self._marker = _read_marker(self.root)
-            self._attempt_pending = _read_intents(self.root) != []
+            self._marker, clear = _controls(self.root)
+            self._attempt_pending = not clear
 
     def _fence(self, *, strict: bool = False) -> bool:
         """Whether no purge or delete intent has arrived since the boundary.
@@ -863,13 +865,13 @@ class Batch:
             self._fence_snapshot = None
         taken = _wall_ns()
         snapshot = _control_snapshot(self.root)
-        passed = self._fence_read()
+        passed = self._fence_read(strict=strict)
         if passed and snapshot is not None and _settled(snapshot, taken):
             self._fence_snapshot = snapshot
         return passed
 
-    def _fence_read(self) -> bool:
-        marker = _read_marker(self.root)
+    def _fence_read(self, *, strict: bool) -> bool:
+        marker, _clear = _controls(self.root, strict=strict)
         # A busy first access still establishes the temporal boundary. A
         # retry may recover the same generation, but cannot adopt a purge that
         # happened while caller compute was already underway (S5 review).
@@ -891,8 +893,9 @@ class Batch:
                 _warn_once('generation')
             finally:
                 _state.lock.release()
+        marker, clear = _controls(self.root, strict=strict)
         return (not self.disabled and self._marker is not None and self._generation is not None
-                and _read_marker(self.root) == self._marker and _read_intents(self.root) == [])
+                and marker == self._marker and clear)
 
     def _session_current(self, session: _Session, *, strict: bool = False) -> bool:
         return self._usable(strict=strict) and _read_generation(session.conn) == self._generation
@@ -2401,12 +2404,10 @@ def _control_snapshot(root: Path) -> tuple | None:
     cost of four lstats instead of the reads, the listing and a probe
     connection per file. SQLite's own journal coming and going moves the
     directory too, which only costs one full pass after each write."""
-    cache = root / '.cache'
-    compiled = cache / 'compiled'
     parts: list[tuple | None] = []
-    for path in (cache, compiled, compiled / 'purge', compiled / 'delete-intents'):
+    for path in _control_paths(root):
         try:
-            info = path.lstat()
+            info = os.lstat(path)
             parts.append((info.st_dev, info.st_ino, info.st_mode, info.st_size,
                           info.st_mtime_ns, info.st_ctime_ns))
         except FileNotFoundError:
@@ -2414,6 +2415,32 @@ def _control_snapshot(root: Path) -> tuple | None:
         except (*_CACHE_ERRORS, AttributeError):
             return None  # no snapshot: every caller takes its full path
     return tuple(parts)
+
+
+@functools.lru_cache(maxsize=16)
+def _control_paths(root: Path) -> tuple[str, ...]:
+    cache = os.path.join(root, '.cache')
+    compiled = os.path.join(cache, 'compiled')
+    return (cache, compiled, os.path.join(compiled, 'purge'), os.path.join(compiled, 'delete-intents'))
+
+
+def _controls(root: Path, *, strict: bool = False) -> tuple[str | None, bool]:
+    """(the purge marker, whether no delete intent is pending) for `root`.
+
+    Re-read only when the control snapshot moved since a settled read, or
+    when `strict` asks: a commit always reads them again."""
+    taken = _wall_ns()
+    snapshot = _control_snapshot(root)
+    memo = _state.controls.get(root)
+    if not strict and snapshot is not None and memo is not None and memo[0] == snapshot:
+        return memo[1], memo[2]
+    marker = _read_marker(root)
+    clear = _read_intents(root) == []
+    if marker is not None and snapshot is not None and _settled(snapshot, taken):
+        _state.controls[root] = (snapshot, marker, clear)
+    else:
+        _state.controls.pop(root, None)
+    return marker, clear
 
 
 def _settled(snapshot: tuple, taken_ns: int) -> bool:
