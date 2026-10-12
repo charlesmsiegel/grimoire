@@ -1,0 +1,10 @@
+{#- One tension level's description (`store/turn_plan.py`, roadmap 02 §7.2):
+    whether the reply cools, holds or raises the scene. Var: level (the index
+    into `turn_plan.TENSION_LEVELS`). -#}
+{%- if level == 0 -%}
+ease the tension of the scene
+{%- elif level == 1 -%}
+hold the scene's tension steady
+{%- elif level == 2 -%}
+raise the stakes
+{%- endif -%}

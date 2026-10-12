@@ -117,6 +117,7 @@ from . import (
     pcs,
     pending_reviews,
     pins,
+    play_decisions,
     playing,
     playstate,
     plot,

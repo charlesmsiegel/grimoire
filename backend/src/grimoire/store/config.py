@@ -90,6 +90,14 @@ DEFAULT_TRACKER = "on"
 # Whether the tracker's perception rider is added to the prompt. Separate from
 # the tracker itself so the record can be kept while its prompt cost is shed.
 DEFAULT_PERCEPTION_RIDER = "on"
+# The three play-decision switches (roadmap 02 §3.6, `store/play_decisions.py`
+# reads them): sampling the next speaker, a pre-generation turn intent or
+# plan, and Decision as a tool from play. Each adds a call or changes who
+# speaks, so each is off until a play gate has measured it and the user said
+# yes -- and a cost may not arrive by upgrade.
+DEFAULT_DECIDE_SPEAKER_SAMPLING = "off"
+DEFAULT_DECIDE_TURN_PLAN = "off"
+DEFAULT_DECIDE_PLAY_TOOL = "off"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -236,6 +244,7 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "art_catalog_depth", "art_catalog_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "tracker", "perception_rider",
+                "decide_speaker_sampling", "decide_turn_plan", "decide_play_tool",
                 "send_images", "send_images_limit",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
@@ -317,6 +326,9 @@ def read_config() -> dict[str, str]:
                 "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
                 "tracker": DEFAULT_TRACKER,
                 "perception_rider": DEFAULT_PERCEPTION_RIDER,
+                "decide_speaker_sampling": DEFAULT_DECIDE_SPEAKER_SAMPLING,
+                "decide_turn_plan": DEFAULT_DECIDE_TURN_PLAN,
+                "decide_play_tool": DEFAULT_DECIDE_PLAY_TOOL,
                 "send_images": DEFAULT_SEND_IMAGES,
                 "send_images_limit": DEFAULT_SEND_IMAGES_LIMIT,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,

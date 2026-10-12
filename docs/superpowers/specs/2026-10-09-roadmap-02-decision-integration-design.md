@@ -188,6 +188,23 @@ play-facing design below is checked against them.
    (`character_turns.py:753-754`), so its cost sits against the player post
    that caused it (`usage.meter`, `store/usage.py:629`).
 
+### 1.5 Confirmed at 02-S1's baseline (`246a0e7`)
+
+Section 1 was re-read against the tree 02-S1 started from. The behaviour it
+records holds; its `file:line` citations have drifted with the files (cite
+the function names). What landed on this subsystem since `35c1fb7`, and so
+moves a "not landed" row:
+
+| Row | Now |
+|---|---|
+| Capture (1.2), "Only the speaker" | **Landed (01b).** Every decide site captures through `routes/decision_capture.py`, in a pool of its own; `test_decision_capture.py` holds every `decide` call to the helper. |
+| Sampling (1.3) | **Mechanism landed (01c).** `draws.draw`, `Eligibility(only, exclude, cutoff, floor)`, `new_seed`, `replay`, `reports_distribution`. No task samples. |
+| Escalation (1.3) | **Mechanism landed (01d).** `routing.TaskPolicy`, `decisions.triggers`, the hop, `routes.common.escalation_inference`. No task escalates. |
+| Decision as a tool (1.3) | **Landed (01g).** The `tools` capability, `inference.run_tools`/`stream_tools`, run budgets, `routes/tool_decision.decision_tool`. No `tool-decision` route ships. |
+| `Rank` (1.3) | **Landed (01e),** with `MultiSelect`, `Joint`, `Answer.expected`, `marginals`. |
+| 3.5's `decide(response_id=)` | **Landed (01g-S3)** on `decide`, `run_stages` and `_Call`. 02-S1 adds only `responses.mint_id()` and `prepare(response_id=, intent=)`. |
+| `routing.NO_LEGACY` | Not landed by any spec; 02-S2 adds it with its `NO_LEGACY_TASKS` set. |
+
 ---
 
 ## 2. Goal, and what is explicitly not the goal

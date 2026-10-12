@@ -327,7 +327,8 @@ def _recursion_depth_ok(value: str | None) -> bool:
 
 
 #: Config keys whose only meaningful values are "on" and "off".
-_ON_OFF_KEYS = ("tracker", "perception_rider", "send_images")
+_ON_OFF_KEYS = ("tracker", "perception_rider", "send_images",
+                "decide_speaker_sampling", "decide_play_tool")
 
 
 #: The legacy keys that pick the Embedding role on a store not yet at format 2.
@@ -375,6 +376,10 @@ def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(g
     for key in _ON_OFF_KEYS:
         if key in fields and fields[key] not in ("on", "off"):
             raise HTTPException(status_code=400, detail=f"{key} must be 'on' or 'off'")
+    if ("decide_turn_plan" in fields
+            and fields["decide_turn_plan"] not in store.play_decisions.TURN_PLAN_MODES):
+        raise HTTPException(status_code=400,
+                            detail="decide_turn_plan must be 'off', 'intent' or 'plan'")
     # A bound, refused rather than clamped: the cap in `config.lore_recursion_depth`
     # is for a hand edit, and a value typed into the page that silently became
     # another one would be a setting nobody chose. Blank clears to the default.

@@ -17,6 +17,7 @@ import math
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -717,6 +718,66 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
         # expired ceiling. It keeps its own message: blaming a setting that had
         # nothing to do with it would send the user to tune the wrong knob.
         raise LLMError("timeout", str(exc) or "the call timed out") from exc
+
+
+#: Seconds one pre-generation play decision (roadmap 02 §3.4: a turn intent,
+#: a turn plan, a tool decision) may hold the contribution it shapes, across
+#: every call it makes -- the primary, each prompt-only re-send of an attempt
+#: that refused the schema, and a fallback stage behind a native one. Argued
+#: structurally: the player is waiting on a stream that has not started, and
+#: an optional decision must cost less waiting than the reply it shapes. Well
+#: under `llm_call_budget` (default 300 s), which bounds one whole
+#: non-streaming generation. To be tuned against 01a's latency reports, never
+#: against a real library.
+PLAN_CEILING_S = 20.0
+
+#: The clock a play decision's deadline reads: a seam for tests, which move it
+#: to prove a second call is refused unsent once the deadline has passed.
+_plan_clock = time.monotonic
+
+
+class DeadlineRefused(LLMError):  # noqa: N818 - the spec's name, beside absorb's BudgetRefused
+    """A play decision's deadline was already gone, so the call was never
+    issued (roadmap 02 §3.4).
+
+    `store.usage.NOT_A_FAILURE` is False, as absorb's `BudgetRefused` declares
+    it, so `inference._refused_unsent` ends the decide chain here rather than
+    trying a later stage, and nothing reaches the error store or the
+    connection's health: the clock is the app's own, not the provider's."""
+
+    llm_call_failed = False
+
+
+def plan_ceiling() -> float:
+    """`PLAN_CEILING_S`, or the user's `llm_call_budget` when that is lower
+    (`<= 0` is "no ceiling" there, which never lifts this one)."""
+    budget = store.config.llm_call_budget()
+    return PLAN_CEILING_S if budget <= 0 else min(PLAN_CEILING_S, budget)
+
+
+def plan_deadline() -> operations.Around:
+    """One monotonic deadline for ONE play decision, as `decide`'s `around`.
+
+    Each facade call is bounded by what is left of it (`_bounded_call` with
+    that remainder as its ceiling); a call that would start with nothing left
+    is refused unsent with `DeadlineRefused`. An overrun of a call that did go
+    out is the call's own `timeout`, filed by its meter -- but never against
+    the connection (`_noting` is deliberately absent): this deadline is the
+    app's constant, not the user's `llm_call_budget`, so a slow and healthy
+    reasoning model must not read as failing on the Models page because of
+    it. Built per decision: the clock starts here."""
+    end = _plan_clock() + plan_ceiling()
+
+    async def bound(call, _holder):
+        left = end - _plan_clock()
+        if left <= 0:
+            close = getattr(call, "close", None)
+            if close is not None:
+                close()   # a coroutine never awaited would warn at collection
+            raise DeadlineRefused(
+                "timeout", "the play decision's deadline passed before this call")
+        return await _bounded_call(call, ceiling=left)
+    return bound
 
 
 def _noting(client: LLMClient, resolved: ResolvedInference, usage: dict | None = None):

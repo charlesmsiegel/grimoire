@@ -130,6 +130,15 @@ def _id():
     return uuid.uuid4().hex
 
 
+def mint_id() -> str:
+    """A response id minted ahead of `prepare` (roadmap 02 §3.5): a play
+    decision asked before the contribution is composed is metered under the
+    id its response will carry, so its ledger row and the response agree.
+    Mints nothing on disk -- an id `prepare` never receives (the contribution
+    then took the resume path) is only a ledger row's attribution."""
+    return _id()
+
+
 def _message(record, content, status, variant=None, excluded=None):
     variant = variant or next((v for v in record["variants"] if v["id"] == record["active_variant"]), {})
     # Only an opaque pointer enters transcript metadata. The reasoning itself
@@ -400,12 +409,25 @@ def prepare(
     speaker: str,
     snapshot: dict,
     settings: dict | None = None,
+    *,
+    response_id: str = "",
+    intent: dict | None = None,
 ) -> dict:
+    """A new pending response for `actor_ref` in round `round_id`.
+
+    `response_id` is an id `mint_id` handed out earlier, so a decision metered
+    before this call names the response it shaped; "" mints one here. `intent`
+    is the play decision's record (roadmap 02 §6.5), stored only when given:
+    a response written without one has no key at all, and every reader uses
+    `.get("intent")`."""
     with locks.campaign_lock(cid):
         data = _read(cid)
         scope = _scope(cid, sid, data)
+        rid = response_id or _id()
+        if rid in scope["responses"]:
+            raise ValueError(f"response id {rid!r} is already taken")
         record = {
-            "id": _id(),
+            "id": rid,
             "round_id": round_id,
             "post": scope["rounds"][round_id]["post"],
             "actor_ref": actor_ref,
@@ -417,6 +439,8 @@ def prepare(
         }
         if settings is not None:
             record["settings"] = copy.deepcopy(settings)
+        if intent is not None:
+            record["intent"] = copy.deepcopy(intent)
         record["snapshot_ref"] = response_snapshots.write(cid, record["id"], "primary", snapshot)
         scope["responses"][record["id"]] = record
         scope["rounds"][round_id].update(pending_response=record["id"], actor_ref=actor_ref)

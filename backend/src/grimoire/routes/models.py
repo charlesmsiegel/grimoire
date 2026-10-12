@@ -53,6 +53,9 @@ class ConfigUpdate(BaseModel):
     speaker_turn_taking: str | None = None
     tracker: str | None = None
     perception_rider: str | None = None
+    decide_speaker_sampling: str | None = None
+    decide_turn_plan: str | None = None
+    decide_play_tool: str | None = None
     send_images: str | None = None
     send_images_limit: str | None = None
     backup_enabled: str | None = None
