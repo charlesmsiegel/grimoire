@@ -37,11 +37,13 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from .. import embed_space
+from .. import compiled, embed_space
 from . import slices as slices_mod
 
-KIND = "searchdocs.scene"
-SEARCH_DOCUMENT_VERSION = 1
+KIND = compiled.SEARCHDOCS_SCENE.name
+#: 03's registry kind's version: one number, so the cache key and the document
+#: key cannot disagree about which rendering they name.
+SEARCH_DOCUMENT_VERSION = compiled.SEARCHDOCS_SCENE.version
 DOC_BYTES = 6000            # context/semantic.py's DOC_BYTES, for its reason
 MAX_META_REFS = 64
 ITEM_SEPARATOR = "; "

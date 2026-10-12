@@ -260,9 +260,15 @@ OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
 # its stamp is not read again (05 section 7.3).
 SYNC_SOURCES = Kind('sync:sources', 1, (), (), True)
 
+# A scene's history SearchDocument (roadmap 08-C2a): keyed by its per-scene
+# slice digests and what would not read, never by a whole file. `version` is
+# `searchdocs.scene.SEARCH_DOCUMENT_VERSION`; bumping it moves every key.
+SEARCHDOCS_SCENE = Kind('searchdocs.scene', 1, (), ('slices', 'degraded'), False)
+
 KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
                           OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS,
-                          SYNC_SOURCES.name: SYNC_SOURCES}
+                          SYNC_SOURCES.name: SYNC_SOURCES,
+                          SEARCHDOCS_SCENE.name: SEARCHDOCS_SCENE}
 
 
 @dataclass(frozen=True)

@@ -112,6 +112,14 @@ def _resolve_groups(rows: list[dict]) -> None:
                 row["closed_by"] = {"sid": done[0]["id"], "title": done[0]["title"]}
 
 
+def resolve_groups(rows: list[dict]) -> None:
+    """`_resolve_groups`, for a caller that built its own rows -- `store/
+    searchdocs`'s tolerant walk, when one unreadable head makes `list_scenes`
+    raise. Each row carries `id`, `title`, `done`, `branch_group` (when set)
+    and `_identity`, which this pops."""
+    _resolve_groups(rows)
+
+
 def closed_by(cid: str, sid: str) -> dict | None:
     """`{"sid", "title"}` of the absorbed sibling that makes this scene
     read-only, or `None` -- for an open scene, an absorbed one, a scene that is

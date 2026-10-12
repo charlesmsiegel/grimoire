@@ -1,0 +1,219 @@
+"""The live set of a campaign's scene SearchDocuments, with lazy build and one
+batch lookup (roadmap 08-C2a, spec section 6).
+
+1. The live set is read from the filesystem on every call: `list_scenes`, which
+   also derives `closed_by`. One unreadable head makes that raise, so an
+   `OSError` from it falls back to this module's own walk -- the same glob and
+   `safe_id` filter, each head read guarded on its own (an unreadable one is
+   `skipped`), and `closed_by` derived by the same rule.
+2. `CampaignInputs.load`: the memoized ledger parses.
+3. Each live scene's head, slices, digests and key.
+4. The process's own bounded memo, keyed by the document key; then ONE batch
+   lookup in 03's compiled cache of every key the memo did not hold.
+5. Every miss is rendered from the slices in hand and stored, with a
+   `materialized` row on every store file its slices read, its `instance`
+   `{"campaign": cid, "identity": <identity>}` -- so 05's sync knows which
+   documents a write to that file made stale.
+6. The answer, in play order.
+
+**Liveness by construction.** A document is only ever found through a key
+computed from the current slices, so a superseded one is never returned,
+whether or not any sync ran, and there is no "retire the old one" step: an
+unreachable row is evicted by 03's LRU.
+
+**Two tiers.** Every document this process built or read is held in a FIFO
+keyed by the document key, bounded at `DOC_MEMO_ENTRIES`, and asked first: on
+a synthetic 400-scene campaign the cache's batch lookup cost as much as all the
+slicing, so a warm call asks 03 only for what the memo lacks (after a restart,
+or past the bound). With the cache off (`GRIMOIRE_COMPILED_CACHE=0`, no
+SQLite, a held campaign lock or the event loop, where 03 refuses) no key is
+made and the memo is the only tier. Answers are identical either way.
+
+**No lock.** A read that crosses an absorb's sequence can pair a new chronicle
+slice with an old plot slice; the document is keyed by exactly those slices,
+so it is self-consistent with what it read, and the next call computes the new
+keys. Taking the lock would put a turn-path reader behind an absorb save.
+Called from threadpool workers and detached runs, never the event loop.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from .. import compiled, paths
+from ..scenes import paths as scenes_paths
+from ..scenes import read as scenes_read
+from . import scene as scene_mod
+from . import slices as slices_mod
+
+#: The cache-off memo's bound: at most about 48 MB of text at the worst-case
+#: 5803 bytes a document, typically far less. Structural; tune later.
+DOC_MEMO_ENTRIES = 8192
+_MEMO: dict = {}
+
+#: 03 stages at most this many rows per request (`compiled.MAX_STAGED_ROWS`):
+#: a document and its `materialized` rows are stored in batches that fit it.
+_STAGED_ROWS = compiled.MAX_STAGED_ROWS
+
+
+@dataclass(frozen=True)
+class LiveDocument:
+    sid: str                         # current
+    closed_by: dict | None           # list_scenes' derivation, never cached
+    doc: scene_mod.SceneDocument     # key, text, meta
+    paths: tuple[Path, ...]          # the store files its slices read
+
+
+@dataclass(frozen=True)
+class LiveSet:
+    documents: tuple[LiveDocument, ...]   # play order
+    skipped: tuple[str, ...]              # sids whose head could not be read
+    degraded: tuple[str, ...]             # campaign inputs that would not read
+
+
+def _walk(cid: str) -> tuple[list[dict], list[str]]:
+    """`list_scenes` rows (id, closed_by), tolerant of an unreadable head."""
+    try:
+        return scenes_read.list_scenes(cid), []
+    except OSError:
+        pass
+    rows, skipped = [], []
+    d = scenes_paths._scenes_dir(cid)
+    for p in sorted(d.glob("*.md")) if d.exists() else ():
+        if not paths.safe_id(p.stem):
+            continue
+        try:
+            head = slices_mod.read_head(cid, p.stem)
+        except (OSError, scenes_paths.SceneNotFound, ValueError):
+            skipped.append(p.stem)
+            continue
+        rows.append({"id": p.stem, "title": head.meta.get("title", p.stem),
+                     "done": head.absorbed,
+                     **{k: str(head.meta[k]) for k in ("branch_group",) if head.meta.get(k)},
+                     "_identity": head.identity})
+    scenes_read.resolve_groups(rows)
+    return rows, skipped
+
+
+def _cache_key(sl: slices_mod.Slices) -> compiled.Key | None:
+    return compiled.make_key(compiled.SEARCHDOCS_SCENE, [],
+                             params={"slices": dict(sl.digests), "degraded": list(sl.degraded)})
+
+
+def _decoded(value: object, key: str) -> scene_mod.SceneDocument | None:
+    """A cached payload, if it is a whole document for exactly this key."""
+    if (isinstance(value, dict) and value.get("key") == key
+            and isinstance(value.get("text"), str) and isinstance(value.get("meta"), dict)):
+        return scene_mod.SceneDocument(key=key, text=value["text"], meta=value["meta"])
+    return None
+
+
+def _payload(doc: scene_mod.SceneDocument) -> dict:
+    return {"key": doc.key, "text": doc.text, "meta": doc.meta}
+
+
+def _remember(doc: scene_mod.SceneDocument) -> None:
+    """FIFO insert under `DOC_MEMO_ENTRIES`. Races under the threadpool at
+    worst evict one entry too many, which costs a re-render."""
+    while len(_MEMO) >= DOC_MEMO_ENTRIES:
+        try:
+            del _MEMO[next(iter(_MEMO))]
+        except (StopIteration, KeyError, RuntimeError):
+            break
+    _MEMO[doc.key] = doc
+
+
+def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
+                                       scene_mod.SceneDocument]]) -> None:
+    """Put each built document and its `materialized` rows, in batches that
+    fit 03's staging bound. A batch that cannot persist costs a miss next
+    time, never an answer."""
+    chunk: list = []
+    rows = 0
+    for item in built:
+        need = 1 + len(item[1].paths)
+        if chunk and rows + need > _STAGED_ROWS:
+            _flush(cid, chunk)
+            chunk, rows = [], 0
+        chunk.append(item)
+        rows += need
+    if chunk:
+        _flush(cid, chunk)
+
+
+def _flush(cid: str, chunk: list) -> None:
+    with compiled.batch() as request:
+        for key, sl, doc in chunk:
+            request.put(key, _payload(doc))
+            instance = {"campaign": cid, "identity": sl.identity}
+            for path in sl.paths:
+                request.mark_materialized(path, scene_mod.KIND, instance=instance)
+
+
+def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,
+            exclude: frozenset[str], only: frozenset[str] | None,
+            skipped: list[str]) -> list[tuple[dict, slices_mod.Slices]]:
+    """Each live scene asked for, in play order, with its slices; a head that
+    will not read is added to `skipped`."""
+    out = []
+    for row in sorted(rows, key=lambda r: r["id"]):
+        sid = row["id"]
+        if sid in exclude or (only is not None and sid not in only):
+            continue
+        try:
+            head = slices_mod.read_head(cid, sid)
+        except (OSError, scenes_paths.SceneNotFound, ValueError):
+            skipped.append(sid)
+            continue
+        out.append((row, slices_mod.scene_slices(inputs, head)))
+    return out
+
+
+def _documents(wanted: list[tuple[dict, slices_mod.Slices]]
+               ) -> tuple[list[scene_mod.SceneDocument], list[tuple]]:
+    """Each scene's document from the memo, else the cache (one batch lookup
+    of what the memo lacked), else rendered; and what was rendered with a
+    cache key, to store."""
+    doc_keys = [scene_mod.key_of(sl) for _row, sl in wanted]
+    held = {k: d for k in doc_keys
+            if isinstance(d := _MEMO.get(k), scene_mod.SceneDocument)}
+    keys = [_cache_key(sl) if k not in held else None
+            for (_row, sl), k in zip(wanted, doc_keys, strict=True)]
+    found: dict = {}
+    if any(k is not None for k in keys):
+        with compiled.batch() as request:
+            found = request.lookup_many([k for k in keys if k is not None]).values
+    docs, built = [], []
+    for (_row, sl), key, doc_key in zip(wanted, keys, doc_keys, strict=True):
+        doc = held.get(doc_key)
+        if doc is None and key is not None:
+            hit = found.get(key)
+            doc = _decoded(hit.value, doc_key) if hit is not None and hit.hit else None
+        if doc is None:
+            doc = scene_mod.render(sl)
+            if key is not None:
+                built.append((key, sl, doc))
+        if doc_key not in held:
+            _remember(doc)
+        docs.append(doc)
+    return docs, built
+
+
+def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
+                    only: frozenset[str] | None = None) -> LiveSet:
+    """The campaign's live scene documents, in play order. `exclude` drops
+    sids (09 excludes the scene being played); `only` restricts (05's hook).
+    Never raises for store damage; raises `CampaignNotFound`."""
+    rows, skipped = _walk(cid)
+    inputs = slices_mod.CampaignInputs.load(cid)
+    wanted = _wanted(cid, rows, inputs, exclude, only, skipped)
+    docs, built = _documents(wanted)
+    if built:
+        _store(cid, built)
+    out = [LiveDocument(sid=row["id"],
+                        closed_by=dict(row["closed_by"]) if row.get("closed_by") else None,
+                        doc=doc, paths=sl.paths)
+           for (row, sl), doc in zip(wanted, docs, strict=True)]
+    return LiveSet(documents=tuple(out), skipped=tuple(sorted(set(skipped))),
+                   degraded=inputs.degraded)
