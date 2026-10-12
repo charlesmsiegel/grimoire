@@ -75,6 +75,7 @@ from . import (
     image_refs,
     image_store,
     journal,
+    knowledge,
     locks,
     pcs,
     revision,
@@ -1189,6 +1190,8 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
     with locks.campaign_lock(cid):
         require_identity_ledgers(cid)
         journal.require_readable(cid)
+        if kind == "groups":
+            knowledge.require_readable(cid)
         eid = _canonical_record_id(cid, kind, eid)
         ref = _flat_ref(kind, eid)
         source_refs = capture_record_refs(cid, ref)
@@ -1207,6 +1210,10 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
                 add_deleted(cid, ref)   # keep the world's copy from showing through
             _drop_record_dir(croot_of(cid), kind, eid)
             _undetach(cid, ref, source_refs=source_refs)
+            if kind == "groups":
+                # A group recreated under this id must not inherit what the
+                # user said the deleted one knew (spec 11 §7.5).
+                knowledge.forget_audience(cid, f"groups:{eid}")
 
 
 def require_owned_entity(cid: str, kind: str, eid: str) -> Path:
@@ -2191,6 +2198,10 @@ def delete_actor(cid: str, kind: str, aid: str) -> None:
     """
     with locks.campaign_lock(cid):
         require_identity_ledgers(cid)
+        if kind == "characters":
+            # Before anything is removed: the prune below must be able to run.
+            knowledge.require_readable(cid)
+            journal.require_readable(cid)
         aid = _canonical_record_id(cid, kind, aid)
         ref = _flat_ref(kind, aid)
         source_refs = capture_record_refs(cid, ref)
@@ -2202,6 +2213,10 @@ def delete_actor(cid: str, kind: str, aid: str) -> None:
             shutil.rmtree(mine, ignore_errors=True)
         _drop_manifest_ref(cid, ref, source_refs=source_refs)
         appearances_paths.forget(cid, kind, aid)
+        if kind == "characters":
+            # The same rule for what the user said this actor knows (spec 11
+            # §7.5); a PC is never an audience, since nothing writes its words.
+            knowledge.forget_audience(cid, f"characters:{aid}")
         if in_world:
             add_deleted(cid, ref)
         _undetach(cid, ref, source_refs=source_refs)
@@ -3027,6 +3042,7 @@ def world_identity_scope(wroot: Path) -> Iterator[WorldIdentityScope]:
                 commits.require_readable(cid)
                 require_identity_ledgers(cid)
                 journal.require_readable(cid)
+                knowledge.require_readable(cid)
             yield WorldIdentityScope(captured=captured, bound=bound)
 
 
@@ -3254,6 +3270,12 @@ def _forget_in_campaign(cid: str, kind: str, rid: str, wroot: Path) -> None:
             _drop_manifest_ref(cid, ref)
             return
         _drop_record_dir(croot, kind, rid)
+        # Statements about an inherited actor or group go with it, as its
+        # campaign-local state does. A campaign that kept its own copy returned
+        # above and keeps them, as it keeps the record. A world route stamps no
+        # campaign, and this wrote one.
+        if kind in ("characters", "groups") and knowledge.forget_audience(cid, f"{kind}:{rid}"):
+            revision.bump(cid)
         # Per-asset tombstones outlive the record they hid, and they hide by slot:
         # `assets/characters/mara/default/avatar` would blank the NEXT Mara's avatar
         # in this campaign, for a deletion aimed at a record that is gone (Codex

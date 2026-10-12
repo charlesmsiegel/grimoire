@@ -175,6 +175,30 @@ def retire_membership_targets(cid: str, kind: str, rid: str) -> None:
             _write(cid, doc)
 
 
+def retire_offers(cid: str, matches, why: str) -> int:
+    """Withdraw every live Undo whose plan `matches`, durably, saying `why`.
+
+    For a record about to be deleted whose id may be handed to somebody new:
+    an Undo that would put back a value naming it would attach that value to
+    the newcomer (spec 11 §7.5, the membership fences' reason). The plan is
+    dropped rather than flagged, so `undo` refuses with the stated reason and
+    nothing downstream has to know about the flag. Strict, like the
+    membership fences: a journal that cannot be read may hold the offer, so it
+    raises rather than reading as empty.
+    """
+    with locks.campaign_lock(cid):
+        doc = _load_lifetime(cid)
+        n = 0
+        for entry in doc["entries"]:
+            plan = entry.get("undo")
+            if isinstance(plan, dict) and not entry.get("undone") and matches(plan):
+                entry["undo"], entry["why"] = None, why
+                n += 1
+        if n:
+            _write(cid, doc)
+        return n
+
+
 def begin_membership_relocation(cid: str, kind: str, rid: str,
                                 new_kind: str) -> str | None:
     """Suspend offers before the move; only this operation can resume them."""

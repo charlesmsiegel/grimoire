@@ -92,6 +92,7 @@ from . import (
     group_refs,
     groupstate,
     journal,
+    knowledge,
     locks,
     overlay,
     pcs,
@@ -483,6 +484,10 @@ def read_value(cid: str, target: dict):
         return facts.get(cid, target["id"])
     if w == "chronicle":
         return chronicle.get_record(cid, target["id"])
+    if w == "knowledge":
+        # Strict: an unreadable file raises, so a reversal is never judged
+        # against a None that only means "could not see".
+        return knowledge.get_strict(cid, target["id"])
     if w == "continuity_alias":
         return continuity_doc.alias_snapshot(cid, target["ref"])
     if w == "continuity_link":
@@ -553,6 +558,8 @@ def write_value(cid: str, target: dict, value) -> None:
         facts.restore(cid, target["id"], value)
     elif w == "chronicle":
         chronicle.restore(cid, target["id"], value)
+    elif w == "knowledge":
+        knowledge.restore(cid, target["id"], value)
     elif w in ("continuity_alias", "continuity_link"):
         # The compare-and-swap covered only this record; the restore checks it
         # against everything else (a cycle, an equivalent link made since), and
@@ -594,9 +601,14 @@ def seal(cid: str, target: dict, restore) -> dict | None:
 
 
 def _display(value) -> str:
-    """A snapshot value as the panel's diff text. The two writers `journalled`
-    serves both hold plain bodies; anything else journals a row with no diff
-    rather than raising out of a write that already succeeded."""
+    """A snapshot value as the panel's diff text. Most writers `journalled`
+    serves hold plain bodies; a knowledge statement reads as who and what
+    (roadmap 11); anything else journals a row with no diff rather than
+    raising out of a write that already succeeded."""
+    if isinstance(value, dict) and value.get("status") in knowledge.STATUSES:
+        who = value.get("audience_name") or "Everyone"
+        note = value.get("note") or ""
+        return f"{who}: {value['status']}" + (f" — {note}" if note else "")
     return value if isinstance(value, str) else ""
 
 

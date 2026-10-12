@@ -251,6 +251,11 @@ def _status_problems(slices: dict[str, dict], text: str, boxes: dict[str, list[b
     problems = []
     specs = _specs(slices)
     seen = set()
+    # Only the Status table: the "End-to-end readiness" table under it also
+    # opens its rows with a spec id, and its cells say something else.
+    start = text.find("## Status")
+    end = text.find("\n## ", start + 1) if start >= 0 else -1
+    text = text[start:end] if start >= 0 and end >= 0 else text
     for m in STATUS_ROW.finditer(text):
         spec, cells = m.group(1), [c.strip() for c in m.group(2).split("|")]
         # The End-to-end readiness table also opens its rows with a spec id;
