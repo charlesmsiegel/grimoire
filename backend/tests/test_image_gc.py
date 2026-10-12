@@ -454,6 +454,27 @@ def test_held_objects_are_protected_not_offered(root):
     assert unarrived["counts"]["protected"] == len(unarrived["protected"])
 
 
+@pytest.mark.parametrize("hold", ["unreadable-sidecars", "unarrived-objects"])
+def test_a_hold_that_appears_after_the_scan_keeps_the_blob(root, hold):
+    """The scan was clean, then a sync delivered a placement whose sidecar has
+    not arrived, or a sidecar went bad: the collection re-checks the hold and
+    must not take the blob (the sidecar's own fate is not what is asserted)."""
+    orphan = _obj(1)
+    report = _ready(root)
+    assert _ids(report) == {orphan.id} and report["token"]
+    if hold == "unreadable-sidecars":
+        bad = _obj(2)
+        _sidecar(bad).write_text("{torn", encoding="utf-8")
+        os.utime(_sidecar(bad), (OLD, OLD))
+    else:
+        image_refs.write(_char_dir(root), "avatar", "px1-" + "ef" * 32)
+    done = _collect(root, report["token"])
+    assert _blob(orphan).is_file(), "the blob survives a hold that arrived after the scan"
+    assert {"id": orphan.id, "blob": orphan.blob_sha256 + ".png", "reason": hold} \
+        in done["kept_blobs"]
+    assert done["deleted"]["blobs"] == []
+
+
 def test_an_orphan_blob_is_a_candidate_after_grace(root):
     gone = _obj(1)
     blob = _blob(gone)
