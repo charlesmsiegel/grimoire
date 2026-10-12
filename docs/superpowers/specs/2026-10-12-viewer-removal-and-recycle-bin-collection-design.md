@@ -348,7 +348,8 @@ dependency set stays as it is. Availability is one function,
   is read again; if it rose by less than the number of files sent and no
   purge could have happened — the size before the batch plus the bytes sent
   fits the capacity (the known `MaxCapacity`, or, when the per-volume key is
-  absent, 5% of the volume as a conservative estimate of Windows' default) —
+  absent, 10% of the volume, which is at or above Windows' default, so a doubt
+  errs toward stopping) —
   the run stops with `recycle-bin-unverified`
   and names the files it could not confirm: "Windows did not confirm these
   went to the Recycle Bin. Check the bin before collecting again." It says
