@@ -830,3 +830,21 @@ Open decisions recorded rather than changed: publication validates Leader
 tokens as well as members (Q4, adopted by the S1 plan); 9.4.1's general
 "choose any row that can copy safely" fallback is implemented only for the
 dangling-leave case it names.
+
+
+### 2026-10-12 03 landed: rebase, and 07-S8 measured and withheld
+
+The branch was rebased onto main after spec 03 landed (#506). Its 30 commits
+were squashed into one S1-S7 commit, so the shared lock, path and delete-route
+changes are integrated once with 03's provider rather than replayed against the
+copy the branch used to carry. The membership memo tests now age the memo
+clock, because 03's memo holds a file's change time to the racy window too.
+
+07-S8 was then measured against 03 §8's cost gate
+([report](../../benchmarks/2026-10-12-spec-07-s8-membership-cost-gate.md)).
+The section 7.4 artifact loses at every size, and a cheaper permitted key is
+at best level with a fresh derive. Past roughly 125 groups, 03 admits nothing.
+Following 03's own precedent for consumers that lose their measurement,
+nothing is registered; the spec records the outcome in section 7.4 and the S8
+slice. The harness stays committed (`backend/scripts/benchmark_membership.py`,
+`test_benchmark_membership.py`) so the decision can be rerun.

@@ -1132,6 +1132,25 @@ ledgers never authorize a stale artifact or an empty-input fallback. Its digests
 computed by 03's reader through the same overlay helpers, never off a raw
 campaign root.
 
+**Measured outcome (2026-10-12, after 03 landed in #506): withheld.** 03 §8
+wires a kind only when a persisted read costs much less than the compute it
+replaces, shown on a synthetic library. This artifact does not pass that gate
+([report](../../benchmarks/2026-10-12-spec-07-s8-membership-cost-gate.md),
+harness `backend/scripts/benchmark_membership.py`):
+
+- **Hits are slower.** The fresh collection read this section requires, added
+  to the mandatory capture, makes a hit cost more than a fresh derive at every
+  size measured.
+- **Larger worlds are never stored.** Past roughly 125 groups, a family
+  exceeds 03's staged-row cap and is not admitted.
+- **The cheapest permitted key does no better.** Reusing the capture's own
+  digests is at best level with a fresh derive.
+
+`membership_index` is therefore not registered. S2's in-process memo stays
+the only tier, which C2 already allows. If a later 03 change makes a cheaper
+hit path acceptable here, rerun the harness; the kind is wired only if it
+then passes.
+
 ### 7.5 The API
 
 Two read routes, registered before the generic entity router (whose
@@ -2207,14 +2226,14 @@ it. S8 waits on 03 and can land at any point after S2.
 - **Acceptance:** 17.7.
 - **Size:** S
 
-### 07-S8: Persistent tier of the inverse index
+### 07-S8: Persistent tier of the inverse index (measured; withheld)
 
 - **Delivers:** none. 07-C2 is full at S2; this slice adds the optional cost-only tier the C2 contract allows.
 - **Needs (this spec):** 07-S2 (H)
 - **Needs (other specs):** 03-C1 (H: composite keys over collection digests, with a member filter for top-level `*.md` with `safe_id` stems); 03-C2 (H: liveness by construction); 03-C3 (S: the `materialized` record; until it lands, 05 cannot rebuild the index eagerly and it is rebuilt lazily on the next read)
 - **Needs (slices):** 03-S2 (H), 03-S3 (H), 03-S4 (S), 07-S2 (H)
-- **Scope:** Registers `membership_index` as a 03 artifact kind, keyed as section 7.4 says, with digests computed through the overlay helpers from S2. The edge is soft at spec level because the slice is optional: every consumer works from S2's in-process tier, and this slice only changes cost.
-- **Acceptance:** `test_membership_cache_equivalence` (17.2): every consumer's output is equal with the tier on and off.
+- **Scope:** Measures `membership_index`, keyed as section 7.4 says, against 03 §8's cost gate on a synthetic library, and registers it as a 03 artifact kind only if it passes. The edge is soft at spec level because the slice is optional: every consumer works from S2's in-process tier, and this slice only changes cost. Outcome: it did not pass (section 7.4, "Measured outcome"), so nothing is registered.
+- **Acceptance:** the committed harness (`backend/scripts/benchmark_membership.py`, exercised by `test_benchmark_membership.py`) and the recorded decision. `test_membership_cache_equivalence` (17.2) applies only if a later measurement wires the tier.
 - **Size:** S
 
 ## 15. Contract
@@ -2294,7 +2313,7 @@ repair error, never invented affiliations or stale fallback.
   (the app, an editor, a sync client) is seen on the next read.
 - The persistent tier changes cost, never output. It is an optional addition
   once 03 lands (07-S8), not part of what C2 delivers: C2 is complete with the
-  in-process tier.
+  in-process tier. 07-S8 measured it against 03's cost gate and withheld it.
 
 **Failure behaviour.** An unreadable group file raises from the listing, as
 `GET /{scope}/groups` does. Ledger failures raise `GroupIdentityConflict`,
@@ -2660,7 +2679,9 @@ never activates a group's own entry and never changes `actor.knows`.
 - `test_overlay_guard.py` passes with `membership.py` present (no raw campaign
   root).
 - When 03 lands: every consumer's output is equal with the persistent tier on
-  and off (`test_membership_cache_equivalence`).
+  and off (`test_membership_cache_equivalence`). 03 has landed and the tier
+  was withheld after its cost gate (section 7.4), so this applies only if a
+  later measurement wires it.
 - Routes: `GET .../membership` and `?actor=`; 400 on `actor=groups:x` and on a
   malformed ref; 404 for an unknown campaign; route order holds
   (`test_route_order.py`).

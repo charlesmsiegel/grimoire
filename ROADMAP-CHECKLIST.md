@@ -579,7 +579,7 @@ alone. This table is generated: after a spec's slices change, run
 | 07-S5 | Absorb membership proposals | L | 3 | 07-S1, 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 | 07-S6 | Story Graph group nodes and edges | M | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 | 07-S7 | Retrieval projections | S | 3 | 07-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 07-S8 | Persistent tier of the inverse index | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [x] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 07-S8 | Persistent tier of the inverse index (measured; withheld) | S | 4 | 03-S2, 03-S3, 03-S4 (S), 07-S2 | [x] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 08
 

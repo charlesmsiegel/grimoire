@@ -1,5 +1,11 @@
 # 07-S8 persistent membership implementation plan
 
+> **Superseded (2026-10-12).** Once spec 03 landed (#506), this slice was
+> measured against 03 §8's cost gate before anything was wired, and it lost
+> ([report](../../benchmarks/2026-10-12-spec-07-s8-membership-cost-gate.md)).
+> No kind is registered; spec 07 section 7.4 records the outcome. The plan
+> below is kept for the record and for a future rerun.
+
 > Execute inline with superpowers:executing-plans. User authorized every spec07
 > slice, frequent coherent commits and independent brutal-review gates. Focused
 > checks once per change and one combined full branch gate before completion.
