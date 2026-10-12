@@ -14,7 +14,14 @@ import time
 
 import pytest
 
-from grimoire.store import image_gc, image_migration, maintenance_reports, paths, proclock
+from grimoire.store import (
+    image_gc,
+    image_migration,
+    maintenance_reports,
+    paths,
+    proclock,
+    recycle_bin,
+)
 
 WAIT = 10.0
 RUN_ID = "0123456789abcdef0123456789abcdef"
@@ -106,6 +113,22 @@ def test_gc_delete_without_token_is_400(client):
         assert res.status_code == 400, res.text
     # Refused BEFORE a run was reserved: nothing is live, nothing was reported.
     assert client.get("/api/runs").json()["runs"] == []
+    assert _start(client, GC, {"dry_run": True}).status_code == 202
+
+
+def test_route_refuses_when_bin_unavailable(client, monkeypatch):
+    code = "volume_has_no_bin"
+    monkeypatch.setattr(recycle_bin, "check", lambda root: recycle_bin.Availability(
+        False, code, recycle_bin.MESSAGES[code]))
+    res = _start(client, GC, {"dry_run": False, "token": "tok-1"})
+    assert res.status_code == 409, res.text
+    body = res.json()
+    assert body["kind"] == "no_recycle_bin"
+    assert body["code"] == code
+    assert body["detail"] == recycle_bin.MESSAGES[code]
+    # Refused BEFORE a run was reserved.
+    assert client.get("/api/runs").json()["runs"] == []
+    # A dry run sends nothing to a bin, so availability does not gate it.
     assert _start(client, GC, {"dry_run": True}).status_code == 202
 
 
