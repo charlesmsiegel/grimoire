@@ -67,10 +67,18 @@ surface supplies:
 - **Contract for every `onRemove`:** it calls the API directly — never a
   surface's existing mutation wrapper, which swallows errors into panel state
   and refreshes before resolving (`useRecordArt`'s `mutation`, `WorldArtPanel`'s
-  `mutate`) — and it resolves or rejects as soon as the request settles. The
-  surface's list refresh starts after that and is not awaited by the viewer.
-  The surface still disables its own other mutations while one is pending
-  (§1.2).
+  `mutate`). On success it resolves `"removed"` as soon as the request settles;
+  the surface's list refresh starts after that and is not awaited by the
+  viewer. On a `stale_image` refusal (409) it **does** await its own fresh
+  re-read, and resolves `"removed"` when the key is gone from it (removed
+  elsewhere) or `"changed"` when it is still there — the viewer never has to
+  guess whether a refresh has landed. Any other refusal rejects with a
+  readable sentence; a bare error code is never shown (for example the world
+  library's 409 `image_in_collection` reads "This picture is part of a
+  collection, so it can't be deleted from the library."). The surface keeps
+  its own exclusion: while it has another mutation pending, or (the Art panel)
+  holds an unsaved description or crop draft, `onRemove` rejects with "Finish
+  or cancel the edit in the Art panel first." without sending anything.
 - **The viewer remembers the key it removed.** A refresh that drops that key
   never fires the viewer's unavailable-close (`ImageViewer.tsx`'s
   `onClose("unavailable")` effect), whatever order the selection move and the
@@ -85,9 +93,11 @@ surface supplies:
 | Record Art panel viewer (`useRecordArt` / `RecordArtEntry`) | every image when the read's `operations` include `remove`, except world originals | `adapter.remove(image)`; the controller's `pending` exclusion is taken for the call and released when it settles, and its refresh follows |
 | World art panel (`WorldArtPanel`) | every library image | `api.deleteWorldImage`; the panel's `busy` is set for the call, then `load(true)` |
 
-`api.removeRecordArt` takes a full `RecordArtImage`; the gallery path passes
-the fields the route reads (`name`, `v`) through a narrowed parameter type
-rather than fabricating the rest.
+The adapter's `remove` runs `checkImage`, which reads
+`image.placement.target`; gallery record rows already carry `placement`
+(`routes/characters.py` `_gallery_art_fields`), so the gallery passes
+`{name, v, placement}` through a narrowed parameter type (`Pick` of
+`RecordArtImage`) rather than fabricating the rest, and keeps that check.
 
 Every other viewer — Markdown images, the existing-art picker, the post-image
 picker, drawers, character related art — supplies no `onRemove`. Greeting
@@ -138,12 +148,10 @@ The slot label is the descriptor's existing `label` / `primaryLabel`.
 - **`"removed"`**: the viewer moves to the next image in its sequence, or the
   previous one if the removed image was last, and closes (a plain close, not
   `"unavailable"`) when it was the only one.
-- **`"changed"`** — the server refused on the version guard (`stale_image`,
-  409). That refusal covers both a picture changed under the reader and one
-  already removed elsewhere, so the surface refreshes and the viewer decides
-  from the refreshed sequence: if the key is gone it behaves as `"removed"`;
-  if it is still there it stays and shows "This picture changed since it was
-  loaded, so it was not removed."
+- **`"changed"`** (the version guard refused and the surface's fresh re-read
+  still holds the key): the viewer stays and shows "This picture changed
+  since it was loaded, so it was not removed." A picture already removed
+  elsewhere arrives as `"removed"` (§1.1).
 - **A rejection**: the viewer stays on the image, closes the confirmation and
   shows the message under the controls.
 
@@ -213,12 +221,36 @@ refcount):
    is moved with `os.replace` into the outbox under its bin name (§3.2), and
    then the sidecar is deleted. The move is the commit: a crash after it
    leaves a sidecar naming a missing blob, which no placement reaches and the
-   next collection removes. A move that fails stops the run with the blob in
-   place.
+   next collection removes. **A blob already missing** at this step (that
+   crash, or a sync that delivered its deletion) is not a failure: the sidecar
+   is deleted, nothing is recycled, and the report counts it under `released`
+   — the same treatment `_delete_blob` gives a gone blob today. Any other
+   move failure stops the run with the blob in place.
+
+This reverses today's order (sidecar first, then blob) for the recycled case
+only. It is safe for the reason the old order was: the stripe and the
+ingest/GC lock are held across both steps, so an ingest of the same id waits
+and then finds no sidecar and recreates the object with a fresh blob; and
+nothing can newly place an id whose sidecar names a missing blob, because
+placing goes through ingest. `docs/store-guarantees.md` ("delete the sidecar
+before the blob") and `image_store.py`'s "never a sidecar naming nothing"
+comment are rewritten to say a *collected* object may briefly be a sidecar
+naming nothing, and only while unreachable; the tests that pin the old order
+(`test_a_concurrent_ingest_is_never_left_dangling`,
+`test_a_root_flip_between_sidecar_and_blob_reports_the_sidecar`) change with
+it.
 4. The blob-index entry and thumbnails are deleted, best effort (unchanged).
 
 An orphan blob (named by no sidecar) is moved to the outbox the same way, with
-no description. Nothing else goes to the outbox: sidecars, index entries,
+no description.
+
+**The scan agrees with the collection.** `_classify_objects` today never looks
+at the hold reasons; only the blob classification does. So that the scan does
+not offer — and the token does not name — objects the collection will skip,
+an otherwise collectable object whose blob is held for `unreadable-sidecars`
+or `unarrived-objects` is classified `protected` with that reason and left out
+of the token and the button's count. A `shared` blob does not protect its
+object. Nothing else goes to the outbox: sidecars, index entries,
 thumbnails and tokens are deleted as today.
 
 ### 3.2 The outbox and the bin name
@@ -279,8 +311,10 @@ dependency set stays as it is. Availability is one function,
 `store/recycle_bin.py`'s `check(root) -> Availability`, whose answer is
 `ok`, or a refusal with a code and a sentence:
 
-- **`android`** — `hasattr(sys, "getandroidapilevel")`: "This device has no
-  recycle bin. Run the collection from a computer."
+- **`android`** — `proclock._on_android()` (which also checks `ANDROID_ROOT`
+  / `ANDROID_DATA`, for a Chaquopy without `sys.getandroidapilevel`), made a
+  public helper both modules call: "This device has no recycle bin. Run the
+  collection from a computer."
 - **`not_installed`** — a desktop where `send2trash` does not import (an
   install upgraded by `git pull` without re-running the installer): "The
   recycle-bin helper is not installed. Re-run the installer, then try again."
@@ -291,17 +325,34 @@ dependency set stays as it is. Availability is one function,
   the outbox's volume must pass, before any bin call: `GetDriveTypeW` is
   `DRIVE_FIXED` (a network share, a mapped drive or a removable drive is
   refused, code `volume_has_no_bin`); `SHQueryRecycleBinW` on that volume
-  succeeds (same code); the user's policy `NoRecycleFiles` is not set and the
-  volume's `BitBucket\Volume\{GUID}\NukeOnDelete` is not 1 (code
+  succeeds (same code); the policy `NoRecycleFiles` (under
+  `Software\Microsoft\Windows\CurrentVersion\Policies\Explorer`, read from
+  both HKCU and HKLM) is not set, and the volume's
+  `HKCU\...\Explorer\BitBucket\Volume\{GUID}\NukeOnDelete` is not 1 (code
   `bin_deletes_immediately`: "Windows is set to delete files immediately
-  instead of using the Recycle Bin on this drive."). Per file, a size above the
-  volume's `MaxCapacity` keeps that file in the outbox and stops the run
-  (`too_large_for_bin`). After each bin call the volume's item count from
-  `SHQueryRecycleBinW` must have risen; if it has not, the run stops with
-  `recycle-bin-bypassed`. That last check is the backstop for a configuration
-  none of the earlier checks recognise, and it can only notice after the
-  fact — the one place a picture could still be lost, and the report says so
-  by name.
+  instead of using the Recycle Bin on this drive."). An absent per-volume key
+  means Windows' defaults — the bin is on, with its default capacity — and is
+  not a refusal; `MaxCapacity` is then unknown and the size check below is
+  skipped.
+- **Windows, a full bin or an oversized file.** A bin at capacity purges its
+  oldest items to fit a new one, and a file larger than the whole bin is
+  deleted outright. Before each batch's bin calls the volume's
+  `SHQueryRecycleBinW` size is read once; a file whose size alone exceeds a
+  known `MaxCapacity` stays in the outbox and stops the run
+  (`too_large_for_bin`: "This picture is larger than the Recycle Bin on its
+  drive can hold."). The bin making room by purging its own older items is
+  ordinary bin behaviour and is not refused.
+- **Windows backstop.** After each batch's bin calls, the volume's item count
+  is read again; if it rose by less than the number of files sent and the
+  bin's size is not at capacity, the run stops with `recycle-bin-unverified`
+  and names the files it could not confirm: "Windows did not confirm these
+  went to the Recycle Bin. Check the bin before collecting again." It says
+  *unverified*, not *deleted*, because a purge or a concurrent delete from
+  Explorer moves the count too. This is the backstop for a configuration none
+  of the checks above recognise and it can only notice after the fact; it is
+  stated as the residual in `docs/store-guarantees.md`.
+- `Send2Trash` is pinned `>=2.1,<3`, the range whose Windows flags were
+  checked.
 - **macOS and Linux** refuse rather than delete when a volume has no trash
   (`NSFileManager` / the freedesktop topdir trash raise); a refusal is §3.3.
 
@@ -344,9 +395,9 @@ caveat.) The binned file has lost its description and tags.
   bin (X). The space is freed when you empty the bin." with "Their names start
   with `grimoire - `." A stop names its cause: `trash-unavailable` ("The
   recycle bin refused a file; N are waiting to be sent. Nothing more was
-  collected."), `recycle-bin-bypassed` (names the file Windows deleted instead
-  of recycling), and the existing ones. `ImageGcReport.state` gains the two new
-  states.
+  collected."), `recycle-bin-unverified` (names the files Windows did not confirm
+  reached the bin), and the existing ones. `ImageGcReport.state` gains the two
+  new states, and its rows gain `protected` objects (§3.1) with their reason.
 
 ## 5. Documentation and tooling
 
@@ -394,8 +445,16 @@ tests that are about availability override it.
   never touched and is counted in `foreign_outboxes`;
 - `recycle_bin.check`: `android`, `not_installed`, and on Windows (through
   seams over `ctypes` and `winreg`) a non-fixed drive, a failing
-  `SHQueryRecycleBinW`, `NoRecycleFiles`, `NukeOnDelete`, a file over
-  `MaxCapacity`, and an item count that did not rise (`recycle-bin-bypassed`);
+  `SHQueryRecycleBinW`, `NoRecycleFiles` in HKCU and in HKLM, `NukeOnDelete`,
+  an absent per-volume key (not a refusal), a file over `MaxCapacity`
+  (`too_large_for_bin`), and a batch whose item count rose by less than the
+  files sent with the bin below capacity (`recycle-bin-unverified`) versus one
+  at capacity (not a stop);
+- an object held by `unreadable-sidecars` / `unarrived-objects` is
+  `protected` in the scan and absent from the token; a blob already missing at
+  collect deletes the sidecar, recycles nothing and is `released`; the
+  rewritten ordering tests (blob to the outbox, then the sidecar) hold against
+  a concurrent ingest and a root flip between the two;
 - the route refuses `dry_run: false` with 409 `no_recycle_bin` and reserves no
   run when `check` is not `ok`; a scan reports it; `collect()` refuses without
   spending the token;
@@ -416,8 +475,11 @@ Frontend (`ImageViewer.test.tsx`, `ImagesView` tests, `RecordArtPanel` /
 - `"changed"` with the key gone after refresh steps on; with it still there
   stays and shows the sentence; a rejection keeps the image and shows the
   message;
-- each surface's `onRemove` rejects on an API error (not swallowed) and
-  resolves before its refresh completes; the gallery sends the record route
+- each surface's `onRemove` rejects on an API error (not swallowed) with a
+  sentence, never a bare code (`image_in_collection`); resolves `"removed"`
+  before its refresh completes on success; on `stale_image` awaits its
+  re-read and resolves `"removed"` or `"changed"` from it; rejects unsent
+  while the surface has a mutation pending or a draft held; the gallery sends the record route
   with the row's `v`, and the library deletes for library rows;
 - the Settings card: button text and count, each refusal sentence, the time of
   a too-new row, waiting and foreign outbox files, the recycled report and both
