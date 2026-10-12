@@ -48,6 +48,13 @@ const OUTBOX_DIR = ".cache/image-store/recycle/";
 
 const NO_BIN = "This computer has no recycle bin Grimoire can use, so nothing is collected.";
 
+/** Why a protected row with no date is kept, by the scan's `why`: the line after
+ *  its count. */
+const HELD: Record<string, string> = {
+  "unarrived-objects": "kept while a picture is still arriving from another device.",
+  "unreadable-sidecars": "kept while a picture's record can't be read.",
+};
+
 const isMigration = (r: ImageMaintenanceReport): r is ImageMigrationReport =>
   r.kind === "image-migration";
 
@@ -249,9 +256,12 @@ export function ImageStoreCard() {
 
 /** The token a scan issued, and how many images it covers (what is collectable
  *  plus what already waits in the outbox) -- only while it can still be used
- *  and a recycle bin is there. Spent, expired or absent, there is nothing to offer. */
+ *  and a recycle bin is there. Spent, expired or absent, there is nothing to offer.
+ *  A blocked scan offers nothing collectable, but its token still drains the
+ *  outbox, so its waiting files are offered all the same. */
 function deletable(r: ImageGcReport): { token: string; count: number } | null {
-  if (r.mode !== "scan" || r.state !== "complete" || !r.token) return null;
+  if (r.mode !== "scan" || !r.token) return null;
+  if (r.state !== "complete" && r.state !== "blocked") return null;
   if (r.token_expires_at !== null && r.token_expires_at * 1000 <= Date.now()) return null;
   const p: Partial<ImageGcReport> = r;
   // Only a bin known to be missing hides the offer: `null` is "not asked", and
@@ -338,18 +348,24 @@ function GcReport({ report }: { report: ImageGcReport }) {
   const now = (r.counts?.collectable ?? 0) + (r.counts?.collectable_blobs ?? 0);
   const skew = r.clock_skew ?? [];
   const unreadable = r.unreadable_sidecars ?? [];
+  const waiting = (r.outbox ?? []).length;
   // One line for every too-new image, naming when the last of them is due: each
   // upload has its own due second, so a line per time is a wall after a burst.
+  // An undated row is held for a reason, and each reason has its own line; a
+  // clock-skew row is the timestamp line's.
   let dated = 0;
   let latest = 0;
-  let undated = 0;
+  const held: Record<string, number> = {};
   for (const row of r.protected ?? []) {
-    if (row.collectable_at === null) undated += 1;
-    else {
+    if (row.collectable_at !== null) {
       dated += 1;
       latest = Math.max(latest, row.collectable_at);
+    } else if (row.why !== "clock-skew") {
+      held[row.why] = (held[row.why] ?? 0) + 1;
     }
   }
+  const undated = Object.entries(held).filter(([why]) => !(why in HELD)).reduce(
+    (sum, [, n]) => sum + n, 0);
   return (
     <div className="image-store-report">
       <Stopped report={report} />
@@ -360,9 +376,11 @@ function GcReport({ report }: { report: ImageGcReport }) {
         <p className="field-hint">
           {now > 0
             ? `${plural(now, "unused image", "unused images")} can be sent to the `
-              + `recycle bin now, freeing ${formatSize(r.reclaimable_bytes ?? 0)} once it is emptied.`
-            : "No unused images can be sent to the recycle bin yet."}
-          {" "}{plural(r.counts?.objects ?? 0, "image", "images")} in the store,{" "}
+              + `recycle bin now, freeing ${formatSize(r.reclaimable_bytes ?? 0)} once it is emptied. `
+            // With files waiting, the button sends those: the Waiting paragraph
+            // says so, and "nothing can be sent" would contradict it.
+            : waiting > 0 ? "" : "No unused images can be sent to the recycle bin yet. "}
+          {plural(r.counts?.objects ?? 0, "image", "images")} in the store,{" "}
           {plural(r.counts?.unreferenced ?? 0, "image is", "images are")} not used by anything.
         </p>
       )}
@@ -372,9 +390,12 @@ function GcReport({ report }: { report: ImageGcReport }) {
           {clock(latest)}, if still unused.
         </p>
       )}
+      {Object.entries(HELD).map(([why, line]) => (held[why] ?? 0) > 0 && (
+        <p key={why} className="field-hint">{held[why]} {line}</p>
+      ))}
       {undated > 0 && (
         <p className="field-hint">
-          {plural(undated, "image", "images")} cannot be dated: see the notes below.
+          {plural(undated, "image", "images")} cannot be dated yet.
         </p>
       )}
       {skew.length > 0 && (
@@ -414,8 +435,10 @@ function Waiting({ report }: { report: ImageGcReport }) {
       {foreign > 0 && (
         <p className="field-hint">
           {foreign === 1 ? "1 file is" : `${foreign} files are`} waiting in another
-          device&apos;s folder under <code>{OUTBOX_DIR}</code>. That device sends{" "}
-          {foreign === 1 ? "it" : "them"}; this one leaves {foreign === 1 ? "it" : "them"} alone.
+          folder under <code>{OUTBOX_DIR}</code>, from another device, or from this one
+          under an earlier store location. This collection leaves{" "}
+          {foreign === 1 ? "it" : "them"} alone; {foreign === 1 ? "it" : "they"} can be
+          emptied by hand from <code>{OUTBOX_DIR}</code>.
         </p>
       )}
     </>
@@ -437,11 +460,19 @@ function Stopped({ report }: { report: ImageGcReport }) {
       </p>
     );
   }
+  // A report with no `recycled` was written by a build that deleted, and says
+  // so in its words. Otherwise nothing is deleted any more: a stop is about
+  // what was not sent to the bin, and "more" once something already was.
+  const legacy = p.recycled === undefined;
+  const none = legacy ? "Nothing was deleted"
+    : (p.recycled ?? []).length > 0 ? "Nothing more was sent to the recycle bin"
+    : "Nothing was sent to the recycle bin";
+  const noneMore = legacy ? "Nothing more was deleted" : "Nothing more was sent to the recycle bin";
   const lead: Record<string, string> = {
-    blocked: "Nothing was deleted, because these could not be read safely:",
-    refused: "Nothing was deleted.",
+    blocked: `${none}, because these could not be read safely:`,
+    refused: `${none}.`,
     cancelled: "Cancelled. What was done before it stopped is below.",
-    "root-changed": "The storage location changed during the run. Nothing more was deleted.",
+    "root-changed": `The storage location changed during the run. ${noneMore}.`,
     failed: "The run failed.",
   };
   // A collection refused for want of a bin carries a code in `error`; the

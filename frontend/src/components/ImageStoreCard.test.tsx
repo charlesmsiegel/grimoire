@@ -284,7 +284,13 @@ test("waiting and foreign outbox files are listed with where they are", async ()
   const waiting = await screen.findByRole("list", { name: "Waiting to be sent" });
   expect(waiting).toHaveTextContent("grimoire - Mara - ab12cd34.png");
   expect(screen.getAllByText(/\.cache\/image-store\/recycle\//).length).toBeGreaterThan(0);
-  expect(screen.getByText(/2 files are waiting in another device's folder/)).toBeInTheDocument();
+  // Another device's, or this one's under an earlier store location: left
+  // alone, and where to empty them by hand.
+  const foreign = screen.getByText(/2 files are waiting in another folder/);
+  expect(foreign).toHaveTextContent(/another device, or from this one under an earlier store location/);
+  expect(foreign).toHaveTextContent(/This collection leaves them alone/);
+  expect(foreign).toHaveTextContent(/emptied by hand from \.cache\/image-store\/recycle\//);
+  expect(screen.queryByText(/That device sends/)).toBeNull();
   // Three collectable plus one waiting file: the button counts both.
   expect(screen.getByRole("button", { name: "Send 4 unused images to the recycle bin" }))
     .toBeEnabled();
@@ -300,6 +306,46 @@ test("waiting files alone can be sent", async () => {
 
   expect(await screen.findByRole("button", { name: "Send 1 unused image to the recycle bin" }))
     .toBeEnabled();
+  // The button is explained by the waiting paragraph, not contradicted.
+  expect(screen.queryByText(/No unused images can be sent/)).toBeNull();
+  expect(screen.getByText(/1 image is waiting to be sent to the recycle bin/)).toBeInTheDocument();
+});
+
+test("a blocked scan still offers to send what waits in the outbox", async () => {
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    state: "blocked", collectable: [], counts: { ...scan().counts, collectable: 0 },
+    protected: [], outbox: ["grimoire - ab12cd34.png", "grimoire - ef56ab78.png"],
+    blocking: [{ path: "worlds/realm/image-refs/avatar.json", reason: "unparseable" }],
+  }));
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  const send = await screen.findByRole("button", { name: "Send 2 unused images to the recycle bin" });
+  expect(send).toBeEnabled();
+  expect(screen.getByText(/worlds\/realm\/image-refs\/avatar\.json/)).toBeInTheDocument();
+  fireEvent.click(send);
+  await waitFor(() => expect(api.startImageGc).toHaveBeenLastCalledWith(
+    { dry_run: false, token: "tok-123" }, expect.any(String)));
+});
+
+test("held images say why they are kept, one line per reason", async () => {
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    protected: [
+      { id: "a", blob: "x", why: "unarrived-objects", collectable_at: null },
+      { id: "b", blob: "y", why: "unarrived-objects", collectable_at: null },
+      { id: null, blob: "z", why: "unreadable-sidecars", collectable_at: null },
+      { id: "c", blob: "w", why: "clock-skew", collectable_at: null },
+    ],
+    clock_skew: [{ id: "c", blob: null, what: "mtime" }],
+  }));
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  expect(await screen.findByText("2 kept while a picture is still arriving from another device."))
+    .toBeInTheDocument();
+  expect(screen.getByText("1 kept while a picture's record can't be read.")).toBeInTheDocument();
+  expect(screen.getByText(/1 image has a timestamp in the future/)).toBeInTheDocument();
+  expect(screen.queryByText(/cannot be dated/)).toBeNull();
 });
 
 test("a scan that finds no recycle bin offers nothing and says why", async () => {
@@ -393,6 +439,10 @@ test("blocking paths and maintenance elsewhere are shown", async () => {
 
   expect(await screen.findByText(/worlds\/realm\/image-refs\/avatar\.json/)).toBeInTheDocument();
   expect(screen.getByText(/unparseable/)).toBeInTheDocument();
+  expect(screen.getByText(
+    /Nothing was sent to the recycle bin, because these could not be read safely:/,
+  )).toBeInTheDocument();
+  expect(screen.queryByText(/Nothing was deleted/)).toBeNull();
   expect(screen.getByText(/\.world-staging\/saltmarch/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
 
@@ -525,4 +575,45 @@ test("a minimal failure report renders rather than crashing the card", async () 
     expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).not.toBeInTheDocument();
     view.unmount();
   }
+});
+
+test("a stop says nothing more was sent to the bin, not deleted", async () => {
+  showCollection({ state: "root-changed", recycled: binned(1) });
+
+  expect(await screen.findByText(
+    /The storage location changed during the run\. Nothing more was sent to the recycle bin\./,
+  )).toBeInTheDocument();
+  expect(screen.queryByText(/deleted/)).toBeNull();
+});
+
+test("a blocked collection after a drain says nothing more was sent", async () => {
+  showCollection({
+    state: "blocked", recycled: binned(1),
+    blocking: [{ path: "worlds/realm/image-refs/avatar.json", reason: "unparseable" }],
+  });
+
+  expect(await screen.findByText(
+    /Nothing more was sent to the recycle bin, because these could not be read safely:/,
+  )).toBeInTheDocument();
+});
+
+test("a refused collection says nothing was sent to the bin", async () => {
+  showCollection({ state: "refused", error: "expired", recycled: [] });
+
+  expect(await screen.findByText(/Nothing was sent to the recycle bin\. expired/)).toBeInTheDocument();
+});
+
+test("a stop in a report from an older build still says deleted", async () => {
+  const { recycled, ...old } = scan({ mode: "collect", state: "root-changed",
+                                       token: null, token_expires_at: null }) as Record<string, any>;
+  void recycled;
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), kind: "gc" }) });
+  (api.getImageMaintenanceReport as any).mockResolvedValue(old);
+  render(<ImageStoreCard />);
+
+  expect(await screen.findByText(
+    /The storage location changed during the run\. Nothing more was deleted\./,
+  )).toBeInTheDocument();
 });
