@@ -1,5 +1,11 @@
 # Spec 03 implementation validation — 2026-10-12
 
+> **Source pins.** The commit ids below (`c291eafb1`, `391113b6b`,
+> `61a5c7c069`, `9843b8ea6`, …) name checkpoints of the branch before it was
+> squashed into PR #506's first commit, so they do not resolve in this
+> repository. `246a0e73a87` is main. The PR follow-up section at the end
+> records what ran against the squashed source.
+
 All six implementation slices and contracts 03-C1–C9 are implemented on a
 branch based on main `246a0e73a87`. The branch remains unmerged. The final
 fidelity review found a vector-history race at `391113b6b`; correction
@@ -137,3 +143,35 @@ physical remount/FAT/ReFS hardware, on-device performance and power-loss
 durability remain unverified. Failed durable-control I/O, unreadable ownership,
 unproved hot journals and dormant devices retain their documented residuals.
 Linux-platform mypy is simulated on Windows, not a real POSIX execution.
+
+## PR follow-up — Linux CI and review fixes
+
+The squashed source then ran on GitHub's Linux runners. It is the first real
+POSIX execution, and it reproduced two failures:
+
+- `PRAGMA incremental_vacuum` reclaimed a single page per call on Python
+  3.11, whose `sqlite3` stops a statement with no result columns after its
+  first step. A trimmed cache stayed near full size on disk there.
+  Maintenance now repeats the pragma up to `VACUUM_PAGES`.
+- A Windows clock-classification test faked `kernel32` but not the NTFS/ReFS
+  query, so it passed only on a real Windows host.
+
+After those fixes the whole Linux gate passed on the PR head: backend under
+Python 3.11 and 3.14, the pydantic 1.10 Android dependency set, frontend,
+lint, mypy, ESLint, templates and the Android debug APK build. That
+supersedes the open items above about a final-tip suite, real POSIX execution
+and the APK rebuild.
+
+Review of the PR fixed five defects beyond those two:
+
+- `statcache.stamp()` read an existing file with no available change time as
+  missing. On Windows network, FAT/exFAT and reparse-point volumes the
+  character grid came back empty.
+- BUILD was fingerprinted at the first cache use, not at startup.
+- An interrupted first initialisation left a 0-byte file that disabled the
+  cache for good.
+- A double-quoted SQL string literal broke lookups under `SQLITE_DQS=0`.
+- The token-count memo re-summed its pool on every insert.
+
+Each fix has a test that fails without it.
+
