@@ -51,7 +51,9 @@ def _hook(event: str, args: tuple) -> None:
         target = args[0]
         if isinstance(target, int) or target is None:
             return
-        path = os.fsdecode(os.fspath(target))
+        # Without a trailing separator: Python 3.14's pathlib glob lists
+        # `dir/` where earlier versions list `dir`.
+        path = os.fsdecode(os.fspath(target)).rstrip("/" + os.sep) or os.sep
     except Exception:  # noqa: BLE001 -- an audit hook must never raise into the read
         return
     with _lock:
