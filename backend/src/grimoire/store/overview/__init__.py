@@ -21,7 +21,7 @@ in `store/locks.py`.
 
 from __future__ import annotations
 
-from . import kinds, read  # noqa: F401
+from . import kinds, persist, read, warm  # noqa: F401
 from .read import (  # noqa: F401
     campaign_cards,
     campaign_meta,
@@ -32,3 +32,4 @@ from .read import (  # noqa: F401
     world_name,
     world_rows,
 )
+from .warm import warm_paths, warm_scene  # noqa: F401

@@ -514,7 +514,7 @@ def test_follow_ups_fire_once_per_chain(client, monkeypatch):
     group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
     fired = []
 
-    async def count(after_turn, outcome):
+    async def count(after_turn, outcome, *_scene):
         fired.append(after_turn)
 
     monkeypatch.setattr(streaming, "_fire_follow_up", count)

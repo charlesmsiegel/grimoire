@@ -1553,7 +1553,7 @@ async def _frames(
         raise
     finally:
         with anyio.CancelScope(shield=True):
-            await streaming._fire_follow_up(after_turn, outcome)
+            await streaming._fire_follow_up(after_turn, outcome, cid, sid)
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
