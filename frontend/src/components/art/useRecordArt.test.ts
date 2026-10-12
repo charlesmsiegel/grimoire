@@ -4,6 +4,7 @@ import { artChanged } from "../../appEvents";
 import { artAdapter, artImage, artRead, artTarget } from "../../testkit/recordArt";
 import * as adapters from "./recordArtAdapter";
 import { useRecordArt } from "./useRecordArt";
+import { EDIT_FIRST, IN_COLLECTION, REMOVE_FAILED } from "./removal";
 
 afterEach(() => vi.restoreAllMocks());
 function setup(adapter = artAdapter()) {
@@ -446,4 +447,149 @@ test("keeping a draft for replacement bytes retires an older caption reload", as
   expect(result.current.draft?.kind === "description" && result.current.draft.text).toBe("Unsaved description");
   await act(() => result.current.saveDescription());
   expect(adapter.setDescription).toHaveBeenLastCalledWith(replacement, "Unsaved description", "replacement-caption");
+});
+
+// ---- removal from the viewer (2026-10-12 viewer removal design, §1.2) ----
+
+const RECHECK = "Could not check this picture again. Reload the Art panel and try again.";
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+test("viewer descriptors carry the record's removal question, never a world original's", async () => {
+  const target = artTarget("items", "campaign"), data = artRead(target);
+  data.world_originals = [artImage(artTarget("items"), "avatar", { provenance: "world-original" })];
+  const { result } = setup(artAdapter(target, data));
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  expect(result.current.describe(artImage(target, "gallery_1")).removal).toEqual({
+    question: "Hide Saltmarch's gallery 1 only in this campaign? Any inherited world image in this slot is hidden too." });
+  expect(result.current.describe(data.world_originals[0]).removal).toBeUndefined();
+  expect(result.current.viewerProps).toBeNull();
+});
+test("a world-scoped actor's question names its avatar, and a read without remove offers none", async () => {
+  const target = artTarget("characters"), data = artRead(target);
+  const { result, adapter } = setup(artAdapter(target, data));
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  expect(result.current.describe(artImage(target)).removal).toEqual({ question: "Remove Seraphine's avatar?" });
+  adapter.read.mockResolvedValue({ ...data, operations: data.operations.filter((operation) => operation !== "remove") });
+  await act(() => result.current.refresh(true));
+  expect(result.current.describe(artImage(target)).removal).toBeUndefined();
+});
+test("the open viewer is handed removeFromViewer as onRemove", async () => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  act(() => result.current.openImage(artImage(adapter.target, "gallery_1"), document.createElement("button")));
+  expect(result.current.viewerProps?.onRemove).toBe(result.current.removeFromViewer);
+});
+test("removeFromViewer refuses while a draft is held and sends nothing", async () => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  const image = artImage(adapter.target, "gallery_1");
+  act(() => result.current.editDescription(image));
+  await expect(result.current.removeFromViewer(result.current.describe(image).key)).rejects.toThrow(EDIT_FIRST);
+  expect(adapter.remove).not.toHaveBeenCalled();
+});
+test("removeFromViewer refuses while another mutation is pending and sends nothing", async () => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  const promotion = deferred<{ ok: true }>();
+  adapter.promote.mockReturnValue(promotion.promise);
+  let promoting!: Promise<void>;
+  act(() => { promoting = result.current.promote(artImage(adapter.target, "gallery_1")); });
+  await expect(result.current.removeFromViewer(result.current.describe(artImage(adapter.target, "gallery_1")).key))
+    .rejects.toThrow(EDIT_FIRST);
+  expect(adapter.remove).not.toHaveBeenCalled();
+  await act(async () => { promotion.resolve({ ok: true }); await promoting; });
+});
+test("removeFromViewer holds the pending exclusion for the call and releases it when it settles", async () => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  const removal = deferred<{ ok: true }>();
+  adapter.remove.mockReturnValue(removal.promise);
+  const key = result.current.describe(artImage(adapter.target, "gallery_1")).key;
+  let removing!: Promise<string>;
+  act(() => { removing = result.current.removeFromViewer(key); });
+  expect(adapter.remove).toHaveBeenCalledWith(artImage(adapter.target, "gallery_1"));
+  expect(result.current.busy).toBe("remove");
+  await act(() => result.current.promote(artImage(adapter.target, "gallery_1")));
+  expect(adapter.promote).not.toHaveBeenCalled();
+  await expect(result.current.removeFromViewer(key)).rejects.toThrow(EDIT_FIRST);
+  expect(adapter.remove).toHaveBeenCalledOnce();
+  await act(async () => { removal.resolve({ ok: true }); await removing; });
+  expect(result.current.busy).toBeNull();
+  await act(() => result.current.promote(artImage(adapter.target, "gallery_1")));
+  expect(adapter.promote).toHaveBeenCalledOnce();
+});
+test("removeFromViewer resolves removed before its refresh lands, which then runs onSaved", async () => {
+  const { result, adapter, saved } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  const reread = deferred<ReturnType<typeof artRead>>();
+  adapter.read.mockReturnValue(reread.promise);
+  let outcome: string | undefined;
+  await act(async () => { outcome = await result.current.removeFromViewer(result.current.describe(artImage(adapter.target, "gallery_1")).key); });
+  expect(outcome).toBe("removed");
+  expect(adapter.read).toHaveBeenCalledTimes(2);
+  expect(adapter.read).toHaveBeenLastCalledWith(expect.objectContaining({ fresh: true }));
+  expect(saved).not.toHaveBeenCalled();
+  await act(async () => { reread.resolve(artRead(adapter.target, [artImage(adapter.target)])); });
+  await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  expect(result.current.images.map((image) => image.name)).toEqual(["avatar"]);
+});
+test.each([
+  ["still present", [artImage(artTarget(), "avatar"), artImage(artTarget(), "gallery_1", { v: "gallery_1-2" })], "changed"],
+  ["already gone", [artImage(artTarget(), "avatar")], "removed"],
+] as const)("a stale removal re-reads and settles by presence (%s)", async (_case, rows, expected) => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  adapter.remove.mockRejectedValue(new ApiError(409, "This image changed.", "stale_image"));
+  const reread = deferred<ReturnType<typeof artRead>>();
+  adapter.read.mockReturnValue(reread.promise);
+  let settled = false, outcome: string | undefined;
+  let removing!: Promise<void>;
+  act(() => { removing = result.current.removeFromViewer(result.current.describe(artImage(adapter.target, "gallery_1")).key)
+    .then((value) => { settled = true; outcome = value; }); });
+  await act(async () => {});
+  expect(settled).toBe(false);
+  await act(async () => { reread.resolve(artRead(adapter.target, [...rows])); await removing; });
+  expect(outcome).toBe(expected);
+  expect(adapter.read).toHaveBeenLastCalledWith(expect.objectContaining({ fresh: true }));
+  expect(result.current.busy).toBeNull();
+});
+test("a stale removal whose re-read fails asks for a reload instead of guessing", async () => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  adapter.remove.mockRejectedValue(new ApiError(409, "This image changed.", "stale_image"));
+  adapter.read.mockRejectedValue(new Error("offline"));
+  let removing!: Promise<string>;
+  act(() => { removing = result.current.removeFromViewer(result.current.describe(artImage(adapter.target, "gallery_1")).key); });
+  await act(async () => { await expect(removing).rejects.toThrow(RECHECK); });
+});
+test("a stale removal whose re-read is superseded asks for a reload instead of guessing", async () => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  adapter.remove.mockRejectedValue(new ApiError(409, "This image changed.", "stale_image"));
+  const reread = deferred<ReturnType<typeof artRead>>();
+  adapter.read.mockReturnValueOnce(reread.promise);
+  let removing!: Promise<string>;
+  act(() => { removing = result.current.removeFromViewer(result.current.describe(artImage(adapter.target, "gallery_1")).key); });
+  await waitFor(() => expect(adapter.read).toHaveBeenCalledTimes(2));
+  act(artChanged);
+  await waitFor(() => expect(adapter.read).toHaveBeenCalledTimes(3));
+  reread.resolve(artRead(adapter.target, [artImage(adapter.target)]));
+  await act(async () => { await expect(removing).rejects.toThrow(RECHECK); });
+});
+test.each([
+  ["a refusal's own sentence", new ApiError(409, "This slot is locked."), "This slot is locked."],
+  ["a collection refusal", new ApiError(409, "image_in_collection"), IN_COLLECTION],
+  ["a transport failure", new TypeError("disconnected"), REMOVE_FAILED],
+] as const)("any other failure rejects with %s and re-reads nothing", async (_case, error, message) => {
+  const { result, adapter } = setup();
+  await waitFor(() => expect(result.current.status).toBe("ready"));
+  adapter.remove.mockRejectedValue(error);
+  let removing!: Promise<string>;
+  act(() => { removing = result.current.removeFromViewer(result.current.describe(artImage(adapter.target, "gallery_1")).key); });
+  await act(async () => { await expect(removing).rejects.toThrow(message); });
+  expect(adapter.read).toHaveBeenCalledOnce();
+  expect(result.current.busy).toBeNull();
 });

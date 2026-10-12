@@ -6,6 +6,8 @@ import { ImageViewer } from "./art/ImageViewer";
 import { useLibraryDescriptionDrafts } from "./art/useLibraryDescriptionDrafts";
 import { useImageViewer } from "./art/useImageViewer";
 import { galleryImageDescriptor } from "./art/galleryState";
+import { EDIT_FIRST, REMOVE_FAILED, removalError } from "./art/removal";
+import type { RemoveOutcome } from "./art/types";
 import { CoverPanel } from "./CoverPanel";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { ImageUsage } from "./ImageUsage";
@@ -107,6 +109,32 @@ export function WorldArtPanel({ wid }: { wid: string }) {
     void mutate(() => api.deleteWorldImage(wid, name));
   }
 
+  // The key `galleryImageDescriptor` gives a world-library row.
+  const libraryKey = (name: string) => JSON.stringify(["world", wid, "default", name]);
+
+  /** The viewer's Remove (2026-10-12 viewer removal design, §1.2). It asks in
+   *  the viewer, so there is no browser confirm, and it calls the API directly
+   *  rather than through `mutate`, which swallows the error the viewer has to
+   *  show. The library delete takes no version guard, so there is no
+   *  "changed" outcome: it resolves once the delete lands and leaves the
+   *  refresh running. */
+  async function removeFromViewer(key: string): Promise<RemoveOutcome> {
+    if (busy) throw new Error(EDIT_FIRST);
+    const image = (images ?? []).find((img) => libraryKey(img.name) === key);
+    if (!image) throw new Error(REMOVE_FAILED);
+    const mine = wid;
+    setBusy(true);
+    try {
+      await api.deleteWorldImage(wid, image.name);
+    } catch (e: unknown) {
+      throw new Error(removalError(e));
+    } finally {
+      if (live.current === mine) setBusy(false);
+    }
+    if (live.current === mine) void load(true);
+    return "removed";
+  }
+
   const drafts = useLibraryDescriptionDrafts("world-library/" + wid);
   const viewer = useImageViewer("world-library/" + wid);
   const descriptors = (images ?? []).map((img) => galleryImageDescriptor({
@@ -118,7 +146,8 @@ export function WorldArtPanel({ wid }: { wid: string }) {
   return (
     <div className="world-art">
       {viewer.notice && <p role="status">{viewer.notice}</p>}
-      {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={shelf.current} />}
+      {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={shelf.current}
+        onRemove={removeFromViewer} />}
       <div className="side-section">
         <h4>World cover</h4>
         <CoverPanel scope={{ kind: "world", id: wid }} />
@@ -141,8 +170,8 @@ export function WorldArtPanel({ wid }: { wid: string }) {
           <div className="image-picker-grid">
             {images.map((img) => (
               <div className="image-picker-tile" key={img.name}>
-                <ImageTile image={descriptors.find((image) => image.key === JSON.stringify(["world", wid, "default", img.name]))!}
-                  onOpen={(opener) => drafts.transition(() => viewer.open(descriptors, JSON.stringify(["world", wid, "default", img.name]), opener))} />
+                <ImageTile image={descriptors.find((image) => image.key === libraryKey(img.name))!}
+                  onOpen={(opener) => drafts.transition(() => viewer.open(descriptors, libraryKey(img.name), opener))} />
                 <ImageDescriptionField
                   key={drafts.key + "/" + img.name} name={img.name}
                   onEditorStateChange={(state) => drafts.track(img.name, state)}

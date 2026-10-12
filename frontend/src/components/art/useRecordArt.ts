@@ -7,7 +7,8 @@ import { onArtChanged } from "../../appEvents";
 import { createRecordArtAdapter, isDescriptionState, toImageDescriptor } from "./recordArtAdapter";
 import { useArtNavigation } from "./ArtNavigationProvider";
 import { useImageViewer } from "./useImageViewer";
-import { recordArtKey } from "./types";
+import { EDIT_FIRST, REMOVE_FAILED, removalError, removalQuestion } from "./removal";
+import { recordArtKey, type ImageDescriptor, type RemoveOutcome } from "./types";
 
 type CaptionSnapshot = Extract<DescriptionRecovery, { available: true }>;
 export type DescriptionDraft = {
@@ -25,6 +26,7 @@ type State = {
 };
 const initialState = (owner: string): State => ({ owner, data: null, status: owner ? "loading" : "idle", manage: false,
   draft: null, busy: null, error: null, readError: null, message: null, batch: [], partialReuse: null, uploadProgress: null });
+const RECHECK_FAILED = "Could not check this picture again. Reload the Art panel and try again.";
 const partialReuseMessage = "Image added, but it could not be made primary. Retry promotion on the added image.";
 function primaryIsCreated(data: RecordArtRead | null | undefined, created: ArtCreated): boolean {
   return !!data?.images.some(image => image.name === "avatar" && image.image_id === created.image_id && image.v === created.v);
@@ -217,7 +219,16 @@ export function useRecordArt(target: RecordArtTarget | null, { onSaved, recordNa
       return undefined;
     } finally { if (isCurrent()) { pending.current.value = false; update({ busy: null, uploadProgress: null }); } }
   }
-  const describe = (image: RecordArtImage) => toImageDescriptor(image, { name: recordName, versionName });
+  const operations = current.data?.operations ?? [];
+  // Removal is offered wherever the panel itself offers it, except on a world
+  // original: those are read-only here, and the panel shows them no Remove.
+  const removable = (image: RecordArtImage) => !!adapter && operations.includes("remove") && image.provenance !== "world-original";
+  const describe = (image: RecordArtImage): ImageDescriptor => {
+    const descriptor = toImageDescriptor(image, { name: recordName, versionName });
+    return adapter && removable(image) ? { ...descriptor, removal: { question: removalQuestion({ surface: "record",
+      scope: adapter.target.scope.kind, record: recordName || adapter.target.record_id, name: image.name,
+      primaryLabel: descriptor.primaryLabel }) } } : descriptor;
+  };
   const images = current.data?.images ?? [], primary = images.find((image) => image.name === "avatar");
   function editDescription(image: RecordArtImage) {
     if (!image.description_available || !image.description_rev) {
@@ -409,12 +420,36 @@ export function useRecordArt(target: RecordArtTarget | null, { onSaved, recordNa
       viewer.open(descriptors, describe(image).key, opener);
     });
   }
+  /** The viewer's Remove (2026-10-12 viewer removal design, §1.1). Calls the
+   *  adapter directly rather than through `mutation`, which swallows errors
+   *  into panel state and refreshes before it resolves: this resolves as soon
+   *  as the delete lands and leaves the refresh running. Only a version
+   *  refusal waits, for a re-read that says whether the picture is still here. */
+  async function removeFromViewer(key: string): Promise<RemoveOutcome> {
+    // The panel's own exclusion: an unsaved draft or another pending write
+    // refuses before anything is sent, as every other write here does.
+    if (pending.current.value || held.current.draft) throw new Error(EDIT_FIRST);
+    const image = held.current.data?.images.find((row) => describe(row).key === key);
+    if (!adapter || !image || !removable(image)) throw new Error(REMOVE_FAILED);
+    pending.current.value = true; update({ busy: "remove", error: null, message: null });
+    try {
+      await adapter.remove(image);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.kind === "stale_image")) throw new Error(removalError(error));
+      // A superseded or failed re-read proves nothing either way; never guess.
+      const fresh = await refresh(true);
+      if (!fresh) throw new Error(RECHECK_FAILED);
+      return fresh.images.some((row) => describe(row).key === key) ? "changed" : "removed";
+    } finally { if (isCurrent()) { pending.current.value = false; update({ busy: null }); } }
+    void afterSaved();
+    return "removed";
+  }
   const viewerProps = viewer.viewerProps && { ...viewer.viewerProps,
     images: (viewer.viewerProps.images.some((image) => image.provenance === "world-original")
-      ? current.data?.world_originals ?? [] : images).map(describe) };
+      ? current.data?.world_originals ?? [] : images).map(describe), onRemove: removeFromViewer };
   return {
     ...current, entryRef, focusRef, describe, recordName, viewerNotice: viewer.notice, target: adapter?.target ?? null, adapter, images, primary, preview: primary ?? images[0] ?? null,
-    uploadProgress: current.uploadProgress, count: current.data && !current.readError ? images.length : null, openPanel, closePanel, operations: current.data?.operations ?? [], refresh, transition, viewerProps,
+    uploadProgress: current.uploadProgress, count: current.data && !current.readError ? images.length : null, openPanel, closePanel, operations, refresh, transition, viewerProps, removeFromViewer,
     openImage, closeViewer, editDescription, changeDescription, saveDescription, finishDescription,
     reloadDescription, reconcileDescription, rebaseDraft, generateDescription, editFocus, changeFocus, saveFocus,
     cancelDraft: () => transition(() => {}), upload, retryUpload, reuse, retryPromotion,
