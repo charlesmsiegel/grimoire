@@ -844,6 +844,29 @@ was read, or `""`. Nothing is sent when every one is `""`.
 `scripts/verify_templates.py` holds the item, its options and the block to
 these templates.
 
+### `epistemic_access/` and `history_rerank/` — decide kits for 11 and 09
+Two decide items with no call site yet (roadmap 02-S7): their routes,
+policy rows, registered eval cases and captures land with the call sites in
+11 and 09. Neither renders messages of its own; `decide/` renders the prompt
+around the item.
+- `epistemic_access/item.j2` (`store/epistemic_access.py:build_items`): vars
+  `name`, `excerpt` (bounded, through the prompt-phase regex view) and `basis`
+  (a list of the caller's deterministic signals; empty renders no line).
+  `epistemic_access/question.j2` (no vars) is the `access` choice, null
+  allowed, over `epistemic_access.CLASSES`, each described by
+  `epistemic_access/class.j2` (var `access`).
+- `history_rerank/item.j2` (`store/history_rerank.py:build_items`): vars
+  `query`, `excerpt` and `when` (a date label; `""` renders no line).
+  `history_rerank/question.j2` (no vars) is the `relevance` score over
+  `history_rerank.LEVELS`.
+- The ranked form (`store/history_rerank.py:build_items_ranked`, 01e's
+  `Rank`) uses `history_rerank/rank_context.j2` (var `query`),
+  `history_rerank/rank_question.j2` and `history_rerank/pointwise.j2`, the
+  per-candidate question only a native stage asks. The candidates are its
+  options, each described by its excerpt.
+
+`scripts/verify_templates.py` holds both kits to these templates.
+
 ## Keeping templates honest
 
 The verification harness checks the WIRING (each builder passes the documented

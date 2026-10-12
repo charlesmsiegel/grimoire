@@ -1,0 +1,12 @@
+{#- One epistemic-access item's context (`store/epistemic_access.build_items`,
+    roadmap 02-C5a): whether one character could know one recalled piece of
+    history, where the record alone could not say.
+    Vars: name (the character's name); excerpt (the recalled evidence,
+    bounded, already through the prompt-phase regex view); basis (the
+    deterministic signals the caller already read, e.g. "present",
+    "not_addressed"; an empty list renders no line). -#}
+Character: {{ name }}
+Recalled history: {{ excerpt }}
+{%- if basis %}
+What the record already says: {{ basis | join(", ") }}
+{%- endif %}

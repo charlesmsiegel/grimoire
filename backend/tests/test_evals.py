@@ -75,7 +75,7 @@ def test_no_orphan_recordings():
     deleting its old files would otherwise leave dead fixtures behind that no
     longer score anything."""
     declared = {rec.path(case.id).name
-                for case in case_mod.CASES for rec in case.recordings}
+                for case in (*case_mod.CASES, *case_mod.KIT_CASES) for rec in case.recordings}
     on_disk = {p.name for p in case_mod.RECORDINGS.iterdir() if p.is_file()}
     assert on_disk == declared, f"orphaned: {sorted(on_disk - declared)}"
 

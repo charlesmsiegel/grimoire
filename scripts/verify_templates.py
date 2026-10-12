@@ -569,6 +569,48 @@ for level in range(len(turn_plan.TENSION_LEVELS)):
                    bool(render("turn_plan/tension.j2", level=level).strip()),
                    "turn_plan/tension.j2 renders nothing for it")
 
+# --- the decide kits (roadmap 02-S7): epistemic access and history relevance
+from grimoire.store import epistemic_access, history_rerank  # noqa: E402
+
+for basis in ((), ("present", "asleep")):
+    label = f"basis={bool(basis)}"
+    question = epistemic_access.AccessQuestion("characters:mara", "Mara", "ev1",
+                                               "Seraphine <takes> the key.", basis)
+    (item,) = epistemic_access.build_items([question])
+    check(f"epistemic item context ({label})", item.context,
+          render("epistemic_access/item.j2", name="Mara", excerpt=question.excerpt,
+                 basis=list(basis)))
+    (access,) = item.questions
+    check(f"epistemic question ({label})", access.instructions,
+          render("epistemic_access/question.j2").strip())
+    REPORT.require(f"epistemic options ({label})",
+                   [(o.id, o.description) for o in access.options]
+                   == [(c, render("epistemic_access/class.j2", access=c).strip())
+                       for c in epistemic_access.CLASSES]
+                   and access.allow_none and all(o.description for o in access.options),
+                   f"offers {[o.id for o in access.options]}")
+for when in ("", "the night of the storm"):
+    label = f"when={bool(when)}"
+    candidate = history_rerank.Candidate("scene-2", "The ledger <goes> under the pier.", when)
+    (item,) = history_rerank.build_items("Where is the ledger?", [candidate])
+    check(f"rerank item context ({label})", item.context,
+          render("history_rerank/item.j2", query="Where is the ledger?",
+                 excerpt=candidate.excerpt, when=when))
+    (relevance,) = item.questions
+    check(f"rerank question ({label})", relevance.instructions,
+          render("history_rerank/question.j2").strip())
+    REPORT.require(f"rerank levels ({label})", relevance.levels == history_rerank.LEVELS,
+                   f"levels {relevance.levels}")
+ranked = history_rerank.build_items_ranked(
+    "Where is the ledger?", [history_rerank.Candidate("a", "x"),
+                             history_rerank.Candidate("b", "y", "spring")])
+check("rerank ranked context", ranked.context,
+      render("history_rerank/rank_context.j2", query="Where is the ledger?"))
+(rank,) = ranked.questions
+check("rerank ranked question", rank.instructions,
+      render("history_rerank/rank_question.j2").strip())
+check("rerank ranked pointwise", rank.pointwise, render("history_rerank/pointwise.j2").strip())
+
 #: The driver keys of the suggestion snapshot (`build_snapshot(drivers=True)`,
 #: which has no `upcoming`), empty.
 DRIVER_KEYS = {"commitments": [], "timeline": [], "driver_index": [], "anchors": [],
