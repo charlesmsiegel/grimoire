@@ -529,7 +529,7 @@ alone. This table is generated: after a spec's slices change, run
 | 02-S3 | Sampling (speaker and stance) | M | 4 | 01c-S1, 01c-S2, 01d-S1, 02-S2 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 02-S4 | Turn plan, dark | M | 5 | 01e-S4 (S), 02-S3 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 02-S5 | Play gate harness | L | 4 | 01a-S2, 01a-S3, 01a-S4, 02-S2 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 02-S6 | Exposure of ratified features | M | 5 | 02-S5 | [x] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S6 | Exposure of ratified features | M | 5 | 02-S5 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 02-S7 | Decide kits for 11 and 09 | M | 3 | 01d-S3, 01e-S5 (S), 02-S1 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 02-S8 | Decision as a tool from play, dark | L | 7 | 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5 | [x] | [x] | [x] | [x] | [x] | [ ] |
 
