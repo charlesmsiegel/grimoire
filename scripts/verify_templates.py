@@ -560,6 +560,13 @@ REPORT.require("plan disclosure options",
                f"offers {[o.id for o in disclosure.options]}")
 REPORT.require("plan tension levels", tension.levels == turn_plan.TENSION_LEVELS,
                f"levels {tension.levels}")
+# The decide tool's item context in play (§8.1): the asking actor's name and
+# the observable window, never the writer's whole prompt.
+REPORT.require("tool item context",
+               "Observable transcript:" in render("turn_plan/tool_item.j2", name="Mara",
+                                                  conversation=SELECTOR_CONVERSATION)
+               and "Mara" in render("turn_plan/tool_item.j2", name="Mara", conversation=[]),
+               "turn_plan/tool_item.j2 lost its name or its transcript")
 for value in turn_plan.DISCLOSURES:
     REPORT.require(f"disclosure {value} described",
                    bool(render("turn_plan/disclosure.j2", disclosure=value).strip()),

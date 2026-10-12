@@ -468,6 +468,14 @@ def run_checks(run: PlayRun) -> list[Check]:
                      if (i.get("draw") or {}).get("basis") == "sampled" and i.get("stance") is None]
     bad_stance = [i.get("stance") for i in stances
                   if i.get("stance") is not None and i["stance"] not in turn_plan.STANCES]
+    # The decide tool's selections (§8.6): within the options the model
+    # offered, and those within the shape's two to six.
+    tools = [r["tool"] for r in run.replies if r.get("tool")]
+    bad_tool = [t for t in tools if t.get("selected") is not None
+                and (t["selected"] not in (t.get("options") or ())
+                     or not 2 <= len(t.get("options") or ()) <= 6)]
+    checks.append(Check("gate.legal_tool", not bad_tool,
+                        f"{len(bad_tool)} tool selection(s) outside the options offered"))
     checks += [Check("gate.no_sampled_abstention", not sampled_none,
                      f"{len(sampled_none)} draw(s) over an answer of None"),
                Check("gate.legal_stance", not bad_stance, f"stances {bad_stance}")]
@@ -539,6 +547,11 @@ def _not_on(run: PlayRun) -> bool:
     if run.config.feature == "speaker":
         picked = any(r.get("task") == "response-selector" for r in run.rows)
         return picked and not run.picks
+    if run.config.feature == "tool":
+        # On means offered to every NPC contribution; whether the model used
+        # it is the call rate, reported, never a failure.
+        npc = [r for r in run.replies if r.get("actor") != "grimoire"]
+        return any(not (r.get("tool") or {}).get("offered") for r in npc)
     if run.config.feature in ("intent", "plan"):
         if run.fixture.send.get("director"):
             return False    # a typed note is the player's direction: never asked (§6.3)
@@ -588,6 +601,13 @@ def summary(graded: Sequence[Graded]) -> list[str]:
                      f"{statistics.median(pres) if pres else 0:.0f}, max {max(pres, default=0)}")
         lines.append(f"  stance diversity: {sorted(stances)}")
         lines.append(f"  open-fixture spread: {len(open_speakers)} distinct opener(s)")
+        tools = [x["tool"] for r in runs for x in r.replies if x.get("tool")]
+        offered = [t for t in tools if t.get("offered")]
+        called = sum(1 for t in offered if t.get("called"))
+        declined = sum(1 for t in offered if t.get("declined") == "after_text")
+        if offered:
+            lines.append(f"  tool calls: {called}/{len(offered)} offered; declined after "
+                         f"text: {declined}/{len(offered)}")
         lines.append(f"  departures: {departures}/{len(picks)}; addressed overrides: "
                      f"{overrides}/{len(picks)}; mean mass on intended: "
                      f"{statistics.mean(masses) if masses else 0:.3f}")

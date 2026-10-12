@@ -1060,8 +1060,8 @@ would answer neither question.
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
   runs, so the Models page's decide note is the server's sentence and the
-  frontend keeps no capability rule of its own. The four decide routes (`speaker`,
-  `scene_break`, `voice_drift` and `continuity`) use the Decision role, which
+  frontend keeps no capability rule of its own. The five decide routes (`speaker`,
+  `scene_break`, `voice_drift`, `continuity` and `turn_plan`) use the Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which
   a Fast override used to reach: a campaign that wants that sets its own
@@ -1106,8 +1106,35 @@ would answer neither question.
   The caller files `Draw.record` in the same write, under the same lock, as
   the outcome it chose (for the speaker pick, the round record through
   `responses.update_round`). A present record means decided, a decided
-  outcome is never re-drawn, and a reroll mints a new seed. No task samples
-  yet.
+  outcome is never re-drawn, and a reroll mints a new seed. Four tasks may
+  sample (`routing.TASK_POLICY`): the speaker pick, the turn intent and plan's
+  stance, and the play decide tool's selection -- each only behind its play
+  decision switch, all off by default (below).
+- **Play decisions (roadmap 02) are dark, soft and off by default.** Three
+  switches (`decide_speaker_sampling`, `decide_turn_plan` = `off` | `intent` |
+  `plan`, `decide_play_tool`), each a `config.md` key with a `campaign.md`
+  override, are read through `store/play_decisions.py` alone, and no UI shows
+  one until its play gate (`evals/run.py --live --play`, `evals/play.py`) is
+  ratified. Off is byte-identical: nothing is resolved, called or written.
+  On, a turn decision is asked before the contribution is composed
+  (`character_turns._turn_plan`), resolved through `_soft_resolved`, bounded
+  by one `common.plan_deadline()` for the whole decision (a spent one is
+  `DeadlineRefused`, unsent, never noted against the connection), and caught
+  whole: any failure is recorded `skipped` on the response's `intent` and the
+  turn plays on. Its answer is one system message after the history
+  (`compose_turn(plan=)`, `store/turn_plan.block`), never a catalog section,
+  frozen into the snapshot and carried into a roll resume and Keep writing; a
+  retry and a reroll never ask again. The speaker draw is stored as the
+  round's `pick` with its speaker, and a round holding one is never re-picked.
+  The decide tool (`decide_choice`) is offered only to a fresh NPC
+  contribution or a reroll, on the `scene` route (`routing.TOOLS_OPTIONAL`),
+  once, before any text the watcher would show (`stream_tools(visibility=)`),
+  and its record rides the variant as `tool`. Routes born at format 2 carry
+  `routing.NO_LEGACY` and their tasks sit in `NO_LEGACY_TASKS`, which the
+  frozen inference baselines leave out. `store/epistemic_access.py` and
+  `store/history_rerank.py` are decide KITS for 11 and 09: their routes,
+  policy rows and registered eval cases land with those call sites
+  (`evals/cases.KIT_CASES` holds the cases until then).
 - **Adding an embedding call site?** The doors are in one module,
   `store/inference/embed.py`: `embed_sync(<task>, texts,
   space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread

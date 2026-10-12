@@ -205,3 +205,13 @@ def test_the_leak_check_reads_offline():
     assert play.leaks(LEAK_RECORDINGS["clean"]) == []
     assert play.leaks(LEAK_RECORDINGS["names-the-approach"])
     assert play.leaks(LEAK_RECORDINGS["quotes-the-stance"])
+
+
+def test_the_tool_gate_reports_its_offers(real):
+    _results, graded = _run("tool", _Scripted(), fixtures=play.FIXTURES[:1])
+    text, passed = play.report(graded)
+    assert passed, text
+    assert "tool calls: 0/1 offered" in text
+    on = [g for g in graded if g.run.config.on]
+    assert all(r["tool"]["offered"] for g in on for r in g.run.replies)
+    assert all(not r.get("tool") for g in graded if not g.run.config.on for r in g.run.replies)

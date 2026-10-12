@@ -45,6 +45,7 @@ _QUESTION: dict[str, str] = {
     "voice-drift": voice_drift.QUESTION_ID,
     "turn-intent": turn_plan.STANCE_ID,
     "turn-plan": turn_plan.STANCE_ID,
+    "turn-tool-decision": "choice",
 }
 
 #: The tasks whose caller maps `abstained`/`refused` on the deciding question
@@ -59,7 +60,8 @@ _READS_DECLINES = frozenset({"response-selector"})
 #: does: a verdict about what happened in the fiction must not change between
 #: two runs of the same input). The speaker pick is 02-C2's sampled path; a
 #: task 02 or 13 adds that samples joins it in the change that adds it.
-_SAMPLES = frozenset({"response-selector", "turn-intent", "turn-plan"})
+_SAMPLES = frozenset({"response-selector", "turn-intent", "turn-plan",
+                      "turn-tool-decision"})
 
 
 class _Vocab(NamedTuple):
@@ -131,6 +133,9 @@ def _answers() -> dict[str, _Vocab]:
                                     _QUESTION["turn-intent"])),
         "turn-plan": _Vocab(_keys(turn_plan.plan_item("Seraphine", [], ""),
                                   _QUESTION["turn-plan"])),
+        # The decide tool's options are the asking model's, per call: none
+        # can be listed in advance.
+        "turn-tool-decision": _Vocab(frozenset()),
     }
 
 
@@ -368,7 +373,8 @@ def test_every_task_is_off_at_landing():
     (01d §6.3) or "Decision distributions" (01c §4.3)."""
     # Roadmap 02-S3 lists the two sampling tasks -- sampling is the caller's,
     # and runs only where a campaign switches it on -- with escalation off.
-    assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent", "turn-plan"}
+    assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent", "turn-plan",
+                                        "turn-tool-decision"}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
@@ -382,7 +388,7 @@ def test_every_decide_task_is_pinned():
     assert _QUESTION == {"response-selector": "next", "continuity-identity": "decision",
                          "continuity-reconcile": "decision", "scene-break": "over",
                          "voice-drift": "verdict", "turn-intent": "stance",
-                         "turn-plan": "stance"}
+                         "turn-plan": "stance", "turn-tool-decision": "choice"}
     assert not _answers()["continuity-reconcile"].exact & {
         "duplicate", "continuation", "subthread", "pays_off"}
     # The builders' vocabularies, as each call site offers them.

@@ -462,10 +462,13 @@ def save_variant(
     reasoning="",
     connection="",
     made_by: dict | None = None,
+    tool: dict | None = None,
 ) -> dict:
     """Append a variant. `made_by` (the call that wrote it) is stored only when
     given: a variant from before it existed, or one whose provenance could not
-    be built, has no key at all rather than an empty one."""
+    be built, has no key at all rather than an empty one. `tool` is the decide
+    tool's record for this variant (roadmap 02 §8.6), stored beside `made_by`
+    on the same terms."""
     with locks.campaign_lock(cid):
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
@@ -499,6 +502,8 @@ def save_variant(
             variant["connection"] = connection
         if made_by is not None:
             variant["made_by"] = copy.deepcopy(made_by)
+        if tool is not None:
+            variant["tool"] = copy.deepcopy(tool)
         record["variants"].append(variant)
         if activate:
             record.update(active_variant=variant["id"], status=status)

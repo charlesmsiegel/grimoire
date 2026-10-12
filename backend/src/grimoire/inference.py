@@ -1944,6 +1944,10 @@ class _Turn:
     target: wire.Target | None
     #: Whether the turn streamed visible text (01g-C6).
     shown: bool = False
+    #: Whether the turn streamed text the CALLER's reader would see -- its
+    #: `visibility` predicate's answer, which a hidden fence does not meet
+    #: (roadmap 02 §8.2); `shown` when the caller gave none.
+    visible: bool = False
 
 
 class _Loop:
@@ -1957,13 +1961,19 @@ class _Loop:
                  tool_choice: str, capture: TurnCapture | None,
                  prices: dict[tuple[str, str], Price | None] | None = None,
                  streaming: bool = False, decline_after_text: bool = False,
-                 reasoning: llm_reasoning.Buffer | None = None):
+                 reasoning: llm_reasoning.Buffer | None = None,
+                 visibility: Callable[[], Callable[[str], bool]] | None = None):
         prices = prices or {}
         #: 01g-C6: each turn through `client.stream`, the caller's display
         #: reasoning buffer in each turn's holder, and visible text final.
         self.streaming, self.decline_after_text = streaming, decline_after_text
         self.reasoning = reasoning
         self.shown = False
+        #: A fresh predicate per turn (02 §8.2): does this delta show the
+        #: reader anything? None reads every non-empty delta as visible.
+        self.visibility = visibility
+        self.visible = False
+        self._sees: Callable[[str], bool] | None = None
         self.task, self.base, self.toolset, self.execute = task, messages, toolset, execute
         self.client, self.resolved, self.budget, self.run_id = client, resolved, budget, run_id
         self.attribution, self.scene_identity = attribution, scene_identity
@@ -2130,7 +2140,7 @@ class _Loop:
         """A turn's calls answered, or the run ended by its answer."""
         if not turn.calls:
             return await self._answered(turn)
-        if self.decline_after_text and turn.shown:
+        if self.decline_after_text and turn.visible:
             # Visible text is final (01g-C6): the calls it ended with are
             # declined, and no turn follows it.
             for call in turn.calls:
@@ -2193,6 +2203,8 @@ class _Loop:
             return None
         k = self.turns = self.turns + 1
         self.shown = False
+        self.visible = False
+        self._sees = self.visibility() if self.visibility is not None else None
         if extra is not None:
             self.appended.append(extra)
         self.sent_len = len(self.appended)
@@ -2221,9 +2233,11 @@ class _Loop:
         made = tuple(self._named(c) for c in collector.calls())
         calls = made if not final else ()
         # A joined turn's text is shown whole below, so it is visible text too.
-        self.shown = self.shown or (bool(text) and not self.streaming)
+        if text and not self.streaming:
+            self.shown = True
+            self.visible = self.visible or self._seen(text)
         turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target,
-                     self.shown)
+                     self.shown, self.visible)
         if text or not (final and made):
             # A finalize turn that only called (a chain sent `none` as
             # `auto`) leaves the text the run already had.
@@ -2383,12 +2397,18 @@ class _Loop:
             async for delta in deltas:
                 if delta:
                     self.shown = True
+                    self.visible = self.visible or self._seen(delta)
                 elif (not self.shown and seconds is not None
                       and time.monotonic() - started > seconds):
                     raise overrun(seconds)
                 parts.append(delta)
                 self.emit(tool_calls.LoopEvent("text", turn=k, delta=delta))
         return "".join(parts)
+
+    def _seen(self, text: str) -> bool:
+        """Whether `text` shows the caller's reader anything (`visibility`),
+        or -- with no predicate -- whether it is text at all."""
+        return self._sees(text) if self._sees is not None else bool(text)
 
     def _note_overrun(self, holder: dict, chain: wire.Chain, error: LLMError) -> None:
         """An `llm_call_budget` overrun, filed against the attempt that was
@@ -2736,7 +2756,9 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
                  tool_choice: Literal["auto", "required"] = "auto",
                  capture: TurnCapture | None = None, decline_after_text: bool = False,
                  reasoning: llm_reasoning.Buffer | None = None,
-                 streaming: bool = True) -> AsyncGenerator[tool_calls.LoopEvent, None]:
+                 streaming: bool = True,
+                 visibility: Callable[[], Callable[[str], bool]] | None = None,
+                 ) -> AsyncGenerator[tool_calls.LoopEvent, None]:
     """`run_tools`' loop as it happens (spec 3.8; 01g-C6): an async iterator
     of `tool_calls.LoopEvent`s in the order `text* turn_end (tool_start
     tool_end)* ... done`, `done` last and carrying the `LoopResult`.
@@ -2754,7 +2776,10 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
     With `decline_after_text`, visible text is final: a turn that showed text
     and ended in tool calls ends the run `completed` with that text, its calls
     unexecuted, in `LoopResult.declined` and the trace as declined
-    `after_text`. A call before any visible text runs normally.
+    `after_text`. A call before any visible text runs normally. "Visible" is
+    the caller's to say when it hides some text from its reader (a hidden
+    preparation fence, roadmap 02 §8.2): `visibility` makes a fresh
+    predicate per turn, fed each delta, True once the reader would see it.
 
     The entry checks (`ValueError`) are made here, before an iterator is
     returned; the spend preflight (`RunRefused`) on the first step.
@@ -2767,7 +2792,7 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
                "scene_identity": scene_identity, "cancelled": cancelled,
                "final_schema": final_schema, "tool_choice": tool_choice, "capture": capture,
                "streaming": streaming, "decline_after_text": decline_after_text,
-               "reasoning": reasoning}
+               "reasoning": reasoning, "visibility": visibility}
     return _loop_events(task, messages, options)
 
 

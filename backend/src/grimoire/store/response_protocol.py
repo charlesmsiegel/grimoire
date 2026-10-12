@@ -293,6 +293,7 @@ class ResponseWatcher:
     """Rolls interrupt first; state precedes the final handoff and stays hidden."""
 
     def __init__(self, *, perception=False):
+        self._perception = perception
         self.preparation = _PreparationPrefix(perception)
         self.roll = fence.FenceWatcher()
         self.redactor = state_fence.StreamRedactor()
@@ -322,6 +323,17 @@ class ResponseWatcher:
         delta = self.raw[self.visible : stop]
         self.visible = stop
         return self.redactor.feed(delta)
+
+    def next_turn(self):
+        """A tool loop's next turn begins (roadmap 02-C4): the turn before it
+        ended in a tool call with nothing visible, so the next turn opens its
+        reply afresh -- and may open its own leading preparation fence, which
+        stays hidden as the first one did. What both fences held is kept as
+        one preparation note."""
+        self.preparation.finish()
+        body = self.preparation.body
+        self.preparation = _PreparationPrefix(self._perception)
+        self.preparation.body = body
 
     def feed(self, text):
         # A no-op for "" in every state (the roll watcher, the searches and the

@@ -1742,6 +1742,49 @@ def grade_decide_turn_plan(ctx: dict, output: str) -> list[Check]:
     return checks
 
 
+# ------------------------------------------- decide, the play tool (02-S8)
+#
+# The decide tool as a contribution's writer asks it mid-reply (roadmap 02
+# §8.1): its item is the asking actor's name over the observable window
+# (`turn_plan/tool_item.j2`), and one choice over the model's own options.
+# Mara has been caught with the ledger; asked whether she tells the truth or
+# lies about burning it, her card says she lies to protect her own.
+
+PLAY_TOOL_QUESTION = "Does Mara tell Seraphine the truth about the ledger?"
+PLAY_TOOL_OPTIONS = (("truth", "she admits she burned it"),
+                     ("lie", "she claims she never saw it"))
+
+
+def _decide_play_tool_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item the decide tool sends, gathered as
+    `routes.character_turns._play_tool` gathers it."""
+    _decide_turn_intent_prompt(ctx)
+    context = prompts.render("turn_plan/tool_item.j2", name=ctx["name"],
+                             conversation=ctx["conversation"])
+    item = decisions.Item(context, (decisions.Choice(
+        "choice", PLAY_TOOL_QUESTION,
+        tuple(decisions.Option(i, d) for i, d in PLAY_TOOL_OPTIONS)),))
+    ctx.update(items=(item,), tool_context=context)
+    return inference.structured_messages([item])
+
+
+def grade_decide_play_tool(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    missing = [i for i, d in PLAY_TOOL_OPTIONS if f"- {i}: {d}" not in text]
+    return [Check("prompt.question", PLAY_TOOL_QUESTION in text,
+                  "the model's own question is not in the prompt"),
+            Check("prompt.options", not missing, f"options missing: {missing}"),
+            Check("prompt.context", ctx["tool_context"] in text,
+                  "the observable window is not in the prompt"),
+            Check("prompt.private", ctx["brief"] not in text,
+                  "the writer's whole prompt (the card brief) reached the tool's item"),
+            *graders.grade_decision(output, ctx["items"], explain=False, question="choice",
+                                    expected="lie"),
+            *graders.grade_distribution(ctx["items"][0], "choice",
+                                        ctx.get("native_results", {}).get(0))]
+
+
 # ------------------------------------- case 13: decide, continuity identity
 #
 # The duplicate check as `decide()` will send it after the switch: the same
@@ -2371,6 +2414,23 @@ CASES: tuple[Case, ...] = (
              Recording("forthcoming", ("plan.disclosure", "plan.tension"), "json"),
              # A tension level the scale does not have: unread, never clamped.
              Recording("off-scale", ("plan.tension",), "json"))),
+    Case(id="decide-play-tool",
+         task="turn-tool-decision",
+         hypothesis="asked through the decide tool, mid-reply, whether a character who "
+                    "protects her own tells the truth about burning a ledger, the reply is "
+                    "the schema's object and picks the lie",
+         build=build_decide_turn_intent,
+         prompt=_decide_play_tool_prompt,
+         grade=grade_decide_play_tool,
+         schema=_decide_turn_intent_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("decide.json",), "json"),
+             # An id the asking model never offered.
+             Recording("off-option", ("decide.answer",), "json"),
+             # A null, which this question does not allow: unread.
+             Recording("abstained", ("decide.answer",), "json"),
+             Recording("native", (), "json", native="openai"))),
     Case(id="decide-rank",
          task="continuity-reconcile",
          hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "

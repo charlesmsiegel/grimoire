@@ -168,7 +168,8 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
         assert routing.config_key(r.key) not in routing.CONFIG_KEYS
         assert routing.preset_key(r.key) not in routing.PRESET_CONFIG_KEYS
         assert routing.legacy_key(r) == ""
-    assert sorted(routing.NO_LEGACY_TASKS) == ["turn-intent", "turn-plan"]
+    assert sorted(routing.NO_LEGACY_TASKS) == ["turn-intent", "turn-plan",
+                                               "turn-tool-decision"]
     assert routing.NO_LEGACY not in routing.TASK_ROUTE.values()
 
 

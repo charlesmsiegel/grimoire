@@ -836,6 +836,12 @@ messages of its own: `store/turn_plan.py:intent_item` makes the item and
   `turn_plan/tension.j2`, var `level`, describes). No vars in either
   question. Only the stance is ever drawn.
 
+With `decide_play_tool` on, a contribution may call the decide tool mid-reply
+(`routes.character_turns._play_tool`, roadmap 02 §8): its item's context is
+`turn_plan/tool_item.j2` -- vars `name` and `conversation`, the observable
+window and never the writer's whole prompt -- and its one choice is the
+model's own question and options.
+
 What was chosen reaches the writer through `scene/turn_intent.j2`
 (`store/turn_plan.py:block`): one system message after the history, placed as
 an author's note at depth 0 is and never a catalog section. Vars: `name`, and

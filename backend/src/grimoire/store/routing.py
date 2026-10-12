@@ -81,7 +81,11 @@ OPERATIONS: tuple[str, ...] = ("generate", "decide")
 #: `requires=("tools",)` would make the seam refuse every call on a known-`no`
 #: model, the ones that offer no tool included. Empty until a consumer (02-C4's
 #: scene route) opts one in.
-TOOLS_OPTIONAL: frozenset[str] = frozenset()
+TOOLS_OPTIONAL: frozenset[str] = frozenset({
+    # Roadmap 02-C4: a contribution may be offered the decide tool, behind
+    # its own switch, and is a plain generation otherwise.
+    "scene",
+})
 DEFAULT_ROLES: tuple[str, ...] = ("primary", "fast", "decision")
 
 
@@ -167,6 +171,9 @@ TASK_POLICY: dict[str, TaskPolicy] = {
     # Roadmap 02-C3: the plan replaces the intent call, and draws only its
     # stance; disclosure and tension are taken as answered.
     "turn-plan": TaskPolicy(question="stance", samples=True),
+    # Roadmap 02-C4: the decide tool's selection is drawn where a report
+    # allows (§8.1, as §6.5); never escalated (the tool takes no escalator).
+    "turn-tool-decision": TaskPolicy(question="choice", samples=True),
 }
 
 _DEFAULT = TaskPolicy()
@@ -211,7 +218,8 @@ ROUTES: tuple[Route, ...] = (
     Route("turn_plan", "Turn planning",
           "How each character approaches their reply in play, decided before it is "
           "written. Off unless Play decisions are switched on.",
-          ("turn-intent", "turn-plan"), True, operation="decide", default_role="decision",
+          ("turn-intent", "turn-plan", "turn-tool-decision"), True, operation="decide",
+          default_role="decision",
           legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),

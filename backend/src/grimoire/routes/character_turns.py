@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import dataclasses
 import json
@@ -10,12 +11,13 @@ import random
 from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass
+from typing import Any
 
 import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import decisions, draws, llm_reasoning, prompts, store, wire
+from .. import deadline, decisions, draws, llm_reasoning, prompts, store, tool_calls, wire
 from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
@@ -26,7 +28,8 @@ from ..llm import (
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from ..store.inference import providers as inference_providers
-from . import decision_capture, runs, streaming
+from ..store.inference import resolve as inference_resolve
+from . import decision_capture, runs, streaming, tool_decision
 from . import tracker as tracker_routes
 from .common import (
     _dump,
@@ -37,6 +40,7 @@ from .common import (
     get_llm,
     model_window,
     override_inference,
+    plan_ceiling,
     plan_deadline,
     require_inference,
 )
@@ -562,7 +566,7 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
 
 
 def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None,
-          tracked=None, connection="", made_by=None):
+          tracked=None, connection="", made_by=None, tool=None):
     """Persist this contribution's variant. A key the tracker marked `pending`
     for it is appended to `tracked`, for the caller to start once the turn's
     terminal frames are out (see `_start_tracking`). `connection` is the id of
@@ -590,6 +594,7 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             reasoning=watcher.reasoning + watcher.preparation_note,
             connection=connection,
             made_by=made_by,
+            tool=tool,
         )
         before = streaming._active_variant(cid, sid, record["id"]) if continuation else ""
         if continuation and status == "complete":
@@ -948,6 +953,32 @@ async def _turn_plan(cid, sid, client, round_record, actor, response_id, mode="i
         return {**record, "skipped": f"error:{type(exc).__name__}"}
 
 
+async def _pre_generation(cid, sid, client, turn, actor):
+    """`(plan, response_id)`: the turn decision this contribution asks, if
+    any (roadmap 02 §6.3), and the response id it was metered under -- or
+    `(None, "")`, reading nothing past the switch, minting and asking
+    nothing."""
+    mode = await run_in_threadpool(_plan_mode, cid, turn.round_record, actor, turn.appended)
+    if not mode:
+        return None, ""
+    response_id = store.responses.mint_id()
+    return (await _turn_plan(cid, sid, client, turn.round_record, actor, response_id, mode),
+            response_id)
+
+
+async def _contribution_tool(cid, sid, client, round_record, actor, response_id, task,
+                             messages, resolved, run):
+    """`(tool, record)` for a contribution the decide tool may be offered to
+    (§8.4): the opened loop, or None; and the variant's record of it, or
+    None when the switch and the scene route offer nothing."""
+    if not _offers_tool(cid, actor, resolved):
+        return None, None
+    tool, record = await _play_tool(cid, sid, client, round_record, actor, response_id)
+    if tool is not None:
+        tool = await _opened(tool, task, messages, client, resolved, run)
+    return tool, record
+
+
 def _drawn_stance(cid, sid, item, result):
     """The stance, drawn where the report allows (`turn_plan.drawn_stance`,
     roadmap 02 §6.5). A `ValueError` from the draw is a defect: the plain
@@ -959,6 +990,258 @@ def _drawn_stance(cid, sid, item, result):
                    cid, sid, type(exc).__name__)
         stance, reason = store.turn_plan.stance_of(result)
         return stance, reason, None
+
+
+# --- Decision as a tool from play (roadmap 02-C4) ----------------------------
+
+#: The tool's one shape (§8.1): its name, no model-supplied context (the item
+#: is built over the observable window, never the writer's whole prompt), a
+#: question of at most 300 characters, 2..6 options, the selection only --
+#: never the distribution, which would invite the model to argue with the
+#: draw -- and a cap answered as a result rather than an error that would
+#: fail the stream.
+PLAY_TOOL_SHAPE = tool_decision.ToolShape(
+    name="decide_choice",
+    description=("Ask a closed question about what happens next, with two to six "
+                 "options, and get the chosen option back instead of deciding it "
+                 "yourself. Only before you write any of your reply."),
+    context=False, max_question_chars=300, min_options=2, max_options=6,
+    result="selection", on_cap="result")
+
+#: Tool calls one contribution may make (§8.3): one, so a used call costs at
+#: most a second loop turn -- each re-sends the whole contribution prompt.
+PLAY_TOOL_CALLS = 1
+
+#: The contribution's run budget (§8.3): two turns, one call, one decision;
+#: the wall and the per-turn ceiling are the loop's defaults.
+PLAY_TOOL_BUDGET = tool_calls.RunBudget(max_turns=2, max_tool_calls=PLAY_TOOL_CALLS,
+                                        max_decisions=1)
+
+
+@dataclass
+class _PlayTool:
+    """One contribution's decide tool: the toolset the loop is offered, the
+    variant's `tool` record it fills, the capture scope its decision is
+    filed in, and the loop's result once it is done."""
+
+    toolset: tool_calls.Toolset
+    record: dict
+    scope: contextlib.AsyncExitStack
+    perception: bool
+    attribution: dict
+    result: tool_calls.LoopResult | None = None
+    events: Any = None
+    buffer: llm_reasoning.Buffer | None = None
+
+
+def _offers_tool(cid, actor, resolved):
+    """Whether this contribution may be offered the decide tool (§8.4), read
+    off the switch and the scene route's primary: the switch on, an NPC
+    (never the narrator), and a primary not KNOWN unable to call tools (an
+    `unknown` offers, as every capability does). Fail-soft."""
+    if actor in (None, "grimoire") or resolved is None:
+        return False
+    try:
+        return (store.play_decisions.play_tool(cid)
+                and not inference_resolve.known_lacks(resolved, "tools"))
+    except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn
+        _log.error("play tool switch unreadable for %s: %s", cid, type(exc).__name__)
+        return False
+
+
+def _tool_selection(record: dict, args: dict, result: decisions.ItemResult) -> dict:
+    """What the model is sent for its decision, and the record of it (§8.1,
+    §8.6): the selection drawn where a report allows (§6.5's rule: the none
+    excluded, a cutoff at half of indifference), the plain answer otherwise,
+    or none with why. Never the distribution."""
+    answer = result.answers.get(tool_decision.QUESTION_ID)
+    record.update(backend=result.backend)
+    if answer is None or answer.answer is None:
+        reason = "abstained" if answer is not None and answer.reason == "abstained" \
+            else "unanswered"
+        record.update(selected=None, reason=reason)
+        return {"selected": None, "reason": reason}
+    options = tuple(decisions.Option(str(o.get("id", "")), str(o.get("description", "")))
+                    for o in args.get("options") or () if isinstance(o, dict))
+    question = decisions.Choice(tool_decision.QUESTION_ID, str(args.get("question", "")),
+                                options, allow_none=bool(args.get("allow_none")))
+    selected = answer.answer
+    try:
+        # The none is excluded only where it was offered (a mask names
+        # offered keys alone): whether to answer at all is the model's.
+        drawn = draws.draw(question, result, seed=draws.new_seed(), purpose="tool",
+                           eligibility=draws.Eligibility(
+                               exclude=(decisions.NONE_KEY,) if question.allow_none else (),
+                               cutoff=1 / (2 * len(options))))
+        if drawn.basis in ("sampled", "answer") and isinstance(drawn.value, str):
+            selected = drawn.value
+        record["draw"] = drawn.record
+    except ValueError as exc:
+        _log.error("tool draw failed, the answer stands: %s", type(exc).__name__)
+    record.update(selected=selected)
+    return {"selected": selected}
+
+
+async def _play_tool(cid, sid, client, round_record, actor, response_id):
+    """The decide tool for one contribution (§8), or None when it is not
+    offered. Soft (§3.2): a Decision resolution the seam refuses offers
+    nothing and is recorded on the variant as `skipped`. The decision is
+    filed through one capture scope, held open until the loop is done."""
+    record: dict = {"task": "turn-tool-decision", "offered": False}
+    try:
+        resolved, _why, kind = await run_in_threadpool(
+            _soft_resolved,
+            lambda: require_inference("turn-tool-decision", cid, operation="decide"))
+        if resolved is None:
+            return None, {**record, "skipped": kind or "unresolved"}
+        name, conversation, _brief = await run_in_threadpool(_turn_inputs, cid, sid, actor)
+        context = await run_in_threadpool(lambda: prompts.render(
+            "turn_plan/tool_item.j2", name=name, conversation=conversation))
+        stack = contextlib.AsyncExitStack()
+        scope = await stack.enter_async_context(
+            decision_capture.capturing(cid, sid, "turn-tool-decision"))
+        asked: dict = {}
+        spec, why = tool_decision.decision_tool(
+            "turn-tool-decision", resolved, client, cid=cid, scene=sid,
+            round_id=round_record["id"], response_id=response_id, shape=PLAY_TOOL_SHAPE,
+            context=context, select=lambda result: _tool_selection(record, asked, result),
+            capture=scope.hook())
+        if spec is None:
+            await stack.aclose()
+            return None, {**record, "skipped": why or "unresolved"}
+        inner = spec.fn
+
+        async def ask(args, ctx):
+            # The question and its options, recorded as asked (bounded by
+            # the shape); one deadline for the whole decision (§3.4), and a
+            # decision that outlives it is unanswered, never a failed stream.
+            asked.clear()
+            asked.update(args)
+            raw = args.get("options")
+            record.update(question=str(args.get("question", ""))[:PLAY_TOOL_SHAPE.max_question_chars],
+                          options=[str(o.get("id", "")) for o in raw if isinstance(o, dict)]
+                          if isinstance(raw, list) else [])
+            try:
+                return await deadline.bounded(inner(args, ctx), plan_ceiling(),
+                                              lambda _s: TimeoutError())
+            except TimeoutError:
+                record.update(selected=None, reason="unanswered")
+                return tool_calls.ToolOutput(json.dumps({"selected": None,
+                                                         "reason": "unanswered"}))
+
+        tool = dataclasses.replace(spec, fn=ask)
+        record["offered"] = True
+        attribution = {"campaign": cid, "scene": sid, "post": round_record.get("post"),
+                       "round_id": round_record["id"] or "", "response_id": response_id}
+        return _PlayTool(tool_calls.Toolset((tool,)), record, stack,
+                         perception=actor != "grimoire", attribution=attribution), record
+    except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn (§3.3)
+        _log.error("play tool for %s/%s skipped: %s", cid, sid, type(exc).__name__)
+        return None, {**record, "skipped": f"error:{type(exc).__name__}"}
+
+
+def _visibility(perception):
+    """A fresh predicate per loop turn (§8.2): does this delta show the
+    reader anything? Its own `ResponseWatcher`, so a hidden perception fence
+    is not visible text and a tool call after it is still honoured."""
+    def fresh():
+        watcher = store.response_protocol.ResponseWatcher(perception=perception)
+        return lambda delta: bool(watcher.feed(delta).strip())
+    return fresh
+
+
+class _LoopMeter:
+    """A contribution's meter while it runs as a tool loop: the loop meters
+    every turn itself under the run's id (01g-C3), so this files nothing --
+    `done` is a no-op -- and its `usage` is the serving turn's stamp, read
+    from the loop's last row for `_made_by` and `streaming._served`."""
+
+    def __init__(self, task):
+        self.task = task
+        self.usage: dict = {}
+        self.row = None
+
+    def done(self, *_args, **_kwargs):
+        return None
+
+    def settle(self, resolved, result):
+        """Fill `usage` from the loop's last row, naming the attempt that
+        served it among the resolution's own."""
+        rows = [r for r in (result.rows if result is not None else ()) if r]
+        if not rows:
+            return
+        last = rows[-1]
+        for key in ("model", "connection", "provider"):
+            if last.get(key):
+                self.usage[key] = last[key]
+        served = next((a.target for a in resolved.attempts
+                       if a.target.provider_id == last.get("provider_id")
+                       and a.target.model == last.get("model")), None)
+        if served is not None:
+            self.usage[ATTEMPTED] = served
+
+
+async def _opened(tool, task, messages, client, resolved, run):
+    """`tool`'s loop opened over the contribution's prompt (01g-C6), or None
+    -- its scope closed and its record `skipped` -- when the loop refuses to
+    start (its entry checks are made here, before anything is sent), so the
+    contribution runs as a plain generation instead of failing."""
+    tool.buffer = llm_reasoning.Buffer()
+    options = {"toolset": tool.toolset, "execute": tool_calls.registered(tool.toolset),
+               "client": client, "budget": PLAY_TOOL_BUDGET, "run_id": run.id,
+               "scene_identity": run.scene_identity,
+               "cancelled": lambda: run.cancel_requested, "decline_after_text": True,
+               "reasoning": tool.buffer, "visibility": _visibility(tool.perception),
+               **tool.attribution}
+    try:
+        # A fresh contribution is `chat` and a reroll `regenerate` (§8.4),
+        # each named as the literal the operation guard reads.
+        if task == "regenerate":
+            tool.events = operations.stream_tools("regenerate", messages, resolved=resolved,
+                                                  **options)
+        elif task == "chat":
+            tool.events = operations.stream_tools("chat", messages, resolved=resolved,
+                                                  **options)
+        else:
+            raise ValueError(f"{task!r} is never offered the decide tool")
+    except ValueError as exc:
+        _log.error("play tool loop refused for %s: %s", task, exc)
+        tool.record.update(offered=False, skipped="error:ValueError")
+        await tool.scope.aclose()
+        return None
+    return tool
+
+
+async def _tool_events(tool, watcher):
+    """The contribution's display events as a tool loop yields them, in
+    `llm_reasoning.stream`'s shape: reasoning drained before each delta,
+    every turn streamed, a tool call honoured only before visible text
+    (`_visibility`), the watcher handed a fresh reply between a tool turn
+    and the next, and the loop's result kept on `tool`. A loop that failed
+    is the contribution's failure, as any stream failure is."""
+    try:
+        async with aclosing(tool.events) as running:
+            async for event in running:
+                if event.kind == "text":
+                    for item in tool.buffer.drain():
+                        yield item
+                    yield {"delta": event.delta}
+                elif event.kind == "turn_end" and event.interstitial:
+                    watcher.next_turn()
+                elif event.kind == "done":
+                    tool.result = event.result
+        for item in tool.buffer.drain():
+            yield item
+    finally:
+        await tool.scope.aclose()
+    result = tool.result
+    if result is not None:
+        if any("after_text" in e.note for e in result.trace if e.kind == "tool"):
+            tool.record["declined"] = "after_text"
+        tool.record["called"] = any(e.kind == "tool" and "declined" not in e.note
+                                    for e in result.trace)
+        if result.status == "failed" and isinstance(result.error, LLMError):
+            raise result.error
 
 
 def _reasoning_frame(event, watcher, liveness):
@@ -975,16 +1258,17 @@ def _reasoning_frame(event, watcher, liveness):
 
 
 async def _stream_events(client, messages, resolved, meter, watcher, run, display,
-                         task="chat"):
+                         task="chat", tool=None):
     # Heartbeats are throttled here, at the producer, for `streaming._Liveness`'s
     # reason: every SSE line arrives as an empty delta. Liveness records frames
     # that went out, so a display frame the throttle held back is not one.
     liveness = streaming._Liveness()
     # The generation is opened by `llm_reasoning.stream` once its display
     # buffer is in the holder, so the adapters find it from the first frame.
-    async with aclosing(llm_reasoning.stream(meter.usage, lambda: operations.generate(
-            task, messages, client=client, resolved=resolved,
-            usage=meter.usage))) as source:
+    source_of = (_tool_events(tool, watcher) if tool is not None
+                 else llm_reasoning.stream(meter.usage, lambda: operations.generate(
+                     task, messages, client=client, resolved=resolved, usage=meter.usage)))
+    async with aclosing(source_of) as source:
         async for event in source:
             if run.cancel_requested:
                 raise anyio.get_cancelled_exc_class()()
@@ -1008,7 +1292,7 @@ async def _stream_events(client, messages, resolved, meter, watcher, run, displa
 
 
 async def _stream_contribution(client, messages, resolved, meter, watcher, run, cid=None,
-                               task="chat"):
+                               task="chat", tool=None):
     # Display rules for the connection that serves the call, settled on the
     # first visible text (`streaming._Display`), so a fallback's reply is shaped
     # by the rules it is saved under. Frames replace `delta` frames one for
@@ -1019,7 +1303,7 @@ async def _stream_contribution(client, messages, resolved, meter, watcher, run, 
     try:
         async with aclosing(
             _stream_events(client, messages, resolved, meter, watcher, run, display,
-                           task=task)
+                           task=task, tool=tool)
         ) as events:
             async for frame in events:
                 yield frame
@@ -1042,7 +1326,7 @@ async def _stream_contribution(client, messages, resolved, meter, watcher, run, 
 
 
 def _pause(cid, sid, run, token, record, watcher, round_record, continuation, outcome, actor,
-           tracked=None, connection="", made_by=None):
+           tracked=None, connection="", made_by=None, tool=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         if continuation:
@@ -1064,7 +1348,7 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         # is tracked; the resumed part marks the finished variant again, over
         # the whole response.
         at = _save(cid, sid, run, token, record, watcher, "incomplete", round_record, continuation,
-                   tracked=tracked, connection=connection, made_by=made_by)
+                   tracked=tracked, connection=connection, made_by=made_by, tool=tool)
         _round_state(
             cid,
             sid,
@@ -1128,6 +1412,9 @@ class _Progress:
         self.composed = "primary"
         self.composed_settings = None
         self.made_by = None
+        #: The decide tool's record for the contribution in flight (02-C4),
+        #: stored on its variant; None when it was not offered.
+        self.tool_record = None
 
 
 async def _frames(
@@ -1198,7 +1485,7 @@ async def _frames(
             cid, sid, run, token, turn.record, turn.watcher, turn.round_record, turn.continuation,
             outcome, turn.meter, exc, tracked=tracked, served=turn.served,
             made_by=turn.made_by, composed=turn.composed,
-            composed_settings=turn.composed_settings,
+            composed_settings=turn.composed_settings, tool=turn.tool_record,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
@@ -1208,7 +1495,7 @@ async def _frames(
                 cid, sid, run, token, turn.record, turn.watcher, turn.round_record,
                 turn.continuation, outcome, turn.meter, tracked=tracked, served=turn.served,
                 made_by=turn.made_by, composed=turn.composed,
-                composed_settings=turn.composed_settings,
+                composed_settings=turn.composed_settings, tool=turn.tool_record,
             )
         raise
     finally:
@@ -1246,16 +1533,17 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             actor = turn.round_record.get("actor_ref")
             continue
         turn.made_by = None
+        turn.tool_record = None
+        # A fresh contribution, the only one besides a reroll that may be
+        # offered the decide tool (§8.4): not a retry, a roll resume or a
+        # roll continuation.
+        fresh = (not turn.round_record.get("pending_response") and not turn.appended
+                 and not turn.continuation)
         # The turn decision (roadmap 02 §6.3), asked before the contribution
         # is composed and never by a resume, a roll continuation, the
         # narrator or a turn the player directed. Off, nothing is read past
         # the switch, minted or asked, and `_prepare` is called as before.
-        plan, response_id = None, ""
-        mode = await run_in_threadpool(_plan_mode, cid, turn.round_record, actor, turn.appended)
-        if mode:
-            response_id = store.responses.mint_id()
-            plan = await _turn_plan(cid, sid, client, turn.round_record, actor, response_id,
-                                    mode)
+        plan, response_id = await _pre_generation(cid, sid, client, turn, actor)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
             plan=plan, response_id=response_id)
@@ -1276,7 +1564,13 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         # generated -- as `chat`, or as `continuation` when it finishes a roll:
         # one route, so the round's one resolution serves both (`for_task`).
         task = "continuation" if turn.continuation else "chat"
-        turn.meter = store.usage.meter(
+        on_task = operations.for_task(resolved, task)
+        tool = None
+        if fresh:
+            tool, turn.tool_record = await _contribution_tool(
+                cid, sid, client, turn.round_record, actor, record["id"], task, messages,
+                on_task, run)
+        turn.meter = _LoopMeter(task) if tool is not None else store.usage.meter(
             task,
             campaign=cid,
             scene=sid,
@@ -1285,9 +1579,11 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             response_id=record["id"],
         )
         async for frame in _stream_contribution(
-                client, messages, operations.for_task(resolved, task), turn.meter,
-                watcher, run, cid, task=task):
+                client, messages, on_task, turn.meter, watcher, run, cid, task=task,
+                tool=tool):
             yield frame
+        if isinstance(turn.meter, _LoopMeter) and tool is not None:
+            turn.meter.settle(on_task, tool.result)
         # Read before the meter is dropped: the facade stamps the attempt
         # that ran on `meter.usage`, which a fallback makes someone other
         # than the resolution's primary.
@@ -1318,6 +1614,7 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
                 tracked,
                 served,
                 made_by=turn.made_by,
+                tool=turn.tool_record,
             )
             turn.terminal = True
             yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
@@ -1326,7 +1623,7 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             return
         at = await run_in_threadpool(
             _save, cid, sid, run, token, record, watcher, status, turn.round_record,
-            turn.continuation, tracked, served, made_by=turn.made_by,
+            turn.continuation, tracked, served, made_by=turn.made_by, tool=turn.tool_record,
         )
         outcome.persisted(at)
         if watcher.issue == "empty response":
@@ -1442,6 +1739,7 @@ def _abort_meter(meter):
 async def _rescue(
     cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None,
     *, tracked=None, served="", made_by=None, composed="primary", composed_settings=None,
+    tool=None,
 ):
     # Before `meter.done`, for `_frames`' reason: what a rescued partial is
     # filed under is the attempt that was running when the turn broke. With no
@@ -1483,6 +1781,7 @@ async def _rescue(
                             tracked,
                             served,
                             made_by=made_by,
+                            tool=tool,
                         )
                         return
                     at = _save(
@@ -1498,6 +1797,7 @@ async def _rescue(
                         tracked,
                         served,
                         made_by=made_by,
+                        tool=tool,
                     )
                     outcome.persisted(at)
             # Only this run's own round, and only while it is unfinished: a
@@ -1861,7 +2161,16 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
     if extend is not None:
         perception = perception and not _prefills(chain.primary)
     watcher = store.response_protocol.ResponseWatcher(perception=perception)
-    meter = store.usage.meter(
+    # A reroll is a new variant of the same response, and the one replay that
+    # may be offered the decide tool (§8.4): its loop comes after the frozen
+    # snapshot, so it may decide differently, and its decision is this
+    # variant's alone. Keep writing continues a reply whose loop is over.
+    tool = tool_record = None
+    if extend is None:
+        tool, tool_record = await _contribution_tool(
+            cid, sid, client, {"id": record["round_id"] or "", "post": record.get("post")},
+            record["actor_ref"], rid, task, messages, resolved, run)
+    meter = _LoopMeter(task) if tool is not None else store.usage.meter(
         task,
         campaign=cid,
         scene=sid,
@@ -1888,8 +2197,10 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
             }
         )
         async for frame in _stream_contribution(
-                client, messages, resolved, meter, watcher, run, cid, task=task):
+                client, messages, resolved, meter, watcher, run, cid, task=task, tool=tool):
             yield frame
+        if isinstance(meter, _LoopMeter) and tool is not None:
+            meter.settle(resolved, tool.result)
         served = streaming._served(meter, streaming._asked(resolved))
         meter.done()
         refusal: tuple[str, str] | None
@@ -1897,7 +2208,7 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
             made_by = _made_by(meter, task, "primary", note, guidance)
             accepted = await run_in_threadpool(
                 _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked, served,
-                made_by=made_by,
+                made_by=made_by, tool=tool_record,
             )
             refusal = None if accepted else (
                 "replacement_incomplete", "The previous response was retained.")
@@ -1933,7 +2244,7 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
 
 
 def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, connection="",
-                   made_by=None):
+                   made_by=None, tool=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         if run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
@@ -1947,13 +2258,13 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
         _land_variant(cid, sid, rid, text.strip(), handoff=watcher.handoff, issue=watcher.issue,
                       reasoning=watcher.reasoning + watcher.preparation_note,
                       tracked=tracked, made_by=made_by, connection=connection,
-                      rewrite=rewrite)
+                      rewrite=rewrite, tool=tool)
         return True
 
 
 def _land_variant(cid, sid, rid, text, *, handoff, issue, reasoning, tracked=None,
                   made_by=None, connection="",
-                  rewrite: tuple[str, list[str]] | None = None) -> None:
+                  rewrite: tuple[str, list[str]] | None = None, tool=None) -> None:
     """Save `text` as a new complete variant of `rid` and make it the one shown.
 
     The tail a reroll and a Keep writing continuation share. Called inside the
@@ -1973,6 +2284,7 @@ def _land_variant(cid, sid, rid, text, *, handoff, issue, reasoning, tracked=Non
         reasoning=reasoning,
         connection=connection,
         made_by=made_by,
+        tool=tool,
     )
     store.responses.activate(cid, sid, rid, variant["id"])
     if rewrite:
