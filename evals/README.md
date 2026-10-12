@@ -517,6 +517,53 @@ the decide prompt and schema, writes the right answer. Each conversion lands
 with a permanent `decide-*` case beside its corpus, which holds that prompt's
 contract offline, and `--live` (above) is the only thing that asks a model.
 
+## The play gate (roadmap 02 §4)
+
+A play decision -- the sampled next speaker, the turn intent, the turn plan,
+Decision as a tool -- has no legacy parse to compare with, so `--gate` cannot
+judge it. `--live --play FEATURE` measures what it does to play instead:
+
+    backend/.venv/Scripts/python.exe evals/run.py --live --play intent \
+        --scene openrouter/vendor/writer --decision openrouter/vendor/decider \
+        --out evals/out/intent.json
+
+`evals/play.py` holds the synthetic fixtures (Seraphine, Mara and Winifred
+on the night dock: an addressed NPC, an open remark, a pending player
+decision, a director note naming Winifred). It also holds the feature's
+configuration matrix (`play.matrix`: off and on per Decision selection; a
+`cutoff: 0` arm for the speaker; §7.5's cheaper scene rows for the plan),
+the seeding, the graders and the gate.
+
+- **Refused without `--live`**, since every run is paid. `--repeat`
+  defaults to 5 in this mode.
+- **Each run is seeded in its own throwaway store.** It holds exactly the
+  selected providers (their files read out of the real store before any
+  isolate is entered), the Primary and Decision selections, and the
+  feature's switch, with the tracker, the rolling summary and the
+  scene-break check off. Nothing is written to the real store.
+- **Each run plays through the app and is drained before its rows are
+  harvested** (`runner.drain`). Rows are stamped `scope: "eval"` and carry
+  the fixture campaign's id.
+- **The hard criteria fail the run (§4.3):**
+  - every selection is offered (`gate.legal`, `gate.legal_stance`);
+  - no draw over an answer of None (`gate.no_sampled_abstention`);
+  - no turn check passes on every off repeat of a fixture and fails on
+    every on repeat (`gate.no_turn_regression`);
+  - off files no row under the feature's task (`gate.off_is_free`);
+  - on never skipped and filed its calls (`gate.on_is_on`).
+- **Reported, for you to judge:**
+  - the added pre-generation time (median and maximum);
+  - stance diversity and the open fixtures' speaker spread;
+  - departures (selected is not the answer) and addressed overrides;
+  - the mean mass on the intended speaker, over the weights actually drawn;
+  - the money per task, per column, in the case lines and the run file.
+- **The leak check** (`play.leaks`) is the one feature grader that reads
+  offline. `test_play_gate.py` holds it, with the rest of the harness,
+  against a scripted fake.
+
+A switch is shown in the UI (02-S6) only with its report attached to the PR
+and the user's explicit yes. No real store is ever measured or quoted.
+
 ## Embedding evals
 
 `--embed` asks a different question from every case above: not whether a
