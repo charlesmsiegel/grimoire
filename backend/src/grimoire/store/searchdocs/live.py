@@ -149,24 +149,34 @@ def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
     batches rather than cut short. A batch that cannot persist costs a miss
     next time, never an answer."""
     ops: list[tuple] = []
-    for key, sl, doc, put in built:
+    owners: list[int] = []            # which of `built` each op belongs to
+    for n, (key, sl, doc, put) in enumerate(built):
         if put:
             ops.append(("put", key, _payload(doc)))
+            owners.append(n)
         instance = {"campaign": cid, "identity": sl.identity}
         ops += [("mark", path, instance) for path in sl.paths]
+        owners += [n] * len(sl.paths)
+    failed: set[int] = set()
     for start in range(0, len(ops), _STAGED_ROWS):
-        _flush(ops[start:start + _STAGED_ROWS])
-    for _key, sl, doc, _put in built:
-        _fifo(_RECORDED, _recorded(cid, sl, doc), True)
+        if not _flush(ops[start:start + _STAGED_ROWS]):
+            failed.update(owners[start:start + _STAGED_ROWS])
+    # Only what committed is remembered as written: a refused or failed write
+    # is retried by the next call that finds the document, not forgotten.
+    for n, (_key, sl, doc, _put) in enumerate(built):
+        if n not in failed:
+            _fifo(_RECORDED, _recorded(cid, sl, doc), True)
 
 
-def _flush(ops: list[tuple]) -> None:
+def _flush(ops: list[tuple]) -> bool:
+    """Stage `ops` in one request; whether 03 committed them."""
     with compiled.batch() as request:
         for op, target, value in ops:
             if op == "put":
                 request.put(target, value)
             else:
                 request.mark_materialized(target, scene_mod.KIND, instance=value)
+    return request.committed
 
 
 def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,

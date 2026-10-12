@@ -979,6 +979,10 @@ class Batch:
         self._marker: str | None = None
         self._generation: str | None = None
         self._fence_snapshot: tuple | None = None
+        # Whether the last `flush` committed what was staged. A caller that
+        # remembers having written (`store/searchdocs`'s materialized rows)
+        # reads it, so a refused or failed write is retried, not forgotten.
+        self.committed = False
 
     def _usable(self, key: Key | None = None, *, strict: bool = False) -> bool:
         self._maintenance()
@@ -1789,6 +1793,7 @@ class Batch:
                     marker = _read_marker(self.root)
                     _purge_connection(session.conn, marker if marker is not None else self._generation or '')
                     return
+                self.committed = True
                 _maintain(session)
                 session.last_used = _clock()
         except _CACHE_ERRORS as error:

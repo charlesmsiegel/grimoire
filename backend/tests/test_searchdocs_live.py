@@ -287,3 +287,31 @@ def test_a_document_wider_than_a_staging_batch_keeps_every_row(cid, monkeypatch)
     instance = _instance(cid, doc.doc.meta["identity"])
     for path in doc.paths:
         assert (scene.KIND, instance) in [(m.kind, m.instance) for m in rows[path]], path
+
+
+def test_rows_a_flush_did_not_commit_are_retried(cid, monkeypatch):
+    """A refused or failed cache write is not remembered as written: the next
+    call that finds the document writes its rows again."""
+    sid, *_ = _three(cid)
+    real = compiled.Batch.flush
+    monkeypatch.setattr(compiled.Batch, "flush", lambda self: None)   # stages, commits nothing
+    live.scene_documents(cid)
+    assert not live._RECORDED
+    monkeypatch.setattr(compiled.Batch, "flush", real)
+    doc = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
+    assert live._RECORDED
+    with compiled.batch() as request:
+        rows = request.materialized([doc.paths[0]])
+    assert (scene.KIND, _instance(cid, doc.doc.meta["identity"])) in \
+        [(m.kind, m.instance) for m in rows[doc.paths[0]]]
+
+
+def test_a_malformed_appearances_ledger_drops_only_the_running_summary(cid):
+    sid = scenes.create_scene(cid, "Saltmarch")
+    for i in range(4):
+        scenes.append_message(cid, sid, "user", f"Post {i}.")
+    scenes.set_rolling_summary(cid, sid, "Folded.", 4, "x" * 64, "y" * 64)
+    (campaigns.campaign_root(cid) / "appearances.json").write_text("[1, 2]", encoding="utf-8")
+    doc = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
+    assert doc.doc.meta["summary_source"] == "none"
+    assert "appearances.json" in doc.doc.meta["degraded"]

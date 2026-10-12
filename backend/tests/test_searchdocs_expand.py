@@ -304,3 +304,23 @@ def test_a_spent_budget_still_reports_that_matches_existed(cid):
         assert hit.mode == "empty" and hit.budget_exhausted is True, limits
         miss = expand.expand(cid, sid, phase="prompt", terms=["nowhere"], **limits)
         assert miss.mode == "empty" and miss.budget_exhausted is False, limits
+
+
+def test_adjacent_hits_each_claim_their_own_context(cid):
+    messages = _plain(12)
+    messages[5] = _reply("Mara mentions the tide tax.", 5)
+    messages[6] = _user("Seraphine repeats: the tide tax.", 6)
+    sid = _scene(cid, messages)
+    got = expand.expand(cid, sid, phase="prompt", terms=["tide tax"], radius=1,
+                        max_bytes=8000, max_posts=8)
+    assert [(e.start, e.end) for e in got.excerpts] == [(4, 8)]
+
+
+def test_a_whole_transcript_that_exactly_fits_is_whole(cid):
+    sid = _scene(cid, _plain(3))
+    roomy = expand.expand(cid, sid, phase="prompt", terms=["item"], allow_whole=True,
+                          max_bytes=8000)
+    assert roomy.mode == "whole"
+    exact = expand.expand(cid, sid, phase="prompt", terms=["item"], allow_whole=True,
+                          max_bytes=roomy.bytes)
+    assert exact.mode == "whole" and exact.bytes == roomy.bytes

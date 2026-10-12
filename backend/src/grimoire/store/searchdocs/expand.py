@@ -287,13 +287,16 @@ class _Plan:
         return {pos for w in self.windows for pos in w.contents}
 
     def contents_for(self, hit: int, new: list[int]) -> tuple[dict[int, tuple[str, bool]], int]:
-        """The hit framed on its rarest term within what is left, and each
-        neighbour cut from the end nearer the hit; with their cost."""
-        room = min(MESSAGE_BYTES, self.remaining - _cost(self.posts[hit], ""))
-        text = self.posts[hit]["content"]
-        if _nbytes(text) > room and room < MIN_POST_BYTES:
-            raise _FloorUnmetError
-        contents = {hit: _cut(text, max(room, 0), keep="frame", terms=self.terms)}
+        """The hit framed on its rarest term within what is left (unless it is
+        already placed, as another hit's neighbour), and each new neighbour cut
+        from the end nearer the hit; with the cost of what is new."""
+        contents: dict[int, tuple[str, bool]] = {}
+        if hit in new:
+            room = min(MESSAGE_BYTES, self.remaining - _cost(self.posts[hit], ""))
+            text = self.posts[hit]["content"]
+            if _nbytes(text) > room and room < MIN_POST_BYTES:
+                raise _FloorUnmetError
+            contents[hit] = _cut(text, max(room, 0), keep="frame", terms=self.terms)
         for p in new:
             if p != hit:
                 contents[p] = _cut(self.posts[p]["content"], MESSAGE_BYTES,
@@ -302,9 +305,12 @@ class _Plan:
 
     def place(self, hit: int, lo: int, hi: int) -> bool:
         """Add the window `lo..hi` around `hit`, merging any it touches, if it
-        fits every limit; whether it did."""
+        fits every limit; whether it did. A hit another window already holds
+        extends that window, charged only for the posts it adds."""
         taken = self.placed()
         new = [p for p in range(lo, hi + 1) if p not in taken]
+        if not new:
+            return True
         touching = [w for w in self.windows if w.lo - 1 <= hi and lo <= w.hi + 1]
         if len(taken) + len(new) > self.max_posts \
                 or len(self.windows) - len(touching) + 1 > self.max_excerpts:
@@ -330,9 +336,10 @@ def _plan_matched(posts: list[dict], ranked: list[int], terms: list[str], *,
     plan = _Plan(posts, terms, max_excerpts, max_posts, max_bytes, [])
     try:
         for hit in ranked:
-            if hit in plan.placed():
-                continue
             lo, hi = max(0, hit - radius), min(len(posts) - 1, hit + radius)
+            if hit in plan.placed():
+                plan.place(hit, lo, hi)   # its own context, or nothing if it no longer fits
+                continue
             if not plan.place(hit, lo, hi) and not plan.place(hit, hit, hit) \
                     and (len(plan.placed()) >= max_posts or len(plan.windows) >= max_excerpts):
                 break      # those limits only tighten: nothing later fits either
@@ -363,7 +370,9 @@ def _plan_tail(posts: list[dict], *, radius: int, max_posts: int,
 def _whole(posts: list[dict], *, max_posts: int, max_bytes: int) -> list[_Window]:
     if not posts or len(posts) > max_posts:
         return []
-    if sum(_cost(p, p["content"]) for p in posts) > max_bytes:
+    # `_cost` charges every post the blank line that joins two; one excerpt
+    # of n posts renders n - 1 of them.
+    if sum(_cost(p, p["content"]) for p in posts) - len(b"\n\n") > max_bytes:
         return []
     return [_Window(0, len(posts) - 1, {i: (p["content"], False) for i, p in enumerate(posts)})]
 
