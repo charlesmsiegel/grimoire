@@ -52,8 +52,10 @@ from .common import (
     get_llm,
     image_draft_prompt,
     image_id_field,
+    image_promote_guards,
     leaves_campaign_unchanged,
     pc_history_404,
+    record_art_mutation,
     require_inference,
 )
 from .models import (
@@ -68,6 +70,7 @@ from .models import (
     ForkCampaign,
     GroupStateSave,
     ImageDescription,
+    ImagePromote,
     NameBody,
     NewCampaign,
     NoticeMark,
@@ -2015,62 +2018,42 @@ async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: Upl
 
 
 @router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
-def delete_campaign_image(cid: str, char: str, vid: str, name: str):
-    _campaign_char_version_or_404(cid, char, vid)
+def delete_campaign_image(cid: str, char: str, vid: str, name: str, expected_v: str | None = None):
     # tombstone so a still-materialized world image doesn't show back through
     # the overlaid read the moment the campaign's own copy is gone (get_campaign_image).
-    store.overlay.delete_image(cid, char, vid, name)
-    return {"ok": True}
+    _campaign_char_version_or_404(cid, char, vid)
+    return record_art_mutation("campaign", cid, "characters", char, vid, name,
+                               "delete", expected_v=expected_v)
 
 
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}/promote")
-def promote_campaign_image(cid: str, char: str, vid: str, name: str):
+def promote_campaign_image(cid: str, char: str, vid: str, name: str, body: ImagePromote | None = None):
     _campaign_char_version_or_404(cid, char, vid)
-    try:
-        store.overlay.promote_image(cid, char, vid, name)
-    except store.assets.ImageNotYetAvailableError as exc:
-        # placed, not arrived (mid-sync): absent here for now, and says why
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
-    except ValueError as exc:
-        # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True}
+    return record_art_mutation("campaign", cid, "characters", char, vid, name,
+                               "promote", **image_promote_guards(body))
 
 
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/avatar/focus")
 def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
-    root = _campaign_char_version_or_404(cid, char, vid)
     # a thin campaign may only have this avatar through the inherited world
     # character, so the existence gate must check the overlay union, not croot alone
-    names = {i["name"] for i in store.overlay.list_images(cid, char, vid)}
-    if store.assets.AVATAR not in names:
-        raise HTTPException(status_code=404, detail="image not found")
     # the write always lands campaign-side; overlay.read_focus then finds this
     # campaign crop record (an avatar placement -- image-less over an inherited
     # avatar -- or a focus.json beside a legacy campaign avatar) and treats the
     # campaign as authoritative going forward
-    store.assets.write_focus(root, char, vid, body.focus)
-    return {"ok": True}
+    _campaign_char_version_or_404(cid, char, vid)
+    return record_art_mutation("campaign", cid, "characters", char, vid, "avatar",
+                               "focus", focus=body.focus, expected_v=body.expected_v)
 
 
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}/description")
 def put_campaign_image_description(cid: str, char: str, vid: str, name: str,
                                    body: ImageDescription):
     _campaign_char_version_or_404(cid, char, vid)
-    try:
-        store.overlay.set_description(cid, char, vid, name, body.description)
-    except store.image_descriptions.DescriptionTooLongError as exc:
-        # Before the ValueError below, which it subclasses: too long is not
-        # "not found" -- the image is there and the text is refused.
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except ValueError:
-        # `from None`: the strict-write ValueError is this module's own
-        # implementation detail, and chaining it onto the 404 says nothing a
-        # caller can act on.
-        raise HTTPException(status_code=404, detail="image not found") from None
-    return {"ok": True}
+    return record_art_mutation("campaign", cid, "characters", char, vid, name,
+                               "description", description=body.description, expected_v=body.expected_v,
+                               expected_description_rev=body.expected_description_rev,
+                               cleanup_only=body.cleanup_only)
 
 
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/copy-from-greeting")
@@ -2543,19 +2526,10 @@ def _campaign_pc_version_or_404(cid: str, pid: str, vid: str):
 def put_campaign_pc_image_description(cid: str, pid: str, vid: str, name: str,
                                       body: ImageDescription):
     _campaign_pc_version_or_404(cid, pid, vid)
-    try:
-        store.overlay.set_description(cid, pid, vid, name, body.description,
-                                      base=store.pcs.ASSET_BASE)
-    except store.image_descriptions.DescriptionTooLongError as exc:
-        # Before the ValueError below, which it subclasses: too long is not
-        # "not found" -- the image is there and the text is refused.
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except ValueError:
-        # `from None`: the strict-write ValueError is this module's own
-        # implementation detail, and chaining it onto the 404 says nothing a
-        # caller can act on.
-        raise HTTPException(status_code=404, detail="image not found") from None
-    return {"ok": True}
+    return record_art_mutation("campaign", cid, "pcs", pid, vid, name,
+                               "description", description=body.description, expected_v=body.expected_v,
+                               expected_description_rev=body.expected_description_rev,
+                               cleanup_only=body.cleanup_only)
 
 
 @router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images")
@@ -2589,45 +2563,32 @@ async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
 
 
 @router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
-def delete_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
-    _campaign_pc_version_or_404(cid, pid, vid)
+def delete_campaign_pc_image(cid: str, pid: str, vid: str, name: str, expected_v: str | None = None):
     # tombstone so a still-materialized world image doesn't show back through
     # the overlaid read the moment the campaign's own copy is gone
-    store.overlay.delete_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
-    return {"ok": True}
+    _campaign_pc_version_or_404(cid, pid, vid)
+    return record_art_mutation("campaign", cid, "pcs", pid, vid, name,
+                               "delete", expected_v=expected_v)
 
 
 @router.post("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}/promote")
-def promote_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
+def promote_campaign_pc_image(cid: str, pid: str, vid: str, name: str, body: ImagePromote | None = None):
     _campaign_pc_version_or_404(cid, pid, vid)
-    try:
-        store.overlay.promote_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
-    except store.assets.ImageNotYetAvailableError as exc:
-        # placed, not arrived (mid-sync): absent here for now, and says why
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
-    except ValueError as exc:
-        # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True}
+    return record_art_mutation("campaign", cid, "pcs", pid, vid, name,
+                               "promote", **image_promote_guards(body))
 
 
 @router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/avatar/focus")
 def put_campaign_pc_avatar_focus(cid: str, pid: str, vid: str, body: AvatarFocus):
-    root = _campaign_pc_version_or_404(cid, pid, vid)
     # a thin campaign may only have this avatar through the inherited world PC,
     # so the existence gate checks the overlay union, not croot alone
-    names = {i["name"] for i in store.overlay.list_images(cid, pid, vid,
-                                                          base=store.pcs.ASSET_BASE)}
-    if store.assets.AVATAR not in names:
-        raise HTTPException(status_code=404, detail="image not found")
     # the write always lands campaign-side; overlay.read_focus then finds this
     # campaign crop record (an avatar placement -- image-less over an inherited
     # avatar -- or a focus.json beside a legacy campaign avatar) and treats the
     # campaign as authoritative going forward
-    store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
-    return {"ok": True}
+    _campaign_pc_version_or_404(cid, pid, vid)
+    return record_art_mutation("campaign", cid, "pcs", pid, vid, "avatar",
+                               "focus", focus=body.focus, expected_v=body.expected_v)
 
 
 @router.post("/campaigns/{cid}/{kind}/{aid}/pick-version")

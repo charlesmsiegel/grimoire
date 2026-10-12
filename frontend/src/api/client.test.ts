@@ -1,5 +1,5 @@
 import { api, ApiError, invalidateConfigCache, RefreshRefused } from "./client";
-import { onCampaignsChanged, onConfigChanged, onShellChanged } from "../appEvents";
+import { onArtChanged, onCampaignsChanged, onConfigChanged, onShellChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
 import type { DriverLink, GraphEdge, LinkRelation, ReconcileRunError, StoryGraph } from "./types";
 import { THUMB_REV } from "./thumbs";
@@ -280,6 +280,7 @@ test("proposal reads never coalesce, so claim order is request order", async () 
 });
 
 test("localizeImages posts to the localize endpoint and forwards SSE events", async () => {
+  const changed = vi.fn(); const unsubscribe = onArtChanged(changed);
   const fetchMock = vi.fn().mockResolvedValue(
     sseResponse([
       'data: {"total":1}\n\n',
@@ -299,6 +300,7 @@ test("localizeImages posts to the localize endpoint and forwards SSE events", as
     { done: 1, total: 1 },
     { summary: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false } },
   ]);
+  unsubscribe(); expect(changed).toHaveBeenCalledOnce();
 });
 
 test("retry posts to the scene retry endpoint", async () => {
@@ -2919,4 +2921,24 @@ test("a model test sent under a caller's attempt id names that id", async () => 
   // The same id a second ask would send, which the server answers with the
   // run it already started rather than a new one.
   expect(fetchMock.mock.calls[0][1].headers["X-Grimoire-Attempt"]).toBe("held-attempt");
+});
+
+test("a confirmed Chub gallery download invalidates common Art", async () => {
+  const changed = vi.fn(); const unsubscribe = onArtChanged(changed);
+  globalThis.fetch = vi.fn().mockResolvedValue(sseResponse(['data: {"summary":{"attempted":2,"stored":1}}\n\n']));
+  await api.downloadCharacterChubGallery("realm", "seraphine", "default", vi.fn());
+  unsubscribe(); expect(changed).toHaveBeenCalledOnce();
+});
+
+test("fresh entity summaries do not join a pre-write in-flight listing", async () => {
+  let finishOld!: (response: ReturnType<typeof jsonOk>) => void;
+  const fetched = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+    .mockResolvedValueOnce(jsonOk([{ id: "saltmarch", name: "Saltmarch", has_image: true }]));
+  globalThis.fetch = fetched;
+  const older = api.listEntities({ kind: "world", id: "realm" }, "items");
+  const fresh = await api.listEntities({ kind: "world", id: "realm" }, "items", true);
+  finishOld(jsonOk([]));
+  await older;
+  expect(fresh[0].has_image).toBe(true);
+  expect(fetched).toHaveBeenCalledTimes(2);
 });

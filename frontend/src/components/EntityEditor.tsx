@@ -1,5 +1,6 @@
+import { MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
@@ -7,13 +8,16 @@ import { ACTIVATION_FIELDS, ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_
 import { errorText } from "../api/errors";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
 import { THUMB, thumbSet } from "../api/thumbs";
+import { onArtChanged } from "../appEvents";
+import { RecordArtEntry, RecordArtViewer } from "./art/RecordArtEntry";
+import { RecordArtPanel } from "./art/RecordArtPanel";
+import { useRecordArt } from "./art/useRecordArt";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
 import { Field } from "./Field";
-import { ImageDescriptionField } from "./ImageDescriptionField";
-import { ImageUsage } from "./ImageUsage";
 import { GroupStatePanel } from "./GroupStatePanel";
 import { LibraryPanel } from "./LibraryPanel";
+import { MobileArtEntry } from "./MobileArtEntry";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
@@ -110,9 +114,6 @@ const tokenTitle = (level: Secrecy) => (isNeverCharged(level) ? TOKEN_HINT_NEVER
 // to be in the name rather than only in the styling.
 const tokenAria = (n: number, level: Secrecy) =>
   isNeverCharged(level) ? `${tokenLabel(n)}, never charged` : tokenLabel(n);
-
-// The width a tile on the detail view's `.images-shelf.wide` is drawn at.
-const SHELF_WIDE = "154px";
 
 // What each secrecy level does to the prompt, in the words the picker shows.
 // "this text", not "this entry": secrecy gates the BODY, and the record still
@@ -406,6 +407,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
 }) {
   const scope: EntityScope = scopeProp ?? { kind: "world", id: wid };
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const recordTab = params.get("tab") === "art" ? "art" : "details";
+  const [loadedArtOwner, setLoadedArtOwner] = useState<string | null>(null);
   const [items, setItems] = useState<EntitySummary[]>([]);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null); // entity id, or null = new
@@ -443,6 +447,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // click that sent it, and what it does on completion -- reload the rail, open
   // a record, set the note or the error -- is about the scope it was sent from.
   const scopeGen = useRef(0);
+  // Initial loads, writes and shared-art invalidation all feed the same rail.
+  // Order them together so a pre-write response cannot undo fresh thumbnails.
+  const summaryReads = useRef(0);
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
@@ -458,11 +465,6 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // makes "do it anyway" repeat the right write rather than turning a move into
   // a save.
   const [stale, setStale] = useState<{ rev: string | null; to?: EntityKind } | null>(null);
-  // `description` is undefined until the listing says otherwise, and that is
-  // load-bearing: undefined means never reviewed, "" means reviewed and
-  // deliberately undescribed. `described` from the server is what separates them.
-  const [images, setImages] = useState<{ name: string; v: string; image_id?: string | null;
-                        description?: string }[]>([]);
   const [contentPreview, setContentPreview] = useState<ModuleContentEntry | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   // Whether the form's Activation disclosure is open. Its contents are drawn
@@ -480,17 +482,25 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // buttons wait on it: a second click would send the same write twice and, for
   // the bulk one, report the second run's "0 entries" over the first's outcome.
   const [adoptBusy, setAdoptBusy] = useState(false);
-  const shelfFileRef = useRef<HTMLInputElement>(null);
   const label = KIND_LABELS[kind];
 
-  const reload = useCallback(() => api.listEntities(scope, kind).then(setItems),
+  const reload = useCallback(async (fresh = true) => {
+    const gen = scopeGen.current, sequence = ++summaryReads.current;
+    try {
+      const rows = await (fresh ? api.listEntities(scope, kind, true) : api.listEntities(scope, kind));
+      if (gen === scopeGen.current && sequence === summaryReads.current) setItems(rows);
+    } catch (err) {
+      if (gen === scopeGen.current && sequence === summaryReads.current) throw err;
+    }
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [wid, kind, scope.kind, scope.id]);
   useEffect(() => {
     readReq.current += 1;   // discard a record read still out for the old scope
     scopeGen.current += 1;  // ...and an adopt still out for it
     setAdoptBusy(false);    // that request no longer holds this scope's buttons
-    reload();
+    const gen = scopeGen.current;
+    void reload(false).catch((err: unknown) => { if (gen === scopeGen.current) setError(errorText(err)); });
     resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind, scope.kind, scope.id]);
@@ -636,18 +646,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         .catch((err: unknown) => { if (req === readReq.current) setError(errorText(err)); });
     } else resetForm(newOwner);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, newOwner, scope.kind, scope.id]);
-
-  const reloadImages = useCallback((id: string) => {
-    const req = readReq.current;   // whichever select or refresh asked for these
-    api.listEntityImages(scope, kind, id)
-      .then((imgs) => { if (req === readReq.current) setImages(imgs.map((i) => ({
-        name: i.name, v: i.v, image_id: i.image_id,
-        description: i.described ? (i.description ?? "") : undefined,
-      }))); })
-      .catch(() => { if (req === readReq.current) setImages([]); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, scope.kind, scope.id]);
+  }, [selected, newOwner, kind, scope.kind, scope.id]);
 
   function resetForm(owner = "") {
     setEditing(null);
@@ -662,7 +661,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     setSecrecy("public");
     setSdPrompt("");
     setTokenCost(null);
-    setImages([]);
+    setLoadedArtOwner(null);
     setContentPreview(null);
     setWizardOpen(false);
     setAdopt(null);
@@ -697,7 +696,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     setSdPrompt(e.meta.sd_prompt ?? "");
     setTokenCost(typeof e.tokens === "number" ? e.tokens : null);
     setMode("view");
-    reloadImages(id);
+    setLoadedArtOwner(JSON.stringify([scope.kind, scope.id, kind, id]));
     // Asked only of a record that carries a stash: nothing else can have
     // anything to adopt, and most records are not imports. Its failure is
     // silence -- the banner is an offer, not something the record needs.
@@ -717,8 +716,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   /** `reload`, unless the scope has moved on since `gen` was taken: a listing
    *  of the old scope must not repopulate the new scope's rail. */
   async function reloadFor(gen: number) {
-    const rows = await api.listEntities(scope, kind);
-    if (gen === scopeGen.current) setItems(rows);
+    if (gen === scopeGen.current) await reload(true);
   }
 
   async function applyAdopt() {
@@ -908,63 +906,33 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     await reload();
   }
 
-  // ---- location images shelf (the primary image is the asset named "avatar") ----
-  // ?v= names the exact content state, so the browser caches these immutable;
-  // uploads/promotes refresh the tokens via reloadImages/reload.
-  const hasPrimary = images.some((i) => i.name === "avatar");
-  const imageIdOf = (n: string) => images.find((i) => i.name === n)?.image_id;
-  const galleryNames = images
-    .map((i) => i.name)
-    .filter((n) => n.startsWith("gallery_"))
-    .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
-  const imgUrl = (n: string, w?: number) =>
-    api.entityImageUrl(scope, kind, editing ?? "", n, { w, v: images.find((i) => i.name === n)?.v });
-  // The original is what a link out opens -- there the reader is looking at
-  // the picture itself. What the page draws is a downscale sized to its slot.
-  const imgSrc = (n: string) => imgUrl(n);
-  const imgThumb = (n: string, sizes: string, original?: string) =>
-    thumbSet((w) => imgUrl(n, w), sizes, THUMB.tile, original);
-
-  async function describeImage(name: string, description: string) {
-    if (!editing) return;
-    await api.setEntityImageDescription(scope, kind, editing, name, description);
-    reloadImages(editing);
+  // A selected record is not yet an Art owner while another record/scope is
+  // resolving. Tag the successful prose read so old ids cannot be combined
+  // with the new scope, and never issue image requests for a New form.
+  const selectedRead = readReq.current;
+  const artOwner = editing ? JSON.stringify([scope.kind, scope.id, kind, editing]) : null;
+  const art = useRecordArt(editing && loadedArtOwner === artOwner && (selected === undefined || selected === editing)
+    ? { scope, kind, record_id: editing } : null, { recordName: name, onSaved: async () => {
+      const gen = scopeGen.current, viewing = readReq.current;
+      await reloadFor(gen);
+      // Reloading the rail can outlive a same-scope selection change. Refresh
+      // prose only while the original selection still owns this callback.
+      if (gen === scopeGen.current && viewing === readReq.current && editing) await select(editing);
+    } });
+  function selectRecordTab(tab: "details" | "art") {
+    art.transition(() => {
+      const next = new URLSearchParams(params);
+      if (tab === "art") next.set("tab", "art"); else next.delete("tab");
+      setParams(next, { replace: true });
+    });
   }
-
-  async function draftDescription(name: string): Promise<string> {
-    if (!editing) return "";
-    return (await api.draftEntityImageDescription(wid, kind, editing, name)).description;
-  }
-
-  async function promoteImage(name: string) {
-    if (!editing) return;
-    setError(null);
-    try {
-      await api.promoteEntityImage(scope, kind, editing, name);
-      reloadImages(editing);
-      await reload();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    }
-  }
-
-  async function onShelfAdd(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !editing) return;
-    setError(null);
-    const next = hasPrimary
-      ? `gallery_${galleryNames.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0) + 1}`
-      : "avatar";
-    try {
-      await api.putEntityImage(scope, kind, editing, next, file);
-      reloadImages(editing);
-      await reload();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    } finally {
-      e.target.value = "";
-    }
-  }
+  useEffect(() => {
+    const gen = scopeGen.current;
+    return onArtChanged(() => {
+      // Shared captions/bytes may affect another placement's rail preview.
+      void reloadFor(gen).catch((err: unknown) => { if (gen === scopeGen.current) setError(errorText(err)); });
+    });
+  }, [scope.kind, scope.id, kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
   // How often that cost is actually paid, which is the whole reason a raw
@@ -990,7 +958,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // Beside the title in both header layouts, so it is written once rather than
   // in the plain-<h3> branch and the image branch separately.
   const heading = (
-    <h3>
+    <h3 ref={art.focusRef} tabIndex={-1}>
       {name}
       {tokenCost !== null && (
         <span className={tokenClass(secrecy)} title={tokenTitle(secrecy)}
@@ -1055,6 +1023,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
           // The 220px rail, or the whole width once the editor stacks on a
           // phone -- past what the 1024 fills there, so the original is offered.
           <img className="loc-row-img" alt="" loading="lazy" decoding="async"
+               style={e.image_focus == null ? undefined : { objectPosition: e.image_focus + "% " + e.image_focus + "%" }}
                {...thumbSet((w) => api.entityImageUrl(at, kind, e.id, "avatar", { w, v: e.image_v }),
                             "(max-width: 640px) 100vw, 220px", THUMB.tile,
                             api.entityImageUrl(at, kind, e.id, "avatar", { v: e.image_v }))}
@@ -1225,7 +1194,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
           </>
         )}
         {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === kind) && (
-          <button className="subtle" onClick={() => { resetForm(); setWizardOpen(true); }}>
+          <button className="subtle" onClick={() => art.transition(() => { resetForm(); setWizardOpen(true); })}>
             + New {label} with sheet…
           </button>
         )}
@@ -1238,7 +1207,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         )}
         {module?.content.filter((c) => c.kind === kind).map((c) => (
           <button key={`content-${c.id}`} className="row content-row"
-                  onClick={() => selectContent(c.id)}>
+                  onClick={() => art.transition(() => { void selectContent(c.id); })}>
             <span className="row-name">{c.name}</span>
             <span className="chip">template</span>
           </button>
@@ -1246,6 +1215,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
       </div>
 
       <div className="editor-body">
+        <RecordArtViewer controller={art} />
         {error && <div className="banner">{error}</div>}
         {stale && (
           <StaleRecordBanner label={label} rev={stale.rev} onReload={discardAndReload}
@@ -1265,7 +1235,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             <div className="detail-main">
               <h3>{contentPreview.name}</h3>
               <div className="detail-rendered">
-                <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{contentPreview.body}</Markdown>
+                <MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, kind, "template", contentPreview.name])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{contentPreview.body}</Markdown></MarkdownArtProvider>
               </div>
             </div>
             <aside className="detail-sidebar">
@@ -1281,6 +1251,21 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         ) : mode === "view" && editing ? (
           <div className="detail-view">
             <div className="detail-main">
+              <div className="entity-record-head">
+                {heading}
+                <RecordArtEntry controller={art} name={name} onOpenArt={() => selectRecordTab("art")} />
+              </div>
+              <MobileArtEntry name={name} image={art.preview ? () => art.preview.thumb : null} focus={art.preview?.focus}
+                onOpenArt={() => selectRecordTab("art")}
+                onOpenPreview={opener => { if (art.preview) art.openImage(art.preview, opener); }} />
+              <div className="card-tabs" role="tablist" aria-label="Record">
+                <button role="tab" aria-selected={recordTab === "details"} className={"tab" + (recordTab === "details" ? " active" : "")}
+                  onClick={() => selectRecordTab("details")}>Details</button>
+                <button role="tab" aria-selected={recordTab === "art"} className={"tab" + (recordTab === "art" ? " active" : "")}
+                  onClick={() => selectRecordTab("art")}>{art.count === null ? "Art" : "Art " + art.count}</button>
+              </div>
+              <div role="tabpanel">
+                {recordTab === "art" ? <RecordArtPanel controller={art} /> : <>
               {adopt?.inherited && (
                 // A record the campaign only reads from its world: the world's
                 // copy is the one that takes the import, so there is nothing to
@@ -1306,65 +1291,15 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                           disabled={adoptBusy}>Apply</button>
                 </div>
               )}
-              {editing && hasPrimary ? (
-                <div className="loc-head">
-                  <img className="loc-head-img" alt={`${name} primary`} decoding="async"
-                       {...imgThumb("avatar", "340px", imgSrc("avatar"))}
-                       onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                  {heading}
-                </div>
-              ) : (
-                heading
-              )}
-              {editing && (
-                <>
-                  <div className="section-label">Images</div>
-                  <div className="images-shelf wide">
-                    {hasPrimary ? (
-                      <figure className="shelf-tile avatar-tile">
-                        <a href={imgSrc("avatar")} target="_blank" rel="noreferrer">
-                          <img alt="primary" loading="lazy" decoding="async"
-                               {...imgThumb("avatar", SHELF_WIDE)} />
-                        </a>
-                        <figcaption>primary</figcaption>
-                        <ImageDescriptionField
-                          key={`${editing}:avatar`}
-                          name="avatar"
-                          value={images.find((i) => i.name === "avatar")?.description}
-                          onSave={(d) => describeImage("avatar", d)}
-                          onDraft={scope.kind === "world" ? () => draftDescription("avatar") : undefined} />
-                        {imageIdOf("avatar") && <ImageUsage imageId={imageIdOf("avatar")!} />}
-                      </figure>
-                    ) : (
-                      <div className="shelf-tile shelf-empty">no image</div>
-                    )}
-                    {galleryNames.map((n) => (
-                      <div className="shelf-tile" key={n}>
-                        <a href={imgSrc(n)} target="_blank" rel="noreferrer">
-                          <img alt={n} loading="lazy" decoding="async" {...imgThumb(n, SHELF_WIDE)} />
-                        </a>
-                        <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as primary</button>
-                        <ImageDescriptionField
-                          key={`${editing}:${n}`}
-                          name={n} value={images.find((i) => i.name === n)?.description}
-                          onSave={(d) => describeImage(n, d)}
-                          onDraft={scope.kind === "world" ? () => draftDescription(n) : undefined} />
-                        {imageIdOf(n) && <ImageUsage imageId={imageIdOf(n)!} />}
-                      </div>
-                    ))}
-                    <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-                    <input ref={shelfFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
-                           aria-label="Add image" onChange={onShelfAdd} />
+                  <div className="detail-rendered">
+                    <MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, kind, editing])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{body}</Markdown></MarkdownArtProvider>
                   </div>
-                </>
-              )}
-              <div className="detail-rendered">
-                <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{body}</Markdown>
+                </>}
               </div>
             </div>
             <aside className="detail-sidebar">
               <div className="form-actions">
-                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
+                <button className="subtle" onClick={() => art.transition(() => { selectRecordTab("details"); setMode("edit"); })}>Edit</button>
               </div>
               {/* Keyed on the record, so switching rows remounts rather than
                   showing the previous record's library state while the new one
@@ -1377,7 +1312,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
               ) : (
                 <DemotePanel key={`${scope.id}:${kind}:${editing}`}
                              wid={scope.id} kind={kind} id={editing}
-                             onDemoted={() => { void reload(); resetForm(); }} />
+                             beforeDemote={() => {
+                               let allowed = false; art.transition(() => { allowed = true; }); return allowed;
+                             }}
+                             onDemoted={() => {
+                               // A completed sidebar write belongs to the record
+                               // that opened it, not a later selection's form.
+                               if (selectedRead === readReq.current) { void reload(); resetForm(); }
+                             }} />
               ))}
               <div className="side-section">
                 <h4>Keys</h4>
@@ -1527,7 +1469,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
               <div className="side-section">
                 <h4>Reclassify</h4>
                 <select aria-label="Reclassify as" value=""
-                        onChange={(e) => askReclassify(e.target.value as EntityKind)}>
+                        onChange={(e) => art.transition(() => askReclassify(e.target.value as EntityKind))}>
                   <option value="">Reclassify as…</option>
                   {ENTITY_KINDS.filter((k) => k !== kind).map((k) => (
                     <option key={k} value={k}>{KIND_LABELS[k]}</option>

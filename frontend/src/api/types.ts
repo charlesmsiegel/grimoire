@@ -1071,6 +1071,49 @@ export type EntityKind = (typeof ENTITY_KINDS)[number];
 export type EntityKindName = EntityKind | (string & {});
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 
+/** The common Art surface deliberately excludes Greetings, whose art is
+ *  authored through greeting Markdown, collections, and subject reviews. */
+export const ART_RECORD_KINDS = ["characters", "pcs", ...ENTITY_KINDS] as const;
+export type ArtRecordKind = (typeof ART_RECORD_KINDS)[number];
+export type RecordArtTarget =
+  | { scope: EntityScope; kind: "characters" | "pcs"; record_id: string; version: string }
+  | { scope: EntityScope; kind: EntityKind; record_id: string; version?: never };
+export type ArtSourceRef =
+  | { surface: "record"; target: RecordArtTarget; name: string; expected_v: string }
+  | { surface: "library"; scope: EntityScope; name: string; expected_v: string };
+export type DescriptionState = {
+  scope: "shared" | "legacy" | null; text: string; described: boolean;
+  conflicts: { text: string; from: string }[];
+};
+export type ArtProvenance = "world" | "campaign" | "inherited" | "world-original";
+export type ArtCreated = { name: string; ext: string; v: string; image_id: string };
+export type ArtLinkResult =
+  | { status: "ok"; created: ArtCreated; no_op?: boolean }
+  | { status: "partial"; created: ArtCreated; error: { kind: string; detail: string } };
+export type ArtOperation = "append" | "reuse" | "promote" | "focus" | "description" | "remove" | "draft_description";
+export type DescriptionRecovery = { available: false } | {
+  available: true; description_rev: string; effective_description: DescriptionState;
+  write_target_description: DescriptionState;
+};
+export type DescriptionSaveResult =
+  | { status: "ok" }
+  | { status: "partial"; kind: "description_cleanup_incomplete"; committed: true;
+      confirmed_text: string; recovery: DescriptionRecovery };
+export type RecordArtImage = {
+  name: string; ext: string; v: string; image_id?: string | null; url: string; thumb: string;
+  description: string; described: boolean; description_scope?: "shared" | "legacy";
+  description_available: boolean; description_rev: string | null;
+  effective_description?: DescriptionState; write_target_description?: DescriptionState;
+  focus?: number | null; width?: number | null; height?: number | null; animated?: boolean;
+  provenance: ArtProvenance; placement: Extract<ArtSourceRef, { surface: "record" }>;
+};
+export type RecordArtRead = {
+  target: RecordArtTarget; images: RecordArtImage[]; world_originals: RecordArtImage[];
+  world_originals_error?: string; operations: ArtOperation[];
+};
+export type ImagePromoteGuards = { expected_v?: string; expected_primary_v?: string | null };
+export type ImageDescriptionGuards = { expected_v?: string; expected_description_rev?: string; cleanup_only?: boolean };
+
 // ---- library moves (#52, #53, #60) ----
 //
 // The kinds that can move between a campaign and its world. Wider than
@@ -1210,7 +1253,7 @@ export const SECRECY_LABELS: Record<Secrecy, string> = {
 // regardless of `secrecy`: it is the cost of the text, and a gm-only body
 // costs nothing because it is never sent, not because it is short.
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
-  secrecy?: string; has_image?: boolean; image_v?: string | null; tokens?: number } & Record<string, unknown>;
+  secrecy?: string; has_image?: boolean; image_v?: string | null; image_focus?: number | null; tokens?: number } & Record<string, unknown>;
 export type EntityDetail = {
   meta: { id: string; name: string; keys?: string; owners?: string; secrecy?: string;
     sd_prompt?: string } & Record<string, unknown>;
@@ -1626,6 +1669,7 @@ export type GalleryImage = {
   subjects?: string[] | null;
   /** The picture's identity in the image store; absent for a legacy file. */
   image_id?: string | null;
+  v?: string; placement?: ArtSourceRef; provenance?: ArtProvenance;
 };
 export type CampaignImage = {
   name: string; ext: string; v: string;

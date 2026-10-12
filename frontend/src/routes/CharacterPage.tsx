@@ -6,14 +6,14 @@ import {
   type ModuleDetail, type VersionRef,
 } from "../api/client";
 import { errorText } from "../api/errors";
-import { thumbSet } from "../api/thumbs";
-import { AvatarFocusPicker } from "../components/AvatarFocusPicker";
 import { BirthdateDisplay, BirthdatePicker } from "../components/BirthdatePicker";
 import { ErrorNote } from "../components/ErrorNote";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { useEntityKinds } from "../components/useEntityKinds";
+import { RecordArtEntry, RecordArtViewer } from "../components/art/RecordArtEntry";
+import { useRecordArt } from "../components/art/useRecordArt";
 import { ArtTab } from "../components/character/ArtTab";
 import { MobileArtEntry } from "../components/MobileArtEntry";
 import { CampaignSection } from "../components/character/CampaignSection";
@@ -24,8 +24,8 @@ import { TaglineSection } from "../components/character/TaglineSection";
 import { VersionList } from "../components/character/VersionList";
 import { VoiceAnchorSection } from "../components/character/VoiceAnchorSection";
 import {
-  avatarSrc, buildCard, characterHref, characterImage, charactersHref,
-  ExportMenu, focusStyle, formatOf, initialsOf,
+  buildCard, characterHref, charactersHref,
+  ExportMenu, formatOf,
 } from "../components/character/shared";
 import { sectionHref } from "../worldPaths";
 
@@ -99,7 +99,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   const [savingBirthdate, setSavingBirthdate] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notFound, setNotFound] = useState(false);
-  const [tab, setTab] = useState<CardTabKey>("card");
+  const [detailTab, setDetailTab] = useState<Exclude<CardTabKey, "art">>("card");
+  const tab: CardTabKey = params.get("tab") === "art" ? "art" : detailTab;
   /** Which field is open for editing, `"<section>:<key>"`. One at a time. */
   const [editing, setEditing] = useState<string | null>(null);
   /** True while a whole-card write is in flight.
@@ -113,7 +114,6 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   const [saving, setSaving] = useState(false);
   const [versionWriting, setVersionWriting] = useState(false);
   const busy = saving || savingBirthdate || versionWriting;
-  const [cropOpen, setCropOpen] = useState(false);
   const [voiceAnchorCap, setVoiceAnchorCap] = useState<number | null>(null);
   const [module, setModule] = useState<ModuleDetail | null>(null);
 
@@ -376,10 +376,23 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     if (d) loadVersion(d, vid);
   }
 
+  const art = useRecordArt(detail?.versions.some((v) => v.id === vid)
+    ? { scope, kind: "characters", record_id: eid, version: vid } : null, { onSaved: refresh, recordName: card?.data.name || detail?.meta.name,
+      versionName: detail?.versions.find(v => v.id === vid)?.name });
+  function selectTab(nextTab: CardTabKey) {
+    art.transition(() => {
+      const next = new URLSearchParams(params);
+      if (nextTab === "art") { next.set("tab", "art"); next.set("v", vid); }
+      else { next.delete("tab"); setDetailTab(nextTab); }
+      setParams(next, { replace: true });
+    });
+  }
   function openVersion(id: string) {
+    art.transition(() => {
     const next = new URLSearchParams(params);
     next.set("v", id);
     setParams(next, { replace: true });
+    });
   }
 
   async function saveBirthdate(value: string) {
@@ -539,16 +552,10 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
   const version = detail.versions.find((v) => v.id === vid);
   const name = card.data.name || detail.meta.name;
-  const hasAvatar = (version?.images ?? []).includes("avatar");
-  const avatarFocus = version?.avatar_focus ?? null;
-  const imageTokens = version?.image_v ?? {};
-  const galleryImages = (version?.images ?? [])
-    .filter((n) => n.startsWith("gallery_"))
-    .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
   const firstMes = (card.data.first_mes as string) ?? "";
   const featuringGreetings = worldGreetings.filter((g) => (g.present ?? []).includes(eid));
   const greetingCount = (firstMes.trim() ? 1 : 0) + greetings.length + featuringGreetings.length;
-  const artCount = (hasAvatar ? 1 : 0) + galleryImages.length;
+  const artCount = art.count;
   // `scope.id` is a slug and a poor heading, but a heading with the wrong
   // subject would be worse than a plain one, so it stands in only when the
   // campaign's name could not be read.
@@ -561,16 +568,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     <Link className="column-back" to={charactersHref(scope)}
           state={{ reveal: eid }}>‹ All characters</Link>
 
-    {hasAvatar
-      ? <button className="identity-art avatar-crop-btn" type="button"
-                aria-label="Adjust avatar crop" title="Adjust avatar crop"
-                onClick={() => setCropOpen(true)}>
-          {/* `.identity-art` tops out at 240px square: a thumbnail the
-              screen picks, while the crop picker below keeps the original. */}
-          <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)} decoding="async"
-               {...thumbSet(characterImage(scope, eid, vid, "avatar", imageTokens.avatar), "240px")} />
-        </button>
-      : <div className="identity-art identity-art-empty" aria-hidden>{initialsOf(name)}</div>}
+    <RecordArtEntry controller={art} name={name} onOpenArt={() => selectTab("art")} />
 
     <h2 className="identity-name">{name}</h2>
     {card.data.creator ? <div className="detail-byline">by {String(card.data.creator)}</div> : null}
@@ -579,12 +577,14 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
     <VersionList scope={scope} detail={detail} vid={vid} locked={locked}
                  campaignLabel={campaignLabel} worldVersions={worldVersions}
-                 onPick={() => void runPick()}
-                 onImportFromWorld={(v) => void importFromWorld(v)}
+                 onPick={() => art.transition(() => { void runPick(); })}
+                 onImportFromWorld={(v) => art.transition(() => { void importFromWorld(v); })}
                  onOpenVersion={openVersion}
-                 onImportFile={() => versionFileRef.current?.click()}
-                 onImportUrl={() => setImportUrlOpen(true)}
-                 busy={busy} onWritingChange={setVersionWriting}
+                 onImportFile={() => art.transition(() => versionFileRef.current?.click())}
+                 onImportUrl={() => art.transition(() => setImportUrlOpen(true))}
+                 busy={busy || !!art.busy} beforeVersionChange={() => {
+                   let allowed = false; art.transition(() => { allowed = true; }); return allowed;
+                 }} onWritingChange={setVersionWriting}
                  onChanged={refresh} onError={setError} />
     <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
            aria-label="Import version" onChange={onImportVersionFile} />
@@ -640,18 +640,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
   return (
     <PageShell column={column} footer={footer} columnLabel="Character" className="character-page">
-      {cropOpen && hasAvatar && (
-        <AvatarFocusPicker src={avatarSrc(scope, eid, vid, imageTokens.avatar)}
-                           initial={avatarFocus ?? 50}
-                           onSave={(f) => void (async () => {
-                             setCropOpen(false);
-                             try {
-                               await api.setAvatarFocus(scope, eid, vid, f);
-                               await refresh();
-                             } catch (err: unknown) { setError(err); }
-                           })()}
-                           onClose={() => setCropOpen(false)} />
-      )}
+      <RecordArtViewer controller={art} />
       {importFile && (
         <ImportVersionDialog fileName={importFile.name} characters={roster}
                              fixedTo={{ id: eid, name: detail.meta.name }}
@@ -670,7 +659,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
           <div className="eyebrow">
             {worldScope ? "World record · shared · sent to the model" : `Campaign copy · ${campaignLabel}`}
           </div>
-          <h1 className="screen-title">{name}</h1>
+          <h1 className="screen-title" ref={art.focusRef} tabIndex={-1}>{name}</h1>
         </div>
         <div className="screen-head-actions">
           {worldScope && <ExportMenu wid={wid} cid={eid} vid={vid} />}
@@ -681,11 +670,9 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       {error != null && <div className="banner"><ErrorNote err={error} /></div>}
       {importMsg && <p className="field-hint">{importMsg}</p>}
 
-      <MobileArtEntry name={name}
-        image={hasAvatar ? characterImage(scope, eid, vid, "avatar", imageTokens.avatar)
-          : galleryImages[0] ? characterImage(scope, eid, vid, galleryImages[0], imageTokens[galleryImages[0]])
-          : null}
-        onOpenArt={() => setTab("art")} />
+      <MobileArtEntry name={name} image={art.preview ? () => art.preview.thumb : null} focus={art.preview?.focus}
+        onOpenArt={() => selectTab("art")}
+        onOpenPreview={(opener) => { if (art.preview) art.openImage(art.preview, opener); }} />
 
       <div className="card-tabs" role="tablist" aria-label="Card">
         {([["card", "Card", null],
@@ -695,7 +682,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
           .map(([key, label, count]) => (
             <button key={key} role="tab" aria-selected={tab === key}
                     className={"tab" + (tab === key ? " active" : "")}
-                    onClick={() => setTab(key)}>
+                    onClick={() => selectTab(key)}>
               {label}{count === null ? "" : ` ${count}`}
             </button>
           ))}
@@ -737,20 +724,14 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         )}
 
         {tab === "art" && (
-          <ArtTab scope={scope} wid={wid} cid={eid} vid={vid}
-                  hasAvatar={hasAvatar} galleryImages={galleryImages}
-                  imageTokens={imageTokens}
-                  imageIds={version?.image_ids}
-                  descriptions={version?.image_descriptions ?? {}}
-                  appearances={imageAppearances}
-                  worldScope={worldScope}
-                  inherited={version?.inherited ?? []}
-                  baseVersions={detail.base_versions ?? []}
-                  shadowed={version?.world_shadowed ?? []}
-                  localizeProg={localizeProg} localizeMsg={localizeMsg}
-                  onLocalize={() => void runLocalize(vid)}
-                  onRefresh={refresh} onError={setError}
-                  greetingHref={greetingHref} />
+          <ArtTab controller={art} related={{
+            scope, wid, record: eid, version: vid, appearances: imageAppearances,
+            baseVersions: detail.base_versions ?? [], manage: art.manage, busy: !!art.busy || !!art.draft,
+            fallbackFocus: art.focusRef.current ?? art.entryRef.current, greetingHref, localizeProg, localizeMsg,
+            onCopy: (appearance, slot) => { void art.runRelated("copy greeting art", () =>
+              api.copyGreetingImage(scope, eid, vid, { gid: appearance.gid, name: appearance.name, slot })); },
+            onLocalize: () => { void art.runRelated("localize images", () => runLocalize(vid)); },
+          }} />
         )}
       </div>
     </PageShell>

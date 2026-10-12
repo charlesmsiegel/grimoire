@@ -5,6 +5,7 @@ import {
   createMemoryRouter, RouterProvider,
 } from "react-router-dom";
 import WorldView from "./WorldView";
+import { artRead } from "../testkit/recordArt";
 import PCPage from "./PCPage";
 import { resetPrefetch } from "../api/prefetch";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
@@ -48,6 +49,7 @@ vi.mock("../api/client", () => ({
                 { key: "threat", label: "Threat", widget: "text" }],
   },
   api: {
+    readRecordArt: vi.fn(),
     getWorld: vi.fn(),
     worldCoverUrl: vi.fn(),
     getCampaign: vi.fn(),
@@ -126,6 +128,7 @@ const POOL_BASIC: ModuleDetail = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, []));
   resetPrefetch();
   // The world read carries how many campaigns play the world, which is the
   // only place the page reads that number from.
@@ -1517,4 +1520,14 @@ test("the Characters row prefetches nothing while it is the page already open", 
   fireEvent.pointerDown(indexRow("Characters"));
   await screen.findByRole("heading", { name: "Characters" });
   expect((api.listCharacters as any).mock.calls.length).toBe(before);
+});
+
+test.each(["world", "campaign"])("record canonicalization retains Art query in %s", async (scope) => {
+  if (scope === "world") renderAtUrl("/worlds/Realm/locations//Saltmarch?tab=art");
+  else renderCampaignAtUrl("/campaigns/Realm/world/locations//Saltmarch?tab=art");
+  await waitFor(() => expect(lastPath).toBe(scope === "world"
+    ? "/worlds/Realm/locations/Saltmarch" : "/campaigns/Realm/world/locations/Saltmarch"));
+  expect(lastSearch).toBe("?tab=art");
+  expect(await screen.findByRole("tab", { name: /^Art/ })).toHaveAttribute("aria-selected", "true");
+  expect(await screen.findByText("No images yet")).toBeInTheDocument();
 });

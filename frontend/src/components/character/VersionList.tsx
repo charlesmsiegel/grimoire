@@ -27,7 +27,7 @@ function withLabel(card: Card, label: string): Card {
  */
 export function VersionList(
   { scope, detail, vid, locked, campaignLabel, worldVersions, onPick, onImportFromWorld,
-    onOpenVersion, onImportFile, onImportUrl, busy, onWritingChange, onChanged, onError }: {
+    onOpenVersion, onImportFile, onImportUrl, busy, beforeVersionChange, onWritingChange, onChanged, onError }: {
     scope: EntityScope;
     detail: CharacterDetail;
     vid: string;
@@ -48,6 +48,8 @@ export function VersionList(
     /** A whole-card write is in flight elsewhere on the page. A rename is one
      *  too, so it waits rather than racing it. */
     busy: boolean;
+    /** A new version changes the selected Art owner, so guard before writing. */
+    beforeVersionChange?: () => boolean;
     onWritingChange: (writing: boolean) => void;
     onChanged: () => Promise<void> | void;
     onError: (err: unknown) => void;
@@ -79,7 +81,7 @@ export function VersionList(
   }
 
   async function addVersion() {
-    if (held) return;
+    if (held || (beforeVersionChange && !beforeVersionChange())) return;
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
     setWriting(true);

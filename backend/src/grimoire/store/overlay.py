@@ -1831,7 +1831,7 @@ def read_descriptions_listed(cid: str, aid: str, vid: str, base: str = "characte
 
 
 def set_description(cid: str, aid: str, vid: str, name: str, text: str,
-                    base: str = "characters") -> None:
+                    base: str = "characters", **guards) -> None:
     """Write one image's description, as this campaign sees the image.
 
     - **Inherited art whose world placement resolves** (D1, R3): the text goes
@@ -1885,9 +1885,15 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
                 # directory edited, not the world's (R2/R8).
                 cdir = assets.version_dir(v.croot, aid, vid, base)
                 image_descriptions.set_in(wdir, name, text, names=union,
-                                          also_clear=cdir, fallback_dir=cdir)
+                                          also_clear=cdir, fallback_dir=cdir, **guards)
                 return
-        image_descriptions.set_description(v.croot, aid, vid, name, text, base, names=union)
+            # Legacy inherited art has no shared object to update. Its binding
+            # still participates in the guard, and campaign/world key order
+            # must match what this editor displayed before Save.
+            cdir = assets.version_dir(v.croot, aid, vid, base)
+            guards = {**guards, "source_dir": wdir, "effective_dirs": (cdir, wdir)}
+        image_descriptions.set_description(v.croot, aid, vid, name, text, base,
+                                           names=union, **guards)
 
 
 def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
@@ -2068,7 +2074,8 @@ def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict
     return out
 
 
-def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) -> list[dict]:
+def shadowed_images(cid: str, char_id: str, vid: str, *, base: str = "characters",
+                    v: View | None = None) -> list[dict]:
     """The world's copies of one version's pictures that the union HIDES: same
     version, same name, and a campaign file of its own under that name.
 
@@ -2094,14 +2101,14 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
     file under cannot normally carry one.
     """
     v = _view(cid, v)
-    ref = _flat_ref("characters", char_id)
+    ref = _flat_ref(base, char_id)
     gone = v.gone
     if ref in gone or ref in v.off:
         return []
     croot = v.croot
     # Held NAMES come from the listing, not from file stems: a placement's
     # path is a blob named by its hash.
-    mine_rows = assets.list_images(croot, char_id, vid)
+    mine_rows = assets.list_images(croot, char_id, vid, base)
     held = {i["name"] for i in mine_rows}
     if not held:
         return []
@@ -2111,22 +2118,22 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
     # read for that pair. Anything involving a legacy file has no identity to
     # compare and falls to bytes: a legacy row's file, and -- for a legacy
     # world row -- a placement's blob.
-    mine_ids, legacy_files, all_files = _held_pictures(croot, char_id, vid, mine_rows)
+    mine_ids, legacy_files, all_files = _held_pictures(croot, char_id, vid, mine_rows, base)
     out = []
-    for i in assets.list_images(wroot, char_id, vid):
-        if i["name"] not in held or _asset_ref("characters", char_id, vid, i["name"]) in gone:
+    for i in assets.list_images(wroot, char_id, vid, base):
+        if i["name"] not in held or _asset_ref(base, char_id, vid, i["name"]) in gone:
             continue
         if i.get("image_id") and i["image_id"] in mine_ids:
             continue   # the same picture, however it is named or stored
         compare = legacy_files if i.get("image_id") else all_files
-        if _novel_bytes(assets.image_path(wroot, char_id, vid, i["name"]), compare):
+        if _novel_bytes(assets.image_path(wroot, char_id, vid, i["name"], base), compare):
             out.append(i)
     if not out:
         return []
     # The world's R1 for each row, off the world listing's own ids: no
     # placement is read twice, and a placement-backed row shows the text on
     # its (shared) image object.
-    described = image_descriptions.read_all(wroot, char_id, vid,
+    described = image_descriptions.read_all(wroot, char_id, vid, base,
                                             names={i["name"] for i in out}, ids=_row_ids(out))
     return [{"name": i["name"], "v": i["v"],
              **({"image_id": i["image_id"]} if i.get("image_id") else {}),
@@ -2135,7 +2142,7 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
 
 
 def _held_pictures(root: Path, char_id: str, vid: str,
-                   rows: list[dict]) -> tuple[set[str], list[Path], list[Path]]:
+                   rows: list[dict], base: str = "characters") -> tuple[set[str], list[Path], list[Path]]:
     """What a version's listing `rows` hold, as `shadowed_images` compares it:
     the placement image ids, the files of rows with no identity (legacy), and
     every row's resolved file."""
@@ -2143,7 +2150,7 @@ def _held_pictures(root: Path, char_id: str, vid: str,
     legacy: list[Path] = []
     every: list[Path] = []
     for i in rows:
-        p = assets.image_path(root, char_id, vid, i["name"])
+        p = assets.image_path(root, char_id, vid, i["name"], base)
         if p is None:
             continue
         every.append(p)

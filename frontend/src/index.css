@@ -2434,12 +2434,12 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    labels -- rather than a fourth spelling of it, but it lives in an
    `.editor-body` and sizes off that rather than off a modal. */
 .images-view { display: grid; gap: 10px; }
-.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(154px, 1fr)); gap: 10px; }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 10px; }
 .gallery-tile { display: flex; flex-direction: column; gap: 4px; align-items: stretch; padding: 6px; background: transparent; border: 1px solid var(--muted); color: inherit; cursor: pointer; text-align: left; }
 .gallery-tile:hover { border-color: var(--accent); }
-/* A square crop, so a grid of portraits and landscapes still reads as a grid.
-   The detail view shows the picture whole. */
-.gallery-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+/* Greeting detail keeps its existing preview crop. Record/library tiles use
+   the shared contained surface, so maps and narrow art remain legible. */
+.gallery-tile:not(.art-image-tile) img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
 .gallery-tile span { font-size: 11px; overflow-wrap: anywhere; }
 .gallery-full { max-width: 100%; border-radius: 8px; display: block; }
 
@@ -5314,3 +5314,63 @@ a.subtle, a.button { display: inline-flex; align-items: center; justify-content:
   .role-row { grid-template-columns: 1fr; gap: 4px; }
   .model-select select { min-width: 0; width: 100%; }
 }
+
+/* Shared art tiles contain originals of any aspect; record previews alone crop. */
+.art-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); gap: 16px; }
+.art-image-tile { min-width: 0; width: 100%; text-align: left; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.art-image-tile-preview { display: grid; place-items: center; height: 160px; overflow: hidden; background: var(--bg); border-radius: 4px; }
+.art-image-tile-preview img { max-width: 100%; max-height: 160px; width: auto; height: auto; object-fit: contain; }
+.art-image-tile-label { display: block; margin-top: 8px; overflow-wrap: anywhere; }
+/* The modal owns overflow while background scrolling is locked. Its image
+   stage can shrink on short screens; controls and information keep their rows. */
+.art-viewer { position: fixed; inset: 0; z-index: 1600; display: flex; flex-direction: column; overflow: auto; background: var(--bg, #161719); color: var(--text); padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom)); }
+.art-viewer-header, .art-viewer-tools, .art-viewer-steps { flex-shrink: 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.art-viewer-header { justify-content: space-between; }
+.art-viewer-tools { padding: 12px 0; }
+.art-viewer button, .art-viewer a { min-height: 44px; display: inline-flex; align-items: center; }
+.art-viewer-stage { flex: 1; min-height: 80px; min-width: 0; overflow: hidden; position: relative; display: grid; place-items: center; touch-action: none; user-select: none; }
+.art-viewer-stage img { max-width: none; max-height: none; grid-area: 1 / 1; transform-origin: center; }
+.art-viewer-stage > p, .art-viewer-stage > div { grid-area: 1 / 1; z-index: 1; }
+.art-viewer-information { flex-shrink: 0; max-height: 28vh; overflow: auto; padding-top: 12px; }
+.art-viewer-information summary { min-height: 44px; cursor: pointer; }
+@media (max-width: 600px) {
+  .art-viewer { padding-left: 10px; padding-right: 10px; }
+  .art-viewer-tools { gap: 8px; }
+  .art-viewer-header strong { max-width: 45%; overflow-wrap: anywhere; }
+}
+
+.record-art-entry { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
+.record-art-preview { display: grid; place-items: center; width: 120px; flex: none; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.record-art-preview img { width: 100%; height: 100%; object-fit: cover; }
+.record-art-panel > .form-actions { margin-bottom: 20px; }
+.record-art-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.record-art-actions .image-description-editor, .record-art-actions dl, .art-description-conflict, .art-description-recovery { width: 100%; }
+.record-art-card { min-width: 0; }
+.record-art-card p, .art-description-conflict dd { overflow-wrap: anywhere; }
+.art-picker-backdrop, .art-focus-backdrop { z-index: 1200; }
+.art-picker { width: min(920px, 94vw); max-height: calc(100dvh - 48px); overflow: auto; }
+.art-picker .art-image-grid { margin: 16px 0; }
+.art-upload-results { padding-left: 20px; }
+.art-upload-results button { margin-left: 8px; }
+
+/* Entity selection keeps its rail/sidebar layout. The compact desktop entry
+   yields to the same mobile Art action used by Characters and PCs. */
+.entity-record-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.entity-record-head h3 { min-width: 0; overflow-wrap: anywhere; }
+.entity-record-head .record-art-entry { margin: 0 0 12px; }
+.entity-record-head .record-art-preview { width: 120px; }
+.entity-record-head ~ .card-tabs { margin-bottom: 16px; }
+@media (max-width: 720px) {
+  .entity-record-head .record-art-entry { display: none; }
+}
+
+.gallery-tile.art-image-tile { padding: 0; }
+.gallery-tile[aria-pressed="true"] { outline: 2px solid var(--accent); }
+
+.drawer-art-preview { display: block; padding: 0; border: 0; background: none; max-width: 100%; }
+.drawer-art-preview .drawer-avatar { object-fit: contain; }
+
+.markdown-art-enlarge { min-width: 44px; min-height: 44px; }
+.markdown-image-link { display: inline; }
+
+.art-recovery-preview { display: block; max-width: 100%; max-height: 30vh; object-fit: contain; }

@@ -41,7 +41,7 @@ include order below is load-bearing in two ways.
 1. ``entities`` registers ``/worlds/{wid}/{kind}`` and ``/campaigns/{cid}/{kind}``,
    which capture any third path segment, so it goes **last** — a literal-segment
    route registered after it would never be reached.
-2. Seven pairs of patterns *cross* (nine counting per-method): neither is more
+2. Several pairs of patterns *cross*: neither is more
    general, but a concrete URL exists that both match — e.g.
    ``POST /campaigns/c/scenes/instantiate/cast/batch`` matches both
    ``/campaigns/{cid}/scenes/{sid}/cast/batch`` and
@@ -86,6 +86,7 @@ from . import (
     observability,
     passage_characters,
     quick_replies,
+    record_art,
     regex_rules,
     runs,
     scenes,
@@ -185,7 +186,7 @@ def _compose(domain: APIRouter) -> None:
 # `world_images` AFTER `characters`: `/worlds/{wid}/images/{name}` generalizes
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
-for _domain in (config, inference, modules, worlds, characters, world_images, images, greetings,
+for _domain in (config, inference, modules, record_art, worlds, characters, world_images, images, greetings,
                 runs, maintenance, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
                 campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
     _compose(_domain.router)

@@ -97,12 +97,12 @@
   },
   "frontend/src/components/EntityEditor.tsx": {
     "@typescript-eslint/no-base-to-string": 1,
-    "@typescript-eslint/no-explicit-any": 5,
-    "@typescript-eslint/no-floating-promises": 2,
-    "@typescript-eslint/no-misused-promises": 10,
-    "@typescript-eslint/no-unnecessary-type-assertion": 3,
-    "@typescript-eslint/no-unsafe-argument": 4,
-    "@typescript-eslint/no-unsafe-member-access": 5,
+    "@typescript-eslint/no-explicit-any": 3,
+    "@typescript-eslint/no-floating-promises": 1,
+    "@typescript-eslint/no-misused-promises": 7,
+    "@typescript-eslint/no-unnecessary-type-assertion": 2,
+    "@typescript-eslint/no-unsafe-argument": 2,
+    "@typescript-eslint/no-unsafe-member-access": 3,
     "react-hooks/exhaustive-deps": 1
   },
   "frontend/src/components/EventsPanel.test.tsx": {
@@ -194,18 +194,10 @@
   "frontend/src/components/PostImagePicker.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
-  "frontend/src/components/PostImagePicker.tsx": {
-    "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-unsafe-argument": 2,
-    "@typescript-eslint/no-unsafe-member-access": 2
-  },
   "frontend/src/components/PromptLayoutEditor.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/RecordDrawer.tsx": {
-    "@typescript-eslint/no-floating-promises": 2,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
     "jsx-a11y/click-events-have-key-events": 2,
     "jsx-a11y/no-noninteractive-element-interactions": 1,
     "jsx-a11y/no-static-element-interactions": 1

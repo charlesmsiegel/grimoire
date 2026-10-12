@@ -1,21 +1,21 @@
+import { MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCRevision, type Persona,
          type VersionRef } from "../api/client";
 import { errorText } from "../api/errors";
-import { thumbSet } from "../api/thumbs";
-import { AvatarFocusPicker } from "../components/AvatarFocusPicker";
 import { BirthdateDisplay, BirthdatePicker } from "../components/BirthdatePicker";
 import { Field } from "../components/Field";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import SheetPanel from "../components/SheetPanel";
-import { initialsOf } from "../components/Portrait";
 import { sectionHref } from "../worldPaths";
+import { RecordArtEntry, RecordArtViewer } from "../components/art/RecordArtEntry";
+import { useRecordArt } from "../components/art/useRecordArt";
 import { PCArtTab } from "../components/pc/PCArtTab";
 import { MobileArtEntry } from "../components/MobileArtEntry";
 import { whenLabel } from "../components/turnLabels";
@@ -24,14 +24,13 @@ const BLANK: Persona = {
   name: "", pronouns: "", summary: "", description: "", birthdate: "", goals: "", player_notes: "",
 };
 type Tab = "persona" | "lore" | "art" | "sheet";
-type PCImage = { name: string; v: string; image_id?: string | null };
 
 /** A PC record is the unit of navigation and writing. The section page owns
  * only its index and creation; this page owns one record's persona, version,
  * campaign state, art, lore, and sheet, all addressed through the same scope.
  * React Router reuses a route element when params change, so the key retires
- * old reads and edit state before another record can receive a write. Image
- * listings have a second request token because versions change in place. */
+ * old reads and edit state before another record can receive a write. Records
+ * and their Art controller retire their reads when versions change in place. */
 export default function PCPage({ campaign = false }: { campaign?: boolean }) {
   const { wid = "", cid = "", pid = "" } = useParams();
   return <PCRecord key={`${campaign ? `campaign:${cid}` : `world:${wid}`}/${pid}`} campaign={campaign} />;
@@ -41,6 +40,8 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const { wid: worldParam = "", cid = "", pid = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const wanted = params.get("v") ?? "";
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: worldParam };
   const [wid, setWid] = useState(worldParam);
   const [detail, setDetail] = useState<PCDetail | null>(null);
@@ -52,14 +53,12 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   // a normal read, and must not silently put an existing PC back in edit mode.
   useEffect(() => {
     if ((location.state as { newPC?: boolean } | null)?.newPC) {
-      navigate(location.pathname, { replace: true, state: null });
+      navigate(location.pathname + location.search, { replace: true, state: null });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const [tab, setTab] = useState<Tab>("persona");
+  const [detailTab, setDetailTab] = useState<Exclude<Tab, "art">>("persona");
+  const tab: Tab = params.get("tab") === "art" ? "art" : detailTab;
   const [error, setError] = useState<string | null>(null);
-  const [imageError, setImageError] = useState<string | null>(null);
-  const [images, setImages] = useState<PCImage[]>([]);
-  const [cropOpen, setCropOpen] = useState(false);
   const [module, setModule] = useState<ModuleDetail | null>(null);
   const [tags, setTags] = useState<Record<string, string>>({});
   const [newTag, setNewTag] = useState("");
@@ -72,24 +71,10 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const [revisions, setRevisions] = useState<PCRevision[] | null>(null);
   const [revisionError, setRevisionError] = useState<string | null>(null);
   const [revision, setRevision] = useState<(PCRevision & { persona: Persona }) | null>(null);
-  const imageRequest = useRef(0);
   const recordRequest = useRef(0);
   const selectedVid = useRef("");
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
-
-  const loadImages = useCallback(async (version: string) => {
-    const request = ++imageRequest.current;
-    setImages([]);
-    setImageError(null);
-    if (!version) return;
-    try {
-      const listing = await api.listPCImages(scope, pid, version);
-      if (live.current && request === imageRequest.current) setImages(listing);
-    } catch (err: unknown) {
-      if (live.current && request === imageRequest.current) setImageError(errorText(err));
-    }
-  }, [scope.kind, scope.id, pid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const read = useCallback(async (version?: string, preserveMode = false) => {
     const request = ++recordRequest.current;
@@ -101,24 +86,27 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     selectedVid.current = selected?.id ?? "";
     setPersona(selected?.persona ?? BLANK);
     if (!preserveMode) setMode("view");
-    void loadImages(selected?.id ?? "");
+    // Post-save metadata refresh is not navigation. Replacing the same URL
+    // retires Art's feedback and, after a partial save, its recovery editor.
+    if (!preserveMode && version && selected?.id && selected.id !== wanted) {
+      setParams((previous) => { const nextParams = new URLSearchParams(previous); nextParams.set("v", selected.id); return nextParams; }, { replace: true });
+    }
     if (campaign) {
       const roster = await api.listAppearances(cid);
       if (live.current && request === recordRequest.current) {
         setLocked(roster.find((r) => r.kind === "pcs" && r.id === pid)?.version ?? null);
       }
     }
-  }, [scope.kind, scope.id, pid, loadImages, campaign, cid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scope.kind, scope.id, pid, campaign, cid, wanted, setParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let active = true;
     api.readPC(scope, pid).then((next) => {
       if (!active) return;
       setDetail(next);
-      const v = next.versions.find((x) => x.id === next.meta.default_version) ?? next.versions[0];
+      const v = next.versions.find((x) => x.id === (wanted || next.meta.default_version)) ?? next.versions[0];
       setVid(v?.id ?? ""); selectedVid.current = v?.id ?? "";
       setPersona(v?.persona ?? BLANK);
-      void loadImages(v?.id ?? "");
     }).catch((err: unknown) => { if (active) setError(errorText(err)); });
     if (campaign) {
       api.getCampaign(cid).then((c) => { if (active) setWid(c.meta.world); })
@@ -131,7 +119,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
         .catch((err: unknown) => { if (active) setError(errorText(err)); });
     }
     return () => { active = false; };
-  }, [scope.kind, scope.id, pid, loadImages]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scope.kind, scope.id, pid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!wid) return;
@@ -182,7 +170,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
       && selectedVid.current === vid;
     try {
       const persona = await api.readPCRevision(scope, pid, vid, rev.id);
-      if (fresh()) { setRevision({ ...rev, persona }); setTab("persona"); }
+      if (fresh()) art.transition(() => { setRevision({ ...rev, persona }); selectTab("persona"); });
     } catch (err: unknown) { if (fresh()) setError(errorText(err)); }
   }
   async function restoreRevision() {
@@ -193,24 +181,51 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     });
   }
 
-  function switchVersion(version: string) {
+  const art = useRecordArt(detail?.versions.some((v) => v.id === vid)
+    ? { scope, kind: "pcs", record_id: pid, version: vid } : null, { onSaved: () => read(vid, true), recordName: detail?.meta.name,
+      versionName: detail?.versions.find(v => v.id === vid)?.name });
+  function installVersion(version: string) {
     setRevision(null);
     recordRequest.current++;
-    imageRequest.current++;
     setVid(version);
     selectedVid.current = version;
     setPersona(detail?.versions.find((v) => v.id === version)?.persona ?? BLANK);
-    setCropOpen(false);
-    void loadImages(version);
+  }
+  // Browser navigation is guarded before this effect. Local controls guard
+  // before either the URL or the version's form state changes.
+  useEffect(() => {
+    if (!detail) return;
+    const resolved = detail.versions.find(v => v.id === (wanted || detail.meta.default_version)) ?? detail.versions[0];
+    if (resolved && resolved.id !== vid) installVersion(resolved.id);
+  }, [wanted, detail]); // eslint-disable-line react-hooks/exhaustive-deps
+  function switchVersion(version: string) {
+    art.transition(() => {
+      installVersion(version);
+      const next = new URLSearchParams(params); next.set("v", version);
+      setParams(next, { replace: true });
+    });
+  }
+  function selectTab(nextTab: Tab) {
+    art.transition(() => {
+      const next = new URLSearchParams(params);
+      if (nextTab === "art") { next.set("tab", "art"); next.set("v", vid); }
+      else { next.delete("tab"); setDetailTab(nextTab); }
+      setParams(next, { replace: true });
+    });
   }
   async function run(action: () => Promise<unknown>, after?: () => Promise<void>) {
-    setError(null);
-    const request = recordRequest.current;
-    try {
-      await action();
-      if (request === recordRequest.current) await (after ?? (() => read(vid)))();
-    }
-    catch (err: unknown) { setError(errorText(err)); }
+    let job: Promise<void> | undefined;
+    art.transition(() => {
+      job = (async () => {
+        setError(null);
+        const request = recordRequest.current;
+        try {
+          await action();
+          if (request === recordRequest.current) await (after ?? (() => read(vid)))();
+        } catch (err: unknown) { if (live.current) setError(errorText(err)); }
+      })();
+    });
+    await job;
   }
   async function savePersona() {
     await run(() => api.updatePCVersion(scope, pid, vid, persona), () => read(vid));
@@ -242,26 +257,11 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     await run(() => api.importVersion(cid, "pcs", pid, importVid), () => read(importVid));
   }
 
-  const version = detail?.versions.find((v) => v.id === vid);
   const name = persona.name || detail?.meta.name || pid;
-  const avatar = images.find((i) => i.name === "avatar");
-  const firstGallery = images.filter((i) => i.name.startsWith("gallery_"))
-    .sort((a, b) => Number(a.name.slice(8)) - Number(b.name.slice(8)))[0];
-  const preview = avatar ?? firstGallery;
-  const imageUrl = (image: PCImage, w?: number) =>
-    api.actorImageUrl(scope, "pcs", pid, vid, image.name, { w, v: image.v });
   const back = sectionHref(scope, { kind: "section", at: "pcs" });
   const column = <>
     <Link className="column-back" to={back}>‹ All PCs</Link>
-    {avatar
-      ? <button className="identity-art avatar-crop-btn" type="button"
-                aria-label="Adjust avatar crop" onClick={() => setCropOpen(true)}>
-          <img className="detail-avatar" alt="" decoding="async"
-               {...thumbSet((w) => imageUrl(avatar, w), "240px")}
-               style={version?.avatar_focus == null ? undefined
-                 : { objectPosition: `${version.avatar_focus}% ${version.avatar_focus}%` }} />
-        </button>
-      : <div className="identity-art identity-art-empty" aria-hidden>{initialsOf(name)}</div>}
+    <RecordArtEntry controller={art} name={name} onOpenArt={() => selectTab("art")} />
     <h2 className="identity-name">{name}</h2>
     {detail && <ColumnSection label="Version">
       <select value={vid} onChange={(e) => switchVersion(e.target.value)} aria-label="Version">
@@ -311,24 +311,22 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   </>;
 
   return <PageShell column={column} columnLabel="PC" className="character-page pc-page">
-    {cropOpen && avatar && <AvatarFocusPicker src={imageUrl(avatar)} initial={version?.avatar_focus ?? 50}
-      onSave={(focus) => void run(() => api.setPCAvatarFocus(scope, pid, vid, focus), async () => {
-        setCropOpen(false); await read(vid, true);
-      })} onClose={() => setCropOpen(false)} />}
+    <RecordArtViewer controller={art} />
     <div className="screen-head"><div>
       <div className="eyebrow">{campaign ? "Campaign PC" : "World PC"}</div>
-      <h1 className="screen-title">{detail ? name : "PC"}</h1>
+      <h1 className="screen-title" ref={art.focusRef} tabIndex={-1}>{detail ? name : "PC"}</h1>
     </div>{detail && scope.kind === "world" && <button className="subtle" onClick={() => void deletePC()}>Delete PC</button>}</div>
     {error && <div className="banner">{error}</div>}
     {detail && <>
-      <MobileArtEntry name={name} image={preview ? (w?: number) => imageUrl(preview, w) : null}
-                      onOpenArt={() => setTab("art")} />
+      <MobileArtEntry name={name} image={art.preview ? () => art.preview.thumb : null} focus={art.preview?.focus}
+        onOpenArt={() => selectTab("art")}
+        onOpenPreview={(opener) => { if (art.preview) art.openImage(art.preview, opener); }} />
       <div className="card-tabs" role="tablist" aria-label="PC">
         {(["persona", "lore", "art", "sheet"] as Tab[])
           .filter((t) => t !== "sheet" || module)
           .map((t) => <button key={t} role="tab" aria-selected={tab === t}
-            className={"tab" + (tab === t ? " active" : "")} onClick={() => setTab(t)}>
-            {t === "persona" ? "Persona" : t === "lore" ? "Lore" : t === "art" ? `Art ${images.length}` : "Sheet"}
+            className={"tab" + (tab === t ? " active" : "")} onClick={() => selectTab(t)}>
+            {t === "persona" ? "Persona" : t === "lore" ? "Lore" : t === "art" ? art.count === null ? "Art" : `Art ${art.count}` : "Sheet"}
           </button>)}
       </div>
       <div className="card-pane-body" role="tabpanel">
@@ -346,10 +344,10 @@ function PCRecord({ campaign }: { campaign: boolean }) {
               <div key={label} className="side-section"><h4>{label}</h4>{label === "Birthdate"
                 ? <BirthdateDisplay scope={scope} value={v ?? ""} />
                 : <div className="field-hint">{v}</div>}</div>)}
-          <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{revision.persona.description}</Markdown></div>
+          <div className="detail-rendered"><MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, pid, vid, revision.saved])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{revision.persona.description}</Markdown></MarkdownArtProvider></div>
         </div> : <>
           <div className="form-actions"><button className="subtle" onClick={() => setMode("edit")}>Edit</button></div>
-          <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{persona.description}</Markdown></div>
+          <div className="detail-rendered"><MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, pid, vid, "persona"])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{persona.description}</Markdown></MarkdownArtProvider></div>
         </> : <div className="form">
           <Field label="Name"><input type="text" value={persona.name} onChange={(e) => setPersona({ ...persona, name: e.target.value })} /></Field>
           <Field label="Pronouns"><input type="text" value={persona.pronouns} onChange={(e) => setPersona({ ...persona, pronouns: e.target.value })} /></Field>
@@ -385,11 +383,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
         {tab === "lore" && <OwnedLorePanel scope={scope} ownerRef={`pcs:${pid}`}
           hrefFor={(id) => sectionHref(scope, { kind: "record", at: "lore", rid: id })}
           newHref={sectionHref(scope, { kind: "section", at: "lore", newOwner: `pcs:${pid}` })} />}
-        {tab === "art" && <PCArtTab key={vid} scope={scope} wid={wid} pid={pid} vid={vid}
-          images={images} descriptions={version?.image_descriptions ?? {}}
-          imageError={imageError} avatarFocus={version?.avatar_focus ?? null}
-          onRefresh={() => vid === selectedVid.current ? read(vid, true) : Promise.resolve()}
-          onError={setError} />}
+        {tab === "art" && <PCArtTab controller={art} />}
         {tab === "sheet" && module && <SheetPanel scope={scope} module={module} kind="pcs" eid={pid} />}
       </div>
     </>}

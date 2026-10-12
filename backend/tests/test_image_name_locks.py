@@ -39,10 +39,12 @@ from grimoire.store import (
     locks,
     overlay,
     proclock,
+    record_art,
     sync,
     world_bundle,
     worlds,
 )
+from tests.record_art_fixtures import setup_records
 
 from .world_fixtures import seed_world
 
@@ -135,6 +137,18 @@ def test_a_shared_stripe_is_taken_once(monkeypatch, tmp_path):
     assert got == [locks.image_name_lock(d, "avatar")]
     with assets._image_locks_held(d, "avatar", "gallery_1"):
         assert got[0]._depth == 1
+
+
+def test_cross_directory_name_set_is_sorted_and_deduplicated(monkeypatch, tmp_path):
+    table = {("world", "avatar"): 9, ("campaign", "avatar"): 2,
+             ("world", "gallery_1"): 2}
+    monkeypatch.setattr(locks, "_image_stripe", lambda d, key: table[(d.name, key)])
+    keyed = [(tmp_path / "world", "avatar"), (tmp_path / "campaign", "avatar"),
+             (tmp_path / "world", "gallery_1")]
+    expected = [locks.image_name_lock(*keyed[1]), locks.image_name_lock(*keyed[0])]
+    assert locks.image_name_locks_for(keyed) == expected
+    with assets.name_locks_held(*keyed):
+        assert [lock._depth for lock in expected] == [1, 1]
 
 
 def test_stripes_are_taken_in_stripe_order_not_name_order(monkeypatch, tmp_path):
@@ -672,3 +686,51 @@ def test_bundle_containment_takes_no_name_or_sidecar_stripe(monkeypatch, tmp_pat
         new = world_bundle.import_bundle(dest)
     assert seen[0] == 0
     assert worlds.read_world(new)["counts"] == worlds.read_world(old)["counts"]
+
+
+@pytest.mark.parametrize("scope", ("world", "campaign"))
+@pytest.mark.parametrize("operation", ("promote", "reuse"))
+def test_record_art_promotion_never_blocks_on_a_nested_heal_stripe(client, monkeypatch, scope, operation):
+    """The facade holds names/sidecars before promotion's read-side repair.
+    A missing lower stripe must be tried nonblocking, including forced aliases.
+    This exercises the reported promote-tmp inversion rather than assuming a
+    nested recovery uses the primitive's outermost blocking acquisition path.
+    """
+    records = setup_records(client)
+    root = records["wroot"]
+    rid = records["records"]["characters"]
+    assets.put_image(root, rid, "default", "avatar", _png(1), "png")
+    assets.put_image(root, rid, "default", "gallery_1", _png(2), "png")
+    rows = {row["name"]: row for row in assets.list_images(root, rid, "default")}
+    d = assets.version_dir(root, rid, "default")
+    (d / "promote-tmp.png").write_bytes(_png(3))
+    monkeypatch.setattr(locks, "_image_stripe", _forced_stripes)
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+    temp_lock = locks.image_name_lock(d, "promote-tmp")
+    done = _hold(temp_lock)
+    real_acquire = locks._ProcessScopedLock.acquire
+    attempts = []
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self is temp_lock and threading.current_thread() is threading.main_thread() and locks.image_stripes_held():
+            attempts.append(blocking)
+            assert not blocking, "a nested heal waited for an additional lower stripe"
+        return real_acquire(self, blocking, timeout)
+
+    monkeypatch.setattr(locks._ProcessScopedLock, "acquire", acquire)
+    try:
+        if operation == "promote":
+            call = record_art.guarded_world if scope == "world" else record_art.guarded_campaign
+            result = call(records[scope], "characters", rid, "default", "gallery_1", "promote")
+        else:
+            source = {"surface": "record", "target": {
+                "scope": {"kind": scope, "id": records[scope]},
+                "kind": "characters", "record_id": rid, "version": "default"},
+                "name": "gallery_1", "expected_v": rows["gallery_1"]["v"]}
+            call = record_art.reuse_world if scope == "world" else record_art.reuse_campaign
+            result = call(records[scope], "characters", rid, "default", source, "primary",
+                          expected_primary_v=rows["avatar"]["v"], check_primary=True)
+        assert result.get("status", "ok") == "ok"
+        assert attempts and not any(attempts)
+    finally:
+        done()

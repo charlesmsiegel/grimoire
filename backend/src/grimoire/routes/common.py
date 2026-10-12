@@ -20,6 +20,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -946,6 +947,44 @@ def _honours_version(request: Request | None, source: str) -> bool:
     return v is not None and not (_BLOB_TOKEN.match(v) and v != source)
 
 
+def attachment_disposition(label: str, ext: str) -> str:
+    """A readable slot filename, safe in a header and on desktop filesystems.
+
+    Keep Unicode in RFC 5987's encoded parameter and supply an ASCII fallback.
+    The label is a serving route's slot, never a filesystem path or blob id.
+    Control characters, separators, quotes, and Windows reserved names cannot
+    escape the header or become an unusable suggested filename.
+    """
+    stem = re.sub(r'[\x00-\x1f\x7f<>:"/\\|?*]', "_", label).strip(" .")[:100] or "image"
+    ext = re.sub(r"[^a-zA-Z0-9]", "", ext)[:12] or "bin"
+    reserved = {"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)),
+                *(f"lpt{n}" for n in range(1, 10))}
+    if stem.split(".", 1)[0].casefold() in reserved:
+        stem = "image_" + stem
+    filename = f"{stem}.{ext}"
+    fallback = stem.encode("ascii", "ignore").decode().strip(" .") or "image"
+    return f'attachment; filename="{fallback}.{ext}"; filename*=UTF-8\'\'{quote(filename, safe="")}'
+
+
+def _serve_attachment(p: Path, request: Request, source: str, cache: str) -> Response:
+    # Attachment and inline requests are different representations, including
+    # their validators. A thumbnail query never changes the downloaded bytes.
+    _require_intact(p)
+    etag = f'"{source}-download"'
+    try:
+        content = p.read_bytes()
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail="image not found") from exc
+    ext = store.fetch.sniff_ext(content) or p.suffix.lstrip(".").lower()
+    label = request.url.path.rsplit("/", 1)[-1]
+    headers = {"Cache-Control": cache, "ETag": etag,
+               "Content-Disposition": attachment_disposition(label, ext)}
+    if etag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=content, media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),
+                    headers=headers)
+
+
 def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     """Serve one image file with the app's caching contract.
 
@@ -982,6 +1021,8 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     etag = f'"{source}"'
     versioned = _honours_version(request, source)
     cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
+    if request is not None and request.query_params.get("download") == "1":
+        return _serve_attachment(p, request, source, cache)
     asked = request.headers.get("if-none-match", "") if request is not None else ""
     # ?w= asks for a downscaled variant — tiles shouldn't pull multi-MB originals.
     if request is not None and (w := request.query_params.get("w", "")).isdigit():
@@ -1126,6 +1167,64 @@ def _page_of(rows: list, limit: int | None, offset: int) -> list:
 
 
 # ---- 404 guards and other lookups shared by worlds and campaigns ----
+def field_provided(model: BaseModel, name: str) -> bool:
+    """Plain-model field presence on both pydantic versions: null is a real
+    primary expectation, while omission keeps old callers' unguarded intent."""
+    fields = getattr(model, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(model, "__fields_set__", set())
+    return name in (fields or set())
+
+
+def image_promote_guards(body: BaseModel | None) -> dict:
+    if body is None:
+        return {}
+    return {"expected_v": getattr(body, "expected_v", None),
+            "expected_primary_v": getattr(body, "expected_primary_v", None),
+            "check_primary": field_provided(body, "expected_primary_v")}
+
+
+def _description_failure(exc: Exception) -> HTTPException:
+    if isinstance(exc, store.image_descriptions.DescriptionConflictError):
+        return HTTPException(409, detail={"kind": "stale_description", "detail": str(exc),
+                                         **exc.state})
+    if isinstance(exc, store.image_descriptions.DescriptionCleanupError):
+        return HTTPException(500, detail={"kind": "description_cleanup_incomplete",
+                                         "detail": str(exc), "committed": True,
+                                         "confirmed_text": exc.text, "recovery": exc.recovery})
+    if isinstance(exc, store.image_descriptions.DescriptionUnavailableError):
+        return HTTPException(503, detail={"kind": "description_unavailable", "detail": str(exc)})
+    return HTTPException(400, detail=str(exc))
+
+
+def record_art_mutation(scope: str, sid: str, kind: str, rid: str, version: str | None,
+                        name: str, operation: str, **guards) -> dict:
+    # Keep old callers' missing-image deletes idempotent, distinguish placed
+    # but unarrived pictures from invalid formats, and refuse a too-long
+    # caption before its ValueError superclass can disguise it as a 404.
+    writer = store.record_art.guarded_world if scope == "world" else store.record_art.guarded_campaign
+    try:
+        return writer(sid, kind, rid, version, name, operation, **guards)
+    except store.record_art.ArtConflictError as exc:
+        raise HTTPException(409, detail={"kind": exc.kind, "detail": str(exc)}) from exc
+    except (store.image_descriptions.DescriptionConflictError,
+            store.image_descriptions.DescriptionCleanupError,
+            store.image_descriptions.DescriptionGuardRequiredError,
+            store.image_descriptions.DescriptionUnavailableError) as exc:
+        raise _description_failure(exc) from exc
+    except store.record_art.ArtTargetNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except store.assets.ImageNotYetAvailableError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail="image not found") from exc
+    except ValueError as exc:
+        status = 404 if operation == "description" else 400
+        raise HTTPException(status, detail="image not found" if status == 404 else str(exc)) from exc
+
+
 def _world_root_or_404(wid: str):
     if not store.worlds.world_exists(wid):
         raise HTTPException(status_code=404, detail="world not found")

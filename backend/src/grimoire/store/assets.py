@@ -161,6 +161,17 @@ def _image_locks_held(d: Path, *names: str):
         yield
 
 
+@contextmanager
+def name_locks_held(*keyed: tuple[Path, str]):
+    """Hold the complete name-stripe set for several directories at once.
+    This is the source/destination counterpart of `_image_locks_held`;
+    callers pass every name before acquiring any stripe."""
+    with ExitStack() as stack:
+        for lock in locks.image_name_locks_for(keyed):
+            stack.enter_context(lock)
+        yield
+
+
 def _free_gallery(d: Path) -> str:
     """The lowest ``gallery_N`` no image in ``d`` already occupies -- a legacy
     file or a placement (`names_in`), so a healed stray never lands on a slot a
@@ -1604,13 +1615,21 @@ def recover_promotions_in(d: Path) -> None:
             _recover_promotion(Path(dirpath).parent)
 
 
-def recover_promotion(d: Path) -> None:
-    """Finish or discard an interrupted promotion in record image directory
-    `d` (`_recover_promotion`), for a caller about to read a placement there
-    without going through `image_path` or a listing, which both do this
-    first. Reads no placement unless a journal is present; never raises,
-    never waits."""
+def recover_promotion(d: Path, *, required: bool = False) -> None:
+    """Finish or discard an interrupted promotion in image directory `d`.
+
+    Ordinary readers retain best-effort recovery: no waiting or exceptions.
+    A writer checking vacancy or captured tokens passes `required=True` while
+    holding the avatar name stripe through its check AND publication. A valid
+    journal left busy or unwritable must refuse that operation: recovery in a
+    later writer could otherwise change the binding after its check succeeded.
+    Malformed journals cannot replay and retain their existing read semantics.
+    """
     _recover_promotion(d)
+    if required:
+        journal = image_refs.read_journal(d)
+        if journal is not None and _journal_ok(journal) is not None:
+            raise locks.StoreBusy("promotion", "image promotion")
 
 
 def _recover_before_write(d: Path, name: str) -> None:

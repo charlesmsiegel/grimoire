@@ -11,11 +11,13 @@ import { ApiError, api, type LibraryDependent, type LibraryKind } from "../api/c
  *  Copy-down is the default and the destructive option is the one you have to
  *  choose, which is the same shape the route uses.
  */
-export function DemotePanel({ wid, kind, id, onDemoted }: {
+export function DemotePanel({ wid, kind, id, onDemoted, beforeDemote }: {
   wid: string;
   kind: LibraryKind;
   id: string;
   onDemoted?: () => void;
+  /** The selected record may own an unsaved Art draft; check before deleting. */
+  beforeDemote?: () => boolean;
 }) {
   const [deps, setDeps] = useState<LibraryDependent[] | null>(null);
   const [open, setOpen] = useState(false);
@@ -41,6 +43,7 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
   useEffect(load, [load]);
 
   async function demote() {
+    if (busy || (beforeDemote && !beforeDemote())) return;
     setBusy(true);
     setError(null);
     try {

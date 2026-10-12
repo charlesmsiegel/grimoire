@@ -43,13 +43,16 @@ from .common import (
     get_llm,
     image_draft_prompt,
     image_id_field,
+    image_promote_guards,
     pc_history_404,
+    record_art_mutation,
     require_inference,
 )
 from .models import (
     AvatarFocus,
     CalendarConfig,
     ImageDescription,
+    ImagePromote,
     LorebookCommit,
     ModuleSetting,
     NameBody,
@@ -679,39 +682,27 @@ async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
 
 
 @router.delete("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
-def delete_world_pc_image(wid: str, pid: str, vid: str, name: str):
+def delete_world_pc_image(wid: str, pid: str, vid: str, name: str, expected_v: str | None = None):
     # Gated on the PC and version, not on the image: removing an image that is
     # already gone is the caller getting what they asked for, but removing one
     # from a PC that does not exist is a typo worth reporting.
-    store.assets.delete_image(_world_pc_version_or_404(wid, pid, vid), pid, vid, name,
-                              base=store.pcs.ASSET_BASE)
-    return {"ok": True}
+    _world_pc_version_or_404(wid, pid, vid)
+    return record_art_mutation("world", wid, "pcs", pid, vid, name,
+                               "delete", expected_v=expected_v)
 
 
 @router.post("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/promote")
-def promote_world_pc_image(wid: str, pid: str, vid: str, name: str):
-    root = _world_pc_version_or_404(wid, pid, vid)
-    try:
-        store.assets.promote_image(root, pid, vid, name, base=store.pcs.ASSET_BASE)
-    except store.assets.ImageNotYetAvailableError as exc:
-        # placed, not arrived (mid-sync): absent here for now, and says why
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
-    except ValueError as exc:
-        # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True}
+def promote_world_pc_image(wid: str, pid: str, vid: str, name: str, body: ImagePromote | None = None):
+    _world_pc_version_or_404(wid, pid, vid)
+    return record_art_mutation("world", wid, "pcs", pid, vid, name,
+                               "promote", **image_promote_guards(body))
 
 
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/avatar/focus")
 def put_world_pc_avatar_focus(wid: str, pid: str, vid: str, body: AvatarFocus):
-    root = _world_pc_version_or_404(wid, pid, vid)
-    if store.assets.image_path(root, pid, vid, store.assets.AVATAR,
-                               base=store.pcs.ASSET_BASE) is None:
-        raise HTTPException(status_code=404, detail="image not found")
-    store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
-    return {"ok": True}
+    _world_pc_version_or_404(wid, pid, vid)
+    return record_art_mutation("world", wid, "pcs", pid, vid, "avatar",
+                               "focus", focus=body.focus, expected_v=body.expected_v)
 
 
 @router.post("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description/draft",
@@ -741,20 +732,11 @@ def post_world_pc_image_description_draft(
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description")
 def put_world_pc_image_description(wid: str, pid: str, vid: str, name: str,
                                    body: ImageDescription):
-    root = _world_pc_version_or_404(wid, pid, vid)
-    try:
-        store.image_descriptions.set_description(root, pid, vid, name, body.description,
-                                                 base=store.pcs.ASSET_BASE)
-    except store.image_descriptions.DescriptionTooLongError as exc:
-        # Before the ValueError below, which it subclasses: too long is not
-        # "not found" -- the image is there and the text is refused.
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except ValueError:
-        # `from None`: the strict-write ValueError is this module's own
-        # implementation detail, and chaining it onto the 404 says nothing a
-        # caller can act on.
-        raise HTTPException(status_code=404, detail="image not found") from None
-    return {"ok": True}
+    _world_pc_version_or_404(wid, pid, vid)
+    return record_art_mutation("world", wid, "pcs", pid, vid, name,
+                               "description", description=body.description, expected_v=body.expected_v,
+                               expected_description_rev=body.expected_description_rev,
+                               cleanup_only=body.cleanup_only)
 
 
 # ---- world lorebook import ----

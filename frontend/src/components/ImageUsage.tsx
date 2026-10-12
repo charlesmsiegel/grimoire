@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/errors";
+import { onArtChanged } from "../appEvents";
 import type { EntityScope, ImageUsageReport } from "../api/types";
 import { RECORD_SECTIONS, sectionHref, type RecordSection } from "../worldPaths";
 
@@ -89,20 +90,26 @@ export function ImageUsage({ imageId, navigable = true }: {
   imageId: string; navigable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [revision, setRevision] = useState(0);
   const [report, setReport] = useState<ImageUsageReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // A different image under the same mounted control starts collapsed again.
   useEffect(() => { setOpen(false); setReport(null); setError(null); }, [imageId]);
 
+  // Placement/caption writes invalidate open reports too. Collapsed controls
+  // retain demand-only behavior; a superseded request cannot restore old uses.
+  useEffect(() => onArtChanged(() => {
+    setReport(null); setError(null); setRevision((value) => value + 1);
+  }), []);
   useEffect(() => {
-    if (!open || report || error) return;
+    if (!open) return;
     let live = true;
-    api.getImageUsage(imageId)
+    api.getImageUsage(imageId, { fresh: true })
       .then((r) => { if (live) setReport(r); })
       .catch((err: unknown) => { if (live) setError(errorText(err)); });
     return () => { live = false; };
-  }, [open, report, error, imageId]);
+  }, [open, revision, imageId]);
 
   if (!open) {
     return (
@@ -118,7 +125,7 @@ export function ImageUsage({ imageId, navigable = true }: {
       {error && (
         <>
           <p className="field-hint">{error}</p>
-          <button className="subtle" type="button" onClick={() => setError(null)}>Try again</button>
+          <button className="subtle" type="button" onClick={() => { setError(null); setRevision((value) => value + 1); }}>Try again</button>
         </>
       )}
       {!error && !report && <p className="field-hint">Reading…</p>}

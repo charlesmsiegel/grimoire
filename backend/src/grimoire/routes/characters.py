@@ -23,6 +23,7 @@ from .. import inference as operations
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store.record_art import read as art_read
 from . import runs
 from .common import (
     _bounded_call,
@@ -37,6 +38,8 @@ from .common import (
     get_llm,
     image_draft_prompt,
     image_id_field,
+    image_promote_guards,
+    record_art_mutation,
     require_inference,
     thumb_query,
 )
@@ -48,6 +51,7 @@ from .models import (
     ChubSourceBody,
     DefaultVersion,
     ImageDescription,
+    ImagePromote,
     NameBody,
     TaglineSave,
     VersionCreate,
@@ -803,6 +807,16 @@ UNDESCRIBED_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_
 GALLERY_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS, "greetings")
 
 
+def _gallery_art_fields(scope: str, sid: str, base: str, rid: str, vid: str,
+                        image: dict, provenance: str) -> dict:
+    # Greetings share the gallery, but their subject workflow is separate and
+    # must never become a reuse candidate by acquiring a common placement.
+    if base not in store.record_art.ART_RECORD_KINDS:
+        return {}
+    return {"v": image["v"], "provenance": provenance,
+            "placement": art_read.placement(scope, sid, base, rid, vid, image["name"], image["v"])}
+
+
 @router.get("/worlds/{wid}/gallery")
 def list_world_gallery(wid: str):
     """Every image this world holds, in one response — the browser #200 asks for.
@@ -851,7 +865,8 @@ def list_world_gallery(wid: str):
             row = {"kind": base, "id": item["id"], "vid": item["vid"],
                    "name": item["name"], "ext": item["ext"], "record_name": found[0],
                    "described": item["described"], "description": item["description"],
-                   **_gallery_image_id(item), **_gallery_urls(wid, base, item)}
+                   **_gallery_image_id(item), **_gallery_urls(wid, base, item),
+                   **_gallery_art_fields("world", wid, base, item["id"], item["vid"], item, "world")}
             if base == "greetings":
                 # Who is in the picture, which for greeting art is the sidecar
                 # that governs it. Carried here so the gallery can say which
@@ -967,7 +982,10 @@ def list_campaign_gallery(cid: str):
                        "description": desc.get(item["name"], ""),
                        **_gallery_image_id(item),
                        "url": f"{base_url}?v={v}",
-                       "thumb": f"{base_url}{thumb_query(v)}"}
+                       "thumb": f"{base_url}{thumb_query(v)}",
+                       **_gallery_art_fields("campaign", cid, base, rid, vid, item,
+                           "campaign" if store.overlay.image_root(cid, rid, vid, item["name"], base, v=ov)
+                           == croot else "inherited")}
                 if base == "greetings":
                     row["subjects"] = subjects.lookup(rid, item["name"])
                 out.append(row)
@@ -1185,37 +1203,27 @@ async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadF
 
 
 @router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
-def delete_world_image(wid: str, cid: str, vid: str, name: str):
+def delete_world_image(wid: str, cid: str, vid: str, name: str, expected_v: str | None = None):
     # Gated on the character and the version, not on the image: removing an
     # image that is already gone is the caller getting what they asked for, but
     # removing one from a character that does not exist is a typo worth reporting.
-    store.assets.delete_image(_world_char_version_or_404(wid, cid, vid), cid, vid, name)
-    return {"ok": True}
+    _world_char_version_or_404(wid, cid, vid)
+    return record_art_mutation("world", wid, "characters", cid, vid, name,
+                               "delete", expected_v=expected_v)
 
 
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/promote")
-def promote_world_image(wid: str, cid: str, vid: str, name: str):
-    root = _world_char_version_or_404(wid, cid, vid)
-    try:
-        store.assets.promote_image(root, cid, vid, name)
-    except store.assets.ImageNotYetAvailableError as exc:
-        # placed, not arrived (mid-sync): absent here for now, and says why
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
-    except ValueError as exc:
-        # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True}
+def promote_world_image(wid: str, cid: str, vid: str, name: str, body: ImagePromote | None = None):
+    _world_char_version_or_404(wid, cid, vid)
+    return record_art_mutation("world", wid, "characters", cid, vid, name,
+                               "promote", **image_promote_guards(body))
 
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/avatar/focus")
 def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
-    root = _world_char_version_or_404(wid, cid, vid)
-    if store.assets.image_path(root, cid, vid, store.assets.AVATAR) is None:
-        raise HTTPException(status_code=404, detail="image not found")
-    store.assets.write_focus(root, cid, vid, body.focus)
-    return {"ok": True}
+    _world_char_version_or_404(wid, cid, vid)
+    return record_art_mutation("world", wid, "characters", cid, vid, "avatar",
+                               "focus", focus=body.focus, expected_v=body.expected_v)
 
 
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description/draft",
@@ -1253,16 +1261,8 @@ def post_world_image_description_draft(
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description")
 def put_world_image_description(wid: str, cid: str, vid: str, name: str,
                                 body: ImageDescription):
-    root = _world_char_version_or_404(wid, cid, vid)
-    try:
-        store.image_descriptions.set_description(root, cid, vid, name, body.description)
-    except store.image_descriptions.DescriptionTooLongError as exc:
-        # Before the ValueError below, which it subclasses: too long is not
-        # "not found" -- the image is there and the text is refused.
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except ValueError:
-        # The strict-write rule as a status code: describing an image this
-        # version does not hold is a 404, never a silently-kept orphan entry.
-        # `from None` -- the ValueError is the store's detail, not the caller's.
-        raise HTTPException(status_code=404, detail="image not found") from None
-    return {"ok": True}
+    _world_char_version_or_404(wid, cid, vid)
+    return record_art_mutation("world", wid, "characters", cid, vid, name,
+                               "description", description=body.description, expected_v=body.expected_v,
+                               expected_description_rev=body.expected_description_rev,
+                               cleanup_only=body.cleanup_only)

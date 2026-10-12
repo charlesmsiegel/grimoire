@@ -2,11 +2,13 @@ import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
   type OpenerContribution, type OpenerSpeaker,
   type LocalizeEvent, type ChubGalleryEvent, type RunHandle,
   type TaglineBatchEvent } from "./stream";
-import { campaignsChanged, configChanged, noticesChanged,
+import { artChanged, campaignsChanged, configChanged, noticesChanged,
   shellChanged, storeMovedElsewhere } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
 import { THUMB_REV } from "./thumbs";
+import type { ArtCreated, ArtLinkResult, ArtSourceRef, ImageDescriptionGuards, ImagePromoteGuards,
+  RecordArtImage, RecordArtRead, RecordArtTarget } from "./types";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
 // in `./errors` now — a leaf with no imports of its own, for the reason its
 // docstring gives: the components that render an error are tested against a
@@ -90,6 +92,18 @@ import {
 function notifyCampaigns<T>(result: T): T {
   campaignsChanged();
   return result;
+}
+
+function notifyArt<T>(result: T): T {
+  artChanged();
+  return result;
+}
+
+function notifyArtOnLanded(err: unknown): never {
+  if (err instanceof ApiError && err.kind === "description_cleanup_incomplete" && err.body?.committed === true) {
+    artChanged();
+  }
+  throw err;
 }
 
 /** Same shape for the config channel. Hung off the calls that already
@@ -1015,6 +1029,24 @@ function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
 
+function recordArtBase(target: RecordArtTarget, suffix = ""): string {
+  const prefix = `/api/${target.scope.kind}s/${encodeSegment(target.scope.id)}`;
+  const path = `${prefix}/record-art/${target.kind}/${encodeSegment(target.record_id)}${suffix}`;
+  return target.kind === "characters" || target.kind === "pcs"
+    ? `${path}?${new URLSearchParams({ version: target.version })}` : path;
+}
+
+function recordImageBase(target: RecordArtTarget, name: string): string {
+  const prefix = `/api/${target.scope.kind}s/${encodeSegment(target.scope.id)}/${target.kind}/${encodeSegment(target.record_id)}`;
+  const version = target.kind === "characters" || target.kind === "pcs"
+    ? `/versions/${encodeSegment(target.version)}` : "";
+  return `${prefix}${version}/images/${encodeSegment(name)}`;
+}
+
+function expectedImageQuery(path: string, expectedV?: string): string {
+  return expectedV === undefined ? path : `${path}?${new URLSearchParams({ expected_v: expectedV })}`;
+}
+
 /** What an image URL can ask of the route that serves it: `w`, a downscale
  *  (`api/thumbs.ts` says which), and `v`, the store's token for the bytes,
  *  which makes the response cache immutable. Either left out, or empty, is
@@ -1152,6 +1184,41 @@ function regexPath(scope: RegexScope): string {
 }
 
 export const api = {
+  readRecordArt: (target: RecordArtTarget, opts?: { fresh?: boolean; signal?: AbortSignal }) =>
+    // A caller-owned abort cannot cancel a shared GET for another owner. A
+    // signalled Art read therefore takes the existing fresh/unshared path.
+    request<RecordArtRead>("GET", recordArtBase(target), undefined,
+      opts?.signal ? { ...opts, fresh: true } : opts),
+  appendRecordArt: (target: RecordArtTarget, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<ArtCreated>(recordArtBase(target, "/images"), form).then(notifyArt);
+  },
+  reuseRecordArt: (target: RecordArtTarget, source: ArtSourceRef, intent: "gallery" | "primary",
+                   expectedPrimary?: string | null) =>
+    request<ArtLinkResult>("POST", recordArtBase(target, "/images/link"), {
+      source, intent, ...(intent === "primary" ? { expected_primary_v: expectedPrimary } : {}),
+    }).then(notifyArt),
+  removeRecordArt: (target: RecordArtTarget, image: RecordArtImage) =>
+    request<{ ok: boolean }>("DELETE", `${recordImageBase(target, image.name)}?${new URLSearchParams({ expected_v: image.v })}`)
+      .then(notifyArt),
+  promoteRecordArt: (target: RecordArtTarget, image: RecordArtImage, expectedPrimary: string | null) =>
+    request<{ ok: boolean }>("POST", `${recordImageBase(target, image.name)}/promote`,
+      { expected_v: image.v, expected_primary_v: expectedPrimary }).then(notifyArt),
+  setRecordArtFocus: (target: RecordArtTarget, image: RecordArtImage, focus: number) =>
+    request<{ ok: boolean }>("PUT", `${recordImageBase(target, "avatar")}/focus`,
+      { focus, expected_v: image.v }).then(notifyArt),
+  setRecordArtDescription: (target: RecordArtTarget, image: RecordArtImage, description: string,
+                            expectedDescriptionRev: string, cleanupOnly = false) =>
+    request<{ ok: boolean }>("PUT", `${recordImageBase(target, image.name)}/description`, {
+      description, expected_v: image.v, expected_description_rev: expectedDescriptionRev,
+      ...(cleanupOnly ? { cleanup_only: true } : {}),
+    }).then(notifyArt).catch(notifyArtOnLanded),
+  draftRecordArtDescription: (target: RecordArtTarget, image: RecordArtImage, signal?: AbortSignal) => {
+    if (target.scope.kind !== "world") return Promise.reject(new Error("Description drafting requires a world target"));
+    return describeImage({ at: "world", id: target.scope.id },
+      `${recordImageBase(target, image.name)}/description/draft`, signal);
+  },
   /** `fresh` forces a new request and re-seeds the cache with it. The cache is
    *  keyed to nothing but this tab's own writes, so a store populated by
    *  another tab, another device, or a sync client is invisible to it — and
@@ -1925,8 +1992,8 @@ export const api = {
   entityKinds: () => request<{ kinds: string[] }>("GET", "/api/entity-kinds"),
 
   // entities, world or campaign scope
-  listEntities: (scope: EntityScope, kind: EntityKind) =>
-    request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
+  listEntities: (scope: EntityScope, kind: EntityKind, fresh = false) =>
+    request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`, undefined, { fresh }),
   createEntity: (scope: EntityScope, kind: EntityKind,
                  body: { name: string; body?: string; keys?: string; owners?: string;
                          secrecy?: string; fields?: Record<string, string> }) =>
@@ -2079,7 +2146,10 @@ export const api = {
   },
   localizeImages: (wid: string, cid: string, vid: string, onEvent: (e: LocalizeEvent) => void) =>
     streamPost<LocalizeEvent>(
-      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/localize`, undefined, onEvent),
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/localize`, undefined, (event) => {
+        if (event.summary && event.summary.localized > 0) artChanged();
+        onEvent(event);
+      }),
   imageUrl: (wid: string, cid: string, vid: string, name: string) =>
     `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`,
   /** A card download for one version. Not a `request` — the response is binary
@@ -2090,15 +2160,17 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     return requestForm<{ name: string; ext: string; image_id?: string | null }>(
-      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`, form, "PUT");
+      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`, form, "PUT").then(notifyArt);
   },
-  deleteImage: (scope: EntityScope, cid: string, vid: string, name: string) =>
-    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`),
-  promoteImage: (scope: EntityScope, cid: string, vid: string, name: string) =>
-    request<{ ok: boolean }>("POST", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}/promote`),
-  setAvatarFocus: (scope: EntityScope, cid: string, vid: string, focus: number) =>
+  deleteImage: (scope: EntityScope, cid: string, vid: string, name: string, expectedV?: string) =>
+    request<{ ok: boolean }>("DELETE", expectedImageQuery(
+      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${encodeSegment(name)}`, expectedV)).then(notifyArt),
+  promoteImage: (scope: EntityScope, cid: string, vid: string, name: string, guards?: ImagePromoteGuards) =>
+    request<{ ok: boolean }>("POST", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${encodeSegment(name)}/promote`, guards).then(notifyArt),
+  setAvatarFocus: (scope: EntityScope, cid: string, vid: string, focus: number, expectedV?: string) =>
     request<{ ok: boolean }>("PUT",
-      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/avatar/focus`, { focus }),
+      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/avatar/focus`,
+      { focus, ...(expectedV === undefined ? {} : { expected_v: expectedV }) }).then(notifyArt),
   entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string,
                    opts?: ImageOpts) =>
     withImageQuery(`${entityBase(scope)}/${kind}/${eid}/images/${name}`, opts),
@@ -2131,20 +2203,20 @@ export const api = {
    *  and its world's alike (each row saying which via `inherited`), and
    *  `hidden` names the inherited pictures this campaign has tombstoned — the
    *  only surface from which one can be restored. */
-  listCampaignImages: (cid: string) =>
-    request<CampaignLibrary>("GET", `/api/campaigns/${cid}/images`),
+  listCampaignImages: (cid: string, fresh = false) =>
+    request<CampaignLibrary>("GET", `/api/campaigns/${cid}/images`, undefined, { fresh }),
   /** Un-hide an inherited image. Idempotent, so a stale entry left by a sweep
    *  that could not reach this campaign clears the same way a fresh one does. */
   restoreCampaignImage: (cid: string, name: string) =>
     request<{ ok: boolean }>(
-      "POST", `/api/campaigns/${cid}/images/${encodeSegment(name)}/restore`),
+      "POST", `/api/campaigns/${cid}/images/${encodeSegment(name)}/restore`).then(notifyArt),
   putCampaignImage: (cid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<CampaignImage>(`/api/campaigns/${cid}/images/${name}`, form, "PUT");
+    return requestForm<CampaignImage>(`/api/campaigns/${cid}/images/${name}`, form, "PUT").then(notifyArt);
   },
   deleteCampaignImage: (cid: string, name: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/images/${name}`),
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/images/${name}`).then(notifyArt),
   // ---- the world's cover and its own image library ----
   /** The world's cover: the worlds shelf, the world header, and a bundle. */
   worldCoverUrl: (wid: string, opts?: ImageOpts) =>
@@ -2171,30 +2243,34 @@ export const api = {
    *  next door is the whole-world GALLERY (every record's art), and two
    *  functions a letter apart returning different things is how the wrong one
    *  gets called. */
-  listWorldLibrary: (wid: string) =>
-    request<WorldImage[]>("GET", `/api/worlds/${wid}/images`),
+  listWorldLibrary: (wid: string, fresh = false) =>
+    request<WorldImage[]>("GET", `/api/worlds/${wid}/images`, undefined, { fresh }),
   putWorldImage: (wid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<WorldImage>(`/api/worlds/${wid}/images/${name}`, form, "PUT");
+    return requestForm<WorldImage>(`/api/worlds/${wid}/images/${name}`, form, "PUT").then(notifyArt);
   },
   deleteWorldImage: (wid: string, name: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/images/${encodeSegment(name)}`),
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/images/${encodeSegment(name)}`).then(notifyArt),
   setWorldImageDescription: (wid: string, name: string, description: string) =>
     request<{ ok: boolean }>(
       "PUT", `/api/worlds/${wid}/images/${encodeSegment(name)}/description`,
-      { description }),
+      { description }).then(notifyArt).catch(notifyArtOnLanded),
 
   putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
     return requestForm<{ name: string; ext: string; image_id?: string | null }>(
-      `${entityBase(scope)}/${kind}/${eid}/images/${name}`, form, "PUT");
+      `${entityBase(scope)}/${kind}/${eid}/images/${name}`, form, "PUT").then(notifyArt);
   },
-  deleteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
-    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${eid}/images/${name}`),
-  promoteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
-    request<{ ok: boolean }>("POST", `${entityBase(scope)}/${kind}/${eid}/images/${name}/promote`),
+  deleteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, expectedV?: string) =>
+    request<{ ok: boolean }>("DELETE", expectedImageQuery(
+      `${entityBase(scope)}/${kind}/${eid}/images/${encodeSegment(name)}`, expectedV)).then(notifyArt),
+  promoteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, guards?: ImagePromoteGuards) =>
+    request<{ ok: boolean }>("POST", `${entityBase(scope)}/${kind}/${eid}/images/${encodeSegment(name)}/promote`, guards).then(notifyArt),
+  setEntityAvatarFocus: (scope: EntityScope, kind: EntityKind, eid: string, focus: number, expectedV?: string) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${eid}/images/avatar/focus`,
+      { focus, ...(expectedV === undefined ? {} : { expected_v: expectedV }) }).then(notifyArt),
   importCharacterBook: (wid: string, cid: string, vid: string) =>
     request<{ created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/lorebook/import`),
@@ -2213,7 +2289,10 @@ export const api = {
       "DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-source`),
   downloadCharacterChubGallery: (wid: string, cid: string, vid: string, onEvent: (e: ChubGalleryEvent) => void) =>
     streamPost<ChubGalleryEvent>(
-      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-gallery`, undefined, onEvent),
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-gallery`, undefined, (event) => {
+        if (event.summary && event.summary.stored > 0) artChanged();
+        onEvent(event);
+      }),
   downloadCharacterChubLorebooks: (wid: string, cid: string, vid: string) =>
     request<{ lorebooks_found: number; created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-lorebooks`),
@@ -2264,16 +2343,18 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     return requestForm<{ name: string; ext: string; image_id?: string | null }>(
-      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`, form, "PUT");
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`, form, "PUT").then(notifyArt);
   },
-  deletePCImage: (scope: EntityScope, pid: string, vid: string, name: string) =>
-    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`),
-  promotePCImage: (scope: EntityScope, pid: string, vid: string, name: string) =>
+  deletePCImage: (scope: EntityScope, pid: string, vid: string, name: string, expectedV?: string) =>
+    request<{ ok: boolean }>("DELETE", expectedImageQuery(
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${encodeSegment(name)}`, expectedV)).then(notifyArt),
+  promotePCImage: (scope: EntityScope, pid: string, vid: string, name: string, guards?: ImagePromoteGuards) =>
     request<{ ok: boolean }>("POST",
-      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}/promote`),
-  setPCAvatarFocus: (scope: EntityScope, pid: string, vid: string, focus: number) =>
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${encodeSegment(name)}/promote`, guards).then(notifyArt),
+  setPCAvatarFocus: (scope: EntityScope, pid: string, vid: string, focus: number, expectedV?: string) =>
     request<{ ok: boolean }>("PUT",
-      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/avatar/focus`, { focus }),
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/avatar/focus`,
+      { focus, ...(expectedV === undefined ? {} : { expected_v: expectedV }) }).then(notifyArt),
 
   // greetings & plot maps
   /** Each row carries its greeting's plot-map `edges` (see `Greeting.edges`).
@@ -2319,8 +2400,8 @@ export const api = {
     request<{ count: number }>("GET", `${entityBase(scope)}/images/undescribed?count=1`)
       .then((r) => r.count),
   /** Every record that places this image object, by bucket. */
-  getImageUsage: (imageId: string) =>
-    request<ImageUsageReport>("GET", `/api/images/${encodeURIComponent(imageId)}/usage`),
+  getImageUsage: (imageId: string, opts?: { fresh?: boolean }) =>
+    request<ImageUsageReport>("GET", `/api/images/${encodeURIComponent(imageId)}/usage`, undefined, opts),
   /** Every image in a world, from all eight bases, in one response (#200).
    *  World-scoped only: a campaign reaches most of its art through its world,
    *  and the art it has diverged is listed in its own editors — the same split
@@ -2344,10 +2425,10 @@ export const api = {
    *  model. Campaign-scoped writes land campaign-side, so describing art a
    *  thin campaign still inherits does not diverge the art itself. */
   setCharacterImageDescription: (scope: EntityScope, cid: string, vid: string,
-                                 name: string, description: string) =>
+                                 name: string, description: string, guards?: ImageDescriptionGuards) =>
     request<{ ok: boolean }>("PUT",
       `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${encodeSegment(name)}/description`,
-      { description }),
+      { description, ...guards }).then(notifyArt).catch(notifyArtOnLanded),
   /** Ask the model what a picture shows. A PREVIEW: the caller decides whether
    *  to keep it and persists through `setCharacterImageDescription`. World-side
    *  only — a description drafted from the bytes is a claim about the bytes,
@@ -2376,17 +2457,18 @@ export const api = {
     describeImage({ at: "world", id: wid },
       `/api/worlds/${wid}/images/${encodeSegment(name)}/description/draft`, signal),
   setPCImageDescription: (scope: EntityScope, pid: string, vid: string,
-                          name: string, description: string) =>
+                          name: string, description: string, guards?: ImageDescriptionGuards) =>
     request<{ ok: boolean }>("PUT",
       `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${encodeSegment(name)}/description`,
-      { description }),
+      { description, ...guards }).then(notifyArt).catch(notifyArtOnLanded),
   setEntityImageDescription: (scope: EntityScope, kind: EntityKind, eid: string,
-                              name: string, description: string) =>
+                              name: string, description: string, guards?: ImageDescriptionGuards) =>
     request<{ ok: boolean }>("PUT",
-      `${entityBase(scope)}/${kind}/${eid}/images/${encodeSegment(name)}/description`, { description }),
+      `${entityBase(scope)}/${kind}/${eid}/images/${encodeSegment(name)}/description`,
+      { description, ...guards }).then(notifyArt).catch(notifyArtOnLanded),
   setCampaignImageDescription: (cid: string, name: string, description: string) =>
     request<{ ok: boolean }>("PUT",
-      `/api/campaigns/${cid}/images/${encodeSegment(name)}/description`, { description }),
+      `/api/campaigns/${cid}/images/${encodeSegment(name)}/description`, { description }).then(notifyArt).catch(notifyArtOnLanded),
   setImageSubjects: (wid: string, gid: string, name: string, subjects: string[]) =>
     name.startsWith("/") || /^https?:\/\//i.test(name)
       ? request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/subjects`, { image: name, subjects })
@@ -2402,7 +2484,7 @@ export const api = {
   copyGreetingImage: (scope: EntityScope, cid: string, vid: string,
                       body: { gid: string; name: string; slot: "avatar" | "gallery" }) =>
     request<{ name: string; ext: string }>(
-      "POST", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/copy-from-greeting`, body),
+      "POST", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/copy-from-greeting`, body).then(notifyArt),
 
   // campaign world-copy actions
   markGreeting: (cid: string, gid: string, status: "completed" | "skipped" | "none") =>

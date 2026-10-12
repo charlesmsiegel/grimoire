@@ -7,7 +7,7 @@
  *
  *  A leaf module: no React, and nothing imported that could drag a cycle in.
  */
-import type { EntityScope } from "./api/types";
+import type { EntityScope, RecordArtTarget } from "./api/types";
 import { encodeSegment } from "./urlSegment";
 
 /** Which of the two shapes of this page is being addressed. A campaign's fork
@@ -60,18 +60,26 @@ export function shapeOf(scope: EntityScope): Shape {
 export type SectionTarget =
   // a section's own screen
   | { kind: "section"; at: "overview" | "push" | "tags" | "tracker" | "output" | "quick-replies" }
-  | { kind: "section"; at: "images"; forCampaign?: string }
+  | { kind: "section"; at: "images"; forCampaign?: string; view?: "world" }
+  | { kind: "section"; at: "images"; forCampaign: string; view: "campaign-library" }
   | { kind: "section"; at: "greetings"; view?: "graph" }
   | { kind: "section"; at: "lore"; newOwner?: string }
   | { kind: "section"; at: Exclude<RecordSection, "lore" | "greetings"> }
   // one record inside one
-  | { kind: "record"; at: "characters"; rid: string; v?: string }
-  | { kind: "record"; at: Exclude<RecordSection, "characters">; rid: string };
+  | { kind: "record"; at: "characters" | "pcs"; rid: string; v?: string; tab?: "art" }
+  | { kind: "record"; at: Exclude<RecordSection, "characters" | "pcs" | "greetings">; rid: string; tab?: "art" }
+  | { kind: "record"; at: "greetings"; rid: string };
 
 function baseOf(scope: EntityScope): string {
   return scope.kind === "world"
     ? `/worlds/${encodeSegment(scope.id)}`
     : `/campaigns/${encodeSegment(scope.id)}/world`;
+}
+
+/** A recordless index never carries a manager modifier. Narrow Images before
+ * constructing the union: its campaign-library variant requires a campaign. */
+export function sectionIndex(at: Section): SectionTarget {
+  return at === "images" ? { kind: "section", at: "images" } : { kind: "section", at };
 }
 
 /** The only thing that builds one of these paths.
@@ -93,10 +101,12 @@ export function sectionHref(scope: EntityScope, target: SectionTarget): string {
   if (target.kind === "record") path += `/${encodeSegment(target.rid)}`;
 
   const q = new URLSearchParams();
-  if (target.kind === "record" && target.at === "characters" && target.v) q.set("v", target.v);
+  if (target.kind === "record" && target.at !== "greetings" && target.tab) q.set("tab", target.tab);
+  if (target.kind === "record" && (target.at === "characters" || target.at === "pcs") && target.v) q.set("v", target.v);
   if (target.kind === "section" && target.at === "images" && target.forCampaign) {
     q.set("for", target.forCampaign);
   }
+  if (target.kind === "section" && target.at === "images" && target.view) q.set("view", target.view);
   if (target.kind === "section" && target.at === "greetings" && target.view) {
     q.set("view", target.view);
   }
@@ -191,4 +201,17 @@ export function legacyTarget(search: URLSearchParams, shape: Shape): SectionTarg
   }
   if (section === "greetings") return { kind: "section", at: "greetings" };
   return { kind: "section", at: section };
+}
+
+/** Unsupported modifiers never become hidden state on another record kind. */
+export function parseRecordModifiers(section: Section, search: string): { v?: string; tab?: "art" } {
+  const q = new URLSearchParams(search);
+  if (section === "greetings" || !(RECORD_SECTIONS as readonly string[]).includes(section)) return {};
+  const v = section === "characters" || section === "pcs" ? q.get("v") : null;
+  return { ...(v ? { v } : {}), ...(q.get("tab") === "art" ? { tab: "art" as const } : {}) };
+}
+export function artRecordHref(target: RecordArtTarget): string {
+  return target.kind === "characters" || target.kind === "pcs"
+    ? sectionHref(target.scope, { kind: "record", at: target.kind, rid: target.record_id, v: target.version, tab: "art" })
+    : sectionHref(target.scope, { kind: "record", at: target.kind, rid: target.record_id, tab: "art" });
 }

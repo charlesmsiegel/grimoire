@@ -165,6 +165,9 @@ _registry_guard = threading.Lock()
 
 #: Modules whose public campaign-scoped mutators all take `campaign_lock(cid)`.
 DOMAIN_MODULES: frozenset[str] = frozenset({
+    # Art append/reuse and guarded mutations resolve and publish campaign
+    # placements under the same campaign hold as their overlay metadata.
+    "store.record_art.write",
     # Reroll alternates read the transcript, decide against it, and write a
     # sidecar beside it -- and `promote` then drives two `scenes` mutators. All
     # of that has to be one critical section with the scene writes it brackets,
@@ -408,6 +411,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
 #: Modules deliberately outside the exclusion, with the reason. An entry here is
 #: a decision someone made and can defend, not merely the status quo.
 OUTSIDE_DOMAIN: dict[str, str] = {
+    "store.image_subjects": (
+        "copy_to_character takes a character id as cid and a root, not a "
+        "campaign identity. It is a root-level image-reference primitive; "
+        "campaign callers own campaign exclusion. Recognizing assets.link_in "
+        "as publication makes this existing character-id writer visible to "
+        "the guard's cid approximation, without making cid a campaign id."
+    ),
     # One `store.campaigns` entry until the module became a package; the reason
     # below is that entry's, split across the three submodules its mutators
     # landed in. Nothing was reassessed and nothing changed hands.
@@ -925,6 +935,13 @@ def image_name_locks(d: Path, names: Iterable[str]) -> list[StripeLock]:
     """The name stripes of `names` in `d`, deduplicated and in stripe order --
     the one order every holder of several takes them in, whatever the names."""
     return _stripe_set(_NAME_DOMAIN, [(d, n) for n in names])
+
+
+def image_name_locks_for(keyed: Iterable[tuple[Path, str]]) -> list[StripeLock]:
+    """One sorted, deduplicated name-stripe set across all source/destination
+    directories. Sorting each directory separately does not establish one
+    order when their names hash onto interleaved stripes."""
+    return _stripe_set(_NAME_DOMAIN, keyed)
 
 
 def image_sidecar_lock(d: Path, filename: str) -> StripeLock:

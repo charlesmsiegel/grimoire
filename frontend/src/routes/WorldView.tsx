@@ -22,7 +22,7 @@ import { WorldOverview } from "../components/WorldOverview";
 import { WorldPushPanel } from "../components/WorldPushPanel";
 import { ImagesView } from "../components/ImagesView";
 import {
-  defaultSection, legacyTarget, parseWorldTail, sectionHref,
+  defaultSection, legacyTarget, parseWorldTail, sectionHref, sectionIndex,
   type RecordSection, type Section,
 } from "../worldPaths";
 
@@ -480,7 +480,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** Where a row, a tile or a palette item points. The scope this page is
    *  *about* — a campaign's fork addresses under its own base. */
   const hrefFor = (at: Section) =>
-    sectionHref(scopeForPaths, { kind: "section", at });
+    sectionHref(scopeForPaths, sectionIndex(at));
 
   /** What this page contributes to ⌘K: its own index, so a section can be
    *  reached by name from anywhere in the world rather than only by finding
@@ -527,7 +527,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   if (!parsed.ok) {
     return <Navigate replace
                      to={sectionHref(scopeForPaths,
-                                     { kind: "section", at: defaultSection(shape) })} />;
+                                     sectionIndex(defaultSection(shape)))} />;
   }
   if (campaign && tail === "") {
     return <Navigate replace
@@ -547,7 +547,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // them here would be a redirect that loses what the link asked for.
   const canonicalPath = rid
     ? sectionHref(scopeForPaths, { kind: "record", at: section as RecordSection, rid })
-    : sectionHref(scopeForPaths, { kind: "section", at: section });
+    : sectionHref(scopeForPaths, sectionIndex(section));
   if (location.pathname !== canonicalPath) {
     return <Navigate replace to={canonicalPath + location.search} />;
   }

@@ -671,7 +671,7 @@ def update(image_id: str, change: Callable[[dict], dict | None]) -> bool:
     _no_reentry("update")
     object_path(image_id)               # validates the id before it picks a stripe
     with locks.image_object_lock(image_id):
-        obj = read(image_id)
+        obj = read_fresh(image_id)
         if obj is None:
             return False
         _IN_UPDATE.active = True

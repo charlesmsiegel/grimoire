@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { PostImagePicker, freeName, insertion, nameFromFile } from "./PostImagePicker";
 
 vi.mock("../api/client", () => ({
@@ -18,6 +18,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { artChanged } from "../appEvents";
 
 const file = (name: string) => new File(["png"], name, { type: "image/png" });
 
@@ -87,7 +88,7 @@ test("a narrator post is offered the campaign's images", async () => {
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={onInsert} onClose={() => {}} />);
   await screen.findByRole("button", { name: "Insert coastline" });
-  expect(api.listCampaignImages).toHaveBeenCalledWith("run");
+  expect(api.listCampaignImages).toHaveBeenCalledWith("run", false);
   expect(api.readCharacter).not.toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole("button", { name: "Insert the-inn" }));
@@ -461,7 +462,7 @@ test("an inherited placement-backed library image is describable", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
   const chip = await screen.findByText("seraphine · avatar");
-  expect(api.getImageUsage).toHaveBeenCalledWith("id-coast");
+  expect(api.getImageUsage).toHaveBeenCalledWith("id-coast", { fresh: true });
   expect(chip.tagName).toBe("SPAN");
   expect(chip).toHaveClass("chip", "on");
 });
@@ -479,4 +480,65 @@ test("a hidden image is listed with a way back", async () => {
   expect(await screen.findByText("Hidden from this campaign")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Show coastline/ }));
   expect(api.restoreCampaignImage).toHaveBeenCalledWith("run", "coastline");
+});
+
+test("campaign library manager uses the common viewer while keeping narrator insertion separate", async () => {
+  render(<PostImagePicker cid="Realm" target={{ kind: "campaign", name: "Realm" }} onClose={vi.fn()} />);
+  const tile = await screen.findByRole("button", { name: "View coastline" });
+  expect(screen.getByRole("dialog", { name: "Campaign image library" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Insert coastline" })).not.toBeInTheDocument();
+  fireEvent.click(tile);
+  expect(screen.getByRole("link", { name: "Open original" })).toHaveAttribute("href", "/api/campaigns/Realm/images/coastline?v=a1");
+  expect(screen.getByText("1 / 2")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Make primary|Crop preview/ })).not.toBeInTheDocument();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.getByRole("dialog", { name: "Campaign image library" })).toBeInTheDocument();
+  expect(tile).toHaveFocus();
+});
+
+test("failed campaign-library refresh preserves known art and its viewer", async () => {
+  render(<PostImagePicker cid="Realm" target={{ kind: "campaign", name: "Realm" }} onClose={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "View coastline" }));
+  vi.mocked(api.listCampaignImages).mockRejectedValueOnce(new Error("Library unreadable"));
+  act(artChanged);
+  await screen.findByText(/Library unreadable/);
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.queryByText("This image is no longer available.")).not.toBeInTheDocument();
+});
+
+test.each([false, true])("campaign library viewer asks before discarding a dirty caption (discard: %s)", async discard => {
+  render(<PostImagePicker cid="Saltmarch" target={{ kind: "campaign", name: "Saltmarch" }} onClose={vi.fn()} />);
+  const tile = await screen.findByRole("button", { name: "View coastline" });
+  fireEvent.click(screen.getByRole("button", { name: "Description of coastline" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Unsaved" } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(discard);
+  try {
+    fireEvent.click(tile);
+    expect(confirm).toHaveBeenCalledOnce();
+    if (discard) {
+      expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox")).toHaveValue("Unsaved");
+    }
+    expect(api.setCampaignImageDescription).not.toHaveBeenCalled();
+  } finally { confirm.mockRestore(); }
+});
+
+test.each(["keyboard", "button", "scrim"] as const)("campaign library %s close preserves a refused caption draft", async control => {
+  const close = vi.fn();
+  render(<PostImagePicker cid="Saltmarch" target={{ kind: "campaign", name: "Saltmarch" }} onClose={close} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Description of coastline" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Unsaved" } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    if (control === "keyboard") fireEvent.keyDown(window, { key: "Escape" });
+    else if (control === "button") fireEvent.click(screen.getByRole("button", { name: "Close library" }));
+    else fireEvent.click(document.querySelector(".image-picker-backdrop")!);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("Unsaved");
+  } finally { confirm.mockRestore(); }
 });

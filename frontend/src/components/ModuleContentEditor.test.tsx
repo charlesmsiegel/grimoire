@@ -206,3 +206,13 @@ test("a failed content delete's guard banner clears when another row is selected
   await screen.findByText("A sliver of night.");
   expect(screen.queryByText(/dangling refs/)).not.toBeInTheDocument();
 });
+
+test("module record prose opts into the common image viewer without record controls", async () => {
+  (api.readModuleContent as any).mockResolvedValue({ kind: "items", id: "Saltmarch", name: "Saltmarch",
+    body: "![Saltmarch](https://example.test/item.png)", keys: "", fields: {} });
+  render(<ContentSection pack={{ ...PACK, content: [{ kind: "items", id: "Saltmarch", name: "Saltmarch" }] }} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Saltmarch"));
+  fireEvent.click(await screen.findByRole("button", { name: "Enlarge Saltmarch" }));
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Open record" })).not.toBeInTheDocument();
+});

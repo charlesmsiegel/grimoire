@@ -33,13 +33,17 @@ from .common import (
     get_llm,
     image_draft_prompt,
     image_id_field,
+    image_promote_guards,
+    record_art_mutation,
 )
 from .models import (
+    AvatarFocus,
     DemoteBody,
     EntityCreate,
     EntityReclassify,
     EntityUpdate,
     ImageDescription,
+    ImagePromote,
     PushBody,
 )
 
@@ -55,6 +59,7 @@ def _entity_list(root, kind: str):
         p = store.assets.image_path(root, it["id"], "default", store.assets.AVATAR, base=kind)
         it["has_image"] = p is not None
         it["image_v"] = store.assets.image_version(p) if p is not None else None
+        it["image_focus"] = store.assets.read_focus(root, it["id"], "default", kind) if p else None
     return items
 
 
@@ -164,6 +169,7 @@ def _campaign_entity_list(cid: str, kind: str):
         p = store.assets.image_path(root, it["id"], "default", store.assets.AVATAR, base=kind)
         it["has_image"] = p is not None
         it["image_v"] = store.assets.image_version(p) if p is not None else None
+        it["image_focus"] = store.overlay.read_focus(cid, it["id"], "default", kind) if p else None
     return items
 
 
@@ -544,17 +550,20 @@ async def put_world_entity_image(wid: str, kind: str, eid: str, name: str, file:
 
 
 @router.delete("/worlds/{wid}/{kind}/{eid}/images/{name}")
-def delete_world_entity_image(wid: str, kind: str, eid: str, name: str):
+def delete_world_entity_image(wid: str, kind: str, eid: str, name: str, expected_v: str | None = None):
     # Gated on the record, not on the image: removing an image that is already
     # gone is the caller getting what they asked for, but removing one from an
     # entity that does not exist is a typo worth reporting.
-    store.assets.delete_image(_world_entity_or_404(wid, kind, eid), eid, "default", name, base=kind)
-    return {"ok": True}
+    _world_entity_or_404(wid, kind, eid)
+    return record_art_mutation("world", wid, kind, eid, None, name,
+                               "delete", expected_v=expected_v)
 
 
 @router.post("/worlds/{wid}/{kind}/{eid}/images/{name}/promote")
-def promote_world_entity_image(wid: str, kind: str, eid: str, name: str):
-    return _entity_image_promote(_world_entity_or_404(wid, kind, eid), kind, eid, name)
+def promote_world_entity_image(wid: str, kind: str, eid: str, name: str, body: ImagePromote | None = None):
+    _world_entity_or_404(wid, kind, eid)
+    return record_art_mutation("world", wid, kind, eid, None, name,
+                               "promote", **image_promote_guards(body))
 
 
 # ---- campaign entity CRUD (generic; see the module docstring on ordering) ----
@@ -614,41 +623,21 @@ def post_world_entity_image_description_draft(
 @router.put("/worlds/{wid}/{kind}/{eid}/images/{name}/description")
 def put_world_entity_image_description(wid: str, kind: str, eid: str, name: str,
                                        body: ImageDescription):
-    root = _world_entity_or_404(wid, kind, eid)
-    try:
-        store.image_descriptions.set_description(root, eid, "default", name,
-                                                 body.description, base=kind)
-    except store.image_descriptions.DescriptionTooLongError as exc:
-        # Before the ValueError below, which it subclasses: too long is not
-        # "not found" -- the image is there and the text is refused.
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except ValueError:
-        # `from None`: the strict-write ValueError is this module's own
-        # implementation detail, and chaining it onto the 404 says nothing a
-        # caller can act on.
-        raise HTTPException(status_code=404, detail="image not found") from None
-    return {"ok": True}
+    _world_entity_or_404(wid, kind, eid)
+    return record_art_mutation("world", wid, kind, eid, None, name,
+                               "description", description=body.description, expected_v=body.expected_v,
+                               expected_description_rev=body.expected_description_rev,
+                               cleanup_only=body.cleanup_only)
 
 
 @router.put("/campaigns/{cid}/{kind}/{eid}/images/{name}/description")
 def put_campaign_entity_image_description(cid: str, kind: str, eid: str, name: str,
                                           body: ImageDescription):
     _campaign_entity_or_404(cid, kind, eid)
-    try:
-        # Through the overlay: the write lands campaign-side, and the existence
-        # gate is the overlay union, so a thin campaign can describe art whose
-        # bytes it still inherits without diverging the art itself.
-        store.overlay.set_description(cid, eid, "default", name, body.description, base=kind)
-    except store.image_descriptions.DescriptionTooLongError as exc:
-        # Before the ValueError below, which it subclasses: too long is not
-        # "not found" -- the image is there and the text is refused.
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except ValueError:
-        # `from None`: the strict-write ValueError is this module's own
-        # implementation detail, and chaining it onto the 404 says nothing a
-        # caller can act on.
-        raise HTTPException(status_code=404, detail="image not found") from None
-    return {"ok": True}
+    return record_art_mutation("campaign", cid, kind, eid, None, name,
+                               "description", description=body.description, expected_v=body.expected_v,
+                               expected_description_rev=body.expected_description_rev,
+                               cleanup_only=body.cleanup_only)
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images")
@@ -674,28 +663,33 @@ async def put_campaign_entity_image(cid: str, kind: str, eid: str, name: str, fi
 
 
 @router.delete("/campaigns/{cid}/{kind}/{eid}/images/{name}")
-def delete_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
-    _campaign_entity_or_404(cid, kind, eid)
+def delete_campaign_entity_image(cid: str, kind: str, eid: str, name: str, expected_v: str | None = None):
     # tombstone so a still-materialized world image doesn't show back through
     # the overlaid read the moment the campaign's own copy is gone.
-    store.overlay.delete_image(cid, eid, "default", name, base=kind)
-    return {"ok": True}
+    _campaign_entity_or_404(cid, kind, eid)
+    return record_art_mutation("campaign", cid, kind, eid, None, name,
+                               "delete", expected_v=expected_v)
 
 
 @router.post("/campaigns/{cid}/{kind}/{eid}/images/{name}/promote")
-def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
+def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str, body: ImagePromote | None = None):
     _campaign_entity_or_404(cid, kind, eid)
-    try:
-        store.overlay.promote_image(cid, eid, "default", name, base=kind)
-    except store.assets.ImageNotYetAvailableError as exc:
-        # placed, not arrived (mid-sync): absent here for now, and says why
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
-    except ValueError as exc:
-        # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True}
+    return record_art_mutation("campaign", cid, kind, eid, None, name,
+                               "promote", **image_promote_guards(body))
+
+
+@router.put("/worlds/{wid}/{kind}/{eid}/images/avatar/focus")
+def put_world_entity_avatar_focus(wid: str, kind: str, eid: str, body: AvatarFocus):
+    _world_entity_or_404(wid, kind, eid)
+    return record_art_mutation("world", wid, kind, eid, None, "avatar", "focus",
+                               focus=body.focus, expected_v=body.expected_v)
+
+
+@router.put("/campaigns/{cid}/{kind}/{eid}/images/avatar/focus")
+def put_campaign_entity_avatar_focus(cid: str, kind: str, eid: str, body: AvatarFocus):
+    _campaign_entity_or_404(cid, kind, eid)
+    return record_art_mutation("campaign", cid, kind, eid, None, "avatar", "focus",
+                               focus=body.focus, expected_v=body.expected_v)
 
 
 # ---- library moves: promote / push / dependents / demote (#52, #53, #60) ----

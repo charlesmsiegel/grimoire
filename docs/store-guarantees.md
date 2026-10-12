@@ -576,6 +576,18 @@ avatar the collector would otherwise see as unreferenced
 therefore now raise in that rare state, and its callers already treat an
 `OSError` as retryable.
 
+**Record-art checks recover first.** In-process append, reuse and guarded
+mutations settle valid promotion journals before choosing a vacant slot or
+checking the reader's image/primary token. They hold the avatar and selected
+name stripes through publication, including inherited and source directories.
+`assets.recover_promotion(required=True)` raises retryable `StoreBusy` (HTTP409)
+if a valid journal remains busy or unwritable: writer-side recovery must not
+change the binding after a vacancy or token comparison succeeds. Source
+preparation uses the same ordering. Default reader recovery keeps its existing
+nonblocking, best-effort behavior; malformed journals cannot replay. The
+world/campaign-owned/inherited and controlled-release cases live in
+`test_record_art_recovery.py`.
+
 **Callers that can now stop part-way** (a stripe timing out between two of
 their steps) were each checked safe to re-run: `copy_slots`, `sync._copy_tree`,
 `overlay.copy_record_dir_down`, `characters._replace_gallery` and bundle

@@ -95,12 +95,14 @@ no longer frames anything. Stated rather than solved.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from . import assets, atomic, image_refs, image_store
+from . import assets, atomic, image_refs, image_store, locks
 from .paths import safe_id
 
 #: Re-exported from `assets`, which owns the names of the sidecars living in
@@ -117,6 +119,102 @@ class DescriptionTooLongError(ValueError):
     A `ValueError`, so a caller that only knew "refused" still refuses; its
     own class, so a route can tell "too long" (422) from "no such image"
     (404) -- which is what every description PUT route does."""
+
+
+class DescriptionConflictError(ValueError):
+    def __init__(self, state: dict):
+        super().__init__("This description changed. Reconcile it before saving again.")
+        self.state = state
+
+
+class DescriptionUnavailableError(OSError):
+    """A guarded edit cannot authorize an unreadable shared/legacy state."""
+
+
+class DescriptionGuardRequiredError(ValueError):
+    """Cleanup-only is authorized by both captured preconditions."""
+
+
+class DescriptionCleanupError(OSError):
+    """The shared write is confirmed; retry may only finish legacy cleanup."""
+
+    def __init__(self, text: str, recovery: dict):
+        super().__init__("The shared description saved, but its legacy override could not be cleared.")
+        self.text = text
+        self.recovery = recovery
+
+
+def _strict_raw(d: Path) -> dict:
+    try:
+        raw = json.loads(path_in(d).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise DescriptionUnavailableError("Description metadata could not be read.") from exc
+    if not isinstance(raw, dict):
+        raise DescriptionUnavailableError("Description metadata is not an object.")
+    return raw
+
+
+def _description_state(raw: dict, key: str, scope: str | None) -> dict:
+    text = raw.get(key)
+    held = raw.get("description_conflicts")
+    conflicts = [{"text": c["text"], "from": c.get("from", "")}
+                 for c in held if isinstance(c, dict) and isinstance(c.get("text"), str)
+                 and isinstance(c.get("from", ""), str)] if isinstance(held, list) else []
+    return {"scope": scope, "text": text if isinstance(text, str) else "",
+            "described": isinstance(text, str),
+            "conflicts": conflicts if scope == "shared" else []}
+
+
+def _state_dirs(d: Path, also_clear: Path | None,
+                effective_dirs: tuple[Path, ...] | None) -> tuple[Path, ...]:
+    return effective_dirs or tuple(dict.fromkeys(p for p in (also_clear, d) if p is not None))
+
+
+def _description_snapshot(dirs: tuple[Path, ...], source: Path, name: str) -> dict:
+    legacy = [_description_state(_strict_raw(d), name, "legacy") for d in dirs]
+    resolved = assets.resolve(source, name)
+    image_id = resolved.image_id if resolved else None
+    obj = image_store.read_fresh(image_id) if image_id else None
+    if image_id and obj is None:
+        raise DescriptionUnavailableError("Shared description metadata could not be read.")
+    shared = _description_state(obj.raw if obj else {}, "description", "shared" if obj else None)
+    effective = next((s for s in legacy if s["described"]), shared)
+    target = shared if obj else {**legacy[0], "scope": "legacy"}
+    path = assets.path_in(source, name)
+    if path is None:
+        raise DescriptionUnavailableError("This image binding is no longer available.")
+    binding = {"image_id": image_id, "v": assets.image_version(path)}
+    # Only caption state enters this digest. Subjects, focus, and unrelated
+    # shared metadata must not reject an otherwise current caption draft.
+    payload = json.dumps({"binding": binding, "legacy": legacy, "shared": shared},
+                         sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return {"image_binding": binding,
+            "description_rev": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+            "effective_description": effective, "write_target_description": target}
+
+
+def description_state_in(d: Path, name: str, *, also_clear: Path | None = None,
+                         source_dir: Path | None = None,
+                         effective_dirs: tuple[Path, ...] | None = None) -> dict:
+    """One coherent effective/shared caption snapshot, including masked text.
+
+    Legacy precedence is the supplied effective directory order. The source
+    directory owns the visible image binding, which may differ from the
+    campaign directory that receives a legacy fallback. Shared state is read
+    fresh under its object stripe; keys and binding are held under the complete
+    name/sidecar sets first. No persistent revision or store migration is needed.
+    """
+    dirs = _state_dirs(d, also_clear, effective_dirs)
+    source = source_dir or d
+    all_dirs = tuple(dict.fromkeys((*dirs, source)))
+    with assets.name_locks_held(*[(p, name) for p in all_dirs]), assets.sidecar_locks_held(
+            *[(p, DESCRIPTIONS_FILE) for p in all_dirs]):
+        ref = image_refs.read(source, name)
+        hold = locks.image_object_lock(ref.image) if ref and ref.image else contextlib.nullcontext()
+        with hold:
+            return _description_snapshot(dirs, source, name)
 
 
 def path_in(d: Path) -> Path:
@@ -326,7 +424,10 @@ def write_in(d: Path, descriptions: dict[str, str], names: set[str] | None = Non
 
 
 def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
-           also_clear: Path | None = None, fallback_dir: Path | None = None) -> None:
+           also_clear: Path | None = None, fallback_dir: Path | None = None,
+           expected_description_rev: str | None = None, cleanup_only: bool = False,
+           source_dir: Path | None = None,
+           effective_dirs: tuple[Path, ...] | None = None) -> None:
     """Describe one image of `d` (R2).
 
     A name whose placement resolves is described on its image object, and
@@ -355,33 +456,73 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
     # crossing the same two directories the other way would each hold one and
     # wait for the other; with striped locks, two unrelated directories can be
     # those two.
-    others = [p for p in (also_clear, fallback_dir) if p is not None]
-    with assets.sidecar_locks_held(*[(p, DESCRIPTIONS_FILE) for p in (d, *others)]):
+    others = [p for p in (also_clear, fallback_dir, source_dir) if p is not None]
+    dirs = tuple(dict.fromkeys((d, *others, *(effective_dirs or ()))))
+    with assets.name_locks_held(*[(p, name) for p in dirs]), assets.sidecar_locks_held(
+            *[(p, DESCRIPTIONS_FILE) for p in dirs]):
         if name not in (_names(d) if names is None else names):
             raise ValueError(f"unknown image(s): [{name!r}]")
         text = str(text)
         if len(text) > image_store.MAX_DESCRIPTION:
             raise DescriptionTooLongError(
                 f"description longer than {image_store.MAX_DESCRIPTION} characters")
-        image_id = object_id_in(d, name)
-        # A pure dict edit: the callback contract (`image_store.update`).
-        # The same edit drops `description_conflicts` (stage 4, M11): choosing
-        # or typing a description is what resolves a migration disagreement,
-        # and a second step would leave a window with both.
-        if image_id is not None and image_store.update(
-                image_id, lambda raw: {**{k: v for k, v in raw.items()
-                                          if k != "description_conflicts"},
-                                       "description": text}):
-            # Object first, keys second: a failure between the two leaves the
-            # old key showing (R1), never nothing. Cleared STRICTLY, not with
-            # `assets.edit_sidecar` (which swallows a failed write): a key left
-            # behind keeps masking the new text, so the save must say it failed
-            # rather than answer ok over the old words. A retry finishes it.
-            _clear_legacy(d, name)
-            if also_clear is not None and also_clear != d:
-                _clear_legacy(also_clear, name)
-            return
-        _write_legacy(d if fallback_dir is None else fallback_dir, name, text)
+        image_id = object_id_in(source_dir or d, name)
+        hold = locks.image_object_lock(image_id) if image_id else contextlib.nullcontext()
+        with hold:
+            _save_locked(d, name, text, image_id, also_clear, fallback_dir,
+                         expected_description_rev, cleanup_only, source_dir, effective_dirs)
+
+
+def _guard_description(state: dict, expected: str | None, text: str, cleanup_only: bool) -> None:
+    if cleanup_only and expected is None:
+        raise DescriptionGuardRequiredError("Cleanup requires image and description preconditions.")
+    target = state["write_target_description"]
+    if (expected is not None and state["description_rev"] != expected) or (
+            cleanup_only and (target["scope"] != "shared" or not target["described"]
+                              or target["text"] != text)):
+        raise DescriptionConflictError(state)
+
+
+def _recovery(d: Path, name: str, state_args: dict) -> dict:
+    try:
+        return {"available": True, **description_state_in(d, name, **state_args)}
+    except OSError:
+        return {"available": False}
+
+
+def _finish_legacy(d: Path, name: str, text: str, also_clear: Path | None,
+                   state_args: dict) -> None:
+    # Object first, keys second: a failure leaves the old key showing (R1),
+    # never nothing. Strict clearing reports the confirmed shared change
+    # separately; retry may finish cleanup but must never replay shared Save.
+    try:
+        _clear_legacy(d, name)
+        if also_clear is not None and also_clear != d:
+            _clear_legacy(also_clear, name)
+    except OSError as exc:
+        raise DescriptionCleanupError(text, _recovery(d, name, state_args)) from exc
+
+
+def _save_locked(d: Path, name: str, text: str, image_id: str | None,
+                 also_clear: Path | None, fallback_dir: Path | None,
+                 expected: str | None, cleanup_only: bool,
+                 source_dir: Path | None, effective_dirs: tuple[Path, ...] | None) -> None:
+    state_args: dict = {"also_clear": also_clear, "source_dir": source_dir,
+                  "effective_dirs": effective_dirs}
+    if expected is not None or cleanup_only:
+        _guard_description(description_state_in(d, name, **state_args), expected, text, cleanup_only)
+    if cleanup_only:
+        _finish_legacy(d, name, text, also_clear, state_args)
+        return
+    # A pure dict edit, including conflict resolution, under the SAME object
+    # stripe as the authoritative comparison. update reads fresh too, so an
+    # unrelated metadata edit cannot be overwritten by a cached projection.
+    if image_id is not None and image_store.update(
+            image_id, lambda raw: {**{k: v for k, v in raw.items()
+                                      if k != "description_conflicts"}, "description": text}):
+        _finish_legacy(d, name, text, also_clear, state_args)
+        return
+    _write_legacy(d if fallback_dir is None else fallback_dir, name, text)
 
 
 def _clear_legacy(d: Path, name: str) -> None:
@@ -405,6 +546,23 @@ def carry_legacy(d: Path, name: str, text: str) -> None:
     campaign (R5), which must never write the shared object."""
     with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
         _write_legacy(d, name, str(text))
+
+
+def prepare_legacy(d: Path, name: str, text: str | None) -> None:
+    """Stage a new slot's local caption before publishing its placement.
+
+    Reuse preserves a source's legacy override without changing the shared
+    object. Appends clear an orphan key left under an otherwise empty slot.
+    Strict reads refuse unreadable metadata; a failed reference publication
+    leaves no visible caption, and the next allocation prepares the slot again.
+    The caller holds its name lock and the complete sidecar set.
+    """
+    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
+        _strict_raw(d)
+        if text is None:
+            _clear_legacy(d, name)
+        else:
+            _write_legacy(d, name, text)
 
 
 def _write_legacy(d: Path, name: str, text: str) -> None:
@@ -464,10 +622,10 @@ def read(root: Path, aid: str, vid: str, name: str, base: str = "characters",
 
 
 def set_description(root: Path, aid: str, vid: str, name: str, text: str,
-                    base: str = "characters", names: set[str] | None = None) -> None:
+                    base: str = "characters", names: set[str] | None = None, **guards) -> None:
     if not (safe_id(aid) and safe_id(vid)):
         raise ValueError("unsafe image id")
-    set_in(_dir(root, aid, vid, base), name, text, names)
+    set_in(_dir(root, aid, vid, base), name, text, names, **guards)
 
 
 def _walk(root: Path, base: str) -> Iterator[tuple[Path, Path]]:

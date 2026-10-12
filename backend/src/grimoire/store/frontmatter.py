@@ -11,7 +11,7 @@ from . import atomic
 #: `----` is a body's first line (or a horizontal rule inside a block nobody
 #: closed), and both parsers below ask this same question so a list endpoint
 #: and a full read cannot disagree about one file.
-_CLOSING_FENCE = re.compile(r"^---$", re.MULTILINE)
+_CLOSING_FENCE = re.compile(r"^---\r?$", re.MULTILINE)
 
 
 def _is_fence_line(line: str) -> bool:
@@ -64,9 +64,14 @@ def _unquote(value: str) -> str:
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """Split `---`-fenced frontmatter from the body. String scalars only."""
-    if not text.startswith("---\n"):
+    # Archives/imports decode raw bytes, unlike read_text's universal newlines.
+    # Accept CRLF fences there too without rewriting the body's original bytes.
+    if text.startswith("---\r\n"):
+        rest = text[5:]
+    elif text.startswith("---\n"):
+        rest = text[4:]
+    else:
         return {}, text
-    rest = text[4:]
     # `^` in MULTILINE also matches at rest[0], which is where an EMPTY block's
     # closing fence sits: the opening fence's own newline doubles as the
     # separator, and a search for "\n---" found nothing there.
@@ -75,8 +80,11 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
         return {}, text
     block = rest[:fence.start()]
     after = rest[fence.end():]
-    after = after.removeprefix("\n")
-    after = after.removeprefix("\n")
+    for _ in range(2):
+        if after.startswith("\r\n"):
+            after = after[2:]
+        elif after.startswith("\n"):
+            after = after[1:]
     meta: dict[str, str] = {}
     for line in block.splitlines():
         if not line.strip():

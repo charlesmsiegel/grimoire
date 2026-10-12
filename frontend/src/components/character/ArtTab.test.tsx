@@ -1,41 +1,29 @@
 import { MemoryRouter } from "react-router-dom";
 import { render, screen, within } from "@testing-library/react";
 import { ArtTab } from "./ArtTab";
+import { artAdapter, artImage, artRead, artTarget } from "../../testkit/recordArt";
+import * as adapters from "../art/recordArtAdapter";
+import { useRecordArt } from "../art/useRecordArt";
 
-vi.mock("../../api/client", () => ({
-  api: {
-    getImageUsage: vi.fn(),
-    actorImageUrl: () => "/img",
-    putImage: vi.fn(),
-    promoteImage: vi.fn(),
-    deleteImage: vi.fn(),
-    copyGreetingImage: vi.fn(),
-    setCharacterImageDescription: vi.fn(),
-    draftCharacterImageDescription: vi.fn(),
-  },
-}));
-
-function mount() {
-  return render(
-    <MemoryRouter>
-      <ArtTab scope={{ kind: "world", id: "realm" }} wid="realm" cid="seraphine" vid="default"
-              hasAvatar galleryImages={["gallery_1"]} imageTokens={{}}
-              imageIds={{ avatar: "id-avatar" }}
-              descriptions={{ avatar: "A portrait", gallery_1: "A sketch" }}
-              appearances={[]} worldScope
-              localizeProg={null} localizeMsg={null} onLocalize={() => {}}
-              onRefresh={async () => {}} onError={() => {}}
-              greetingHref={(g) => `/g/${g}`} />
-    </MemoryRouter>,
-  );
-}
-
-test("an image with an image_id shows the Used in control; a legacy image does not", () => {
-  mount();
-  // The avatar is placement-backed; gallery_1 is a legacy file with no id.
-  const tile = (name: string) => within(screen.getByAltText(name).closest("figure")!);
-  expect(tile("avatar").getByRole("button", { name: "Used in…" })).toBeInTheDocument();
-  expect(tile("gallery_1").getByRole("button", { name: "Description of gallery_1" }))
-    .toBeInTheDocument();
-  expect(tile("gallery_1").queryByRole("button", { name: "Used in…" })).toBeNull();
+vi.mock("../../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+  return { ...actual, api: { ...actual.api, getImageUsage: vi.fn() } };
+});
+test("the Character wrapper uses the common panel and preserves placement usage", async () => {
+  const target = artTarget();
+  const adapter = artAdapter(target, artRead(target, [artImage(target), artImage(target, "gallery_1", { image_id: null })]));
+  vi.spyOn(adapters, "createRecordArtAdapter").mockReturnValue(adapter);
+  function Harness() {
+    const controller = useRecordArt(target, { onSaved: async () => {} });
+    return <ArtTab controller={controller} related={{ scope: target.scope, wid: "Realm", record: "Seraphine", version: "main",
+      appearances: [], baseVersions: [], manage: controller.manage, busy: !!controller.busy, fallbackFocus: null,
+      localizeProg: null, localizeMsg: null, onLocalize: vi.fn(), onCopy: vi.fn(), greetingHref: (gid) => "/g/" + gid }} />;
+  }
+  render(<MemoryRouter><Harness /></MemoryRouter>);
+  const primary = await screen.findByRole("button", { name: "View Primary image" });
+  expect(within(primary.closest("article")!).getByRole("button", { name: "Used in…" })).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: "View Gallery image 1" }).closest("article")!)
+    .queryByRole("button", { name: "Used in…" })).not.toBeInTheDocument();
+  expect(adapter.read).toHaveBeenCalledOnce();
+  vi.restoreAllMocks();
 });

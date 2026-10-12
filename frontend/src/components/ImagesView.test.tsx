@@ -1,5 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ImagesView } from "./ImagesView";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ImagesView as RealImagesView } from "./ImagesView";
+import { createMemoryRouter, MemoryRouter, Outlet, RouterProvider } from "react-router-dom";
+import { GalleryStateProvider } from "./art/galleryState";
+function ImagesView(props: Parameters<typeof RealImagesView>[0]) {
+  return <MemoryRouter><GalleryStateProvider><RealImagesView {...props} /></GalleryStateProvider></MemoryRouter>;
+}
 
 vi.mock("../api/client", () => ({
   api: {
@@ -10,9 +15,11 @@ vi.mock("../api/client", () => ({
     setWorldImageDescription: vi.fn(), draftWorldImageDescription: vi.fn(),
     listGreetings: vi.fn(), listUntaggedImages: vi.fn(), setImageSubjects: vi.fn(),
     listAppearances: vi.fn(), listCampaignGallery: vi.fn(),
+    listCampaignImages: vi.fn(), campaignImageUrl: (cid: string, name: string) => "/api/campaigns/" + cid + "/images/" + name,
   },
 }));
 import { api } from "../api/client";
+import { artChanged } from "../appEvents";
 
 const AVATAR = {
   kind: "characters", id: "seraphine", vid: "default", name: "avatar",
@@ -46,9 +53,12 @@ const QUEUE = [{ gid: "dusk", greeting_name: "Saltmarch dusk", name: "art_1",
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (api.worldImageUrl as any).mockImplementation((wid: string, name: string, opts?: { w?: number; v?: string }) =>
+    "/api/worlds/" + wid + "/images/" + name + "?v=" + opts?.v + (opts?.w ? "&w=" + opts.w : ""));
   (api.listWorldImages as any).mockResolvedValue([AVATAR, SKETCH, QUAY, TAGGED, UNTAGGED]);
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
   (api.listAppearances as any).mockResolvedValue([]);
+  (api.listCampaignImages as any).mockResolvedValue({ images: [{ name: "Saltmarch", ext: "png", v: "bytes" }], hidden: [] });
   (api.listCampaignGallery as any).mockResolvedValue([AVATAR, SKETCH, QUAY, TAGGED, UNTAGGED]);
   (api.listGreetings as any).mockResolvedValue([
     { id: "dusk", name: "Saltmarch dusk", present: ["seraphine"] }]);
@@ -86,21 +96,21 @@ test("the rail filters by kind, and names no kind the world has no art for", asy
   fireEvent.click(screen.getByRole("button", { name: /Locations/ }));
   await act(async () => {});
   expect(tiles()).toHaveLength(1);
-  expect(screen.getByText("Saltmarch")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^View Saltmarch/ })).toBeInTheDocument();
 });
 
 test("a tile opens the image read-only, with the full-size art and its metadata", async () => {
   await renderView();
   fireEvent.click(screen.getByAltText("In half-plate, at the quay."));
   await act(async () => {});
-  const full = screen.getByAltText("In half-plate, at the quay.");
+  const full = within(screen.getByRole("dialog", { name: "Image viewer" })).getByAltText("In half-plate, at the quay.");
   expect(full.getAttribute("src")).toBe("/img/avatar?v=1");   // not the thumbnail
-  expect(full.className).toContain("gallery-full");
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
   expect(screen.getByText("In half-plate, at the quay.")).toBeInTheDocument();
   // Nothing here edits: the two sidecars are written in the editors that own
   // them, so where Edit sits in every other detail view is the way back.
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Back to the gallery" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
   await act(async () => {});
   expect(tiles()).toHaveLength(5);
 });
@@ -109,17 +119,17 @@ test("a described-but-blank image is finished, and says so rather than reading a
   await renderView();
   fireEvent.click(screen.getByAltText("Saltmarch — gallery_1")); // described, no text
   await act(async () => {});
-  expect(screen.getByText(/deliberately left blank/)).toBeInTheDocument();
+  expect(screen.getByText("No description (reviewed)")).toBeInTheDocument();
 });
 
 test("an undescribed image says what is still missing", async () => {
   await renderView();
   fireEvent.click(screen.getByAltText("Seraphine — gallery_1"));   // SKETCH
   await act(async () => {});
-  expect(screen.getByText(/Not described yet/)).toBeInTheDocument();
+  expect(screen.getByText("No description")).toBeInTheDocument();
   // The asset version, because a character's art is per version and two
   // versions can hold different pictures under the same name.
-  expect(screen.getByText("version older")).toBeInTheDocument();
+  expect(within(screen.getByRole("dialog", { name: "Image viewer" })).getByText("Seraphine / older / gallery_1")).toBeInTheDocument();
 });
 
 test("greeting subjects distinguish untagged from tagged-as-nobody", async () => {
@@ -325,7 +335,7 @@ test("an actor in the world but never on stage is filtered out", async () => {
     fireEvent.click(screen.getByRole("button", { name: /appeared in this campaign/i }));
   });
   expect(screen.queryByAltText("In half-plate, at the quay.")).toBeNull();
-  expect(screen.getByText(/nothing here/i)).toBeInTheDocument();
+  expect(screen.getByText("No images match these filters")).toBeInTheDocument();
 });
 
 test("a failed appearance read costs the filter, not the gallery", async () => {
@@ -397,4 +407,170 @@ test("the World art tab is offered even with a campaign open", async () => {
 
   render(<ImagesView wid="realm" forCampaign="run" />);
   expect(await screen.findByRole("tab", { name: /World art/ })).toBeTruthy();
+});
+
+test("search composes with kind, unfinished, and appearance filters", async () => {
+  (api.listAppearances as any).mockResolvedValue([{ kind: "characters", id: "seraphine" }]);
+  render(<ImagesView wid="realm" forCampaign="c" />);
+  await screen.findByRole("button", { name: /Appeared in this campaign/ });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search images" }), { target: { value: "OLDER" } });
+  fireEvent.click(screen.getByRole("button", { name: /^Characters/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Needs a description/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Appeared in this campaign/ }));
+  expect(tiles()).toHaveLength(1);
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "not present" } });
+  expect(screen.getByText("No images match these filters")).toBeVisible();
+});
+test("the common viewer sequence excludes greetings and follows current filters", async () => {
+  await renderView();
+  fireEvent.click(screen.getByAltText("In half-plate, at the quay."));
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.getByText("1 / 3")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Next image" }));
+  expect(screen.getByRole("link", { name: "Open original" })).toHaveAttribute("href", SKETCH.url);
+  fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Locations/ }));
+  fireEvent.click(screen.getByAltText("Saltmarch — gallery_1"));
+  expect(screen.queryByRole("button", { name: "Next image" })).not.toBeInTheDocument();
+});
+test("gallery record navigation and Back restore filters, selected occurrence, and actual scroll owner", async () => {
+  const NativeRequest = globalThis.Request;
+  class TestRequest extends NativeRequest {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      const { signal, ...rest } = init ?? {};
+      super(input, rest);
+      if (signal) Object.defineProperty(this, "signal", { value: signal });
+    }
+  }
+  vi.stubGlobal("Request", TestRequest);
+  const router = createMemoryRouter([{ element: <GalleryStateProvider><Outlet /></GalleryStateProvider>, children: [
+    { path: "/worlds/realm/images", element: <main className="shell-main"><RealImagesView wid="realm" /></main> },
+    { path: "/worlds/realm/locations/saltmarch", element: <p>Record Art</p> },
+  ] }], { initialEntries: ["/worlds/realm/images"] });
+  const view = render(<RouterProvider router={router} />);
+  try {
+    await screen.findByRole("button", { name: /^Locations/ });
+    fireEvent.click(screen.getByRole("button", { name: /^Locations/ }));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "salt" } });
+    const scroll = view.container.querySelector(".shell-main") as HTMLElement;
+    scroll.scrollTop = 341; fireEvent.scroll(scroll);
+    fireEvent.click(screen.getByAltText("Saltmarch — gallery_1"));
+    fireEvent.click(screen.getByRole("button", { name: "Open record" }));
+    await screen.findByText("Record Art");
+    expect(router.state.location.search).toBe("?tab=art");
+    await act(() => router.navigate(-1));
+    await screen.findByRole("searchbox");
+    expect(screen.getByRole("searchbox")).toHaveValue("salt");
+    expect(screen.getByRole("button", { name: /^Locations/ })).toHaveClass("active");
+    expect(view.container.querySelector(".shell-main")?.scrollTop).toBe(341);
+    expect(screen.getByRole("button", { name: /^View Saltmarch/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+  } finally { router.dispose(); vi.unstubAllGlobals(); }
+});
+test("a greeting detail links only to its dedicated editor", async () => {
+  await renderView();
+  fireEvent.click(screen.getByAltText("Two figures on the quay."));
+  expect(screen.getByRole("link", { name: "Open greeting" })).toHaveAttribute("href", "/worlds/realm/greetings/dawn");
+  expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+});
+
+test("campaign library gallery navigation reaches the existing campaign manager", async () => {
+  (api.listCampaignGallery as any).mockResolvedValue([{ ...AVATAR, kind: "campaign", id: "c", record_name: "Library", name: "Saltmarch" }]);
+  // The deep link is a known world gallery entry carrying the campaign; it
+  // never manufactures a /campaigns/:cid/world/images route.
+  const view = render(<MemoryRouter initialEntries={["/worlds/realm/images?for=c"]}>
+    <RealImagesView wid="realm" forCampaign="c" /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: /^View Library/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Manage images" }));
+  expect(await screen.findByRole("dialog", { name: "Campaign image library" })).toBeInTheDocument();
+  expect(api.listCampaignImages).toHaveBeenCalledWith("c", false);
+  view.unmount();
+});
+
+test("a delayed full-read companion cannot overwrite a newer gallery invalidation", async () => {
+  let finishCompanion!: (rows: Awaited<ReturnType<typeof api.listCharacters>>) => void;
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise(resolve => { finishCompanion = resolve; }));
+  render(<ImagesView wid="realm" />);
+  await waitFor(() => expect(api.listWorldImages).toHaveBeenCalled());
+  vi.mocked(api.listWorldImages).mockResolvedValue([QUAY]);
+  artChanged();
+  await screen.findByRole("button", { name: /View Saltmarch/ });
+  await act(async () => finishCompanion([]));
+  expect(screen.queryByRole("button", { name: /View Seraphine/ })).not.toBeInTheDocument();
+});
+
+test("failed newer gallery invalidation reports failure while an older full read is pending", async () => {
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise(() => {}));
+  render(<ImagesView wid="realm" />);
+  await waitFor(() => expect(api.listWorldImages).toHaveBeenCalled());
+  vi.mocked(api.listWorldImages).mockRejectedValue(new Error("Art unreadable"));
+  artChanged();
+  expect(await screen.findByRole("alert")).toHaveTextContent("Art unreadable");
+  expect(screen.queryByText(/no art yet/i)).not.toBeInTheDocument();
+});
+
+test("campaign greeting details preserve their effective campaign scope", async () => {
+  render(<ImagesView wid="realm" forCampaign="c" />);
+  fireEvent.click(await screen.findByAltText("Two figures on the quay."));
+  expect(screen.getByRole("link", { name: "Open greeting" })).toHaveAttribute("href", "/campaigns/c/world/greetings/dawn");
+});
+
+test("removed combined-gallery selection restores focus to the owning gallery", async () => {
+  const view = render(<ImagesView wid="realm" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^View Saltmarch/ }));
+  vi.mocked(api.listWorldImages).mockResolvedValue([]);
+  act(artChanged);
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(view.container.querySelector(".images-view")).toHaveFocus();
+});
+
+
+test.each(["listCharacters", "listGreetings", "listUntaggedImages"] as const)("gallery invalidation cannot hide a failed %s companion", async method => {
+  let reject!: (error: Error) => void;
+  vi.mocked(api[method]).mockImplementationOnce(() => new Promise<never>((_resolve, fail) => { reject = fail; }));
+  render(<ImagesView wid="realm" />);
+  await waitFor(() => expect(api.listWorldImages).toHaveBeenCalled());
+  vi.mocked(api.listWorldImages).mockResolvedValue([QUAY]);
+  act(artChanged);
+  await screen.findByRole("button", { name: /View Saltmarch/ });
+  await act(async () => reject(new Error("Required tagging data unreadable")));
+  expect(screen.getByRole("alert")).toHaveTextContent("Required tagging data unreadable");
+  fireEvent.click(screen.getByRole("tab", { name: /Tagging queue/ }));
+  expect(screen.queryByText("Every greeting image in this world has been tagged.")).not.toBeInTheDocument();
+  // A subsequent gallery-only success still cannot repair the failed companion.
+  act(artChanged);
+  await waitFor(() => expect(api.listWorldImages).toHaveBeenCalledTimes(3));
+  expect(screen.getByRole("alert")).toHaveTextContent("Required tagging data unreadable");
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText(/Tagging 1 \/ 1 \u2014 Saltmarch dusk/)).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("an older full gallery failure cannot replace a newer gallery success", async () => {
+  let reject!: (error: Error) => void;
+  vi.mocked(api.listWorldImages).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  render(<ImagesView wid="realm" />);
+  await waitFor(() => expect(api.listWorldImages).toHaveBeenCalled());
+  vi.mocked(api.listWorldImages).mockResolvedValue([QUAY]);
+  act(artChanged);
+  await screen.findByRole("button", { name: /View Saltmarch/ });
+  await act(async () => reject(new Error("Older gallery unreadable")));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: /Tagging queue/ }));
+  expect(screen.getByText(/Tagging 1 \/ 1 \u2014 Saltmarch dusk/)).toBeInTheDocument();
+});
+
+
+test("a refreshed gallery does not label pending tagging companions as empty", async () => {
+  let finish!: (rows: Awaited<ReturnType<typeof api.listCharacters>>) => void;
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<ImagesView wid="realm" />);
+  await waitFor(() => expect(api.listWorldImages).toHaveBeenCalled());
+  vi.mocked(api.listWorldImages).mockResolvedValue([QUAY]);
+  act(artChanged);
+  await screen.findByRole("button", { name: /View Saltmarch/ });
+  fireEvent.click(screen.getByRole("tab", { name: /Tagging queue/ }));
+  expect(screen.queryByText("Every greeting image in this world has been tagged.")).not.toBeInTheDocument();
+  await act(async () => finish([]));
+  expect(screen.getByText(/Tagging 1 \/ 1 \u2014 Saltmarch dusk/)).toBeInTheDocument();
 });

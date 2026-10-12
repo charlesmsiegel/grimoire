@@ -710,6 +710,18 @@ class GroupStateSave(BaseModel):
 
 class AvatarFocus(BaseModel):
     focus: int
+    expected_v: str | None = None
+
+
+class ImagePromote(BaseModel):
+    expected_v: str | None = None
+    expected_primary_v: str | None = None
+
+
+class RecordArtLink(BaseModel):
+    source: dict
+    intent: str = "gallery"
+    expected_primary_v: str | None = None
 
 
 class ImageDescription(BaseModel):
@@ -719,6 +731,9 @@ class ImageDescription(BaseModel):
     to the model. Plain field, no `Field(...)`, per the pydantic v1/v2 rule."""
 
     description: str
+    expected_v: str | None = None
+    expected_description_rev: str | None = None
+    cleanup_only: bool = False
 
 
 class PCCreate(BaseModel):
