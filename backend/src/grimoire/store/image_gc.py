@@ -77,8 +77,10 @@ reachability by the fresh walk, the blob refcount), and then:
    description and bin nothing;
 2. an object whose blob another sidecar names loses only its sidecar, and is
    reported ``released`` (``shared``): the picture is still in the store;
-3. otherwise the blob is moved into the outbox with one ``os.replace`` and
-   THEN the sidecar is deleted. The move is the commit: a crash after it
+3. otherwise the blob is moved into the outbox by a move that never
+   replaces a file there (a hard link and an unlink, or ``os.rename`` on
+   Windows; `_no_clobber_move`) and THEN the sidecar is deleted. The move is
+   the commit: a crash after it
    leaves a sidecar naming a missing blob, which no placement reaches and the
    next collection releases (``blob-missing``) -- the same as a blob already
    gone at this step. This reverses ingest's order (blob, then sidecar) and is
@@ -136,12 +138,14 @@ state.
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import logging
 import os
 import re
 import secrets
 import stat
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -208,6 +212,17 @@ BIN_DESCRIPTION_BYTES = 200
 #: Characters a Windows file name may not hold, every control character, and
 #: lone surrogates (which no file system can encode).
 _NOT_IN_A_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f-\x9f\ud800-\udfff]')
+
+MOVE_TRIES = 100
+"""How many names one move into the outbox tries -- the bin name, then its
+`` (2)``, `` (3)``, ... -- when each it picks is taken by the time it lands
+(something syncing files into the outbox). Past that the run stops with the
+blob still in ``blobs/``."""
+
+#: Whether `os.rename` refuses a target that exists (Windows), so it is the
+#: no-clobber move; elsewhere it replaces one, and the move is a hard link and
+#: an unlink. A module attribute so a test can take the Windows branch.
+_RENAME_REFUSES_EXISTING = sys.platform == "win32"
 
 #: A report's `state`.
 COMPLETE = "complete"
@@ -391,8 +406,16 @@ def _move_to_outbox(root: Path, blob: Path, name: str) -> Path | None:
     suffixed one), after checking the live root is still `root`: the blob a
     regular file under ``blobs/`` and the outbox a real directory, neither
     reached through a link (`_UnsafePathError` otherwise). Returns where it
-    went, or None when the blob was already gone. The move is one
-    ``os.replace`` on one volume, so the picture is in exactly one place."""
+    went, or None when the blob was already gone.
+
+    The move never replaces a file (`_no_clobber_move`): `_free_name` only says
+    a name was free when it looked, a sync client can deliver a file there
+    before the move lands, and a file in the outbox may be the only copy left
+    of an earlier collection the bin refused. A taken name moves on to the
+    next suffix, up to `MOVE_TRIES` names, and then the run stops with
+    FileExistsError and the blob in place. Any other failure of the move --
+    hard links unsupported here (EPERM, ENOTSUP, EXDEV, ...) among them --
+    stops the run the same way: there is no fallback to a replacing move."""
     _check_root(root)
     rel = Path(blob).relative_to(root).parts     # ValueError: not ours at all
     if rel[:len(_BLOBS_DIR)] != _BLOBS_DIR or len(rel) != len(_BLOBS_DIR) + 2:
@@ -407,14 +430,36 @@ def _move_to_outbox(root: Path, blob: Path, name: str) -> Path | None:
         raise _UnsafePathError(Path(blob))
     outbox = outbox_dir(root)
     _real_dirs(root, outbox, create=True)
-    target = _free_name(outbox, name)
-    try:
-        os.replace(blob, target)
-    except FileNotFoundError:
-        if os.path.lexists(blob):
-            raise                  # the outbox went, not the blob: stop, blob in place
-        return None
-    return target
+    for _ in range(MOVE_TRIES):
+        target = _free_name(outbox, name)
+        try:
+            _no_clobber_move(blob, target)
+        except FileExistsError:
+            continue               # it arrived after `_free_name` looked: next name
+        except FileNotFoundError:
+            if os.path.lexists(blob):
+                raise              # the outbox went, not the blob: stop, blob in place
+            return None
+        return target
+    raise FileExistsError(errno.EEXIST, "no free name in the outbox", str(outbox / name))
+
+
+def _no_clobber_move(src: Path, dst: Path) -> None:
+    """Move `src` to `dst`, raising FileExistsError when `dst` exists rather
+    than replacing it. On Windows `os.rename` is that move. Elsewhere it is
+    ``os.link`` -- atomic, and refusing a taken name -- and then the unlink of
+    `src`. A crash (or a failed unlink, which raises) between the two leaves
+    the picture under both names, which loses nothing: the next collection
+    drains the outbox copy to the bin and, finding the object still there,
+    moves the blob again under a suffixed name, so both copies reach the bin.
+    A blob someone else unlinked after the link is not an error: the picture
+    is in the outbox."""
+    if _RENAME_REFUSES_EXISTING:
+        os.rename(src, dst)
+        return
+    os.link(src, dst, follow_symlinks=False)
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(src)
 
 
 def _outbox_files(root: Path) -> list[Path]:

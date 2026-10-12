@@ -1297,6 +1297,170 @@ def test_a_name_already_waiting_gets_a_suffix(root, monkeypatch, fake_bin):
     assert [r["name"] for r in done["recycled"]] == _binned(fake_bin)
 
 
+# ---- the move into the outbox never replaces a file ------------------------------
+#
+# `_free_name` says a name is free and the move happens after it: a sync client
+# can deliver a file at that name in between, and an outbox file may be the
+# only copy left of an earlier refused or cancelled collection. So the move
+# refuses an existing target (a hard link on POSIX, `os.rename` on Windows) and
+# never falls back to a replacing move.
+
+def _arriving(monkeypatch, *, every: bool = False) -> list[tuple[Path, bytes]]:
+    """Wrap `_free_name` so a file lands at the name it chose before the move
+    (on the first call, or on `every` call). Returns what was planted."""
+    real = image_gc._free_name
+    planted: list[tuple[Path, bytes]] = []
+
+    def free_name(outbox, name):
+        target = real(outbox, name)
+        if every or not planted:
+            data = _png(200 + len(planted))
+            target.write_bytes(data)
+            planted.append((target, data))
+        return target
+
+    monkeypatch.setattr(image_gc, "_free_name", free_name)
+    return planted
+
+
+def _binned_bytes(fake_bin) -> dict[str, bytes]:
+    return {p.name: (fake_bin._dir / f"{i}-{p.name}").read_bytes()
+            for i, p in enumerate(fake_bin.paths)}
+
+
+def _emulate_windows_rename(monkeypatch) -> list[tuple[str, str]]:
+    """`os.rename` as Windows has it (FileExistsError for a taken target), and
+    the move told it is on Windows; `os.link` must not be reached."""
+    real = os.rename
+    calls: list[tuple[str, str]] = []
+
+    def rename(src, dst, *a, **kw):
+        calls.append((str(src), str(dst)))
+        if os.path.lexists(dst):
+            raise FileExistsError(17, "Cannot create a file when that file already exists",
+                                  str(dst))
+        return real(src, dst, *a, **kw)
+
+    def link(*a, **kw):
+        raise AssertionError("the Windows move never hard-links")
+
+    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", True)
+    monkeypatch.setattr(os, "rename", rename)
+    monkeypatch.setattr(os, "link", link)
+    return calls
+
+
+@pytest.mark.parametrize("platform", ["posix", "windows"])
+def test_a_file_arriving_at_the_chosen_name_is_never_overwritten(root, monkeypatch, fake_bin,
+                                                                 platform):
+    orphan = _obj(1)
+    picture = _blob(orphan).read_bytes()
+    report = _ready(root)
+    name = f"grimoire - {orphan.blob_sha256[:8]}.png"
+    calls = _emulate_windows_rename(monkeypatch) if platform == "windows" else None
+    planted = _arriving(monkeypatch)
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    (arrived, data), = planted
+    assert arrived.name == name
+    assert arrived.read_bytes() == data, "the file that arrived is untouched"
+    suffixed = f"grimoire - {orphan.blob_sha256[:8]} (2).png"
+    assert _binned(fake_bin) == [suffixed]
+    assert _binned_bytes(fake_bin) == {suffixed: picture}
+    assert done["outbox"] == [name]
+    assert not _blob(orphan).exists() and not _sidecar(orphan).exists()
+    if calls is not None:
+        into_outbox = [Path(dst).name for _src, dst in calls
+                       if Path(dst).parent == image_gc.outbox_dir(root)]
+        assert into_outbox == [name, suffixed]
+
+
+@pytest.mark.parametrize("platform", ["posix", "windows"])
+def test_a_name_that_never_comes_free_stops_the_run_with_the_blob_in_place(
+        root, monkeypatch, fake_bin, platform):
+    orphan = _obj(1)
+    picture = _blob(orphan).read_bytes()
+    report = _ready(root)
+    if platform == "windows":
+        _emulate_windows_rename(monkeypatch)
+    planted = _arriving(monkeypatch, every=True)
+    with pytest.raises(FileExistsError):
+        _collect(root, report["token"], run_id="5" * 32)
+    assert len(planted) == image_gc.MOVE_TRIES
+    assert all(p.read_bytes() == d for p, d in planted), "no arrival was replaced"
+    assert _blob(orphan).read_bytes() == picture and _sidecar(orphan).is_file()
+    assert fake_bin.paths == []
+    assert maintenance_reports.read(root, "5" * 32)["state"] == "failed"
+
+
+@pytest.mark.parametrize("error", [PermissionError(1, "Operation not permitted"),
+                                   OSError(95, "Operation not supported"),
+                                   OSError(18, "Invalid cross-device link")])
+def test_no_hard_links_stops_the_run_and_never_replaces(root, monkeypatch, fake_bin, error):
+    orphan = _obj(1)
+    picture = _blob(orphan).read_bytes()
+    report = _ready(root)
+
+    def link(*a, **kw):
+        raise error
+
+    def replace(src, dst, *a, **kw):
+        assert image_gc.outbox_dir(root) not in Path(dst).parents, "no replacing move"
+        return real_replace(src, dst, *a, **kw)
+
+    real_replace = os.replace
+    monkeypatch.setattr(os, "link", link)
+    monkeypatch.setattr(os, "replace", replace)
+    with pytest.raises(type(error)):
+        _collect(root, report["token"], run_id="6" * 32)
+    assert _blob(orphan).read_bytes() == picture, "the blob is still in blobs/"
+    assert _sidecar(orphan).is_file(), "the sidecar is intact"
+    assert fake_bin.paths == []
+    assert image_gc._outbox_files(root) == []
+    assert maintenance_reports.read(root, "6" * 32)["state"] == "failed"
+
+
+def test_a_blob_that_will_not_unlink_after_the_link_keeps_both_copies(root, monkeypatch,
+                                                                      fake_bin):
+    """Between the link and the unlink the picture has two names: a failure (or
+    a crash) there loses neither, and the run stops."""
+    orphan = _obj(1)
+    blob = _blob(orphan)
+    picture = blob.read_bytes()
+    report = _ready(root)
+    real_unlink = os.unlink
+
+    def unlink(path, *a, **kw):
+        if Path(path) == blob:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+    with pytest.raises(PermissionError):
+        _collect(root, report["token"])
+    assert blob.read_bytes() == picture and _sidecar(orphan).is_file()
+    (waiting,) = image_gc._outbox_files(root)
+    assert waiting.read_bytes() == picture
+    assert fake_bin.paths == []
+
+
+def test_a_blob_gone_before_the_link_is_released(root, monkeypatch, fake_bin):
+    orphan = _obj(1)
+    report = _ready(root)
+    real_link = os.link
+
+    def link(src, dst, *a, **kw):
+        os.remove(src)                  # someone else got there first
+        return real_link(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "link", link)
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    assert done["released"] == [{"id": orphan.id, "blob": f"{orphan.blob_sha256}.png",
+                                 "reason": "blob-missing"}]
+    assert image_gc._outbox_files(root) == [] and fake_bin.paths == []
+
+
 # ---- a cancel reaches the bin calls ---------------------------------------------
 
 def _waiting(root: Path, *names: str) -> list[Path]:

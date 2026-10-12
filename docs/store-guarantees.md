@@ -939,13 +939,25 @@ operating system's; on Windows that is the residual stated below.
   (`test_an_older_format_token_is_refused`).
 - **Disposal commits to the outbox, under the lock.** Batches run under the
   ingest lock and then each object's stripe, re-checking mtime, root,
-  reachability and refcount. A recycled object's blob is moved with one
-  `os.replace` into `.cache/image-store/recycle/<device key>/`, under a readable
+  reachability and refcount. A recycled object's blob is moved into
+  `.cache/image-store/recycle/<device key>/`, under a readable
   name (`grimoire - <description> - <sha8>.<ext>`, the description cut to
   60 characters, or `grimoire - <sha8>.<ext>` when the object has none), and
   then its sidecar is deleted. The move is the commit
   (`test_a_collected_blob_goes_to_the_bin_named_and_its_rest_is_deleted`,
-  `test_a_name_already_waiting_gets_a_suffix`). An object whose blob another
+  `test_a_name_already_waiting_gets_a_suffix`). It never replaces a file: a
+  file in the outbox may be the only copy left of an earlier collection, and a
+  sync client can deliver one at the chosen name after it was found free. So
+  the move is a hard link and then an unlink of the blob (`os.rename` on
+  Windows, which refuses a taken name); a taken name moves on to the next
+  suffix, a hundred names at most, and then the run stops with the blob in
+  place (`test_a_file_arriving_at_the_chosen_name_is_never_overwritten`,
+  `test_a_name_that_never_comes_free_stops_the_run_with_the_blob_in_place`).
+  A volume without hard links stops the run the same way, never falling back
+  to a replacing move (`test_no_hard_links_stops_the_run_and_never_replaces`).
+  A crash between the link and the unlink leaves the picture under both names,
+  and the next collection bins both
+  (`test_a_blob_that_will_not_unlink_after_the_link_keeps_both_copies`). An object whose blob another
   sidecar names loses only its sidecar and is reported `released`, as is one
   whose blob is already gone (`test_a_missing_blob_releases_the_sidecar`).
 - **Blob first, sidecar second, and why that is safe.** For a recycled object
