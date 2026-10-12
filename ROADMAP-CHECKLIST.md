@@ -269,6 +269,11 @@ These are headlines. The owning spec's Contract section is authoritative.
   default.
 
 ### 03: Compiled cache
+Gates: the 03 plan gates ran as CLI Codex adversarial reviews on 2026-10-11
+(03-S3's after 03-S2's amendment). 03-S1's code review and final gate ran the
+same way, with their findings fixed before the slices were squashed into one
+PR. The other slices' review and final gate are still open.
+
 - [x] **03-C1** Composite keys over collection digests and inputs that are not
   files. A collection can take a member filter.
 - [x] **03-C2** Liveness by construction.
@@ -522,12 +527,12 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [x] | [x] CLI Codex (2026-10-11) | [x] | [x] CLI Codex; findings fixed | [x] CLI Codex; finding fixed | [ ] |
-| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
-| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [x] | [x] CLI Codex (2026-10-11); waits for S2 | [x] | [ ] | [ ] | [ ] |
-| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
-| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
-| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
+| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 
 ### 04
 

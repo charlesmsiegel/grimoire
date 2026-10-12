@@ -68,6 +68,8 @@ export function StorageLocation(
         a world or campaign clears derived text on this device now and on other
         devices when they next open the library. Dormant caches can remain for
         90 days. Text-keyed vectors remain until you clear the embeddings folder.
+        Each device keeps its own file under <code>.cache/compiled/</code>, so you
+        can exclude that folder from sync; a device without it rebuilds what it needs.
       </p>
       <div className="joined">
         <input
