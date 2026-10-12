@@ -148,16 +148,19 @@ def test_the_reasoning_buffer_rides_every_turn():
 
 def test_the_wall_never_cuts_a_turn_that_has_shown_text(monkeypatch):
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
-    fake = FakeToolTurns(ToolTurn(deltas=("Mara ", "keeps it."), pause=0.4))
-    result = _events(fake, budget=RunBudget(wall_seconds=0.2))[-1].result
+    # Walls of a second, not a fraction: the run's setup (worker-thread store
+    # reads) must never spend the wall before turn 1 on a loaded runner. The
+    # turn still outlasts it.
+    fake = FakeToolTurns(ToolTurn(deltas=("Mara ", "keeps it."), pause=1.2))
+    result = _events(fake, budget=RunBudget(wall_seconds=1.0))[-1].result
     assert result.status == "completed" and result.text == "Mara keeps it."
 
 
 def test_before_visible_text_the_turn_is_bounded(monkeypatch):
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
     fake = FakeToolTurns(("", [("read", {})]),
-                         ToolTurn(deltas=("", "", "late"), pause=0.4))
-    result = _events(fake, budget=RunBudget(wall_seconds=0.2, reserve_final=False))[-1].result
+                         ToolTurn(deltas=("", "", "late"), pause=1.2))
+    result = _events(fake, budget=RunBudget(wall_seconds=1.0, reserve_final=False))[-1].result
     assert (result.status, result.limit) == ("budget_exhausted", "wall")
     assert [r["status"] for r in result.rows] == ["ok", "aborted"]
 

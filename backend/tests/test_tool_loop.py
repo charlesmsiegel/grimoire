@@ -377,7 +377,9 @@ def test_a_tool_result_is_held_to_its_own_cap_marker_included():
 def test_the_runs_wall_is_a_budget_stop_with_an_aborted_row(monkeypatch):
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
     fake = FakeToolTurns(ToolTurn("", (("read", {}),)), ToolTurn("late", (), delay=3))
-    result = _run(fake, budget=RunBudget(wall_seconds=0.4, reserve_final=False))
+    # A wall of a second leaves the setup room on a loaded runner; the late
+    # turn (3s) still outlasts it.
+    result = _run(fake, budget=RunBudget(wall_seconds=1.0, reserve_final=False))
     assert result.status == "budget_exhausted" and result.limit == "wall"
     assert [r["status"] for r in result.rows] == ["ok", "aborted"]
 
