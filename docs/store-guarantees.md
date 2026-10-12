@@ -1020,7 +1020,17 @@ operating system's; on Windows that is the residual stated below.
   returns a `refused` report (`test_collect_refuses_without_a_bin`). A scan is
   always allowed and reports the answer as `recycle_bin`. Android has no bin; a
   desktop whose install lacks the Send2Trash helper (the `desktop` extra) is
-  refused as `not_installed`.
+  refused as `not_installed`. On macOS and Linux the move into the outbox is a
+  hard link, so `check` also probes that the outbox's drive can make one --
+  two uniquely named empty files in the deepest existing ancestor of the
+  outbox, both removed again, the outbox never created -- and refuses
+  `no_hard_links` when the link fails (exFAT, FAT, many network and cloud
+  mounts), or `outbox_not_writable` when the probe file cannot be created,
+  rather than letting every collection fail at its first object
+  (`test_a_drive_without_hard_links_refuses`,
+  `test_hard_links_that_work_pass_and_leave_nothing`,
+  `test_route_refuses_a_drive_without_hard_links`). Windows skips the probe:
+  it moves with `os.rename`.
 - **Windows needs more than the helper's word.** Send2Trash 2.1 calls the
   shell without the flag that makes Windows warn, so on a volume with no
   Recycle Bin, or one set to delete immediately, the shell deletes the file

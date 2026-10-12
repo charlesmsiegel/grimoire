@@ -130,6 +130,130 @@ def test_the_real_platform_names_this_machine():
     assert REAL_PLATFORM() == {"win32": "windows", "darwin": "darwin"}.get(sys.platform, "linux")
 
 
+# --- check: hard links on macOS and Linux -------------------------------------
+#
+# Off Windows the move into the outbox is a hard link and an unlink (it never
+# replaces a file), so a drive that cannot make hard links -- exFAT, FAT, many
+# network and cloud mounts -- would stop every collection at its first object.
+# `check` asks first, with a probe pair of files next to where the outbox goes.
+
+PROBE_PREFIX = ".grimoire-link-probe-"
+
+
+def _probe_files(base: Path) -> list[Path]:
+    return [p for p in base.rglob("*") if p.name.startswith(PROBE_PREFIX)]
+
+
+@pytest.fixture
+def unix_check(monkeypatch, real_check):
+    monkeypatch.setattr(recycle_bin, "_platform", lambda: "linux")
+    monkeypatch.setattr(recycle_bin, "_send2trash", lambda p: None)
+    monkeypatch.setattr(recycle_bin, "_link_probe", recycle_bin._probe_hard_links)
+
+
+def test_the_message_for_a_drive_without_hard_links():
+    assert MESSAGES["no_hard_links"] == (
+        "This library's drive can't make hard links (for example exFAT, FAT, or some "
+        "network and cloud drives), so unused pictures can't be safely moved to the "
+        "recycle bin from it. Move the library to a drive that supports them to "
+        "collect from it.")
+
+
+def test_hard_links_that_work_pass_and_leave_nothing(unix_check, tmp_path):
+    before = sorted(tmp_path.rglob("*"))
+    assert recycle_bin.check(tmp_path) == Availability(True)
+    assert sorted(tmp_path.rglob("*")) == before, "the probe leaves nothing behind"
+
+
+def test_the_probe_runs_in_the_deepest_existing_ancestor(unix_check, monkeypatch, tmp_path):
+    cache = tmp_path / ".cache" / "image-store"
+    cache.mkdir(parents=True)
+    made = []
+    real_link = os.link
+
+    def link(src, dst, *a, **kw):
+        made.append((Path(src).parent, Path(dst).parent))
+        return real_link(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "link", link)
+    assert recycle_bin.check(tmp_path).ok
+    assert made == [(cache, cache)]
+    assert not (cache / "recycle").exists(), "the outbox is never created to probe"
+    assert _probe_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("error", [PermissionError(1, "Operation not permitted"),
+                                   OSError(18, "Invalid cross-device link"),
+                                   OSError(95, "Operation not supported")])
+def test_a_drive_without_hard_links_refuses(unix_check, monkeypatch, tmp_path, error):
+    def link(*a, **kw):
+        raise error
+
+    monkeypatch.setattr(os, "link", link)
+    assert recycle_bin.check(tmp_path) == Availability(
+        False, "no_hard_links", MESSAGES["no_hard_links"])
+    assert _probe_files(tmp_path) == [], "the probe file is removed after a refusal"
+
+
+def test_a_folder_that_cannot_be_written_refuses(unix_check, monkeypatch, tmp_path):
+    real_open = os.open
+
+    def deny(path, *a, **kw):
+        if Path(path).name.startswith(PROBE_PREFIX):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(os, "open", deny)
+    assert recycle_bin.check(tmp_path) == Availability(
+        False, "outbox_not_writable", MESSAGES["outbox_not_writable"])
+    assert _probe_files(tmp_path) == []
+
+
+def test_a_failed_link_never_removes_a_file_it_did_not_make(unix_check, monkeypatch,
+                                                            tmp_path):
+    """Cleanup removes only the probe names this call created: a link refused
+    because its name exists must not unlink whatever holds that name."""
+    seen = []
+
+    def link(src, dst, *a, **kw):
+        Path(dst).write_bytes(b"someone else's")
+        seen.append(Path(dst))
+        raise FileExistsError(17, "File exists", str(dst))
+
+    monkeypatch.setattr(os, "link", link)
+    assert recycle_bin.check(tmp_path).code == "no_hard_links"
+    (other,) = seen
+    assert other.read_bytes() == b"someone else's"
+    assert _probe_files(tmp_path) == [other]
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_the_probe_runs_off_windows(monkeypatch, tmp_path, real_check, platform):
+    monkeypatch.setattr(recycle_bin, "_platform", lambda: platform)
+    monkeypatch.setattr(recycle_bin, "_send2trash", lambda p: None)
+    asked = []
+    monkeypatch.setattr(recycle_bin, "_link_probe", lambda d: asked.append(d) or None)
+    assert recycle_bin.check(tmp_path) == Availability(True)
+    assert asked == [tmp_path]
+
+
+def test_windows_skips_the_hard_link_probe(windows, monkeypatch, tmp_path):
+    windows()
+    monkeypatch.setattr(recycle_bin, "_link_probe",
+                        lambda d: pytest.fail("Windows moves with os.rename"))
+    assert recycle_bin.check(tmp_path) == Availability(True)
+
+
+def test_android_and_a_missing_helper_refuse_before_the_probe(monkeypatch, tmp_path,
+                                                              real_check):
+    monkeypatch.setattr(recycle_bin, "_platform", lambda: "linux")
+    monkeypatch.setattr(recycle_bin, "_link_probe", lambda d: pytest.fail("probed"))
+    monkeypatch.setattr(recycle_bin, "_send2trash", None)
+    assert recycle_bin.check(tmp_path).code == "not_installed"
+    monkeypatch.setattr(proclock, "on_android", lambda: True)
+    assert recycle_bin.check(tmp_path).code == "android"
+
+
 # --- check: Windows ----------------------------------------------------------
 
 def test_windows_volume_is_the_outboxs_mount(windows, tmp_path):

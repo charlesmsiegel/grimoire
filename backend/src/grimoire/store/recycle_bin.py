@@ -30,6 +30,12 @@ three apart (a DWORD, None for absent, `UNREADABLE`), and an unreadable
 `bin_settings_unreadable`. So does a volume whose GUID cannot be resolved: its
 per-volume key cannot be named, so those two are unread, not absent.
 
+**macOS and Linux need hard links.** There the move into the outbox is a hard
+link and an unlink (it never replaces a file), so `check` probes, with a pair
+of empty files it removes again, that the outbox's drive can make one, and
+refuses `no_hard_links` (or `outbox_not_writable`) before a collection starts
+rather than letting it fail at its first object.
+
 **Capacity.** A bin at capacity purges its oldest items to fit a new one, and a
 file larger than the whole bin is deleted outright. The capacity is the
 volume's `MaxCapacity` (MB) in the registry; a file larger than a *known*
@@ -51,7 +57,10 @@ fact; it is the backstop for a configuration none of the checks recognise.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import sys
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,6 +92,12 @@ MESSAGES: dict[str, str] = {
     "too_large_for_bin": "This picture is larger than the Recycle Bin on its drive can hold.",
     "bin_settings_unreadable": ("Windows' Recycle Bin settings for this drive couldn't be "
                                 "read, so pictures won't be sent to it."),
+    "no_hard_links": ("This library's drive can't make hard links (for example exFAT, FAT, "
+                      "or some network and cloud drives), so unused pictures can't be safely "
+                      "moved to the recycle bin from it. Move the library to a drive that "
+                      "supports them to collect from it."),
+    "outbox_not_writable": ("This library's folder can't be written to, so unused pictures "
+                            "can't be moved to the recycle bin from it."),
 }
 
 _POLICY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
@@ -267,14 +282,64 @@ _win: Any = SimpleNamespace(
 )
 
 
-def _outbox_volume(root: Path) -> str | None:
-    """The volume the collection outbox lives on: that of the deepest existing
-    ancestor of the outbox directory (nothing is created to ask)."""
+def _outbox_ancestor(root: Path) -> Path:
+    """The deepest existing ancestor of the collection outbox directory (the
+    outbox itself when it exists): where to ask about the outbox's drive
+    without creating anything."""
     probe = root / ".cache" / "image-store" / "recycle"
     while not probe.exists() and probe.parent != probe:
         probe = probe.parent
-    volume: str | None = _win.volume_of(probe)
+    return probe
+
+
+def _outbox_volume(root: Path) -> str | None:
+    """The volume the collection outbox lives on: that of the deepest existing
+    ancestor of the outbox directory (nothing is created to ask)."""
+    volume: str | None = _win.volume_of(_outbox_ancestor(root))
     return volume
+
+
+_PROBE_PREFIX = ".grimoire-link-probe-"
+
+
+def _probe_hard_links(directory: Path) -> str | None:
+    """Whether a hard link can be made in `directory`: None when it can, else
+    the refusal code. Off Windows the move into the outbox is a hard link and
+    an unlink (`image_gc._no_clobber_move`), so a drive without them (exFAT,
+    FAT, many network and cloud mounts) would stop every collection at its
+    first object.
+
+    One uniquely named empty file is created (``O_EXCL``, so nothing is ever
+    opened over) and linked to a second unique name; both are removed after,
+    whatever happened, and only the names this call made -- a link refused
+    because its name exists leaves that file alone. A file that cannot be
+    created is `outbox_not_writable` (the folder, not the links, is the
+    problem); a link that fails with any OSError is `no_hard_links`."""
+    token = uuid.uuid4().hex
+    source = Path(directory) / f"{_PROBE_PREFIX}{token}"
+    linked = Path(directory) / f"{_PROBE_PREFIX}{token}-link"
+    made: list[Path] = []
+    try:
+        try:
+            os.close(os.open(source, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except OSError:
+            return "outbox_not_writable"
+        made.append(source)
+        try:
+            os.link(source, linked, follow_symlinks=False)
+        except OSError:
+            return "no_hard_links"
+        made.append(linked)
+        return None
+    finally:
+        for path in made:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
+#: The seam tests replace: the hard-link probe `check` runs off Windows.
+#: Looked up at call time, never bound.
+_link_probe: Callable[[Path], str | None] = _probe_hard_links
 
 
 def _volume_key(volume: str) -> str | None:
@@ -334,13 +399,19 @@ def _windows(root: Path) -> _WindowsReading:
 
 
 def check(root: Path) -> Availability:
-    """Whether pictures can be sent to a real recycle bin from this store."""
+    """Whether pictures can be sent to a real recycle bin from this store.
+    Off Windows this makes (and removes) two empty probe files where the
+    outbox goes (`_probe_hard_links`); it never creates the outbox."""
     if proclock.on_android():
         return _refusal("android")
     if _send2trash is None:
         return _refusal("not_installed")
     if _platform() != "windows":
-        return Availability(True)
+        # Windows moves into the outbox with `os.rename`; elsewhere the move
+        # is a hard link, so a drive that cannot make one is refused here
+        # rather than failing the run at its first object.
+        code = _link_probe(_outbox_ancestor(Path(root)))
+        return Availability(True) if code is None else _refusal(code)
     return _windows(root).availability
 
 

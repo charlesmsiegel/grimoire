@@ -361,6 +361,21 @@ test("a scan that finds no recycle bin offers nothing and says why", async () =>
   expect(screen.queryByText(/not_installed/)).toBeNull();
 });
 
+test("a drive that can't make hard links offers nothing and shows the server's sentence", async () => {
+  const message = "This library's drive can't make hard links (for example exFAT, FAT, or some "
+    + "network and cloud drives), so unused pictures can't be safely moved to the recycle bin "
+    + "from it. Move the library to a drive that supports them to collect from it.";
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    recycle_bin: { ok: false, code: "no_hard_links", message },
+  }));
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+  expect(screen.queryByText(/no_hard_links/)).toBeNull();
+});
+
 test("a bin that is not known either way does not hide the button as 'no bin'", async () => {
   // `ok: null` is what a report that ended before it asked carries.
   (api.getImageMaintenanceReport as any).mockResolvedValue(scan({

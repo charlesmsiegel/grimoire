@@ -9,6 +9,7 @@ ones, over an empty or synthetic store, or a stand-in that blocks.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -24,6 +25,8 @@ from grimoire.store import (
 )
 
 WAIT = 10.0
+#: The real availability check: conftest's autouse `fake_bin` replaces it per test.
+REAL_BIN_CHECK = recycle_bin.check
 RUN_ID = "0123456789abcdef0123456789abcdef"
 
 
@@ -130,6 +133,27 @@ def test_route_refuses_when_bin_unavailable(client, monkeypatch):
     assert client.get("/api/runs").json()["runs"] == []
     # A dry run sends nothing to a bin, so availability does not gate it.
     assert _start(client, GC, {"dry_run": True}).status_code == 202
+
+
+def test_route_refuses_a_drive_without_hard_links(client, monkeypatch):
+    """The real `check`, off Windows, on a drive whose links fail: the start
+    is refused 409 before a run is reserved, carrying the code and sentence."""
+    monkeypatch.setattr(recycle_bin, "check", REAL_BIN_CHECK)
+    monkeypatch.setattr(recycle_bin, "_platform", lambda: "linux")
+    monkeypatch.setattr(recycle_bin, "_send2trash", lambda p: None)
+    monkeypatch.setattr(proclock, "on_android", lambda: False)
+
+    def link(*a, **kw):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", link)
+    res = _start(client, GC, {"dry_run": False, "token": "tok-1"})
+    assert res.status_code == 409, res.text
+    body = res.json()
+    assert body["kind"] == "no_recycle_bin"
+    assert body["code"] == "no_hard_links"
+    assert body["detail"] == recycle_bin.MESSAGES["no_hard_links"]
+    assert client.get("/api/runs").json()["runs"] == []
 
 
 def test_gc_delete_carries_the_token_to_collect(client, monkeypatch):

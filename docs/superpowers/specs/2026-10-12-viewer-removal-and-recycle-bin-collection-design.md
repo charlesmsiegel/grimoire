@@ -325,6 +325,20 @@ dependency set stays as it is. Availability is one function,
 - **`not_installed`** — a desktop where `send2trash` does not import (an
   install upgraded by `git pull` without re-running the installer): "The
   recycle-bin helper is not installed. Re-run the installer, then try again."
+- **`no_hard_links`** — macOS and Linux only (Windows moves with
+  `os.rename`). There the move into the outbox is a hard link and an unlink,
+  never a replacing move (§3.1), so a drive that cannot make one (exFAT, FAT,
+  many SMB/NFS shares and FUSE or cloud mounts) would stop every collection
+  `failed` at its first object. `check` probes in the deepest existing
+  ancestor of the outbox (never creating it): one uniquely named empty file,
+  created exclusively, linked to a second unique name, and both removed
+  whatever happened -- only names the probe made. A link failing with any
+  OSError refuses: "This library's drive can't make hard links (for example
+  exFAT, FAT, or some network and cloud drives), so unused pictures can't be
+  safely moved to the recycle bin from it. Move the library to a drive that
+  supports them to collect from it." A probe file that cannot be created
+  refuses as **`outbox_not_writable`**: "This library's folder can't be
+  written to, so unused pictures can't be moved to the recycle bin from it."
 - **Windows, a volume with no bin.** Send2Trash calls the shell without
   `FOF_WANTNUKEWARNING`, and on a volume with no Recycle Bin Windows then
   *deletes the file permanently and reports success* (verified against
@@ -466,7 +480,9 @@ tests that are about availability override it.
   first, and a drain refusal stops that collection before its first batch;
 - a scan with only outbox files issues a token; another outbox directory is
   never touched and is counted in `foreign_outboxes`;
-- `recycle_bin.check`: `android`, `not_installed`, and on Windows (through
+- `recycle_bin.check`: `android`, `not_installed`, off Windows a drive whose
+  hard-link probe fails (`no_hard_links`, `outbox_not_writable`, no probe file
+  left behind), and on Windows (through
   seams over `ctypes` and `winreg`) a non-fixed drive, a failing
   `SHQueryRecycleBinW`, `NoRecycleFiles` in HKCU and in HKLM, `NukeOnDelete`,
   an absent per-volume key (not a refusal), an unresolvable volume GUID
