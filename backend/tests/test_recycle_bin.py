@@ -300,3 +300,23 @@ def test_fake_bin_moves_and_records(fake_bin, tmp_path):
     result = recycle_bin.send_batch(tmp_path, [a], lambda p: None)
     assert result.sent == [a] and not a.exists()
     assert fake_bin.paths == [a]
+
+
+# --- a failing bin query never lets a send go unremarked ----------------------
+
+def test_pre_batch_query_failure_sends_nothing(windows, monkeypatch, tmp_path):
+    _, paths, log = _windows_batch(
+        windows, monkeypatch, tmp_path, [1, 1],
+        registry={("HKCU", VOLUME_KEY, "MaxCapacity"): 100}, bin_states=[None])
+    result = recycle_bin.send_batch(tmp_path, paths, lambda p: pytest.fail("before ran"))
+    assert result.sent == [] and log == []
+    assert result.refused == paths[0] and result.code == "volume_has_no_bin"
+    assert all(p.exists() for p in paths)
+
+
+def test_post_batch_query_failure_is_unverified(windows, monkeypatch, tmp_path):
+    _, paths, _ = _windows_batch(
+        windows, monkeypatch, tmp_path, [1024],
+        registry={("HKCU", VOLUME_KEY, "MaxCapacity"): 100}, bin_states=[(0, 5), None])
+    result = recycle_bin.send_batch(tmp_path, paths, lambda p: None)
+    assert result.sent == paths and result.unverified == paths

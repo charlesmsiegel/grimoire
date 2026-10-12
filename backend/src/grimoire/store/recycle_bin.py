@@ -120,14 +120,35 @@ if sys.platform == "win32":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
     _shell32 = ctypes.WinDLL("shell32", use_last_error=True)  # type: ignore[attr-defined]
     _GUID = re.compile(r"\{[0-9A-Fa-f-]+\}")
+    _ulonglong_p = ctypes.POINTER(ctypes.c_ulonglong)
+
+    def _declare(function: Any, argtypes: list[Any], restype: Any) -> None:
+        function.argtypes = argtypes
+        function.restype = restype
+
+    _declare(_kernel32.GetVolumePathNameW,
+             [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_int)
+    _declare(_kernel32.GetDriveTypeW, [ctypes.c_wchar_p], ctypes.c_uint)
+    _declare(_kernel32.GetVolumeNameForVolumeMountPointW,
+             [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_int)
+    _declare(_kernel32.GetDiskFreeSpaceExW,
+             [ctypes.c_wchar_p, _ulonglong_p, _ulonglong_p, _ulonglong_p], ctypes.c_int)
+    # SHQueryRecycleBinW's second argument is a struct pointer, declared once
+    # the struct exists (below); the HRESULT comes back as a signed int.
 
     class _SHQUERYRBINFO(ctypes.Structure):
-        # shellapi.h wraps this in pshpack1.h: the two int64s follow the DWORD
-        # with no padding, and cbSize must say so (20, not 24).
-        _pack_ = 1
+        # shellapi.h applies 1-byte packing (pshpack1.h) only when _WIN64 is
+        # not defined: on 32-bit Windows the int64s follow the DWORD with no
+        # padding (cbSize 20), on x64 they are naturally aligned (cbSize 24,
+        # at offsets 8 and 16). cbSize is taken from sizeof, so it follows.
+        if ctypes.sizeof(ctypes.c_void_p) == 4:
+            _pack_ = 1
         _fields_ = [("cbSize", wintypes.DWORD),
                     ("i64Size", ctypes.c_int64),
                     ("i64NumItems", ctypes.c_int64)]
+
+    _declare(_shell32.SHQueryRecycleBinW,
+             [ctypes.c_wchar_p, ctypes.POINTER(_SHQUERYRBINFO)], ctypes.c_long)
 
     def _volume_of(path: Path) -> str | None:
         buf = ctypes.create_unicode_buffer(32768)
@@ -254,7 +275,9 @@ def _unverified(volume: str, pre: tuple[int, int] | None, estimate: int | None,
     if pre is None or not result.sent:
         return []
     post = _win.query_bin(volume)
-    if post is None or post[1] - pre[1] >= len(result.sent):
+    if post is None:
+        return list(result.sent)  # nothing confirmed them: a doubt is never "sent"
+    if post[1] - pre[1] >= len(result.sent):
         return []
     # No estimate at all means no purge is assumed: err toward stopping.
     may_have_purged = estimate is not None and pre[0] + sent_bytes > estimate
@@ -276,11 +299,13 @@ def send_batch(root: Path, paths: list[Path],
     result = BatchResult(sent=[])
     windows = _platform() == "windows"
     volume = _outbox_volume(root) if windows else None
-    if windows and volume is None:
+    pre = _win.query_bin(volume) if volume is not None else None
+    if windows and (volume is None or pre is None):
+        # The same doubt `check` refuses on: with no bin to read, nothing is
+        # sent, because on Windows that is how a file gets deleted outright.
         if paths:
             result.refused, result.code = paths[0], "volume_has_no_bin"
         return result
-    pre = _win.query_bin(volume) if volume is not None else None
     known, estimate = _capacity(volume) if volume is not None else (None, None)
     sent_bytes = 0
     for path in paths:
