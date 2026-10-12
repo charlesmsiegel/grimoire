@@ -99,6 +99,20 @@ def _valid_targets(value) -> bool:
         for position, target in value.items())
 
 
+def _valid_membership_progress(progress: dict) -> bool:
+    """The deferred views `_fence_membership_progress` walks, in the shapes
+    apply's journal writes them, so a damaged account refuses here rather than
+    raising halfway through a lifecycle fence."""
+    journalled = progress.get("journalled", [])
+    recorded = progress.get("recorded", {})
+    return (isinstance(journalled, list)
+            and all(isinstance(row, dict) and isinstance(row.get("ref", {}), dict) for row in journalled)
+            and isinstance(recorded, dict)
+            and all(isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+                    for rows in recorded.values())
+            and isinstance(progress.get("cited", {}), dict))
+
+
 def _valid_entry(entry) -> bool:
     if not isinstance(entry, dict) or type(entry.get("done")) is not bool:
         return False
@@ -111,6 +125,8 @@ def _valid_entry(entry) -> bool:
     progress = entry.get("progress", {})
     if ("membership_targets" in progress and not _valid_targets(progress["membership_targets"])) or (
             "membership_targets" in entry and not _valid_targets(entry["membership_targets"])):
+        return False
+    if ("membership_targets" in progress or "membership_targets" in entry) and not _valid_membership_progress(progress):
         return False
     claimed = entry.get("claimed")
     return claimed is None or (type(claimed) is int and claimed >= 0)

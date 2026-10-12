@@ -34,6 +34,15 @@ def ledger(monkeypatch, tmp_path):
      b'{"0":{"kind":"groups","id":"salt-circle","actor":["characters:mara"]}}}},"scenes":{}}'),
     (b'{"v":2,"tokens":{"mara":{"done":false,"progress":{"membership_targets":'
      b'{"0":{"id":"salt-circle","token":5}}}}},"scenes":{}}'),
+    # Valid targets beside a deferred view the fence would walk as a container.
+    (b'{"v":2,"tokens":{"mara":{"done":false,"progress":{"journalled":1,"membership_targets":'
+     b'{"0":{"kind":"groups","id":"salt-circle"}}}}},"scenes":{}}'),
+    (b'{"v":2,"tokens":{"mara":{"done":false,"progress":{"journalled":[{"ref":"groups/x"}]},'
+     b'"membership_targets":{"0":{"kind":"groups","id":"salt-circle"}}}},"scenes":{}}'),
+    (b'{"v":2,"tokens":{"mara":{"done":false,"progress":{"recorded":{"groups/salt-circle":{}},'
+     b'"membership_targets":{"0":{"kind":"groups","id":"salt-circle"}}}}},"scenes":{}}'),
+    (b'{"v":2,"tokens":{"mara":{"done":false,"progress":{"cited":[],"membership_targets":'
+     b'{"0":{"kind":"groups","id":"salt-circle"}}}}},"scenes":{}}'),
 ])
 def test_every_account_owner_refuses_invalid_documents_without_writing(ledger, raw):
     cid, path = ledger
