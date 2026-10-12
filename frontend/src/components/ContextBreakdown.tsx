@@ -3,6 +3,7 @@ import { type Model } from "../api/models";
 import { SamplingSummary } from "./SamplingSummary";
 import { type ContextSection } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
+import { promptFieldWarning } from "./promptFieldWarning";
 
 /** The section a decision's prompt capture files its outcome under
  *  (`routes/decision_capture.OUTCOME_SECTION_ID`, which a backend test pins to
@@ -24,6 +25,7 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
   const approx = approxMark(ctx);
+  const fieldWarning = promptFieldWarning(ctx.prompt_field_statuses);
 
   return (
     <>
@@ -42,6 +44,7 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
       {/* What this turn is (or was) sent with, and what its backend could not
           take — live for the next turn, frozen for a past one. */}
       <SamplingSummary report={ctx.sampling} />
+      {fieldWarning && <div className="field-hint" role="status">{fieldWarning}</div>}
       <div className="ctx-caption">Breakdown · click a row to inspect</div>
       {/* Keyed on `id`, because the label stopped being unique the moment #29
           let a reader rename two sections the same string. `label` is the

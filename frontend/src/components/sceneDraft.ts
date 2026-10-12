@@ -17,6 +17,8 @@ function narrowCast(cast: { kind: string; id: string; name: string }[]): DraftCa
 type DraftBase = {
   /** editable in the confirm form */
   title: string;
+  /** A reviewed authorial paragraph, separate from the opener premise. */
+  focus: string;
   /** immutable: what an emptied title falls back to, so the fallback is
    *  executable from the draft alone rather than from whatever produced it */
   defaultTitle: string;
@@ -51,9 +53,30 @@ export type SceneDraft =
 
 export const BLANK_TITLE = "New scene";
 
+const FOCUS_BREAKS = new Set("\n\r\v\f\u0085\u2028\u2029" + String.fromCodePoint(0x1c, 0x1d, 0x1e));
+
+function focusEdgeWhitespace(char: string): boolean {
+  // Python strip includes these four separators and excludes a content BOM.
+  // Unicode White_Space supplies the rest; JavaScript trim has both wrong.
+  const code = char.charCodeAt(0);
+  return /\p{White_Space}/u.test(char) || (code >= 0x1c && code <= 0x1f);
+}
+
+export function collapseSceneFocusBreaks(text: string): string {
+  return Array.from(text, (char) => FOCUS_BREAKS.has(char) ? " " : char).join("");
+}
+
+export function normalizeSceneFocus(text: string): string {
+  const collapsed = collapseSceneFocusBreaks(text);
+  let start = 0, end = collapsed.length;
+  while (start < end && focusEdgeWhitespace(collapsed[start])) start++;
+  while (end > start && focusEdgeWhitespace(collapsed[end - 1])) end--;
+  return collapsed.slice(start, end);
+}
+
 export function greetingDraft(g: Availability, nextDate: string, pcless: boolean): SceneDraft {
   return { source: "greeting", gid: g.id, title: g.name, defaultTitle: g.name,
-           date: nextDate, location: g.location ?? "", pcless };
+           date: nextDate, location: g.location ?? "", pcless, focus: "" };
 }
 
 /** A generated card. Its own date wins, and `nextDate` is the fallback --
@@ -66,6 +89,7 @@ export function greetingDraft(g: Availability, nextDate: string, pcless: boolean
 export function suggestionDraft(s: SceneSuggestion, nextDate: string,
                                 pcless: boolean): SceneDraft {
   return { source: "generated", title: s.title, defaultTitle: s.title,
+           focus: normalizeSceneFocus(s.focus ?? ""),
            date: s.date || (s.time_anchor ? "" : nextDate), location: s.location?.id ?? "",
            pcless, premise: s.premise, cast: narrowCast(s.cast) };
 }
@@ -102,6 +126,7 @@ export function suggestionDraft(s: SceneSuggestion, nextDate: string,
 export function savedDraft(idea: SceneIdea, nextDate: string, pcless: boolean): SceneDraft {
   const date = idea.anchor_date || (idea.time_anchor ? "" : nextDate || idea.date);
   return { source: "saved", lid: idea.id, title: idea.title, defaultTitle: idea.title,
+           focus: normalizeSceneFocus(idea.focus ?? ""),
            date, location: idea.location?.id ?? "",
            pcless, premise: idea.premise, cast: narrowCast(idea.cast) };
 }
@@ -113,6 +138,7 @@ export function customDraft(typed: string, intent: SceneIntentResult | null,
                             nextDate: string, pcless: boolean): SceneDraft {
   const title = intent?.title || BLANK_TITLE;
   return { source: "custom", title, defaultTitle: title,
+           focus: normalizeSceneFocus(intent?.focus ?? ""),
            date: intent?.date || nextDate, location: intent?.location?.id ?? "",
            pcless, premise: typed, cast: narrowCast(intent?.cast ?? []) };
 }

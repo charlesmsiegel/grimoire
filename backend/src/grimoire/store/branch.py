@@ -52,8 +52,10 @@ log = logging.getLogger(__name__)
 #: transcript the sibling does not have, and are recomputed. `group_play` (the
 #: scene's speaker order, who sits out, its auto-round cap) is the player's
 #: setting for the scene, as the reply settings are, so it travels with them.
+#: `focus` is likewise current authorial guidance, not a transcript fact to
+#: rewind or an outcome the new branch has already accomplished.
 COPIED_KEYS = ("model", "location_history", "time_history", "suggested_date", "pcless",
-               "turn_sizes", "dismissed", "group_play", *scenes_write.RESPONSE_FIELDS)
+               "turn_sizes", "dismissed", "group_play", "focus", *scenes_write.RESPONSE_FIELDS)
 
 
 class BranchRefused(Exception):  # noqa: N818 - a refusal, named like ResponseConflict

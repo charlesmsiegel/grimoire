@@ -15,6 +15,7 @@ from grimoire.store import (
     campaigns,
     config,
     context,
+    default_prompts,
     entities,
     locks,
     prompt_log,
@@ -33,6 +34,21 @@ def _campaign(monkeypatch, tmp_path):
 def _record(cid, sid, task="chat"):
     _messages, breakdown = context.compose_turn(cid, sid)
     return prompt_log.record(cid, sid, task, breakdown, model="test/model")
+
+
+def test_prompt_field_warning_statuses_stay_frozen(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    sid = scenes.create_scene(cid, "Mara")
+    config.write_config(prompt_log_depth="10")
+    default_prompts.set_world(wid, "The river freezes.")
+    eid = _record(cid, sid)
+    before = prompt_log.read_entry(cid, eid)
+    assert before["prompt_field_statuses"]["world_default_prompt"] == "ok"
+    default_prompts.set_world(wid, "")
+    assert context.context_breakdown(cid, sid)["prompt_field_statuses"]["world_default_prompt"] == "empty"
+    assert prompt_log.read_entry(cid, eid) == before
 
 
 def test_a_snapshot_does_not_move_when_the_store_does(monkeypatch, tmp_path):

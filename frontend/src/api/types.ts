@@ -2037,9 +2037,22 @@ export type CampaignBudget = {
  *  model's own; for most backends it is not, and the counts are estimates.
  *  Even native counts are text only — the provider adds per-message framing. */
 export type TokenCounting = { tokenizer: string; native: boolean };
+export type PromptFieldStatus = "ok" | "empty" | "unreadable";
+export type PromptField = { text: string; status: PromptFieldStatus };
+export type CampaignDefaultPrompt = PromptField & {
+  world: { id: string | null; text: string; status: PromptFieldStatus | "unavailable" };
+};
+export type PromptFieldStatuses = {
+  world_default_prompt?: PromptFieldStatus | "unavailable";
+  campaign_default_prompt?: PromptFieldStatus;
+  scene_focus?: PromptFieldStatus;
+};
 export type SceneContext = {
   model: string; total_tokens: number; dropped_tokens: number;
   budget_tokens: number; sections: ContextSection[];
+  /** Status only, not a prompt row/token charge. Frozen entries keep their
+   *  captured statuses; old entries may omit this block entirely. */
+  prompt_field_statuses?: PromptFieldStatuses;
   /** Absent on a snapshot frozen before it existed — read as an estimate. */
   token_count?: TokenCounting;
   /** The sampler preset this turn is (or was) sent with. Absent on a snapshot
@@ -2481,6 +2494,7 @@ export type RefLabel = { ref: string; label: string };
  *  them, or a fixture, has none, and reads as claiming nothing (§27). */
 export type SceneSuggestion = {
   title: string; premise: string; date?: string;
+  focus?: string;
   cast: { kind: string; id: string; name: string }[];
   location: { id: string; name: string } | null;
   drivers?: SuggestionDriver[];
@@ -2512,6 +2526,7 @@ export type SceneSuggestionsOptions = {
  *  marks server-side. */
 export type SceneIdea = {
   id: string; title: string; premise: string; date: string;
+  focus?: string;
   cast: { kind: string; id: string; name: string }[];
   location: { id: string; name: string } | null;
   pcless: boolean;
@@ -2529,12 +2544,15 @@ export type SceneIdea = {
 };
 export type SceneIdeaDraft = {
   title?: string; premise?: string; cast?: string[]; location?: string;
+  focus?: string;
   date?: string; pcless?: boolean; source?: "llm" | "user";
   drivers?: { ref: string; action: DriverAction }[];
   time_anchor?: { ref: string; relation: AnchorRelation };
 };
 export type SceneIntentResult = {
   title: string; date: string;
+  focus?: string;
+  prompt_field_statuses?: PromptFieldStatuses;
   location: { id: string; name: string } | null;
   cast: { kind: string; id: string; name: string }[];
 };

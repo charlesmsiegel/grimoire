@@ -133,6 +133,14 @@ Vars (both files take the same set):
   `links`, `fixed`, `near_days` and `sooner_ref`, and a `ref` on each thread)
 - `offscreen` — bool selector: `instruction/{standard|offscreen}.j2`
 - `greeting_candidates` — `suggest.greeting_candidates()` list or None
+- `default_sections` — the nonempty, layout-enabled world/campaign default
+  blocks captured by `suggest.creation_defaults(cid)`, in that order. Appended
+  to the system message only; macros have already expanded once with no scene,
+  actor or date binding. The suggestion builder takes this capture explicitly,
+  and the intent builder resolves it once when a direct caller supplies none.
+  Neither reads another scene's focus. A draft's string `focus` is requested
+  with its other metadata in the existing call; missing/non-string model
+  values remain an empty focus, not a discarded draft or another generation.
 - `direction` — the game master's steering text, "" when absent
 - `drivers` — bool; `build_prompt` passes True. Under it, `user.j2` prefixes
   each thread line with its `thread:<id> =` ref, drops the Upcoming line in
@@ -599,6 +607,20 @@ are dropped lowest tier first and the history is trimmed; lock-in never is. See
 The section data vars, in section order — all already `{{user}}`/`{{char}}`
 substituted by code:
 - `global_system_prompt` — config `system_prompt`
+- `world_default_prompt`, `campaign_default_prompt`, `scene_focus` — optional
+  authorial fields from the bound world's `default_prompt.md`, the campaign's
+  own `default_prompt.md` and the addressed scene's `focus` frontmatter.
+  They follow the global system prompt in this order, each as a complete
+  lock-in section; empty values emit no heading or separators. The campaign
+  text is additive, with explicit local exceptions over the corresponding
+  world fact. Focus offers opportunities, never a required outcome or player
+  decision, and yields to immediate input and established continuity.
+  All three are shared with NPC writers: they are not secret knowledge vaults
+  and do not activate lore or widen actor visibility. Standard macros expand
+  once during section rendering; prepared variants and historical captures
+  retain that expansion. `prompt_field_statuses` is optional inspector/capture
+  metadata, not a rendered section or token charge. Merely adding defaults
+  increases input; savings require deliberately consolidating repeated prose.
 - `prose_style_name`, `prose_style_body` — the resolved style guide; both
   `""` when none resolves. Resolved by `response_presets.resolve()`, whose
   per-field cascade (turn → scene → campaign → global) subsumes the older

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { CalendarConfig } from "./CalendarConfig";
 import { WorldAbout } from "./WorldAbout";
+import { DefaultPromptEditor } from "./DefaultPromptEditor";
 import WorldMechanics from "./WorldMechanics";
 
 const TILES = [
@@ -86,6 +87,7 @@ export function WorldOverview({
   return (
     <div className="world-overview">
       <WorldAbout wid={wid} />
+      <DefaultPromptEditor scope={scope} />
       <div className="overview-tiles">
         {TILES.map((t) => (
           <Link key={t.key} className="overview-tile" to={hrefFor(t.tab)}>

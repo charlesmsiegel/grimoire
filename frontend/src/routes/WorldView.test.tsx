@@ -51,6 +51,9 @@ vi.mock("../api/client", () => ({
   api: {
     readRecordArt: vi.fn(),
     getWorld: vi.fn(),
+    getWorldDefaultPrompt: vi.fn().mockResolvedValue({ text: "", status: "empty" }),
+    setWorldDefaultPrompt: vi.fn(),
+    getPromptLayout: vi.fn().mockResolvedValue({ enabled: false, sections: [] }),
     worldCoverUrl: vi.fn(),
     getCampaign: vi.fn(),
     listCampaigns: vi.fn(),

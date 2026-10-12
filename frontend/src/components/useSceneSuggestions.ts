@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type SceneSuggestion, type SceneSuggestionsOptions } from "../api/client";
+import { api, ApiError, type PromptFieldStatuses, type SceneSuggestion, type SceneSuggestionsOptions } from "../api/client";
 
 /** Story pressure, as the chooser hands it to the hook (capstone §16, plan
  *  Decision 19).
@@ -73,6 +73,9 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
   // greetings would then never get the ordering it is waiting on.
   const [ranked, setRanked] = useState(false);
   const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>([]);
+  // This metadata belongs to the accepted cards, never to the request now in
+  // flight. Keeping old cards visible during regeneration keeps their warning.
+  const [promptFieldStatuses, setPromptFieldStatuses] = useState<PromptFieldStatuses>({});
   const [picks, setPicks] = useState<string[] | null>([]);
   const [nextDate, setNextDate] = useState("");
   const [busy, setBusy] = useState(false);
@@ -112,6 +115,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
       .then((r) => {
         if (mine !== seq.current) return;
         setSuggestions(r.suggestions);
+        setPromptFieldStatuses(r.prompt_field_statuses ?? {});
         setControlled(steered(controls));
         // A rank=false reply carries no picks; writing its empty list would
         // wipe the ranking the greeting cards are ordered by.
@@ -122,6 +126,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
       .catch((err: unknown) => {
         if (mine !== seq.current) return;
         setSuggestions([]);
+        setPromptFieldStatuses({});
         if (rank) setPicks([]);
         // A control named a driver the campaign no longer lists. No run was
         // reserved and nothing was spent: it is the chooser's to reset and
@@ -148,6 +153,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setAsked(false);
     setRanked(false);
     setSuggestions([]);
+    setPromptFieldStatuses({});
     setPicks([]);
     setNextDate("");
     setError(null);
@@ -227,7 +233,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     run(direction, !ranked);
   }, [ready, hold, question, ranked, run]);
 
-  return { asked, suggestions, picks, nextDate, busy, error, suggest,
+  return { asked, suggestions, picks, nextDate, busy, error, suggest, promptFieldStatuses,
            controlled, held: hold, stale };
 }
 

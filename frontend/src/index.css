@@ -5300,6 +5300,14 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .what-it-sends { margin-block: 8px; padding: 8px 12px; border: 1px solid var(--rule);
                  border-radius: 6px; color: var(--muted); }
 .decision-tasks { margin-block: 8px; color: var(--muted); }
+/* Focus is one authored paragraph. Wrapping changes only its visual lines;
+   the input boundary collapses hard breaks and submission trims the edges. */
+.scene-focus-paragraph { width: 100%; resize: vertical; white-space: pre-wrap; }
+.scene-focus-saved { white-space: pre-wrap; overflow-wrap: anywhere; }
+.default-prompt-editor textarea { width: 100%; }
+.inherited-default-prompt { margin-block: 12px; padding: 8px 12px; border-left: 2px solid var(--rule); }
+.inherited-default-prompt h5 { margin-block: 0 8px; }
+.prompt-inclusion { margin-block: 8px; }
 /* A Link wearing a button's class: an `<a>` is inline and underlined where a
    `<button>` is neither, and the Add provider / Presets actions are links. */
 a.column-primary { display: flex; align-items: center; justify-content: center;

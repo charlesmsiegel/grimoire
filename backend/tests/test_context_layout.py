@@ -1,10 +1,11 @@
 """The prompt layout: the merge rules, the file, and the toggle (#29)."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from grimoire.store import config
+from grimoire.store import atomic, config
 from grimoire.store.context import assemble, layout
 
 
@@ -35,6 +36,34 @@ def store_home(tmp_path, monkeypatch):
 
 def test_empty_layout_is_the_catalog_unchanged():
     assert [s.id for s in layout.merge(CATALOG, [])] == ["a", "b", "c", "d"]
+
+
+@pytest.mark.parametrize("entries", [
+    [], [{"id": "world_overview", "enabled": False}],
+    [{"id": "world_default_prompt", "enabled": False}],
+    [{"id": "world_default_prompt", "enabled": 0}, {"id": "scene_focus", "enabled": "false"}],
+    [{"id": "scene_focus", "enabled": False}, {"id": "scene_focus", "enabled": True}],
+    ["junk", {}, {"id": []}, {"id": {}}, {"id": "campaign_default_prompt", "label": "Shared"}],
+])
+@pytest.mark.parametrize("on", [False, True])
+def test_enabled_ids_matches_layout_apply(store_home, entries, on):
+    # Hand-written malformed entries exercise the actual read boundary, not
+    # the writer's sanitized answer. Missing new IDs must remain enabled.
+    atomic.write_text(store_home / "prompt_layout.json", json.dumps({"sections": entries}))
+    config.write_config(prompt_layout_enabled="on" if on else "off")
+    requested = ("world_default_prompt", "campaign_default_prompt", "scene_focus")
+    actual = layout.enabled_ids(requested)
+    assert actual == frozenset(s.id for s in layout.apply(assemble.SECTIONS) if s.id in requested)
+    assert len(actual) <= 3
+
+
+@pytest.mark.parametrize("raw", ['{"sections": [', '[]', '{"sections": 42}'])
+def test_enabled_ids_tolerates_malformed_layout_files(store_home, raw):
+    atomic.write_text(store_home / "prompt_layout.json", raw)
+    config.write_config(prompt_layout_enabled="on")
+    requested = ("world_default_prompt", "campaign_default_prompt", "scene_focus")
+    assert layout.enabled_ids(requested) == frozenset(requested)
+    assert set(requested) <= {s.id for s in layout.apply(assemble.SECTIONS)}
 
 
 def test_stored_order_wins():

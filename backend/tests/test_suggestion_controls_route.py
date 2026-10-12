@@ -306,6 +306,7 @@ def test_payload_carries_resolved_provenance(client):
     cid = _campaign(client)
     _fake(client, json.dumps({"suggestions": [{
         "title": "Before the crown", "premise": "Mara counts the days.", "cast": [],
+        "focus": "Offer Mara a choice.",
         "location": "", "date": "2026-05-12",
         "drivers": [{"ref": MAP, "action": "advance"},
                     {"ref": "commitment:ghost", "action": "address"}],
@@ -313,6 +314,9 @@ def test_payload_carries_resolved_provenance(client):
     r = _post(client, cid)
     assert r.status_code == 200
     [s] = r.json()["suggestions"]
+    assert s["focus"] == "Offer Mara a choice."
+    assert r.json()["prompt_field_statuses"] == {
+        "world_default_prompt": "empty", "campaign_default_prompt": "empty"}
     assert s["drivers"] == [
         {"ref": MAP, "kind": "thread", "action": "advance", "label": "Mara's map"},
         {"ref": CORONATION, "kind": "event", "action": "anchor", "label": "The coronation"}]

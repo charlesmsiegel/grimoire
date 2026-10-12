@@ -44,11 +44,23 @@ vi.mock("../api/client", () => ({
     listSceneIdeas: vi.fn(),
     actorImageUrl: vi.fn(() => "/img"),
     getCampaignTracker: vi.fn(), setCampaignTracker: vi.fn(),
+    getCampaignDefaultPrompt: vi.fn(), setCampaignDefaultPrompt: vi.fn(), getPromptLayout: vi.fn(),
   },
 }));
 
 import { api } from "../api/client";
 import CampaignHub from "./CampaignHub";
+
+test("Default prompts is a reachable campaign Settings panel, with live world preview", async () => {
+  vi.mocked(api.getCampaignDefaultPrompt).mockResolvedValue({ text: "Mara waits.", status: "ok",
+    world: { id: "realm", text: "The river freezes.", status: "ok" } });
+  vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
+  renderHub();
+  fireEvent.click(await screen.findByRole("button", { name: "Default prompts" }));
+  expect(await screen.findByText("Mara waits.")).toBeInTheDocument();
+  expect(screen.getByText("The river freezes.")).toBeInTheDocument();
+  expect(api.getCampaignDefaultPrompt).toHaveBeenCalledWith("run");
+});
 
 const META = { id: "run", name: "Run One", world: "w", world_name: "Saltmarch",
                created: "", updated: "", scenes: 3, last_scene: "", absorbed: 1 };

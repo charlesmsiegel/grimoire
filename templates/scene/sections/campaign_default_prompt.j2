@@ -1,0 +1,6 @@
+{%- if campaign_default_prompt | default('') %}
+# Campaign default prompt
+Shared standing context, additive to the world defaults. An explicit campaign or local exception overrides only the corresponding world fact, not unrelated defaults. Preserve established events and the actor/POV, player-control and response contracts. This is authorial context, not dialogue or knowledge a character automatically has.
+
+{{ campaign_default_prompt }}
+{%- endif %}

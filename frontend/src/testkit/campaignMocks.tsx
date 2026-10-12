@@ -80,6 +80,7 @@ export async function campaignApiMock() {
       awaitRun: vi.fn(), getRun: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      getSceneFocus: vi.fn(), setSceneFocus: vi.fn(), getPromptLayout: vi.fn(),
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
       sceneBriefing: vi.fn(),
       listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),

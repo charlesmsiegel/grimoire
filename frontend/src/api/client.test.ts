@@ -34,6 +34,59 @@ function jsonOk(value: unknown) {
   return { ok: true, json: async () => value };
 }
 
+test("scene creation carries reviewed initial focus in the same request", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "mara" }));
+  globalThis.fetch = fetchMock;
+  await api.createScene("saltmarch", "Mara", undefined, false, "Let Mara choose.");
+  expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/saltmarch/scenes", expect.objectContaining({
+    method: "POST", body: JSON.stringify({ title: "Mara", pcless: false, focus: "Let Mara choose." }),
+  }));
+});
+
+test.each([
+  ["world", "/api/worlds/realm/default-prompt", () => api.getWorldDefaultPrompt("realm")],
+  ["campaign", "/api/campaigns/saltmarch/default-prompt", () => api.getCampaignDefaultPrompt("saltmarch")],
+  ["focus", "/api/campaigns/saltmarch/scenes/mara/focus", () => api.getSceneFocus("saltmarch", "mara")],
+] as const)("%s prompt-field reads never join a pre-save request", async (_name, path, read) => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ text: "", status: "empty" }));
+  globalThis.fetch = fetchMock;
+  await Promise.all([read(), read()]);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledWith(path, expect.objectContaining({ method: "GET" }));
+});
+
+test.each([
+  ["world", "/api/worlds/realm/default-prompt", (text: string) => api.setWorldDefaultPrompt("realm", text)],
+  ["campaign", "/api/campaigns/saltmarch/default-prompt", (text: string) => api.setCampaignDefaultPrompt("saltmarch", text)],
+  ["focus", "/api/campaigns/saltmarch/scenes/mara/focus", (text: string) => api.setSceneFocus("saltmarch", "mara", text)],
+] as const)("%s prompt-field saves send only the addressed text", async (_name, path, save) => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ text: "Let Mara choose.", status: "ok" }));
+  globalThis.fetch = fetchMock;
+  await save("Let Mara choose.");
+  expect(fetchMock).toHaveBeenCalledWith(path, expect.objectContaining({
+    method: "PUT", body: JSON.stringify({ text: "Let Mara choose." }),
+  }));
+});
+
+test("fresh context after focus publication does not join a pre-save request", async () => {
+  let finishOld: (value: unknown) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+    .mockResolvedValueOnce(jsonOk({ text: "Seraphine chooses.", status: "ok" }))
+    .mockResolvedValueOnce(jsonOk({ sections: [{ id: "scene_focus", text: "Seraphine chooses." }] }));
+  globalThis.fetch = fetchMock;
+  const old = api.getSceneContext("saltmarch", "mara");
+  try {
+    await api.setSceneFocus("saltmarch", "mara", "Seraphine chooses.");
+    const current = api.getSceneContext("saltmarch", "mara", { fresh: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect((await current).sections[0].text).toBe("Seraphine chooses.");
+  } finally {
+    finishOld(jsonOk({ sections: [{ id: "scene_focus", text: "Mara waits." }] }));
+    expect((await old).sections[0].text).toBe("Mara waits.");
+  }
+});
+
 test("createCampaign POSTs name + world", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "run" }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;

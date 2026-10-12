@@ -20,6 +20,7 @@ from grimoire.store import (
     assets,
     characters,
     covers,
+    default_prompts,
     fetch,
     greetings,
     image_collections,
@@ -57,6 +58,18 @@ def _export(wid: str, tmp_path: Path, label: str = "bundle") -> Path:
     dest = tmp_path / f"{label}.zip"
     world_bundle.write_bundle(wid, dest)
     return dest
+
+
+def test_world_default_bundle_round_trip_preserves_text_and_repoints_urls(monkeypatch,
+                                                                       tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    default_prompts.set_world(wid, f"Map: /api/worlds/{wid}/assets/images/map.png\nThe river freezes.")
+    child = world_bundle.import_bundle(_export(wid, tmp_path))
+    assert default_prompts.read_world(child)["text"] == (
+        f"Map: /api/worlds/{child}/assets/images/map.png\nThe river freezes.")
+    default_prompts.set_world(wid, "The harbor stays open.")
+    assert default_prompts.read_world(child)["text"].endswith("The river freezes.")
 
 
 # ---- export ----

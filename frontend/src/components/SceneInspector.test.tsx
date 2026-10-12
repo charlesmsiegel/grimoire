@@ -36,6 +36,7 @@ vi.mock("../api/client", async () => {
       getSceneRewrites: vi.fn(), getRegex: vi.fn(), editMessage: vi.fn(),
       // The Author's notes section's count (play controls V).
       getAuthorsNotesNext: vi.fn(),
+      getSceneFocus: vi.fn(), setSceneFocus: vi.fn(), getPromptLayout: vi.fn(),
       // The Models section: the campaign's inference view and its write, and
       // what the shared pickers ask of a provider.
       getCampaignInference: vi.fn(), putCampaignInference: vi.fn(),
@@ -81,6 +82,8 @@ const GREG_MONTHS = [
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  vi.mocked(api.getSceneFocus).mockResolvedValue({ text: "Let Mara choose.", status: "ok" });
+  vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
   (api.getAuthorsNotesNext as any).mockResolvedValue({ turn: 1, count: 0, notes: [] });
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
   (api.getSceneUsage as any).mockResolvedValue({
@@ -173,6 +176,56 @@ function renderInspector(onSceneChanged: () => void = () => {}) {
   render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
                                        onSceneChanged={onSceneChanged} /></MemoryRouter>);
 }
+
+test("scene focus refreshes only live context, never the parent's transcript reload", async () => {
+  const changed = vi.fn();
+  vi.mocked(api.setSceneFocus).mockResolvedValue({ text: "Seraphine waits.", status: "ok" });
+  renderInspector(changed);
+  await waitFor(() => expect(api.getSceneContext).toHaveBeenCalled());
+  const reads = vi.mocked(api.getSceneContext).mock.calls.length;
+  fireEvent.click(await screen.findByText("Scene focus"));
+  await screen.findByText("Let Mara choose.");
+  fireEvent.click(screen.getByRole("button", { name: /edit scene focus/i }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Scene focus" }), { target: { value: "Seraphine waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /^save/i }));
+  await waitFor(() => expect(api.getSceneContext).toHaveBeenCalledTimes(reads + 1));
+  expect(changed).not.toHaveBeenCalled();
+  expect(api.setSceneFocus).toHaveBeenCalledWith("c", "s", "Seraphine waits.");
+});
+
+test("focus publication fetches a new composition and rejects the late pre-save transport response", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  const context = (text: string) => ({ model: "m", total_tokens: 1, dropped_tokens: 0, budget_tokens: 0,
+    sections: [{ id: "scene_focus", label: "Scene focus", text, tokens: 1, tier: "lock-in", dropped: false, trimmed: 0 }] });
+  let finishOld: (response: Response) => void = () => {};
+  let finishNew: (response: Response) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockImplementationOnce(() => new Promise<Response>((resolve) => { finishOld = resolve; }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ text: "Seraphine waits.", status: "ok" })))
+    .mockImplementationOnce(() => new Promise<Response>((resolve) => { finishNew = resolve; }));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.mocked(api.getSceneContext).mockImplementation(actual.api.getSceneContext);
+  vi.mocked(api.setSceneFocus).mockImplementation(actual.api.setSceneFocus);
+  try {
+    renderInspector();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /^Scene focus/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Edit scene focus/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Scene focus" }), { target: { value: "Seraphine waits." } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText("Seraphine waits.");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await act(async () => { finishNew(new Response(JSON.stringify(context("Current composition.")))); });
+    await screen.findByText("Current composition.");
+    await act(async () => { finishOld(new Response(JSON.stringify(context("Stale composition.")))); });
+    expect(screen.queryByText("Stale composition.")).toBeNull();
+    expect(screen.getByText("Current composition.")).toBeInTheDocument();
+  } finally {
+    finishOld(new Response(JSON.stringify(context("Stale composition."))));
+    finishNew(new Response(JSON.stringify(context("Current composition."))));
+    vi.unstubAllGlobals();
+  }
+});
 
 // ---- the scene-break detector (#84) ----
 const BREAK_YES = {
@@ -2697,6 +2750,25 @@ test("going back to live context ends the comparison", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Back to live context/ }));
   await screen.findByText("lore text");
   expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
+});
+
+test.each(["live", "000002"])("focus save refreshes only the live end of a %s comparison", async (against) => {
+  await openTurnAndCompare(against);
+  await screen.findByText("the pact was signed at dusk");
+  const reads = vi.mocked(api.getScenePromptDiff).mock.calls.length;
+  const snapshotReads = vi.mocked(api.getScenePrompt).mock.calls.length;
+  // The field publishes its canonical metadata; the selected capture stays
+  // selected. Only a comparison whose OTHER end is live can change here.
+  fireEvent.click(screen.getByRole("button", { name: /^Scene focus/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Edit scene focus/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Scene focus" }), { target: { value: "Seraphine waits." } });
+  vi.mocked(api.setSceneFocus).mockResolvedValueOnce({ text: "Seraphine waits.", status: "ok" });
+  fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+  await screen.findByText("Seraphine waits.");
+  if (against === "live") await waitFor(() => expect(api.getScenePromptDiff).toHaveBeenCalledTimes(reads + 1));
+  else expect(api.getScenePromptDiff).toHaveBeenCalledTimes(reads);
+  expect(api.getScenePrompt).toHaveBeenCalledTimes(snapshotReads);
+  expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe(against);
 });
 
 test("a landed turn re-reads the comparison, because the live end has moved", async () => {

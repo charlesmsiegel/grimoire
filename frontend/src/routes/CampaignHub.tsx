@@ -16,6 +16,7 @@ import { CampaignTrackerSwitch } from "../components/tracker/CampaignTrackerSwit
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
 import { QuickReplyEditor } from "../components/QuickReplyEditor";
+import { DefaultPromptEditor } from "../components/DefaultPromptEditor";
 import { sectionHref } from "../worldPaths";
 import { intentProps } from "../api/prefetch";
 
@@ -166,7 +167,7 @@ export default function CampaignHub() {
    *  the campaign, not to whichever scene you happen to have open, so they are
    *  here. */
   const [panel, setPanel] = useState<
-    "mechanics" | "calendar" | "cover" | "tracker" | "output" | "quick-replies" | null>(null);
+    "mechanics" | "calendar" | "cover" | "tracker" | "output" | "quick-replies" | "default-prompts" | null>(null);
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -329,6 +330,7 @@ export default function CampaignHub() {
       <ColumnSection label="Settings">
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
            ["cover", "Cover"], ["tracker", "Tracker"],
+           ["default-prompts", "Default prompts"],
            ["output", "Output processing"], ["quick-replies", "Quick replies"]] as const).map(([id, label]) => (
           <button key={id} type="button"
                   className={"column-row" + (panel === id ? " active" : "")}
@@ -394,6 +396,7 @@ export default function CampaignHub() {
                 rail rather than reading here refreshes both at once. */}
             {panel === "mechanics" && <MechanicsConfig cid={cid} onChanged={retryShell} />}
             {panel === "calendar" && <CalendarConfig scope={{ kind: "campaign", id: cid }} />}
+            {panel === "default-prompts" && <DefaultPromptEditor scope={{ kind: "campaign", id: cid }} />}
             {panel === "cover" && <CampaignCover cid={cid} />}
             {/* Keyed by cid so a campaign switch cannot show the last one's fields. */}
             {panel === "output" && <RegexRulesEditor key={cid} scope={{ kind: "campaign", cid }} />}

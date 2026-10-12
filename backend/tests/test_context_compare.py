@@ -34,6 +34,16 @@ def test_identical_compositions_report_nothing_changed():
     assert all(r["diff"] == [] for r in result["sections"])
 
 
+def test_prompt_field_status_metadata_is_not_a_prompt_diff_row():
+    before = {**_bd(_row("world_default_prompt", "The river freezes.")),
+              "prompt_field_statuses": {"world_default_prompt": "ok"}}
+    after = {**before, "prompt_field_statuses": {"world_default_prompt": "unreadable"}}
+    result = context.compare_breakdowns(before, after)
+    assert [r["id"] for r in result["sections"]] == ["world_default_prompt"]
+    assert result["sections"][0]["status"] == "unchanged"
+    assert result["sections"][0]["diff"] == []
+
+
 def test_a_changed_section_reports_the_lines_that_moved():
     before = _bd(_row("world", "a keep by the sea\nthe gate is shut"))
     after = _bd(_row("world", "a keep by the sea\nthe gate is open"))

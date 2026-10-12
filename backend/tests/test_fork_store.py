@@ -13,6 +13,7 @@ from grimoire.store import (
     appearances,
     campaigns,
     chronicle,
+    default_prompts,
     entities,
     fork,
     image_scopes,
@@ -43,6 +44,36 @@ def _meta(cid):
 
 def _sids(cid):
     return sorted(s["id"] for s in scenes.list_scenes(cid))
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_campaign_fork_retains_current_focus_independently(cid, historical):
+    sid = scenes.create_scene(cid, "Mara", focus="Offer Mara a choice.")
+    scenes.append_message(cid, sid, "user", "Mara waits.")
+    scenes.append_message(cid, sid, "user", "Seraphine arrives.")
+    scenes.focus.set(cid, sid, "Let Mara decide whether to stay.")
+    kwargs = {"from_scene": sid, "from_index": 0} if historical else {}
+    child = fork.fork_campaign(cid, "Saltmarch", **kwargs)["id"]
+    assert scenes.focus.read(child, sid)["text"] == "Let Mara decide whether to stay."
+    assert len(scenes.read_scene(child, sid)["messages"]) == (1 if historical else 2)
+    scenes.focus.set(child, sid, "Offer Seraphine a choice.")
+    assert scenes.focus.read(cid, sid)["text"] == "Let Mara decide whether to stay."
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_campaign_fork_copies_current_default_and_inherits_world_live(cid, wid, historical):
+    default_prompts.set_world(wid, "The river freezes.")
+    default_prompts.set_campaign(cid, "The harbor stays open.")
+    sid = scenes.create_scene(cid, "Mara")
+    scenes.append_message(cid, sid, "user", "The harbor is quiet.")
+    # This setting is authored now, not a ledger fact rewound to the scene.
+    default_prompts.set_campaign(cid, "This winter the river stays open.")
+    child = fork.fork_campaign(cid, "Saltmarch", from_scene=sid if historical else None)["id"]
+    assert default_prompts.read_campaign(child)["text"] == "This winter the river stays open."
+    default_prompts.set_campaign(cid, "The river freezes again.")
+    assert default_prompts.read_campaign(child)["text"] == "This winter the river stays open."
+    default_prompts.set_world(wid, "The harbor is frozen.")
+    assert default_prompts.resolve(child)["world"]["text"] == "The harbor is frozen."
 
 
 def _played(cid, title, posts=2):

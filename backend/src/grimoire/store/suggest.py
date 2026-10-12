@@ -36,6 +36,7 @@ from . import (
     characters,
     chronicle,
     clock,
+    default_prompts,
     events,
     greetings,
     overlay,
@@ -45,8 +46,10 @@ from . import (
 from .appearances import cast as appearances_cast
 from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
+from .context import layout, macros
 from .continuity import drivers as continuity_drivers
 from .continuity import effective, pressure
+from .scenes import focus as scenes_focus
 
 
 def _char_name(aroot, aid: str) -> str:
@@ -689,14 +692,37 @@ def driver_view(snapshot: dict, controls: Controls) -> dict:
     }
 
 
+def creation_defaults(cid: str) -> dict:
+    """Capture shared defaults for one metadata call, with no scene binding.
+
+    Reuse play's field resolver, layout policy, templates and macro engine,
+    not its assembly (which would invent a scene/actor/date and read focus).
+    The capture belongs to the generated batch, not to any later live preview.
+    """
+    fields = default_prompts.resolve(cid)
+    requested = ("world_default_prompt", "campaign_default_prompt")
+    enabled = layout.enabled_ids(requested)
+    texts = {requested[0]: fields["world"]["text"], requested[1]: fields["text"]}
+    sections = []
+    for section_id, text in texts.items():
+        if text and section_id in enabled:
+            rendered = prompts.render(f"scene/sections/{section_id}.j2", **{section_id: text})
+            expanded = macros.expand_macros(rendered, {}, cid, "", datetime_subs={}).strip()
+            if expanded:
+                sections.append(expanded)
+    return {"sections": sections,
+            "statuses": {requested[0]: fields["world"]["status"], requested[1]: fields["status"]}}
+
+
 def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
                  offscreen: bool = False, direction: str = "",
-                 controls: Controls | None = None) -> list[dict]:
+                 controls: Controls | None = None, *, defaults: dict | None = None) -> list[dict]:
     # the templates pick the instruction variant and addenda from the same vars
     vars = {"s": snapshot, "offscreen": offscreen,
             "greeting_candidates": greeting_candidates,
             "direction": direction.strip()[:DIRECTION_LIMIT],
-            "drivers": True, "view": driver_view(snapshot, controls or NO_CONTROLS)}
+            "drivers": True, "view": driver_view(snapshot, controls or NO_CONTROLS),
+            "default_sections": defaults["sections"] if defaults is not None else []}
     return [{"role": "system", "content": prompts.render("scene_suggestions/system.j2", **vars)},
             {"role": "user", "content": prompts.render("scene_suggestions/user.j2", **vars)}]
 
@@ -713,8 +739,9 @@ def _intent_shape(locations: list[str], tokens: list[str]) -> dict:
                       else {"type": "string"})
     member: dict = {"type": "string", "enum": tokens} if tokens else {"type": "string"}
     return {"type": "object", "additionalProperties": False,
-            "required": ["title", "date", "location", "cast"],
+            "required": ["title", "date", "location", "cast", "focus"],
             "properties": {"title": {"type": "string"}, "date": {"type": "string"},
+                           "focus": {"type": "string"},
                            "location": location,
                            "cast": {"type": "array", "items": member}}}
 
@@ -744,7 +771,8 @@ def intent_schema(snapshot: dict) -> dict:
 
 
 def build_intent_request(cid: str, typed: str,
-                         offscreen: bool = False) -> tuple[list[dict], dict]:
+                         offscreen: bool = False, *,
+                         defaults: dict | None = None) -> tuple[list[dict], dict]:
     """The scene-intent prompt and the schema its reply is asked for in
     (`intent_schema`), from one snapshot: the system message renders the
     schema (`schema_json`), which is what `inference.generate(schema=)`
@@ -757,6 +785,7 @@ def build_intent_request(cid: str, typed: str,
     driver work (spec §15) -- its only change since is the schema paragraph
     at the end of the system message (01f-S4)."""
     snapshot = build_snapshot(cid, offscreen=offscreen, drivers=False)
+    captured_defaults = creation_defaults(cid) if defaults is None else defaults
     schema = intent_schema(snapshot)
     # `direction`, `drivers` and `view` are here because scene_intent/user.j2
     # INCLUDES scene_suggestions/user.j2, which reads them — and both this env
@@ -764,7 +793,8 @@ def build_intent_request(cid: str, typed: str,
     # hard failure, not a silently-empty block.
     vars = {"s": snapshot, "schema": schema,
             "offscreen": offscreen, "greeting_candidates": None, "direction": "",
-            "drivers": False, "view": None, "typed": typed.strip()[:INTENT_LIMIT]}
+            "drivers": False, "view": None, "typed": typed.strip()[:INTENT_LIMIT],
+            "default_sections": captured_defaults["sections"]}
     return ([{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
              {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}],
             schema)
@@ -1709,6 +1739,7 @@ def _card(entry, ctx: dict) -> dict | None:
         return [{"ref": r, "label": labels.get(r, r)} for r in refs]
 
     return {"title": title, "premise": premise,
+            "focus": scenes_focus.normalize(_str_field(entry.get("focus", ""))),
             "cast": _cast_of(entry, ctx["ids"], ctx["offscreen"]),
             "location": loc if loc in ctx["ids"][2] else "",
             "date": date, "date_friendly": _friendly_of(provider, fixed),
@@ -1779,7 +1810,7 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
     covered by that and surface as the route's ordinary 500, exactly as they do
     for `parse_output`. A calendar plugin that cannot load is: the provider
     resolves softly (Decision 25), so the date comes back blank."""
-    empty = {"title": "", "date": "", "location": "", "cast": []}
+    empty = {"title": "", "date": "", "location": "", "cast": [], "focus": ""}
     parsed = _extract_json(reply)
     if isinstance(parsed, list):   # a bare array is a common LLM deviation
         parsed = next((e for e in parsed if isinstance(e, dict)), None)
@@ -1792,6 +1823,7 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
             if isinstance(raw_cast, list) else [])
     loc = _str_field(parsed.get("location", ""))
     return {"title": _str_field(parsed.get("title", "")),
+            "focus": scenes_focus.normalize(_str_field(parsed.get("focus", ""))),
             "date": date_normalizer(cid, tolerant=True)(_str_field(parsed.get("date", ""))),
             "location": loc if loc in loc_ids else "",
             "cast": cast}

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
-import type { SceneIdea, SceneSuggestion } from "../api/client";
+import type { PromptFieldStatuses, SceneIdea, SceneSuggestion } from "../api/client";
 
 // `useSceneSuggestions` now lives in NewSceneChooser (issue #319) -- this
 // pane only renders what it's handed, so its own tests supply the generated
@@ -38,6 +38,7 @@ beforeEach(() => {
 });
 
 type StateOverrides = Partial<{
+  promptFieldStatuses: PromptFieldStatuses;
   ready: boolean;
   direction: string;
   asked: boolean;
@@ -70,6 +71,7 @@ function Wrapper(props: StateOverrides) {
                      busy={props.busy ?? false}
                      error={props.error ?? null}
                      controlled={props.controlled ?? false}
+                     promptFieldStatuses={props.promptFieldStatuses}
                      suggest={props.suggest ?? vi.fn()}
                      onPicked={props.onPicked ?? vi.fn()}
                      onCancel={props.onCancel ?? vi.fn()} />
@@ -99,6 +101,75 @@ test("picking a generated card emits its resolved metadata", async () => {
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
     source: "generated", location: "saltmarch", date: "2026-03-04",
     premise: "A debt-collector arrives." }));
+});
+
+
+test("generated focus and its batch warning travel to confirmation and save", async () => {
+  const suggestion = { ...SUGGESTION, focus: " Let Mara choose.\nGently. " };
+  const { onPicked } = renderPicker({ suggestions: [suggestion],
+    promptFieldStatuses: { world_default_prompt: "unreadable" } });
+  expect(await screen.findByText(/world default prompt.*could not be read/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByText("The creditor"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ focus: "Let Mara choose. Gently." }),
+    expect.stringMatching(/world default prompt.*could not be read/i));
+  fireEvent.click(screen.getByRole("button", { name: "Save The creditor" }));
+  await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith("c", expect.objectContaining({
+    focus: "Let Mara choose. Gently.",
+  })));
+});
+
+test("greeting and blank selections never inherit a generated batch warning", async () => {
+  const { onPicked } = renderPicker({ promptFieldStatuses: { world_default_prompt: "unreadable" } });
+  fireEvent.click(await screen.findByText("Reckoning"));
+  expect(onPicked).toHaveBeenLastCalledWith(expect.objectContaining({ source: "greeting", focus: "" }));
+  fireEvent.click(screen.getByRole("button", { name: /create blank scene/i }));
+  expect(onPicked).toHaveBeenLastCalledWith(expect.objectContaining({ source: "custom", focus: "" }));
+  expect(api.sceneIntent).not.toHaveBeenCalled();
+});
+
+test("typed intent uses its own warning and focus rather than the generated batch", async () => {
+  vi.mocked(api.sceneIntent).mockResolvedValue({ title: "Mara", date: "", location: null, cast: [],
+    focus: "Let Mara choose.", prompt_field_statuses: { campaign_default_prompt: "unreadable" } });
+  const { onPicked } = renderPicker({ promptFieldStatuses: { world_default_prompt: "unreadable" } });
+  await screen.findByText("Reckoning");
+  fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  await waitFor(() => expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
+    focus: "Let Mara choose.", premise: "Mara waits.",
+  }), expect.stringMatching(/campaign default prompt.*could not be read/i)));
+  expect(onPicked).not.toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/world default prompt/i));
+  expect(api.sceneIntent).toHaveBeenCalledTimes(1);
+});
+
+test("saved focus is independent of the generated batch warning", async () => {
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([{ ...SAVED, focus: "Let Mara choose." }]);
+  const { onPicked } = renderPicker({ promptFieldStatuses: { world_default_prompt: "unreadable" } });
+  fireEvent.click(await screen.findByText("The tide-book"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ source: "saved", focus: "Let Mara choose." }));
+});
+
+test("focus-only intent is inferred metadata, not an empty-result notice", async () => {
+  vi.mocked(api.sceneIntent).mockResolvedValueOnce({ title: "", date: "", location: null, cast: [],
+    focus: "Let Mara choose.", prompt_field_statuses: { campaign_default_prompt: "unreadable" } });
+  const onPicked = vi.fn();
+  renderPicker({ onPicked });
+  fireEvent.change(await screen.findByLabelText("Your own scene"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  await waitFor(() => expect(onPicked).toHaveBeenCalled());
+  expect(onPicked.mock.calls[0][0].focus).toBe("Let Mara choose.");
+  expect(onPicked.mock.calls[0][1]).toMatch(/campaign default prompt.*could not be read/i);
+  expect(onPicked.mock.calls[0][1]).not.toMatch(/nothing could be inferred/i);
+});
+
+test("empty intent combines its own field warning with the existing empty-result notice", async () => {
+  vi.mocked(api.sceneIntent).mockResolvedValue({ title: "", date: "", location: null, cast: [],
+    focus: "", prompt_field_statuses: { campaign_default_prompt: "unreadable" } });
+  const { onPicked } = renderPicker();
+  await screen.findByText("Reckoning");
+  fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  await waitFor(() => expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ focus: "", premise: "Mara waits." }),
+    expect.stringMatching(/nothing could be inferred.*campaign default prompt.*could not be read/i)));
 });
 
 // ---- the four slots ----
@@ -454,6 +525,7 @@ test("Save keeps a generated card, sending ids rather than the names it rendered
   fireEvent.click(await screen.findByRole("button", { name: "Save The creditor" }));
   await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith("c", {
     pcless: false, title: "The creditor", premise: "A debt-collector arrives.",
+    focus: "",
     date: "2026-03-04", cast: ["characters:mara"], location: "saltmarch", source: "llm" }));
   // the list is re-read, and the card cannot be filed a second time
   await waitFor(() => expect(api.listSceneIdeas).toHaveBeenCalledTimes(2));
@@ -730,6 +802,7 @@ test("saving a generated card sends its drivers and anchor", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Save Before the bells" }));
   await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith("c", {
     pcless: false, title: "Before the bells", premise: "A debt-collector arrives.",
+    focus: "",
     date: "2026-05-11", cast: ["characters:mara"], location: "saltmarch", source: "llm",
     drivers: [{ ref: "thread:find-the-ledger", action: "advance" },
               { ref: "commitment:salt-owed", action: "address" }],

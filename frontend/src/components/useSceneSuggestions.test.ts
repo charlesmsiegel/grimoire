@@ -18,6 +18,40 @@ const pending = () => new Promise(() => {});
 
 beforeEach(() => vi.clearAllMocks());
 
+test("suggestion batch keeps captured statuses with old cards during regeneration and replaces them on every reply", async () => {
+  const unreadable = { world_default_prompt: "unreadable" } as const;
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce({ ...R([{ title: "Mara" }]), prompt_field_statuses: unreadable });
+  const { result } = renderHook(() => useSceneSuggestions("saltmarch", "mara", true, false));
+  await waitFor(() => expect(result.current.promptFieldStatuses).toEqual(unreadable));
+  let finish!: (value: Awaited<ReturnType<typeof api.sceneSuggestions>>) => void;
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  act(() => result.current.suggest("Consider Seraphine."));
+  expect(result.current.suggestions).toEqual([{ title: "Mara" }]);
+  expect(result.current.promptFieldStatuses).toEqual(unreadable);
+  await act(async () => finish(R([{ title: "Seraphine" }])));
+  expect(result.current.promptFieldStatuses).toEqual({});
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(new Error("refused"));
+  act(() => result.current.suggest("Try again."));
+  await waitFor(() => expect(result.current.error).not.toBeNull());
+  expect(result.current.suggestions).toEqual([]);
+  expect(result.current.promptFieldStatuses).toEqual({});
+});
+
+test.each(["campaign", "scene", "offscreen"])("scope change %s retires captured statuses and stale successes", async (change) => {
+  let stale!: (value: Awaited<ReturnType<typeof api.sceneSuggestions>>) => void;
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((resolve) => { stale = resolve; }));
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce({ ...R([{ title: "Seraphine" }]),
+    prompt_field_statuses: { campaign_default_prompt: "ok" } });
+  const { result, rerender } = renderHook(({ cid, sid, offscreen }) => useSceneSuggestions(cid, sid, true, offscreen),
+    { initialProps: { cid: "saltmarch", sid: "mara", offscreen: false } });
+  rerender({ cid: change === "campaign" ? "realm" : "saltmarch",
+    sid: change === "scene" ? "seraphine" : "mara", offscreen: change === "offscreen" });
+  await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "Seraphine" }]));
+  await act(async () => stale({ ...R([{ title: "Mara" }]), prompt_field_statuses: { world_default_prompt: "unreadable" } }));
+  expect(result.current.suggestions).toEqual([{ title: "Seraphine" }]);
+  expect(result.current.promptFieldStatuses).toEqual({ campaign_default_prompt: "ok" });
+});
+
 // ---- the call the picker opens on ----
 
 test("opening asks the ranked question, with no direction", () => {

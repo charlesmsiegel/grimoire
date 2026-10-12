@@ -8839,6 +8839,43 @@ test("speaker progress appears before prose and moves to the next NPC on handoff
 });
 
 
+test("saving focus during an NPC stream preserves its speaker, thinking and accumulated prose", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  let emit: Parameters<typeof api.chat>[3] = () => {};
+  let finish: () => void = () => {};
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent) => new Promise((resolve) => {
+    emit = onEvent; finish = () => { onEvent({ done: true }); resolve(); };
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  act(() => {
+    emit({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    emit({ thinking_delta: "First thought" });
+    emit({ delta: "She waits." });
+  });
+  expect(await screen.findByRole("status", { name: "Mara is responding" })).toBeVisible();
+  fireEvent.click(await screen.findByText("Thinking"));
+  fireEvent.click(screen.getByRole("button", { name: /What the model saw/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Scene focus/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Edit scene focus/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Scene focus" }), { target: { value: "Let Seraphine choose." } });
+  const sceneReads = vi.mocked(api.getScene).mock.calls.length;
+  const contextReads = vi.mocked(api.getSceneContext).mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+  await waitFor(() => expect(api.setSceneFocus).toHaveBeenCalledWith("run", "s1", "Let Seraphine choose."));
+  await screen.findByText("Let Seraphine choose.");
+  await waitFor(() => expect(api.getSceneContext).toHaveBeenCalledTimes(contextReads + 1));
+  expect(api.getScene).toHaveBeenCalledTimes(sceneReads);
+  act(() => { emit({ thinking_delta: " continues" }); emit({ delta: " She nods." }); });
+  expect(screen.getByRole("status", { name: "Mara is responding" })).toBeVisible();
+  expect(screen.getByText(/She waits\. She nods\./).closest(".streaming-response")).toHaveTextContent("Mara");
+  expect(await screen.findByText(/First thought continues/)).toBeInTheDocument();
+  await act(async () => finish());
+});
+
 test("streamed thinking is collapsed and follows its NPC across a handoff", async () => {
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
   let emit: Parameters<typeof api.chat>[3] = () => {};

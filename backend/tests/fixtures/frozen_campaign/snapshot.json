@@ -1524,7 +1524,7 @@
     {
       "content": {
         "__text__": [
-          "You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative \u2014 read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys \"title\" (a short label for the scene, 2-5 words), \"date\" (the date the scene opens, or \"\" if the text implies no particular date), \"location\" (one location id from the available locations, or \"\" if the text implies none), and \"cast\" (a list of \"<kind>:<id>\" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer \"\" or an empty list over a guess.",
+          "You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative \u2014 read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys \"title\" (a short label for the scene, 2-5 words), \"date\" (the date the scene opens, or \"\" if the text implies no particular date), \"location\" (one location id from the available locations, or \"\" if the text implies none), \"focus\" (a concise, shared-safe dramatic purpose or opportunity supported or implied by the description; \"\" when unsupported or open-ended; never a promised outcome, hidden fact or character order; Focus is shared with narrator and NPC prompt readers), and \"cast\" (a list of \"<kind>:<id>\" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer \"\" or an empty list over a guess.",
           "",
           "The reply's JSON Schema:",
           "",
@@ -1545,6 +1545,9 @@
           "    \"date\": {",
           "      \"type\": \"string\"",
           "    },",
+          "    \"focus\": {",
+          "      \"type\": \"string\"",
+          "    },",
           "    \"location\": {",
           "      \"enum\": [",
           "        \"\",",
@@ -1560,7 +1563,8 @@
           "    \"title\",",
           "    \"date\",",
           "    \"location\",",
-          "    \"cast\"",
+          "    \"cast\",",
+          "    \"focus\"",
           "  ],",
           "  \"type\": \"object\"",
           "}"
@@ -1598,7 +1602,7 @@
     {
       "content": {
         "__text__": [
-          "You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative \u2014 read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys \"title\" (a short label for the scene, 2-5 words), \"date\" (the date the scene opens, or \"\" if the text implies no particular date), \"location\" (one location id from the available locations, or \"\" if the text implies none), and \"cast\" (a list of \"<kind>:<id>\" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer \"\" or an empty list over a guess.",
+          "You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative \u2014 read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys \"title\" (a short label for the scene, 2-5 words), \"date\" (the date the scene opens, or \"\" if the text implies no particular date), \"location\" (one location id from the available locations, or \"\" if the text implies none), \"focus\" (a concise, shared-safe dramatic purpose or opportunity supported or implied by the description; \"\" when unsupported or open-ended; never a promised outcome, hidden fact or character order; Focus is shared with narrator and NPC prompt readers), and \"cast\" (a list of \"<kind>:<id>\" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer \"\" or an empty list over a guess.",
           "",
           "The reply's JSON Schema:",
           "",
@@ -1618,6 +1622,9 @@
           "    \"date\": {",
           "      \"type\": \"string\"",
           "    },",
+          "    \"focus\": {",
+          "      \"type\": \"string\"",
+          "    },",
           "    \"location\": {",
           "      \"enum\": [",
           "        \"\",",
@@ -1633,7 +1640,8 @@
           "    \"title\",",
           "    \"date\",",
           "    \"location\",",
-          "    \"cast\"",
+          "    \"cast\",",
+          "    \"focus\"",
           "  ],",
           "  \"type\": \"object\"",
           "}"
@@ -1668,7 +1676,7 @@
   ],
   "suggest.build_prompt[the-drowned-ledger/offscreen=False]": [
     {
-      "content": "You help a game master start the next scene of a role-play campaign. Given the current situation below, propose 3-4 DISTINCT scene openings. Each should advance an open plot thread (a thread that has gone cold \u2014 several scenes without attention \u2014 is especially worth reviving), bring an offstage character back into play, or land on an upcoming date or birthday. Never assume a character is present unless they are listed under \"present\"; an offstage or not-yet-appeared character may enter a scene only with a plausible in-world reason for their arrival. Respect each character's tagline for who they are, including their gender. Reply with ONLY a JSON object with key \"suggestions\": a list of {\"title\" (a short label), \"premise\" (2-3 sentences the GM can open on), \"cast\" (list of \"<kind>:<id>\" tokens chosen ONLY from the available cast below), \"location\" (one location id from the available locations, or \"\")}. Use only the ids given; do not invent ids. Each suggestion also includes key \"drivers\": a list of {\"ref\" (a ref chosen ONLY from the story drivers below), \"action\"}, naming the drivers that scene serves and what it does to each. Actions by kind \u2014 thread: \"advance\" or \"close_candidate\"; commitment: \"address\", \"fulfill_candidate\", \"break_candidate\" or \"expire_candidate\"; event: \"anchor\"; birthday: \"anchor\"; holiday: \"anchor\". An action ending in \"_candidate\" means the scene is plausibly about that outcome, not that playing it guarantees one. A suggestion may also include key \"time_anchor\": {\"ref\" (one event, birthday or holiday ref from the story drivers below that has not passed), \"relation\" (\"before\", \"on\", \"after\" or \"by\")} when the scene is timed against that day; omit it otherwise. High pressure means a driver whose state is \"overdue\", \"today\" or \"due_soon\". Not every suggestion should serve the same drivers. At least one suggestion should address a high-pressure driver, if any exists. Stale or cold drivers are worth reviving but are not mandatory. Near-future temporal anchors are worth using. A quiet character or relationship scene is welcome when nothing urgent dominates, and such a suggestion may list no drivers.",
+      "content": "You help a game master start the next scene of a role-play campaign. Given the current situation below, propose 3-4 DISTINCT scene openings. Each should advance an open plot thread (a thread that has gone cold \u2014 several scenes without attention \u2014 is especially worth reviving), bring an offstage character back into play, or land on an upcoming date or birthday. Never assume a character is present unless they are listed under \"present\"; an offstage or not-yet-appeared character may enter a scene only with a plausible in-world reason for their arrival. Respect each character's tagline for who they are, including their gender. Reply with ONLY a JSON object with key \"suggestions\": a list of {\"title\" (a short label), \"premise\" (2-3 sentences the GM can open on), \"focus\" (a concise, shared-safe dramatic question or opportunity compatible with this scene; \"\" for open-ended play; never a promised outcome, hidden fact or character order; Focus is shared with narrator and NPC prompt readers), \"cast\" (list of \"<kind>:<id>\" tokens chosen ONLY from the available cast below), \"location\" (one location id from the available locations, or \"\")}. Use only the ids given; do not invent ids. Each suggestion also includes key \"drivers\": a list of {\"ref\" (a ref chosen ONLY from the story drivers below), \"action\"}, naming the drivers that scene serves and what it does to each. Actions by kind \u2014 thread: \"advance\" or \"close_candidate\"; commitment: \"address\", \"fulfill_candidate\", \"break_candidate\" or \"expire_candidate\"; event: \"anchor\"; birthday: \"anchor\"; holiday: \"anchor\". An action ending in \"_candidate\" means the scene is plausibly about that outcome, not that playing it guarantees one. A suggestion may also include key \"time_anchor\": {\"ref\" (one event, birthday or holiday ref from the story drivers below that has not passed), \"relation\" (\"before\", \"on\", \"after\" or \"by\")} when the scene is timed against that day; omit it otherwise. High pressure means a driver whose state is \"overdue\", \"today\" or \"due_soon\". Not every suggestion should serve the same drivers. At least one suggestion should address a high-pressure driver, if any exists. Stale or cold drivers are worth reviving but are not mandatory. Near-future temporal anchors are worth using. A quiet character or relationship scene is welcome when nothing urgent dominates, and such a suggestion may list no drivers.",
       "role": "system"
     },
     {
@@ -1703,7 +1711,7 @@
   ],
   "suggest.build_prompt[the-drowned-ledger/offscreen=True]": [
     {
-      "content": "You help a game master write OFFSCREEN scenes for a role-play campaign \u2014 scenes that happen away from the player character, showing what NPCs do, plan, and want when the player is not there. Given the current situation below, propose 3-4 DISTINCT offscreen scene openings. Each should advance an open plot thread (a thread that has gone cold \u2014 several scenes without attention \u2014 is especially worth reviving), reveal an NPC's motivations, or land on an upcoming date or birthday. Never include the player character in the cast. Do not assume a character is present unless they are listed under \"present\"; an offstage or not-yet-appeared NPC may enter a scene only with a plausible in-world reason for their arrival. Respect each character's tagline for who they are, including their gender. Reply with ONLY a JSON object with key \"suggestions\": a list of {\"title\" (a short label), \"premise\" (2-3 sentences the GM can open on), \"cast\" (list of \"<kind>:<id>\" tokens chosen ONLY from the available cast below), \"location\" (one location id from the available locations, or \"\")}. Use only the ids given; do not invent ids. Each suggestion also includes key \"drivers\": a list of {\"ref\" (a ref chosen ONLY from the story drivers below), \"action\"}, naming the drivers that scene serves and what it does to each. Actions by kind \u2014 thread: \"advance\" or \"close_candidate\"; commitment: \"address\", \"fulfill_candidate\", \"break_candidate\" or \"expire_candidate\"; event: \"anchor\"; birthday: \"anchor\"; holiday: \"anchor\". An action ending in \"_candidate\" means the scene is plausibly about that outcome, not that playing it guarantees one. A suggestion may also include key \"time_anchor\": {\"ref\" (one event, birthday or holiday ref from the story drivers below that has not passed), \"relation\" (\"before\", \"on\", \"after\" or \"by\")} when the scene is timed against that day; omit it otherwise. High pressure means a driver whose state is \"overdue\", \"today\" or \"due_soon\". Not every suggestion should serve the same drivers. At least one suggestion should address a high-pressure driver, if any exists. Stale or cold drivers are worth reviving but are not mandatory. Near-future temporal anchors are worth using. A quiet character or relationship scene is welcome when nothing urgent dominates, and such a suggestion may list no drivers.",
+      "content": "You help a game master write OFFSCREEN scenes for a role-play campaign \u2014 scenes that happen away from the player character, showing what NPCs do, plan, and want when the player is not there. Given the current situation below, propose 3-4 DISTINCT offscreen scene openings. Each should advance an open plot thread (a thread that has gone cold \u2014 several scenes without attention \u2014 is especially worth reviving), reveal an NPC's motivations, or land on an upcoming date or birthday. Never include the player character in the cast. Do not assume a character is present unless they are listed under \"present\"; an offstage or not-yet-appeared NPC may enter a scene only with a plausible in-world reason for their arrival. Respect each character's tagline for who they are, including their gender. Reply with ONLY a JSON object with key \"suggestions\": a list of {\"title\" (a short label), \"premise\" (2-3 sentences the GM can open on), \"focus\" (a concise, shared-safe dramatic question or opportunity compatible with this scene; \"\" for open-ended play; never a promised outcome, hidden fact or character order; Focus is shared with narrator and NPC prompt readers), \"cast\" (list of \"<kind>:<id>\" tokens chosen ONLY from the available cast below), \"location\" (one location id from the available locations, or \"\")}. Use only the ids given; do not invent ids. Each suggestion also includes key \"drivers\": a list of {\"ref\" (a ref chosen ONLY from the story drivers below), \"action\"}, naming the drivers that scene serves and what it does to each. Actions by kind \u2014 thread: \"advance\" or \"close_candidate\"; commitment: \"address\", \"fulfill_candidate\", \"break_candidate\" or \"expire_candidate\"; event: \"anchor\"; birthday: \"anchor\"; holiday: \"anchor\". An action ending in \"_candidate\" means the scene is plausibly about that outcome, not that playing it guarantees one. A suggestion may also include key \"time_anchor\": {\"ref\" (one event, birthday or holiday ref from the story drivers below that has not passed), \"relation\" (\"before\", \"on\", \"after\" or \"by\")} when the scene is timed against that day; omit it otherwise. High pressure means a driver whose state is \"overdue\", \"today\" or \"due_soon\". Not every suggestion should serve the same drivers. At least one suggestion should address a high-pressure driver, if any exists. Stale or cold drivers are worth reviving but are not mandatory. Near-future temporal anchors are worth using. A quiet character or relationship scene is welcome when nothing urgent dominates, and such a suggestion may list no drivers.",
       "role": "system"
     },
     {

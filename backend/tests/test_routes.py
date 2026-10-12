@@ -10310,6 +10310,7 @@ def test_saving_an_idea_resolves_its_references_on_the_way_back(client):
              if i["source"] != "greeting"]
     assert saved == [{"id": lid, "title": "The creditor",
                       "premise": "A debt-collector arrives.",
+                      "focus": "",
                       "cast": [{"kind": "characters", "id": "mara", "name": "Mara"}],
                       "location": {"id": "saltmarch", "name": "Saltmarch"},
                       "date": "", "pcless": False, "source": "llm", "status": "active",
