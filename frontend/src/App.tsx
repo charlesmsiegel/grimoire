@@ -1,3 +1,4 @@
+import { GalleryStateProvider } from "./components/art/galleryState";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
@@ -244,7 +245,7 @@ const AppRoutes = memo(function AppRoutes(
 ) {
   const location = useLocation();
   return (
-    <Routes>
+    <GalleryStateProvider><Routes>
       {/* A fresh install lands on the wizard instead of an empty campaigns
           list. Only `/` is redirected: every other route stays reachable, so
           a deep link is never hijacked. The two guards are exact opposites
@@ -396,7 +397,7 @@ const AppRoutes = memo(function AppRoutes(
           saved through Configuration like every other setting. */}
       <Route path="/stats" element={<StatsView />} />
       <Route path="/campaigns/:cid/stats" element={<ScopedStatsView />} />
-    </Routes>
+    </Routes></GalleryStateProvider>
   );
 });
 

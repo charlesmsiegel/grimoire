@@ -126,6 +126,7 @@ from . import (
     provenance,
     quick_replies,
     reclassify,
+    record_art,
     record_refs,
     regex,
     relationship_history,
@@ -224,6 +225,7 @@ from .world_bundle import BundleError
 from .worlds import WorldNotFound
 
 __all__ = [
+    "record_art",
     "absorb",
     "alternates",
     "attempts",

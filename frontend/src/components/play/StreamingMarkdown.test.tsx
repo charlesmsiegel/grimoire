@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { hideArtHandles } from "../../artHandles";
 
 // Counts parses: every render of `react-markdown` is a whole unified pipeline,
@@ -152,4 +152,15 @@ test("a boundary waits until the line after the blank one can be told apart", ()
   expect(blockBoundaries("- salt\n\n  more salt\n")).toEqual([]);
   // A finished line decides at once, however short.
   expect(blockBoundaries("Mara.\n\nNo.\n")).toEqual([7]);
+});
+
+test("stream block completion preserves an open inline image viewer", () => {
+  const first = "![Saltmarch](https://example.test/map.png)";
+  const view = render(<StreamingMarkdown text={first} />);
+  fireEvent.click(screen.getByRole("button", { name: "Enlarge Saltmarch" }));
+  view.rerender(<StreamingMarkdown text={first + "\n\nMara waited."} />);
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Open original" })).toHaveAttribute("href", "https://example.test/map.png");
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(view.container.querySelector("img")).toHaveAttribute("src", "https://example.test/map.png");
 });

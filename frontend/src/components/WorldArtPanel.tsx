@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type WorldImage } from "../api/client";
+import { onArtChanged } from "../appEvents";
+import { ImageTile } from "./art/ImageTile";
+import { ImageViewer } from "./art/ImageViewer";
+import { useLibraryDescriptionDrafts } from "./art/useLibraryDescriptionDrafts";
+import { useImageViewer } from "./art/useImageViewer";
+import { galleryImageDescriptor } from "./art/galleryState";
 import { CoverPanel } from "./CoverPanel";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { ImageUsage } from "./ImageUsage";
@@ -33,23 +39,32 @@ export function WorldArtPanel({ wid }: { wid: string }) {
   const [images, setImages] = useState<WorldImage[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLInputElement>(null), shelf = useRef<HTMLHeadingElement>(null);
   // Which world this panel is showing. The Images tab is keyed by `wid` so a
   // world switch remounts, but an upload in flight can still settle after the
   // reader has moved on -- the guard `CoverPanel` documents, for its reason.
-  const live = useRef(wid);
+  const live = useRef(wid), readSequence = useRef(0);
 
-  const load = useCallback(async () => {
-    const mine = wid;
+  const load = useCallback(async (fresh = false) => {
+    const mine = wid, sequence = ++readSequence.current;
     try {
-      const got = await api.listWorldLibrary(wid);
-      if (live.current === mine) { setImages(got); setErr(null); }
+      const got = await api.listWorldLibrary(wid, fresh);
+      if (live.current === mine && sequence === readSequence.current) { setImages(got); setErr(null); }
     } catch (e: unknown) {
-      if (live.current === mine) { setImages([]); setErr(reason(e)); }
+      if (live.current === mine && sequence === readSequence.current) {
+        // A failed read cannot prove removal. Keep the last successful sequence
+        // so an open viewer survives while the refresh error remains visible.
+        setImages(previous => previous ?? []); setErr(reason(e));
+      }
     }
   }, [wid]);
 
-  useEffect(() => { live.current = wid; setImages(null); void load(); }, [wid, load]);
+  useEffect(() => {
+    live.current = wid; setImages(null); void load();
+    return () => { live.current = ""; readSequence.current += 1; };
+  }, [wid, load]);
+
+  useEffect(() => onArtChanged(() => { void load(true); }), [load]);
 
   async function mutate(fn: () => Promise<unknown>) {
     const mine = wid;
@@ -57,7 +72,7 @@ export function WorldArtPanel({ wid }: { wid: string }) {
     setErr(null);
     try {
       await fn();
-      if (live.current === mine) await load();
+      if (live.current === mine) await load(true);
     } catch (e: unknown) {
       if (live.current === mine) setErr(reason(e));
     } finally {
@@ -92,15 +107,25 @@ export function WorldArtPanel({ wid }: { wid: string }) {
     void mutate(() => api.deleteWorldImage(wid, name));
   }
 
+  const drafts = useLibraryDescriptionDrafts("world-library/" + wid);
+  const viewer = useImageViewer("world-library/" + wid);
+  const descriptors = (images ?? []).map((img) => galleryImageDescriptor({
+    kind: "world", id: wid, vid: "default", record_name: "World library", ...img,
+    described: img.described ?? false, description: img.description ?? "",
+    url: api.worldImageUrl(wid, img.name, { v: img.v }),
+    thumb: api.worldImageUrl(wid, img.name, { w: 160, v: img.v }),
+  }, { kind: "world", id: wid }, wid)!);
   return (
     <div className="world-art">
+      {viewer.notice && <p role="status">{viewer.notice}</p>}
+      {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={shelf.current} />}
       <div className="side-section">
         <h4>World cover</h4>
         <CoverPanel scope={{ kind: "world", id: wid }} />
       </div>
 
       <div className="side-section">
-        <h4>World images</h4>
+        <h4 ref={shelf} tabIndex={-1}>World images</h4>
         <p className="field-hint">
           Art that belongs to the world and to none of its records — a map, a
           banner, a piece of establishing art. Every campaign on this world can
@@ -116,14 +141,15 @@ export function WorldArtPanel({ wid }: { wid: string }) {
           <div className="image-picker-grid">
             {images.map((img) => (
               <div className="image-picker-tile" key={img.name}>
-                <img src={api.worldImageUrl(wid, img.name, { w: 154, v: img.v })} alt="" />
-                <span>{img.name}</span>
+                <ImageTile image={descriptors.find((image) => image.key === JSON.stringify(["world", wid, "default", img.name]))!}
+                  onOpen={(opener) => drafts.transition(() => viewer.open(descriptors, JSON.stringify(["world", wid, "default", img.name]), opener))} />
                 <ImageDescriptionField
-                  key={img.name} name={img.name}
+                  key={drafts.key + "/" + img.name} name={img.name}
+                  onEditorStateChange={(state) => drafts.track(img.name, state)}
                   value={img.described ? (img.description ?? "") : undefined}
                   onSave={async (d) => {
                     await api.setWorldImageDescription(wid, img.name, d);
-                    await load();
+                    await load(true);
                   }}
                   onDraft={async () =>
                     (await api.draftWorldImageDescription(wid, img.name)).description} />

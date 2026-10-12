@@ -81,6 +81,11 @@ threads, and character state — so the next scene starts from an up-to-date wor
 - **Export character cards** — send any version back out as JSON, PNG, or CHARX
   from the character editor's Export menu, avatar embedded, so the file carries
   the whole character into another app (or back into Grimoire).
+- **Art for every record** — characters, PCs, locations, lore, items, groups
+  and creatures share an Art tab and an original-image viewer with Fit, zoom,
+  and pan. **Manage art** offers uploads, reuse, descriptions, primary-image
+  selection, preview crop, and removal from the record. Greetings keep their
+  dedicated art controls.
 - **Lorebooks / world info** — parse and import character-book / world-info
   entries into a world's lore.
 - **LLM-generated taglines** and **image localization** for characters.

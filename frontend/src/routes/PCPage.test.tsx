@@ -1,10 +1,15 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, parsePath, useLocation, useNavigate } from "react-router-dom";
 import PCPage from "./PCPage";
+import { ArtNavigationProvider } from "../components/art/ArtNavigationProvider";
+import { artImage, artRead } from "../testkit/recordArt";
+import { artChanged } from "../appEvents";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
   return { ...actual, api: {
+    readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
+    setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
     readPC: vi.fn(), updatePCVersion: vi.fn(), updatePC: vi.fn(),
     listPCImages: vi.fn(), listAppearances: vi.fn(), listEntities: vi.fn(),
     putPCImage: vi.fn(), promotePCImage: vi.fn(), deletePCImage: vi.fn(),
@@ -17,7 +22,7 @@ vi.mock("../api/client", async () => {
                     version: string, name: string) => `/img/${scope.id}/${id}/${version}/${name}`,
   } };
 });
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 
 const DETAIL = { meta: { id: "mara", name: "Mara", tags: [], default_version: "default" },
   versions: [{ id: "default", name: "default", persona: {
@@ -26,6 +31,9 @@ const DETAIL = { meta: { id: "mara", name: "Mara", tags: [], default_version: "d
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, []));
+  vi.mocked(api.appendRecordArt).mockResolvedValue({ name: "avatar", ext: "png", v: "new", image_id: "new" });
+
   (api.readPC as any).mockResolvedValue(DETAIL);
   (api.listPCImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
@@ -45,12 +53,17 @@ beforeEach(() => {
   (api.restorePCRevision as any).mockResolvedValue({ ok: true });
 });
 
-function renderPC(url = "/worlds/realm/pcs/mara", state?: object) {
-  return render(<MemoryRouter initialEntries={[{ pathname: url, state }]}>
-    <Routes>
-      <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
-      <Route path="/campaigns/:cid/world/pcs/:pid" element={<PCPage campaign />} />
-    </Routes>
+let lastPCPath = "";
+let lastPCKey = "";
+let movePC: ReturnType<typeof useNavigate>;
+function Spy() { movePC = useNavigate(); const location = useLocation(); lastPCPath = location.pathname + location.search; lastPCKey = location.key; return null; }
+function renderPC(url = "/worlds/realm/pcs/mara", state?: object, artNavigation = false) {
+  const content = <><Spy /><Routes>
+    <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
+    <Route path="/campaigns/:cid/world/pcs/:pid" element={<PCPage campaign />} />
+  </Routes></>;
+  return render(<MemoryRouter initialEntries={[{ ...parsePath(url), state }]}>
+    {artNavigation ? <ArtNavigationProvider>{content}</ArtNavigationProvider> : content}
   </MemoryRouter>);
 }
 
@@ -217,74 +230,73 @@ test("a PC with no history says so", async () => {
   expect(await screen.findByText("No earlier revisions.")).toBeInTheDocument();
 });
 
-test("Art shows linked thumbnails for every image without a large viewer", async () => {
-  (api.listPCImages as any).mockResolvedValue([
-    { name: "gallery_2", v: "b" }, { name: "avatar", v: "a" }, { name: "gallery_1", v: "c" },
-  ]);
-  renderPC();
-  fireEvent.click(await screen.findByRole("tab", { name: "Art 3" }));
-  expect(screen.getByRole("link", { name: "avatar" }))
-    .toHaveAttribute("href", "/img/realm/mara/default/avatar");
-  expect(screen.getByRole("link", { name: "gallery_2" }))
-    .toHaveAttribute("href", "/img/realm/mara/default/gallery_2");
-  expect(document.querySelector(".art-viewer")).not.toBeInTheDocument();
-});
-
-test("a campaign art upload writes to the campaign and stays on the selected PC", async () => {
-  renderPC("/campaigns/saltmarch/world/pcs/mara");
-  fireEvent.click(await screen.findByRole("tab", { name: "Art 0" }));
-  fireEvent.change(screen.getByLabelText("Add image"), { target: {
-    files: [new File(["image"], "mara.png", { type: "image/png" })],
-  } });
-  await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(
-    { kind: "campaign", id: "saltmarch" }, "mara", "default", "avatar", expect.any(File)));
-  expect(screen.getByRole("heading", { name: "Mara", level: 1 })).toBeInTheDocument();
-});
-
-test("PC art controls promote, remove, and report a failed description save", async () => {
-  (api.listPCImages as any).mockResolvedValue([{ name: "avatar", v: "a" }, { name: "gallery_1", v: "g" }]);
-  (api.promotePCImage as any).mockResolvedValue({ ok: true });
-  (api.deletePCImage as any).mockResolvedValue({ ok: true });
-  (api.setPCImageDescription as any).mockRejectedValue(new Error("save failed"));
+test("PC art has contained thumbnails and opens the original only when requested", async () => {
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target));
   renderPC();
   fireEvent.click(await screen.findByRole("tab", { name: "Art 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Set as avatar" }));
-  await waitFor(() => expect(api.promotePCImage).toHaveBeenCalledWith(
-    { kind: "world", id: "realm" }, "mara", "default", "gallery_1"));
-  fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[1]);
-  await waitFor(() => expect(api.deletePCImage).toHaveBeenCalledWith(
-    { kind: "world", id: "realm" }, "mara", "default", "gallery_1"));
+  expect(screen.getByRole("button", { name: "View Primary image" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "View Gallery image 1" }));
+  expect(screen.getByTestId("viewer-image")).toHaveAttribute("src", "/api/art/gallery_1?v=1");
+  expect(api.listPCImages).not.toHaveBeenCalled();
+});
+test("campaign uploads use the resolved PC version and server allocation", async () => {
+  renderPC("/campaigns/saltmarch/world/pcs/mara?tab=art&v=default");
+  await screen.findByText("No images yet");
+  const file = new File(["image"], "mara.png", { type: "image/png" });
+  fireEvent.change(screen.getByLabelText("Image files"), { target: { files: [file] } });
+  await waitFor(() => expect(api.appendRecordArt).toHaveBeenCalledWith(
+    { scope: { kind: "campaign", id: "saltmarch" }, kind: "pcs", record_id: "mara", version: "default" }, file));
+  expect(api.putPCImage).not.toHaveBeenCalled();
+  expect(screen.getByRole("heading", { name: "Mara", level: 1 })).toBeInTheDocument();
+});
+test("PC mutations capture image and primary bytes, and preserve a failed description draft", async () => {
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target));
+  vi.mocked(api.promoteRecordArt).mockResolvedValue({ ok: true });
+  vi.mocked(api.removeRecordArt).mockResolvedValue({ ok: true });
+  vi.mocked(api.setRecordArtDescription).mockRejectedValue(new Error("save failed"));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderPC();
+  fireEvent.click(await screen.findByRole("tab", { name: "Art 2" }));
+  fireEvent.click(screen.getByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Make gallery_1 primary" }));
+  const target = { scope: { kind: "world" as const, id: "realm" }, kind: "pcs" as const, record_id: "mara", version: "default" };
+  await waitFor(() => expect(api.promoteRecordArt).toHaveBeenCalledWith(target, artImage(target, "gallery_1"), "avatar-1"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Remove gallery_1" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Remove gallery_1" }));
+  await waitFor(() => expect(api.removeRecordArt).toHaveBeenCalledWith(target, artImage(target, "gallery_1")));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Description of gallery_1" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Description of gallery_1" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Description of gallery_1" }),
-    { target: { value: "Mara at Saltmarch." } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Description of gallery_1" }), { target: { value: "Mara at Saltmarch." } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByText(/save failed/)).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Description of gallery_1" })).toHaveValue("Mara at Saltmarch.");
+  confirm.mockRestore();
 });
-
-test("a failed image listing reports the failure instead of saying the version has no art", async () => {
-  (api.listPCImages as any).mockRejectedValue(new Error("image list failed"));
+test("a failed PC art read reports failure and unknown count while persona remains readable", async () => {
+  vi.mocked(api.readRecordArt).mockRejectedValue(new Error("image list failed"));
   renderPC();
-  fireEvent.click(await screen.findByRole("tab", { name: "Art 0" }));
-  expect(await screen.findByText(/Could not load art:.*image list failed/)).toBeInTheDocument();
-  expect(screen.queryByText("No art for this version yet.")).not.toBeInTheDocument();
+  await screen.findByText("At Saltmarch.");
+  fireEvent.click(screen.getByRole("tab", { name: "Art" }));
+  expect(await screen.findByText(/Art could not be read:.*image list failed/)).toBeInTheDocument();
+  expect(screen.queryByText("No images yet")).not.toBeInTheDocument();
 });
-
-test("a slower image list for another version cannot replace the current version", async () => {
-  let resolveOld!: (value: { name: string; v: string }[]) => void;
-  (api.readPC as any).mockResolvedValue({ ...DETAIL, versions: [
+test("a slow previous-version art read cannot replace the selected PC version", async () => {
+  let resolveOld!: (value: ReturnType<typeof artRead>) => void;
+  vi.mocked(api.readPC).mockResolvedValue({ ...DETAIL, versions: [
     DETAIL.versions[0], { id: "second", name: "second", persona: DETAIL.versions[0].persona, images: [] },
   ] });
-  (api.listPCImages as any).mockImplementation((_scope: unknown, _pid: string, version: string) =>
-    version === "default" ? new Promise((resolve) => { resolveOld = resolve; })
-      : Promise.resolve([{ name: "gallery_1", v: "new" }]));
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => target.version === "default"
+    ? new Promise((resolve) => { resolveOld = resolve; }) : artRead(target, [artImage(target, "gallery_1")]));
   renderPC();
   const selector = await screen.findByRole("combobox", { name: "Version" });
+  await waitFor(() => expect(api.readRecordArt).toHaveBeenCalled());
   fireEvent.change(selector, { target: { value: "second" } });
   fireEvent.click(await screen.findByRole("tab", { name: "Art 1" }));
-  resolveOld([{ name: "avatar", v: "old" }]);
-  await waitFor(() => expect(screen.getByRole("link", { name: "gallery_1" })).toBeInTheDocument());
-  expect(screen.queryByRole("link", { name: "avatar" })).not.toBeInTheDocument();
+  resolveOld(artRead({ scope: { kind: "world", id: "realm" }, kind: "pcs", record_id: "mara", version: "default" }));
+  expect(screen.getByRole("button", { name: "View Gallery image 1" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "View Primary image" })).not.toBeInTheDocument();
+  expect(lastPCPath).toContain("v=second");
 });
 
 test("a late record refresh cannot restore a version after the reader switches versions", async () => {
@@ -313,21 +325,120 @@ test("the phone main area opens Art even when this PC has no image", async () =>
     expect(document.querySelector(".shell.phone .mobile-art-entry")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
     expect(screen.getByRole("tab", { name: "Art 0" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("No art for this version yet.")).toBeInTheDocument();
+    expect(screen.getByText("No images yet")).toBeInTheDocument();
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
 
-test("the phone Art shortcut reaches linked PC thumbnails", async () => {
-  (api.listPCImages as any).mockResolvedValue([{ name: "avatar", v: "a" }]);
+test("the phone Art shortcut opens the common PC shelf", async () => {
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, [artImage(target)]));
   const width = window.innerWidth;
   Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
   try {
     renderPC();
     await screen.findByRole("heading", { name: "Mara", level: 1 });
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
-    expect(screen.getByRole("link", { name: "avatar" }))
-      .toHaveAttribute("href", "/img/realm/mara/default/avatar");
-    expect(screen.getByRole("link", { name: "avatar" }))
-      .toHaveAttribute("target", "_blank");
+    expect(await screen.findByRole("button", { name: "View Primary image" })).toBeInTheDocument();
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
+
+test("the PC Art deep link selects its version and phone action", async () => {
+  renderPC("/worlds/realm/pcs/mara?tab=art&v=default");
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  expect(screen.getByRole("tab", { name: /^Art/ })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "View art" })).toBeInTheDocument();
+  expect(await screen.findByText("No images yet")).toBeInTheDocument();
+});
+test("a PC identity preview opens the viewer and crop belongs to Manage", async () => {
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, [artImage(target)]));
+  renderPC();
+  fireEvent.click((await screen.findAllByRole("button", { name: "View Mara art" }))[0]);
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: /crop/i })).not.toBeInTheDocument();
+});
+
+test("refusing an Art discard keeps the PC version and tab unchanged", async () => {
+  vi.mocked(api.readPC).mockResolvedValue({ ...DETAIL, versions: [DETAIL.versions[0],
+    { id: "veiled", name: "veiled", persona: { ...DETAIL.versions[0].persona, description: "At Realm." }, images: [] }] });
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target));
+  renderPC("/worlds/realm/pcs/mara?tab=art&v=default");
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Description of avatar" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Description of avatar" }), { target: { value: "Unsaved" } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  fireEvent.change(screen.getByRole("combobox", { name: "Version" }), { target: { value: "veiled" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Persona" }));
+  expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("default");
+  expect(lastPCPath).toContain("tab=art&v=default");
+  expect(screen.getByRole("textbox", { name: "Description of avatar" })).toHaveValue("Unsaved");
+  confirm.mockRestore();
+});
+
+test("an addressed PC version change closes viewing and resets its Art management", async () => {
+  vi.mocked(api.readPC).mockResolvedValue({ ...DETAIL, versions: [DETAIL.versions[0],
+    { id: "veiled", name: "veiled", persona: DETAIL.versions[0].persona, images: [] }] });
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, target.version === "default" ? [artImage(target)] : []));
+  renderPC("/worlds/realm/pcs/mara?tab=art&v=default");
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "View Primary image" }));
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  act(() => movePC("/worlds/realm/pcs/mara?tab=art&v=veiled"));
+  await screen.findByText("No images yet");
+  expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Manage art" })).toBeInTheDocument();
+});
+
+test("removing an addressed PC version restores the same default as a direct bare URL", async () => {
+  vi.mocked(api.readPC).mockResolvedValue({ ...DETAIL, versions: [DETAIL.versions[0],
+    { id: "veiled", name: "veiled", persona: DETAIL.versions[0].persona, images: [] }] });
+  renderPC("/worlds/realm/pcs/mara?tab=art&v=veiled");
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("veiled"));
+  act(() => movePC("/worlds/realm/pcs/mara?tab=art"));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("default"));
+  expect(api.readRecordArt).toHaveBeenLastCalledWith(expect.objectContaining({ version: "default" }), expect.anything());
+});
+
+test("phone removed-tile focus returns to the visible main record heading", async () => {
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
+  try {
+    vi.mocked(api.readRecordArt).mockImplementation(async target => artRead(target, [artImage(target, "gallery_1")]));
+    renderPC("/worlds/realm/pcs/mara?tab=art");
+    await screen.findByRole("heading", { name: "Mara", level: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: "View Gallery image 1" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    vi.mocked(api.readRecordArt).mockImplementation(async target => artRead(target, []));
+    act(() => artChanged());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Mara", level: 1 })).toHaveFocus();
+  } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
+});
+
+
+test.each((["world", "campaign"] as const).flatMap(scope => (["ok", "partial"] as const).map(status => [scope, status] as const)))(
+  "%s PC %s Art save refreshes without replacing its accepted route", async (scope, status) => {
+    vi.mocked(api.readRecordArt).mockImplementation(async target => artRead(target, [artImage(target)]));
+    if (status === "ok") vi.mocked(api.setRecordArtDescription).mockResolvedValue({ ok: true });
+    else vi.mocked(api.setRecordArtDescription).mockRejectedValue(new ApiError(500, "Cleanup failed", "description_cleanup_incomplete", {
+      committed: true, confirmed_text: "A map",
+      recovery: { available: true, description_rev: "recovery-1",
+        effective_description: { scope: "legacy", text: "A portrait", described: true, conflicts: [] },
+        write_target_description: { scope: "shared", text: "A map", described: true, conflicts: [] } },
+    }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const prefix = scope === "world" ? "/worlds/realm" : "/campaigns/saltmarch/world";
+    renderPC(prefix + "/pcs/mara?tab=art&v=default", undefined, true);
+    fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+    const before = lastPCKey;
+    fireEvent.click(screen.getByRole("button", { name: "Description of avatar" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Description of avatar" }), { target: { value: "A map" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.readPC).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument());
+    expect(lastPCKey).toBe(before);
+    expect(confirm).not.toHaveBeenCalled();
+    if (status === "partial") {
+      expect(screen.getByRole("textbox", { name: "Description of avatar" })).toHaveValue("A map");
+      expect(screen.getByRole("button", { name: "Finish applying saved description" })).toBeEnabled();
+    } else expect(screen.getByText("Saved")).toBeInTheDocument();
+    confirm.mockRestore();
+  });

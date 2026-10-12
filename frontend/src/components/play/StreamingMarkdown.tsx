@@ -1,3 +1,4 @@
+import { MarkdownArtOffset, MarkdownArtProvider } from "../../markdown/MarkdownArtProvider";
 import { Fragment, memo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,14 +14,18 @@ import { quotePlugin } from "../../markdown/quotePlugin";
  *  nothing unless the words changed. A parse is a full unified pipeline and a
  *  hast-to-React pass, which is the most expensive thing on this screen per
  *  byte. */
-export const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
+const MarkdownBlock = memo(function MarkdownBlock({ content, offset = 0 }: { content: string; offset?: number }) {
   // commentPlugin runs first, though nothing depends on it doing so: quotePlugin
   // scans `text` nodes only and steps over `raw`/`comment` ones without reading
   // their values, so a quote mark inside a note could never have opened a run
   // either way. The order is for reading, not for correctness.
   return (
-    <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[commentPlugin, quotePlugin]}>{content}</Markdown>
+    <MarkdownArtOffset offset={offset}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[commentPlugin, quotePlugin]}>{content}</Markdown></MarkdownArtOffset>
   );
+});
+
+export const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
+  return <MarkdownArtProvider enabled contextKey="post"><MarkdownBlock content={content} /></MarkdownArtProvider>;
 });
 
 // A fence line, opening or closing: up to three spaces, then three or more of
@@ -137,13 +142,16 @@ export function blockBoundaries(text: string): number[] {
  *  gets no seam either, since the whole text has no block there to separate. */
 export const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { text: string }) {
   const starts = [0, ...blockBoundaries(text)];
-  const blocks = starts.map((start, i) => ({
-    start, content: hideArtHandles(text.slice(start, starts[i + 1])),
-  }));
+  let sourceOffset = 0;
+  const blocks = starts.map((start, i) => {
+    const content = hideArtHandles(text.slice(start, starts[i + 1]));
+    const offset = sourceOffset; sourceOffset += content.length;
+    return { start, content, offset };
+  });
   let seen = false;
   return (
-    <>
-      {blocks.map(({ start, content }) => {
+    <MarkdownArtProvider enabled contextKey="stream">
+      {blocks.map(({ start, content, offset }) => {
         const seam = seen && content.trim() !== "";
         seen ||= content.trim() !== "";
         return (
@@ -151,10 +159,10 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { tex
           // grows, so a closed block keeps its element and its memoized parse.
           <Fragment key={start}>
             {seam && "\n"}
-            <RenderedMarkdown content={content} />
+            <MarkdownBlock content={content} offset={offset} />
           </Fragment>
         );
       })}
-    </>
+    </MarkdownArtProvider>
   );
 });

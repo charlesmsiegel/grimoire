@@ -394,3 +394,11 @@ test("a resolve that failed announces nothing", async () => {
   expect(await screen.findByText("world is gone")).toBeInTheDocument();
   expect(onResolved).not.toHaveBeenCalled();
 });
+
+test("non-greeting incoming prose opts into the shared image viewer", async () => {
+  (api.getIncoming as any).mockResolvedValue([{ ...HARBOR, world: { ...HARBOR.world, body: "![Saltmarch](https://example.test/map.png)" } }]);
+  await renderPanel();
+  fireEvent.click(screen.getByRole("button", { name: /Saltmarch Harbor/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Enlarge Saltmarch" }));
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+});

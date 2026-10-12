@@ -1,3 +1,4 @@
+import { MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
 import { useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
@@ -269,7 +270,7 @@ export function ContentSection({ pack, reload }: {
             <div className="detail-main">
               <h3>{viewEntry.name}</h3>
               <div className="detail-rendered">
-                <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{viewEntry.body}</Markdown>
+                <MarkdownArtProvider enabled contextKey={JSON.stringify([pack.id, selected.kind, selected.id])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{viewEntry.body}</Markdown></MarkdownArtProvider>
               </div>
             </div>
             <aside className="detail-sidebar">

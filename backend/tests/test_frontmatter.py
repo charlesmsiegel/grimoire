@@ -101,3 +101,17 @@ def test_a_value_holding_a_line_break_cannot_add_a_key(brk):
     meta, body = parse_frontmatter(text)
     assert meta == {"model": "vendor/m inference_format: 3"}
     assert body == ""
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("meta", [{"name": "Realm"}, {}])
+def test_raw_archive_text_accepts_crlf_fences_without_changing_body(newline, meta):
+    body = "At Saltmarch." + newline + "Realm." + newline
+    header = "".join(key + ": " + value + newline for key, value in meta.items())
+    text = "---" + newline + header + "---" + newline + newline + body
+    assert parse_frontmatter(text) == (meta, body)
+
+
+def test_raw_crlf_does_not_accept_a_four_dash_closing_prefix():
+    text = "---\r\nname: Realm\r\n----\r\nAt Saltmarch.\r\n"
+    assert parse_frontmatter(text) == ({}, text)

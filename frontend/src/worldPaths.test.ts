@@ -1,5 +1,5 @@
 import {
-  sectionHref, parseWorldTail, legacyTarget, defaultSection,
+  sectionHref, parseWorldTail, legacyTarget, defaultSection, parseRecordModifiers,
 } from "./worldPaths";
 
 const W = { kind: "world" as const, id: "realm" };
@@ -204,4 +204,22 @@ describe("defaultSection", () => {
     expect(defaultSection("world")).toBe("overview");
     expect(defaultSection("campaign")).toBe("characters");
   });
+});
+
+
+test.each(["world", "campaign"] as const)("Art record URLs round-trip all seven sources in %s", (kind) => {
+  for (const at of ["characters", "pcs", "locations", "items", "lore", "groups", "creatures"] as const) {
+    const actor = at === "characters" || at === "pcs";
+    const target = actor ? { kind: "record" as const, at, rid: "Mara / #", v: "era #1", tab: "art" as const }
+      : { kind: "record" as const, at, rid: "Saltmarch / #", tab: "art" as const };
+    const href = sectionHref({ kind, id: "Realm #" }, target);
+    const url = new URL(href, "http://localhost");
+    expect(parseRecordModifiers(at, url.search)).toEqual(actor ? { v: "era #1", tab: "art" } : { tab: "art" });
+    expect(href).toContain("%2F");
+  }
+});
+test("unsupported greeting/entity modifiers never become record state", () => {
+  expect(parseRecordModifiers("greetings", "?tab=art&v=era")).toEqual({});
+  expect(parseRecordModifiers("locations", "?tab=art&v=era")).toEqual({ tab: "art" });
+  expect(parseRecordModifiers("characters", "?tab=unknown&v=era")).toEqual({ v: "era" });
 });

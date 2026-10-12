@@ -1,3 +1,4 @@
+import { MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -29,11 +30,11 @@ export function GreetingMarkdown({ children, imageExtras }:
   // Context keeps the image component identity stable when extras change.
   return (
     <div className="detail-rendered">
-      <ImageExtrasContext.Provider value={imageExtras}>
+      <MarkdownArtProvider enabled={false} contextKey="greeting"><ImageExtrasContext.Provider value={imageExtras}>
       <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
         {text}
       </Markdown>
-      </ImageExtrasContext.Provider>
+      </ImageExtrasContext.Provider></MarkdownArtProvider>
     </div>
   );
 }

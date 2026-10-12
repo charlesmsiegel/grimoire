@@ -1,6 +1,9 @@
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import CharacterPage from "./CharacterPage";
+import { artImage, artRead } from "../testkit/recordArt";
+import { artChanged } from "../appEvents";
+import type { CharacterDetail } from "../api/types";
 import { LegacyCharacterRedirect } from "../App";
 
 vi.mock("../api/client", async () => {
@@ -16,6 +19,8 @@ vi.mock("../api/client", async () => {
         + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
       exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+      readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
+      setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
       readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
@@ -80,11 +85,10 @@ test("the phone main area exposes character art and opens the Art tab", async ()
   try {
     await renderWorld();
     expect(document.querySelector(".shell.phone .mobile-art-entry")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Seraphine art preview" })).toBeInTheDocument();
+    expect(within(document.querySelector(".mobile-art-entry")!).getByRole("img", { name: "Seraphine art preview" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
     expect(screen.getByRole("tab", { name: /Art/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("link", { name: "avatar" }))
-      .toHaveAttribute("href", "/img/realm/characters/seraphine/default/avatar?v=a1");
+    expect(screen.getByRole("button", { name: "View Primary image" })).toBeInTheDocument();
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
 
@@ -96,11 +100,10 @@ test("a gallery-only character has a phone preview and a direct Art action", asy
   Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
   try {
     await renderWorld();
-    expect(screen.getByRole("img", { name: "Seraphine art preview" }))
-      .toHaveAttribute("src", "/img/realm/characters/seraphine/default/gallery_1?w=512&v=g1");
+    expect(within(document.querySelector(".mobile-art-entry")!).getByRole("img", { name: "Seraphine art preview" }))
+      .toHaveAttribute("src", "/img/realm/characters/seraphine/default/gallery_1?v=g1&w=160");
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
-    expect(screen.getByRole("link", { name: "gallery_1" }))
-      .toHaveAttribute("href", "/img/realm/characters/seraphine/default/gallery_1?v=g1");
+    expect(screen.getByRole("button", { name: "View Gallery image 1" })).toBeInTheDocument();
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
 
@@ -119,6 +122,21 @@ let storedBirthdate = "";
 beforeEach(() => {
   vi.clearAllMocks();
   storedBirthdate = "";
+  vi.mocked(api.readRecordArt).mockImplementation(async (target) => {
+    const detail = await vi.mocked(api.readCharacter).mock.results[vi.mocked(api.readCharacter).mock.results.length - 1]?.value as CharacterDetail;
+    const version = detail.versions.find((v) => v.id === target.version);
+    return artRead(target, (version?.images ?? []).map((name) => {
+      const v = version?.image_v?.[name] ?? name;
+      const url = api.actorImageUrl(target.scope, "characters", target.record_id, target.version ?? "", name, { v });
+      return artImage(target, name, { v, url, thumb: url + "&w=160",
+        description: version?.image_descriptions?.[name] ?? "", described: name in (version?.image_descriptions ?? {}),
+        provenance: version?.inherited?.includes(name) ? "inherited" : target.scope.kind });
+    }));
+  });
+  vi.mocked(api.appendRecordArt).mockResolvedValue({ name: "gallery_3", ext: "png", v: "new", image_id: "new" });
+  vi.mocked(api.promoteRecordArt).mockResolvedValue({ ok: true });
+  vi.mocked(api.removeRecordArt).mockResolvedValue({ ok: true });
+
   (api.readCharacter as any).mockImplementation(async () => ({
     ...DETAIL, meta: { ...DETAIL.meta, birthdate: storedBirthdate },
   }));
@@ -227,7 +245,7 @@ test("the tabs count the card's own greetings and art", async () => {
   await renderWorld();
   // One first message plus one alternate; one avatar and no gallery.
   expect(screen.getByRole("tab", { name: /Greetings 2/ })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: /Art 1/ })).toBeTruthy();
+  expect(await screen.findByRole("tab", { name: /Art 1/ })).toBeTruthy();
 });
 
 test("remote referenced art appears without local copy controls", async () => {
@@ -249,25 +267,19 @@ test("the description carries what it costs, every turn", async () => {
   expect(within(fieldBlock("Description")).getByText(/sent every turn in scene/i)).toBeTruthy();
 });
 
-test("the page draws its art as downscales and keeps the original where it is looked at", async () => {
+test("the identity thumbnail opens original art, while crop is only offered in Manage", async () => {
   await renderWorld();
-  const base = "/img/realm/characters/seraphine/default/avatar";
-  // The identity art tops out at 240px, so the screen picks among the buckets.
-  const art = document.querySelector(".identity-art img")!;
-  expect(art.getAttribute("src")).toBe(`${base}?w=512&v=a1`);
-  expect(art.getAttribute("srcset")).toContain(`${base}?w=1024&v=a1 682w`);
-  expect(art.getAttribute("sizes")).toBe("240px");
-  // The crop picker is the reader looking at the picture itself: the original.
-  fireEvent.click(screen.getByRole("button", { name: "Adjust avatar crop" }));
-  expect(screen.getByAltText("avatar full view").getAttribute("src")).toBe(`${base}?v=a1`);
-  fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
-  // A 96px shelf tile draws a downscale and links to the original.
+  await screen.findByRole("button", { name: "Art (1)" });
+  const preview = document.querySelector(".record-art-preview img")!;
+  expect(preview).toHaveAttribute("src", "/img/realm/characters/seraphine/default/avatar?v=a1&w=160");
+  fireEvent.click(screen.getAllByRole("button", { name: "View Seraphine art" })[0]);
+  expect(screen.getByTestId("viewer-image")).toHaveAttribute("src", "/img/realm/characters/seraphine/default/avatar?v=a1");
+  fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
   fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  const tile = await screen.findByAltText("avatar");
-  expect(tile.getAttribute("src")).toBe(`${base}?w=512&v=a1`);
-  expect(tile.getAttribute("sizes")).toBe("96px");
-  expect(tile.getAttribute("loading")).toBe("lazy");
-  expect(tile.closest("a")!.getAttribute("href")).toBe(`${base}?v=a1`);
+  expect(screen.queryByRole("button", { name: "Adjust primary crop" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Adjust primary crop" }));
+  expect(screen.getByRole("dialog", { name: "Adjust primary image crop" })).toBeInTheDocument();
 });
 
 // ------------------------------------------------------------ editing inline
@@ -680,226 +692,78 @@ test("editing the first message writes it back to the card", async () => {
   expect((api.updateVersion as any).mock.calls[0][3].data.first_mes).toBe("You are late.");
 });
 
-test("the art tab shows the avatar tile and offers a description per image", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...DETAIL,
-    versions: [{ ...DETAIL.versions[0], images: ["avatar", "gallery_1"],
-                 image_v: { avatar: "a1", gallery_1: "g1" },
-                 image_descriptions: { avatar: "a novice at the gate" } }],
-  });
+test("inherited character art shares one shelf and retains provenance and guarded campaign writes", async () => {
+  const target = { scope: { kind: "campaign" as const, id: "run" }, kind: "characters" as const, record_id: "seraphine", version: "default" };
+  vi.mocked(api.readRecordArt).mockResolvedValue(artRead(target, [artImage(target, "avatar", { provenance: "inherited" }),
+    artImage(target, "gallery_1", { provenance: "campaign" })]));
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  expect(await screen.findByText("inherited")).toBeInTheDocument();
+  expect(screen.getByText("campaign")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Manage art" }));
+  expect(screen.getByRole("button", { name: "Adjust primary crop" })).toBeEnabled();
+});
+test("world originals remain separate, viewable, and read-only", async () => {
+  const target = { scope: { kind: "campaign" as const, id: "run" }, kind: "characters" as const, record_id: "seraphine", version: "default" };
+  const data = artRead(target);
+  data.world_originals = [artImage({ ...target, scope: { kind: "world", id: "realm" } }, "gallery_1", { provenance: "world-original", url: "/world-original" })];
+  vi.mocked(api.readRecordArt).mockResolvedValue(data);
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  const world = await screen.findByRole("region", { name: "World originals" });
+  expect(within(world).getAllByRole("button")).toHaveLength(1);
+  fireEvent.click(within(world).getByRole("button"));
+  expect(screen.getByTestId("viewer-image")).toHaveAttribute("src", "/world-original");
+});
+test("ordinary character uploads defer names to the server and attempt every file", async () => {
   await renderWorld();
   fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  await screen.findByText("avatar");
-  expect(screen.getByAltText("gallery_1")).toBeTruthy();
-  expect(screen.getByText("a novice at the gate")).toBeTruthy();
-  expect(document.querySelector(".art-viewer")).not.toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  vi.mocked(api.appendRecordArt).mockResolvedValueOnce({ name: "gallery_3", ext: "png", v: "1", image_id: "1" })
+    .mockRejectedValueOnce(new Error("unsupported image"))
+    .mockResolvedValueOnce({ name: "gallery_4", ext: "png", v: "2", image_id: "2" });
+  const files = ["a.png", "b.png", "c.png"].map((name) => new File(["x"], name, { type: "image/png" }));
+  fireEvent.change(screen.getByLabelText("Image files"), { target: { files } });
+  await waitFor(() => expect(api.appendRecordArt).toHaveBeenCalledTimes(3));
+  expect(vi.mocked(api.appendRecordArt).mock.calls.map((call) => call[1])).toEqual(files);
+  expect(api.putImage).not.toHaveBeenCalled();
+  expect(await screen.findByText(/b.png:.*unsupported image/)).toBeInTheDocument();
 });
-
-/** A campaign locked to `veiled`, whose world default version still holds art. */
-const BASE_VERSION = {
-  id: "default", name: "default", images: ["avatar", "gallery_1"],
-  image_v: { avatar: "wa", gallery_1: "wg" },
-  image_descriptions: { gallery_1: "at the tide gate" },
-};
-const LOCKED_TO_VEILED = {
-  meta: { ...DETAIL.meta, default_version: "veiled" },
-  versions: [{ ...DETAIL.versions[1], images: ["gallery_1"], image_v: { gallery_1: "c1" } }],
-  base_versions: [BASE_VERSION],
-};
-
-/** The World images section, once it is on the page. */
-async function worldShelf() {
-  const head = await screen.findByText("World images", { selector: ".data-label" });
-  return head.closest(".card-field") as HTMLElement;
-}
-
-test("campaign scope shelves the campaign's own pictures apart from the world's", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...DETAIL,
-    versions: [{ ...DETAIL.versions[0], images: ["avatar", "gallery_1", "gallery_2"],
-                 image_v: { avatar: "a1", gallery_1: "g1", gallery_2: "g2" },
-                 image_descriptions: { gallery_2: "the priory door" },
-                 inherited: ["avatar", "gallery_2"] }],
-    base_versions: [],
-  });
-  await renderCampaign();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  const world = await worldShelf();
-  const own = fieldBlock("Images");
-  // the campaign's own shelf: its one file, and the avatar slot says whose the avatar is
-  expect(within(own).getAllByRole("img").map((i) => i.getAttribute("alt"))).toEqual(["gallery_1"]);
-  expect(within(own).getByText("world’s avatar")).toBeTruthy();
-  // the world's: the inherited avatar and picture, rendered as the same tiles
-  expect(within(world).getAllByRole("img").map((i) => i.getAttribute("alt")))
-    .toEqual(["avatar", "gallery_2"]);
-  expect(within(world).getByAltText("gallery_2").getAttribute("src"))
-    .toBe("/img/run/characters/seraphine/default/gallery_2?w=512&v=g2");
-  // ...and, being this version's, they keep their controls: the campaign
-  // routes resolve an inherited name exactly as the shelf read it
-  expect(within(world).getByRole("button", { name: "Remove" })).toBeTruthy();
-  expect(within(world).getByRole("button", { name: "Set as avatar" })).toBeTruthy();
-  expect(within(world).getByRole("button", { name: "Description of gallery_2" })).toBeTruthy();
-});
-
-test("campaign scope passes the world's default art through under World images", async () => {
-  (api.readCharacter as any).mockResolvedValue(LOCKED_TO_VEILED);
-  await renderCampaign();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  const world = await worldShelf();
-  const tiles = screen.getAllByAltText("gallery_1");
-  expect(tiles.map((t) => t.getAttribute("src"))).toEqual([
-    "/img/run/characters/seraphine/veiled/gallery_1?w=512&v=c1",
-    "/img/run/characters/seraphine/default/gallery_1?w=512&v=wg",
-  ]);
-  expect(within(world).getByAltText("avatar").getAttribute("src"))
-    .toBe("/img/run/characters/seraphine/default/avatar?w=512&v=wa");
-  // captioned with the version it came from, described in the same box
-  expect(within(world).getByText("gallery_1 · default")).toBeTruthy();
-  expect(within(world).getByText("at the tide gate")).toBeTruthy();
-});
-
-test("a passed-through version's tiles are read-only: nothing on them writes", async () => {
-  (api.readCharacter as any).mockResolvedValue(LOCKED_TO_VEILED);
-  await renderCampaign();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  const world = await worldShelf();
-  expect(within(world).getAllByRole("img")).toHaveLength(2);
-  expect(within(world).queryAllByRole("button")).toHaveLength(0);
-  expect(within(world).queryByRole("textbox")).toBeNull();
-  // ...while the version's own shelf keeps its controls
-  const own = fieldBlock("Images");
-  expect(within(own).getByRole("button", { name: "Set as avatar" })).toBeTruthy();
-  expect(within(own).getByRole("button", { name: "Description of gallery_1" })).toBeTruthy();
-});
-
-test("campaign scope shows the world's copy beside a same-named file of the version's own", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...DETAIL,
-    versions: [{ ...DETAIL.versions[0], images: ["avatar", "gallery_1"],
-                 image_v: { avatar: "a1", gallery_1: "c1" },
-                 image_descriptions: { gallery_1: "mine, repainted" },
-                 world_shadowed: [{ name: "gallery_1", v: "w1", description: "at the tide gate" }] }],
-    base_versions: [],
-  });
-  await renderCampaign();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  const world = await worldShelf();
-  // both pictures, under one name: the version's own through the campaign
-  // route, the world's through the WORLD route (the campaign route would
-  // resolve that name to the campaign's file)
-  const tiles = screen.getAllByAltText("gallery_1");
-  expect(tiles.map((t) => t.getAttribute("src"))).toEqual([
-    "/img/run/characters/seraphine/default/gallery_1?w=512&v=c1",
-    "/img/realm/characters/seraphine/default/gallery_1?w=512&v=w1",
-  ]);
-  expect(within(world).getByText("gallery_1 · world’s copy")).toBeTruthy();
-  expect(within(world).getByText("at the tide gate")).toBeTruthy();
-  expect(within(world).queryAllByRole("button")).toHaveLength(0);
-});
-
-test("no World images section when nothing on the page is the world's", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...DETAIL,
-    versions: [{ ...DETAIL.versions[0], inherited: [], world_shadowed: [] }],
-    base_versions: [],
-  });
-  await renderCampaign();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  await screen.findByText("avatar");
-  expect(screen.queryByText("World images")).toBeNull();
-});
-
-test("every passed-through version is captioned, in the order the server lists them", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...LOCKED_TO_VEILED,
-    base_versions: [BASE_VERSION,
-                    { id: "young", name: "main", images: ["gallery_1"], image_v: { gallery_1: "y1" },
-                      image_descriptions: {} }],
-  });
-  await renderCampaign();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  const world = await worldShelf();
-  // a label that is not the id carries the id, so two versions the card
-  // calls the same thing can still be told apart
-  expect(within(world).getByText("gallery_1 · main (young)")).toBeTruthy();
-  expect(screen.getAllByAltText("gallery_1").map((t) => t.getAttribute("src"))).toEqual([
-    "/img/run/characters/seraphine/veiled/gallery_1?w=512&v=c1",
-    "/img/run/characters/seraphine/default/gallery_1?w=512&v=wg",
-    "/img/run/characters/seraphine/young/gallery_1?w=512&v=y1",
-  ]);
-});
-
-test("world scope never shows a World images section", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...LOCKED_TO_VEILED,
-    versions: [{ ...LOCKED_TO_VEILED.versions[0], inherited: ["gallery_1"] }],
-  });
+test("promotion captures image bytes and the current primary, then refreshes the character", async () => {
+  const target = { scope: { kind: "world" as const, id: "realm" }, kind: "characters" as const, record_id: "seraphine", version: "default" };
+  vi.mocked(api.readRecordArt).mockResolvedValue(artRead(target));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   await renderWorld();
   fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  await screen.findByAltText("gallery_1");
-  expect(screen.queryByText("World images")).toBeNull();
-  expect(within(fieldBlock("Images")).getByAltText("gallery_1")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Make gallery_1 primary" }));
+  await waitFor(() => expect(api.promoteRecordArt).toHaveBeenCalledWith(target, artImage(target, "gallery_1"), "avatar-1"));
+  await waitFor(() => expect(vi.mocked(api.readCharacter).mock.calls.length).toBeGreaterThan(1));
+  confirm.mockRestore();
 });
-
-const imgFile = (name: string) => new File(["x"], name, { type: "image/png" });
-
-/** Open the art tab on a version whose images are `images`. */
-async function artTab(images: string[]) {
-  (api.readCharacter as any).mockResolvedValue({
-    ...DETAIL,
-    versions: [{ ...DETAIL.versions[0], images,
-                 image_v: Object.fromEntries(images.map((n) => [n, `v-${n}`])),
-                 image_descriptions: {} }],
-  });
-  (api.putImage as any).mockResolvedValue({ name: "x", ext: "png" });
+test("greeting copying becomes ordinary character placement without changing source links", async () => {
+  vi.mocked(api.listImageAppearances).mockResolvedValue([{ gid: "opening", greeting_name: "Saltmarch", name: "gallery_1", url: "/g/source" }]);
+  vi.mocked(api.copyGreetingImage).mockResolvedValue({ name: "gallery_1", ext: "png" });
   await renderWorld();
   fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  return await screen.findByLabelText("Add images");
-}
-
-const putNames = () => (api.putImage as any).mock.calls.map((c: any[]) => c[3]);
-
-test("the shelf takes several files at once, queued after the highest gallery slot", async () => {
-  const input = await artTab(["avatar", "gallery_2"]);
-  fireEvent.change(input,
-    { target: { files: [imgFile("a.png"), imgFile("b.png"), imgFile("c.png")] } });
-  // Named from ONE read of the shelf, not from a re-read per file: the names
-  // are picked before any of them lands, so three in a batch cannot collide.
-  await waitFor(() => expect(putNames()).toEqual(["gallery_3", "gallery_4", "gallery_5"]));
-  expect((api.readCharacter as any).mock.calls.length).toBeGreaterThan(1);
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  const readsBeforeCopy = vi.mocked(api.readRecordArt).mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "Add to gallery" }));
+  await waitFor(() => expect(api.copyGreetingImage).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "seraphine", "default",
+    { gid: "opening", name: "gallery_1", slot: "gallery" }));
+  expect(screen.getByRole("link", { name: "Saltmarch art" })).toHaveAttribute("href", "/g/source");
+  await waitFor(() => expect(vi.mocked(api.readRecordArt).mock.calls.length).toBeGreaterThan(readsBeforeCopy));
+  expect(api.readRecordArt).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ fresh: true }));
 });
-
-test("with no avatar yet, the first of a batch fills the avatar slot", async () => {
-  const input = await artTab([]);
-  fireEvent.change(input, { target: { files: [imgFile("a.png"), imgFile("b.png")] } });
-  await waitFor(() => expect(putNames()).toEqual(["avatar", "gallery_1"]));
-});
-
-test("one bad file in a batch does not stop the rest, and is named in the error", async () => {
-  const input = await artTab(["avatar"]);
-  (api.putImage as any)
-    .mockResolvedValueOnce({ name: "gallery_1", ext: "png" })
-    .mockRejectedValueOnce({ detail: "unsupported image" })
-    .mockResolvedValueOnce({ name: "gallery_3", ext: "png" });
-  fireEvent.change(input,
-    { target: { files: [imgFile("a.png"), imgFile("b.png"), imgFile("c.png")] } });
-  await waitFor(() => expect(putNames()).toEqual(["gallery_1", "gallery_2", "gallery_3"]));
-  expect(await screen.findByText(/b\.png: unsupported image/)).toBeTruthy();
-});
-
-test("promoting a gallery image re-reads the character, so the avatar is not the old one", async () => {
-  (api.readCharacter as any).mockResolvedValue({
-    ...DETAIL,
-    versions: [{ ...DETAIL.versions[0], images: ["avatar", "gallery_1"],
-                 image_v: { avatar: "a1", gallery_1: "g1" }, image_descriptions: {} }],
-  });
-  (api.promoteImage as any).mockResolvedValue({ ok: true });
-  await renderWorld();
-  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "Set as avatar" }));
-  await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith(
-    { kind: "world", id: "realm" }, "seraphine", "default", "gallery_1"));
-  expect((api.readCharacter as any).mock.calls.length).toBeGreaterThan(1);
+test("a character version change closes its viewer and resets management", async () => {
+  await renderWorld("/worlds/realm/characters/seraphine?tab=art&v=default");
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "View Primary image" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
+  fireEvent.click(screen.getByRole("button", { name: "veiled" }));
+  expect(lastLocation).toContain("v=veiled");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Manage art" })).toBeInTheDocument());
+  expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
 });
 
 test("the lore tab is counted from the entries that name this character as owner", async () => {
@@ -1300,4 +1164,59 @@ test("the redirect carries location.state along, not just the address", async ()
   );
   await screen.findByText("landed");
   expect(seenState).toEqual({ reveal: "seraphine" });
+});
+
+test("the Character Art deep link selects its actor version and identity opens the common viewer", async () => {
+  await renderWorld("/worlds/realm/characters/seraphine?tab=art&v=default");
+  expect(screen.getByRole("tab", { name: /^Art/ })).toHaveAttribute("aria-selected", "true");
+  fireEvent.click(screen.getAllByRole("button", { name: "View Seraphine art" })[0]);
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: /crop/i })).not.toBeInTheDocument();
+});
+test("a Character Art failure keeps prose readable and its count unknown", async () => {
+  vi.mocked(api.readRecordArt).mockRejectedValue(new Error("art unavailable"));
+  await renderWorld();
+  expect(screen.getByText("keeper of the tide gate")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Art" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Art" }));
+  expect(await screen.findByText(/Art could not be read:.*art unavailable/)).toBeInTheDocument();
+});
+
+test("refusing an Art discard keeps the Character version and tab unchanged", async () => {
+  await renderWorld("/worlds/realm/characters/seraphine?tab=art&v=default");
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Description of avatar" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Description of avatar" }), { target: { value: "Unsaved" } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  fireEvent.click(screen.getByRole("button", { name: "veiled" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Card" }));
+  expect(lastLocation).toContain("tab=art&v=default");
+  expect(screen.getByRole("textbox", { name: "Description of avatar" })).toHaveValue("Unsaved");
+  confirm.mockRestore();
+});
+test("an Art draft is guarded before creating a Character version", async () => {
+  await renderWorld("/worlds/realm/characters/seraphine?tab=art&v=default");
+  fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Description of avatar" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Description of avatar" }), { target: { value: "Unsaved" } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("veiled");
+  fireEvent.click(screen.getByRole("button", { name: "+ New version" }));
+  expect(api.createVersion).not.toHaveBeenCalled();
+  confirm.mockRestore(); prompt.mockRestore();
+});
+
+test("phone removed-tile focus returns to the visible main record heading", async () => {
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
+  try {
+    vi.mocked(api.readRecordArt).mockImplementation(async target => artRead(target, [artImage(target, "gallery_1")]));
+    await renderWorld("/worlds/realm/characters/seraphine?tab=art");
+    fireEvent.click(await screen.findByRole("button", { name: "View Gallery image 1" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    vi.mocked(api.readRecordArt).mockImplementation(async target => artRead(target, []));
+    act(() => artChanged());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Seraphine", level: 1 })).toHaveFocus();
+  } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });

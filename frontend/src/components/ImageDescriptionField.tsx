@@ -14,7 +14,11 @@ import { useEffect, useState } from "react";
  *  collapsed label reads "Describe…" for one and "No description" for the
  *  other, rather than showing blank for both and losing the distinction the
  *  store went to the trouble of keeping. */
-export function ImageDescriptionField({ name, value, onSave, onDraft }: {
+export type ImageDescriptionEditorState = { dirty: boolean; busy: boolean };
+export function ImageDescriptionField({ name, value, onSave, onDraft, editor, onEdit, disabled, onEditorStateChange }: {
+  disabled?: boolean; onEdit?: () => void; editor?: ControlledDescriptionEditor;
+  /** Library owners enroll local editors in the common navigation guard. */
+  onEditorStateChange?: (state: ImageDescriptionEditorState | null) => void;
   name: string;
   value: string | undefined;
   onSave: (description: string) => Promise<void>;
@@ -24,6 +28,7 @@ export function ImageDescriptionField({ name, value, onSave, onDraft }: {
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(value ?? "");
+  const [initialText, setInitialText] = useState(value ?? "");
   const [busy, setBusy] = useState<"save" | "draft" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,15 +36,22 @@ export function ImageDescriptionField({ name, value, onSave, onDraft }: {
   // `open` so a reload cannot discard what is being typed.
   useEffect(() => { if (!open) setText(value ?? ""); }, [value, open]);
 
+  useEffect(() => {
+    onEditorStateChange?.(!editor && open ? { dirty: text !== initialText || error !== null, busy: busy !== null } : null);
+    return () => onEditorStateChange?.(null);
+  }, [onEditorStateChange, editor, open, text, initialText, error, busy]);
+
   const reviewed = value !== undefined;
   const label = value ? value : reviewed ? "No description" : "Describe…";
+
+  if (editor) return <DescriptionEditor name={name} editor={editor} onSave={onSave} />;
 
   if (!open) {
     return (
       <button className={"image-description" + (value ? "" : " image-description-empty")}
-              type="button" title={value || undefined}
+              type="button" title={value || undefined} disabled={disabled}
               aria-label={`Description of ${name}`}
-              onClick={() => { setText(value ?? ""); setError(null); setOpen(true); }}>
+              onClick={() => { if (onEdit) onEdit(); else { setText(value ?? ""); setInitialText(value ?? ""); setError(null); setOpen(true); } }}>
         {label}
       </button>
     );
@@ -97,4 +109,25 @@ export function ImageDescriptionField({ name, value, onSave, onDraft }: {
       </div>
     </div>
   );
+}
+
+/** Controlled record editors close only when their owner confirms the outcome.
+ *  A confirmed partial save therefore retains text and recovery controls. */
+export type ControlledDescriptionEditor = {
+  text: string; onChange: (text: string) => void; onCancel: () => void;
+  busy: boolean; blocked?: boolean; onDraft?: () => void;
+};
+function DescriptionEditor({ name, editor, onSave }: {
+  name: string; editor: ControlledDescriptionEditor; onSave: (text: string) => Promise<void>;
+}) {
+  return <div className="image-description-editor">
+    <textarea value={editor.text} rows={3} aria-label={"Description of " + name} disabled={editor.busy}
+      placeholder="What does this picture show?" onChange={(event) => editor.onChange(event.target.value)} />
+    <div className="form-actions">
+      <button className="primary" disabled={editor.busy || editor.blocked} onClick={() => { void onSave(editor.text); }}>Save</button>
+      <button disabled={editor.busy || editor.blocked} onClick={() => { void onSave(""); }}>No description</button>
+      {editor.onDraft && <button disabled={editor.busy || editor.blocked} onClick={editor.onDraft}>Describe it for me</button>}
+      <button disabled={editor.busy} onClick={editor.onCancel}>Cancel</button>
+    </div>
+  </div>;
 }

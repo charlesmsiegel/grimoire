@@ -307,7 +307,9 @@ _ATOMIC_READERS = frozenset({"replace_is_atomic", "read_text", "open_text"})
 # a campaign-lock classification onto mutators that were never campaign-scoped
 # to begin with -- a false positive this guard's own "campaign-scoped is
 # approximated by a `cid` parameter" limit warns about.
-_ASSETS_WRITERS = ("put_in", "delete_in")
+# A reference is publication too: the unified Art facade ingests once and
+# then links the arrived object under its final occupied-slot claim.
+_ASSETS_WRITERS = ("put_in", "delete_in", "link_in")
 # `touch` is ambiguous the other way round: `Path.touch` has no fixed receiver
 # to match, so it is treated as a file creation UNLESS the receiver names a
 # module in this package that defines its own `touch`. Only one does.
@@ -2657,6 +2659,21 @@ def test_assets_put_in_and_delete_in_are_recognized_as_publication():
                "    art.put_in(d, 'cover', data, ext)\n")
     _f, _s, mutators = _probe(aliased)
     assert mutators, "an assets alias bound by assignment was invisible"
+
+
+def test_assets_link_in_is_recognized_as_publication():
+    # A reference publishes campaign-visible art just as put_in does. The
+    # common Art facade uses link_in after ingest; missing this writer would
+    # let its campaign-lock classification vanish from the survey.
+    for src in ("""from . import assets
+def reuse(cid):
+    assets.link_in(d, name, image_id)
+""", """from .assets import link_in as publish
+def reuse(cid):
+    publish(d, name, image_id)
+"""):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"an image-reference publication was invisible: {src!r}"
 
 
 def test_assets_import_from_spelling_is_also_recognized():

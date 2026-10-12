@@ -1251,7 +1251,7 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
                       json={"name": "Opener", "character": "sera", "version": "default"}).json()["id"]
 
     entity_routes = [(m, p) for m, p in _image_write_routes(client) if _surface_seg(p) == "{kind}"]
-    # PUT/DELETE/promote/description, world + campaign, plus the world-side
+    # PUT/DELETE/promote/description/focus, world + campaign, plus the world-side
     # description DRAFT. The description PUT is here for the same reason the
     # greeting-subjects PUT is in the roster above: it writes a sidecar rather
     # than an image, but through the same `mkdir(parents=True)` into the same
@@ -1261,7 +1261,7 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
     # image by kind and id and must refuse a nonsense kind for the same reason
     # every other handler here does -- and being in this roster is what keeps
     # that true if it ever grows a write.
-    assert len(entity_routes) == 9, entity_routes
+    assert len(entity_routes) == 11, entity_routes
 
     for method, path in entity_routes:
         scope_id = wid if path.startswith("/api/worlds") else cid

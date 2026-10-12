@@ -1,5 +1,6 @@
+import { artChanged } from "../appEvents";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { ImageUsage } from "./ImageUsage";
 import type { ImageUsageReport } from "../api/types";
 
@@ -41,7 +42,7 @@ test("stays collapsed and fetches nothing until opened", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
   expect(await screen.findByRole("heading", { name: "Used in" })).toBeInTheDocument();
   expect(api.getImageUsage).toHaveBeenCalledTimes(1);
-  expect(api.getImageUsage).toHaveBeenCalledWith("img-1");
+  expect(api.getImageUsage).toHaveBeenCalledWith("img-1", { fresh: true });
 });
 
 test("lists every bucket's entries as chips after opening", async () => {
@@ -183,4 +184,31 @@ test("an error offers a retry that clears it and asks again", async () => {
   expect(await screen.findByText("seraphine · avatar")).toBeInTheDocument();
   expect(screen.queryByText("usage unavailable")).toBeNull();
   expect(api.getImageUsage).toHaveBeenCalledTimes(2);
+});
+
+test("art changes refresh an open usage report while a collapsed one fetches nothing", async () => {
+  const request = vi.mocked(api.getImageUsage);
+  request.mockResolvedValue(empty);
+  mount();
+  artChanged();
+  expect(request).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Used in\u2026" }));
+  await screen.findByText("No placements found.");
+  request.mockResolvedValue(report({ entities: [{ scope: "world:Realm", kind: "locations",
+    id: "Saltmarch", vid: "", name: "gallery_1" }] }));
+  artChanged();
+  expect(await screen.findByText("Saltmarch \u00b7 gallery_1")).toBeInTheDocument();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test("a pre-mutation usage response cannot overwrite the refreshed report", async () => {
+  let resolveOld!: (value: ImageUsageReport) => void;
+  vi.mocked(api.getImageUsage).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+    .mockResolvedValue(empty);
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Used in\u2026" }));
+  artChanged();
+  await screen.findByText("No placements found.");
+  await act(async () => { resolveOld(report({ world_images: [{ wid: "Realm", name: "Mara" }] })); });
+  expect(screen.queryByText("Mara")).not.toBeInTheDocument();
 });

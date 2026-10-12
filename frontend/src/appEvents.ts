@@ -28,6 +28,13 @@ const config = channel();
 const shell = channel();
 const notices = channel();
 const storeMoves = channel();
+const art = channel();
+
+/** Art metadata can be shared by many placements in different scopes. A
+ *  confirmed write invalidates every visible use, including a shared caption
+ *  saved before a legacy cleanup failure. Refusals emit no landed-write signal. */
+export const artChanged = art.emit;
+export const onArtChanged = art.subscribe;
 
 /** The set of campaigns, or one of their names, changed. */
 export const campaignsChanged = campaigns.emit;

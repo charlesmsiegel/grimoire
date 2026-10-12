@@ -101,3 +101,16 @@ describe("the model-drafted first pass", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 });
+
+test("controlled editor retains unsaved text across metadata refresh and waits for owner to close", async () => {
+  const change = vi.fn(), cancel = vi.fn(), save = vi.fn(async () => {});
+  const editor = { text: "Unsaved description", onChange: change, onCancel: cancel, busy: false };
+  const view = render(<ImageDescriptionField name="Mara" value="A portrait" onSave={save} editor={editor} />);
+  view.rerender(<ImageDescriptionField name="Mara" value="A map" onSave={save} editor={editor} />);
+  expect(screen.getByRole("textbox")).toHaveValue("Unsaved description");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "A banner" } });
+  expect(change).toHaveBeenCalledWith("A banner");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith("Unsaved description"));
+  expect(screen.getByRole("textbox")).toBeVisible();
+});

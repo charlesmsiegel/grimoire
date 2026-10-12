@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, type Appearance, type CharacterSummary, type EntityScope,
   type GalleryImage, type Greeting } from "../api/client";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { sectionHref } from "../worldPaths";
+import { onArtChanged } from "../appEvents";
+import { ImageTile } from "./art/ImageTile";
+import { ImageViewer } from "./art/ImageViewer";
+import { useImageViewer } from "./art/useImageViewer";
+import { filterGallery, galleryHistoryKey, galleryImageDescriptor, galleryImageKey as imgKey,
+  galleryNeedsAttention as needsAttention, useGalleryState, type GalleryState } from "./art/galleryState";
+import type { ImageDescriptor } from "./art/types";
+import { PostImagePicker } from "./PostImagePicker";
 import { TaggingQueue } from "./TaggingQueue";
 import { WorldArtPanel } from "./WorldArtPanel";
 
@@ -25,30 +35,6 @@ const KIND_LABELS: Record<string, string> = {
  *  the server starts sending — or stops — cannot silently reorder the rail. */
 const KINDS = Object.keys(KIND_LABELS);
 
-type Tab = "gallery" | "queue" | "world";
-
-/** What still wants a human: art nobody has described, and greeting art nobody
- *  has said who is in.
- *
- *  Two different sidecars and deliberately one filter, because they are the
- *  same question from the reader's side — "what have I not finished?" — and a
- *  gallery that made you pick which kind of unfinished you meant would be
- *  asking you to know the storage layout.
- *
- *  Which sidecar applies is decided by the kind, not merged. A greeting image is
- *  judged ONLY on its subjects: nothing in this app describes greeting art —
- *  there is no route for it, and the describe backlog does not walk that base —
- *  so counting one undescribed would file every greeting image in a backlog
- *  that can never be worked. Everything else is judged only on `described`,
- *  which is key presence: an image reviewed and left blank is finished. */
-function needsAttention(img: GalleryImage): boolean {
-  if (img.kind === "greetings")
-    return img.subjects === undefined || img.subjects === null;
-  return !img.described;
-}
-
-const imgKey = (img: GalleryImage) => `${img.kind}/${img.id}/${img.vid}/${img.name}`;
-
 /** What a screen reader is told the picture is.
  *
  *  The author's description when there is one — it is a sentence written about
@@ -58,8 +44,8 @@ const imgKey = (img: GalleryImage) => `${img.kind}/${img.id}/${img.vid}/${img.na
  *  nothing at all about which tile they are on. */
 const altOf = (img: GalleryImage) => img.description || `${img.record_name} — ${img.name}`;
 
-function Detail({ img, charName, onBack }: {
-  img: GalleryImage; charName: (cid: string) => string; onBack: () => void;
+function Detail({ img, charName, onBack, scope }: {
+  img: GalleryImage; charName: (cid: string) => string; onBack: () => void; scope: EntityScope;
 }) {
   return (
     <div className="detail-view">
@@ -79,6 +65,7 @@ function Detail({ img, charName, onBack }: {
             the grid instead. */}
         <div className="form-actions">
           <button onClick={onBack}>Back to the gallery</button>
+          <Link to={sectionHref(scope, { kind: "record", at: "greetings", rid: img.id })}>Open greeting</Link>
         </div>
         <div className="side-section">
           <h4>Image</h4>
@@ -146,28 +133,42 @@ export function ImagesView({ wid, forCampaign = null }:
                               *  below exists; without a campaign there is no
                               *  question to ask and it is not offered. */
                              forCampaign?: string | null }) {
-  const [tab, setTab] = useState<Tab>("gallery");
+  const location = useLocation();
+  const owner = JSON.stringify([wid, forCampaign]);
+  return <GalleryBody key={galleryHistoryKey(owner, location.key)} wid={wid} forCampaign={forCampaign} />;
+}
+function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | null }) {
+  const owner = JSON.stringify([wid, forCampaign]), navigate = useNavigate();
+  const [presentation, setPresentation] = useGalleryState(owner);
+  const { tab, kind, unfinished, appearedOnly, selected: sel, search } = presentation;
+  const setTab = (tab: GalleryState["tab"]) => setPresentation((old) => ({ ...old, tab }));
+  const setKind = (kind: string | null) => setPresentation((old) => ({ ...old, kind }));
+  const setUnfinished = (value: (old: boolean) => boolean) => setPresentation((old) => ({ ...old, unfinished: value(old.unfinished) }));
+  const setAppearedOnly = (value: boolean | ((old: boolean) => boolean)) => setPresentation((old) => ({ ...old, appearedOnly: typeof value === "function" ? value(old.appearedOnly) : value }));
+  const setSel = (selected: string | null) => setPresentation((old) => old.selected === selected ? old : { ...old, selected });
+  const root = useRef<HTMLDivElement>(null);
+  const rememberedScroll = useRef(presentation.scroll);
+  rememberedScroll.current = presentation.scroll;
+  const viewer = useImageViewer(owner);
   const [images, setImages] = useState<GalleryImage[] | null>(null);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [untagged, setUntagged] = useState<Appearance[] | null>(null);
-  const [kind, setKind] = useState<string | null>(null);
-  const [unfinished, setUnfinished] = useState(false);
   /** `kind/id` for every actor the campaign has seated, or null when there is
    *  no campaign to ask about and when the read failed. Null both ways on
    *  purpose: the filter is only offered when it can actually be applied, and
    *  an empty set would offer a chip that hides the entire gallery. */
   const [appearedRefs, setAppearedRefs] = useState<Set<string> | null>(null);
-  const [appearedOnly, setAppearedOnly] = useState(false);
-  const [sel, setSel] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [galleryError, setGalleryError] = useState<string | null>(null);
+  const [companionError, setCompanionError] = useState<string | null>(null);
+  const err = galleryError ?? companionError;
 
   // `wid` arrives from the route and this component is not remounted when a
   // campaign's fork switches world underneath it, so a read started for one
   // world can settle while another is on screen. Every commit is gated on the
   // world it was made for still being the one displayed.
-  const liveWid = useRef(wid);
-  useEffect(() => { liveWid.current = wid; }, [wid]);
+  const liveWid = useRef(owner), fullReads = useRef(0), galleryReads = useRef(0);
+  useEffect(() => { liveWid.current = owner; return () => { liveWid.current = ""; }; }, [owner]);
 
   const scope: EntityScope = useMemo(() => ({ kind: "world", id: wid }), [wid]);
 
@@ -182,6 +183,7 @@ export function ImagesView({ wid, forCampaign = null }:
    *  re-read when the queue closes instead, which is what `GreetingEditor` has
    *  always done with the same component. */
   const loadGallery = useCallback(async () => {
+    const sequence = ++galleryReads.current;
     try {
       // `fresh`: this runs immediately after a subjects PUT, and the client
       // shares an in-flight GET by path. Handed one issued before that write,
@@ -192,12 +194,15 @@ export function ImagesView({ wid, forCampaign = null }:
       const got = forCampaign
         ? await api.listCampaignGallery(forCampaign, true)
         : await api.listWorldImages(wid, true);
-      if (liveWid.current === wid) setImages(got);
-    } catch {
-      // Deliberately quiet: the tile this refreshes is a detail beside a save
-      // that has already landed, and the next full read reports the failure.
+      if (liveWid.current === owner && sequence === galleryReads.current) { setImages(got); setGalleryError(null); }
+    } catch (error) {
+      // This read supersedes the older full gallery read even on failure.
+      // Report that failure rather than leaving an initial reader loading
+      // forever after its older successful response has correctly been retired.
+      if (liveWid.current === owner && sequence === galleryReads.current)
+        setGalleryError(error instanceof Error ? error.message : String(error));
     }
-  }, [wid, forCampaign]);
+  }, [wid, forCampaign, owner]);
 
   /** `fresh` when this read follows writes — closing the queue, or a Retry the
    *  reader asked for. Not on mount, where sharing an in-flight GET with
@@ -205,35 +210,41 @@ export function ImagesView({ wid, forCampaign = null }:
    *  Only the two reads a tagging save can move take the flag; a character or
    *  greeting listing is not changed by writing subjects. */
   const load = useCallback(async (fresh = false) => {
-    setErr(null);
-    try {
-      const [got, cs, gs, ut] = await Promise.all([
-        // The campaign's own gallery when there is one: its art is in the
-        // campaign root, and a world sweep cannot see it. The other three stay
-        // world-scoped -- the tagging queue walks the subjects sidecar, which
-        // is written world-side, and the character list is what names it.
-        forCampaign ? api.listCampaignGallery(forCampaign, fresh)
-                    : api.listWorldImages(wid, fresh),
-        api.listCharacters(scope),
-        api.listGreetings(scope), api.listUntaggedImages(wid, fresh),
-      ]);
-      if (liveWid.current !== wid) return;
-      setImages(got);
-      setChars(cs);
-      setGreetings(gs);
-      setUntagged(ut);
-    } catch (e) {
-      if (liveWid.current !== wid) return;
-      // Reported rather than swallowed: a failed read here looks exactly like a
-      // world with no art in it, which is the one wrong answer this view must
-      // never give. `err` also SUPPRESSES the empty states below — without that
-      // the failure is rendered next to "this world has no art yet", which is
-      // the same wrong answer in a second voice.
-      setErr(e instanceof Error ? e.message : String(e));
-      setImages([]);
-      setUntagged([]);
-    }
-  }, [wid, scope, forCampaign]);
+    const sequence = ++fullReads.current, gallerySequence = ++galleryReads.current;
+    setGalleryError(null); setCompanionError(null);
+    // A gallery invalidation supersedes only gallery results. The tagging
+    // companions remain independently required, including their failures.
+    await Promise.all([
+      (async () => {
+        try {
+          // The campaign's own gallery when there is one: a world sweep cannot
+          // see its campaign-root art. Its generation belongs to loadGallery too.
+          const got = forCampaign ? await api.listCampaignGallery(forCampaign, fresh)
+                                  : await api.listWorldImages(wid, fresh);
+          if (liveWid.current === owner && gallerySequence === galleryReads.current) setImages(got);
+        } catch (error) {
+          if (liveWid.current !== owner || gallerySequence !== galleryReads.current) return;
+          // Suppress empty states on failure: unreadable art is not absent art.
+          setGalleryError(error instanceof Error ? error.message : String(error));
+          setImages(previous => previous ?? []);
+        }
+      })(),
+      (async () => {
+        try {
+          // These stay world-scoped: subjects and their naming roster live there.
+          const [cs, gs, ut] = await Promise.all([
+            api.listCharacters(scope), api.listGreetings(scope), api.listUntaggedImages(wid, fresh),
+          ]);
+          if (liveWid.current !== owner || sequence !== fullReads.current) return;
+          setChars(cs); setGreetings(gs); setUntagged(ut);
+        } catch (error) {
+          if (liveWid.current !== owner || sequence !== fullReads.current) return;
+          // A gallery-only success cannot clear an unreadable tagging backlog.
+          setCompanionError(error instanceof Error ? error.message : String(error));
+        }
+      })(),
+    ]);
+  }, [wid, scope, forCampaign, owner]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -243,10 +254,9 @@ export function ImagesView({ wid, forCampaign = null }:
   // gallery -- the right blast radius for "the world's art could not be read"
   // and much too wide for "the appearance record could not be".
   useEffect(() => {
-    if (!forCampaign) { setAppearedRefs(null); setAppearedOnly(false); return; }
+    if (!forCampaign) { setAppearedRefs(null); return; }
     let live = true;
     setAppearedRefs(null);
-    setAppearedOnly(false);
     api.listAppearances(forCampaign)
       .then((roster) => {
         if (live) setAppearedRefs(new Set(roster.map((r) => `${r.kind}/${r.id}`)));
@@ -271,22 +281,40 @@ export function ImagesView({ wid, forCampaign = null }:
   const hasAppeared = useCallback(
     (i: GalleryImage) => !!appearedRefs?.has(`${i.kind}/${i.id}`), [appearedRefs]);
 
-  const shown = all.filter((i) => (kind === null || i.kind === kind)
-                                  && (!unfinished || needsAttention(i))
-                                  && (!appearedOnly || hasAppeared(i)));
-  const active = shown.find((i) => imgKey(i) === sel) ?? null;
+  const shown = filterGallery(all, presentation, appearedRefs);
+  const active = shown.find((i) => i.kind === "greetings" && imgKey(i) === sel) ?? null;
+  const effectiveScope: EntityScope = forCampaign ? { kind: "campaign", id: forCampaign } : scope;
+  const descriptors = shown.map((img) => galleryImageDescriptor(img, effectiveScope, wid))
+    .filter((image): image is ImageDescriptor => image !== null);
+  useEffect(() => onArtChanged(() => { void loadGallery(); }), [loadGallery]);
+  // The shell owns page scrolling; the gallery body does not create another
+  // scroll port. Restore after the grid read has given the shell its height.
+  useLayoutEffect(() => {
+    if (images === null) return;
+    const port = root.current?.closest<HTMLElement>(".shell-main");
+    if (port) port.scrollTop = rememberedScroll.current;
+    else if (rememberedScroll.current) window.scrollTo(0, rememberedScroll.current);
+  }, [images]); // scroll updates must not pull the reader back while scrolling
+  useEffect(() => {
+    const port = root.current?.closest<HTMLElement>(".shell-main");
+    const source = port ?? window;
+    const remember = () => setPresentation((old) => ({ ...old, scroll: port?.scrollTop ?? window.scrollY }));
+    source.addEventListener("scroll", remember, { passive: true });
+    return () => source.removeEventListener("scroll", remember);
+  }, [setPresentation]);
   const attention = all.filter(needsAttention).length;
   const appearedCount = appearedRefs ? all.filter(hasAppeared).length : 0;
 
   return (
-    <div className="images-view">
+    <div className="images-view" ref={root} tabIndex={-1}>
+      {viewer.notice && <p role="status">{viewer.notice}</p>}
       <div className="tabs" role="tablist" aria-label="Images">
         {/* "World art" is world-scoped and rendered whether or not a campaign
             is open: `shell/rail.ts` appends `&for=<cid>` to this row's target
             whenever one is, so hiding it under that flag would put the world's
             only art editor out of reach for as long as a campaign is played. */}
         {([["gallery", "Gallery"], ["queue", "Tagging queue"],
-           ["world", "World art"]] as [Tab, string][])
+           ["world", "World art"]] as [GalleryState["tab"], string][])
           .map(([key, label]) => (
             <button key={key} role="tab" aria-selected={tab === key}
                     className={"tab" + (tab === key ? " active" : "")}
@@ -307,10 +335,14 @@ export function ImagesView({ wid, forCampaign = null }:
         </p>
       )}
       {tab === "world" && <WorldArtPanel wid={wid} />}
-      {tab !== "world" && images === null && !err
+      {tab === "campaign-library" && forCampaign && <PostImagePicker cid={forCampaign}
+        target={{ kind: "campaign", name: "Campaign image library" }} onClose={() => setTab("gallery")} />}
+      {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={root.current}
+        onSelectionChange={setSel} onOpenRecord={(destination) => navigate(destination)} />}
+      {(tab === "gallery" || tab === "queue") && images === null && !err
         && <p className="field-hint">Reading the world’s art…</p>}
       {images !== null && !err && tab === "queue" && (
-        untagged && untagged.length > 0 ? (
+        untagged === null ? <p className="field-hint">Reading tagging data...</p> : untagged.length > 0 ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
                         // Closing is when the backlog is re-read: the queue has
                         // finished stepping, so nothing is measuring progress
@@ -329,6 +361,8 @@ export function ImagesView({ wid, forCampaign = null }:
       {images !== null && !err && tab === "gallery" && (
         <div className="editor">
           <div className="editor-list">
+            <label>Search images<input type="search" aria-label="Search images" value={search}
+              onChange={(event) => { setPresentation((old) => ({ ...old, search: event.target.value, selected: null })); viewer.close(); }} /></label>
             <button className={"row" + (kind === null ? " active" : "")}
                     onClick={() => { setKind(null); setSel(null); }}>
               All images
@@ -369,27 +403,25 @@ export function ImagesView({ wid, forCampaign = null }:
           </div>
           <div className="editor-body">
             {active ? (
-              <Detail img={active} charName={charName} onBack={() => setSel(null)} />
+              <Detail img={active} charName={charName} scope={effectiveScope} onBack={() => setSel(null)} />
             ) : shown.length === 0 ? (
               <p className="field-hint">
                 {all.length === 0
                   ? "This world has no art yet."
-                  : "Nothing here — every image in this filter is finished."}
+                  : "No images match these filters"}
               </p>
             ) : (
               <div className="gallery-grid">
-                {shown.map((img) => (
-                  <button key={imgKey(img)} className="gallery-tile"
-                          onClick={() => setSel(imgKey(img))}>
-                    {/* The `?w=` downscale, not the original: a world's whole
-                        gallery at full resolution is tens of megabytes for
-                        pictures drawn at 154px. */}
-                    <img src={img.thumb} alt={altOf(img)} loading="lazy" />
-                    <span>{img.record_name}</span>
-                    <span className="field-hint">{img.name}</span>
-                    {needsAttention(img) && <span className="chip">unfinished</span>}
-                  </button>
-                ))}
+                {shown.map((img) => {
+                  const key = imgKey(img), descriptor = galleryImageDescriptor(img, effectiveScope, wid);
+                  return descriptor ? <ImageTile key={key} image={descriptor} className="gallery-tile"
+                    selected={sel === key} onOpen={(opener) => { setSel(key); viewer.open(descriptors, key, opener); }} />
+                    : <button key={key} className="gallery-tile" onClick={() => setSel(key)}>
+                      <img src={img.thumb} alt={altOf(img)} loading="lazy" />
+                      <span>{img.record_name}</span><span className="field-hint">{img.name}</span>
+                      {needsAttention(img) && <span className="chip">unfinished</span>}
+                    </button>;
+                })}
               </div>
             )}
           </div>

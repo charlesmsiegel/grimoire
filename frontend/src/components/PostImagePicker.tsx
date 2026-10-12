@@ -4,6 +4,13 @@ import type { CampaignImage } from "../api/types";
 import { encodeSegment } from "../urlSegment";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { ImageDescriptionField } from "./ImageDescriptionField";
+import { onArtChanged } from "../appEvents";
+import { ImageTile } from "./art/ImageTile";
+import { ImageViewer } from "./art/ImageViewer";
+import { useLibraryDescriptionDrafts } from "./art/useLibraryDescriptionDrafts";
+import { useImageViewer } from "./art/useImageViewer";
+import { localImageDownloadUrl } from "./art/recordArtAdapter";
+import type { ImageDescriptor } from "./art/types";
 import { ImageUsage } from "./ImageUsage";
 
 /** Who is speaking in the post the picker was opened from (#376).
@@ -31,7 +38,7 @@ export type PickerTarget =
 type Group = { key: string; label: string;
                images: { name: string; url: string; description?: string;
                         /** Identity in the image store; absent for a legacy file. */
-                        imageId?: string | null }[] };
+                        imageId?: string | null; version?: string; described?: boolean }[] };
 
 /** A stored name derived from an uploaded file's own name.
  *
@@ -114,11 +121,19 @@ export function insertion(name: string, url: string, description?: string): stri
 }
 
 const THUMB = 160;
+function reason(error: unknown): string {
+  const detail = (error as { detail?: unknown } | null)?.detail;
+  return typeof detail === "string" ? detail : String(error);
+}
 
 export function PostImagePicker({ cid, target, onInsert, onClose }: {
   cid: string; target: PickerTarget;
-  onInsert: (markdown: string) => void; onClose: () => void;
+  onInsert?: (markdown: string) => void; onClose: () => void;
 }) {
+  const targetKey = target.kind === "campaign" ? "campaign"
+    : target.kind + "/" + target.id + "/" + target.version;
+  const drafts = useLibraryDescriptionDrafts(cid + "/" + targetKey);
+  const closePicker = () => drafts.transition(onClose);
   const [groups, setGroups] = useState<Group[] | null>(null);
   // `null` until a listing has actually come back. An upload names itself by
   // stepping around the names already there, so uploading against a listing
@@ -142,30 +157,28 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   // back off whatever they had just tabbed to.
   useEffect(() => { panel.current?.focus(); }, []);
   // Escape, and the scene's own bindings held off while this covers it (#193).
-  // Unconditional, because the two dismissals beside it are: Cancel is never
-  // disabled and the scrim always closes. A key refused mid-upload while both
-  // mouse paths still worked would be the one way out keyboard users do not
-  // have -- the opposite of what mirroring a control means (PR #400 review).
+  // All three dismissal paths share the caption discard/pending decision.
+  // Uploads retain their existing close policy: refusing only the keyboard
+  // mid-upload would disagree with Cancel and the scrim (PR #400 review).
   useHotkeys(
     [{ keys: "escape", label: "Close the picker", group: "THIS PANEL",
-       whileTyping: true, run: onClose }],
+       whileTyping: true, run: closePicker }],
     { modal: true },
   );
 
   const isLibrary = target.kind === "campaign";
+  useEffect(() => isLibrary ? onArtChanged(() => setRevision((n) => n + 1)) : undefined, [isLibrary]);
   // One dependency for "which images is this picker showing", so switching to a
   // different actor — or to a different locked version of the same one —
   // re-reads, while a re-render that merely rebuilt the `target` object does not.
-  const targetKey = target.kind === "campaign" ? "campaign"
-    : `${target.kind}/${target.id}/${target.version}`;
 
   useEffect(() => {
     let live = true;
     setError(null);
-    (async () => {
+    void (async () => {
       try {
         if (target.kind === "campaign") {
-          const { images, hidden } = await api.listCampaignImages(cid);
+          const { images, hidden } = await api.listCampaignImages(cid, revision > 0);
           if (!live) return;
           setLibrary(images);
           setHidden(hidden);
@@ -181,14 +194,14 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
               key: "library", label: "Campaign images",
               images: own.map((i) => ({
                 name: i.name, url: api.campaignImageUrl(cid, i.name), imageId: i.image_id,
-                description: i.described ? (i.description ?? "") : undefined,
+                description: i.described ? (i.description ?? "") : undefined, version: i.v, described: i.described,
               })),
             }] : []),
             ...(world.length ? [{
               key: "world", label: "From this world",
               images: world.map((i) => ({
                 name: i.name, url: api.campaignImageUrl(cid, i.name), imageId: i.image_id,
-                description: i.described ? (i.description ?? "") : undefined,
+                description: i.described ? (i.description ?? "") : undefined, version: i.v, described: i.described,
               })),
             }] : []),
           ]);
@@ -226,10 +239,14 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
           if (!held.has(base.id)) groups.push(shelf(base, `${base.name} — from the world`));
         }
         setGroups(groups.filter((g) => g.images.length > 0));
-      } catch (err: any) {
+      } catch (err: unknown) {
         // `library` is deliberately left as it was — null on a first failure,
         // which is what closes the Add control (see the state above).
-        if (live) { setGroups([]); setError(err?.detail ?? String(err)); }
+        if (live) {
+          // A failed refresh establishes no removal. Retain known placements
+          // so the viewer can remain open while the read error is reported.
+          setGroups(previous => previous ?? []); setError(reason(err));
+        }
       }
     })();
     return () => { live = false; };
@@ -244,8 +261,8 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     try {
       await fn();
       setRevision((r) => r + 1);
-    } catch (err: any) {
-      setError(err?.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(reason(err));
     } finally {
       setBusy(false);
     }
@@ -286,17 +303,30 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     void mutate(() => api.restoreCampaignImage(cid, name));
   }
 
+  const viewer = useImageViewer(cid + "/" + targetKey);
+  const descriptors: ImageDescriptor[] = (groups ?? []).flatMap((g) => g.images.map((img) => ({
+    key: JSON.stringify([g.key, img.name]), label: img.name, alt: img.description || img.name,
+    originalUrl: img.url + (img.version ? "?v=" + encodeURIComponent(img.version) : ""),
+    thumbnailUrl: img.url + "?w=" + THUMB + (img.version ? "&v=" + encodeURIComponent(img.version) : ""),
+    version: img.version ?? img.url, description: img.description, described: img.described,
+    imageId: img.imageId, role: isLibrary ? "library" : "gallery",
+    provenance: isLibrary ? g.key === "world" ? "inherited" : "campaign" : undefined,
+    downloadUrl: localImageDownloadUrl(img.url + (img.version ? "?v=" + encodeURIComponent(img.version) : "")),
+  })));
   const empty = groups !== null && groups.every((g) => g.images.length === 0);
-  return (
-    // The scrim is a scrim, not the dialog: the panel is. It used to carry
-    // both, which is how a `keydown` handler ended up on it — the only place
-    // Escape could land once it had focus.
+  return (<>
+    {viewer.notice && <p role="status">{viewer.notice}</p>}
+    {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={panel.current} />}
+    {/* The scrim is a scrim, not the dialog: the panel is. It used to carry
+        both, which is how a `keydown` handler ended up on it — the only place
+        Escape could land once it had focus.
+    */}
     <div className="image-picker-backdrop" role="presentation"
-         onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+         onClick={(e) => { if (e.target === e.currentTarget) closePicker(); }}>
       <div className="image-picker" role="dialog" aria-modal="true"
-           aria-label={`Insert an image — ${target.name}`}
+           aria-label={onInsert ? "Insert an image — " + target.name : "Campaign image library"}
            tabIndex={-1} ref={panel}>
-        <h3>Insert an image</h3>
+        <h3>{onInsert ? "Insert an image" : "Campaign image library"}</h3>
         <p className="field-hint">
           {isLibrary
             ? "The campaign's own images — what the narrator has to draw on."
@@ -324,12 +354,15 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
             <div className="image-picker-grid">
               {g.images.map((img) => (
                 <div className="image-picker-tile" key={img.name}>
-                  <button type="button" title={`Insert ${img.name}`}
+                  {onInsert ? <button type="button" title={`Insert ${img.name}`}
                           aria-label={`Insert ${img.name}`}
                           onClick={() => onInsert(insertion(img.name, img.url, img.description))}>
                     <img src={`${img.url}?w=${THUMB}`} alt="" />
                     <span>{img.name}</span>
-                  </button>
+                  </button> : <ImageTile image={descriptors.find((image) => image.key === JSON.stringify([g.key, img.name]))!}
+                    onOpen={(opener) => drafts.transition(() => viewer.open(descriptors, JSON.stringify([g.key, img.name]), opener))} />}
+                  {onInsert && <button type="button" aria-label={"View " + img.name}
+                    onClick={(event) => { const opener = event.currentTarget; drafts.transition(() => viewer.open(descriptors, JSON.stringify([g.key, img.name]), opener)); }}>View art</button>}
                   {/* Describing belongs to whoever owns the picture. The
                       campaign's own is described here. An inherited one with
                       an `image_id` is a placement of a shared image object,
@@ -340,7 +373,8 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                       the field would be a control that always fails. */}
                   {isLibrary && (g.key === "library" || (g.key === "world" && img.imageId)) && (
                     <ImageDescriptionField
-                      key={img.name}
+                      key={drafts.key + "/" + g.key + "/" + img.name}
+                      onEditorStateChange={(state) => drafts.track(g.key + "/" + img.name, state)}
                       name={img.name} value={img.description}
                       onSave={async (d) => {
                         await api.setCampaignImageDescription(cid, img.name, d);
@@ -401,9 +435,9 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                      onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
             </>
           )}
-          <button className="subtle" type="button" onClick={onClose}>Cancel</button>
+          <button className="subtle" type="button" onClick={closePicker}>{onInsert ? "Cancel" : "Close library"}</button>
         </div>
       </div>
     </div>
-  );
+  </>);
 }

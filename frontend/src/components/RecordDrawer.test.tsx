@@ -1,8 +1,16 @@
-import { useState } from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
+import { render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { RecordDrawer } from "./RecordDrawer";
 import { api } from "../api/client";
+import { artImage, artRead } from "../testkit/recordArt";
+import type { RecordArtTarget } from "../api/types";
 import { useHotkeys } from "../shortcuts/useHotkeys";
+
+let drawerPath = "";
+function LocationSpy() { const location = useLocation(); drawerPath = location.pathname + location.search; return null; }
+function Router({ children }: { children: ReactNode }) { return <MemoryRouter><LocationSpy />{children}</MemoryRouter>; }
+const render = (ui: ReactNode) => rtlRender(ui, { wrapper: Router });
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -10,7 +18,7 @@ vi.mock("../api/client", async () => {
     ...actual,
     api: {
       getCastDetail: vi.fn(),
-      readEntity: vi.fn(),
+      readEntity: vi.fn(), readRecordArt: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
                       o?: { w?: number; v?: string | null }) =>
         `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
@@ -30,6 +38,10 @@ function open(target: Parameters<typeof RecordDrawer>[0]["target"] = ACTOR) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  (api.readRecordArt as any).mockImplementation((target: RecordArtTarget) => Promise.resolve(artRead(target, [
+    artImage(target, "avatar", { image_id: null, description: "A portrait", thumb: "/api/preview?w=160&v=bytes", url: "/api/original?v=bytes", v: "bytes" }),
+  ])));
   (api.getCastDetail as any).mockResolvedValue(detail("library"));
   (api.readEntity as any).mockResolvedValue({ meta: { name: "The Docks" }, body: "wet" });
 });
@@ -57,14 +69,14 @@ test("the avatar is a downscale, not the original file", async () => {
   // the large one, since the reader opened this to look at one person.
   open();
   const img = await screen.findByAltText("Seraphine avatar");
-  expect(img.getAttribute("src")).toBe("/img/characters/seraphine/default?w=1024");
+  expect(img.getAttribute("src")).toBe("/api/preview?w=160&v=bytes");
 });
 
 test("the avatar carries the detail's token, so it is cached immutable", async () => {
   (api.getCastDetail as any).mockResolvedValue({ ...detail("library"), avatar_v: "1a-2b" });
   open();
   const img = await screen.findByAltText("Seraphine avatar");
-  expect(img.getAttribute("src")).toBe("/img/characters/seraphine/default?w=1024&v=1a-2b");
+  expect(img.getAttribute("src")).toBe("/api/preview?w=160&v=bytes");
 });
 
 test("an unrecognized source renders no badge at all", async () => {
@@ -161,4 +173,68 @@ test("the body renders as markdown", async () => {
     { ...detail("library"), body: "A record of **Seraphine**." });
   render(<RecordDrawer cid="c" sid="s" target={ACTOR} onClose={() => {}} />);
   expect((await screen.findByText("Seraphine", { selector: "strong" })).tagName).toBe("STRONG");
+});
+
+test("location drawer reads inherited art through the campaign overlay and uses a gallery fallback", async () => {
+  (api.readRecordArt as any).mockImplementation((target: RecordArtTarget) => Promise.resolve(artRead(target, [
+    artImage(target, "gallery_1", { image_id: null, provenance: "inherited", thumb: "/api/map?w=160&v=bytes" }),
+  ])));
+  open({ type: "location", id: "Saltmarch" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "View art" })).toBeEnabled());
+  expect(api.readRecordArt).toHaveBeenCalledWith({ scope: { kind: "campaign", id: "c" }, kind: "locations", record_id: "Saltmarch" }, expect.objectContaining({ signal: expect.anything() }));
+  expect(screen.getByAltText(/art preview/)).toHaveAttribute("src", "/api/map?w=160&v=bytes");
+  fireEvent.click(screen.getByRole("button", { name: "View art" }));
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+});
+test("drawer art follows the scene's resolved actor version and reads no originals before opening", async () => {
+  (api.getCastDetail as any).mockResolvedValue({ ...detail("override"), version: "older" });
+  const { container } = open();
+  await waitFor(() => expect(screen.getByRole("button", { name: "View art" })).toBeEnabled());
+  expect(api.readRecordArt).toHaveBeenCalledWith(expect.objectContaining({ kind: "characters", version: "older" }), expect.anything());
+  expect(container.querySelector('img[src="/api/original?v=bytes"]')).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "View art" }));
+  expect(screen.getByRole("link", { name: "Open original" })).toHaveAttribute("href", "/api/original?v=bytes");
+});
+test("an art read failure never suppresses readable prose", async () => {
+  (api.readRecordArt as any).mockRejectedValue(new Error("metadata unavailable"));
+  open();
+  expect(await screen.findByText("the drowned keeper")).toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toHaveTextContent("Art could not be read");
+  expect(screen.queryByText("No art yet")).not.toBeInTheDocument();
+});
+test("drawer viewer Escape restores focus and leaves the parent drawer open", async () => {
+  const onClose = vi.fn();
+  render(<RecordDrawer cid="c" sid="s" target={ACTOR} onClose={onClose} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "View art" })).toBeEnabled());
+  const opener = screen.getByRole("button", { name: "View art" });
+  opener.focus(); fireEvent.click(opener);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+  expect(screen.getByText("the drowned keeper")).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(opener).toHaveFocus();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledOnce();
+});
+test("a late previous drawer art reply cannot install a portrait on its successor", async () => {
+  let settle = (_data: unknown) => {};
+  (api.readRecordArt as any).mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+  const view = open();
+  await waitFor(() => expect(api.readRecordArt).toHaveBeenCalledOnce());
+  view.rerender(<RecordDrawer cid="c" sid="s" target={{ type: "location", id: "Saltmarch" }} onClose={vi.fn()} />);
+  await screen.findByRole("button", { name: "View art" });
+  const target = { scope: { kind: "campaign", id: "c" }, kind: "characters", record_id: "seraphine", version: "default" } as const;
+  settle(artRead(target, [artImage(target, "avatar", { thumb: "/stale.png" })]));
+  await waitFor(() => expect(screen.queryByAltText("Seraphine avatar")).not.toBeInTheDocument());
+  expect(view.container.querySelector('img[src="/stale.png"]')).toBeNull();
+});
+
+
+test("drawer Open record carries campaign scope and the scene-resolved version to Art", async () => {
+  vi.mocked(api.getCastDetail).mockResolvedValue({ ...detail("override"), version: "veiled" } as never);
+  open();
+  fireEvent.click(await screen.findByRole("button", { name: "View art" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open record" }));
+  expect(drawerPath).toBe("/campaigns/c/world/characters/seraphine?tab=art&v=veiled");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

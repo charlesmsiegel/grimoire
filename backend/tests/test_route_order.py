@@ -85,6 +85,25 @@ def test_no_route_is_shadowed_by_an_earlier_one():
 # are the ones that were in effect before the routes package was split out
 # (#241), so this pins existing behaviour rather than asserting a preference.
 CROSSING_PAIRS = [
+    ("/api/worlds/{wid}/record-art/{kind}/{rid}/images",
+     "/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}"),
+    ("/api/campaigns/{cid}/record-art/{kind}/{rid}/images",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    # The reserved record-art prefix owns these crossings. "record-art" is
+    # not an entity kind, so the generic entity routes cannot legitimately
+    # claim them; register the facade first, then keep that decision pinned.
+    ("/api/worlds/{wid}/record-art/{kind}/{rid}",
+     "/api/worlds/{wid}/{kind}/{eid}/adopt-st"),
+    ("/api/worlds/{wid}/record-art/{kind}/{rid}",
+     "/api/worlds/{wid}/{kind}/{eid}/dependents"),
+    ("/api/worlds/{wid}/record-art/{kind}/{rid}",
+     "/api/worlds/{wid}/{kind}/{eid}/images"),
+    ("/api/campaigns/{cid}/record-art/{kind}/{rid}",
+     "/api/campaigns/{cid}/{kind}/{eid}/adopt-st"),
+    ("/api/campaigns/{cid}/record-art/{kind}/{rid}",
+     "/api/campaigns/{cid}/{kind}/{eid}/images"),
+    ("/api/campaigns/{cid}/record-art/{kind}/{rid}",
+     "/api/campaigns/{cid}/{kind}/{eid}/library"),
     ("/api/worlds/{wid}/sheets/{mid}/{kind}/{eid}",
      "/api/worlds/{wid}/{kind}/{eid}/images/{name}"),
     ("/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}",

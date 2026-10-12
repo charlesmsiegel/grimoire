@@ -1,3 +1,4 @@
+import { MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
 import { render, screen } from "@testing-library/react";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 
@@ -36,4 +37,19 @@ test.each([
 ] as const)("nested code and HTML containers: %s", (body, visible) => {
   const { container } = render(<GreetingMarkdown>{body}</GreetingMarkdown>);
   expect(container.querySelectorAll("img")).toHaveLength(visible ? 1 : 0);
+});
+
+test("greetings explicitly opt out even inside an enabled Markdown Art context", () => {
+  render(<MarkdownArtProvider enabled contextKey="Realm">
+    <GreetingMarkdown imageExtras={() => <button>Tag subjects</button>}>{"![Saltmarch](https://example.test/map.png)"}</GreetingMarkdown>
+  </MarkdownArtProvider>);
+  expect(screen.getByRole("button", { name: "Tag subjects" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Enlarge Saltmarch" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
+});
+
+test("greeting opt-out preserves linked image markup and has no enlargement control", () => {
+  const view = render(<GreetingMarkdown>{"[![Saltmarch](https://example.test/map.png)](https://example.test/story)"}</GreetingMarkdown>);
+  expect(view.container.querySelector("a img")).toHaveAttribute("src", "https://example.test/map.png");
+  expect(screen.queryByRole("button", { name: "Enlarge Saltmarch" })).not.toBeInTheDocument();
 });

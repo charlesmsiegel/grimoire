@@ -1,3 +1,4 @@
+import { MarkdownArtOffset, MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
@@ -98,19 +99,19 @@ function invisibleChangeHint(item: IncomingItem): string {
   return "the record's keys, owners, or secrecy — front matter this view is not sent";
 }
 
-function Value({ text, markdown }: { text: string; markdown: boolean }) {
+function Value({ text, markdown, documentKey }: { text: string; markdown: boolean; documentKey: string }) {
   if (!text.trim()) return <p className="field-hint">(empty)</p>;
   if (markdown)
     return (
       <div className="detail-rendered">
-        <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{text}</Markdown>
+        <MarkdownArtOffset offset={0} documentKey={documentKey}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{text}</Markdown></MarkdownArtOffset>
       </div>
     );
   return <pre className="incoming-text">{text}</pre>;
 }
 
-function Detail({ item, busy, onResolve }: {
-  item: IncomingItem; busy: boolean;
+function Detail({ item, busy, onResolve, cid }: {
+  item: IncomingItem; busy: boolean; cid: string;
   onResolve: (refs: IncomingRef[], accept: boolean) => void;
 }) {
   const markdown = isMarkdown(item);
@@ -118,7 +119,7 @@ function Detail({ item, busy, onResolve }: {
   // Only worth saying when there are two sides to have matched.
   const identical = Boolean(item.mine) && fields.every((f) => f.world === f.mine);
   return (
-    <div className="detail-view">
+    <MarkdownArtProvider enabled={item.ref.kind !== "greetings"} contextKey={JSON.stringify([cid, refKey(item.ref)])}><div className="detail-view">
       <div className="detail-main">
         <h3>
           {item.world.name}
@@ -138,7 +139,7 @@ function Detail({ item, busy, onResolve }: {
             <div className="incoming-cols">
               <div className="incoming-col">
                 <div className="eyebrow">From the world</div>
-                <Value text={f.world} markdown={markdown} />
+                <Value text={f.world} markdown={markdown} documentKey={"world/" + f.key} />
               </div>
               {/* No campaign copy means one column, not a column paired with an
                   empty frame claiming a copy exists. Keyed off `mine` rather
@@ -146,7 +147,7 @@ function Detail({ item, busy, onResolve }: {
               {item.mine && (
                 <div className="incoming-col">
                   <div className="eyebrow">In this campaign</div>
-                  <Value text={f.mine} markdown={markdown} />
+                  <Value text={f.mine} markdown={markdown} documentKey={"campaign/" + f.key} />
                 </div>
               )}
             </div>
@@ -170,7 +171,7 @@ function Detail({ item, busy, onResolve }: {
           <span className="chip on">{refKey(item.ref)}</span>
         </div>
       </aside>
-    </div>
+    </div></MarkdownArtProvider>
   );
 }
 
@@ -371,7 +372,7 @@ export function IncomingReview({ cid, focus, onResolved, refreshKey = 0 }: {
             })}
           </div>
           <div className="editor-body">
-            {active && <Detail item={active} busy={busy} onResolve={onResolve} />}
+            {active && <Detail cid={cid} item={active} busy={busy} onResolve={onResolve} />}
           </div>
         </div>
       )}

@@ -32,12 +32,12 @@
     "A002": 1
   },
   "backend/src/grimoire/routes/campaigns.py": {
-    "B904": 85,
+    "B904": 81,
     "RUF003": 1
   },
   "backend/src/grimoire/routes/characters.py": {
     "A002": 2,
-    "B904": 42,
+    "B904": 40,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/common.py": {
@@ -50,7 +50,7 @@
     "PERF401": 1
   },
   "backend/src/grimoire/routes/entities.py": {
-    "B904": 25,
+    "B904": 23,
     "RUF005": 1
   },
   "backend/src/grimoire/routes/greetings.py": {
@@ -90,7 +90,7 @@
   },
   "backend/src/grimoire/routes/worlds.py": {
     "A002": 2,
-    "B904": 48,
+    "B904": 46,
     "SIM105": 1
   },
   "backend/src/grimoire/store/__init__.py": {

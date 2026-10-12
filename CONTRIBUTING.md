@@ -203,6 +203,7 @@ cannot fail a test run.
 
 | Guard test | Rule | Marker |
 |---|---|---|
+| `test_record_art_description_guards.py` | stale placement and shared-caption saves refuse newer data; cleanup preserves a later writer | none (behavioral regressions) |
 | `test_atomic_guard.py` | every store write goes through `store.atomic` | `# atomic-ok:` |
 | `test_overlay_guard.py` | campaign reads of inheritable records go through `store.overlay` | `# overlay-ok:` |
 | `test_pydantic_guard.py` | pydantic usage stays v1/v2-agnostic | `# pydantic-ok:` |

@@ -22,3 +22,15 @@ test("Escape cancels without saving", () => {
   expect(onClose).toHaveBeenCalledTimes(1);
   expect(onSave).not.toHaveBeenCalled();
 });
+
+test("16:10 crop follows the axis that overflows and supports controlled focus", () => {
+  const change = vi.fn();
+  render(<AvatarFocusPicker src="/api/art" initial={50} aspect={1.6} label="Primary image"
+    value={50} onChange={change} onSave={vi.fn()} onClose={vi.fn()} />);
+  const image = screen.getByRole("img");
+  Object.defineProperties(image, { naturalWidth: { value: 1024 }, naturalHeight: { value: 768 } });
+  fireEvent.load(image);
+  expect(document.querySelector(".focus-window")).toHaveStyle({ width: "100%", height: "83.33333333333334%" });
+  fireEvent.change(screen.getByLabelText("Crop position"), { target: { value: "100" } });
+  expect(change).toHaveBeenCalledWith(100);
+});
