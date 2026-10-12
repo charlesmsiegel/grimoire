@@ -83,7 +83,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 
 - **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)) and 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
 - **One spec that can run end-to-end now:** 04. All external hard needs are met by merged 03.
-- **Parallel partial implementations:** 05 (S1 and S2 now; S5 waits for 04-S9), 08 (S1 and S4 now; S5 waits for 05-S6), 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
+- **Parallel partial implementations:** 05 (S1-S4, S6 and S7 implemented in one PR; S5 waits for 04-S9), 08 (S1 and S4 now; S5 waits for 05-S6), 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
 - **Scheduled LAST:** 13 (Mechanics II). Do not dispatch it until **every other** roadmap spec, including 04, 05, 06, 08, 09, 10, 11 and 12, has landed. This is a scheduling hold only: the technical slice dependency graph and waves remain unchanged. `ready` hides 13 until then; `ready --include-deferred` displays technical readiness without the scheduling hold.
 - **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. No missing gate is inferred from a merged PR.
 - **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → ~~02~~ → 11 (Decision stage). 01e feeds 09 and the deferred 13.
@@ -336,12 +336,19 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   answering (spec 04 section 16). Open question 4 took option (b).
 
 ### 05: Direct-edit cache sync
-- [ ] **05-C1** `cache_sync.sync_paths` through a write-through queue.
-- [ ] **05-C2** `python -m grimoire.cache sync` and `POST /api/cache/sync`.
+- [x] **05-C1** `cache_sync.sync_paths` through a write-through queue.
+- [x] **05-C2** `python -m grimoire.cache sync` and `POST /api/cache/sync`.
 - [ ] **05-C3** `WarmHook` order: files → overview → searchdocs → vectors.
-  Re-embeds only text not already cached. No confirmation step.
-- [ ] **05-C4** `store/writeset.py`: a context-variable collector that
+  Re-embeds only text not already cached. No confirmation step. (Everything
+  but the `overview` entry is in; 05-S5 waits for 04-S9.)
+- [x] **05-C4** `store/writeset.py`: a context-variable collector that
   `store.atomic` notes into, with a guard.
+- Slices S1-S4, S6 and S7 are implemented in one PR, each its own commit
+  (plans in `docs/superpowers/plans/2026-10-12-roadmap-05-s*.md`). Their
+  reviews were **substitute** adversarial reviews (the Codex CLI was not
+  available), recorded in the PR; the plan gates and the Codex gates are still
+  owed, and the PR's `@codex review` is requested. 05-S5 is not started: it
+  needs 04-S9.
 
 ### 06: Store-editing skill
 - [ ] **06-C1** A canonical skill in `.claude/skills/grimoire-store-editing/`,
@@ -590,13 +597,13 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 05-S1 | The write set | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 05-S2 | The sync primitive and the `files` hook | L | 4 | 03-S2, 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 05-S3 | The CLI, scoped modes and scripts | M | 5 | 03-S2, 03-S4, 03-S5 (S), 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 05-S4 | The write-through queue | M | 5 | 05-S1, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S1 | The write set | M | 1 | — | [x] | [ ] | [x] | [x] | [ ] | [ ] |
+| 05-S2 | The sync primitive and the `files` hook | L | 4 | 03-S2, 03-S4 | [x] | [ ] | [x] | [x] | [ ] | [ ] |
+| 05-S3 | The CLI, scoped modes and scripts | M | 5 | 03-S2, 03-S4, 03-S5 (S), 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 05-S4 | The write-through queue | M | 5 | 05-S1, 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 | 05-S5 | The `overview` hook adapter | S | 6 | 04-S9, 05-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 05-S6 | The `vectors` hook and the three producers | L | 5 | 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 05-S7 | The API | M | 6 | 04-S2 (S), 05-S3, 05-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 05-S6 | The `vectors` hook and the three producers | L | 5 | 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 05-S7 | The API | M | 6 | 04-S2 (S), 05-S3, 05-S6 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 
 ### 06
 

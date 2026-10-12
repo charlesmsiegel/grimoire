@@ -326,7 +326,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Thirty-two handlers** start detached runs, in five classes:
+subscriber. **Thirty-three handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
@@ -371,10 +371,16 @@ subscriber. **Thirty-two handlers** start detached runs, in five classes:
   `@computes_only`, answering **202**. Two more start the tracker's
   `tracker-update` on request: `post_tracker_retry` runs one post's update
   again, and `post_tracker_rerun_from` schedules that post's and every tracked
-  post's after it. The class's other runs are outside the count: a landed
+  post's after it. `post_cache_sync` (`routes/cache.py`, spec 05) runs one
+  compiled-cache warm-up, kind `cache-sync`, on `("global",)`, answering
+  **202**: one at a time and never merged -- a request while one is live is
+  refused 409 `sync_in_flight` naming it, except a repeat of its own attempt
+  id -- in a worker thread it never abandons, stopped by `cancel_requested`.
+  The class's other runs are outside the count: a landed
   turn's rolling summary and scene-break check (below), and the
   `tracker-update` that a turn, `post_start_from_greeting` or `post_first_post`
-  schedules after its posts are written.
+  schedules after its posts are written. The write-through queue
+  (`cache_warm`) is not a run at all.
 
 - `maintenance` — two handlers, `post_images_migrate` and `post_images_gc`
   (`routes/maintenance.py`), start the image store's migration and collector

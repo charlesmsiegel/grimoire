@@ -70,6 +70,7 @@ from fastapi import APIRouter
 
 from . import (
     authors_notes,
+    cache,
     campaigns,
     character_turns,
     characters,
@@ -191,7 +192,7 @@ def _compose(domain: APIRouter) -> None:
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, inference, modules, record_art, worlds, characters, world_images, images, greetings,
-                runs, maintenance, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
+                runs, maintenance, cache, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
                 campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies,
                 default_prompts):
     _compose(_domain.router)
