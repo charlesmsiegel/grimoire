@@ -214,6 +214,32 @@ def test_a_set_policy_still_refuses_beside_an_unreadable_one(windows, tmp_path):
     assert not recycle_bin.check(tmp_path).ok
 
 
+POLICY_FLAGS = [
+    ("HKCU", POLICY, "NoRecycleFiles"),
+    ("HKLM", POLICY, "NoRecycleFiles"),
+    ("HKCU", VOLUME_KEY, "NukeOnDelete"),
+]
+
+
+@pytest.mark.parametrize("setting", POLICY_FLAGS)
+@pytest.mark.parametrize("value", [1, 2, 0xFFFFFFFF])
+def test_any_nonzero_policy_flag_refuses(windows, monkeypatch, tmp_path, setting, value):
+    """Windows reads these flags as on when nonzero, and an unexpected value
+    is safest read as on: it refuses in the check and in every batch."""
+    _, paths, log = _windows_batch(windows, monkeypatch, tmp_path, [1],
+                                   registry={setting: value})
+    assert recycle_bin.check(tmp_path) == Availability(
+        False, "bin_deletes_immediately", MESSAGES["bin_deletes_immediately"])
+    result = recycle_bin.send_batch(tmp_path, paths, lambda p: pytest.fail("before ran"))
+    assert result.sent == [] and log == [] and result.code == "bin_deletes_immediately"
+
+
+@pytest.mark.parametrize("setting", POLICY_FLAGS)
+def test_a_zero_policy_flag_is_allowed(windows, tmp_path, setting):
+    windows(registry={setting: 0})
+    assert recycle_bin.check(tmp_path) == Availability(True)
+
+
 def test_policies_set_to_zero_are_ok(windows, tmp_path):
     windows(registry={("HKCU", POLICY, "NoRecycleFiles"): 0,
                       ("HKLM", POLICY, "NoRecycleFiles"): 0,

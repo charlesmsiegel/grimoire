@@ -337,7 +337,9 @@ dependency set stays as it is. Availability is one function,
   succeeds (same code); the policy `NoRecycleFiles` (under
   `Software\Microsoft\Windows\CurrentVersion\Policies\Explorer`, read from
   both HKCU and HKLM) is not set, and the volume's
-  `HKCU\...\Explorer\BitBucket\Volume\{GUID}\NukeOnDelete` is not 1 (code
+  `HKCU\...\Explorer\BitBucket\Volume\{GUID}\NukeOnDelete` is not set --
+  each flag is on at any nonzero DWORD, not only 1, the way Windows reads it
+  and the safe reading of an unexpected value (code
   `bin_deletes_immediately`: "Windows is set to delete files immediately
   instead of using the Recycle Bin on this drive."). A registry value that
   exists but cannot be read (access denied, or not a DWORD), for either

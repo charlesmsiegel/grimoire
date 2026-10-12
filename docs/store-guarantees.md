@@ -1028,7 +1028,9 @@ operating system's; on Windows that is the residual stated below.
   any file is touched unless the outbox's own volume is a fixed drive, answers
   the bin query, and is covered by neither the `NoRecycleFiles` policy nor the
   volume's delete-immediately setting (`test_windows_network_drive_refuses`,
-  `test_windows_nuke_on_delete_refuses`). A registry setting it cannot read
+  `test_windows_nuke_on_delete_refuses`). Either flag is on at any nonzero
+  value, not only 1, as Windows reads it
+  (`test_any_nonzero_policy_flag_refuses`). A registry setting it cannot read
   is not taken as unset: an absent key or value means Windows' defaults, but
   access denied or any other read error on `NoRecycleFiles` (either hive),
   `NukeOnDelete` or the volume's `MaxCapacity`, or a value there that is not a

@@ -14,7 +14,8 @@ any file is touched, and `send_batch` asks the whole question again at the
 start of every batch, since any answer can change between the two (a drive
 remounted, a policy pushed): the outbox's volume must be a fixed drive
 (`GetDriveTypeW`), answer `SHQueryRecycleBinW`, and carry neither the
-`NoRecycleFiles` policy (HKCU or HKLM) nor `NukeOnDelete`. The volume asked is
+`NoRecycleFiles` policy (HKCU or HKLM) nor `NukeOnDelete` (any nonzero
+value is on). The volume asked is
 the one the *outbox* sits on -- `GetVolumePathNameW` of its deepest existing
 ancestor -- not the drive letter of the library, because a removable drive can
 be mounted into a folder of `C:`. macOS and Linux raise when a volume has no
@@ -312,7 +313,9 @@ def _windows(root: Path) -> _WindowsReading:
     key = _volume_key(volume)
     flags = [_win.reg_dword(hive, _POLICY_KEY, "NoRecycleFiles") for hive in ("HKCU", "HKLM")]
     flags.append(_win.reg_dword("HKCU", key, "NukeOnDelete") if key is not None else None)
-    if any(flag == 1 for flag in flags):
+    # Windows reads each flag as on when it is nonzero, and an unexpected
+    # value is safest read as on: any nonzero DWORD refuses, not only 1.
+    if any(isinstance(flag, int) and flag != 0 for flag in flags):
         return _WindowsReading(_refusal("bin_deletes_immediately"), volume, state)
     if any(flag is UNREADABLE for flag in flags):
         return _WindowsReading(_refusal("bin_settings_unreadable"), volume, state)
