@@ -313,3 +313,15 @@ def test_redo_refuses_while_the_original_is_lore_and_spares_the_replacement(case
     undo.undo(cid, reversed_row["id"])
     assert entities.read_entity(croot, "groups", back)["meta"]["members"] == "characters:mara"
     assert "members" not in entities.read_entity(croot, "groups", replacement)["meta"]
+
+
+@pytest.mark.parametrize("kind,eid", [("groups", "nowhere"), ("spells", "salt-circle")])
+def test_deleting_a_missing_world_record_is_404_before_any_dependent_preflight(client, kind, eid):
+    """A dependent campaign's damaged identity ledger must not turn a missing
+    record or an unknown kind into a membership refusal (Codex review, #507)."""
+    from grimoire.store import campaigns as campaigns_store
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    (campaigns_store.campaign_root(cid) / "detached.json").write_text("{", encoding="utf-8")
+    r = client.delete(f"/api/worlds/{wid}/{kind}/{eid}")
+    assert r.status_code == 404, r.text

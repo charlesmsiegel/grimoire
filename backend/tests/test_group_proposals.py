@@ -124,3 +124,18 @@ def test_distinct_native_case_store_roots_do_not_share_campaign_authority(monkey
     with pytest.raises(group_refs.GroupIdentityConflict, match="store"):
         group_proposals.register(cid, root, {"groups:salt-circle": owned})
     assert not (root / "membership_review_tokens.json").exists()
+
+
+def test_a_lease_write_bumps_the_campaign_revision_and_a_reread_does_not(scope):
+    """The absorb start is @computes_only, so the middleware stamps nothing for
+    it: a capture that writes a lease must move the revision itself, and one
+    that only re-reads the same lease must not."""
+    from grimoire.store import revision
+    cid, root, world, identity = scope
+    before = revision.current(cid)
+    with locks.world_lifecycle_lock(root.parent.parent, world):
+        group_proposals.register(cid, root, {"groups:salt-circle": identity})
+        written = revision.current(cid)
+        group_proposals.register(cid, root, {"groups:salt-circle": identity})
+    assert written != before
+    assert revision.current(cid) == written

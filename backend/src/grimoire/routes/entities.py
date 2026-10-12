@@ -464,6 +464,15 @@ def put_world_entity(wid: str, kind: str, eid: str, body: EntityUpdate):
 @router.delete("/worlds/{wid}/{kind}/{eid}")
 def delete_world_entity(wid: str, kind: str, eid: str):
     root = _world_root_or_404(wid)
+    # A missing record or unknown kind answers 404 before the lifecycle scope
+    # locks and strict-reads every dependent campaign: a dependent's damaged
+    # ledger must not turn "not found" into a membership refusal.
+    try:
+        store.entities.require_entity(root, kind, eid)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind") from None
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="entity not found") from None
     with store.overlay.world_identity_change(root, record=(kind, eid)) as cids:
         out = _entity_delete(root, kind, eid)
         # After the delete, so a crash between the two leaves the pre-#225 state

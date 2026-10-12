@@ -18,7 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from . import atomic, entity_schema, group_refs, locks, paths
+from . import atomic, entity_schema, group_refs, locks, paths, revision
 from .campaigns import paths as campaigns_paths
 
 
@@ -122,6 +122,11 @@ def register(cid: str, croot: Path, identities: Mapping[str, GroupIdentity]) -> 
                 changed = True
         if changed:
             _write(croot, leases)
+            # The absorb start that captures is `@computes_only`, so the
+            # activity middleware stamps nothing for it: a durable lease write
+            # bumps the campaign's revision itself, inside the hold that wrote
+            # it, so an expectation read before this absorb no longer passes.
+            revision.bump(cid)
         return copy.deepcopy({ref: leases[ref] for ref in identities})
 
 
