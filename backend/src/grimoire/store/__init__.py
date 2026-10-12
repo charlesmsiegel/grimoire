@@ -129,6 +129,7 @@ from . import (
     reclassify,
     record_art,
     record_refs,
+    recycle_bin,
     regex,
     relationship_history,
     relationships,
