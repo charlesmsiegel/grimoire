@@ -20,6 +20,14 @@ ancestor -- not the drive letter of the library, because a removable drive can
 be mounted into a folder of `C:`. macOS and Linux raise when a volume has no
 trash, and that raise is an ordinary refusal.
 
+**A registry value that cannot be read is not an unset one.** An absent key or
+value means Windows' defaults (the bin on), but access denied or any other read
+error says nothing about the setting, and reading it as absent is the one
+answer that can turn a send into a permanent delete. So `_reg_value` keeps the
+three apart (a DWORD, None for absent, `UNREADABLE`), and an unreadable
+`NoRecycleFiles`, `NukeOnDelete` or `MaxCapacity` refuses with
+`bin_settings_unreadable`.
+
 **Capacity.** A bin at capacity purges its oldest items to fit a new one, and a
 file larger than the whole bin is deleted outright. The capacity is the
 volume's `MaxCapacity` (MB) in the registry; a file larger than a *known*
@@ -71,6 +79,8 @@ MESSAGES: dict[str, str] = {
     "bin_deletes_immediately": ("Windows is set to delete files immediately instead of "
                                 "using the Recycle Bin on this drive."),
     "too_large_for_bin": "This picture is larger than the Recycle Bin on its drive can hold.",
+    "bin_settings_unreadable": ("Windows' Recycle Bin settings for this drive couldn't be "
+                                "read, so pictures won't be sent to it."),
 }
 
 _POLICY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
@@ -78,6 +88,43 @@ _VOLUME_KEYS = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Vo
 _MIB = 1024 * 1024
 #: Estimated bin capacity when the volume has no `MaxCapacity`: a tenth of it.
 _ESTIMATE_DIVISOR = 10
+
+
+class _Unreadable:
+    """The type of `UNREADABLE`."""
+
+    def __repr__(self) -> str:
+        return "UNREADABLE"
+
+
+#: A registry value that may exist but could not be read: never None, which
+#: means absent.
+UNREADABLE = _Unreadable()
+
+#: What one registry read answers: the DWORD, None (absent) or `UNREADABLE`.
+RegValue = int | None | _Unreadable
+
+#: `winreg.REG_DWORD`, spelled here so `_reg_value` runs on every platform.
+REG_DWORD = 4
+
+
+def _reg_value(read: Callable[[], tuple[object, int]]) -> RegValue:
+    """Classify one registry read. `read` opens the key and queries the value,
+    returning (value, kind). FileNotFoundError -- the key or the value is not
+    there -- is absent (None): Windows' defaults apply. Any other OSError
+    (access denied, a broken hive, ...) is `UNREADABLE`. So is a value that is
+    there but is not a DWORD: Windows reads these settings as DWORDs, and
+    guessing what another type means could read "delete immediately" as "off",
+    so it fails closed like a read error."""
+    try:
+        value, kind = read()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return UNREADABLE
+    if kind != REG_DWORD or not isinstance(value, int):
+        return UNREADABLE
+    return value
 
 
 @dataclass(frozen=True)
@@ -183,14 +230,15 @@ if sys.platform == "win32":
             return None
         return int(total.value)
 
-    def _reg_dword(hive: str, path: str, name: str) -> int | None:
+    def _reg_dword(hive: str, path: str, name: str) -> RegValue:
         root = {"HKCU": winreg.HKEY_CURRENT_USER, "HKLM": winreg.HKEY_LOCAL_MACHINE}[hive]
-        try:
+
+        def read() -> tuple[object, int]:
             with winreg.OpenKey(root, path) as key:
                 value, kind = winreg.QueryValueEx(key, name)
-        except OSError:
-            return None
-        return int(value) if kind == winreg.REG_DWORD else None
+            return value, kind
+
+        return _reg_value(read)
 else:
     def _volume_of(path: Path) -> str | None:
         return None
@@ -207,7 +255,7 @@ else:
     def _volume_bytes(volume: str) -> int | None:
         return None
 
-    def _reg_dword(hive: str, path: str, name: str) -> int | None:
+    def _reg_dword(hive: str, path: str, name: str) -> RegValue:
         return None
 
 #: The seam tests replace wholesale. Looked up at call time, never bound.
@@ -236,25 +284,44 @@ def _refusal(code: str) -> Availability:
     return Availability(False, code, MESSAGES[code])
 
 
-def _windows(root: Path) -> tuple[Availability, str | None, tuple[int, int] | None]:
-    """Windows' half of `check`, and what it read on the way: the availability,
-    the outbox's volume, and the bin's (size, item count) there. `send_batch`
+@dataclass(frozen=True)
+class _WindowsReading:
+    """What `_windows` answered and read on the way: the outbox's volume, the
+    bin's (size, item count) there, and the volume's `MaxCapacity` in MB (None
+    when absent; a capacity that could not be read never gets this far)."""
+    availability: Availability
+    volume: str | None = None
+    state: tuple[int, int] | None = None
+    max_capacity_mb: int | None = None
+
+
+def _windows(root: Path) -> _WindowsReading:
+    """Windows' half of `check`, and what it read on the way. `send_batch`
     asks this whole question again before every batch, because a drive, a
     policy or a per-volume setting may have changed since `check` answered,
-    and keeps the bin reading as the batch's "before" for the backstop."""
+    and keeps the bin reading as the batch's "before" for the backstop and
+    the capacity as what it judges sizes by (read once, here, so the two can
+    never disagree). A setting that cannot be read refuses
+    (`bin_settings_unreadable`): it is never taken as unset."""
     volume = _outbox_volume(root)
     if volume is None or _win.drive_type(volume) != DRIVE_FIXED:
-        return _refusal("volume_has_no_bin"), volume, None
+        return _WindowsReading(_refusal("volume_has_no_bin"), volume)
     state = _win.query_bin(volume)
     if state is None:
-        return _refusal("volume_has_no_bin"), volume, None
-    for hive in ("HKCU", "HKLM"):
-        if _win.reg_dword(hive, _POLICY_KEY, "NoRecycleFiles") == 1:
-            return _refusal("bin_deletes_immediately"), volume, state
+        return _WindowsReading(_refusal("volume_has_no_bin"), volume)
     key = _volume_key(volume)
-    if key is not None and _win.reg_dword("HKCU", key, "NukeOnDelete") == 1:
-        return _refusal("bin_deletes_immediately"), volume, state
-    return Availability(True), volume, state
+    flags = [_win.reg_dword(hive, _POLICY_KEY, "NoRecycleFiles") for hive in ("HKCU", "HKLM")]
+    flags.append(_win.reg_dword("HKCU", key, "NukeOnDelete") if key is not None else None)
+    if any(flag == 1 for flag in flags):
+        return _WindowsReading(_refusal("bin_deletes_immediately"), volume, state)
+    if any(flag is UNREADABLE for flag in flags):
+        return _WindowsReading(_refusal("bin_settings_unreadable"), volume, state)
+    megabytes = _win.reg_dword("HKCU", key, "MaxCapacity") if key is not None else None
+    if megabytes is UNREADABLE:
+        # The capacity rule (`too_large_for_bin`, the backstop) stands on it.
+        return _WindowsReading(_refusal("bin_settings_unreadable"), volume, state)
+    return _WindowsReading(Availability(True), volume, state,
+                           megabytes if isinstance(megabytes, int) else None)
 
 
 def check(root: Path) -> Availability:
@@ -265,18 +332,17 @@ def check(root: Path) -> Availability:
         return _refusal("not_installed")
     if _platform() != "windows":
         return Availability(True)
-    return _windows(root)[0]
+    return _windows(root).availability
 
 
-def _capacity(volume: str) -> tuple[int | None, int | None]:
+def _capacity(volume: str, megabytes: int | None) -> tuple[int | None, int | None]:
     """(known capacity, capacity to judge a purge by), in bytes.
 
-    The first is the volume's `MaxCapacity` and is None when the key is absent.
-    The second is the same value, else a tenth of the volume, else None when
-    even the volume's size is unreadable (`send_batch` then rules no purge in,
-    which errs toward reporting a batch unverified)."""
-    key = _volume_key(volume)
-    megabytes = _win.reg_dword("HKCU", key, "MaxCapacity") if key else None
+    The first is the volume's `MaxCapacity` as `_windows` read it (`megabytes`)
+    and is None when the value is absent. The second is the same value, else a
+    tenth of the volume, else None when even the volume's size is unreadable
+    (`send_batch` then rules no purge in, which errs toward reporting a batch
+    unverified)."""
     if megabytes is not None:
         return megabytes * _MIB, megabytes * _MIB
     total = _win.volume_bytes(volume)
@@ -324,15 +390,17 @@ def send_batch(root: Path, paths: list[Path], before: Callable[[Path], None], *,
     windows = _platform() == "windows"
     volume: str | None = None
     pre: tuple[int, int] | None = None
+    known, estimate = None, None
     if windows:
-        available, volume, pre = _windows(root)
+        reading = _windows(root)
+        available, volume, pre = reading.availability, reading.volume, reading.state
         if not available.ok or volume is None:
             # With no bin to trust, nothing is sent: on Windows that is how a
             # file gets deleted outright.
             if paths:
                 result.refused, result.code = paths[0], available.code or "volume_has_no_bin"
             return result
-    known, estimate = _capacity(volume) if volume is not None else (None, None)
+        known, estimate = _capacity(volume, reading.max_capacity_mb)
     sent_bytes = 0
     for path in paths:
         if cancel():

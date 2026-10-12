@@ -218,7 +218,11 @@ refcount):
    object. Nothing is recycled; the report counts it under `released`, not
    `recycled`.
 3. **Otherwise** the object's description is read from the sidecar, the blob
-   is moved with `os.replace` into the outbox under its bin name (§3.2), and
+   is moved into the outbox under its bin name (§3.2) by a move that never
+   replaces a file already there -- a hard link then an unlink of the blob,
+   or `os.rename` on Windows; a name taken by the time the move lands (a sync
+   client delivering a file) moves on to the next suffix, a bounded number of
+   times, and a volume without hard links stops the run -- and
    then the sidecar is deleted. The move is the commit: a crash after it
    leaves a sidecar naming a missing blob, which no placement reaches and the
    next collection removes. **A blob already missing** at this step (that
@@ -335,7 +339,11 @@ dependency set stays as it is. Availability is one function,
   both HKCU and HKLM) is not set, and the volume's
   `HKCU\...\Explorer\BitBucket\Volume\{GUID}\NukeOnDelete` is not 1 (code
   `bin_deletes_immediately`: "Windows is set to delete files immediately
-  instead of using the Recycle Bin on this drive."). An absent per-volume key
+  instead of using the Recycle Bin on this drive."). A registry value that
+  exists but cannot be read (access denied, or not a DWORD), for either
+  policy or for `MaxCapacity`, is not taken as unset: it refuses with
+  `bin_settings_unreadable` ("Windows' Recycle Bin settings for this drive
+  couldn't be read, so pictures won't be sent to it."). An absent per-volume key
   means Windows' defaults — the bin is on, with its default capacity — and is
   not a refusal; `MaxCapacity` is then unknown and the size check below is
   skipped.

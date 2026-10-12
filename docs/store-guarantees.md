@@ -1028,7 +1028,13 @@ operating system's; on Windows that is the residual stated below.
   any file is touched unless the outbox's own volume is a fixed drive, answers
   the bin query, and is covered by neither the `NoRecycleFiles` policy nor the
   volume's delete-immediately setting (`test_windows_network_drive_refuses`,
-  `test_windows_nuke_on_delete_refuses`). Because any of those can change after
+  `test_windows_nuke_on_delete_refuses`). A registry setting it cannot read
+  is not taken as unset: an absent key or value means Windows' defaults, but
+  access denied or any other read error on `NoRecycleFiles` (either hive),
+  `NukeOnDelete` or the volume's `MaxCapacity`, or a value there that is not a
+  DWORD, refuses as `bin_settings_unreadable`
+  (`test_an_unreadable_bin_setting_refuses_the_check`,
+  `test_reg_value_tells_absent_from_unreadable`). Because any of those can change after
   that answer, `send_batch` asks the whole question again at the start of every
   batch and sends nothing when it fails
   (`test_a_guard_that_flips_after_check_refuses_the_batch`). A file that has

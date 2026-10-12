@@ -171,6 +171,102 @@ def test_windows_absent_volume_key_is_ok(windows, tmp_path):
     assert recycle_bin.check(tmp_path) == Availability(True)
 
 
+# --- a registry value that cannot be read is not an unset one -----------------
+#
+# Access denied (or any read error but "not there") on a policy flag or on
+# `MaxCapacity` used to read as absent -- i.e. "the bin is on" -- which is the
+# one answer that can turn a send into a permanent delete. It refuses now.
+
+UNREADABLE_SETTINGS = [
+    ("HKCU", POLICY, "NoRecycleFiles"),
+    ("HKLM", POLICY, "NoRecycleFiles"),
+    ("HKCU", VOLUME_KEY, "NukeOnDelete"),
+    ("HKCU", VOLUME_KEY, "MaxCapacity"),
+]
+
+
+@pytest.mark.parametrize("setting", UNREADABLE_SETTINGS)
+def test_an_unreadable_bin_setting_refuses_the_check(windows, tmp_path, setting):
+    windows(registry={setting: recycle_bin.UNREADABLE})
+    assert recycle_bin.check(tmp_path) == Availability(
+        False, "bin_settings_unreadable", MESSAGES["bin_settings_unreadable"])
+
+
+@pytest.mark.parametrize("setting", UNREADABLE_SETTINGS)
+def test_an_unreadable_bin_setting_refuses_the_batch(windows, monkeypatch, tmp_path, setting):
+    _, paths, log = _windows_batch(windows, monkeypatch, tmp_path, [1, 1],
+                                   registry={setting: recycle_bin.UNREADABLE})
+    result = recycle_bin.send_batch(tmp_path, paths, lambda p: pytest.fail("before ran"))
+    assert result.sent == [] and log == []
+    assert result.refused == paths[0] and result.code == "bin_settings_unreadable"
+    assert all(p.exists() for p in paths)
+
+
+def test_the_unreadable_sentence():
+    assert MESSAGES["bin_settings_unreadable"] == (
+        "Windows' Recycle Bin settings for this drive couldn't be read, "
+        "so pictures won't be sent to it.")
+
+
+def test_a_set_policy_still_refuses_beside_an_unreadable_one(windows, tmp_path):
+    windows(registry={("HKCU", POLICY, "NoRecycleFiles"): recycle_bin.UNREADABLE,
+                      ("HKLM", POLICY, "NoRecycleFiles"): 1})
+    assert not recycle_bin.check(tmp_path).ok
+
+
+def test_policies_set_to_zero_are_ok(windows, tmp_path):
+    windows(registry={("HKCU", POLICY, "NoRecycleFiles"): 0,
+                      ("HKLM", POLICY, "NoRecycleFiles"): 0,
+                      ("HKCU", VOLUME_KEY, "NukeOnDelete"): 0,
+                      ("HKCU", VOLUME_KEY, "MaxCapacity"): 100})
+    assert recycle_bin.check(tmp_path) == Availability(True)
+
+
+def test_a_batch_reads_max_capacity_once(windows, monkeypatch, tmp_path):
+    """The capacity a batch judges sizes by is the one its availability check
+    read: a second read could disagree with the first (or fail)."""
+    _, paths, _ = _windows_batch(
+        windows, monkeypatch, tmp_path, [1024],
+        registry={("HKCU", VOLUME_KEY, "MaxCapacity"): 100},
+        bin_states=[(0, 5), (1024, 6)])
+    asked = []
+    reg = recycle_bin._win.reg_dword
+
+    def reg_dword(hive, path, name):
+        asked.append(name)
+        return reg(hive, path, name)
+
+    monkeypatch.setattr(recycle_bin._win, "reg_dword", reg_dword)
+    assert recycle_bin.send_batch(tmp_path, paths, lambda p: None).sent == paths
+    assert asked.count("MaxCapacity") == 1
+
+
+def _registry_read(answer):
+    """The open-and-query `_reg_value` drives: `answer` is raised when it is
+    an exception, else returned as the (value, kind) pair."""
+    def read():
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+    return read
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ((1, recycle_bin.REG_DWORD), 1),
+    ((0, recycle_bin.REG_DWORD), 0),
+    ((5000, recycle_bin.REG_DWORD), 5000),
+    (FileNotFoundError(2, "The system cannot find the file specified"), None),
+    (PermissionError(13, "Access is denied"), recycle_bin.UNREADABLE),
+    (OSError(1018, "Illegal operation attempted on a registry key"), recycle_bin.UNREADABLE),
+    (("1", 1), recycle_bin.UNREADABLE),             # REG_SZ: not the DWORD Windows reads
+    ((b"\x01\x00\x00\x00", 3), recycle_bin.UNREADABLE),   # REG_BINARY
+])
+def test_reg_value_tells_absent_from_unreadable(answer, expected):
+    got = recycle_bin._reg_value(_registry_read(answer))
+    assert got is expected if expected is None or expected is recycle_bin.UNREADABLE \
+        else got == expected
+
+
 def test_windows_fresh_store_uses_an_existing_ancestor(windows, tmp_path):
     w = windows()
     assert recycle_bin.check(tmp_path).ok
@@ -355,6 +451,12 @@ def _flip_volume(w):
     w.volume = None
 
 
+def _unreadable(*setting):
+    def flip(w):
+        w.registry[setting] = recycle_bin.UNREADABLE
+    return flip
+
+
 @pytest.mark.parametrize("flip, code", [
     (_flip_drive, "volume_has_no_bin"),
     (_flip_policy_hkcu, "bin_deletes_immediately"),
@@ -362,6 +464,10 @@ def _flip_volume(w):
     (_flip_nuke, "bin_deletes_immediately"),
     (_flip_query, "volume_has_no_bin"),
     (_flip_volume, "volume_has_no_bin"),
+    (_unreadable("HKCU", POLICY, "NoRecycleFiles"), "bin_settings_unreadable"),
+    (_unreadable("HKLM", POLICY, "NoRecycleFiles"), "bin_settings_unreadable"),
+    (_unreadable("HKCU", VOLUME_KEY, "NukeOnDelete"), "bin_settings_unreadable"),
+    (_unreadable("HKCU", VOLUME_KEY, "MaxCapacity"), "bin_settings_unreadable"),
 ])
 def test_a_guard_that_flips_after_check_refuses_the_batch(windows, monkeypatch, tmp_path,
                                                           flip, code):
