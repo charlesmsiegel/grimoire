@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TextIO
 
-from . import proclock
+from . import proclock, writeset
 
 _WINDOWS = os.name == "nt"
 
@@ -267,11 +267,13 @@ def write_text(path: Path, text: str) -> None:
     on its next save.
     """
     _write_through_fd(path, "w", "utf-8", text)
+    writeset.note(path)
 
 
 def write_bytes(path: Path, data: bytes) -> None:
     """Atomic replacement for ``path.write_bytes(data)``. See ``write_text``."""
     _write_through_fd(path, "wb", None, data)
+    writeset.note(path)
 
 
 @contextmanager
@@ -344,6 +346,7 @@ def append_line(path: Path, line: str) -> None:
                 view = view[os.write(fd, view):]
         finally:
             os.close(fd)
+    writeset.note(path)
 
 
 @contextmanager
@@ -386,4 +389,5 @@ def streaming_write(path: Path):
                 pass
         _discard(tmp_name)
         raise
+    writeset.note(path)
 

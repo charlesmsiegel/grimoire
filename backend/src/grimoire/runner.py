@@ -35,6 +35,8 @@ from typing import Any
 import anyio
 from anyio.from_thread import BlockingPortal
 
+from . import cache_warm
+from .store import writeset
 from .store.inference import embed as embed_operation
 
 _log = logging.getLogger(__name__)
@@ -271,6 +273,20 @@ def stop_maintenance(app) -> int:
 
 
 async def _guarded_thread(app, run, work_sync: Callable[[Any], Any]) -> None:
+    """A maintenance run inside its own ISOLATED write set (spec 05-C4).
+
+    The run starts with a copy of the request's context, so without isolation
+    its writes would land in the request's scope after that scope was handed
+    off. Closed at the terminal point; the snapshot goes to the write-through
+    queue, which drops what it cannot warm."""
+    with writeset.collecting(isolated=True) as collected:
+        try:
+            await _guarded_thread_body(app, run, work_sync)
+        finally:
+            await cache_warm.hand_off_async(app, collected.close())
+
+
+async def _guarded_thread_body(app, run, work_sync: Callable[[Any], Any]) -> None:
     """One maintenance run: ``work_sync(run)`` in a worker thread, SHIELDED.
 
     The await is shielded and ``abandon_on_cancel`` is never passed, and both
@@ -376,6 +392,23 @@ def _error_frame(error: dict) -> str:
 
 async def _guarded(app, run, factory: Callable[[], Any],
                    on_unstarted: Callable[[], None] | None = None) -> None:
+    """A run inside its own ISOLATED write set (spec 05-C4, section 5.3).
+
+    A run is scheduled with a copy of the starting request's context, and a
+    run started from inside another (a turn's `_fire_follow_up`) with a copy of
+    its parent's, so each REPLACES the scopes it inherited with one of its own.
+    Closed at the terminal point and handed to the write-through queue; a run
+    that outlives its request therefore never writes into that request's set.
+    """
+    with writeset.collecting(isolated=True) as collected:
+        try:
+            await _guarded_body(app, run, factory, on_unstarted)
+        finally:
+            await cache_warm.hand_off_async(app, collected.close())
+
+
+async def _guarded_body(app, run, factory: Callable[[], Any],
+                        on_unstarted: Callable[[], None] | None = None) -> None:
     """One run, inside its own failure boundary and cancel scope.
 
     The boundary is load-bearing. These run on the lifespan's task group, and

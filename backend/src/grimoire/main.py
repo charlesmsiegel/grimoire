@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import runner
+from . import cache_warm, runner
 from .health import ProviderHealth
 from .routes import build_embeddings, build_llm, build_openai_compatible_client, router, runs
 from .routes import config as config_routes
@@ -37,6 +37,7 @@ from .store import (
     module_edit,
     paths,
     revision,
+    writeset,
 )
 from .store.inference import migrate as inference_migrate
 
@@ -560,6 +561,35 @@ class _CampaignActivityStamp:
             raise
 
 
+class _WriteSetCollector:
+    """Collect the record paths every HTTP request publishes, and hand them to
+    the write-through queue when it ends (spec 05-C4, section 5.3).
+
+    Every route, every method, success or failure: a route that wrote and then
+    failed still wrote -- `_CampaignActivityStamp`'s argument for its exception
+    path. Raw ASGI for the same reason as that class: it awaits the app and
+    catches nothing, so it stays out of the exception path. A streamed response
+    has finished streaming by the time `await self.app(...)` returns.
+
+    The scope is CLOSED in the `finally` before its snapshot is handed over, so
+    a detached run that outlives the request (it opens an isolated scope of its
+    own in `runner`) can never change what was handed off. The handoff runs off
+    the loop and never raises (`cache_warm.hand_off`).
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        with writeset.collecting() as collected:
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                await cache_warm.hand_off_async(scope.get("app"), collected.close())
+
+
 def _is_loopback(host: str | None) -> bool:
     """Is ``host`` -- an ASGI ``client`` host -- this machine?
 
@@ -692,6 +722,9 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(_CampaignActivityStamp)
+    # Outermost, so it also sees what the activity stamp writes; the queue
+    # drops those (a write token has nothing materialized from it).
+    app.add_middleware(_WriteSetCollector)
 
     @app.exception_handler(HTTPException)
     async def http_exc_handler(request: Request, exc: HTTPException):

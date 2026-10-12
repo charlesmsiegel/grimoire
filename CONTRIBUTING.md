@@ -205,6 +205,7 @@ cannot fail a test run.
 |---|---|---|
 | `test_record_art_description_guards.py` | stale placement and shared-caption saves refuse newer data; cleanup preserves a later writer | none (behavioral regressions) |
 | `test_atomic_guard.py` | every store write goes through `store.atomic` | `# atomic-ok:` |
+| `test_writeset_guard.py` | every public publishing function in `store.atomic` calls `writeset.note` in its own body after it publishes (spec 05-C4), so the write-through queue sees every write; the non-publishing ones are an explicit allowlist | — |
 | `test_compiled_guard.py` | only `store.compiled` imports SQLite; reads require supplied keys/paths and literal SQL bounds; named decision hashes and resolvable wrappers cannot use persisted sources | — |
 | `test_overview_guard.py` | only `GET /worlds`, `GET /campaigns`, `GET /api/shell`, `GET /todo` and the post-turn warm import `store.overview`, and no decision site (`closed_by`, `list_scenes`, `read_scene`, `list_campaigns`, `read_campaign`, the to-do items and ignore routes, `continuity.effective` / `pending`) reaches an overview projection | — |
 | `test_overlay_guard.py` | campaign reads of inheritable records go through `store.overlay` | `# overlay-ok:` |

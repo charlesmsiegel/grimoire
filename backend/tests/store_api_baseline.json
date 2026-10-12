@@ -373,6 +373,7 @@
     "world_images",
     "worlds",
     "write_config",
+    "writeset",
     "ziputil"
   ]
 }
