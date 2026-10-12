@@ -204,8 +204,17 @@ def test_windows_local_clock_classification_uses_final_volume(cache, root, monke
 
     monkeypatch.setattr(cache, "_kernel32", SimpleNamespace(
         GetVolumePathNameW=volume, GetDriveTypeW=lambda path: drive_type))
+    # The filesystem half (NTFS/ReFS) is file_stats' own query against the
+    # real kernel32; fake it so this runs, and means the same, on every host.
+    asked = []
+    monkeypatch.setattr(cache.file_stats, "windows_change_supported",
+                        lambda path, device=None: asked.append(path) or True)
     assert cache._clock_supported(root / "Realm.md")
     assert captured == [str((root / "Realm.md").resolve())]
+    assert asked == [root / "Realm.md"]
+    # A local drive whose filesystem keeps no change time is still refused.
+    monkeypatch.setattr(cache.file_stats, "windows_change_supported", lambda path, device=None: False)
+    assert not cache._clock_supported(root / "Realm.md")
 
 
 @pytest.mark.parametrize("failure", ["missing", "api", "exception"])

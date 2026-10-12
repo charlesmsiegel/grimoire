@@ -67,6 +67,44 @@ def test_lru_low_water_and_incremental_vacuum(cache, root, monkeypatch):
     assert session.path.stat().st_size < 8 * 20000
 
 
+class _OnePagePerStep:
+    """A connection whose incremental_vacuum frees one page per call, as
+    Python 3.11's sqlite3 does for a statement with no result columns."""
+
+    def __init__(self, free, stuck=False):
+        self.free, self.stuck, self.calls = free, stuck, 0
+
+    def execute(self, sql):
+        if sql == 'PRAGMA incremental_vacuum(256)':
+            self.calls += 1
+            if not self.stuck:
+                self.free = max(0, self.free - 1)
+            return self
+        assert sql == 'PRAGMA freelist_count'
+        self._row = (self.free,)
+        return self
+
+    def fetchone(self):
+        return self._row
+
+    def fetchall(self):
+        return []
+
+
+@pytest.mark.parametrize('free,calls,left', [(40, 40, 0), (1000, 256, 744), (0, 0, 0)])
+def test_incremental_vacuum_spends_its_page_budget_one_step_at_a_time(cache, free, calls, left):
+    conn = _OnePagePerStep(free)
+    cache._incremental_vacuum(conn)
+    assert (conn.calls, conn.free) == (calls, left)
+    assert cache.VACUUM_PAGES == 256
+
+
+def test_incremental_vacuum_stops_when_the_freelist_does_not_shrink(cache):
+    conn = _OnePagePerStep(40, stuck=True)
+    cache._incremental_vacuum(conn)
+    assert conn.calls == 1
+
+
 @pytest.mark.parametrize('damage', ['invalid', b'invalid'])
 def test_malformed_timestamp_cannot_permanently_stop_eviction(cache, root, monkeypatch, damage):
     kind = _kind(cache, monkeypatch)

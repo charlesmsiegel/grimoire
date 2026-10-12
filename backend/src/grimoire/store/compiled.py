@@ -2478,15 +2478,31 @@ def _maintain(session: _Session) -> None:
         if _live_bytes(conn) <= LOW_WATER_BYTES:
             break
     conn.commit()
-    # Consume the pragma cursor so SQLite executes every requested vacuum
-    # step, rather than stopping after its first returned page.
-    conn.execute('PRAGMA incremental_vacuum(256)').fetchall()
+    _incremental_vacuum(conn)
     if _live_bytes(conn) <= LOW_WATER_BYTES:
         conn.execute("DELETE FROM cache_meta WHERE name='trimming'")
         session.trimming = False
         session.maintained = now
     # A bounded partial pass stays eligible at the next actual write, even
     # after it falls below the cap but has not reached low water (S5 review).
+
+
+def _incremental_vacuum(conn: _sqlite_available.Connection) -> None:
+    # Return at most VACUUM_PAGES free pages to the filesystem. The pragma has
+    # no result columns, and Python 3.11's sqlite3 resets such a statement
+    # after its first step, so there one call frees ONE page however many it
+    # asks for; 3.12+ runs every step. Repeat until the budget is spent or
+    # the freelist stops shrinking, which bounds both.
+    freed = 0
+    while freed < VACUUM_PAGES:
+        before = conn.execute('PRAGMA freelist_count').fetchone()[0]
+        if not before:
+            return
+        conn.execute('PRAGMA incremental_vacuum(256)').fetchall()
+        step = before - conn.execute('PRAGMA freelist_count').fetchone()[0]
+        if step <= 0:
+            return
+        freed += step
 
 
 def _initialise(conn: _sqlite_available.Connection) -> None:
