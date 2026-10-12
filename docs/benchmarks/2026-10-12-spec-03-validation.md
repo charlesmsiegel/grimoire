@@ -175,3 +175,18 @@ Review of the PR fixed five defects beyond those two:
 
 Each fix has a test that fails without it.
 
+The world and campaign shelf rows moved to the full-stamp memo, so their
+warm path changed. Section 14 requires that path not to regress. It was
+compared against main on a synthetic library (`scripts.synth_library`: 40
+worlds, 5 campaigns each). Method: Python 3.11 on Linux, warm in-process
+`list_worlds` and `list_campaigns`, 50-call medians, 15 alternating
+fresh-process pairs, run twice.
+
+| Listing | Paired median ratio (branch/main) | Main median |
+|---|---|---|
+| Worlds | 1.049 and 1.017 | about 4.4 ms |
+| Campaigns | 1.013 and 0.973 | about 4.8 ms |
+
+That is within run-to-run noise. Windows, where the stamp makes a native
+ChangeTime query, was not re-measured.
+

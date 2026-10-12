@@ -739,8 +739,8 @@ These are not specs, and each needs a decision on whether to fix it.
   post-write refreshes do not pass `fresh` (04).
 - [ ] The opener's compose step embeds on the event loop
   (`routes/greetings.py:98-106`). 01h-C4a fixes it.
-- [ ] `migrations._backfill_campaign` measures its racy window at record time
-  rather than at stamp time (03).
+- [x] `migrations._backfill_campaign` measures its racy window at record time
+  rather than at stamp time (03). Fixed by 03: it measures from before the stamp.
 - [ ] Stale docstrings: `entities.py:420` (ref fields do reach prompts),
   `embed_space.facts_moved`, and `context/pack.py:69-73`.
 
