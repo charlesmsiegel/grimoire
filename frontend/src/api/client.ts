@@ -1206,7 +1206,7 @@ export const api = {
     request<ArtLinkResult>("POST", recordArtBase(target, "/images/link"), {
       source, intent, ...(intent === "primary" ? { expected_primary_v: expectedPrimary } : {}),
     }).then(notifyArt),
-  removeRecordArt: (target: RecordArtTarget, image: RecordArtImage) =>
+  removeRecordArt: (target: RecordArtTarget, image: Pick<RecordArtImage, "name" | "v" | "placement">) =>
     request<{ ok: boolean }>("DELETE", `${recordImageBase(target, image.name)}?${new URLSearchParams({ expected_v: image.v })}`)
       .then(notifyArt),
   promoteRecordArt: (target: RecordArtTarget, image: RecordArtImage, expectedPrimary: string | null) =>

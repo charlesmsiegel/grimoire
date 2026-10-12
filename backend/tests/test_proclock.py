@@ -232,7 +232,7 @@ def test_android_uses_the_configured_home_not_the_passwd_entry(monkeypatch, tmp_
     PermissionError before ever reaching a lock."""
     app_home = tmp_path / "app-files"
     app_home.mkdir()
-    monkeypatch.setattr(proclock, "_on_android", lambda: True)
+    monkeypatch.setattr(proclock, "on_android", lambda: True)
     monkeypatch.setenv("HOME", str(app_home))
     monkeypatch.setenv("USERPROFILE", str(app_home))
     assert app_home in _machine_lock_dir().parents

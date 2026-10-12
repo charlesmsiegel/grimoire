@@ -5339,6 +5339,9 @@ a.subtle, a.button { display: inline-flex; align-items: center; justify-content:
 .art-viewer-stage { flex: 1; min-height: 80px; min-width: 0; overflow: hidden; position: relative; display: grid; place-items: center; touch-action: none; user-select: none; }
 .art-viewer-stage img { max-width: none; max-height: none; grid-area: 1 / 1; transform-origin: center; }
 .art-viewer-stage > p, .art-viewer-stage > div { grid-area: 1 / 1; z-index: 1; }
+/* The inline removal confirmation stands where Remove stood; its message sits under the controls. */
+.art-viewer-confirm { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.art-viewer-message { flex-shrink: 0; margin: 0 0 12px; }
 .art-viewer-information { flex-shrink: 0; max-height: 28vh; overflow: auto; padding-top: 12px; }
 .art-viewer-information summary { min-height: 44px; cursor: pointer; }
 @media (max-width: 600px) {

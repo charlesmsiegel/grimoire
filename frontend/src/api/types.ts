@@ -803,8 +803,11 @@ export type ImageGcReport = {
   mode: "scan" | "collect";
   run_id: string;
   state: "complete" | "blocked" | "cancelled" | "refused" | "root-changed" | "failed"
-    | "running";
-  grace_days: number | null;
+    | "trash-unavailable" | "recycle-bin-unverified" | "running";
+  /** The unused-for window, in hours. A report written before the recycle bin
+   *  carries `grace_days` instead; both are optional so either reads. */
+  grace_hours?: number | null;
+  grace_days?: number | null;
   counts: {
     placements: number; objects: number; blobs: number; unreferenced: number;
     collectable: number; collectable_blobs: number; protected: number;
@@ -819,9 +822,24 @@ export type ImageGcReport = {
   token: string | null;
   token_expires_at: number | null;
   /** One row per file removed, appended as each unlink lands; `bytes` is the total. */
-  deleted: { objects: ImageGcDeletedRow[]; blobs: ImageGcDeletedRow[]; bytes: number };
+  deleted: { objects: ImageGcDeletedRow[]; blobs?: ImageGcDeletedRow[]; bytes: number };
+  /** Each file the recycle bin took (`id`/`blob` null for one drained from the
+   *  outbox). A file Windows did not confirm is here AND in `unverified`. */
+  recycled?: { id: string | null; blob: string | null; name: string; bytes: number }[];
+  /** Objects whose sidecar went but whose picture stayed or was already gone. */
+  released?: { id: string; blob: string; reason: string }[];
+  /** Names of files waiting in this device's outbox. */
+  outbox?: string[];
+  /** Files waiting in another device's outbox, never touched from here. */
+  foreign_outboxes?: number;
+  /** Names the bin took without Windows confirming it. */
+  unverified?: string[];
+  /** Whether a real recycle bin is here. `ok` is `null` when the pass ended
+   *  before it knew (a failed report): unknown, not "no bin". */
+  recycle_bin?: { ok: boolean | null; code: string | null; message: string | null };
   skipped: { id: string | null; blob: string | null; reason: string }[];
-  kept_blobs: { id: string; blob: string; reason: string }[];
+  /** Gone from reports written by this build; older stored ones still carry it. */
+  kept_blobs?: { id: string; blob: string; reason: string }[];
   /** Reachable ids with no readable sidecar yet: orphan blobs are kept. */
   unarrived_objects: string[];
   /** Thumbnails or index entries a collection could not remove (best effort). */

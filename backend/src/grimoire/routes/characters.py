@@ -904,6 +904,7 @@ def list_world_gallery(wid: str):
                     "described": image["name"] in descs,
                     "description": descs.get(image["name"], ""),
                     **_gallery_image_id(image),
+                    "provenance": "world",
                     "url": f"{url}?v={v}", "thumb": f"{url}{thumb_query(v)}"})
     return out
 
@@ -1015,6 +1016,7 @@ def _campaign_library_rows(cid: str) -> list[dict]:
                      "ext": image["ext"],
                      "record_name": "World library" if image["inherited"]
                                     else "Campaign library",
+                     "provenance": "inherited" if image["inherited"] else "campaign",
                      "described": image["name"] in descs,
                      "description": descs.get(image["name"], ""),
                      **_gallery_image_id(image),

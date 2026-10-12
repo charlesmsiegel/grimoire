@@ -4,6 +4,7 @@ sheet/audit/absorb store fixtures."""
 import importlib
 import json
 import os
+import shutil
 import threading
 import time
 
@@ -23,6 +24,7 @@ from grimoire.store import (
     modules,
     paths,
     proclock,
+    recycle_bin,
     scenes,
     sheets,
     worlds,
@@ -151,6 +153,39 @@ def _product_birth(request, monkeypatch):
     default comes back after the test."""
     if request.node.get_closest_marker("product_birth"):
         monkeypatch.delenv(store_config.TEST_BIRTH_ENV, raising=False)
+
+
+class FakeBin:
+    """What the suite's recycle bin did: `.paths` is every file it was handed,
+    in order, as the original path. The file itself is moved into a bin
+    directory made on first use, so nothing is deleted and nothing is left in
+    the tree the test is looking at."""
+
+    def __init__(self, tmp_path_factory):
+        self._factory = tmp_path_factory
+        self._dir = None
+        self.paths: list = []
+
+    def send(self, path: str) -> None:
+        from pathlib import Path
+        if self._dir is None:
+            self._dir = self._factory.mktemp("recycle-bin")
+        src = Path(path)
+        shutil.move(str(src), str(self._dir / f"{len(self.paths)}-{src.name}"))
+        self.paths.append(src)
+
+
+@pytest.fixture(autouse=True)
+def fake_bin(monkeypatch, tmp_path_factory):
+    """No test reaches the real OS bin: `recycle_bin` sends into a directory
+    under pytest's temp tree and says it is available, on a Linux-shaped
+    platform. `proclock.on_android` is deliberately left alone. A test of the
+    real availability checks restores `check` / `_platform` itself."""
+    fake = FakeBin(tmp_path_factory)
+    monkeypatch.setattr(recycle_bin, "_send2trash", fake.send)
+    monkeypatch.setattr(recycle_bin, "_platform", lambda: "linux")
+    monkeypatch.setattr(recycle_bin, "check", lambda root: recycle_bin.Availability(True))
+    return fake
 
 
 @pytest.fixture(autouse=True)

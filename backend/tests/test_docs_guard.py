@@ -439,7 +439,7 @@ def test_store_guarantees_names_the_maintenance_modules():
     would leave that promise attached to nothing."""
     section = _section(_read(GUARANTEES), "The image store")
     for name in ("image_migration", "image_gc", "image_surfaces",
-                 "maintenance_reports"):
+                 "maintenance_reports", "recycle_bin"):
         assert name in section, f"the image store section does not name {name}"
         assert (SRC / "store" / f"{name}.py").is_file(), f"store/{name}.py is gone"
 

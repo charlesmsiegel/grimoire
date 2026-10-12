@@ -19,7 +19,7 @@ const WORKING: Record<What, string> = {
   check: "Checking legacy images…",
   migrate: "Migrating legacy images…",
   find: "Looking for unused images…",
-  delete: "Deleting unused images…",
+  delete: "Sending unused images to the recycle bin…",
   other: "An image-store run is in progress…",
 };
 
@@ -36,9 +36,24 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-function day(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleDateString();
+/** The clock time a too-new image becomes collectable. The window is an hour, so
+ *  a date would only be noise. */
+function clock(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleTimeString();
 }
+
+/** Where the outbox lives, under the store folder -- shown so a waiting file
+ *  can be found by hand. */
+const OUTBOX_DIR = ".cache/image-store/recycle/";
+
+const NO_BIN = "This computer has no recycle bin Grimoire can use, so nothing is collected.";
+
+/** Why a protected row with no date is kept, by the scan's `why`: the line after
+ *  its count. */
+const HELD: Record<string, string> = {
+  "unarrived-objects": "kept while a picture is still arriving from another device.",
+  "unreadable-sidecars": "kept while a picture's record can't be read.",
+};
 
 const isMigration = (r: ImageMaintenanceReport): r is ImageMigrationReport =>
   r.kind === "image-migration";
@@ -169,9 +184,12 @@ export function ImageStoreCard() {
   }
   function remove(token: string, n: number) {
     if (!window.confirm(
-      `Delete ${plural(n, "unused image", "unused images")}?\n\n`
+      `Send ${plural(n, "unused image", "unused images")} to the recycle bin?\n\n`
       + "These are images no world, campaign or collection refers to, found by "
-      + "the last scan. This cannot be undone.")) return;
+      + "the last scan. The pictures go to this computer's recycle bin, and can be "
+      + "restored from there until it is emptied. Their descriptions and tags are "
+      + "not kept. A picture another device linked but has not synced yet would "
+      + "be binned too.")) return;
     void begin("delete", (a) => api.startImageGc({ dry_run: false, token }, a));
   }
 
@@ -203,8 +221,9 @@ export function ImageStoreCard() {
         shows what moving them would do and changes nothing; <strong>Migrate</strong>{" "}
         does it. Deleting a record leaves its image in the store, so{" "}
         <strong>Find unused images</strong> looks for what nothing refers to any more.
-        It never deletes: a scan only reports, and an image has to be seen unused on
-        two scans a grace period apart before it can be deleted.
+        A scan only reports: an image that is unused and at least an hour old can
+        then be sent to this computer&apos;s recycle bin, where it can be restored from
+        until the bin is emptied.
       </p>
       <div className="image-store-actions">
         <button className="btn-outline" onClick={check} disabled={busy}>Check</button>
@@ -215,7 +234,7 @@ export function ImageStoreCard() {
         {offer && (
           <button className="btn-outline" onClick={() => remove(offer.token, offer.count)}
                   disabled={busy}>
-            {`Delete ${plural(offer.count, "unused image", "unused images")}`}
+            {`Send ${plural(offer.count, "unused image", "unused images")} to the recycle bin`}
           </button>
         )}
       </div>
@@ -235,13 +254,21 @@ export function ImageStoreCard() {
   );
 }
 
-/** The token a scan issued, and how many images it covers -- only while it can
- *  still be used. Spent, expired or absent, there is nothing to offer. */
+/** The token a scan issued, and how many images it covers (what is collectable
+ *  plus what already waits in the outbox) -- only while it can still be used
+ *  and a recycle bin is there. Spent, expired or absent, there is nothing to offer.
+ *  A blocked scan offers nothing collectable, but its token still drains the
+ *  outbox, so its waiting files are offered all the same. */
 function deletable(r: ImageGcReport): { token: string; count: number } | null {
-  if (r.mode !== "scan" || r.state !== "complete" || !r.token) return null;
+  if (r.mode !== "scan" || !r.token) return null;
+  if (r.state !== "complete" && r.state !== "blocked") return null;
   if (r.token_expires_at !== null && r.token_expires_at * 1000 <= Date.now()) return null;
   const p: Partial<ImageGcReport> = r;
-  const count = (p.collectable ?? []).length + (p.collectable_blobs ?? []).length;
+  // Only a bin known to be missing hides the offer: `null` is "not asked", and
+  // the server refuses a collection that has no bin whatever the card shows.
+  if (p.recycle_bin?.ok === false) return null;
+  const count = (p.collectable ?? []).length + (p.collectable_blobs ?? []).length
+    + (p.outbox ?? []).length;
   return count > 0 ? { token: r.token, count } : null;
 }
 
@@ -321,37 +348,54 @@ function GcReport({ report }: { report: ImageGcReport }) {
   const now = (r.counts?.collectable ?? 0) + (r.counts?.collectable_blobs ?? 0);
   const skew = r.clock_skew ?? [];
   const unreadable = r.unreadable_sidecars ?? [];
-  const dated = new Map<string, number>();
-  let undated = 0;
+  const waiting = (r.outbox ?? []).length;
+  // One line for every too-new image, naming when the last of them is due: each
+  // upload has its own due second, so a line per time is a wall after a burst.
+  // An undated row is held for a reason, and each reason has its own line; a
+  // clock-skew row is the timestamp line's.
+  let dated = 0;
+  let latest = 0;
+  const held: Record<string, number> = {};
   for (const row of r.protected ?? []) {
-    if (row.collectable_at === null) undated += 1;
-    else {
-      const when = day(row.collectable_at);
-      dated.set(when, (dated.get(when) ?? 0) + 1);
+    if (row.collectable_at !== null) {
+      dated += 1;
+      latest = Math.max(latest, row.collectable_at);
+    } else if (row.why !== "clock-skew") {
+      held[row.why] = (held[row.why] ?? 0) + 1;
     }
   }
+  const undated = Object.entries(held).filter(([why]) => !(why in HELD)).reduce(
+    (sum, [, n]) => sum + n, 0);
   return (
     <div className="image-store-report">
       <Stopped report={report} />
+      {report.state === "complete" && r.recycle_bin?.ok === false && (
+        <p className="config-msg err">{r.recycle_bin.message ?? NO_BIN}</p>
+      )}
       {report.state === "complete" && (
         <p className="field-hint">
           {now > 0
-            ? `${plural(now, "unused image", "unused images")} can be deleted now, `
-              + `freeing ${formatSize(r.reclaimable_bytes ?? 0)}.`
-            : "No unused images can be deleted yet."}
-          {" "}{plural(r.counts?.objects ?? 0, "image", "images")} in the store,{" "}
+            ? `${plural(now, "unused image", "unused images")} can be sent to the `
+              + `recycle bin now, freeing ${formatSize(r.reclaimable_bytes ?? 0)} once it is emptied. `
+            // With files waiting, the button sends those: the Waiting paragraph
+            // says so, and "nothing can be sent" would contradict it.
+            : waiting > 0 ? "" : "No unused images can be sent to the recycle bin yet. "}
+          {plural(r.counts?.objects ?? 0, "image", "images")} in the store,{" "}
           {plural(r.counts?.unreferenced ?? 0, "image is", "images are")} not used by anything.
         </p>
       )}
-      {[...dated.entries()].map(([when, n]) => (
-        <p key={when} className="field-hint">
-          {n} more {n === 1 ? "becomes" : "become"} collectable on {when}, if still unused
-          on a scan then.
+      {dated > 0 && (
+        <p className="field-hint">
+          {dated} more {dated === 1 ? "becomes" : "become"} collectable by{" "}
+          {clock(latest)}, if still unused.
         </p>
+      )}
+      {Object.entries(HELD).map(([why, line]) => (held[why] ?? 0) > 0 && (
+        <p key={why} className="field-hint">{held[why]} {line}</p>
       ))}
       {undated > 0 && (
         <p className="field-hint">
-          {plural(undated, "image", "images")} cannot be dated: see the notes below.
+          {plural(undated, "image", "images")} cannot be dated yet.
         </p>
       )}
       {skew.length > 0 && (
@@ -364,34 +408,95 @@ function GcReport({ report }: { report: ImageGcReport }) {
         <Rows label="Unreadable records"
               rows={unreadable.map((path) => ({ path, reason: "unreadable" }))} />
       )}
+      <Waiting report={report} />
     </div>
+  );
+}
+
+/** What already sits in the outbox, waiting to go to the bin, and the files in
+ *  other devices' outboxes, which this device never touches. */
+function Waiting({ report }: { report: ImageGcReport }) {
+  const waiting = report.outbox ?? [];
+  const foreign = report.foreign_outboxes ?? 0;
+  if (waiting.length === 0 && foreign === 0) return null;
+  return (
+    <>
+      {waiting.length > 0 && (
+        <>
+          <p className="field-hint">
+            {plural(waiting.length, "image is", "images are")} waiting to be sent to the
+            recycle bin, in <code>{OUTBOX_DIR}</code> under the store folder. The next
+            collection sends {waiting.length === 1 ? "it" : "them"} first.
+          </p>
+          <Rows label="Waiting to be sent"
+                rows={waiting.map((path) => ({ path, reason: "waiting" }))} />
+        </>
+      )}
+      {foreign > 0 && (
+        <p className="field-hint">
+          {foreign === 1 ? "1 file is" : `${foreign} files are`} waiting in another
+          folder under <code>{OUTBOX_DIR}</code>, from another device, or from this one
+          under an earlier store location. This collection leaves{" "}
+          {foreign === 1 ? "it" : "them"} alone; {foreign === 1 ? "it" : "they"} can be
+          emptied by hand from <code>{OUTBOX_DIR}</code>.
+        </p>
+      )}
+    </>
   );
 }
 
 /** Why a scan or a collection did not do its work, as the server wrote it. */
 function Stopped({ report }: { report: ImageGcReport }) {
   if (report.state === "complete") return null;
+  // Said by `CollectReport`, beside the files it names.
+  if (report.state === "recycle-bin-unverified") return null;
+  const p: Partial<ImageGcReport> = report;
+  if (report.state === "trash-unavailable") {
+    const n = (p.outbox ?? []).length;
+    return (
+      <p className="config-msg err">
+        The recycle bin refused a file; {n} {n === 1 ? "is" : "are"} waiting to be sent.
+        Nothing more was collected.
+      </p>
+    );
+  }
+  // A report with no `recycled` was written by a build that deleted, and says
+  // so in its words. Otherwise nothing is deleted any more: a stop is about
+  // what was not sent to the bin, and "more" once something already was.
+  const legacy = p.recycled === undefined;
+  const none = legacy ? "Nothing was deleted"
+    : (p.recycled ?? []).length > 0 ? "Nothing more was sent to the recycle bin"
+    : "Nothing was sent to the recycle bin";
+  const noneMore = legacy ? "Nothing more was deleted" : "Nothing more was sent to the recycle bin";
   const lead: Record<string, string> = {
-    blocked: "Nothing was deleted, because these could not be read safely:",
-    refused: "Nothing was deleted.",
+    blocked: `${none}, because these could not be read safely:`,
+    refused: `${none}.`,
     cancelled: "Cancelled. What was done before it stopped is below.",
-    "root-changed": "The storage location changed during the run. Nothing more was deleted.",
+    "root-changed": `The storage location changed during the run. ${noneMore}.`,
     failed: "The run failed.",
   };
+  // A collection refused for want of a bin carries a code in `error`; the
+  // sentence is `recycle_bin.message`, and the code is never shown.
+  if (report.error === "no_recycle_bin") {
+    return (
+      <p className="config-msg err">{p.recycle_bin?.message ?? NO_BIN}</p>
+    );
+  }
   return (
     <>
       <p className="config-msg err">
         {lead[report.state] ?? `Stopped (${report.state}).`}
         {report.error ? ` ${report.error}` : ""}
       </p>
-      <Rows rows={(report as Partial<ImageGcReport>).blocking ?? []} label="Blocking paths" />
+      <Rows rows={p.blocking ?? []} label="Blocking paths" />
     </>
   );
 }
 
-/** What a collection deleted, counted the way the scan counted it: each object,
- *  plus each orphan blob (a row with no object, or none deleted here). A blob
- *  that went with an object it belonged to is that object, not a second image. */
+/** What a legacy collection deleted, counted the way the scan counted it: each
+ *  object, plus each orphan blob (a row with no object, or none deleted here). A
+ *  blob that went with an object it belonged to is that object, not a second
+ *  image. Only reports written before the recycle bin have `deleted.blobs`. */
 function deletedCount(deleted: Partial<ImageGcReport["deleted"]> | undefined): number {
   const objects = deleted?.objects ?? [];
   const ids = new Set(objects.map((o) => o.id));
@@ -401,20 +506,53 @@ function deletedCount(deleted: Partial<ImageGcReport["deleted"]> | undefined): n
 
 function CollectReport({ report }: { report: ImageGcReport }) {
   const r: Partial<ImageGcReport> = report;
-  const n = deletedCount(r.deleted);
   const skipped = r.skipped ?? [];
+  const left = skipped.length > 0
+    ? ` ${plural(skipped.length, "image was", "images were")} left `
+      + `(${[...new Set(skipped.map((s) => s.reason))].join(", ")}).` : "";
+  // A report written before the recycle bin has no `recycled`: it deleted, and
+  // says so in the words of the build that did.
+  if (r.recycled === undefined) {
+    const n = deletedCount(r.deleted);
+    return (
+      <div className="image-store-report">
+        <Stopped report={report} />
+        {(report.state === "complete" || n > 0) && (
+          <p className="field-hint">
+            Deleted {plural(n, "unused image", "unused images")}, freeing{" "}
+            {formatSize(r.deleted?.bytes ?? 0)}.{left}
+          </p>
+        )}
+      </div>
+    );
+  }
+  // A file Windows did not confirm is in `recycled` too (the bin was handed it),
+  // but it is not known to be in the bin, so it is never counted as sent.
+  const unverified = r.unverified ?? [];
+  const unconfirmed = new Set(unverified);
+  const sent = r.recycled.filter((f) => !unconfirmed.has(f.name));
+  const bytes = sent.reduce((sum, f) => sum + f.bytes, 0);
   return (
     <div className="image-store-report">
       <Stopped report={report} />
-      {(report.state === "complete" || n > 0) && (
+      {(report.state === "complete" || sent.length > 0) && (
         <p className="field-hint">
-          Deleted {plural(n, "unused image", "unused images")}, freeing{" "}
-          {formatSize(r.deleted?.bytes ?? 0)}.
-          {skipped.length > 0
-            ? ` ${plural(skipped.length, "image was", "images were")} left `
-              + `(${[...new Set(skipped.map((s) => s.reason))].join(", ")}).` : ""}
+          Sent {plural(sent.length, "image", "images")} to the recycle bin
+          ({formatSize(bytes)}). The space is freed when you empty the bin.
+          {sent.length > 0 ? " Their names start with grimoire - ." : ""}{left}
         </p>
       )}
+      {unverified.length > 0 && (
+        <>
+          <p className="config-msg err">
+            Windows did not confirm these went to the Recycle Bin. Check the bin before
+            collecting again.
+          </p>
+          <Rows label="Not confirmed"
+                rows={unverified.map((path) => ({ path, reason: "not confirmed" }))} />
+        </>
+      )}
+      <Waiting report={report} />
     </div>
   );
 }

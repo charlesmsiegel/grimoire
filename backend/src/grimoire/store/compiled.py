@@ -428,7 +428,7 @@ def _fingerprint() -> None:
             stamp = os.environ.get("GRIMOIRE_COMPILED_BUILD")
             _state.build = compiled_build.fingerprint(
                 Path(compiled_build.__file__).parent, template_paths.templates_dir(),
-                stamp_path=Path(stamp) if stamp else None, require_stamp=proclock._on_android())
+                stamp_path=Path(stamp) if stamp else None, require_stamp=proclock.on_android())
         except _CACHE_ERRORS:
             _state.build = None
 

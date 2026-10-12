@@ -36,8 +36,8 @@ BASE_DEPENDENCIES = (
     "pillow", "jinja2", "markdown", "markdown-it-py",
 )
 DESKTOP_DEPENDENCIES = (
-    "tiktoken", "colorama", "httptools", "python-dotenv", "pyyaml", "uvloop",
-    "watchfiles", "websockets",
+    "tiktoken", "send2trash", "colorama", "httptools", "python-dotenv", "pyyaml",
+    "uvloop", "watchfiles", "websockets",
 )
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _DIGEST = re.compile(r"[0-9a-f]{64}")

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, type Appearance, type CharacterSummary, type EntityScope,
+import { api, ApiError, type Appearance, type CharacterSummary, type EntityScope,
   type GalleryImage, type Greeting } from "../api/client";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { sectionHref } from "../worldPaths";
@@ -8,8 +8,10 @@ import { ImageTile } from "./art/ImageTile";
 import { ImageViewer } from "./art/ImageViewer";
 import { useImageViewer } from "./art/useImageViewer";
 import { filterGallery, galleryHistoryKey, galleryImageDescriptor, galleryImageKey as imgKey,
-  galleryNeedsAttention as needsAttention, useGalleryState, type GalleryState } from "./art/galleryState";
-import type { ImageDescriptor } from "./art/types";
+  galleryNeedsAttention as needsAttention, galleryRecordTarget, useGalleryState, type GalleryState } from "./art/galleryState";
+import { createRecordArtAdapter } from "./art/recordArtAdapter";
+import { REMOVE_FAILED, removalError } from "./art/removal";
+import type { ImageDescriptor, RemoveOutcome } from "./art/types";
 import { PostImagePicker } from "./PostImagePicker";
 import { TaggingQueue } from "./TaggingQueue";
 import { WorldArtPanel } from "./WorldArtPanel";
@@ -34,6 +36,11 @@ const KIND_LABELS: Record<string, string> = {
  *  sweeps them in a fixed order), and this is that order named once so a kind
  *  the server starts sending — or stops — cannot silently reorder the rail. */
 const KINDS = Object.keys(KIND_LABELS);
+
+/** A removal whose re-read could not answer whether the picture is still
+ *  there: superseded by a newer read, or failed. Saying "removed" or
+ *  "changed" from it would be a guess. */
+const RECHECK_FAILED = "Could not check this picture again. Reload the gallery and try again.";
 
 /** What a screen reader is told the picture is.
  *
@@ -181,26 +188,29 @@ function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | 
    *  announces itself as "1 / 1" — and a skipped image comes back in the
    *  refreshed prop the local list has already walked past. The backlog is
    *  re-read when the queue closes instead, which is what `GreetingEditor` has
-   *  always done with the same component. */
-  const loadGallery = useCallback(async () => {
+   *  always done with the same component.
+   *
+   *  Resolves to the rows it committed, or null when a newer read superseded
+   *  it or it failed: a removal's stale re-read decides from exactly what is
+   *  on screen, never from a read that lost the race. */
+  const loadGallery = useCallback(async (fresh: boolean): Promise<GalleryImage[] | null> => {
     const sequence = ++galleryReads.current;
     try {
-      // `fresh`: this runs immediately after a subjects PUT, and the client
-      // shares an in-flight GET by path. Handed one issued before that write,
-      // the tile just tagged comes back still unfinished — and stays that way
-      // until the view is remounted.
       // The same choice `load` makes: refreshing a campaign's gallery from the
       // world's would drop its own art on every subjects save.
       const got = forCampaign
-        ? await api.listCampaignGallery(forCampaign, true)
-        : await api.listWorldImages(wid, true);
-      if (liveWid.current === owner && sequence === galleryReads.current) { setImages(got); setGalleryError(null); }
+        ? await api.listCampaignGallery(forCampaign, fresh)
+        : await api.listWorldImages(wid, fresh);
+      if (liveWid.current !== owner || sequence !== galleryReads.current) return null;
+      setImages(got); setGalleryError(null);
+      return got;
     } catch (error) {
       // This read supersedes the older full gallery read even on failure.
       // Report that failure rather than leaving an initial reader loading
       // forever after its older successful response has correctly been retired.
       if (liveWid.current === owner && sequence === galleryReads.current)
         setGalleryError(error instanceof Error ? error.message : String(error));
+      return null;
     }
   }, [wid, forCampaign, owner]);
 
@@ -286,7 +296,40 @@ function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | 
   const effectiveScope: EntityScope = forCampaign ? { kind: "campaign", id: forCampaign } : scope;
   const descriptors = shown.map((img) => galleryImageDescriptor(img, effectiveScope, wid))
     .filter((image): image is ImageDescriptor => image !== null);
-  useEffect(() => onArtChanged(() => { void loadGallery(); }), [loadGallery]);
+  // `fresh` on every invalidation: each follows a write, and the client shares
+  // an in-flight GET by path. Handed one issued before that write, the tile
+  // just tagged comes back still unfinished — and stays that way until the
+  // view is remounted.
+  useEffect(() => onArtChanged(() => { void loadGallery(true); }), [loadGallery]);
+  const latestImages = useRef(images);
+  latestImages.current = images;
+  /** The viewer's Remove (viewer removal design §1.1): the API directly, in the
+   *  scope this gallery is read FOR (`scope` is always the world). Resolves as
+   *  soon as the delete lands and leaves the refresh running; only a version
+   *  refusal waits, for a re-read that says whether the picture is still here. */
+  const removeFromGallery = async (key: string): Promise<RemoveOutcome> => {
+    const row = (latestImages.current ?? []).find((image) => imgKey(image) === key);
+    if (!row) throw new Error(REMOVE_FAILED);
+    try {
+      if (row.kind === "campaign") {
+        if (effectiveScope.kind !== "campaign") throw new Error(REMOVE_FAILED);
+        await api.deleteCampaignImage(effectiveScope.id, row.name);
+      } else if (row.kind === "world") {
+        await api.deleteWorldImage(wid, row.name);
+      } else {
+        const target = galleryRecordTarget(row, effectiveScope);
+        if (!target || !row.v || row.placement?.surface !== "record") throw new Error(REMOVE_FAILED);
+        await createRecordArtAdapter(target).remove({ name: row.name, v: row.v, placement: row.placement });
+      }
+    } catch (error) {
+      if (!(error instanceof ApiError && error.kind === "stale_image")) throw new Error(removalError(error));
+      const fresh = await loadGallery(true);
+      if (fresh === null) throw new Error(RECHECK_FAILED);
+      return fresh.some((image) => imgKey(image) === key) ? "changed" : "removed";
+    }
+    void loadGallery(true);
+    return "removed";
+  };
   // The shell owns page scrolling; the gallery body does not create another
   // scroll port. Restore after the grid read has given the shell its height.
   useLayoutEffect(() => {
@@ -338,7 +381,7 @@ function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | 
       {tab === "campaign-library" && forCampaign && <PostImagePicker cid={forCampaign}
         target={{ kind: "campaign", name: "Campaign image library" }} onClose={() => setTab("gallery")} />}
       {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={root.current}
-        onSelectionChange={setSel} onOpenRecord={(destination) => navigate(destination)} />}
+        onSelectionChange={setSel} onOpenRecord={(destination) => navigate(destination)} onRemove={removeFromGallery} />}
       {(tab === "gallery" || tab === "queue") && images === null && !err
         && <p className="field-hint">Reading the world’s art…</p>}
       {images !== null && !err && tab === "queue" && (
@@ -351,7 +394,7 @@ function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | 
                         // A save makes the tile it was about stop being
                         // unfinished, so the gallery is refreshed — but NOT the
                         // backlog this queue is still walking. See `loadGallery`.
-                        onSaved={() => void loadGallery()} />
+                        onSaved={() => void loadGallery(true)} />
         ) : (
           <p className="field-hint">
             Every greeting image in this world has been tagged.

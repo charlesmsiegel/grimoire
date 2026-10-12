@@ -51,7 +51,7 @@ _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 _MAX_NAME_HINT = 40          # matches atomic.py's bound, well inside NAME_MAX
 
 
-def _on_android() -> bool:
+def on_android() -> bool:
     """CPython only defines ``sys.getandroidapilevel`` on Android builds; the
     env vars are the belt-and-braces check for a Chaquopy runtime that does
     not."""
@@ -78,7 +78,7 @@ def _user_home() -> Path:
     both processes of one user evaluate it identically, so falling back stays
     deterministic.
     """
-    if sys.platform != "win32" and not _on_android():
+    if sys.platform != "win32" and not on_android():
         try:
             candidate = Path(pwd.getpwuid(os.getuid()).pw_dir)
         except (KeyError, OSError):

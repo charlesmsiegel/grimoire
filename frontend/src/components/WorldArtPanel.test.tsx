@@ -4,9 +4,10 @@ import { ArtNavigationProvider, useArtNavigation } from "./art/ArtNavigationProv
 import { ImageViewer } from "./art/ImageViewer";
 import { useImageViewer } from "./art/useImageViewer";
 import { WorldArtPanel } from "./WorldArtPanel";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { artChanged } from "../appEvents";
-vi.mock("../api/client", () => ({ api: {
+import { IN_COLLECTION } from "./art/removal";
+vi.mock("../api/client", async (importOriginal) => ({ ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError, api: {
   listWorldLibrary: vi.fn(), getWorld: vi.fn(), worldCoverUrl: vi.fn(),
   putWorldCover: vi.fn(), deleteWorldCover: vi.fn(), putWorldImage: vi.fn(), deleteWorldImage: vi.fn(),
   setWorldImageDescription: vi.fn(), draftWorldImageDescription: vi.fn(),
@@ -201,4 +202,71 @@ test.each([false, true])("pending library caption permits a context decision (%s
   expect(!!screen.queryByText("Next context selected")).toBe(allow);
   await act(async () => finish({ ok: true }));
   expect(api.setWorldImageDescription).toHaveBeenCalledOnce();
+});
+
+// ---- removal from the viewer (2026-10-12 viewer removal design, §1.2) ----
+
+async function askToRemove() {
+  fireEvent.click(await screen.findByRole("button", { name: /^View World library/ }));
+  const dialog = screen.getByRole("dialog", { name: "Image viewer" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+  return screen.getByRole("group", { name: "Confirm removal" });
+}
+test("the viewer's Remove deletes from the world library without a browser confirm", async () => {
+  vi.mocked(api.listWorldLibrary).mockResolvedValueOnce([
+    { name: "Saltmarch", ext: "png", v: "bytes", described: true, description: "A wide map." },
+    { name: "Seraphine", ext: "png", v: "other", described: true, description: "A portrait." }]);
+  vi.mocked(api.deleteWorldImage).mockResolvedValue({ ok: true });
+  const confirm = vi.spyOn(window, "confirm");
+  try {
+    render(<WorldArtPanel wid="Realm" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^View World library.*Saltmarch/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Image viewer" })).getByRole("button", { name: "Remove" }));
+    const question = screen.getByRole("group", { name: "Confirm removal" });
+    expect(question).toHaveTextContent("Delete Saltmarch from the world library? Every campaign on this world loses it.");
+    vi.mocked(api.listWorldLibrary).mockResolvedValue([{ name: "Seraphine", ext: "png", v: "other", described: true, description: "A portrait." }]);
+    fireEvent.click(within(question).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(api.deleteWorldImage).toHaveBeenCalledWith("Realm", "Saltmarch"));
+    expect(confirm).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.listWorldLibrary).toHaveBeenLastCalledWith("Realm", true));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete Saltmarch" })).not.toBeInTheDocument());
+    expect(within(screen.getByRole("dialog", { name: "Image viewer" })).getByAltText("A portrait.")).toBeInTheDocument();
+  } finally { confirm.mockRestore(); }
+});
+test("a library picture in a collection says so in the viewer", async () => {
+  vi.mocked(api.deleteWorldImage).mockRejectedValue(new ApiError(409, "image_in_collection"));
+  render(<WorldArtPanel wid="Realm" />);
+  const question = await askToRemove();
+  fireEvent.click(within(question).getByRole("button", { name: "Remove" }));
+  const dialog = screen.getByRole("dialog", { name: "Image viewer" });
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(IN_COLLECTION);
+  expect(within(dialog).getByAltText("A wide map.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Delete Saltmarch" })).toBeEnabled();
+});
+test("the viewer's Remove waits for a pending upload and sends nothing", async () => {
+  let finish!: (created: Awaited<ReturnType<typeof api.putWorldImage>>) => void;
+  vi.mocked(api.putWorldImage).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<WorldArtPanel wid="Realm" />);
+  await screen.findByRole("button", { name: /^View World library/ });
+  fireEvent.change(screen.getByLabelText("Add an image"), { target: { files: [new File(["png"], "Mara.png")] } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Delete Saltmarch" })).toBeDisabled());
+  const question = await askToRemove();
+  fireEvent.click(within(question).getByRole("button", { name: "Remove" }));
+  expect(await within(screen.getByRole("dialog", { name: "Image viewer" })).findByRole("alert"))
+    .toHaveTextContent("Finish or cancel the edit in the Art panel first.");
+  expect(api.deleteWorldImage).not.toHaveBeenCalled();
+  await act(async () => finish({ name: "Mara", ext: "png", v: "new" }));
+});
+test("the tile's delete button still asks the browser before deleting", async () => {
+  vi.mocked(api.deleteWorldImage).mockResolvedValue({ ok: true });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+  try {
+    render(<WorldArtPanel wid="Realm" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Saltmarch" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Delete "Saltmarch" from this world?'));
+    expect(api.deleteWorldImage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Saltmarch" }));
+    await waitFor(() => expect(api.deleteWorldImage).toHaveBeenCalledWith("Realm", "Saltmarch"));
+    await waitFor(() => expect(api.listWorldLibrary).toHaveBeenLastCalledWith("Realm", true));
+  } finally { confirm.mockRestore(); }
 });

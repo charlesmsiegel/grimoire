@@ -267,6 +267,7 @@ def test_the_world_gallery_carries_the_library(client):
     assert row["id"] == "" and row["vid"] == ""
     assert row["described"] and row["description"] == "a rocky shore"
     assert "?v=" in row["url"] and "?w=" in row["thumb"]
+    assert row["provenance"] == "world"
 
 
 def test_the_campaign_gallery_names_the_owner_but_serves_it_here(client):
@@ -285,6 +286,8 @@ def test_the_campaign_gallery_names_the_owner_but_serves_it_here(client):
             if r["kind"] == "campaign"}
     assert rows["coastline"]["record_name"] == "World library"
     assert rows["handout"]["record_name"] == "Campaign library"
+    assert rows["coastline"]["provenance"] == "inherited"
+    assert rows["handout"]["provenance"] == "campaign"
     for r in rows.values():
         assert r["url"].startswith(f"/api/campaigns/{cid}/images/")
 

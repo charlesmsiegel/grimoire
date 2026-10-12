@@ -6,7 +6,8 @@ function ImagesView(props: Parameters<typeof RealImagesView>[0]) {
   return <MemoryRouter><GalleryStateProvider><RealImagesView {...props} /></GalleryStateProvider></MemoryRouter>;
 }
 
-vi.mock("../api/client", () => ({
+vi.mock("../api/client", async (importOriginal) => ({
+  ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError,
   api: {
     listWorldImages: vi.fn(), listCharacters: vi.fn(),
     listWorldLibrary: vi.fn(), getWorld: vi.fn(), putWorldCover: vi.fn(),
@@ -15,11 +16,13 @@ vi.mock("../api/client", () => ({
     setWorldImageDescription: vi.fn(), draftWorldImageDescription: vi.fn(),
     listGreetings: vi.fn(), listUntaggedImages: vi.fn(), setImageSubjects: vi.fn(),
     listAppearances: vi.fn(), listCampaignGallery: vi.fn(),
+    removeRecordArt: vi.fn(), deleteCampaignImage: vi.fn(),
     listCampaignImages: vi.fn(), campaignImageUrl: (cid: string, name: string) => "/api/campaigns/" + cid + "/images/" + name,
   },
 }));
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { artChanged } from "../appEvents";
+import { CHANGED_NOT_REMOVED, IN_COLLECTION } from "./art/removal";
 
 const AVATAR = {
   kind: "characters", id: "seraphine", vid: "default", name: "avatar",
@@ -573,4 +576,124 @@ test("a refreshed gallery does not label pending tagging companions as empty", a
   expect(screen.queryByText("Every greeting image in this world has been tagged.")).not.toBeInTheDocument();
   await act(async () => finish([]));
   expect(screen.getByText(/Tagging 1 \/ 1 \u2014 Saltmarch dusk/)).toBeInTheDocument();
+});
+
+
+// ---- removal from the viewer (2026-10-12 viewer removal design, §1.2) ----
+
+const campaignScope = { kind: "campaign" as const, id: "run" };
+const placedIn = (row: typeof AVATAR, v: string) => ({
+  ...row, v, provenance: "campaign",
+  placement: { surface: "record", name: row.name, expected_v: v,
+    target: { scope: campaignScope, kind: "characters", record_id: row.id, version: row.vid } },
+});
+const PLACED_AVATAR = placedIn(AVATAR, "a1"), PLACED_SKETCH = placedIn(SKETCH, "s1");
+const HARBOUR = { kind: "campaign", id: "", vid: "", name: "harbour", record_name: "Library",
+  url: "/img/harbour?v=1", thumb: "/img/harbour?w=320&v=1", ext: "png", described: true,
+  description: "The harbour at low tide.", provenance: "campaign" };
+const COASTLINE = { kind: "world", id: "", vid: "", name: "coastline", record_name: "World library",
+  url: "/img/coast?v=1", thumb: "/img/coast?w=320&v=1", ext: "png", described: true,
+  description: "A rocky shore.", provenance: "world" };
+
+const viewerDialog = () => screen.getByRole("dialog", { name: "Image viewer" });
+const shownSrc = () => screen.getByTestId("viewer-image").getAttribute("src");
+async function confirmRemoval() {
+  fireEvent.click(within(viewerDialog()).getByRole("button", { name: "Remove" }));
+  fireEvent.click(within(screen.getByRole("group", { name: "Confirm removal" })).getByRole("button", { name: "Remove" }));
+  await act(async () => {});
+}
+async function openCampaignGallery(rows: unknown[]) {
+  (api.listCampaignGallery as any).mockResolvedValue(rows);
+  render(<ImagesView wid="realm" forCampaign="run" />);
+  return screen.findByRole("button", { name: /^View Seraphine \/ default \/ avatar/ });
+}
+
+test("a campaign gallery removes a record placement through the campaign's art route and moves on", async () => {
+  (api.removeRecordArt as any).mockResolvedValue({ ok: true });
+  fireEvent.click(await openCampaignGallery([PLACED_AVATAR, PLACED_SKETCH]));
+  expect(within(viewerDialog()).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+  (api.listCampaignGallery as any).mockResolvedValue([PLACED_SKETCH]);
+  await confirmRemoval();
+  expect(api.removeRecordArt).toHaveBeenCalledWith(
+    { scope: campaignScope, kind: "characters", record_id: "seraphine", version: "default" },
+    { name: "avatar", v: "a1", placement: PLACED_AVATAR.placement });
+  expect(shownSrc()).toBe("/img/sketch?v=1");
+  // The refresh is started, not awaited: it reads past the client's cache.
+  expect(api.listCampaignGallery).toHaveBeenLastCalledWith("run", true);
+  await waitFor(() => expect(screen.queryByRole("button", { name: /^View Seraphine \/ default \/ avatar/ })).not.toBeInTheDocument());
+  expect(viewerDialog()).toBeInTheDocument();
+});
+
+test("a campaign library row is removed from the campaign's library", async () => {
+  (api.deleteCampaignImage as any).mockResolvedValue({ ok: true });
+  await openCampaignGallery([PLACED_AVATAR, HARBOUR]);
+  fireEvent.click(screen.getByRole("button", { name: /^View Library \/ harbour/ }));
+  fireEvent.click(within(viewerDialog()).getByRole("button", { name: "Remove" }));
+  const confirm = screen.getByRole("group", { name: "Confirm removal" });
+  expect(confirm).toHaveTextContent("Remove harbour from this campaign's library?");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
+  await act(async () => {});
+  expect(api.deleteCampaignImage).toHaveBeenCalledWith("run", "harbour");
+  expect(shownSrc()).toBe("/img/avatar?v=1");
+});
+
+test("a world gallery's library row is deleted from the world library", async () => {
+  (api.listWorldImages as any).mockResolvedValue([QUAY, COASTLINE]);
+  (api.deleteWorldImage as any).mockResolvedValue({ ok: true });
+  render(<ImagesView wid="realm" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^View World library \/ coastline/ }));
+  await confirmRemoval();
+  expect(api.deleteWorldImage).toHaveBeenCalledWith("realm", "coastline");
+  expect(shownSrc()).toBe("/img/quay?v=1");
+});
+
+test("a library picture in a collection says so rather than showing a code", async () => {
+  (api.listWorldImages as any).mockResolvedValue([QUAY, COASTLINE]);
+  (api.deleteWorldImage as any).mockRejectedValue(new ApiError(409, "image_in_collection"));
+  render(<ImagesView wid="realm" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^View World library \/ coastline/ }));
+  await confirmRemoval();
+  expect(within(viewerDialog()).getByRole("alert")).toHaveTextContent(IN_COLLECTION);
+  expect(shownSrc()).toBe("/img/coast?v=1");
+});
+
+test("a stale record placement still present is reported changed, and a retry uses the re-read version", async () => {
+  (api.removeRecordArt as any).mockRejectedValueOnce(new ApiError(409, "This image changed.", "stale_image"));
+  fireEvent.click(await openCampaignGallery([PLACED_AVATAR, PLACED_SKETCH]));
+  const moved = placedIn(AVATAR, "a2");
+  (api.listCampaignGallery as any).mockResolvedValue([moved, PLACED_SKETCH]);
+  await confirmRemoval();
+  expect(api.listCampaignGallery).toHaveBeenLastCalledWith("run", true);
+  expect(within(viewerDialog()).getByRole("alert")).toHaveTextContent(CHANGED_NOT_REMOVED);
+  expect(shownSrc()).toBe("/img/avatar?v=1");
+  (api.removeRecordArt as any).mockResolvedValueOnce({ ok: true });
+  await confirmRemoval();
+  expect(api.removeRecordArt).toHaveBeenLastCalledWith(expect.anything(),
+    { name: "avatar", v: "a2", placement: moved.placement });
+  expect(shownSrc()).toBe("/img/sketch?v=1");
+});
+
+test("a stale record placement already gone is reported removed", async () => {
+  (api.removeRecordArt as any).mockRejectedValueOnce(new ApiError(409, "This image changed.", "stale_image"));
+  fireEvent.click(await openCampaignGallery([PLACED_AVATAR, PLACED_SKETCH]));
+  (api.listCampaignGallery as any).mockResolvedValue([PLACED_SKETCH]);
+  await confirmRemoval();
+  expect(api.listCampaignGallery).toHaveBeenLastCalledWith("run", true);
+  expect(within(viewerDialog()).queryByRole("alert")).not.toBeInTheDocument();
+  expect(shownSrc()).toBe("/img/sketch?v=1");
+  expect(screen.queryByText("This image is no longer available.")).not.toBeInTheDocument();
+});
+
+test("a stale re-read that is superseded asks for a reload instead of guessing", async () => {
+  (api.removeRecordArt as any).mockRejectedValueOnce(new ApiError(409, "This image changed.", "stale_image"));
+  fireEvent.click(await openCampaignGallery([PLACED_AVATAR, PLACED_SKETCH]));
+  let finish!: (rows: unknown[]) => void;
+  (api.listCampaignGallery as any).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  await confirmRemoval();
+  (api.listCampaignGallery as any).mockResolvedValue([PLACED_AVATAR, PLACED_SKETCH]);
+  await act(async () => { artChanged(); });
+  await act(async () => { finish([PLACED_SKETCH]); });
+  expect(within(viewerDialog()).getByRole("alert"))
+    .toHaveTextContent("Could not check this picture again. Reload the gallery and try again.");
+  expect(shownSrc()).toBe("/img/avatar?v=1");
 });

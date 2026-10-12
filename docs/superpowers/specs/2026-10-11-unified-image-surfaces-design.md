@@ -256,6 +256,13 @@ those controls. A counter announces the selected position and sequence length.
 Navigation is by placement/occurrence key, never merely by `image_id`, because
 one image can appear several times with different provenance.
 
+*Amended 2026-10-12* ([viewer removal](2026-10-12-viewer-removal-and-recycle-bin-collection-design.md)
+sections 1.1 and 1.3): the rule that the viewer closes when a parent refresh
+removes the selected placement (restated under 5.4) has one exception, a
+removal the viewer itself performed on a surface that supplied it. The viewer
+remembers the key it removed, steps to the neighbouring image, and closes only
+when that was the sequence's last image.
+
 ### 5.2 Viewer controls
 
 Required controls are Close, Previous/Next where applicable, Zoom in/out, Fit,
@@ -270,7 +277,12 @@ also interpreted as next/previous; stepping remains explicit controls.
 appropriate filename and attachment behavior. Remote Markdown images keep
 Open original but do not pretend a cross-origin `download` attribute can
 guarantee a download. **Open record** appears where a descriptor has an owning
-record; the viewer itself never exposes crop, deletion, or description saves.
+record; the viewer never exposes crop or description saves, and exposes removal
+only when the opening surface supplies it.
+
+*Amended 2026-10-12* ([viewer removal](2026-10-12-viewer-removal-and-recycle-bin-collection-design.md)
+section 1.4): the previous wording, "never exposes crop, deletion, or
+description saves", no longer holds for deletion.
 
 A readable information area shows the supplied record/occurrence label, image
 description and review status, primary role, actor version where meaningful,

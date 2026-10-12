@@ -699,3 +699,37 @@ test("viewing art during a pending upload preserves the entire submitted batch",
   expect(controller.batch.map(row => row.status)).toEqual(["saved", "saved"]);
   expect(controller.message).toBe("Added 2 of 2 images");
 });
+
+// ---- removal from the viewer (2026-10-12 viewer removal design, §1.2) ----
+
+test("the viewer opened from the panel removes a placement through the adapter", async () => {
+  const target = artTarget("items", "campaign"), adapter = artAdapter(target);
+  const confirm = vi.spyOn(window, "confirm");
+  mountArt(adapter);
+  fireEvent.click(await screen.findByRole("button", { name: "View Gallery image 1" }));
+  const dialog = screen.getByRole("dialog", { name: "Image viewer" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+  const question = screen.getByRole("group", { name: "Confirm removal" });
+  expect(question).toHaveTextContent(
+    "Hide Saltmarch's gallery 1 only in this campaign? Any inherited world image in this slot is hidden too.");
+  adapter.read.mockResolvedValue(artRead(target, [artImage(target)]));
+  fireEvent.click(within(question).getByRole("button", { name: "Remove" }));
+  await waitFor(() => expect(adapter.remove).toHaveBeenCalledWith(artImage(target, "gallery_1")));
+  expect(confirm).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Art (1)" })).toBeInTheDocument());
+  expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  expect(screen.queryByText("This image is no longer available.")).not.toBeInTheDocument();
+});
+test("a world original in the panel's viewer offers no Remove", async () => {
+  const target = artTarget("locations", "campaign"), data = artRead(target);
+  data.world_originals = [artImage(artTarget("locations"), "avatar", { provenance: "world-original" })];
+  const adapter = artAdapter(target, data);
+  mountArt(adapter);
+  const originals = await screen.findByRole("region", { name: "World originals" });
+  fireEvent.click(within(originals).getByRole("button", { name: "View Primary image" }));
+  const dialog = screen.getByRole("dialog", { name: "Image viewer" });
+  expect(within(dialog).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+  fireEvent.keyDown(window, { key: "Delete" });
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  expect(adapter.remove).not.toHaveBeenCalled();
+});

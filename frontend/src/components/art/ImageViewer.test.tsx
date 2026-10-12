@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ImageViewer } from "./ImageViewer";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ImageViewer, type ImageViewerProps } from "./ImageViewer";
 import { activeHotkeys } from "../../shortcuts/registry";
 import { useHotkeys } from "../../shortcuts/useHotkeys";
 import { TestPointerEvent } from "../../testkit/pointer";
-import type { ImageDescriptor } from "./types";
+import { CHANGED_NOT_REMOVED, EDIT_FIRST } from "./removal";
+import type { ImageDescriptor, RemoveOutcome } from "./types";
 
 const images: ImageDescriptor[] = ["avatar", "gallery_2", "gallery_10"].map((name) => ({
   key: name, originalUrl: `/api/${name}?v=1`, thumbnailUrl: `/api/${name}?w=160`, version: "1",
@@ -185,3 +186,227 @@ test("an unknown original's dimensions update Fit without resetting explicit zoo
   expect(retried).toHaveAttribute("data-scale", "1");
   view.unmount();
 });
+
+// ---- Removal (2026-10-12 viewer removal design, §1.3) ----
+
+const removable: ImageDescriptor[] = images.map((image) => ({ ...image, removal: { question: `Remove Mara's ${image.label}?` } }));
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function viewer(props: Partial<ImageViewerProps> = {}) {
+  const onClose = vi.fn(), pending = deferred<RemoveOutcome>(), onRemove = vi.fn(() => pending.promise);
+  const base: ImageViewerProps = { images: removable, initialKey: "avatar", onClose, onRemove, ...props };
+  const view = render(<ImageViewer {...base} />);
+  const refresh = (next: ImageDescriptor[]) => view.rerender(<ImageViewer {...base} images={next} />);
+  return { view, onClose, onRemove, pending, refresh };
+}
+const group = () => screen.getByRole("group", { name: "Confirm removal" });
+const shown = () => screen.getByTestId("viewer-image").getAttribute("src");
+const insideDialog = () => screen.getByRole("dialog", { name: "Image viewer" }).contains(document.activeElement);
+function confirmRemoval() {
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  fireEvent.click(within(group()).getByRole("button", { name: "Remove" }));
+}
+async function settle(pending: ReturnType<typeof deferred<RemoveOutcome>>, outcome: RemoveOutcome | Error) {
+  await act(async () => {
+    if (outcome instanceof Error) pending.reject(outcome); else pending.resolve(outcome);
+    await pending.promise.catch(() => undefined);
+  });
+}
+
+it("draws Remove only with onRemove and a removal", () => {
+  const first = render(<ImageViewer images={removable} initialKey="avatar" onClose={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+  fireEvent.keyDown(window, { key: "Delete" });
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  first.unmount();
+  const second = render(<ImageViewer images={images} initialKey="avatar" onClose={vi.fn()} onRemove={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+  fireEvent.keyDown(window, { key: "Delete" });
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  second.unmount();
+  render(<ImageViewer images={removable} initialKey="avatar" onClose={vi.fn()} onRemove={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+});
+
+it("Remove opens the confirmation with focus on its Remove button", () => {
+  viewer();
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  expect(group()).toHaveTextContent("Remove Mara's avatar?");
+  expect(within(group()).getByRole("button", { name: "Remove" })).toHaveFocus();
+  expect(within(group()).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+});
+
+it("Cancel and Escape cancel without closing", () => {
+  const { onClose, onRemove } = viewer();
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  fireEvent.click(within(group()).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  expect(insideDialog()).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onRemove).not.toHaveBeenCalled();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("Delete and Backspace open the confirmation", () => {
+  viewer();
+  const rows = activeHotkeys().filter(row => row.reachable).map(row => row.key);
+  for (const chord of ["delete", "backspace"])
+    expect(rows.find(key => key.keys === chord)).toMatchObject({ label: "Remove image", group: "IMAGE VIEWER" });
+  fireEvent.keyDown(window, { key: "Delete" });
+  expect(group()).toHaveTextContent("Remove Mara's avatar?");
+  fireEvent.keyDown(window, { key: "Escape" });
+  fireEvent.keyDown(window, { key: "Backspace" });
+  expect(group()).toHaveTextContent("Remove Mara's avatar?");
+});
+
+it("Backspace in a text field does not open the confirmation", () => {
+  render(<input type="text" aria-label="Notes" />);
+  viewer();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Notes", hidden: true }), { key: "Backspace" });
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+});
+
+it("Enter on a focused Cancel does not remove", () => {
+  const { onRemove } = viewer();
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  const cancel = within(group()).getByRole("button", { name: "Cancel" });
+  cancel.focus();
+  fireEvent.keyDown(cancel, { key: "Enter" });
+  expect(onRemove).not.toHaveBeenCalled();
+  expect(group()).toBeInTheDocument();
+});
+
+it("Previous/Next and arrows do nothing while the confirmation is open", () => {
+  viewer({ initialKey: "gallery_2" });
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  expect(screen.getByRole("button", { name: "Previous image" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Next image" })).toBeDisabled();
+  fireEvent.keyDown(window, { key: "ArrowRight" });
+  fireEvent.keyDown(window, { key: "ArrowLeft" });
+  expect(shown()).toBe(images[1].originalUrl);
+  expect(group()).toHaveTextContent("Remove Mara's gallery_2?");
+});
+
+it.each(["before", "after"])("steps to the next image after removal (refresh %s the promise resolves)", async (when) => {
+  const { onRemove, onClose, pending, refresh } = viewer();
+  confirmRemoval();
+  expect(onRemove).toHaveBeenCalledWith("avatar");
+  if (when === "before") refresh(removable.slice(1));
+  await settle(pending, "removed");
+  if (when === "after") refresh(removable.slice(1));
+  expect(shown()).toBe(images[1].originalUrl);
+  expect(screen.getByRole("status", { name: "Image position" })).toHaveTextContent("1 / 2");
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("keeps the image, its keys and focus while a removal is pending after a refresh dropped it", async () => {
+  const page = vi.fn();
+  function Page() { useHotkeys([{ keys: "escape", run: page }]); return null; }
+  render(<Page />);
+  const { onClose, pending, refresh } = viewer();
+  confirmRemoval();
+  refresh(removable.slice(1));
+  expect(shown()).toBe(images[0].originalUrl);
+  expect(group()).toHaveTextContent("Removing…");
+  expect(insideDialog()).toBe(true);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(page).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.keyDown(document.activeElement ?? window, { key: "Tab" });
+  expect(insideDialog()).toBe(true);
+  await settle(pending, "removed");
+  expect(shown()).toBe(images[1].originalUrl);
+  expect(insideDialog()).toBe(true);
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("steps to the previous when the last is removed", async () => {
+  const { pending } = viewer({ initialKey: "gallery_10" });
+  confirmRemoval();
+  await settle(pending, "removed");
+  expect(shown()).toBe(images[1].originalUrl);
+});
+
+it("closes plainly when the last image is removed", async () => {
+  const { onClose, pending, refresh } = viewer({ images: [removable[0]] });
+  confirmRemoval();
+  await settle(pending, "removed");
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(onClose).toHaveBeenCalledWith();
+  refresh([]);
+  await waitFor(() => expect(onClose).not.toHaveBeenCalledWith("unavailable"));
+});
+
+it('"changed" with the key still present stays and shows the sentence', async () => {
+  const { onClose, pending } = viewer();
+  confirmRemoval();
+  await settle(pending, "changed");
+  expect(shown()).toBe(images[0].originalUrl);
+  expect(screen.getByText(CHANGED_NOT_REMOVED)).toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled();
+  expect(insideDialog()).toBe(true);
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('"changed" with the key gone steps on', async () => {
+  const { onClose, pending, refresh } = viewer();
+  confirmRemoval();
+  refresh(removable.slice(1));
+  await settle(pending, "changed");
+  expect(shown()).toBe(images[1].originalUrl);
+  expect(screen.queryByText(CHANGED_NOT_REMOVED)).not.toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("a rejection stays and shows its message", async () => {
+  const { onClose, pending } = viewer();
+  confirmRemoval();
+  await settle(pending, new Error(EDIT_FIRST));
+  expect(shown()).toBe(images[0].originalUrl);
+  expect(screen.getByText(EDIT_FIRST)).toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Confirm removal" })).not.toBeInTheDocument();
+  expect(insideDialog()).toBe(true);
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Next image" }));
+  expect(screen.queryByText(EDIT_FIRST)).not.toBeInTheDocument();
+});
+
+it("controls are disabled while pending", () => {
+  const { onClose, onRemove } = viewer({ initialKey: "gallery_2" });
+  confirmRemoval();
+  expect(group()).toHaveTextContent("Removing…");
+  for (const name of ["Previous image", "Next image", "Fit", "100%", "Zoom in", "Remove", "Cancel"])
+    expect(screen.getByRole("button", { name })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Close image viewer" })).toBeEnabled();
+  for (const key of ["ArrowLeft", "ArrowRight", "Delete", "Backspace", "Escape", "+"]) fireEvent.keyDown(window, { key });
+  expect(shown()).toBe(images[1].originalUrl);
+  expect(onRemove).toHaveBeenCalledOnce();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(group()).toHaveTextContent("Removing…");
+  fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
+  expect(onClose).toHaveBeenCalledWith();
+});
+
+// One image, so a settle that ignored the unmount would reach the `!next`
+// branch and call `onClose()` a second time.
+it.each([["resolving", "removed" as const], ["rejecting", new Error(EDIT_FIRST)]])(
+  "a removal %s after the viewer closed does nothing", async (_how, outcome) => {
+    const onSelectionChange = vi.fn();
+    const { view, onClose, pending } = viewer({ images: [removable[0]], onSelectionChange });
+    confirmRemoval();
+    fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    view.unmount();
+    onSelectionChange.mockClear();
+    await settle(pending, outcome);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });

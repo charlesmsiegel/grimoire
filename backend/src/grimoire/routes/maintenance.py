@@ -12,7 +12,8 @@ reads one of those reports back.
   dry run is the scan; a real run is the collection, and it needs the token a
   scan issued. A delete with no token is refused with a 400 *here*, before a run
   is reserved, rather than reported as a failed run minutes of nobody's
-  attention later.
+  attention later. So is a real run on a machine with no recycle bin: 409
+  ``no_recycle_bin`` with the check's code and sentence (a dry run is not asked).
 * ``GET /maintenance/images/reports/{run_id}`` -- the stored report. A run id
   that is not 32 lowercase hex characters is a 400 (it names a file, so it is
   validated before it is joined to anything), and one nobody wrote, or that the
@@ -119,6 +120,14 @@ def post_images_gc(
             "kind": "token_required",
             "detail": "deleting unused images needs the token a dry run issued; "
                       "run Find unused images first"})
+    # A collection moves pictures into the OS recycle bin and never deletes one,
+    # so a machine with no real bin is refused here, before a run is reserved.
+    # A dry run sends nothing to a bin and is not asked.
+    available = store.recycle_bin.check(store.paths.home().resolve())
+    if not available.ok:
+        raise HTTPException(status_code=409, detail={
+            "kind": "no_recycle_bin", "code": available.code,
+            "detail": available.message})
     return runs.run_maintenance(request.app, "gc", x_grimoire_attempt,
                                 _collect_work(token.strip()), mode="collect")
 
