@@ -271,3 +271,16 @@ def test_excerpt_text_is_the_transcript_render(cid):
     assert "**Mara:** Mara answers about item 1." in text
     # An unstamped player post is rendered under the role label with nobody seated.
     assert "**You:** Seraphine asks about item 0." in text
+
+
+def test_a_hit_is_framed_on_a_term_that_matches_only_by_case_folding(cid):
+    """`casefold` maps "ß" to "ss", which a case-insensitive regex does not:
+    a post scored a hit on "strasse" must be framed on its "Straße"."""
+    filler = " ".join(f"word{k}" for k in range(600))
+    messages = _plain(3)
+    messages[1] = _reply(f"{filler} the old Hauptstraße gate {filler}", 1)
+    sid = _scene(cid, messages)
+    got = expand.expand(cid, sid, phase="prompt", terms=["hauptstrasse"], radius=0)
+    post = got.excerpts[0].posts[0]
+    assert post.clipped and "Hauptstraße" in post.content
+    assert got.excerpts[0].matched == ("hauptstrasse",)

@@ -51,6 +51,12 @@ from . import slices as slices_mod
 #: 5803 bytes a document, typically far less. Structural; tune later.
 DOC_MEMO_ENTRIES = 8192
 _MEMO: dict = {}
+#: Which documents this process has written `materialized` rows for, by the
+#: rows' content (document key, campaign, identity, paths). A hit is served
+#: without a store, but a re-pad or a rename keeps the key while moving the
+#: scene file, so a hit whose paths this process has not recorded records
+#: them -- once per process, which is what keeps a warm call free of writes.
+_RECORDED: dict = {}
 
 #: 03 stages at most this many rows per request (`compiled.MAX_STAGED_ROWS`):
 #: a document and its `materialized` rows are stored in batches that fit it.
@@ -76,7 +82,7 @@ def _walk(cid: str) -> tuple[list[dict], list[str]]:
     """`list_scenes` rows (id, closed_by), tolerant of an unreadable head."""
     try:
         return scenes_read.list_scenes(cid), []
-    except OSError:
+    except (OSError, ValueError):     # UnicodeDecodeError is a ValueError
         pass
     rows, skipped = [], []
     d = scenes_paths._scenes_dir(cid)
@@ -113,22 +119,30 @@ def _payload(doc: scene_mod.SceneDocument) -> dict:
     return {"key": doc.key, "text": doc.text, "meta": doc.meta}
 
 
-def _remember(doc: scene_mod.SceneDocument) -> None:
+def _fifo(pool: dict, key: object, value: object) -> None:
     """FIFO insert under `DOC_MEMO_ENTRIES`. Races under the threadpool at
-    worst evict one entry too many, which costs a re-render."""
-    while len(_MEMO) >= DOC_MEMO_ENTRIES:
+    worst evict one entry too many, which costs a re-render or a re-record."""
+    while len(pool) >= DOC_MEMO_ENTRIES:
         try:
-            del _MEMO[next(iter(_MEMO))]
+            del pool[next(iter(pool))]
         except (StopIteration, KeyError, RuntimeError):
             break
-    _MEMO[doc.key] = doc
+    pool[key] = value
+
+
+def _remember(doc: scene_mod.SceneDocument) -> None:
+    _fifo(_MEMO, doc.key, doc)
+
+
+def _recorded(cid: str, sl: slices_mod.Slices, doc: scene_mod.SceneDocument) -> tuple:
+    return (doc.key, cid, sl.identity, sl.paths)
 
 
 def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
-                                       scene_mod.SceneDocument]]) -> None:
-    """Put each built document and its `materialized` rows, in batches that
-    fit 03's staging bound. A batch that cannot persist costs a miss next
-    time, never an answer."""
+                                       scene_mod.SceneDocument, bool]]) -> None:
+    """Put each built document (`put`) and write its `materialized` rows, in
+    batches that fit 03's staging bound. A batch that cannot persist costs a
+    miss next time, never an answer."""
     chunk: list = []
     rows = 0
     for item in built:
@@ -140,12 +154,15 @@ def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
         rows += need
     if chunk:
         _flush(cid, chunk)
+    for _key, sl, doc, _put in built:
+        _fifo(_RECORDED, _recorded(cid, sl, doc), True)
 
 
 def _flush(cid: str, chunk: list) -> None:
     with compiled.batch() as request:
-        for key, sl, doc in chunk:
-            request.put(key, _payload(doc))
+        for key, sl, doc, put in chunk:
+            if put:
+                request.put(key, _payload(doc))
             instance = {"campaign": cid, "identity": sl.identity}
             for path in sl.paths:
                 request.mark_materialized(path, scene_mod.KIND, instance=instance)
@@ -170,20 +187,22 @@ def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,
     return out
 
 
-def _documents(wanted: list[tuple[dict, slices_mod.Slices]]
+def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
                ) -> tuple[list[scene_mod.SceneDocument], list[tuple]]:
     """Each scene's document from the memo, else the cache (one batch lookup
-    of what the memo lacked), else rendered; and what was rendered with a
-    cache key, to store."""
+    of what the memo lacked), else rendered; and what to store: each rendered
+    document with a cache key, and each hit whose `materialized` rows this
+    process has not written."""
     doc_keys = [scene_mod.key_of(sl) for _row, sl in wanted]
     held = {k: d for k in doc_keys
             if isinstance(d := _MEMO.get(k), scene_mod.SceneDocument)}
-    keys = [_cache_key(sl) if k not in held else None
-            for (_row, sl), k in zip(wanted, doc_keys, strict=True)]
+    keys = [_cache_key(sl) for _row, sl in wanted]
+    asked = [k for k, doc_key in zip(keys, doc_keys, strict=True)
+             if k is not None and doc_key not in held]
     found: dict = {}
-    if any(k is not None for k in keys):
+    if asked:
         with compiled.batch() as request:
-            found = request.lookup_many([k for k in keys if k is not None]).values
+            found = request.lookup_many(asked).values
     docs, built = [], []
     for (_row, sl), key, doc_key in zip(wanted, keys, doc_keys, strict=True):
         doc = held.get(doc_key)
@@ -193,7 +212,9 @@ def _documents(wanted: list[tuple[dict, slices_mod.Slices]]
         if doc is None:
             doc = scene_mod.render(sl)
             if key is not None:
-                built.append((key, sl, doc))
+                built.append((key, sl, doc, True))
+        elif key is not None and _recorded(cid, sl, doc) not in _RECORDED:
+            built.append((key, sl, doc, False))
         if doc_key not in held:
             _remember(doc)
         docs.append(doc)
@@ -208,7 +229,7 @@ def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
     rows, skipped = _walk(cid)
     inputs = slices_mod.CampaignInputs.load(cid)
     wanted = _wanted(cid, rows, inputs, exclude, only, skipped)
-    docs, built = _documents(wanted)
+    docs, built = _documents(cid, wanted)
     if built:
         _store(cid, built)
     out = [LiveDocument(sid=row["id"],

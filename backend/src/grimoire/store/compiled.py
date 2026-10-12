@@ -492,6 +492,15 @@ def _fingerprint() -> None:
             _state.build = None
 
 
+def build_fingerprint() -> str | None:
+    """BUILD, for a consumer whose own content key must move with it -- a
+    derived artifact another spec keys statistics by (`store/searchdocs`'s
+    document key, which 09 keys term statistics by). None when it cannot be
+    computed. Silent, unlike a cache use: a key is not a cache use."""
+    _fingerprint()
+    return _state.build
+
+
 def _build() -> str | None:
     _fingerprint()
     if _state.build is None:

@@ -279,9 +279,19 @@ class CampaignInputs:
             return Name(aid, None, unreadable=True)
         return Name(got, card)
 
+    def location_files(self, lid: str) -> tuple[Path, ...]:
+        """Both layers' files for a location, present or not: what a name read
+        consults, so a write that creates or edits either one finds the
+        documents that named it."""
+        if not paths.safe_id(lid):
+            return ()
+        return (self._view.croot / "locations" / f"{lid}.md",
+                self._view.wroot / "locations" / f"{lid}.md")
+
     def location_name(self, lid: str) -> Name:
         """The location's name through the overlay, memoized on both layers'
-        files and on whether the campaign tombstoned it; the id otherwise."""
+        files and on whether the campaign tombstoned it; the id otherwise. A
+        record that is there but will not read is `unreadable`."""
         if not paths.safe_id(lid):
             return Name(lid, None)
         gone = f"locations/{lid}" in self._view.gone
@@ -289,17 +299,23 @@ class CampaignInputs:
                   self._view.wroot / "locations" / f"{lid}.md")
 
         def compute() -> tuple[str, int] | None:
+            """(name, layer), (``""``, -1) for a record that is there and will
+            not read, None for one that is not there or names nothing."""
             try:
                 meta = overlay.read_entity(self.cid, "locations", lid, v=self._view)["meta"]
             except Exception:  # noqa: BLE001 -- a missing or unreadable record is its id
-                return None
+                return None if gone or not any(p.exists() for p in layers) else ("", -1)
             name = meta.get("name") if isinstance(meta, dict) else None
             source = 0 if layers[0].exists() else 1
             return (name, source) if isinstance(name, str) and name else None
         sig = statcache.signature(*layers, absent_ok=True)
         got = statcache.memo("searchdocs.location", None if sig is None else (*sig, ("gone", gone)),
                              compute, pool=_POOL, max_entries=POOL_ENTRIES)
-        return Name(got[0], layers[got[1]]) if got else Name(lid, None)
+        if got is None:
+            return Name(lid, None)
+        if got[1] < 0:
+            return Name(lid, None, unreadable=True)
+        return Name(got[0], layers[got[1]])
 
     @property
     def degraded(self) -> tuple[str, ...]:
@@ -518,40 +534,37 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
     damage = _Damage()
     absorbed = head.absorbed
     hist = scenes_read.histories(head.meta)
-    used: list[Path] = [head.path]
+    # Every store file a slice CONSULTED, whether or not it contributed: a
+    # ledger that holds nothing for this scene today is still the file whose
+    # next write can (03-C3's rows are how 05's sync finds the document).
+    # The cast and the timed links are read for every scene; the untimed
+    # joins only behind the absorbed gate.
+    used: list[Path] = [head.path, inputs.ledger_paths["appearances"],
+                        inputs.ledger_paths["continuity"]]
+    if absorbed:
+        used += [inputs.ledger_paths[name] for name in
+                 ("chronicle", "plot", "commitments", "facts", "relationships")]
     chron = _chronicle(inputs, head, damage) if absorbed else None
-    if chron and chron["source"] == "chronicle":
-        used.append(inputs.ledger_paths["chronicle"])
     locations = []
     for lid in hist["locations"]:
         name = inputs.location_name(lid)
-        if name.source is not None:
-            used.append(name.source)
+        used += inputs.location_files(lid)
+        if name.unreadable:
+            damage.add(f"locations/{lid}")
         locations.append({"id": damage.text(lid, CAPS["ref"], "head"),
                           "name": damage.text(name.text, CAPS["location"], f"locations/{lid}")})
     cast = _cast(inputs, head, chron, used, damage)
-    if any(a["ref"] not in (chron or {}).get("cast", ()) or a["role"] for a in cast):
-        used.append(inputs.ledger_paths["appearances"])
     threads, t_status = _records_here(inputs.threads, sid, damage, "plot.json") \
         if absorbed else ([], {})
     commits, c_status = _records_here(inputs.commitments, sid, damage, "commitments.json") \
         if absorbed else ([], {})
-    if threads or commits:
-        used += [inputs.ledger_paths["plot"], inputs.ledger_paths["commitments"],
-                 inputs.ledger_paths["continuity"]]
     fact_slice = _facts(inputs.facts, sid, damage) if absorbed else {"recorded": [], "retired": []}
-    if fact_slice["recorded"] or fact_slice["retired"]:
-        used.append(inputs.ledger_paths["facts"])
     rels = _relationships(inputs.relationships, sid, damage) if absorbed else []
-    if rels:
-        used.append(inputs.ledger_paths["relationships"])
     created = str(head.meta.get("created", "") or "")
     links = sorted(lid for lid, link in inputs.links.items()
                    if isinstance(lid, str) and isinstance(link, dict)
                    and link.get("scene") == sid and created
                    and isinstance(link.get("created"), str) and link["created"] >= created)
-    if links:
-        used.append(inputs.ledger_paths["continuity"])
     running = rolling.intact_rolling(inputs.cid, head) if not absorbed else ""
     values = {
         "head": {

@@ -25,10 +25,12 @@ findable is already summarized. The transcript is read after selection, through
 `expand`.
 
 The key: each slice's digest is canonical JSON (`slices.digest`), and the
-document key is a digest of the kind, `SEARCH_DOCUMENT_VERSION` and the slice
-digests -- the document's identity across builds. 03's cache adds its `BUILD`
-fingerprint when it keys the stored row (`live.py`), so an upgrade colds every
-stored document while the vectors, keyed by text, survive.
+document key is 03-C1's composite: a digest of the kind,
+`SEARCH_DOCUMENT_VERSION`, 03's `BUILD` fingerprint and the slice digests. So
+an upgrade that changes rendering moves every key -- 09 keys term statistics by
+it, and a key that survived a rendering change would hand back statistics of
+the old text -- while the vectors, keyed by text, survive whenever the text
+did.
 """
 
 from __future__ import annotations
@@ -228,7 +230,7 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
         "groups": list(values["groups"]),           # current affiliation; never truncated
         "keywords": bounded("keywords", _dedupe_folded(
             [k.casefold() for k in chron.get("keywords", [])])),
-        "degraded": list(degraded),
+        "degraded": bounded("degraded", degraded),
         "bytes": len(text.encode("utf-8")),
         "backstop": backstop,
         "slices": dict(digests),
@@ -239,10 +241,13 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
 
 
 def key_of(sl: slices_mod.Slices) -> str:
-    """The document key: the kind, the version and every slice digest, plus
-    what would not read (a lone surrogate replaced reads like the character
-    that replaced it; the degraded flag keeps the two apart)."""
-    blob = json.dumps([KIND, SEARCH_DOCUMENT_VERSION, sl.digests, list(sl.degraded)],
+    """The document key: the kind, the version, `BUILD` and every slice
+    digest, plus what would not read (a lone surrogate replaced reads like the
+    character that replaced it; the degraded flag keeps the two apart). A
+    process that cannot compute `BUILD` keys with "" -- consistently, within
+    itself."""
+    blob = json.dumps([KIND, SEARCH_DOCUMENT_VERSION, compiled.build_fingerprint() or "",
+                       sl.digests, list(sl.degraded)],
                       sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("ascii")).hexdigest()
 

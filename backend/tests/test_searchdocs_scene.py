@@ -8,6 +8,7 @@ reversed are gone; the key moves with this scene's slices and holds against
 everything else; and damage degrades rather than raises. Placeholder names only.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -17,6 +18,7 @@ from grimoire.store import (
     characters,
     chronicle,
     commitments,
+    compiled,
     entities,
     facts,
     plot,
@@ -515,3 +517,62 @@ def test_a_gm_only_group_is_listed_and_marked(cid):
     d = doc(cid, sid)
     assert [(g["group"], g["secrecy"]) for g in d.meta["groups"]] == [(f"groups:{gid}", "gm-only")]
     assert "Quiet Hand" not in d.text
+
+
+# --- review fixes ---------------------------------------------------------------
+
+def test_every_consulted_ledger_is_an_input_even_when_empty(cid):
+    """A ledger that holds nothing for this scene today is still the file
+    whose next write can change it, so it is recorded as an input."""
+    sid = _played(cid)
+    _absorb(cid, sid)
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    root = campaigns.campaign_root(cid)
+    for name in ("facts.json", "plot.json", "commitments.json", "relationship_history.json",
+                 "continuity.json", "chronicle.json", "appearances.json"):
+        assert root / name in sl.paths, name
+
+
+def test_an_open_scene_records_only_what_it_consulted(cid):
+    sid = _played(cid)
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    root = campaigns.campaign_root(cid)
+    assert root / "appearances.json" in sl.paths and root / "continuity.json" in sl.paths
+    assert root / "facts.json" not in sl.paths
+
+
+def test_an_unreadable_location_is_named_in_degraded(cid):
+    sid = _played(cid)
+    eid = _location(cid, sid, "Saltmarch harbour")
+    (campaigns.campaign_root(cid) / "locations" / f"{eid}.md").write_bytes(b"\xff\xfe\x00garbage")
+    d = doc(cid, sid)
+    assert f"locations/{eid}" in d.meta["degraded"]
+    assert f"Where: {eid}" in d.text
+
+
+def test_a_missing_location_is_its_id_and_not_degraded(cid):
+    sid = _played(cid)
+    eid = _location(cid, sid, "Saltmarch harbour")
+    (campaigns.campaign_root(cid) / "locations" / f"{eid}.md").unlink()
+    d = doc(cid, sid)
+    assert f"locations/{eid}" not in d.meta["degraded"]
+
+
+def test_the_key_moves_with_build(cid, monkeypatch):
+    sid = _played(cid)
+    before = doc(cid, sid)
+    monkeypatch.setattr(compiled, "build_fingerprint", lambda: "another-build")
+    after = doc(cid, sid)
+    assert after.key != before.key and after.text == before.text
+
+
+def test_the_degraded_list_is_bounded(cid):
+    sid = _played(cid)
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    many = tuple(f"characters/c{i:03d}" for i in range(100))
+    d = scene.render(dataclasses.replace(sl, degraded=many))
+    assert len(d.meta["degraded"]) == scene.MAX_META_REFS
+    assert "degraded" in d.meta["truncated"]

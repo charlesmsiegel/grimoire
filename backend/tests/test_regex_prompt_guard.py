@@ -176,16 +176,43 @@ def _reaches_view(fn, helpers: dict[str, ast.AST]) -> bool:
                for c in _calls(fn))
 
 
-def _is_searchdocs_expand(call: ast.Call) -> bool:
-    """`expand.expand(...)` or `<...>.searchdocs.expand.expand(...)`: the module
-    bound as a submodule, the only form the import guard allows. A bare
-    `expand(...)` is someone else's -- the context builder's macro expansion is
-    a local callable of that name."""
+def _expand_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """(names bound to the `searchdocs.expand` module, names bound to its
+    `expand` function), resolved from the file's own imports so an alias
+    (`from ..searchdocs import expand as history_expand`) is held like the
+    plain spelling. `expand` itself always counts as the module's name."""
+    modules, functions = {"expand"}, set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            source = node.module or ""
+            for alias in node.names:
+                bound = alias.asname or alias.name
+                if source.split(".")[-1] == "searchdocs" and alias.name == "expand":
+                    modules.add(bound)
+                elif source.endswith("searchdocs.expand") and alias.name == "expand":
+                    functions.add(bound)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.endswith("searchdocs.expand") and alias.asname:
+                    modules.add(alias.asname)
+    return modules, functions
+
+
+def _is_searchdocs_expand(call: ast.Call, bindings: tuple[set[str], set[str]]) -> bool:
+    """A call of `searchdocs.expand.expand`: through a name bound to the module
+    (`expand.expand(...)`, `history_expand.expand(...)`), through the
+    attribute chain (`<...>.searchdocs.expand.expand(...)`), or through a name
+    bound to the function itself. Any other bare `expand(...)` is someone
+    else's -- the context builder's macro expansion is a local callable of
+    that name."""
+    modules, functions = bindings
     func = call.func
+    if isinstance(func, ast.Name):
+        return func.id in functions
     if not (isinstance(func, ast.Attribute) and func.attr == "expand"):
         return False
     owner = func.value
-    return (isinstance(owner, ast.Name) and owner.id == "expand") or (
+    return (isinstance(owner, ast.Name) and owner.id in modules) or (
         isinstance(owner, ast.Attribute) and owner.attr == "expand"
         and isinstance(owner.value, ast.Attribute) and owner.value.attr == "searchdocs")
 
@@ -270,7 +297,10 @@ class _File:
 
 
     def _expansions(self):
-        for call in filter(_is_searchdocs_expand, _calls(self.tree, "expand")):
+        bindings = _expand_bindings(self.tree)
+        for call in _calls(self.tree):
+            if not _is_searchdocs_expand(call, bindings):
+                continue
             fn = _owner(self.fns, call)
             if fn is None:
                 continue
@@ -368,13 +398,17 @@ def test_the_guard_catches_a_raw_reader(tmp_path, monkeypatch):
 
 def test_the_guard_catches_an_expansion_rendered_into_a_prompt(tmp_path, monkeypatch):
     """The `expand(...)` rule (roadmap 08-C3b): a prompt rendered from excerpts in
-    the display phase, in a phase the guard cannot read, or with none, fails;
-    the constant prompt phase passes, and so do a display read that renders no
-    prompt and a callable that merely shares the name."""
+    the display phase, in a phase the guard cannot read, or with none, fails,
+    and so does one reached through an aliased module or a function imported by
+    value; the constant prompt phase passes, and so do a display read that
+    renders no prompt and a local callable that merely shares the name."""
     history = tmp_path / "store" / "history"
     history.mkdir(parents=True)
     (tmp_path / "routes").mkdir()
     (history / "bad.py").write_text(
+        "from ..searchdocs import expand as history_expand\n"
+        "from ..searchdocs.expand import expand as excerpts_of\n"
+        "\n"
         "def displayed(cid, sid, terms):\n"
         "    found = expand.expand(cid, sid, phase='display', terms=terms)\n"
         "    return prompts.render('x.j2', excerpts=found.excerpts)\n"
@@ -395,12 +429,20 @@ def test_the_guard_catches_an_expansion_rendered_into_a_prompt(tmp_path, monkeyp
         "    return expand.expand(cid, sid, phase='display', terms=terms)\n"
         "\n"
         "def macro(text, expand):\n"
-        "    return prompts.render('x.j2', body=expand(text))\n",
+        "    return prompts.render('x.j2', body=expand(text))\n"
+        "\n"
+        "def aliased(cid, sid, terms):\n"
+        "    found = history_expand.expand(cid, sid, phase='display', terms=terms)\n"
+        "    return prompts.render('x.j2', excerpts=found.excerpts)\n"
+        "\n"
+        "def by_value(cid, sid, terms):\n"
+        "    found = excerpts_of(cid, sid, phase='display', terms=terms)\n"
+        "    return prompts.render('x.j2', excerpts=found.excerpts)\n",
         encoding="utf-8")
     monkeypatch.setitem(globals(), "PACKAGE", tmp_path)
     offences, _ = _scan()
-    assert sorted(o.split(":")[1] for o in offences if o.startswith("store/history/bad.py:")) == \
-        ["10", "2", "6"]
+    assert sorted(int(o.split(":")[1]) for o in offences
+                  if o.startswith("store/history/bad.py:")) == [5, 9, 13, 27, 31]
 
 
 def test_searchdocs_is_scanned():

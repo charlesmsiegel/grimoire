@@ -36,6 +36,7 @@ from grimoire.store.searchdocs import embedded, live, rolling, scene, slices
 def _trust_fresh_files(monkeypatch):
     monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
     live._MEMO.clear()
+    live._RECORDED.clear()
 
 
 @pytest.fixture
@@ -73,7 +74,7 @@ def _answer(ls):
 
 def _restart():
     compiled.close()
-    for pool in (slices._POOL, rolling._POOL, live._MEMO):
+    for pool in (slices._POOL, rolling._POOL, live._MEMO, live._RECORDED):
         pool.clear()
 
 
@@ -233,3 +234,42 @@ def test_a_campaign_delete_purges_its_documents(monkeypatch, tmp_path):
         assert client.delete(f"/api/campaigns/{cid}").status_code in (200, 204)
         with compiled.batch() as request:
             assert not any(v.hit for v in request.lookup_many(keys).values.values())
+
+
+def test_a_head_with_invalid_utf8_is_skipped_and_the_rest_answer(cid):
+    sids = _three(cid)
+    bad = scenes.paths._scenes_dir(cid) / "009--garbled.md"
+    bad.write_bytes(b"---\ntitle: \xff\xfe broken\n---\n\n**You:** hi\n")
+    got = live.scene_documents(cid)
+    assert got.skipped == ("009--garbled",)
+    assert [d.sid for d in got.documents] == sids
+
+
+def test_a_hit_after_a_re_pad_records_the_new_path(cid, monkeypatch):
+    """A re-pad moves the scene file and keeps the key, so the answer is a
+    hit; the hit still has to leave rows on the path the scene now has, or a
+    sync of that path would never find the document."""
+    sid, *_ = _three(cid)
+    live.scene_documents(cid)
+    old = scenes.paths._scene_path(cid, sid)
+    padded = "0" + sid
+    new = old.with_name(f"{padded}.md")
+    old.rename(new)
+    chron = campaigns.campaign_root(cid) / "chronicle.json"
+    data = json.loads(chron.read_text(encoding="utf-8"))
+    data[padded] = data.pop(sid)
+    chron.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(scene, "render", lambda sl: pytest.fail("a re-pad re-rendered"))
+    doc = next(d for d in live.scene_documents(cid).documents if d.sid == padded)
+    with compiled.batch() as request:
+        rows = request.materialized([new])
+    assert (scene.KIND, _instance(cid, doc.doc.meta["identity"])) in \
+        [(m.kind, m.instance) for m in rows[new]]
+
+
+def test_a_warm_call_writes_no_rows(cid, monkeypatch):
+    _three(cid)
+    live.scene_documents(cid)
+    monkeypatch.setattr(compiled.Batch, "mark_materialized",
+                        lambda *a, **k: pytest.fail("a warm call wrote a row"))
+    live.scene_documents(cid)

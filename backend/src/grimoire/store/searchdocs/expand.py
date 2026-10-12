@@ -32,7 +32,6 @@ cannot tie to a view.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -182,21 +181,28 @@ def _wrap(text: str, start: int, end: int) -> str:
     return (_ELLIPSIS if start > 0 else "") + body + (_ELLIPSIS if end < len(text) else "")
 
 
+def _folded(text: str) -> tuple[str, list[int]]:
+    """`text.casefold()`, and for each character of it the index in `text` of
+    the character it folded from. Folding can change the length ("ß" folds to
+    "ss"), so an offset into the folded text is not an offset into the
+    original; this map is what makes the two agree."""
+    out: list[str] = []
+    starts: list[int] = []
+    for i, ch in enumerate(text):
+        folded = ch.casefold()
+        out.append(folded)
+        starts.extend([i] * len(folded))
+    return "".join(out), starts
+
+
 def _rarest(text: str, terms: Sequence[str]) -> int | None:
-    """Where the rarest term that occurs in `text` first does, ties to the
-    earliest (`search.snippet`'s rule). Offsets come from a case-insensitive
-    regex over the raw text, so they index `text` itself; `None` when no term
-    occurs."""
-    hits = []
-    for term in terms:
-        count, first = 0, -1
-        for found in re.finditer(re.escape(term), text, re.IGNORECASE):
-            if first < 0:
-                first = found.start()
-            count += 1
-        if count:
-            hits.append((count, first))
-    return min(hits)[1] if hits else None
+    """Where, in `text`, the rarest term that occurs in it first does, ties to
+    the earliest (`search.snippet`'s rule). Matched with the same `casefold`
+    the score used, so a post scored as a hit is always framed on its term;
+    `None` when no term occurs."""
+    folded, starts = _folded(text)
+    hits = [(folded.count(term), folded.find(term)) for term in terms if term in folded]
+    return starts[min(hits)[1]] if hits else None
 
 
 def _cut(text: str, budget: int, *, keep: str, terms: Sequence[str] = ()) -> tuple[str, bool]:
