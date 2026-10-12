@@ -768,20 +768,39 @@ def roster(root: Path) -> list[dict]:
     the two parsers split a line differently on the rarer Unicode separators.
     A caller that needs another field of the row should read the full listing
     for it rather than widen this one piecemeal.
+
+    Each row is memoized in-process on two stamps, the character directory
+    (whose listing is the version glob, the row filter) and `character.md`
+    (the name), the way `name_and_versions` is: the global to-do page asks for
+    every world's roster on every read (spec 04 section 4.5).
     """
     out: list[dict] = []
     for cd in _listed_dirs(root):
-        cid = cd.name
-        # Meta first, as the listing reads it, so an unreadable meta fails
-        # here exactly where it fails there.
-        meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-        version_ids = _version_ids(root, cid)
-        if not version_ids:
-            continue
-        out.append({"id": cid, "name": meta.get("name", cid),
-                    "default_version": _addressable_default(meta.get("default_version", ""),
-                                                            version_ids)})
+        row = statcache.memo_stamped(
+            ("roster_row", os.fspath(cd)), lambda cd=cd: _build_roster_row(root, cd.name),
+            pool=_IDENTITY_POOL, max_entries=POOL_ENTRIES)
+        if row is not None:
+            out.append(dict(row))
     return out
+
+
+def _build_roster_row(root: Path, cid: str) -> tuple[dict | None, tuple | None]:
+    """One `roster` row (None for a character with no addressable card),
+    vouched for by the character directory and `character.md`, each stamped
+    before it is read. A meta that cannot be read raises and is not
+    remembered -- here exactly where the listing raises."""
+    here = statcache.stamp(_char_dir(root, cid))
+    meta_stamp = statcache.stamp(_meta_path(root, cid))
+    # Meta first, as the listing reads it, so an unreadable meta fails
+    # here exactly where it fails there.
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    version_ids = _version_ids(root, cid)
+    row = None if not version_ids else {
+        "id": cid, "name": meta.get("name", cid),
+        "default_version": _addressable_default(meta.get("default_version", ""), version_ids)}
+    if here is None or meta_stamp is None:
+        return row, None
+    return row, (here, meta_stamp)
 
 
 def listed_ids(root: Path) -> list[str]:

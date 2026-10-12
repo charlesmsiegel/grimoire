@@ -3,7 +3,7 @@
 A leaf: it imports nothing from `store`, so `statcache`, `frontmatter` and the
 transcript parser can bump it and stay leaves themselves. Nothing here is
 persisted or logged. The counters exist for tests and the overview benchmark
-harness (`scripts/bench_overview.py`), which assert on their names; the one
+harness (04-C3b), which assert on their names; the one
 production consumer, the overview routes' Debug `overview_read` row, records
 none of them (most of them scale with the library, and the log is a file users
 share -- spec 04 section 8).

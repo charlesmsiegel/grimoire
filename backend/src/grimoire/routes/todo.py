@@ -251,11 +251,13 @@ def _character_gaps(cid: str) -> tuple[list[dict], list[dict]]:
 
 def _chore_unreviewed(ctx: _Ctx) -> dict | None:
     cid = ctx.cid
-    # Off the same walk the expansion uses, so the count on the row and the
-    # rows behind it cannot disagree about what is waiting.
-    waiting = _items_unreviewed(cid)
-    n = sum(int(w.get("proposals", 0)) for w in waiting)
-    sids = [w["id"] for w in waiting]
+    # Off the same sidecar walk the expansion uses, so the count on the row
+    # and the rows behind it cannot disagree about what is waiting. The walk,
+    # not the expansion itself: the chore needs no titles, and the titles are
+    # a scene listing the expansion pays only when something is waiting.
+    waiting = _review_sidecars(cid)
+    n = sum(len(edits) for _sid, edits in waiting)
+    sids = [sid for sid, _edits in waiting]
     if not n:
         return None
     return {
@@ -889,20 +891,36 @@ def badge_count(cid: str, ctx: _Ctx | None = None) -> int:
 ITEM_CAP = 200
 
 
-def _items_unreviewed(cid: str) -> list[dict]:
-    """One row per waiting scene, naming what it is holding."""
-    out = []
+def _review_sidecars(cid: str) -> list[tuple[str, list]]:
+    """`(sid, edits)` for every readable `<sid>.review.json`, in name order.
+
+    A glob plus one small read per sidecar, and there is normally none. A
+    sidecar that cannot be read is skipped, as the shell's `_pending` skips
+    it."""
     d = store.scenes.paths._scenes_dir(cid)   # paths-ok: the resolver itself
     if not d.exists():
         return []
-    titles = {s["id"]: s["title"] for s in store.scenes.read.list_scenes(cid)}
+    out = []
     for path in sorted(d.glob("*.review.json")):
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
             edits = rec.get("review", {}).get("edits", [])
         except (OSError, ValueError, AttributeError):
             continue
-        sid = path.name[: -len(".review.json")]
+        out.append((path.name[: -len(".review.json")], edits))
+    return out
+
+
+def _items_unreviewed(cid: str) -> list[dict]:
+    """One row per waiting scene, naming what it is holding."""
+    out = []
+    waiting = _review_sidecars(cid)
+    if not waiting:
+        return []
+    # The titles are a listing of every scene, paid only once a sidecar has
+    # been found: on demand, and live (spec 04 section 3.8).
+    titles = {s["id"]: s["title"] for s in store.scenes.read.list_scenes(cid)}
+    for sid, edits in waiting:
         # The kinds it is proposing, which is what tells the reader whether
         # this is a dossier rewrite or one fact nobody cited.
         kinds: dict[str, int] = {}
@@ -913,8 +931,9 @@ def _items_unreviewed(cid: str) -> list[dict]:
         detail = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         out.append({"id": sid, "label": titles.get(sid, sid),
                     "detail": detail or f"{len(edits)} proposals",
-                    # Carried so the chore's headline count comes off this same
-                    # walk. Harmless on the wire; the page ignores it.
+                    # The same count the chore's headline sums off
+                    # `_review_sidecars`. Harmless on the wire; the page
+                    # ignores it.
                     "proposals": len(edits),
                     "fix": f"/campaigns/{cid}/scenes/{sid}"})
     return out
