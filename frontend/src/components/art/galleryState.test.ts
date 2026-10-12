@@ -46,3 +46,44 @@ test("entity gallery labels and searches omit their internal default version", (
   expect(galleryImageDescriptor(entity, { kind: "world", id: "Realm" }, "Realm")?.label).toBe("Saltmarch / gallery_1");
   expect(filterGallery([entity], { kind: null, search: "default", unfinished: false, appearedOnly: false }, null)).toEqual([]);
 });
+
+describe("removal questions (viewer removal design §1.2)", () => {
+  const world = { kind: "world" as const, id: "Realm" }, campaign = { kind: "campaign" as const, id: "Mara" };
+  const placed = (scope: typeof world | typeof campaign, kind = "characters", name = "gallery_3"): GalleryImage => ({
+    ...image, kind, name, record_name: "Seraphine", provenance: scope.kind === "world" ? "world" : "campaign",
+    placement: { surface: "record", name, expected_v: "1",
+      target: kind === "characters" ? { scope, kind: "characters", record_id: "Seraphine", version: "older" }
+        : { scope, kind: "locations", record_id: "Seraphine" } },
+  });
+  test("a world-scoped record placement is removed", () => {
+    expect(galleryImageDescriptor(placed(world), world, "Realm")?.removal?.question).toBe("Remove Seraphine's gallery 3?");
+    expect(galleryImageDescriptor(placed(world, "characters", "avatar"), world, "Realm")?.removal?.question)
+      .toBe("Remove Seraphine's avatar?");
+    expect(galleryImageDescriptor(placed(world, "locations", "avatar"), world, "Realm")?.removal?.question)
+      .toBe("Remove Seraphine's primary image?");
+  });
+  test.each(["campaign", "inherited"] as const)("a campaign-scoped %s record placement is hidden in the campaign", (provenance) => {
+    expect(galleryImageDescriptor({ ...placed(campaign), provenance }, campaign, "Realm")?.removal?.question)
+      .toBe("Hide Seraphine's gallery 3 only in this campaign? Any inherited world image in this slot is hidden too.");
+  });
+  test("campaign library rows say whether the world keeps the picture", () => {
+    const row = { ...image, kind: "campaign", id: "", vid: "", name: "harbour", record_name: "Library" };
+    expect(galleryImageDescriptor({ ...row, provenance: "inherited" }, campaign, "Realm")?.removal?.question)
+      .toBe("Hide harbour in this campaign? The world keeps it.");
+    expect(galleryImageDescriptor({ ...row, provenance: "campaign" }, campaign, "Realm")?.removal?.question)
+      .toBe("Remove harbour from this campaign's library?");
+  });
+  test("a world library row is deleted for every campaign, with or without provenance", () => {
+    const row = { ...image, kind: "world", id: "", vid: "", name: "coastline", record_name: "World library" };
+    expect(galleryImageDescriptor(row, world, "Realm")?.removal?.question)
+      .toBe("Delete coastline from the world library? Every campaign on this world loses it.");
+    expect(galleryImageDescriptor({ ...row, provenance: "world" }, world, "Realm")?.removal?.question)
+      .toBe("Delete coastline from the world library? Every campaign on this world loses it.");
+  });
+  test("greetings, world originals and record rows without a version or placement are not removable", () => {
+    expect(galleryImageDescriptor({ ...placed(world), kind: "greetings" }, world, "Realm")).toBeNull();
+    expect(galleryImageDescriptor({ ...placed(campaign), provenance: "world-original" }, campaign, "Realm")?.removal).toBeUndefined();
+    expect(galleryImageDescriptor({ ...placed(world), v: undefined }, world, "Realm")?.removal).toBeUndefined();
+    expect(galleryImageDescriptor({ ...placed(world), placement: undefined }, world, "Realm")?.removal).toBeUndefined();
+  });
+});

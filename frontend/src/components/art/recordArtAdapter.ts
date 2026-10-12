@@ -14,7 +14,7 @@ function capturedTarget(target: RecordArtTarget): RecordArtTarget {
   return Object.freeze({ ...target, scope: Object.freeze({ ...target.scope }) });
 }
 
-function checkImage(target: RecordArtTarget, image: RecordArtImage): void {
+function checkImage(target: RecordArtTarget, image: Pick<RecordArtImage, "name" | "v" | "placement">): void {
   if (recordArtKey(target) !== recordArtKey(image.placement.target) || image.name !== image.placement.name) {
     throw new Error("This image belongs to a different record or version");
   }

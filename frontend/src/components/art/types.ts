@@ -28,7 +28,9 @@ export type RecordArtAdapter = {
   read(options?: { fresh?: boolean; signal?: AbortSignal }): Promise<RecordArtRead>;
   append(file: File): Promise<ArtCreated>;
   reuse(source: ArtSourceRef, intent: "gallery" | "primary", expectedPrimary?: string | null): Promise<ArtLinkResult>;
-  remove(image: RecordArtImage): Promise<{ ok: boolean }>;
+  /** Takes only what the delete and its placement check read, so a gallery row
+   *  carrying a placement can be removed without fabricating the rest. */
+  remove(image: Pick<RecordArtImage, "name" | "v" | "placement">): Promise<{ ok: boolean }>;
   promote(image: RecordArtImage, expectedPrimary: string | null): Promise<{ ok: boolean }>;
   setFocus(image: RecordArtImage, focus: number): Promise<{ ok: boolean }>;
   setDescription(image: RecordArtImage, text: string, expectedDescriptionRev: string): Promise<DescriptionSaveResult>;
