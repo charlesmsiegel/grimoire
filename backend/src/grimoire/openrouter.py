@@ -117,9 +117,9 @@ _TYPES = {decisions.Predicate: "noul", decisions.Choice: "choice", decisions.Sco
 
 def _criteria(q: decisions.Choice) -> dict[str, str]:
     """A choice's criteria: `{wire key: description}`, the reserved none (when
-    the choice allows one) described by `NATIVE_NONE_TEXT`."""
+    the choice allows one) described by `decisions.none_text`."""
     described = {opt.id: opt.description for opt in q.options}
-    return {wire: (decisions.NATIVE_NONE_TEXT if key == decisions.NONE_KEY else described[key])
+    return {wire: (decisions.none_text(q) if key == decisions.NONE_KEY else described[key])
             for wire, key in decisions.native_choice_keys(q)}
 
 

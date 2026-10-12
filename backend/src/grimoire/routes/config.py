@@ -28,6 +28,7 @@ from .. import (
     tool_calls,
     wire,
 )
+from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store import compiled
@@ -43,15 +44,18 @@ from .common import (
     _dump,
     _llm_http_error,
     _response_body,
+    _soft_resolved,
     _write_response,
     get_health,
     get_llm,
     legacy_refused,
     refuse_newer,
     refuse_unmigrated,
+    require_inference,
     run_error,
 )
 from .models import (
+    CampaignPlayDecisions,
     CatalogProbe,
     ConfigUpdate,
     ConnectionCreate,
@@ -205,6 +209,15 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "tracker": cfg.get("tracker", store.config.DEFAULT_TRACKER),
             "perception_rider": cfg.get("perception_rider",
                                         store.config.DEFAULT_PERCEPTION_RIDER),
+            # The play-decision switches (roadmap 02 §3.6), reported as
+            # stored so a write reads back; Settings, Play decisions edits
+            # them (02-S6).
+            "decide_speaker_sampling": cfg.get("decide_speaker_sampling",
+                                               store.config.DEFAULT_DECIDE_SPEAKER_SAMPLING),
+            "decide_turn_plan": cfg.get("decide_turn_plan",
+                                        store.config.DEFAULT_DECIDE_TURN_PLAN),
+            "decide_play_tool": cfg.get("decide_play_tool",
+                                        store.config.DEFAULT_DECIDE_PLAY_TOOL),
             "send_images": cfg.get("send_images", store.config.DEFAULT_SEND_IMAGES),
             "send_images_limit": cfg.get("send_images_limit",
                                          store.config.DEFAULT_SEND_IMAGES_LIMIT),
@@ -328,7 +341,8 @@ def _recursion_depth_ok(value: str | None) -> bool:
 
 
 #: Config keys whose only meaningful values are "on" and "off".
-_ON_OFF_KEYS = ("tracker", "perception_rider", "send_images")
+_ON_OFF_KEYS = ("tracker", "perception_rider", "send_images",
+                "decide_speaker_sampling", "decide_play_tool")
 
 
 #: The legacy keys that pick the Embedding role on a store not yet at format 2.
@@ -376,6 +390,10 @@ def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(g
     for key in _ON_OFF_KEYS:
         if key in fields and fields[key] not in ("on", "off"):
             raise HTTPException(status_code=400, detail=f"{key} must be 'on' or 'off'")
+    if ("decide_turn_plan" in fields
+            and fields["decide_turn_plan"] not in store.play_decisions.TURN_PLAN_MODES):
+        raise HTTPException(status_code=400,
+                            detail="decide_turn_plan must be 'off', 'intent' or 'plan'")
     # A bound, refused rather than clamped: the cap in `config.lore_recursion_depth`
     # is for a hand edit, and a value typed into the page that silently became
     # another one would be a setting nobody chose. Blank clears to the default.
@@ -408,6 +426,56 @@ def _layout_body(stored: list[dict]) -> dict:
     """
     return {"enabled": store.context.layout.enabled(),
             "sections": store.context.layout.describe(store.context.SECTIONS, stored)}
+
+
+# --- play decisions (roadmap 02 §3.6) -----------------------------------------
+
+#: The campaign route's field for each switch's config key.
+_PLAY_FIELDS = {"speaker_sampling": store.play_decisions.SPEAKER_SAMPLING_KEY,
+                "turn_plan": store.play_decisions.TURN_PLAN_KEY,
+                "play_tool": store.play_decisions.PLAY_TOOL_KEY}
+
+
+@router.get("/play-decisions")
+def get_play_decisions():
+    """What the Settings section says beside the switches: whether the global
+    Decision model reports a distribution for the speaker pick (§5.6), None
+    when the pick resolves to nothing. Soft and free: nothing is sent."""
+    resolved, _why, _kind = _soft_resolved(
+        lambda: require_inference("response-selector", operation="decide"))
+    return {"pick_samples": (None if resolved is None
+                             else operations.reports_distribution(resolved))}
+
+
+def _play_body(cid: str) -> dict:
+    try:
+        own = store.play_decisions.own(cid)
+        effective = store.play_decisions.effective(cid)
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    return {field: own[key] for field, key in _PLAY_FIELDS.items()} | {
+        "effective": {field: effective[key] for field, key in _PLAY_FIELDS.items()}}
+
+
+@router.get("/campaigns/{cid}/play-decisions")
+def get_campaign_play_decisions(cid: str):
+    return _play_body(cid)
+
+
+@router.put("/campaigns/{cid}/play-decisions")
+def put_campaign_play_decisions(cid: str, body: CampaignPlayDecisions):
+    # The campaign first, as the tracker's route: a 400 about a value is an
+    # answer about a campaign, and one that does not exist is a 404.
+    _play_body(cid)
+    values = {key: value for field, key in _PLAY_FIELDS.items()
+              if (value := getattr(body, field)) is not None}
+    try:
+        store.play_decisions.set_campaign(cid, values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    return _play_body(cid)
 
 
 @router.get("/prompt-layout")

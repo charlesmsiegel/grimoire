@@ -54,9 +54,11 @@ from grimoire.store import (
     context,
     default_prompts,
     entities,
+    epistemic_access,
     events,
     facts,
     groupstate,
+    history_rerank,
     overlay,
     pcs,
     playstate,
@@ -71,6 +73,7 @@ from grimoire.store import (
     steering,
     styles,
     suggest,
+    turn_plan,
     voice_anchors,
     voice_drift,
     worlds,
@@ -1606,6 +1609,184 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
                                         ctx.get("native_results", {}).get(0))]
 
 
+# ------------------------------------------------ decide, turn intent (02-S2)
+#
+# The turn intent as `_turn_plan` sends it (roadmap 02 §6): Mara, whose card
+# says she never answers a question about her own whereabouts straight, is
+# asked one directly by the player. The stance that fits her is `deflect`.
+
+DECIDE_INTENT_POSTS = [
+    ("user", "", "I find Mara on the night dock, coat still wet from the tide."),
+    ("assistant", "Mara", "You are late. The lantern has been out for an hour."),
+    ("user", "", "Mara, where were you when the tide bell rang?"),
+]
+
+_INTENT_CARD = {
+    "description": "A Saltmarch dock hand with salt-cracked hands and a ledger she never shows.",
+    "personality": "Guarded and quick-witted. Never answers a question about where she has "
+                   "been; turns it into a question about the asker instead.",
+}
+
+
+def build_decide_turn_intent() -> dict:
+    """Mara and Winifred on the night dock; the player has just asked Mara
+    where she was."""
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    mara_card = characters.blank_card("Mara")
+    mara_card["data"].update(_INTENT_CARD)
+    mara, _ = characters.create_character(wroot, "Mara", "default", mara_card)
+    winifred, _ = characters.create_character(wroot, "Winifred", "default",
+                                              characters.blank_card("Winifred"))
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    sid = scenes.create_scene(cid, "The Night Dock")
+    for npc in (mara, winifred):
+        appearances.appear(cid, sid, "characters", npc, "default", "npc")
+    for role, speaker, content in DECIDE_INTENT_POSTS:
+        scenes.append_message(cid, sid, role, content, **({"speaker": speaker} if speaker
+                                                          else {}))
+    return {"cid": cid, "sid": sid, "actor": f"characters:{mara}"}
+
+
+def _decide_turn_intent_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item `_turn_plan` sends, gathered as
+    `routes.character_turns._turn_inputs` gathers it: the actor's own card
+    brief through the locked version, and the observable transcript through
+    the prompt-phase regex view."""
+    cid, sid = ctx["cid"], ctx["sid"]
+    entry = next(a for a in appearances.scene_cast(cid, sid)
+                 if f"{a['kind']}:{a['id']}" == ctx["actor"])
+    card = characters.read_card(appearances.locked_actor_root(cid), entry["id"],
+                                appearances.locked_version(cid, entry["kind"],
+                                                           entry["id"]))["data"]
+    messages = scenes.read_scene(cid, sid)["messages"]
+    # The twin of `_turn_inputs`'s lambda, which `test_regex_prompt_guard.py`
+    # holds to the prompt phase.
+    conversation = response_protocol.observable_conversation(
+        messages, lambda posts, offset, total: regex_view.view(
+            posts, cid=cid, phase="prompt", offset=offset, total=total))
+    brief = turn_plan.brief_of(card)
+    item = turn_plan.intent_item(entry["name"], conversation, brief)
+    ctx.update(items=(item,), conversation=conversation, brief=brief, name=entry["name"])
+    return inference.structured_messages([item])
+
+
+def _decide_turn_intent_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=False)
+
+
+def grade_decide_turn_intent(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    wanted = [f"- {turn_plan.STANCE_ID} (choice, or null for none of these): ",
+              *(f"- {s}: {turn_plan.stance_description(s)}" for s in turn_plan.STANCES)]
+    missing = [line for line in wanted if line not in text]
+    heard = [turn["content"] for turn in ctx["conversation"] if turn["content"] not in text]
+    return [*graders.grade_prompt_section(messages, "question",
+                                          "turn_plan/stance_question.j2"),
+            Check("prompt.options", not missing,
+                  f"a stance or the null is missing from the choice: {missing}"),
+            Check("prompt.context", ctx["items"][0].context in text and not heard,
+                  f"the observable transcript is not in the prompt: {heard}"),
+            Check("prompt.brief", bool(ctx["brief"]) and ctx["brief"] in text,
+                  "the actor's own card brief is not in the prompt"),
+            Check("prompt.private", "Winifred" not in ctx["brief"],
+                  "another actor's material reached the brief"),
+            *graders.grade_decision(output, ctx["items"], explain=False,
+                                    question=turn_plan.STANCE_ID, expected="deflect"),
+            *graders.grade_distribution(ctx["items"][0], turn_plan.STANCE_ID,
+                                        ctx.get("native_results", {}).get(0))]
+
+
+# ------------------------------------------------- decide, turn plan (02-S4)
+#
+# The turn plan over the same fixture (roadmap 02 §7): one item, three
+# questions. Mara deflects, keeps what she knows to herself, and holds the
+# scene where it is -- she is dodging, not escalating.
+
+def _decide_turn_plan_prompt(ctx: dict) -> list[dict]:
+    """`_decide_turn_intent_prompt`'s gathering, asked as the plan item."""
+    _decide_turn_intent_prompt(ctx)
+    item = turn_plan.plan_item(ctx["name"], ctx["conversation"], ctx["brief"])
+    ctx.update(items=(item,))
+    return inference.structured_messages([item])
+
+
+def grade_decide_turn_plan(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    wanted = [f"- {turn_plan.DISCLOSURE_ID} (choice, or null for none of these): ",
+              *(f"- {d}: {turn_plan.disclosure_description(d)}"
+                for d in turn_plan.DISCLOSURES)]
+    missing = [line for line in wanted if line not in text]
+    levels = [level for level in turn_plan.TENSION_LEVELS if level not in text]
+    checks = [*graders.grade_prompt_section(messages, "stance",
+                                            "turn_plan/stance_question.j2"),
+              *graders.grade_prompt_section(messages, "disclosure",
+                                            "turn_plan/disclosure_question.j2"),
+              *graders.grade_prompt_section(messages, "tension",
+                                            "turn_plan/tension_question.j2"),
+              Check("prompt.options", not missing and not levels,
+                    f"a disclosure option or a tension level is missing: {missing + levels}"),
+              Check("prompt.brief", bool(ctx["brief"]) and ctx["brief"] in text,
+                    "the actor's own card brief is not in the prompt")]
+    checks += graders.grade_decision(output, ctx["items"], explain=False,
+                                     question=turn_plan.STANCE_ID, expected="deflect")
+    checks += graders.grade_distribution(ctx["items"][0], turn_plan.STANCE_ID,
+                                         ctx.get("native_results", {}).get(0))
+    if decisions.find_object(output) is not None:
+        (result,) = decisions.parse(output, ctx["items"], explain=False)
+        got = turn_plan.plan_answers(result)
+        checks += [Check("plan.disclosure", got["disclosure"] == "withhold",
+                         f"disclosure {got['disclosure']!r}, not 'withhold'"),
+                   Check("plan.tension", got["tension"] == 1,
+                         f"tension {got['tension']!r}, not 1 (hold steady)")]
+    return checks
+
+
+# ------------------------------------------- decide, the play tool (02-S8)
+#
+# The decide tool as a contribution's writer asks it mid-reply (roadmap 02
+# §8.1): its item is the asking actor's name over the observable window
+# (`turn_plan/tool_item.j2`), and one choice over the model's own options.
+# Mara has been caught with the ledger; asked whether she tells the truth or
+# lies about burning it, her card says she lies to protect her own.
+
+PLAY_TOOL_QUESTION = "Does Mara tell Seraphine the truth about the ledger?"
+PLAY_TOOL_OPTIONS = (("truth", "she admits she burned it"),
+                     ("lie", "she claims she never saw it"))
+
+
+def _decide_play_tool_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item the decide tool sends, gathered as
+    `routes.character_turns._play_tool` gathers it."""
+    _decide_turn_intent_prompt(ctx)
+    context = prompts.render("turn_plan/tool_item.j2", name=ctx["name"],
+                             conversation=ctx["conversation"])
+    item = decisions.Item(context, (decisions.Choice(
+        "choice", PLAY_TOOL_QUESTION,
+        tuple(decisions.Option(i, d) for i, d in PLAY_TOOL_OPTIONS)),))
+    ctx.update(items=(item,), tool_context=context)
+    return inference.structured_messages([item])
+
+
+def grade_decide_play_tool(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    missing = [i for i, d in PLAY_TOOL_OPTIONS if f"- {i}: {d}" not in text]
+    return [Check("prompt.question", PLAY_TOOL_QUESTION in text,
+                  "the model's own question is not in the prompt"),
+            Check("prompt.options", not missing, f"options missing: {missing}"),
+            Check("prompt.context", ctx["tool_context"] in text,
+                  "the observable window is not in the prompt"),
+            Check("prompt.private", ctx["brief"] not in text,
+                  "the writer's whole prompt (the card brief) reached the tool's item"),
+            *graders.grade_decision(output, ctx["items"], explain=False, question="choice",
+                                    expected="lie"),
+            *graders.grade_distribution(ctx["items"][0], "choice",
+                                        ctx.get("native_results", {}).get(0))]
+
+
 # ------------------------------------- case 13: decide, continuity identity
 #
 # The duplicate check as `decide()` will send it after the switch: the same
@@ -2195,6 +2376,70 @@ CASES: tuple[Case, ...] = (
              # it no weight: the answer stands, the report is no draw of it.
              Recording("native-inconsistent", ("decide.distribution",), "json",
                        native="openrouter"))),
+    Case(id="decide-turn-intent",
+         task="turn-intent",
+         hypothesis="asked through decide() how a guarded character whose card says she "
+                    "never answers a question about her whereabouts approaches her reply "
+                    "to one, the reply is the schema's object and picks deflect",
+         build=build_decide_turn_intent,
+         prompt=_decide_turn_intent_prompt,
+         grade=grade_decide_turn_intent,
+         schema=_decide_turn_intent_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-stance: nothing decodes, so the answer check is not
+             # reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # Well formed, naming no stance the vocabulary offers.
+             Recording("off-option", ("decide.answer",), "json"),
+             # Well formed, and a null: no particular stance -- a real answer,
+             # but not this fixture's.
+             Recording("abstained", ("decide.answer",), "json"),
+             # The compliant stance from OpenAI's decisions endpoint, with a
+             # distribution the stance draw would sample from (02-S3).
+             Recording("native", (), "json", native="openai"))),
+    Case(id="decide-turn-plan",
+         task="turn-plan",
+         hypothesis="asked through decide() for the turn plan of a guarded character "
+                    "dodging a question about her whereabouts, the reply is the schema's "
+                    "object and answers deflect, withhold and hold steady in one item",
+         build=build_decide_turn_intent,
+         prompt=_decide_turn_plan_prompt,
+         grade=grade_decide_turn_plan,
+         schema=_decide_turn_intent_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-plan: nothing decodes, so no answer check is
+             # reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # The stance right, the secret given away and the stakes raised.
+             Recording("forthcoming", ("plan.disclosure", "plan.tension"), "json"),
+             # A tension level the scale does not have: unread, never clamped.
+             Recording("off-scale", ("plan.tension",), "json"),
+             # Well formed, and a null stance: a real answer, not this
+             # fixture's, and never drawn from (§6.5).
+             Recording("abstained", ("decide.answer",), "json"),
+             # The compliant plan from OpenAI's decisions endpoint: the stance
+             # with a distribution the draw would sample from, and the tension
+             # as a score on the level scale.
+             Recording("native", (), "json", native="openai"))),
+    Case(id="decide-play-tool",
+         task="turn-tool-decision",
+         hypothesis="asked through the decide tool, mid-reply, whether a character who "
+                    "protects her own tells the truth about burning a ledger, the reply is "
+                    "the schema's object and picks the lie",
+         build=build_decide_turn_intent,
+         prompt=_decide_play_tool_prompt,
+         grade=grade_decide_play_tool,
+         schema=_decide_turn_intent_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("decide.json",), "json"),
+             # An id the asking model never offered.
+             Recording("off-option", ("decide.answer",), "json"),
+             # A null, which this question does not allow: unread.
+             Recording("abstained", ("decide.answer",), "json"),
+             Recording("native", (), "json", native="openai"))),
     Case(id="decide-rank",
          task="continuity-reconcile",
          hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "
@@ -2276,3 +2521,145 @@ CASES: tuple[Case, ...] = (
 )
 
 BY_ID = {c.id: c for c in CASES}
+
+
+# ------------------------------------------------- the decide kits (02-S7)
+#
+# Cases for the two kits whose call sites land with 11 and 09 (roadmap 02
+# §9.1). Held OUTSIDE `CASES`: a registered case's task must be on a route,
+# and these routes land with those call sites. Their recordings are replayed
+# by each kit's own unit test (`test_epistemic_access.py`,
+# `test_history_rerank.py`), and `test_no_orphan_recordings` claims them
+# through `KIT_CASES`. The consumer's first slice moves its case into
+# `CASES`.
+
+EPISTEMIC_QUESTION = epistemic_access.AccessQuestion(
+    actor_ref="characters:mara", actor_name="Mara", evidence_ref="scene-3#12",
+    excerpt=("Seraphine lifts the harbour key from the hook while Mara sleeps in the "
+             "corner, her back to the room."),
+    basis=("present", "asleep"))
+
+
+def build_decide_epistemic() -> dict:
+    """No store: the kit's item is built from what 11 hands it."""
+    return {"questions": (EPISTEMIC_QUESTION,)}
+
+
+def _decide_epistemic_prompt(ctx: dict) -> list[dict]:
+    items = epistemic_access.build_items(ctx["questions"])
+    ctx.update(items=items)
+    return inference.structured_messages(list(items))
+
+
+def _kit_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=False)
+
+
+def grade_decide_epistemic(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    wanted = [f"- {epistemic_access.ACCESS_ID} (choice, or null for none of these): ",
+              *(f"- {c}: {epistemic_access.class_description(c)}"
+                for c in epistemic_access.CLASSES)]
+    missing = [line for line in wanted if line not in text]
+    checks = [*graders.grade_prompt_section(messages, "question",
+                                            "epistemic_access/question.j2"),
+              Check("prompt.options", not missing, f"a class is missing: {missing}"),
+              Check("prompt.context", ctx["items"][0].context in text,
+                    "the excerpt and the basis are not in the prompt"),
+              *graders.grade_decision(output, ctx["items"], explain=False,
+                                      question=epistemic_access.ACCESS_ID,
+                                      expected="narrator_only")]
+    # Fail closed: whatever the reply, the mapping never grants `known`
+    # unless the reply said so -- and an unread reply withholds.
+    if decisions.find_object(output) is not None:
+        results = tuple(decisions.parse(output, ctx["items"], explain=False))
+        mapped = epistemic_access.access_of(
+            ctx["questions"], decisions.Decision(items=results, backend="structured"))
+        said = results[0].answers[epistemic_access.ACCESS_ID].answer
+        got = mapped[(EPISTEMIC_QUESTION.actor_ref, EPISTEMIC_QUESTION.evidence_ref)]
+        checks.append(Check("access.fail_closed",
+                            got == (said if said in epistemic_access.CLASSES
+                                    else epistemic_access.UNKNOWN),
+                            f"mapped {got!r} from an answer of {said!r}"))
+    return checks
+
+
+RERANK_QUERY = "Mara asks where her missing ledger went."
+RERANK_CANDIDATE = history_rerank.Candidate(
+    ref="scene-2", when="the night of the storm",
+    excerpt="Seraphine wraps Mara's ledger in oilcloth and wedges it under the pier.")
+
+
+def build_decide_rerank() -> dict:
+    return {"query": RERANK_QUERY, "candidates": (RERANK_CANDIDATE,)}
+
+
+def _decide_rerank_prompt(ctx: dict) -> list[dict]:
+    items = history_rerank.build_items(ctx["query"], ctx["candidates"])
+    ctx.update(items=items)
+    return inference.structured_messages(list(items))
+
+
+def grade_decide_rerank(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    missing = [level for level in history_rerank.LEVELS if level not in text]
+    checks = [*graders.grade_prompt_section(messages, "question",
+                                            "history_rerank/question.j2"),
+              Check("prompt.levels", not missing, f"a level is missing: {missing}"),
+              Check("prompt.context", ctx["items"][0].context in text,
+                    "the query, the excerpt and its date are not in the prompt"),
+              *graders.grade_decision(output, ctx["items"], explain=False,
+                                      question=history_rerank.RELEVANCE_ID, expected=3)]
+    if decisions.find_object(output) is not None:
+        results = decisions.parse(output, ctx["items"], explain=False)
+        grade = history_rerank.grades_of(ctx["candidates"], results)[RERANK_CANDIDATE.ref]
+        level = results[0].answers[history_rerank.RELEVANCE_ID].answer
+        checks.append(Check("rerank.ungraded",
+                            grade.level == (level if isinstance(level, int) else None),
+                            f"graded {grade.level!r} from an answer of {level!r}"))
+    return checks
+
+
+KIT_CASES: tuple[Case, ...] = (
+    Case(id="decide-epistemic-access",
+         task=epistemic_access.TASK,
+         hypothesis="asked through decide() whether a character asleep with her back to "
+                    "the room could know another took a key, the reply is the schema's "
+                    "object and answers narrator_only",
+         build=build_decide_epistemic,
+         prompt=_decide_epistemic_prompt,
+         grade=grade_decide_epistemic,
+         schema=_kit_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("decide.json",), "json"),
+             # A class the vocabulary does not have: unread, so UNKNOWN.
+             Recording("off-option", ("decide.answer",), "json"),
+             # A null: cannot tell, which withholds.
+             Recording("abstained", ("decide.answer",), "json"),
+             # The wrong, permissive class, read as given.
+             Recording("leaky", ("decide.answer",), "json"),
+             Recording("native", (), "json", native="openai"),
+             # Refused natively: never a class, so UNKNOWN.
+             Recording("native-refused", ("decide.answer",), "json", native="openai"))),
+    Case(id="decide-history-rerank",
+         task=history_rerank.TASK,
+         hypothesis="asked through decide() how much a scene in which the missing ledger "
+                    "is hidden bears on a turn asking where it went, the reply is the "
+                    "schema's object and grades it as bearing directly on the turn",
+         build=build_decide_rerank,
+         prompt=_decide_rerank_prompt,
+         grade=grade_decide_rerank,
+         schema=_kit_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("decide.json",), "json"),
+             # A level the scale does not have: ungraded, never clamped.
+             Recording("off-scale", ("decide.answer",), "json"),
+             # A null: ungraded, never level 0.
+             Recording("abstained", ("decide.answer",), "json"),
+             Recording("native", (), "json", native="openai"),
+             Recording("native-refused", ("decide.answer",), "json", native="openai"))),
+)

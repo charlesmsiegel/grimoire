@@ -13,6 +13,7 @@ vi.mock("../api/client", () => ({
     listCampaigns: vi.fn(), listScenes: vi.fn(),
     listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
     getPromptLayout: vi.fn(), putPromptLayout: vi.fn(),
+    getPlayDecisionsInfo: vi.fn(),
   },
 }));
 const setTheme = vi.fn();
@@ -115,7 +116,7 @@ test("the column leads with Inference's three pages, then every section in three
   expect(screen.getByRole("link", { name: /^Presets/ })).toHaveAttribute("href", "/presets");
   for (const label of [
     /^Storage/, /^Backups/, /^Logging/, /^Timeouts & retries/, /^First-run setup/, /^Context/,
-    /^Prompt layout/, /^Scene tracker/, /^System prompt/, /^Response targets/,
+    /^Prompt layout/, /^Scene tracker/, /^Play decisions/, /^System prompt/, /^Response targets/,
     /^Transcript/, /^Output processing/, /^While playing/, /^Appearance/,
   ]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
@@ -584,6 +585,25 @@ test("tracker settings toggle and save", async () => {
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ tracker: "off" })));
+});
+
+test("the play decisions save each switch, the speaker draw on by default", async () => {
+  (api.getConfig as any).mockResolvedValue({
+    ...cfg, decide_speaker_sampling: "on", decide_turn_plan: "off", decide_play_tool: "off" });
+  (api.getPlayDecisionsInfo as any).mockResolvedValue({ pick_samples: false });
+  (api.putConfig as any).mockResolvedValue(cfg);
+  renderView();
+  await open(/^Play decisions/);
+  const draw = await screen.findByRole("checkbox", { name: /draw the next speaker/i });
+  expect(draw).toBeChecked();
+  expect(await screen.findByText(/always the most likely speaker/i)).toBeInTheDocument();
+  fireEvent.click(draw);
+  fireEvent.change(screen.getByLabelText("Turn decision before each reply"),
+                   { target: { value: "plan" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /ask one closed question/i }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(expect.objectContaining({
+    decide_speaker_sampling: "off", decide_turn_plan: "plan", decide_play_tool: "on" })));
 });
 
 test("the perception rider toggle saves as off, never blank", async () => {

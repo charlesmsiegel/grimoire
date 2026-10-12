@@ -17,6 +17,7 @@ from .lifecycle import (  # noqa: F401
     set_campaign_inference,
     set_campaign_response,
     set_campaign_routing,
+    set_campaign_switches,
     set_campaign_tracker,
 )
 from .paths import (  # noqa: F401

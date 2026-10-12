@@ -41,6 +41,7 @@ from .. import (
     response_targets,
     styles,
     tokens,
+    turn_plan,
     voice_anchors,
 )
 from ..appearances import cast as appearances_cast
@@ -1516,7 +1517,8 @@ def _profile_sections(base: list[dict], guidance: str) -> list[dict]:
 def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
              opener: bool = False, before_post: tuple[dict, ...] = (),
              after_post: tuple[dict, ...] = (),
-             extra: tuple[tuple[str, str], ...] = ()) -> tuple[model_guidance.PreparedMessages, dict | None]:
+             extra: tuple[tuple[str, str], ...] = (),
+             after_history: tuple[dict, ...] = ()) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """Freeze one generation, including each available profile's packed variant.
 
     A fallback is the same scene evidence with different model advice. Reusing
@@ -1546,6 +1548,7 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     note_index = frozenset(n["index"] for n in notes if n["index"] is not None)
     post_history = a["post_history"]
     before_post, after_post = deepcopy(before_post), deepcopy(after_post)
+    after_history = deepcopy(after_history)
     budget = pack.budget_tokens()
     count = _token_memo()
     reserved = (count(post_history)
@@ -1559,7 +1562,10 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         packed["budget"] = budget
         system = compose([s["text"] for s in packed["sections"] if not s["dropped"]])
         messages = [{"role": "system", "content": system}] if system or opener else []
-        messages += _merged_carrier(packed["history"], before_post)
+        # A play decision's block (`after_history`, roadmap 02 §6.5) follows
+        # the last post, as an author's note at depth 0 does, and precedes a
+        # director note -- also one a trailing carrier is folded into (#377).
+        messages += _merged_carrier(packed["history"], before_post, after_history)
         if post_history:
             messages.append({"role": "system", "content": post_history})
         messages += after_post
@@ -1584,20 +1590,24 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     return prepared, prepared.breakdown
 
 
-def _merged_carrier(history: list[dict], before_post: tuple[dict, ...]) -> list[dict]:
-    """`history + before_post`, with a trailing carrier folded into a user
-    message the prompt appends right after it (a director note, #377), so the
-    carrier never sits beside another user message. New list, new dicts: the
-    packed history and `before_post` are shared by every guidance variant."""
+def _merged_carrier(history: list[dict], before_post: tuple[dict, ...],
+                    between: tuple[dict, ...] = ()) -> list[dict]:
+    """`history + between + before_post`, with a trailing carrier folded into
+    a user message the prompt appends right after it (a director note, #377),
+    so the carrier never sits beside another user message -- `between` (a
+    play decision's system block) included, which a provider that lifts
+    system messages out of the list would otherwise leave the two beside.
+    New list, new dicts: the packed history and `before_post` are shared by
+    every guidance variant."""
     tail = history[-1] if history else None
     first = before_post[0] if before_post else None
     if not (tail and tail.get(content_parts.CARRIER) and first and first["role"] == "user"):
-        return [*history, *before_post]
+        return [*history, *between, *before_post]
     content = first["content"]
     note = {**first, "content": [*tail["content"],
                                  *([{"type": "text", "text": content}]
                                    if isinstance(content, str) else content)]}
-    return [*history[:-1], note, *before_post[1:]]
+    return [*history[:-1], *between, note, *before_post[1:]]
 
 
 def _token_memo():
@@ -1659,7 +1669,8 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
                  describe: bool = True, model: str = "", actor_ref: str | None = None,
                  eligible_speakers: list[dict] | None = None,
-                 images: int = 0) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                 images: int = 0,
+                 plan: dict | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One turn's messages, and the breakdown describing them.
 
     `images` is how many of the newest post images to keep as references for a
@@ -1694,13 +1705,44 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     the request silently overspends the budget, the message must actually be
     sent, and the record must report it), and three call sites used to spell
     the first two out separately with nothing holding them together.
+
+    `plan` is a play decision's record for this contribution (the response's
+    `intent`, roadmap 02 §6.5). What it chose is sent as one system message
+    after the history (`_plan_block`), reserved and reported like an appended
+    block. None -- or a record with nothing to say -- adds nothing, so the
+    prompt is byte-identical to one composed without it.
     """
     a = _assemble(cid, sid, turn=turn, actor_ref=actor_ref, eligible_speakers=eligible_speakers,
                   images=images)
+    intent = _plan_block(a, plan)
     return _prepare(a, cid, sid, model=model, describe=describe,
                     after_post=tuple({"role": role, "content": content}
                                      for _label, role, content in appended),
-                    extra=tuple((label, content) for label, _role, content in appended))
+                    extra=(*((label, content) for label, _role, content in appended),
+                           *_plan_rows(intent)),
+                    after_history=_plan_messages(intent))
+
+
+def _plan_block(a: dict, plan: dict | None) -> str:
+    """The intent block's text for this composition, or "" (no plan, a plan
+    with nothing read, or a call that is not one actor's). Built from the
+    actor `_assemble` resolved, so the name is the one the prompt uses."""
+    if not plan:
+        return ""
+    actor_entry = a["data"].get("response_actor")
+    if not actor_entry or actor_entry.get("ref") == "grimoire":
+        return ""
+    return turn_plan.block(plan, actor_entry["name"])
+
+
+def _plan_rows(text: str) -> tuple[tuple[str, str], ...]:
+    """The intent block's inspector row (and its reservation): last among the
+    appended rows, so the rows a prompt without one carries keep their ids."""
+    return (("Turn intent", text),) if text else ()
+
+
+def _plan_messages(text: str) -> tuple[dict, ...]:
+    return ({"role": "system", "content": text},) if text else ()
 
 
 
@@ -1722,7 +1764,8 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
                           describe: bool = True, model: str = "", actor_ref: str | None = None,
                           eligible_speakers: list[dict] | None = None,
                           appended: tuple[Appended, ...] = (),
-                          images: int = 0) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                          images: int = 0,
+                          plan: dict | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One director turn: full system + history, then the note as the final user
     message. The note rides only this call — never persisted. `turn` is the same
     one-shot response-preset override as `compose_turn`, and the messages and
@@ -1748,12 +1791,16 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid, datetime_subs=a["datetime_subs"])
+    # `plan` as `compose_turn`'s: after the history, so before the note.
+    intent = _plan_block(a, plan)
     return _prepare(a, cid, sid, model=model, describe=describe,
                     before_post=({"role": "user", "content": note_text},),
                     after_post=tuple({"role": role, "content": content}
                                      for _label, role, content in appended),
                     extra=(("Director note", note_text),
-                           *((label, content) for label, _role, content in appended)))
+                           *((label, content) for label, _role, content in appended),
+                           *_plan_rows(intent)),
+                    after_history=_plan_messages(intent))
 
 
 

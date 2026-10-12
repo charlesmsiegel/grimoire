@@ -377,7 +377,9 @@ def test_a_tool_result_is_held_to_its_own_cap_marker_included():
 def test_the_runs_wall_is_a_budget_stop_with_an_aborted_row(monkeypatch):
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
     fake = FakeToolTurns(ToolTurn("", (("read", {}),)), ToolTurn("late", (), delay=3))
-    result = _run(fake, budget=RunBudget(wall_seconds=0.4, reserve_final=False))
+    # A wall of a second leaves the setup room on a loaded runner; the late
+    # turn (3s) still outlasts it.
+    result = _run(fake, budget=RunBudget(wall_seconds=1.0, reserve_final=False))
     assert result.status == "budget_exhausted" and result.limit == "wall"
     assert [r["status"] for r in result.rows] == ["ok", "aborted"]
 
@@ -442,13 +444,16 @@ def test_an_unreadable_answer_after_the_wall_gets_no_repair_turn(monkeypatch):
     """The repair turn is a send like any other: admitted on the wall too,
     not on `max_turns` alone."""
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
-    fake = FakeToolTurns(ToolTurn(deltas=("Mara, ", "I think."), pause=0.4),
+    # The wall leaves the run's setup (a store read, the root check, both in
+    # worker threads) most of a second before turn 1 could be refused, so a
+    # loaded runner still sends it; the turn itself outlasts the wall.
+    fake = FakeToolTurns(ToolTurn(deltas=("Mara, ", "I think."), pause=1.2),
                          ('{"keeper": "Mara"}', []))
 
     async def go():
         return [e async for e in inference.stream_tools(
             "chat", PROMPT, toolset=_toolset(), execute=tool_calls.registered(_toolset()),
-            client=fake, resolved=_resolved(), budget=RunBudget(wall_seconds=0.2),
+            client=fake, resolved=_resolved(), budget=RunBudget(wall_seconds=1.0),
             run_id=RUN, final_schema=ANSWER)]
     result = asyncio.run(go())[-1].result
     assert fake.calls == 1

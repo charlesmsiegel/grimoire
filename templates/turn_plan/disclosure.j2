@@ -1,0 +1,10 @@
+{#- One disclosure option's description (`store/turn_plan.py`, roadmap 02
+    §7.2): how much of what the character ALREADY knows they let out. Var:
+    disclosure (one of `turn_plan.DISCLOSURES`). It never grants knowledge. -#}
+{%- if disclosure == "share" -%}
+share what bears on this
+{%- elif disclosure == "hint" -%}
+hint at it without stating it
+{%- elif disclosure == "withhold" -%}
+keep it to themselves
+{%- endif -%}

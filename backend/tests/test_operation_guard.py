@@ -1664,13 +1664,13 @@ def _planted_loop_problems(src: str) -> list[str]:
 
 
 @pytest.mark.parametrize("src", [
-    _OPS + "operations.run_tools('chat', m, toolset=t, execute=e, client=c, resolved=r)\n",
+    _OPS + "operations.run_tools('absorb', m, toolset=t, execute=e, client=c, resolved=r)\n",
     _OPS + "operations.run_tools(task, m, toolset=t, execute=e, client=c, resolved=r)\n",
     _OPS + "operations.run_tools('investigation', m, toolset=t, execute=e, client=c)\n",
     _OPS + "operations.stream_tools('scene-break', m, client=c, resolved=r)\n",
     _OPS + "run(operations.run_tools, 'investigation')\n",
     ("from ..inference import run_tools as loop\n"
-     "loop('chat', m, toolset=t, execute=e, client=c, resolved=r)\n"),
+     "loop('absorb', m, toolset=t, execute=e, client=c, resolved=r)\n"),
 ])
 def test_the_loop_guard_flags_planted_cases(src):
     assert _planted_loop_problems(src), src

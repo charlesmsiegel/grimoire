@@ -1,0 +1,8 @@
+{#- The decide tool's item context in play (`routes.character_turns`, roadmap
+    02 §8.1): the closed question a contribution's writer asked mid-reply is
+    the item's one choice, and this is what it is asked over -- never the
+    writer's whole prompt.
+    Vars: name (the asking actor's name); conversation (the observable window
+    the speaker pick reads, through the prompt-phase regex view). -#}
+Asked while writing {{ name }}'s reply.
+Observable transcript: {{ conversation | tojson }}

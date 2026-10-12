@@ -172,7 +172,7 @@ def _question(q: decisions.NativeQuestion) -> dict:
         described = {opt.id: opt.description for opt in q.options}
         asked["choices"] = [
             {"value": wire,
-             "description": (decisions.NATIVE_NONE_TEXT if key == decisions.NONE_KEY
+             "description": (decisions.none_text(q) if key == decisions.NONE_KEY
                              else described[key])}
             for wire, key in decisions.native_choice_keys(q)]
     elif isinstance(q, decisions.Score):

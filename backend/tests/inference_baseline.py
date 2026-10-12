@@ -418,7 +418,7 @@ def observe(client: TestClient, ctx: dict) -> dict:
     out = {
         "tasks": {task: {"global": _task(client, task, ""),
                          "campaign": _task(client, task, cid)}
-                  for task in [*sorted(routing.TASK_ROUTE), ""]},
+                  for task in [*sorted(set(routing.TASK_ROUTE) - routing.NO_LEGACY_TASKS), ""]},
         "overrides": {name: _override(body, cid) for name, body in OVERRIDE_BODIES.items()},
         "display": _display(client, cid),
         "embedding": store.embed_space.resolve(),

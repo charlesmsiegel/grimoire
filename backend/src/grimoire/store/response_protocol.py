@@ -7,8 +7,8 @@ import json
 import re
 from collections.abc import Callable
 
-from .. import decisions, prompts
-from . import fence, state_fence
+from .. import decisions, draws, prompts
+from . import fence, group_play, state_fence
 from .scenes import serialize as scenes_serialize
 
 _HANDOFF = re.compile(r"```[ \t]*handoff\b", re.IGNORECASE)
@@ -100,7 +100,7 @@ def observable_conversation(messages: list[dict], view: View) -> list[dict]:
 
 
 def selector_item(roster: list[dict], conversation: list[dict],
-                  note: str = "") -> decisions.Item:
+                  note: str = "", player: str = "") -> decisions.Item:
     """The speaker pick as a decision item: the observable transcript (and the
     round's user direction, when there is one) as its context, and one choice
     over the eligible refs -- each described by its name -- and `grimoire`,
@@ -111,7 +111,9 @@ def selector_item(roster: list[dict], conversation: list[dict],
     player, so an explicit null is `abstained` rather than unreadable. The
     roster is not repeated in the context, because the options are the
     roster. `roster` is the round record's `eligible` (dicts with `ref` and
-    `name`)."""
+    `name`). The null is described to a native endpoint as the player taking
+    the turn (`scene/response_selector_none.j2`), named when `player` -- the
+    scene's player character names -- is given."""
     context = prompts.render("scene/response_selector_context.j2",
                              conversation=conversation, note=note)
     options = (*(decisions.Option(entry["ref"], entry["name"]) for entry in roster),
@@ -119,7 +121,8 @@ def selector_item(roster: list[dict], conversation: list[dict],
                                 prompts.render("scene/response_selector_grimoire.j2")))
     return decisions.Item(context, (decisions.Choice(
         SELECTOR_QUESTION, prompts.render("scene/response_selector_question.j2"),
-        options, allow_none=True),))
+        options, allow_none=True,
+        none_text=prompts.render("scene/response_selector_none.j2", player=player).strip()),))
 
 
 def selection_of(result: decisions.ItemResult) -> tuple[str | None, str | None]:
@@ -143,6 +146,72 @@ def selection_of(result: decisions.ItemResult) -> tuple[str | None, str | None]:
     if answer is not None and answer.detail == decisions.NOT_AN_OPTION:
         return None, INELIGIBLE
     return None, INVALID_HANDOFF
+
+
+# --- sampling the pick (roadmap 02-C2a) -------------------------------------
+#
+# The pick's answer is read first and unchanged (`selection_of`); only when
+# it named a speaker, and the campaign samples, is WHO drawn from the report
+# (`draws.draw`). Whether anyone speaks stays the model's answer: the none is
+# excluded from every draw.
+
+#: The draw's purpose, recorded with it: the pick's question id.
+PICK_PURPOSE = SELECTOR_QUESTION
+
+
+def addressed(trigger: str, eligible: list[dict], author_ref: str | None) -> tuple[str, ...]:
+    """The eligible refs the round's trigger names (§5.2 rule 2): the
+    player-typed note when the round carries one, else the newest
+    non-synthetic post in the pick's window -- less that post's author, who
+    does not summon themselves. Read by group play's own name matcher, so a
+    name is addressed exactly when the planner would call it named."""
+    return tuple(group_play.named(trigger or "", eligible, author_ref=author_ref))
+
+
+def pick_eligibility(offered: list[str] | tuple[str, ...],
+                     addressed_refs: tuple[str, ...]) -> draws.Eligibility:
+    """The pick's one reshaping (§5.2): the none excluded (whether anyone
+    speaks is the model's answer, never the draw's), narrowed to the
+    addressed actors when the trigger addressed any, and a cutoff at half of
+    indifference over the `n` offered keys (the eligible refs and
+    `grimoire`), with no floor. Argued structurally -- an actor the model
+    rated below half of indifference is one it argued against -- and to be
+    tuned through the play gate's `cutoff` axis."""
+    return draws.Eligibility(exclude=(decisions.NONE_KEY,),
+                             only=tuple(addressed_refs) or None,
+                             cutoff=1 / (2 * len(offered)))
+
+
+def sampled_pick(item: decisions.Item, result: decisions.ItemResult, offered: list[str],
+                 addressed_refs: tuple[str, ...], seed: int) -> draws.Draw:
+    """The pick's draw over `result`, with the §5.2 rule 3 fallback: when the
+    narrowing leaves nothing (`ineligible` -- the answer lies outside
+    `addressed` with no usable report -- or `cutoff`), it draws once more
+    with the same seed and purpose, the none excluded and nothing else, so a
+    narrowing never turns an answered speaker into "nobody". A draw over an
+    answer of None is `none` with its reason. Raises only `draws.draw`'s
+    `ValueError` for misuse."""
+    (question,) = item.questions
+    first = draws.draw(question, result, seed=seed, purpose=PICK_PURPOSE,
+                       eligibility=pick_eligibility(offered, addressed_refs))
+    answer = result.answers.get(SELECTOR_QUESTION)
+    if (first.basis == "none" and first.record["why"] in ("ineligible", "cutoff")
+            and answer is not None and answer.answer is not None):
+        return draws.draw(question, result, seed=seed, purpose=PICK_PURPOSE,
+                          eligibility=draws.Eligibility(exclude=(decisions.NONE_KEY,)))
+    return first
+
+
+def next_of(selection: tuple[str | None, str | None], drawn: draws.Draw) -> str | None:
+    """The speaker after the draw (§5.2 rule 3): only a pick `selection_of`
+    read as a speaker is ever drawn over, and only a `sampled` or `answer`
+    draw names one -- a sampled key is an offered one, never the none."""
+    nxt, issue = selection
+    if nxt is None or issue is not None:
+        return nxt
+    if drawn.basis in ("sampled", "answer") and isinstance(drawn.value, str):
+        return drawn.value
+    return nxt
 
 
 class _PreparationPrefix:
@@ -203,6 +272,17 @@ class _PreparationPrefix:
         return out
 
 
+def opens_reply(perception: bool):
+    """A predicate fed one reply turn's deltas, in order: True once the turn
+    has written anything past its leading preparation fence -- prose, but
+    also a state, roll or handoff fence, each of which is hidden yet sets a
+    reply's course (roadmap 02 §8.2). A tool loop honours a call only before
+    this, so a turn whose call it honoured fed `ResponseWatcher` nothing but
+    that fence, and `next_turn` has only the preparation parser to reset."""
+    prefix = _PreparationPrefix(perception)
+    return lambda delta: bool(prefix.feed(delta).strip())
+
+
 def preparation_note(body: str) -> str:
     """The reasoning note a perception body is kept as -- `""` for none."""
     return "\n\n[Perception preparation]\n" + body if body else ""
@@ -227,6 +307,7 @@ class ResponseWatcher:
     """Rolls interrupt first; state precedes the final handoff and stays hidden."""
 
     def __init__(self, *, perception=False):
+        self._perception = perception
         self.preparation = _PreparationPrefix(perception)
         self.roll = fence.FenceWatcher()
         self.redactor = state_fence.StreamRedactor()
@@ -236,6 +317,7 @@ class ResponseWatcher:
         self.handoff = None
         self.issue = None
         self._narration = ""
+        self._opened = False
 
     def _emit(self, text):
         # Everything before `visible` is decided, so the searches start there
@@ -257,16 +339,33 @@ class ResponseWatcher:
         self.visible = stop
         return self.redactor.feed(delta)
 
+    def next_turn(self):
+        """A tool loop's next turn begins (roadmap 02-C4): the turn before it
+        ended in a tool call having written nothing past its leading
+        preparation fence (`opens_reply`), so the roll watcher, the redactor
+        and the handoff scan have seen nothing yet and only the preparation
+        parser restarts. The next turn may open its own leading preparation
+        fence, which stays hidden as the first one did. What both fences held
+        is kept as one preparation note."""
+        self.preparation.finish()
+        body = self.preparation.body
+        self.preparation = _PreparationPrefix(self._perception)
+        self.preparation.body = body
+
     def feed(self, text):
         # A no-op for "" in every state (the roll watcher, the searches and the
         # redactor all reach the answer they already had), and the adapters send
         # one per SSE line -- so it is answered before any of them runs.
         if not text:
             return ""
-        return self._emit(self.roll.feed(self.preparation.feed(text)))
+        return self._emit(self.roll.feed(self._past_preparation(self.preparation.feed(text))))
+
+    def _past_preparation(self, text):
+        self._opened = self._opened or bool(text.strip())
+        return text
 
     def finish(self):
-        out = self._emit(self.roll.feed(self.preparation.finish()))
+        out = self._emit(self.roll.feed(self._past_preparation(self.preparation.finish())))
         out += self._emit(self.roll.finish())
         match = _HANDOFF.search(self.raw)
         self._narration = self.raw[: match.start()] if match else self.raw
@@ -282,6 +381,13 @@ class ResponseWatcher:
             out += self.redactor.feed(self.raw[self.visible :])
         out += self.redactor.finish()
         return out
+
+    @property
+    def opened(self):
+        """Whether the reply has written anything past its preparation fence:
+        prose, or a fence of any other kind, hidden or not (`opens_reply`'s
+        test, on what this watcher was fed)."""
+        return self._opened
 
     @property
     def preparation_note(self):

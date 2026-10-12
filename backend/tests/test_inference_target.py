@@ -32,7 +32,7 @@ from . import inference_baseline_c as baseline_c
 from . import inference_fixtures as fx
 from . import wire_kit
 
-TASKS = [*sorted(routing.TASK_ROUTE), ""]
+TASKS = [*sorted(set(routing.TASK_ROUTE) - routing.NO_LEGACY_TASKS), ""]
 
 
 def _operation(task: str) -> str:

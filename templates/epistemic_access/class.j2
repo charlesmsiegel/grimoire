@@ -1,0 +1,11 @@
+{#- One epistemic class's description (`store/epistemic_access.py`). Var:
+    access (one of `epistemic_access.CLASSES`). -#}
+{%- if access == "known" -%}
+they know it: they were told it plainly, or it is common knowledge to them
+{%- elif access == "suspected" -%}
+they suspect it from hints or rumour, without knowing it
+{%- elif access == "experienced" -%}
+they were there and saw or heard it themselves
+{%- elif access == "narrator_only" -%}
+only the narrator knows it; this character has no way of knowing it
+{%- endif -%}

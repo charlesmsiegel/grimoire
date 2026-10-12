@@ -1,0 +1,13 @@
+{#- A turn decision's item context (`store/turn_plan.intent_item`, roadmap 02
+    §6.2), which `decide/user.j2` shows above the questions.
+    Vars: name (the assigned actor's name); brief (the actor's OWN card
+    description and personality, clipped to `turn_plan.INTENT_BRIEF_TOKENS`;
+    "" renders no line); conversation (list of {"speaker", "content"}: the
+    observable transcript the speaker pick reads,
+    `response_protocol.observable_conversation`, through the prompt-phase
+    regex view). Nothing here is any other actor's private description. -#}
+Character about to reply: {{ name }}
+{%- if brief %}
+What {{ name }} is like: {{ brief }}
+{%- endif %}
+Observable transcript: {{ conversation | tojson }}

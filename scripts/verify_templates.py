@@ -496,6 +496,128 @@ REPORT.require("selector options are the item's",
                        len(SELECTOR_ROSTER):],
                f"carried descriptions for {list(SELECTOR_OPTIONS)}")
 
+# --- the turn intent (roadmap 02 §6): its item, and the block it sends -------
+#
+# `turn_plan.intent_item` renders `turn_plan/item.j2` as the item's context
+# (its brief line only when there is a brief) and one choice,
+# `turn_plan/stance_question.j2`, over `turn_plan.STANCES`, each described by
+# `turn_plan/stance.j2`, null allowed. `turn_plan.block` renders
+# `scene/turn_intent.j2` from the descriptions of the answers it was handed.
+from grimoire.store import turn_plan  # noqa: E402
+
+for brief in ("", "Guarded <and> quick."):
+    label = f"brief={bool(brief)}"
+    item = turn_plan.intent_item("Mara", SELECTOR_CONVERSATION, brief)
+    check(f"intent item context ({label})", item.context,
+          render("turn_plan/item.j2", name="Mara", brief=brief,
+                 conversation=SELECTOR_CONVERSATION))
+    REPORT.require(f"intent item brief line ({label})",
+                   ("What Mara is like:" in item.context) == bool(brief),
+                   "the brief line does not follow the brief")
+    (stance,) = item.questions
+    check(f"intent item question ({label})", stance.instructions,
+          render("turn_plan/stance_question.j2").strip())
+    REPORT.require(f"intent item options ({label})",
+                   stance.id == turn_plan.STANCE_ID and stance.allow_none
+                   and [o.id for o in stance.options] == list(turn_plan.STANCES),
+                   f"offers {[o.id for o in stance.options]} (allow_none={stance.allow_none})")
+    for option in stance.options:
+        check(f"intent option {option.id} ({label})", option.description,
+              render("turn_plan/stance.j2", stance=option.id).strip())
+        REPORT.require(f"intent option {option.id} described", bool(option.description),
+                       "turn_plan/stance.j2 renders nothing for it")
+for plan in ({"stance": "deflect"}, {"stance": "press", "disclosure": "hint", "tension": 2},
+             {"disclosure": "withhold"}):
+    expected = render("scene/turn_intent.j2", name="Mara",
+                      stance=(render("turn_plan/stance.j2", stance=plan["stance"]).strip()
+                              if "stance" in plan else ""),
+                      disclosure=(render("turn_plan/disclosure.j2",
+                                         disclosure=plan["disclosure"]).strip()
+                                  if "disclosure" in plan else ""),
+                      tension=(render("turn_plan/tension.j2", level=plan["tension"]).strip()
+                               if "tension" in plan else "")).strip()
+    check(f"intent block ({sorted(plan)})", turn_plan.block(plan, "Mara"), expected)
+# The turn plan (§7.2): the same context, then stance, disclosure (a choice
+# over `DISCLOSURES` described by `turn_plan/disclosure.j2`, null allowed)
+# and tension (a score over `TENSION_LEVELS`).
+plan = turn_plan.plan_item("Mara", SELECTOR_CONVERSATION, "Guarded.")
+check("plan item context", plan.context,
+      render("turn_plan/item.j2", name="Mara", brief="Guarded.",
+             conversation=SELECTOR_CONVERSATION))
+REPORT.require("plan item questions",
+               [q.id for q in plan.questions]
+               == [turn_plan.STANCE_ID, turn_plan.DISCLOSURE_ID, turn_plan.TENSION_ID],
+               f"asks {[q.id for q in plan.questions]}")
+_, disclosure, tension = plan.questions
+check("plan disclosure question", disclosure.instructions,
+      render("turn_plan/disclosure_question.j2").strip())
+check("plan tension question", tension.instructions,
+      render("turn_plan/tension_question.j2").strip())
+REPORT.require("plan disclosure options",
+               [(o.id, o.description) for o in disclosure.options]
+               == [(d, render("turn_plan/disclosure.j2", disclosure=d).strip())
+                   for d in turn_plan.DISCLOSURES] and disclosure.allow_none,
+               f"offers {[o.id for o in disclosure.options]}")
+REPORT.require("plan tension levels", tension.levels == turn_plan.TENSION_LEVELS,
+               f"levels {tension.levels}")
+# The decide tool's item context in play (§8.1): the asking actor's name and
+# the observable window, never the writer's whole prompt.
+REPORT.require("tool item context",
+               "Observable transcript:" in render("turn_plan/tool_item.j2", name="Mara",
+                                                  conversation=SELECTOR_CONVERSATION)
+               and "Mara" in render("turn_plan/tool_item.j2", name="Mara", conversation=[]),
+               "turn_plan/tool_item.j2 lost its name or its transcript")
+for value in turn_plan.DISCLOSURES:
+    REPORT.require(f"disclosure {value} described",
+                   bool(render("turn_plan/disclosure.j2", disclosure=value).strip()),
+                   "turn_plan/disclosure.j2 renders nothing for it")
+for level in range(len(turn_plan.TENSION_LEVELS)):
+    REPORT.require(f"tension {level} described",
+                   bool(render("turn_plan/tension.j2", level=level).strip()),
+                   "turn_plan/tension.j2 renders nothing for it")
+
+# --- the decide kits (roadmap 02-S7): epistemic access and history relevance
+from grimoire.store import epistemic_access, history_rerank  # noqa: E402
+
+for basis in ((), ("present", "asleep")):
+    label = f"basis={bool(basis)}"
+    question = epistemic_access.AccessQuestion("characters:mara", "Mara", "ev1",
+                                               "Seraphine <takes> the key.", basis)
+    (item,) = epistemic_access.build_items([question])
+    check(f"epistemic item context ({label})", item.context,
+          render("epistemic_access/item.j2", name="Mara", excerpt=question.excerpt,
+                 basis=list(basis)))
+    (access,) = item.questions
+    check(f"epistemic question ({label})", access.instructions,
+          render("epistemic_access/question.j2").strip())
+    REPORT.require(f"epistemic options ({label})",
+                   [(o.id, o.description) for o in access.options]
+                   == [(c, render("epistemic_access/class.j2", access=c).strip())
+                       for c in epistemic_access.CLASSES]
+                   and access.allow_none and all(o.description for o in access.options),
+                   f"offers {[o.id for o in access.options]}")
+for when in ("", "the night of the storm"):
+    label = f"when={bool(when)}"
+    candidate = history_rerank.Candidate("scene-2", "The ledger <goes> under the pier.", when)
+    (item,) = history_rerank.build_items("Where is the ledger?", [candidate])
+    check(f"rerank item context ({label})", item.context,
+          render("history_rerank/item.j2", query="Where is the ledger?",
+                 excerpt=candidate.excerpt, when=when))
+    (relevance,) = item.questions
+    check(f"rerank question ({label})", relevance.instructions,
+          render("history_rerank/question.j2").strip())
+    REPORT.require(f"rerank levels ({label})", relevance.levels == history_rerank.LEVELS,
+                   f"levels {relevance.levels}")
+ranked = history_rerank.build_items_ranked(
+    "Where is the ledger?", [history_rerank.Candidate("a", "x"),
+                             history_rerank.Candidate("b", "y", "spring")])
+check("rerank ranked context", ranked.context,
+      render("history_rerank/rank_context.j2", query="Where is the ledger?"))
+(rank,) = ranked.questions
+check("rerank ranked question", rank.instructions,
+      render("history_rerank/rank_question.j2").strip())
+check("rerank ranked pointwise", rank.pointwise, render("history_rerank/pointwise.j2").strip())
+
 #: The driver keys of the suggestion snapshot (`build_snapshot(drivers=True)`,
 #: which has no `upcoming`), empty.
 DRIVER_KEYS = {"commitments": [], "timeline": [], "driver_index": [], "anchors": [],

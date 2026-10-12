@@ -40,7 +40,7 @@ from .test_inference_equivalence import (
     migrated_expectation,
 )
 
-TASKS = [*sorted(routing.TASK_ROUTE), ""]
+TASKS = [*sorted(set(routing.TASK_ROUTE) - routing.NO_LEGACY_TASKS), ""]
 
 
 def _recorded(state: str, task: str, scope: str) -> dict:

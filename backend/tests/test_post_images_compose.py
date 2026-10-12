@@ -169,3 +169,22 @@ def test_macros_expand_around_a_kept_image(cid):
     assert cp.as_text(list(rich)) == list(plain)
     assert not any("{{nonsense}}" in cp.text_of(m["content"]) for m in rich)
     assert any("Mara unrolls a map" in cp.text_of(m["content"]) for m in rich)
+
+
+def test_a_play_decision_block_never_keeps_a_carrier_from_its_note():
+    """Roadmap 02's intent block sits after the history and before a director
+    note; a trailing carrier is still folded into that note (#377), with the
+    block before it, so a provider that lifts system messages out of the
+    list never leaves the carrier beside another user message."""
+    from grimoire.store.context import assemble
+
+    carrier = {"role": "user", "content": [{"type": "text", "text": "art"}], cp.CARRIER: True}
+    block = ({"role": "system", "content": "Turn intent"},)
+    note = ({"role": "user", "content": "what next"},)
+    merged = assemble._merged_carrier([{"role": "assistant", "content": "hi"}, carrier],
+                                      note, block)
+    assert [m["role"] for m in merged] == ["assistant", "system", "user"]
+    assert not any(m.get(cp.CARRIER) for m in merged)
+    assert cp.text_of(merged[-1]["content"]).endswith("what next")
+    plain = assemble._merged_carrier([{"role": "assistant", "content": "hi"}], note, block)
+    assert [m["role"] for m in plain] == ["assistant", "system", "user"]

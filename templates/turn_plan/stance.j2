@@ -1,0 +1,20 @@
+{#- One stance's description (`store/turn_plan.py`, roadmap 02 §6.1): the
+    option text the turn decision is offered beside the id, and the clause
+    the intent block (`scene/turn_intent.j2`) tells the writer. Var: stance
+    (one of `turn_plan.STANCES`). A stance is a way of answering, never what
+    the character says. -#}
+{%- if stance == "engage" -%}
+answer or go along openly
+{%- elif stance == "press" -%}
+push, challenge or accuse
+{%- elif stance == "deflect" -%}
+evade, change the subject, or answer a different question
+{%- elif stance == "refuse" -%}
+decline openly
+{%- elif stance == "deceive" -%}
+say something they believe is untrue
+{%- elif stance == "withdraw" -%}
+disengage, go quiet, or leave the exchange
+{%- elif stance == "act" -%}
+let an action carry the reply rather than words
+{%- endif -%}

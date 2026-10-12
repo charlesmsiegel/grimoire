@@ -811,12 +811,21 @@ class RunBudget:
     max_tool_calls: int = 12
     max_decisions: int = 2
     wall_seconds: float | None = None
-    max_output_tokens: int = 2048
+    #: Each turn's output cap (`inference.call_chain(max_tokens=)`). None
+    #: sends each turn the preset's own cap, and none where it sets none, as
+    #: a plain generation is sent (roadmap 02 §8.3) -- never with a spend
+    #: ceiling, whose projection needs a bound.
+    max_output_tokens: int | None = 2048
     max_result_chars_total: int = 48_000
     reserve_final: bool = True
     #: The most a run's projected spend may reach, in USD (01g-S5); None is
     #: no spend axis. A projection, never accounting (`inference.price_for`).
     spend_ceiling_usd: float | None = None
+    #: Whether the finalize turn is sent `tools/finalize.j2`'s instruction.
+    #: False sends the run's messages as they stand (tools still withheld): a
+    #: creative turn whose continuation IS the answer (roadmap 02 §8.5),
+    #: where "give your final answer now" would be prompt text in the story.
+    finalize_note: bool = True
 
     def __post_init__(self) -> None:
         ceiling = self.spend_ceiling_usd
@@ -826,6 +835,11 @@ class RunBudget:
             raise ValueError("RunBudget.spend_ceiling_usd is a finite amount of at least 0")
         for name in ("max_turns", "max_tool_calls", "max_output_tokens",
                      "max_result_chars_total"):
+            if name == "max_output_tokens" and self.max_output_tokens is None:
+                if ceiling is not None:
+                    raise ValueError("RunBudget.max_output_tokens bounds a spend ceiling's "
+                                     "projection, so it is not None beside one")
+                continue
             if not _positive_int(getattr(self, name)):
                 raise ValueError(f"RunBudget.{name} is a positive whole number")
         if isinstance(self.max_decisions, bool) or not isinstance(self.max_decisions, int) \

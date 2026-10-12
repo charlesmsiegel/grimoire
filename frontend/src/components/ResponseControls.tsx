@@ -86,6 +86,7 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
       <button disabled={disabled || loading} onClick={() => void variants()}>Response variants</button>
       {onCreateCharacter && <button disabled={disabled} onClick={onCreateCharacter}>Create character from this passage</button>}
       {error !== null && <p role="alert"><ErrorNote err={error} /></p>}
+      {record?.approach && <p className="subtle">Approach: <span className="chip on">{record.approach}</span></p>}
       {record?.variants.map((variant, index) => <div key={variant.id}>
         <Thinking content={variant.reasoning ?? ""} />
         <p>{variant.content}</p>

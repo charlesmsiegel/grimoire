@@ -1,0 +1,3 @@
+[
+  {"model": "gpt-6-luna", "answers": [{"type": "refusal", "name": "relevance"}], "usage": {"input_tokens": 200, "output_tokens": 0, "total_tokens": 200}}
+]

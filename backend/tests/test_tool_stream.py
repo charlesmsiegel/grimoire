@@ -148,18 +148,40 @@ def test_the_reasoning_buffer_rides_every_turn():
 
 def test_the_wall_never_cuts_a_turn_that_has_shown_text(monkeypatch):
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
-    fake = FakeToolTurns(ToolTurn(deltas=("Mara ", "keeps it."), pause=0.4))
-    result = _events(fake, budget=RunBudget(wall_seconds=0.2))[-1].result
+    # Walls of a second, not a fraction: the run's setup (worker-thread store
+    # reads) must never spend the wall before turn 1 on a loaded runner. The
+    # turn still outlasts it.
+    fake = FakeToolTurns(ToolTurn(deltas=("Mara ", "keeps it."), pause=1.2))
+    result = _events(fake, budget=RunBudget(wall_seconds=1.0))[-1].result
     assert result.status == "completed" and result.text == "Mara keeps it."
 
 
 def test_before_visible_text_the_turn_is_bounded(monkeypatch):
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
     fake = FakeToolTurns(("", [("read", {})]),
-                         ToolTurn(deltas=("", "", "late"), pause=0.4))
-    result = _events(fake, budget=RunBudget(wall_seconds=0.2, reserve_final=False))[-1].result
+                         ToolTurn(deltas=("", "", "late"), pause=1.2))
+    result = _events(fake, budget=RunBudget(wall_seconds=1.0, reserve_final=False))[-1].result
     assert (result.status, result.limit) == ("budget_exhausted", "wall")
     assert [r["status"] for r in result.rows] == ["ok", "aborted"]
+
+
+def test_text_the_caller_hides_does_not_lift_the_turn_bound(monkeypatch):
+    """With a visibility predicate (roadmap 02 §8.2), a leading perception
+    fence has shown the reader nothing: a turn that writes only that and
+    stalls is still cut, where text the reader sees would lift the bound."""
+    from grimoire.store import response_protocol
+
+    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
+    hidden = FakeToolTurns(("", [("read", {})]), ToolTurn(
+        deltas=("```perception\nShe waits.\n```\n", "", "late"), pause=1.2))
+    result = _events(hidden, budget=RunBudget(wall_seconds=1.0, reserve_final=False),
+                     visibility=lambda: response_protocol.opens_reply(True))[-1].result
+    assert (result.status, result.limit) == ("budget_exhausted", "wall")
+    shown = FakeToolTurns(("", [("read", {})]), ToolTurn(
+        deltas=("Mara ", "", "keeps it."), pause=1.2))
+    result = _events(shown, budget=RunBudget(wall_seconds=1.0, reserve_final=False),
+                     visibility=lambda: response_protocol.opens_reply(True))[-1].result
+    assert result.status == "completed" and result.text == "Mara keeps it."
 
 
 def test_entry_checks_are_raised_before_an_iterator_is_returned():

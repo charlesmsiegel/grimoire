@@ -713,6 +713,37 @@ def set_campaign_tracker(cid: str, value: str) -> None:
         atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
+def set_campaign_switches(cid: str, values: dict[str, str],
+                          vocabularies: dict[str, tuple[str, ...]]) -> None:
+    """Several of this campaign's own switches at once, each one a value of its
+    vocabulary or "" for "follow the global one" (the play decisions, roadmap
+    02 §3.6). `set_campaign_tracker`'s shape: every value is checked before
+    the lock is taken, a cleared key is REMOVED, and a write that changes
+    nothing neither touches the file nor moves `updated`. A key not in
+    `vocabularies` is refused, as is a value outside its own."""
+    for key, value in values.items():
+        if key not in vocabularies:
+            raise ValueError(f"{key!r} is not a campaign switch")
+        if value != "" and value not in vocabularies[key]:
+            allowed = ", ".join(repr(v) for v in ("", *vocabularies[key]))
+            raise ValueError(f"{key} must be one of {allowed}, not {value!r}")
+    with locks.campaign_lock(cid):
+        mp = paths.campaign_meta_path(cid)
+        if not mp.exists():
+            raise paths.CampaignNotFound(cid)
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        before = dict(meta)
+        for key, value in values.items():
+            if value:
+                meta[key] = value
+            else:
+                meta.pop(key, None)
+        if meta == before:
+            return
+        meta["updated"] = now_iso()
+        atomic.write_text(mp, dump_frontmatter(meta, body))
+
+
 #: The two campaign.md keys a cost budget occupies (#153). Named together
 #: because they are written and cleared together: a period with no limit beside
 #: it describes nothing, and a reader would have to invent a default for it.

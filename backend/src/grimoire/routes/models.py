@@ -53,6 +53,9 @@ class ConfigUpdate(BaseModel):
     speaker_turn_taking: str | None = None
     tracker: str | None = None
     perception_rider: str | None = None
+    decide_speaker_sampling: str | None = None
+    decide_turn_plan: str | None = None
+    decide_play_tool: str | None = None
     send_images: str | None = None
     send_images_limit: str | None = None
     backup_enabled: str | None = None
@@ -293,6 +296,16 @@ class TrackerLayer(BaseModel):
     fields: list[dict] = []
     change: dict = {}
     off: list[str] = []
+
+
+class CampaignPlayDecisions(BaseModel):
+    """A campaign's own play-decision switches (roadmap 02 §3.6): each one a
+    value of its switch, or "" to follow the global one. A field left out is
+    left as it is."""
+
+    speaker_sampling: str | None = None
+    turn_plan: str | None = None
+    play_tool: str | None = None
 
 
 class CampaignTracker(BaseModel):

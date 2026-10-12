@@ -62,8 +62,16 @@ class Route(NamedTuple):
     requires: tuple[str, ...] = ()
     #: For a route split out of a legacy one, the legacy route's key: stored
     #: settings (connection and preset keys) are still read from it. "" means
-    #: this route IS a legacy route.
+    #: this route IS a legacy route. `NO_LEGACY` means it was born at format
+    #: 2 and has no legacy key at all: nothing is read for it at format 1,
+    #: and it adds nothing to `LEGACY_ROUTES` or `CONFIG_KEYS`.
     legacy: str = ""
+
+
+#: `Route.legacy` for a route new at format 2 (roadmap shared structure;
+#: 02-S2 lands it): no legacy key names it, so a format-1 store resolves it
+#: through its role alone. Spelled so that no route key can equal it.
+NO_LEGACY = "<no legacy>"
 
 
 OPERATIONS: tuple[str, ...] = ("generate", "decide")
@@ -73,7 +81,11 @@ OPERATIONS: tuple[str, ...] = ("generate", "decide")
 #: `requires=("tools",)` would make the seam refuse every call on a known-`no`
 #: model, the ones that offer no tool included. Empty until a consumer (02-C4's
 #: scene route) opts one in.
-TOOLS_OPTIONAL: frozenset[str] = frozenset()
+TOOLS_OPTIONAL: frozenset[str] = frozenset({
+    # Roadmap 02-C4: a contribution may be offered the decide tool, behind
+    # its own switch, and is a plain generation otherwise.
+    "scene",
+})
 DEFAULT_ROLES: tuple[str, ...] = ("primary", "fast", "decision")
 
 
@@ -146,7 +158,23 @@ class TaskPolicy(NamedTuple):
 #: is added to a task's `native_first` only with its spec 01c §4.3 evidence
 #: in `evals/README.md`, "Decision distributions", and the entry's comment
 #: names that section, the kind and the run's date.
-TASK_POLICY: dict[str, TaskPolicy] = {}
+TASK_POLICY: dict[str, TaskPolicy] = {
+    # Roadmap 02-C2a: the pick's caller may draw WHO speaks from a reported
+    # distribution (only when the campaign samples, `play_decisions`).
+    # Escalation stays off until C2a's play gate measures it, and would be on
+    # `refused` only, with `reads_declines` (an abstention hands control
+    # back): a sampling task never escalates on margin (01c §4.1).
+    "response-selector": TaskPolicy(question="next", samples=True),
+    # Roadmap 02-C2b: the stance is drawn where a report allows. Escalation
+    # off: the feature is soft, so a failure costs only the intent.
+    "turn-intent": TaskPolicy(question="stance", samples=True),
+    # Roadmap 02-C3: the plan replaces the intent call, and draws only its
+    # stance; disclosure and tension are taken as answered.
+    "turn-plan": TaskPolicy(question="stance", samples=True),
+    # Roadmap 02-C4: the decide tool's selection is drawn where a report
+    # allows (§8.1, as §6.5); never escalated (the tool takes no escalator).
+    "turn-tool-decision": TaskPolicy(question="choice", samples=True),
+}
 
 _DEFAULT = TaskPolicy()
 
@@ -158,7 +186,10 @@ def policy(task: str) -> TaskPolicy:
 
 
 def legacy_key(route: Route) -> str:
-    """The key this route's stored settings live under."""
+    """The key this route's stored settings live under at format 1, or "" for
+    a route born at format 2 (`NO_LEGACY`), which has none."""
+    if route.legacy == NO_LEGACY:
+        return ""
     return route.legacy or route.key
 
 
@@ -184,6 +215,12 @@ ROUTES: tuple[Route, ...] = (
           "Which character speaks next in group play.",
           ("response-selector",), True, operation="decide", default_role="decision",
           legacy="scene"),
+    Route("turn_plan", "Turn planning",
+          "How each character approaches their reply in play, decided before it is "
+          "written. Off unless Play decisions are switched on.",
+          ("turn-intent", "turn-plan", "turn-tool-decision"), True, operation="decide",
+          default_role="decision",
+          legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",
@@ -249,8 +286,15 @@ def _legacy_routes() -> tuple[Route, ...]:
     return tuple(out)
 
 
-#: The twelve routes `ROUTES` held before the split.
+#: The twelve routes `ROUTES` held before the split. A `NO_LEGACY` route is
+#: in none of them (`_legacy_routes` skips every route with a `legacy`).
 LEGACY_ROUTES: tuple[Route, ...] = _legacy_routes()
+
+#: Every task on a `NO_LEGACY` route. The frozen inference baselines, recorded
+#: before such a route existed, enumerate `TASK_ROUTE` less these: a task on a
+#: route with no legacy key equals no sibling's resolution on a format-1 store.
+NO_LEGACY_TASKS: frozenset[str] = frozenset(
+    task for r in ROUTES if r.legacy == NO_LEGACY for task in r.tasks)
 
 #: Tasks a call meters under that NO route claims, on purpose: the connection
 #: test call runs on the connection it is testing, so no routing setting may

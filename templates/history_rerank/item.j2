@@ -1,0 +1,10 @@
+{#- One history-relevance item's context (`store/history_rerank.build_items`,
+    roadmap 02-C5b): how much one recalled scene bears on the current turn.
+    Vars: query (what the turn is about); excerpt (the recalled scene,
+    bounded, already through the prompt-phase regex view); when (its
+    in-fiction date label, "" renders no line). -#}
+The current turn: {{ query }}
+Recalled scene: {{ excerpt }}
+{%- if when %}
+When it happened: {{ when }}
+{%- endif %}

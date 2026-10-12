@@ -26,7 +26,7 @@ from typing import NamedTuple
 import pytest
 
 from grimoire import adapters, decisions
-from grimoire.store import response_protocol, routing, scene_break, voice_drift
+from grimoire.store import response_protocol, routing, scene_break, turn_plan, voice_drift
 from grimoire.store.continuity import identity, reconcile
 from grimoire.store.inference import resolve
 
@@ -43,6 +43,9 @@ _QUESTION: dict[str, str] = {
     "continuity-reconcile": reconcile.DECISION_ID,
     "scene-break": scene_break.QUESTION_ID,
     "voice-drift": voice_drift.QUESTION_ID,
+    "turn-intent": turn_plan.STANCE_ID,
+    "turn-plan": turn_plan.STANCE_ID,
+    "turn-tool-decision": "choice",
 }
 
 #: The tasks whose caller maps `abstained`/`refused` on the deciding question
@@ -57,7 +60,8 @@ _READS_DECLINES = frozenset({"response-selector"})
 #: does: a verdict about what happened in the fiction must not change between
 #: two runs of the same input). The speaker pick is 02-C2's sampled path; a
 #: task 02 or 13 adds that samples joins it in the change that adds it.
-_SAMPLES = frozenset({"response-selector"})
+_SAMPLES = frozenset({"response-selector", "turn-intent", "turn-plan",
+                      "turn-tool-decision"})
 
 
 class _Vocab(NamedTuple):
@@ -125,6 +129,13 @@ def _answers() -> dict[str, _Vocab]:
                                     _QUESTION["scene-break"])),
         "voice-drift": _Vocab(_keys(voice_drift.build_item("Seraphine", "anchor", "transcript"),
                                     _QUESTION["voice-drift"])),
+        "turn-intent": _Vocab(_keys(turn_plan.intent_item("Seraphine", [], ""),
+                                    _QUESTION["turn-intent"])),
+        "turn-plan": _Vocab(_keys(turn_plan.plan_item("Seraphine", [], ""),
+                                  _QUESTION["turn-plan"])),
+        # The decide tool's options are the asking model's, per call: none
+        # can be listed in advance.
+        "turn-tool-decision": _Vocab(frozenset()),
     }
 
 
@@ -360,11 +371,15 @@ def test_every_task_is_off_at_landing():
     (spec 01c §3.3). The change that switches a task on edits this test
     together with its evidence in `evals/README.md`: "Decision escalation"
     (01d §6.3) or "Decision distributions" (01c §4.3)."""
-    assert routing.TASK_POLICY == {}
+    # Roadmap 02-S3 lists the two sampling tasks -- sampling is the caller's,
+    # and runs only where a campaign switches it on -- with escalation off.
+    assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent", "turn-plan",
+                                        "turn-tool-decision"}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
-        assert not p.samples and p.native_first == (), task
+        assert p.native_first == (), task
+        assert p.samples == (task in _SAMPLES), task
 
 
 def test_every_decide_task_is_pinned():
@@ -372,7 +387,8 @@ def test_every_decide_task_is_pinned():
     assert set(_QUESTION) == set(_answers()) == decide
     assert _QUESTION == {"response-selector": "next", "continuity-identity": "decision",
                          "continuity-reconcile": "decision", "scene-break": "over",
-                         "voice-drift": "verdict"}
+                         "voice-drift": "verdict", "turn-intent": "stance",
+                         "turn-plan": "stance", "turn-tool-decision": "choice"}
     assert not _answers()["continuity-reconcile"].exact & {
         "duplicate", "continuation", "subthread", "pays_off"}
     # The builders' vocabularies, as each call site offers them.
@@ -381,6 +397,8 @@ def test_every_decide_task_is_pinned():
     assert _answers()["scene-break"].exact == {"true", "false"}
     assert _answers()["voice-drift"].exact == {voice_drift.DRIFT, voice_drift.IN_VOICE,
                                                voice_drift.NOT_ENOUGH}
+    assert _answers()["turn-intent"].exact == set(turn_plan.STANCES)
+    assert _answers()["turn-plan"].exact == set(turn_plan.STANCES)
 
 
 # ---- the checker accepts what it should ----

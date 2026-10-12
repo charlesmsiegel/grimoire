@@ -1,0 +1,20 @@
+{#- The turn intent block (roadmap 02 §6.5): what a play decision chose for
+    the assigned actor's next contribution, sent as its own system message
+    after the history -- placed as an author's note at depth 0 is, and never
+    a catalog section, so a prompt layout cannot switch it off while its call
+    is still paid, and it breaks no cached prefix before it.
+    Vars: name (the actor's name); stance, disclosure, tension: the
+    descriptions of the answers that were read (`turn_plan/stance.j2`,
+    `turn_plan/disclosure.j2`, `turn_plan/tension.j2`), each "" when that
+    question was not asked or not answered. At least one is non-empty, or
+    nothing is sent. -#}
+{%- if stance -%}
+{{ name }}'s approach in this reply: {{ stance }}.
+{% endif -%}
+{%- if disclosure -%}
+Of what {{ name }} already knows, they {{ disclosure }}.
+{% endif -%}
+{%- if tension -%}
+In this reply, {{ tension }}.
+{% endif -%}
+Write it in their own voice. Never name or explain the approach.

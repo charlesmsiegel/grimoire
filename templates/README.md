@@ -797,6 +797,11 @@ context, each through the prompt-phase regex view the caller hands in, as
   (`response_protocol.GRIMOIRE_REF`), described by
   `response_selector_grimoire.j2` (no vars): the retired prompt's words for what
   grimoire is chosen for.
+- Its null is described to a native decisions endpoint by
+  `response_selector_none.j2` (`decisions.Choice.none_text`; var `player`, the
+  scene's player character names, "" for none): the player taking the turn,
+  rather than the generic "None of the other options fits.". The structured
+  prompt already says null returns control to the player.
 
 No rationale is asked for. `store/response_protocol.py:selection_of` maps the answer
 back to the `(next, issue)` pair `_round_state` stores, with the two issue strings
@@ -811,6 +816,67 @@ a decide-era template verbatim (`SELECTOR_CARRIED`) and that
 `response_selector_grimoire.j2` renders the `grimoire` option's own description
 (`SELECTOR_OPTIONS`). The capture the prompt log keeps for the pick is this
 decide prompt.
+
+### `turn_plan/` — the `turn_plan` route's decide items, and the intent block
+When Play decisions are switched on (`decide_turn_plan`, off by default and
+shown in no UI until its play gate is ratified; roadmap 02 §3.6),
+`routes.character_turns._turn_plan` asks one `decide()` item about how the
+assigned actor approaches their contribution, before it is composed. No
+messages of its own: `store/turn_plan.py:intent_item` makes the item and
+`decide/` renders the prompt around it.
+- `turn_plan/item.j2` is the item's context. Vars: `name` (the actor's name),
+  `brief` (the actor's OWN card description and personality, clipped to
+  `turn_plan.INTENT_BRIEF_TOKENS` by `store/turn_plan.py:brief_of`; `""`
+  renders no line) and `conversation` (the speaker pick's observable window,
+  through the prompt-phase regex view).
+- `turn_plan/stance_question.j2` is the stance choice's instructions (id
+  `stance`, null allowed). No vars. Its options are `turn_plan.STANCES`, each
+  described by `turn_plan/stance.j2` (var `stance`).
+- With `decide_turn_plan=plan`, `store/turn_plan.py:plan_item` asks the same
+  context with two more questions in the same item, and the plan replaces the
+  intent call: `turn_plan/disclosure_question.j2` (id `disclosure`, a choice
+  over `turn_plan.DISCLOSURES`, each described by `turn_plan/disclosure.j2`,
+  var `disclosure`; null allowed) and `turn_plan/tension_question.j2` (id
+  `tension`, a score over `turn_plan.TENSION_LEVELS`, whose answers
+  `turn_plan/tension.j2`, var `level`, describes). No vars in either
+  question. Only the stance is ever drawn.
+
+With `decide_play_tool` on, a contribution may call the decide tool mid-reply
+(`routes.character_turns._play_tool`, roadmap 02 §8): its item's context is
+`turn_plan/tool_item.j2` -- vars `name` and `conversation`, the observable
+window and never the writer's whole prompt -- and its one choice is the
+model's own question and options.
+
+What was chosen reaches the writer through `scene/turn_intent.j2`
+(`store/turn_plan.py:block`): one system message after the history, placed as
+an author's note at depth 0 is and never a catalog section. Vars: `name`, and
+`stance`, `disclosure`, `tension` -- each the description of an answer that
+was read, or `""`. Nothing is sent when every one is `""`.
+`scripts/verify_templates.py` holds the item, its options and the block to
+these templates.
+
+### `epistemic_access/` and `history_rerank/` — decide kits for 11 and 09
+Two decide items with no call site yet (roadmap 02-S7): their routes,
+policy rows, registered eval cases and captures land with the call sites in
+11 and 09. Neither renders messages of its own; `decide/` renders the prompt
+around the item.
+- `epistemic_access/item.j2` (`store/epistemic_access.py:build_items`): vars
+  `name`, `excerpt` (bounded, through the prompt-phase regex view) and `basis`
+  (a list of the caller's deterministic signals; empty renders no line).
+  `epistemic_access/question.j2` (no vars) is the `access` choice, null
+  allowed, over `epistemic_access.CLASSES`, each described by
+  `epistemic_access/class.j2` (var `access`).
+- `history_rerank/item.j2` (`store/history_rerank.py:build_items`): vars
+  `query`, `excerpt` and `when` (a date label; `""` renders no line).
+  `history_rerank/question.j2` (no vars) is the `relevance` score over
+  `history_rerank.LEVELS`.
+- The ranked form (`store/history_rerank.py:build_items_ranked`, 01e's
+  `Rank`) uses `history_rerank/rank_context.j2` (var `query`),
+  `history_rerank/rank_question.j2` and `history_rerank/pointwise.j2`, the
+  per-candidate question only a native stage asks. The candidates are its
+  options, each described by its excerpt.
+
+`scripts/verify_templates.py` holds both kits to these templates.
 
 ## Keeping templates honest
 

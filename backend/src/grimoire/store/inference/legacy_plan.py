@@ -290,6 +290,8 @@ def _pins_and_presets(meta: Mapping, conn: Lookup, scoped_only: bool,
         if only is not None and route.key not in only:
             continue
         legacy = routing.legacy_key(route)
+        if not legacy:
+            continue   # born at format 2 (`routing.NO_LEGACY`): nothing stored for it
         chosen = str(meta.get(routing.config_key(legacy), "") or "").strip()
         if chosen:
             out[keys.use_key(route.key)] = keys.PIN

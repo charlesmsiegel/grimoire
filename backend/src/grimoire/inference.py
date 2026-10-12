@@ -1944,6 +1944,10 @@ class _Turn:
     target: wire.Target | None
     #: Whether the turn streamed visible text (01g-C6).
     shown: bool = False
+    #: Whether the turn streamed text the CALLER's reader would see -- its
+    #: `visibility` predicate's answer, which a hidden fence does not meet
+    #: (roadmap 02 §8.2); `shown` when the caller gave none.
+    visible: bool = False
 
 
 class _Loop:
@@ -1957,13 +1961,24 @@ class _Loop:
                  tool_choice: str, capture: TurnCapture | None,
                  prices: dict[tuple[str, str], Price | None] | None = None,
                  streaming: bool = False, decline_after_text: bool = False,
-                 reasoning: llm_reasoning.Buffer | None = None):
+                 reasoning: llm_reasoning.Buffer | None = None,
+                 visibility: Callable[[], Callable[[str], bool]] | None = None,
+                 holders: list[dict] | None = None):
         prices = prices or {}
+        #: The caller's list each turn's usage holder is appended to as its
+        #: meter opens (02 §8.5): the facade stamps the holder in place, so
+        #: the caller reads which attempt is serving while the turn streams.
+        self.holders = holders
         #: 01g-C6: each turn through `client.stream`, the caller's display
         #: reasoning buffer in each turn's holder, and visible text final.
         self.streaming, self.decline_after_text = streaming, decline_after_text
         self.reasoning = reasoning
         self.shown = False
+        #: A fresh predicate per turn (02 §8.2): does this delta show the
+        #: reader anything? None reads every non-empty delta as visible.
+        self.visibility = visibility
+        self.visible = False
+        self._sees: Callable[[str], bool] | None = None
         self.task, self.base, self.toolset, self.execute = task, messages, toolset, execute
         self.client, self.resolved, self.budget, self.run_id = client, resolved, budget, run_id
         self.attribution, self.scene_identity = attribution, scene_identity
@@ -2108,8 +2123,9 @@ class _Loop:
     async def _finalize(self, *, stopped: bool) -> tool_calls.LoopResult:
         """The finalize turn (spec 3.7 step 7)."""
         self.finalized = True
-        note = await asyncio.to_thread(partial(finalize_message, self.final_schema,
-                                               stopped=stopped))
+        note = (await asyncio.to_thread(partial(finalize_message, self.final_schema,
+                                                stopped=stopped))
+                if self.budget.finalize_note or self.final_schema is not None else None)
         turn = await self._turn(final=True, extra=note)
         if turn is None:
             return self._result("budget_exhausted")
@@ -2130,7 +2146,7 @@ class _Loop:
         """A turn's calls answered, or the run ended by its answer."""
         if not turn.calls:
             return await self._answered(turn)
-        if self.decline_after_text and turn.shown:
+        if self.decline_after_text and turn.visible:
             # Visible text is final (01g-C6): the calls it ended with are
             # declined, and no turn follows it.
             for call in turn.calls:
@@ -2193,6 +2209,8 @@ class _Loop:
             return None
         k = self.turns = self.turns + 1
         self.shown = False
+        self.visible = False
+        self._sees = self.visibility() if self.visibility is not None else None
         if extra is not None:
             self.appended.append(extra)
         self.sent_len = len(self.appended)
@@ -2221,9 +2239,11 @@ class _Loop:
         made = tuple(self._named(c) for c in collector.calls())
         calls = made if not final else ()
         # A joined turn's text is shown whole below, so it is visible text too.
-        self.shown = self.shown or (bool(text) and not self.streaming)
+        if text and not self.streaming:
+            self.shown = True
+            self.visible = self.visible or self._seen(text)
         turn = _Turn(k, text, calls, collector.finish_reason, collector.opaque(), target,
-                     self.shown)
+                     self.shown, self.visible)
         if text or not (final and made):
             # A finalize turn that only called (a chain sent `none` as
             # `auto`) leaves the text the run already had.
@@ -2253,7 +2273,9 @@ class _Loop:
         the last, on top of that send's reported (else projected) count --
         and the completion is the turn's cap; the maximum over the attempts
         that could serve it."""
-        if self.budget.spend_ceiling_usd is None:
+        cap = self.budget.max_output_tokens
+        if self.budget.spend_ceiling_usd is None or cap is None:
+            # `RunBudget` refuses an uncapped run beside a ceiling.
             return None
         if self.last_prompt is None:
             counted = await asyncio.to_thread(_prompt_count, list(sending), self.defs)
@@ -2264,7 +2286,7 @@ class _Loop:
             prompt = self.last_prompt + counted * tool_calls.PROJECTION_MARGIN
         self.next_prompt = prompt
         costs = [_cost(self.prices.get((t.provider_id, t.model)), prompt,
-                       clamp_to_max_output(t, self.budget.max_output_tokens))
+                       clamp_to_max_output(t, cap))
                  for t in chain.attempts]
         known = [c for c in costs if c is not None]
         # Every attempt was priced at entry (`tool_run_refusal`); one that
@@ -2321,6 +2343,8 @@ class _Loop:
         try:
             with meter as m:
                 m.usage[tool_calls.KEY] = collector
+                if self.holders is not None:
+                    self.holders.append(m.usage)
 
                 def overrun(limit: float) -> LLMError:
                     if by_wall:
@@ -2376,19 +2400,29 @@ class _Loop:
         turn's bound holds only until visible text: a turn that has shown
         text is never cut (spec 3.9), so the wall and the per-call ceiling
         are checked at each delta before the first visible one -- as often as
-        the provider or the facade's heartbeat speaks."""
+        the provider or the facade's heartbeat speaks. "Visible" is the
+        caller's `visibility` when it gave one: text it hides (a leading
+        perception fence, roadmap 02 §8.2) has shown its reader nothing, so a
+        turn that writes only that and stalls is still cut."""
         parts: list[str] = []
         started = time.monotonic()
         async with aclosing(source) as deltas:
             async for delta in deltas:
                 if delta:
                     self.shown = True
-                elif (not self.shown and seconds is not None
-                      and time.monotonic() - started > seconds):
+                    self.visible = self.visible or self._seen(delta)
+                begun = self.visible if self._sees is not None else self.shown
+                if (not begun and seconds is not None
+                        and time.monotonic() - started > seconds):
                     raise overrun(seconds)
                 parts.append(delta)
                 self.emit(tool_calls.LoopEvent("text", turn=k, delta=delta))
         return "".join(parts)
+
+    def _seen(self, text: str) -> bool:
+        """Whether `text` shows the caller's reader anything (`visibility`),
+        or -- with no predicate -- whether it is text at all."""
+        return self._sees(text) if self._sees is not None else bool(text)
 
     def _note_overrun(self, holder: dict, chain: wire.Chain, error: LLMError) -> None:
         """An `llm_call_budget` overrun, filed against the attempt that was
@@ -2736,7 +2770,10 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
                  tool_choice: Literal["auto", "required"] = "auto",
                  capture: TurnCapture | None = None, decline_after_text: bool = False,
                  reasoning: llm_reasoning.Buffer | None = None,
-                 streaming: bool = True) -> AsyncGenerator[tool_calls.LoopEvent, None]:
+                 streaming: bool = True,
+                 visibility: Callable[[], Callable[[str], bool]] | None = None,
+                 holders: list[dict] | None = None,
+                 ) -> AsyncGenerator[tool_calls.LoopEvent, None]:
     """`run_tools`' loop as it happens (spec 3.8; 01g-C6): an async iterator
     of `tool_calls.LoopEvent`s in the order `text* turn_end (tool_start
     tool_end)* ... done`, `done` last and carrying the `LoopResult`.
@@ -2754,7 +2791,12 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
     With `decline_after_text`, visible text is final: a turn that showed text
     and ended in tool calls ends the run `completed` with that text, its calls
     unexecuted, in `LoopResult.declined` and the trace as declined
-    `after_text`. A call before any visible text runs normally.
+    `after_text`. A call before any visible text runs normally. "Visible" is
+    the caller's to say when it hides some text from its reader (a hidden
+    preparation fence, roadmap 02 §8.2): `visibility` makes a fresh
+    predicate per turn, fed each delta, True once the reader would see it.
+    `holders`, a caller's list, is handed each turn's usage holder as its
+    meter opens, the dict the facade stamps the serving attempt into.
 
     The entry checks (`ValueError`) are made here, before an iterator is
     returned; the spend preflight (`RunRefused`) on the first step.
@@ -2767,7 +2809,7 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
                "scene_identity": scene_identity, "cancelled": cancelled,
                "final_schema": final_schema, "tool_choice": tool_choice, "capture": capture,
                "streaming": streaming, "decline_after_text": decline_after_text,
-               "reasoning": reasoning}
+               "reasoning": reasoning, "visibility": visibility, "holders": holders}
     return _loop_events(task, messages, options)
 
 

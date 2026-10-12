@@ -320,6 +320,12 @@ NOT_IN_CASSETTE = {
     "response-selector": ("the next-speaker pick in group play, which "
                           "`test_character_turns.py` and `test_group_play_turns.py` "
                           "drive with scripted decide replies"),
+    "turn-intent": ("the play decision before a contribution, off unless switched on, "
+                    "which `test_turn_intent.py` drives with scripted decide replies"),
+    "turn-plan": ("the play decision that replaces the intent when switched to `plan`, "
+                  "which `test_turn_plan.py` drives with scripted decide replies"),
+    "turn-tool-decision": ("the decide tool a contribution may call, off unless switched "
+                           "on, which `test_play_tool.py` drives with scripted replies"),
 }
 
 

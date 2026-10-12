@@ -13,6 +13,8 @@
     backend/.venv/Scripts/python.exe evals/run.py --escalation-sweep --case decide-continuity-identity
     backend/.venv/Scripts/python.exe evals/run.py --live --case decide-continuity-identity \
         --escalation '{"escalate_to": "primary", ...}' --out evals/out/esc.json
+    backend/.venv/Scripts/python.exe evals/run.py --live --play intent \
+        --scene openrouter/vendor/model --decision openrouter/vendor/decider  # a play gate
     backend/.venv/Scripts/python.exe evals/run.py --embed         # embedding rankings, replay
     backend/.venv/Scripts/python.exe evals/run.py --live --embed \
         --embed-options '{"input": "prefix", "document_prefix": "passage: "}'  # an A/B
@@ -41,7 +43,7 @@ sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
 from evals import cases as case_mod  # noqa: E402
-from evals import costs, escalation, gate, runfile, runner  # noqa: E402
+from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
 from evals.embed import corpus as embed_corpus  # noqa: E402
 from evals.embed import harness as embed_harness  # noqa: E402
 from evals.embed import metrics as embed_metrics  # noqa: E402
@@ -434,11 +436,73 @@ def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> 
                  "several --decide-backend it is ambiguous which")
 
 
+def run_play(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--live --play FEATURE`: the play gate (roadmap 02 §4). Every
+    configuration of the feature's matrix (`play.matrix`) plays every fixture
+    through the app, `--repeat` times (default `play.DEFAULT_REPEAT`), each
+    in its own seeded throwaway store; nothing is written to the real one.
+    Refused without `--live`: a play run is paid."""
+    if not args.live:
+        ap.error("--play runs the app live and costs money; it needs --live")
+    clash = [flag for flag, on in (("--record", args.record), ("--case", bool(args.case)),
+                                   ("--provider", bool(args.provider)),
+                                   ("--model", bool(args.model)),
+                                   ("--decide-backend", args.decide_backend is not None),
+                                   ("--escalation", bool(args.escalation)),
+                                   # Another mode, offline ones included: a paid
+                                   # run never stands in for what was asked.
+                                   ("--gate", args.gate), ("--compare", bool(args.compare)),
+                                   ("--embed", args.embed),
+                                   ("--embed-options", bool(args.embed_options)),
+                                   ("--escalation-sweep", args.escalation_sweep))
+             if on]
+    if clash:
+        ap.error(f"--play plays its own matrix; it takes no {', '.join(clash)}")
+    if not args.scene or not args.decision:
+        ap.error("--play needs at least one --scene and one --decision selection "
+                 "(provider/model[#preset])")
+    if args.repeat is not None and not 1 <= args.repeat <= runner.MAX_REPEAT:
+        ap.error(f"--repeat takes 1 to {runner.MAX_REPEAT}")
+    try:
+        configs = play.matrix(args.play, [play.Selection.parse(s) for s in args.scene],
+                              [play.Selection.parse(s) for s in args.decision])
+        # Still in the real store: the selected providers' files, the
+        # tripwire's reference and the rates every row is priced against.
+        selected = play.read_selected(configs)
+    except ValueError as exc:
+        print(runner.ascii_safe(f"play: {exc}"), file=sys.stderr)
+        return 2
+    real_home = paths.home()
+    rates = usage.Rates.current()
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for conf in configs:
+        print(runner.ascii_safe(f"play: {conf.id} " + " ".join(
+            f"{k}={v}" for k, v in conf.axes().items())))
+    try:
+        results, graded = play.run_all(args.play, configs, temp_home,
+                                       repeat=args.repeat or play.DEFAULT_REPEAT,
+                                       selected=selected, real_home=real_home, rates=rates,
+                                       run_id=args.run_id)
+    except (play.PlayRefusedError, runner.FollowUpsRunningError) as exc:
+        print(runner.ascii_safe(f"play: {exc}"), file=sys.stderr)
+        return 1
+    print(runner.report(results))
+    verdict, passed = play.report(graded)
+    print(runner.ascii_safe(verdict))
+    doc = runfile.build(results, [runfile.config(c.id, f"{c.feature} {c.setting}", c.axes())
+                                  for c in configs], run_id=args.run_id, started=started)
+    if args.out:
+        runfile.write(Path(args.out), doc)
+        print(runner.ascii_safe(f"wrote {args.out}"))
+    return 0 if passed else 1
+
+
 def _other_mode(args: argparse.Namespace):
     """The mode that is not a case run, when one is asked for: the embedding
     evals (`--embed`, or `--embed-options`, which it refuses alone), the
     decide gate, a comparison, or the escalation sweep. None for a case run."""
-    for asked, mode in ((args.embed or bool(args.embed_options), run_embed),
+    for asked, mode in ((bool(args.play), run_play),
+                        (args.embed or bool(args.embed_options), run_embed),
                         (args.gate, run_gate), (bool(args.compare), run_compare),
                         (args.escalation_sweep, run_sweep)):
         if asked:
@@ -491,6 +555,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--embed-options", action="append", metavar="JSON",
                     help="with --live --embed, also rank under this embedding options "
                          "block (repeatable), in memory: nothing is written")
+    ap.add_argument("--play", choices=tuple(play.FEATURES), default="",
+                    help="with --live, the play gate for this feature (roadmap 02 "
+                         "section 4): its configurations through the app, on synthetic "
+                         "fixtures, each in a seeded throwaway store")
+    ap.add_argument("--scene", action="append", metavar="SELECTION",
+                    help="with --play, a scene-route selection, provider/model[#preset] "
+                         "(repeatable: the plan matrix's further rows)")
+    ap.add_argument("--decision", action="append", metavar="SELECTION",
+                    help="with --play, a Decision selection, provider/model (repeatable)")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
 

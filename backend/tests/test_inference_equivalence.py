@@ -375,7 +375,7 @@ def planned_cells(cid: str) -> dict:
         return out
 
     return {task: {"global": cell(task, ""), "campaign": cell(task, cid)}
-            for task in [*sorted(routing.TASK_ROUTE), ""]}
+            for task in [*sorted(set(routing.TASK_ROUTE) - routing.NO_LEGACY_TASKS), ""]}
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
