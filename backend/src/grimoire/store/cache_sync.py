@@ -388,8 +388,19 @@ def _norm(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
 
 
+#: The reparse tags that redirect a path: a symlink and a junction (mount
+#: point). Any other reparse point -- a cloud-sync placeholder, say -- is the
+#: file itself, and refusing it would refuse a library kept in a synced folder.
+_LINK_TAGS = frozenset({0xA000000C, 0xA0000003})
+
+
 def _linked(info: os.stat_result) -> bool:
-    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT)
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    if not getattr(info, "st_file_attributes", 0) & _REPARSE_POINT:
+        return False
+    tag = getattr(info, "st_reparse_tag", None)
+    return tag is None or tag in _LINK_TAGS
 
 
 def _relative_parts(root: Path, given: str) -> list[str] | None:
@@ -431,8 +442,15 @@ def _check(root: Path, given: str) -> _Checked:
     parts = _relative_parts(root, text)
     if parts is None:
         return _Checked(str(text), reason="outside_store")
-    if parts[0] not in SYNCABLE_ROOTS:
+    # The top-level name is matched without case, and reported in the
+    # store's own spelling: on a case-insensitive volume `Worlds/...` is the
+    # same directory (section 8, rule 6). A wrong-case component below it is
+    # accepted as the OS resolves it, but its rows are keyed by the spelling
+    # the app wrote, so it reads cold; name paths in their own case.
+    top = next((name for name in SYNCABLE_ROOTS if name.casefold() == parts[0].casefold()), None)
+    if top is None:
         return _Checked(text, reason="not_syncable")
+    parts = [top, *parts[1:]]
     rel = "/".join(parts)
     if atomic.is_write_temp(Path(parts[-1])):
         return _Checked(text, rel, reason="temp_file")
@@ -472,14 +490,18 @@ def _expand(root: Path, rel: str, limit: int) -> tuple[list[str], bool]:
                 pending.append(Path(entry.path))
             elif stat.S_ISREG(info.st_mode):
                 if len(found) >= limit:
-                    return found, True
+                    return sorted(found), True
                 found.append(Path(os.path.relpath(entry.path, root)).as_posix())
     return sorted(found), False
 
 
-def _campaign_of(rel: str) -> str | None:
+def _campaign_of(root: Path, rel: str) -> str | None:
+    """The campaign a path inside `campaigns/<cid>/` belongs to, while that
+    campaign's directory exists. A file directly under `campaigns/`, or a
+    whole campaign deleted, has no token to bump."""
     parts = rel.split("/")
-    if len(parts) >= 2 and parts[0] == "campaigns" and paths.safe_id(parts[1]):
+    if (len(parts) >= 3 and parts[0] == "campaigns" and paths.safe_id(parts[1])
+            and (root / "campaigns" / parts[1]).is_dir()):
         return parts[1]
     return None
 
@@ -518,12 +540,15 @@ def _context(root: Path, mode: str, *, dry_run: bool, verify: bool, embed: bool,
                        space=space, space_digest=digest, stop=stop)
 
 
-def _rows(root: Path, rel: str) -> tuple[compiled.Materialized, ...]:
-    """`rel`'s `materialized` rows, read by its path alone (03 section 4)."""
+def _rows(root: Path, rel: str) -> tuple[compiled.Materialized, ...] | None:
+    """`rel`'s `materialized` rows, read by its path alone (03 section 4), or
+    None when the history could not be read -- a busy cache, a read error --
+    which must never pass for "nothing was hot"."""
     path = root.joinpath(*rel.split("/"))
     with compiled.batch(root) as request:
         try:
-            return request.materialized([path]).get(path, ())
+            answer = request.materialized_answer([path])
+            return None if answer is None else answer.get(path, ())
         finally:
             request.disabled = True                       # a read: nothing to flush
 
@@ -567,10 +592,13 @@ def sync_paths(relpaths: Iterable[str], *,
         report.cache, report.cache_reason = "off", reason
         _warn_once(f"cache_off:{reason}")
 
+    # Section 10: the app is told about the edit before anything slow can
+    # stop the batch -- the bump depends only on validation, never on what
+    # was hot -- and only a moved root, never a cancel, skips it.
+    if not dry_run and mode == "explicit":
+        _bump(root, report)
     copied = _copy_renames(root, items, hooks, dry_run=dry_run) if report.cache == "on" else {}
-    hot = _find_hot(root, items, report, stop, copied)
-    if not dry_run and mode == "explicit" and report.stopped is None:
-        _bump(root, report, stop)
+    hot = _find_hot(root, items, report, stop, copied) if report.stopped is None else {}
 
     if report.cache == "on" and hot and report.stopped is None:
         _run_hooks(root, mode, hooks, hot, report, embed=embed, dry_run=dry_run,
@@ -597,11 +625,15 @@ def _find_hot(root: Path, items: list[PathReport], report: SyncReport, stop: Cal
         if (halt := _halted(root, stop)) is not None:
             report.stopped = halt
             break
+        rows: tuple[compiled.Materialized, ...] | None
         if item.rel in copied:
             rows = copied[item.rel]
         else:
             rows = _rows(root, item.rel) if report.cache == "on" else ()
-        if rows:
+        if rows is None:
+            _warn_once("history_unreadable")
+            item.status = "unsynced"
+        elif rows:
             hot[item.rel] = rows
         else:
             item.status = "cold"
@@ -618,17 +650,30 @@ class _Collector:
         self.items: list[PathReport] = []
         self.accepted = 0
 
-    def add(self, item: PathReport) -> None:
+    def add(self, item: PathReport) -> bool:
+        """Record `item`; False when it repeats a path already in the batch."""
         if item.rel is not None:
             if item.rel in self.seen:
-                return
+                return False
             self.seen.add(item.rel)
         if self.quiet and item.status in ("refused", "missing"):
-            return
+            return True
         self.report.paths.append(item)
         self.items.append(item)
+        return True
+
+    def full(self, given: str) -> bool:
+        """Past `MAX_PATHS`: refuse `given` as `too_many` and say so."""
+        if self.accepted < MAX_PATHS:
+            return False
+        self.report.truncated = True
+        self.add(PathReport(os.fspath(given), "refused", "too_many"))
+        return True
 
     def deleted(self, root: Path, given: str) -> None:
+        if self.full(given):
+            return
+        self.accepted += 1
         checked = _check(root, given)
         if checked.reason is not None:
             self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
@@ -650,14 +695,11 @@ class _Collector:
         elif checked.kind != "file":
             self.add(PathReport(checked.given, "refused", "not_a_file", rel=checked.rel))
         else:
-            self.accepted += 1
-            self.add(PathReport(checked.given, "pending", rel=checked.rel,
-                                renamed_from=self.items[before].rel if gone else None))
+            self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel,
+                                                 renamed_from=self.items[before].rel if gone else None))
 
     def argument(self, root: Path, given: str) -> None:
-        if self.accepted >= MAX_PATHS:
-            self.report.truncated = True
-            self.add(PathReport(os.fspath(given), "refused", "too_many"))
+        if self.full(given):
             return
         checked = _check(root, given)
         if checked.reason is not None:
@@ -668,11 +710,9 @@ class _Collector:
             files, cut = _expand(root, checked.rel, MAX_PATHS - self.accepted)
             self.report.truncated = self.report.truncated or cut
             for rel in files:
-                self.accepted += 1
-                self.add(PathReport(rel, "pending", rel=rel))
+                self.accepted += self.add(PathReport(rel, "pending", rel=rel))
         else:
-            self.accepted += 1
-            self.add(PathReport(checked.given, "pending", rel=checked.rel))
+            self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
 
 def _classify_arguments(root: Path, relpaths: Iterable[str], deleted: Iterable[str],
@@ -717,7 +757,7 @@ def _copy_renames(root: Path, items: list[PathReport], hooks: tuple[WarmHook, ..
         try:
             if dry_run:
                 rows = []
-                for row in _rows(root, item.renamed_from):
+                for row in _rows(root, item.renamed_from) or ():
                     mapped = remap(row.kind, row.instance)
                     text = mapped if isinstance(mapped, str) else _canonical(mapped)
                     rows.append(compiled.Materialized(new, row.kind, text, "", row.last_used))
@@ -751,15 +791,18 @@ def _purge_roots(root: Path, report: SyncReport, stop: Callable[[], bool]) -> No
     report.purged = True
 
 
-def _bump(root: Path, report: SyncReport, stop: Callable[[], bool]) -> None:
+def _bump(root: Path, report: SyncReport) -> None:
     """Section 10: once per campaign per batch, before any rebuild, for every
-    path that is not refused or missing -- hot, cold or an intended delete."""
+    path that is not refused or missing -- hot, cold or an intended delete --
+    in a campaign that still exists. A cancel does not skip it (it costs one
+    atomic write per campaign); a moved root does, since `revision.bump`
+    resolves the root itself."""
     cids = sorted({cid for item in report.paths
                    if item.rel is not None and item.status not in ("refused", "missing")
-                   and (cid := _campaign_of(item.rel)) is not None})
+                   and (cid := _campaign_of(root, item.rel)) is not None})
     for cid in cids:
-        if (halt := _halted(root, stop)) is not None:
-            report.stopped = halt
+        if _halted(root, lambda: False) is not None:
+            report.stopped = "root_moved"
             return
         revision.bump(cid)
         report.tokens_bumped += 1
@@ -782,9 +825,11 @@ def _run_hooks(root: Path, mode: str, hooks: tuple[WarmHook, ...],
             _network_phases(ctx, plans, by_rel, report)
     finally:
         _lane.release()
-    for item in by_rel.values():
-        if item.status == "pending" and (report.stopped is None or item.kinds):
-            item.status = _status(item)
+    for rel, item in by_rel.items():
+        if item.status != "pending":
+            continue
+        reached = all(row.kind in item.kinds for row in hot[rel])
+        item.status = _status(item) if report.stopped is None or reached else "unsynced"
 
 
 def _mark_lazy(hooks: tuple[WarmHook, ...], hot: Mapping[str, tuple[compiled.Materialized, ...]],
@@ -820,6 +865,8 @@ def _local_phases(ctx: WarmContext, hooks: tuple[WarmHook, ...],
             result = LocalResult(outcomes={(rel, row.kind): f"failed:{type(exc).__name__}"
                                            for rel, rows in mine.items() for row in rows})
         _merge(by_rel, result.outcomes, summary)
+        if (halt := ctx.halted()) is not None:     # the hook may have stopped part-way
+            report.stopped = halt
         for rel in result.verify_failed & by_rel.keys():
             by_rel[rel].status = "verify_failed"
         _add_embedding(report, result.embedding)
@@ -1015,6 +1062,16 @@ def _relative_to(root: Path, written: Iterable[str]) -> list[str]:
         if os.path.normcase(full).startswith(base + os.sep):
             out.append(Path(os.path.relpath(full, os.path.abspath(root))).as_posix())
     return sorted(out)
+
+
+def syncable(root: Path, written: Iterable[str]) -> list[str]:
+    """The write set's paths that a write-through batch could warm: inside
+    `root`, under a syncable record directory, and not a write temp. The
+    queue filters with this before anything is looked up, so the server's own
+    ledgers, logs, keys and top-level files never reach a batch at all."""
+    return [rel for rel in _relative_to(root, written)
+            if rel.split("/", 1)[0] in SYNCABLE_ROOTS and "/" in rel
+            and not atomic.is_write_temp(Path(rel.rsplit("/", 1)[-1]))]
 
 
 @contextlib.contextmanager

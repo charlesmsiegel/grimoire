@@ -7,9 +7,10 @@ append has succeeded. A fifth writer added to `atomic` without that call would
 be invisible to every warm-up, and nothing else would fail, so this does.
 
 Mechanical rule: every public callable in `atomic`, except an explicit
-allowlist of the ones that publish nothing, calls `writeset.note` in its OWN
-body -- not only in a private helper it calls, where one helper's note would
-silently cover a writer that never reaches it. No marker: a publishing
+allowlist of the ones that publish nothing, ends its OWN body with a
+`writeset.note(...)` statement -- after the publish, on every path that gets
+there, and not only in a private helper it calls, where one helper's note
+would silently cover a writer that never reaches it. No marker: a publishing
 function either notes or is added to the allowlist with its reason.
 """
 
@@ -30,20 +31,6 @@ NON_PUBLISHING = {
 }
 
 
-def _own_calls(fn: ast.FunctionDef) -> list[ast.Call]:
-    """Calls in `fn`'s own body, not inside a nested def or class."""
-    found: list[ast.Call] = []
-    stack: list[ast.AST] = list(fn.body)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            continue
-        if isinstance(node, ast.Call):
-            found.append(node)
-        stack.extend(ast.iter_child_nodes(node))
-    return found
-
-
 def _notes(call: ast.Call) -> bool:
     func = call.func
     return (isinstance(func, ast.Attribute) and func.attr == "note"
@@ -59,7 +46,8 @@ def violations(source: str) -> list[str]:
             continue
         if node.name.startswith("_") or node.name in NON_PUBLISHING:
             continue
-        if not any(_notes(call) for call in _own_calls(node)):
+        last = node.body[-1]
+        if not (isinstance(last, ast.Expr) and isinstance(last.value, ast.Call) and _notes(last.value)):
             bad.append(node.name)
     return bad
 
@@ -113,6 +101,25 @@ def write_later(path, data):
     return later
 '''
     assert violations(planted) == ["write_later"]
+
+
+def test_planted_note_before_the_publish_fails():
+    planted = '''
+def write_blob(path, data):
+    writeset.note(path)
+    _write_through_fd(path, "wb", None, data)
+'''
+    assert violations(planted) == ["write_blob"]
+
+
+def test_planted_note_in_a_branch_fails():
+    planted = '''
+def write_blob(path, data):
+    _write_through_fd(path, "wb", None, data)
+    if data:
+        writeset.note(path)
+'''
+    assert violations(planted) == ["write_blob"]
 
 
 def test_planted_writer_with_note_passes():

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import (
+    cache_warm,
     catalog,
     decisions,
     embeddings,
@@ -538,6 +539,9 @@ def put_data_dir(update: DataDirUpdate, request: Request):
     # Refs a continuity trigger left for a sweep name records in the OLD tree;
     # a move is refused only while a run is live, and these can wait with none.
     runs.drop_pending_touched(request.app)
+    # Paths the write-through queue holds were collected under the old root,
+    # and the queue never warms one against another (spec 05 section 5.4).
+    cache_warm.clear(request.app)
     # And the threshold belongs to the store, not to the process: `log_level`
     # lives in the config of whichever library is open, so a root that moved
     # without this kept writing at the OLD tree's floor while `GET /config`

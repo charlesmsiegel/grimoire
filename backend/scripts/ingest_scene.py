@@ -703,6 +703,13 @@ def resolve_key(cid: str, key: str) -> tuple[bool, object]:
     return True, closed
 
 
+def _sync_note(synced: cache_sync.Collected) -> None:
+    """One line on stderr, so stdout stays the JSON a batch driver parses."""
+    if synced.report is not None:
+        counts = " ".join(f"{k}={v}" for k, v in synced.report.counts().items() if v)
+        print(f"cache sync: {counts or 'nothing written'}", file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Ingest a rewritten campaign-log scene into a grimoire campaign.")
@@ -749,9 +756,7 @@ def main() -> int:
     with cache_sync.collecting() as synced:
         result = asyncio.run(ingest_one_scene(args.campaign, scene, client, resolved))
     print(json.dumps(result, indent=2))
-    if synced.report is not None:
-        counts = " ".join(f"{k}={v}" for k, v in synced.report.counts().items() if v)
-        print(f"cache sync: {counts or 'nothing written'}", file=sys.stderr)
+    _sync_note(synced)
     if result["status"] == "incomplete":
         # Nonzero, because the caller is a batch driver working through a log in
         # strict scene order and its only signal is this exit status. Scene N+1's

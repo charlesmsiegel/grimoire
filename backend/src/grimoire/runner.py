@@ -144,6 +144,10 @@ def install(app, tg) -> None:
     app.state.run_task_group = tg
     app.state.runs.set_event_factory(lambda: _PortalEvent(portal, loop_thread))
     tg.start_soon(_reaper, app)
+    # Beside the registry: the write-through queue every boundary's write set
+    # is handed to, and its worker (spec 05 section 5.4). Off when
+    # `GRIMOIRE_CACHE_WARM` is "0".
+    cache_warm.install(app, tg)
 
 
 def uninstall(app) -> None:

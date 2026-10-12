@@ -50,6 +50,10 @@ route_memo.install()
 # `tests.inference_fixtures.legacy_store()` before anything reads the store.
 # Set at import, not in a fixture, so a subprocess a test spawns inherits it.
 os.environ["GRIMOIRE_INFERENCE_AUTOMIGRATE"] = "0"
+# No write-through warm-up in the suite either (spec 05 section 5.4): the
+# collector still runs, but no queue is installed, so no test sees a
+# background rebuild it did not ask for. A test about the queue unsets it.
+os.environ["GRIMOIRE_CACHE_WARM"] = "0"
 # Every suite plays at format 2 on what a fresh install that has been through
 # the layout switch holds: a store a test creates from nothing is born an
 # upgraded default library (`store.config.birth_fields`) -- the format marker

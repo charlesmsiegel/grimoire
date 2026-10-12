@@ -102,13 +102,14 @@ extend-immutable-calls = [
 "backend/src/grimoire/store/__init__.py"  = ["F401"]  # 60-submodule aggregation
 "backend/src/grimoire/routes/__init__.py" = ["F401"]  # router aggregation
 # T201 the other way round: these *are* globs, because the whole of each tree
-# is command-line tooling whose output is the point. `where.py` is named
-# individually -- it is the one module inside the shipped package that is also
-# a CLI (`python -m grimoire.where`), and the rest of the package must keep
-# failing on a stray debug print.
+# is command-line tooling whose output is the point. `where.py` and `cache.py`
+# are named individually -- they are the modules inside the shipped package
+# that are also CLIs (`python -m grimoire.where`, `python -m grimoire.cache`),
+# and the rest of the package must keep failing on a stray debug print.
 "scripts/**"                              = ["T201"]
 "backend/scripts/**"                      = ["T201"]
 "evals/**"                                = ["T201"]
 ".claude/**"                              = ["T201"]
 "backend/tests/fixtures/**"               = ["T201"]
 "backend/src/grimoire/where.py"           = ["T201"]
+"backend/src/grimoire/cache.py"           = ["T201"]

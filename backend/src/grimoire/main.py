@@ -351,6 +351,9 @@ async def _lifespan(app: FastAPI):
                 # portal waits for it; this is what makes that wait one item
                 # long rather than the rest of a migration.
                 runner.stop_maintenance(app)
+                # The write-through queue's running batch, likewise: it stops
+                # at its next check rather than finishing every embedding.
+                cache_warm.stop(app)
                 # The inference migration is not a run, so the registry
                 # cannot stop it; it has a flag of its own.
                 _stop_migration(app)

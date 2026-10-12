@@ -448,3 +448,63 @@ def test_the_report_uses_only_the_exported_vocabulary(home, upper):
             assert outcome.split(":", 1)[0] in cache_sync.KIND_OUTCOMES
     assert set(out["counts"]) == set(cache_sync.PATH_STATUSES)
     assert set(out["embedding"]) == set(cache_sync.EMBEDDING_FIELDS)
+
+
+# -- review regressions ------------------------------------------------------
+
+
+def test_a_stop_inside_a_hook_leaves_the_unreached_paths_unsynced(home, upper):
+    for name in "abc":
+        _write(home, f"worlds/realm/lore/{name}.md", name)
+        _read(home, upper, f"worlds/realm/lore/{name}.md")
+        _write(home, f"worlds/realm/lore/{name}.md", f"{name}, edited")
+    built = []
+    real = upper.compute
+    object.__setattr__(upper, "compute", lambda v, p: built.append(1) or real(v, p))
+    report = cache_sync.sync_paths([f"worlds/realm/lore/{n}.md" for n in "abc"], mode="explicit",
+                                   stop=lambda: bool(built))
+    statuses = [p.status for p in report.paths]
+    assert statuses == ["refreshed", "unsynced", "unsynced"]
+    assert report.stopped == "cancelled" and not report.ok
+
+
+def test_an_unreadable_history_is_unsynced_never_cold(home, upper, monkeypatch):
+    _write(home, "worlds/realm/lore/pact.md", "x")
+    _read(home, upper, "worlds/realm/lore/pact.md")
+    monkeypatch.setattr(compiled, "STRICT_LOCK_SECONDS", 0.01)
+    with compiled._state.lock:                         # a concurrent reader holds the cache
+        report = cache_sync.sync_paths(["worlds/realm/lore/pact.md"], mode="explicit")
+    assert [p.status for p in report.paths] == ["unsynced"] and not report.ok
+
+
+def test_a_cancel_still_bumps_the_token(home):
+    _write(home, "campaigns/saltmarch/plot.json", "{}")
+    report = cache_sync.sync_paths(["campaigns/saltmarch/plot.json"], mode="explicit", stop=lambda: True)
+    assert report.tokens_bumped == 1 and report.stopped == "cancelled"
+
+
+def test_only_a_path_inside_an_existing_campaign_bumps(home, monkeypatch):
+    _write(home, "campaigns/notes.md", "x")
+    bumps = []
+    monkeypatch.setattr(revision, "bump", bumps.append)
+    report = cache_sync.sync_paths(["campaigns/notes.md"], deleted=["campaigns/winifred",
+                                                                      "campaigns/vanished/plot.json"],
+                                   mode="explicit")
+    assert bumps == [] and report.tokens_bumped == 0
+
+
+def test_duplicates_do_not_use_up_the_quota(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    for name in "ab":
+        _write(home, f"worlds/realm/lore/{name}.md", "x")
+    report = cache_sync.sync_paths(["worlds/realm/lore/a.md", "worlds/realm/lore/a.md",
+                                    "worlds/realm/lore/b.md"], mode="explicit")
+    assert [p.status for p in report.paths] == ["cold", "cold"] and not report.truncated
+
+
+def test_the_top_level_directory_is_matched_without_case(home):
+    _write(home, "worlds/realm/lore/pact.md", "x")
+    report = cache_sync.sync_paths(["Worlds/realm/lore/pact.md"], mode="explicit")
+    item = report.paths[0]
+    assert item.reason != "not_syncable"
+    assert item.rel == "worlds/realm/lore/pact.md"

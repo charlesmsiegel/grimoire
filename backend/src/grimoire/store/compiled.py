@@ -126,6 +126,9 @@ MAX_STAGED_BYTES = 4 << 20
 MAX_HISTORY_ROWS = 128
 MAX_HISTORY_BYTES = 4 << 20
 WRITE_LOCK_SECONDS = 0.010
+# How long a strict history read (`Batch.materialized_answer`) waits for the
+# process exclusion before saying it could not answer.
+STRICT_LOCK_SECONDS = 2.0
 IDLE_SECONDS = 30.0
 SIZE_CAP_BYTES = 64 << 20
 LOW_WATER_BYTES = 48 << 20
@@ -902,6 +905,11 @@ def _history_size(row: tuple) -> int:
     return sum(len(item.encode('utf-8')) if isinstance(item, str) else 8 for item in row)
 
 
+# `_materialized_rows`' answer for a family past the history budget: an
+# answer (empty), not a failure to ask.
+_OVER_BUDGET: list[tuple] = []
+
+
 def _history_transfer(cursor: Iterator[tuple]) -> list[tuple] | None:
     # Path count does not bound selectors per path. Reject the complete
     # optional answer before retaining an unbounded family; never truncate
@@ -1334,43 +1342,64 @@ class Batch:
         finally:
             _state.lock.release()
 
-    def _materialized_rows(self, paths: Sequence[str]) -> list[tuple] | None:
-        if not paths or not self._usable() or not _state.lock.acquire(blocking=False):
+    def _materialized_rows(self, paths: Sequence[str], *, strict: bool = False) -> list[tuple] | None:
+        # Strict callers (spec 05's sync) must tell "no rows" from "could not
+        # ask": they wait briefly for the process exclusion, and every
+        # non-answer is None rather than an empty, cold-looking list.
+        miss: list[tuple] | None = None if strict else []
+        if not paths:
             return []
+        if not self._usable() or not (_state.lock.acquire(timeout=STRICT_LOCK_SECONDS) if strict
+                                      else _state.lock.acquire(blocking=False)):
+            return miss
         session = None
         try:
             if not self._usable():
-                return []
+                return miss
             with _database(self.root, expected_generation=self._generation) as session:
                 if session is None or not self._session_current(session):
-                    return []
+                    return miss
                 supplied: list[object] = [MAX_KEY_BYTES, MAX_KEY_BYTES, MAX_KEY_BYTES, *paths]
                 supplied.extend([None] * (SOURCE_CHUNK - len(paths)))
                 rows = _history_transfer(session.conn.execute(_MATERIALIZED_SQL, supplied))
                 session.last_used = _clock()
-                return rows
+                return rows if rows is not None else _OVER_BUDGET
         except _CACHE_ERRORS as error:
             if session is not None:
                 _recover(self.root, session.path, error)
             _warn_once('materialized')
-            return []
+            return miss
         finally:
             _state.lock.release()
 
     def materialized(self, paths: Sequence[Path]) -> dict[Path, tuple[Materialized, ...]]:
         """Advisory work history for explicit paths, including vanished ones."""
+        found = self._read_history(paths, strict=False)
+        return found if found is not None else dict.fromkeys(paths, ())
+
+    def materialized_answer(self, paths: Sequence[Path]) -> dict[Path, tuple[Materialized, ...]] | None:
+        """`materialized`, or None when the history could not be read at all
+        (a busy exclusion after a short wait, an unusable batch, a read error,
+        or a family past the history budget). Spec 05's sync must not report a
+        hot path `cold` because the question went unanswered."""
+        return self._read_history(paths, strict=True)
+
+    def _read_history(self, paths: Sequence[Path], *, strict: bool) -> dict[Path, tuple[Materialized, ...]] | None:
         requested: dict[Path, tuple[Materialized, ...]] = dict.fromkeys(paths, ())
+        unanswered = None if strict else requested
         relatives = {path: relative for path in requested if (relative := _relative(self.root, path)) is not None}
         supplied = list(dict.fromkeys(relatives.values()))
         decoded: dict[str, list[Materialized]] = {}
         count, size = 0, 0
         for offset in range(0, len(supplied), SOURCE_CHUNK):
-            rows = self._materialized_rows(supplied[offset:offset + SOURCE_CHUNK])
+            rows = self._materialized_rows(supplied[offset:offset + SOURCE_CHUNK], strict=strict)
             if rows is None:
-                return requested
+                return unanswered
             count += len(rows)
             size += sum(_history_size(row) for row in rows)
-            if count > MAX_HISTORY_ROWS or size > MAX_HISTORY_BYTES:
+            # Past the budget the history is answered as empty in both forms:
+            # oversize history stays an optional cold warm-up (S4 contract).
+            if rows is _OVER_BUDGET or count > MAX_HISTORY_ROWS or size > MAX_HISTORY_BYTES:
                 _warn_once('materialized_budget')
                 return requested
             for row in rows:
@@ -1379,7 +1408,7 @@ class Batch:
                     decoded.setdefault(row[0], []).append(value)
                     self._remember_metadata(self._history_known, row[:3], row)
         if not self._usable():
-            return requested
+            return unanswered
         return {path: tuple(sorted(decoded.get(relatives.get(path, ''), ()),
                                    key=lambda item: (item.kind, item.instance))) for path in requested}
 

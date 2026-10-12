@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="a rename you made: NEW inherits what OLD had materialized")
     sync.add_argument("--deleted", action="append", default=[], metavar="PATH",
                       help="a path you removed on purpose (a world or campaign root purges the cache)")
-    sync.add_argument("--no-embed", action="store_false", dest="embed",
+    sync.add_argument("--no-embed", action="store_false", dest="send_embeddings",
                       help="rebuild everything local and leave embeddings to lazy")
     sync.add_argument("--dry-run", action="store_true",
                       help="validate, classify and plan; build, store, embed and bump nothing")
@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ROOT
     report = cache_sync.run(args.paths, campaigns=args.campaign, worlds=args.world,
                             all_records=args.all_records, renamed=dict(args.renamed),
-                            deleted=args.deleted, embed=args.embed, dry_run=args.dry_run,
+                            deleted=args.deleted, embed=args.send_embeddings, dry_run=args.dry_run,
                             verify=args.verify, root=root)
     out = report.as_dict()
     if args.json:
