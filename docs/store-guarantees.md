@@ -27,6 +27,7 @@ lesson is why `store/locks.py` turned its domain from prose into constants
 - [A second process on the same store](#a-second-process-on-the-same-store)
 - [The image store](#the-image-store)
 - [Model settings migration](#model-settings-migration)
+- [The compiled cache](#the-compiled-cache)
 - [What is **not** promised](#what-is-not-promised)
 
 ---
@@ -391,20 +392,24 @@ sync client, invalidates the entry. Filesystem timestamps tick coarsely (up to
 leave the signature unchanged; `RACY_WINDOW_NS` handles that the way git
 handles racy-clean, by never caching a file whose mtime is that recent.
 
-The character listings' rows (`statcache.memo_stamped`) are keyed wider,
-because a row is built from directory listings as well as files — which card
-files exist, which images a version holds. Each row carries a stamp of every
-file it read *and* of every directory whose listing it read: a directory's
-mtime moves on every create, unlink and rename inside it (every atomic write
-included), so a card or an image arriving from a sync client is noticed
-without the row having to list anything again. The stamp adds `st_ctime_ns`,
-which on POSIX catches a same-size in-place rewrite whose mtime was handed back
-— the residual the `(path, mtime_ns, size)` signature above accepts. On Windows
-`st_ctime` is the creation time, which an in-place rewrite does not move, so
-there that residual stands as it does for every other memo. What it cannot
-see is a mount whose directories do not advance their mtime when an entry
-changes; on such a store a new file shows up at the next change to anything
-else the row read, or at restart.
+The character listings' rows and the world and campaign shelf rows
+(`statcache.memo_stamped`) are keyed wider, because a row is built from
+directory listings as well as files — which card files exist, which images a
+version holds. Each row carries a stamp of every file it read *and* of every
+directory whose listing it read: a directory's mtime moves on every create,
+unlink and rename inside it (every atomic write included), so a card or an
+image arriving from a sync client is noticed without the row having to list
+anything again. The stamp adds the file's change time, which catches a
+same-size in-place rewrite whose mtime was handed back — the residual the
+`(path, mtime_ns, size)` signature above accepts. On POSIX that is
+`st_ctime_ns`. On Windows Python's `st_ctime` is the creation time, so
+`store/file_stats.py` asks the filesystem for its ChangeTime instead, and only
+on a local NTFS or ReFS volume; where no change time can be had, the row is not
+memoized at all rather than memoized on a stamp that cannot see the rewrite.
+The racy guard holds both times to `RACY_WINDOW_NS`. What it cannot see is a
+mount whose directories do not advance their mtime when an entry changes; on
+such a store a new file shows up at the next change to anything else the row
+read, or at restart.
 
 ### Conflicted copies
 
@@ -1331,6 +1336,73 @@ sentence names the file and says whether waiting for a sync will do (empty,
 held by another program, an entry not arrived) or a person must repair or
 restore it (it does not parse). Nothing is ever written over it. The view
 reads it fail-soft.
+
+---
+
+## The compiled cache
+
+**Module:** `backend/src/grimoire/store/compiled.py` · **Spec:**
+`docs/superpowers/specs/2026-10-09-roadmap-03-content-addressed-compiled-cache-design.md`
+· **Guard:** `backend/tests/test_compiled_guard.py`
+
+### A memo, never the inventory
+
+The cache is disposable. Files decide what exists; a cached artifact is found
+only by a key the caller computed from bytes it just validated, so a record
+that is gone has no live key and its rows are unreachable before anything
+deletes them. Every failure — no SQLite, a locked, linked, foreign, damaged or
+newer-schema file, a full disk — is a miss, and the caller's own file reader
+answers. Only SQLite's own `CORRUPT` and `NOTADB` answers on a file the cache
+owns let it set that file aside and start again; a foreign or locked file is
+never touched.
+
+### One file per device, inside the library
+
+It lives at `<home>/.cache/compiled/<device>-v<SCHEMA>.sqlite`, inside the root
+the user chose, because it holds derived private text and that root is where
+they decided such text may live. Each device writes only its own file, so a
+sync client copies files that each have one owner and two devices never open
+one database. Excluding the database files (`*.sqlite`, and their `.alive`
+leases) from sync is safe: a device without them rebuilds what it needs. The
+rest of `.cache/compiled/` must keep syncing, because the purge marker and
+`delete-intents/` are how other devices learn of a delete: excluding them leaves
+another device's copy of a deleted record's derived text at rest until eviction.
+Backups, bundle exports and the external-change scan skip `.cache/` entirely.
+
+### Deleting a world or campaign
+
+The delete routes pin the library root, hold off a root switch
+(`compiled.root_change()`, taken by `PUT /config/data-dir`), write a durable
+intent under `.cache/compiled/delete-intents/` (`compiled.prepare_delete`),
+delete the record, and then — in a `finally`, after the exclusion is released —
+call `compiled.purge_for_delete` with that same root. The purge publishes a new
+random token in `.cache/compiled/purge` and purges this device's files in
+place, obsolete schemas included. Every other device compares the token with
+the generation its own file recorded and purges itself the next time it opens
+the library. An intent left by a crash between the delete and the purge is
+found and finished later; it is never redirected to a library the pointer
+names afterwards.
+
+### What it does not promise
+
+- **A dormant device keeps its file.** A device that is retired or rarely
+  opened still holds the deleted record's derived text, and every other device
+  still receives that file through the sync client, until the device opens the
+  library again or another device's lease sweep removes a file whose lease has
+  not been renewed in 90 days (`RETENTION_S`). A delete intent such a device
+  left mid-delete fences every other device's cache off until the same 90 days
+  pass; after that it is ignored (never deleted), as the device is.
+- **Vectors are not purged per record.** `.cache/embeddings/*.vec` is keyed by
+  space and text, never by campaign, so a deleted campaign's vectors stay until
+  the user clears that folder. Thumbnails under `.cache/` likewise.
+- **Failed marker or intent I/O is a limit, not an error.** If the marker or
+  the intent cannot be written (unsafe controls, a full disk), the purge logs
+  once and the delete still succeeds; the rows are unreachable but stay at rest
+  until eviction or retention removes them.
+- **Size is bounded, not exact.** Past `SIZE_CAP_BYTES` a maintenance pass
+  evicts least-recently-used rows toward `LOW_WATER_BYTES` and returns at most
+  `VACUUM_PAGES` free pages to the filesystem per pass, so the file can sit
+  above the cap until later writes finish the trim.
 
 ---
 

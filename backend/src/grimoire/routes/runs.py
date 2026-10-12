@@ -825,8 +825,12 @@ class RunRegistry:
         the original.
 
         So the refusal and the flag are set in ONE acquisition, and
-        `start_or_existing` reads the flag inside that same lock. The block is
-        short and takes no other lock: `set_data_dir` rewrites a pointer file.
+        `start_or_existing` reads the flag inside that same lock. The block
+        takes no other registry lock: `set_data_dir` rewrites a pointer file,
+        but it first waits out `paths.library_guard`, which a world or
+        campaign delete holds across its whole removal (spec 03 keeps the
+        root still under a delete). So a move that lands beside a delete
+        refuses reservations for that delete's length, not just a write's.
 
         The count is decremented in a `finally`, because a move that raises must
         not leave the app unable to start a turn until it is restarted.

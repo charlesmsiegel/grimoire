@@ -40,6 +40,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -72,6 +73,17 @@ DEVICE_ID_FILE = "device-id"
 _RUN_ID = re.compile(r"[0-9a-f]{32}")
 _DEVICE_ID = re.compile(r"[0-9a-f]{32}")
 _DEVICE_LOCK = threading.Lock()
+_pid = os.getpid()
+
+
+def _reset_after_fork() -> None:
+    global _DEVICE_LOCK, _pid  # noqa: PLW0603 -- inherited locks belong to the parent
+    _DEVICE_LOCK = threading.Lock()
+    _pid = os.getpid()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 class MaintenanceElsewhereError(Exception):
@@ -187,6 +199,10 @@ def device_id() -> str:
     write so that, should the lock not come in time, the caller still returns
     what is on disk rather than its own losing guess.
     """
+    # A child cannot acquire a lock whose owning parent thread did not fork.
+    # This owner resets its own guard; compiled never reaches into it.
+    if _pid != os.getpid():
+        _reset_after_fork()
     path = proclock.lock_dir() / DEVICE_ID_FILE
     with _DEVICE_LOCK:
         found = _read_device_id(path)

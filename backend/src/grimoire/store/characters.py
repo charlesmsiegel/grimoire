@@ -492,6 +492,8 @@ def _card_summary(root: Path, cid: str, vid: str,
                 "greeting_count": _greeting_count(cards.card_data(card)),
                 "chub_source": _version_chub_source(card)}
 
+    if not statcache.vouches(stamp):
+        return compute()
     return statcache.memo("card_summary", sig, compute,
                           pool=_SUMMARY_POOL, max_entries=POOL_ENTRIES)
 

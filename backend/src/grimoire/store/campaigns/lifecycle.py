@@ -760,12 +760,17 @@ def set_campaign_budget(cid: str, budget_usd: float | str, period: str = "") -> 
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
-def delete_campaign(cid: str) -> None:
+def _preflight_delete(cid: str) -> Path:
     root = paths.campaign_root(cid)
     # same canonical-name requirement as delete_world: an rmtree must not
     # run for a spelling the store does not actually use (#259 review)
     if not paths.campaign_meta_path(cid).exists() or not worlds_paths.names_its_directory(root):
         raise paths.CampaignNotFound(cid)
+    return root
+
+
+def delete_campaign(cid: str) -> None:
+    root = _preflight_delete(cid)
     # The campaign's subject tags live on the shared image objects, which
     # outlive this directory; stripped, so a campaign created again under this
     # slug starts untagged. `remove_published` moves the tree aside, strips,

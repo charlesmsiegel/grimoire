@@ -159,3 +159,56 @@ def test_set_data_dir_over_a_corrupt_pointer_repairs_it_and_goes_quiet(monkeypat
         caplog.clear()
         assert store.home() == tmp_path / "synced"
     assert caplog.records == []
+
+
+@pytest.mark.parametrize("reset", [False, True])
+@pytest.mark.parametrize("blocked", ["worlds", "campaigns"])
+def test_failed_initialization_preserves_pointer(monkeypatch, tmp_path, reset, blocked):
+    pointer = isolate(monkeypatch, tmp_path)
+    old = store.set_data_dir(tmp_path / "old")
+    before = pointer.read_bytes()
+    target = paths.DEFAULT_HOME if reset else tmp_path / "target"
+    target.mkdir()
+    (target / blocked).write_text("Realm", encoding="utf-8")
+    with pytest.raises(OSError):
+        store.set_data_dir(None if reset else target)
+    assert pointer.read_bytes() == before
+    assert store.home() == old
+    assert (target / blocked).read_text(encoding="utf-8") == "Realm"
+
+
+def test_failed_env_root_initialization_preserves_pointer(monkeypatch, tmp_path):
+    pointer = isolate(monkeypatch, tmp_path)
+    store.set_data_dir(tmp_path / "old")
+    before = pointer.read_bytes()
+    env = tmp_path / "env"
+    env.mkdir()
+    (env / "campaigns").write_text("Realm", encoding="utf-8")
+    monkeypatch.setenv("GRIMOIRE_HOME", str(env))
+    with pytest.raises(OSError):
+        store.set_data_dir(tmp_path / "target")
+    assert pointer.read_bytes() == before and store.home() == env
+
+
+def test_failed_pointer_write_preserves_selection(monkeypatch, tmp_path):
+    pointer = isolate(monkeypatch, tmp_path)
+    old = store.set_data_dir(tmp_path / "old")
+    before = pointer.read_bytes()
+
+    def unavailable(*args, **kwargs):
+        raise OSError("pointer unavailable")
+
+    monkeypatch.setattr(paths.atomic, "write_text", unavailable)
+    with pytest.raises(OSError):
+        store.set_data_dir(tmp_path / "target")
+    assert pointer.read_bytes() == before and store.home() == old
+
+
+def test_clearing_under_an_env_root_does_not_create_the_default(monkeypatch, tmp_path):
+    pointer = isolate(monkeypatch, tmp_path)
+    store.set_data_dir(tmp_path / "old")
+    env = tmp_path / "env"
+    monkeypatch.setenv("GRIMOIRE_HOME", str(env))
+    assert store.set_data_dir(None) == env
+    assert not paths.DEFAULT_HOME.exists()
+    assert (env / "worlds").is_dir() and "data_dir" not in pointer.read_text(encoding="utf-8")

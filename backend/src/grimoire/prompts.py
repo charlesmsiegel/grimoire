@@ -8,25 +8,16 @@ template's variables. Jinja's auto-reload picks up template edits live.
 from __future__ import annotations
 
 import functools
-import os
-from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from . import schemas
 
-DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "templates"  # paths-ok: DEFAULT_TEMPLATES_DIR only; GRIMOIRE_TEMPLATES overrides it on Android
-
-
-def templates_dir() -> Path:
-    """Resolve the template directory.
-
-    ``GRIMOIRE_TEMPLATES`` overrides the repo-relative default for builds where
-    the source tree isn't laid out as a checkout (the Android APK extracts
-    templates to app storage).
-    """
-    env = os.environ.get("GRIMOIRE_TEMPLATES")
-    return Path(env) if env else DEFAULT_TEMPLATES_DIR
+# Public resolver names remain available to rendering callers and tests.
+from .template_paths import (  # noqa: F401 -- public compatibility re-exports
+    DEFAULT_TEMPLATES_DIR,
+    templates_dir,
+)
 
 
 @functools.lru_cache(maxsize=1)

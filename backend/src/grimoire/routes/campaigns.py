@@ -26,6 +26,8 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import store
 from ..llm import LLMClient
+from ..store import compiled
+from ..store import paths as library_paths
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
 from ..store.inference import settings as inference_settings
@@ -1047,20 +1049,34 @@ def post_campaign_fork(cid: str, body: ForkCampaign, request: Request):
 def delete_campaign(cid: str, request: Request):
     # Held against image-store maintenance for the whole delete, for the world
     # route's reason: a pass must not have a tree removed beneath it.
-    with runs.maintenance_excluded(request.app):
-        try:
-            store.campaigns.delete_campaign(cid)
-        except store.campaigns.CampaignNotFound:
-            raise HTTPException(status_code=404, detail="campaign not found")
-    # AFTER the delete, so a campaign that could not be removed keeps its runs.
-    # Campaign ids are slugs and a slug is reusable, so a replacement created
-    # inside the retention window would otherwise inherit this one's drafts --
-    # see `RunRegistry.forget_subject`.
-    runs.forget_subject(request.app, runs.campaign_subject(cid))
-    # Its "not carried over" notes on `/models` go too, for the same reason: a
-    # replacement under this slug must not be shown a loss that happened here.
-    # Best effort -- the campaign is gone either way.
-    inference_settings.forget_campaign_notes(store.inference_retired.campaign_scope(cid))
+    root, intent, prepared = None, None, False
+    try:
+        with runs.maintenance_excluded(request.app):
+            with library_paths.library_guard():
+                root = library_paths.home()
+                # ASGI response/error bookkeeping runs after this thread's
+                # pin exits; carry the same root across that boundary too.
+                request.scope['grimoire_library_root'] = root
+                with library_paths.pin_library(root):
+                    try:
+                        store.campaigns.lifecycle._preflight_delete(cid)
+                        intent = compiled.prepare_delete(root)
+                        prepared = True
+                        store.campaigns.delete_campaign(cid)
+                    except store.campaigns.CampaignNotFound:
+                        raise HTTPException(status_code=404, detail="campaign not found")
+                    # Its "not carried over" notes on `/models` go too: a
+                    # replacement under this slug must not be shown a loss
+                    # that happened here. Best effort, pinned to this library.
+                    inference_settings.forget_campaign_notes(store.inference_retired.campaign_scope(cid))
+            # AFTER the delete, so a campaign that could not be removed keeps
+            # its runs. Slugs are reusable; a replacement inside the retention
+            # window must not inherit this one's drafts (RunRegistry).
+            # Release the leaf root mutex before entering that registry.
+            runs.forget_subject(request.app, runs.campaign_subject(cid))
+    finally:
+        if prepared and root is not None:
+            compiled.purge_for_delete(root, intent=intent)
     # Nothing is done about this campaign's ledger rows, and `usage_rollup` has
     # no `forget` for the same reason: the ledger is append-only and records
     # money that was actually spent, so a replacement campaign reusing the slug

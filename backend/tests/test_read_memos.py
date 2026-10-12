@@ -33,6 +33,9 @@ def store(tmp_path, monkeypatch):
         '---\nname: Realm\ncreated: \'2026-01-01T00:00:00Z\'\n'
         'updated: \'2026-01-01T00:00:00Z\'\n---\n', encoding="utf-8")
     _age_tree(tmp_path)
+    # utime cannot age native ChangeTime; retain real invalidation metadata.
+    real_now = time.time_ns
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: real_now() + 3 * statcache.RACY_WINDOW_NS)
     return tmp_path
 
 

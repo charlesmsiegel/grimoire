@@ -7,11 +7,13 @@ no ranking a real full-text engine would give, which is a deliberate trade at
 this store's scale (hundreds of files, one user, local disk). What keeps it
 cheap enough is `statcache.memo`: every file's *extraction* — frontmatter
 parsing, card field selection, whitespace flattening — is memoized on its
-(path, mtime, size) signature, so a repeat query re-reads only what changed,
+(path, mtime, size, inode) signature, so a repeat query re-reads only what changed,
 including changes another process made by syncing the folder. It memoizes into
 this module's own pool (`_POOL`), never the shared one: a sweep of the whole
 store through the shared cache would evict every hash the sync path keeps
-there.
+there. The original in-place same-size rewrite with restored-mtime residual
+remains: this consumer failed Spec03's persisted-cost gate, and changing its
+wrapper alone made actual warm pages slower, so its original memo is retained.
 
 The fact files are the deliberate exception — chronicle.json, timeline.md,
 plot.json, facts.json and relationships.json are re-read and re-parsed per
@@ -238,8 +240,12 @@ def _markdown_doc(path: Path) -> tuple[str, str, str]:
     every short record. A metadata-only hit still snippets from the metadata,
     because that is where its match is.
     """
-    meta, body = parse_frontmatter(_read_text(path))
-    name = str(meta.get("name") or meta.get("title") or path.stem)
+    return _markdown_text(_read_text(path), path.stem)
+
+
+def _markdown_text(text: str, stem: str) -> tuple[str, str, str]:
+    meta, body = parse_frontmatter(text)
+    name = str(meta.get("name") or meta.get("title") or stem)
     prose = _flat(body)
     parts = [prose] + [str(meta.get(key, "")) for key in _META_KEYS]
     return name, _flat(" ".join(p for p in parts if p)), prose
@@ -252,19 +258,23 @@ def _card_doc(path: Path) -> tuple[str, str, str]:
     not (v1), which is the same tolerance `store/cards.py` applies on import. A
     card that will not parse contributes nothing rather than failing the query.
     """
+    return _card_text(_read_text(path), path.stem)
+
+
+def _card_text(text: str, stem: str) -> tuple[str, str, str]:
     try:
-        card = json.loads(_read_text(path) or "{}")
+        card = json.loads(text or "{}")
     except ValueError:
-        return path.stem, "", ""
+        return stem, "", ""
     if not isinstance(card, dict):
-        return path.stem, "", ""
+        return stem, "", ""
     data = card.get("data") if isinstance(card.get("data"), dict) else card
     parts = [str(data.get(field, "")) for field in _CARD_FIELDS]
     for key in _CARD_LISTS:
         value = data.get(key)
         if isinstance(value, list):
             parts.extend(str(item) for item in value if item)
-    name = str(data.get("name") or path.stem)
+    name = str(data.get("name") or stem)
     text = _flat(" ".join(p for p in parts if p))
     # A card is prose all the way down -- there is no metadata tail to keep out
     # of the snippet -- so the two are the same string.

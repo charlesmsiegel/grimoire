@@ -74,13 +74,15 @@ re-embed and never a failed scene.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import math
 import struct
 import zlib
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
-from . import atomic
+from . import atomic, compiled
 from .paths import home
 
 #: Bytes per component. Little-endian float32, spelled out rather than left to
@@ -101,6 +103,8 @@ SUFFIX = ".vec"
 #: record failed the context build with a MemoryError instead of degrading to
 #: the cache miss every other bad file degrades to.
 MAX_RECORD = 1 << 20
+
+_HISTORY_ERRORS = (OSError, ValueError, TypeError, RuntimeError, MemoryError)
 
 #: Record layout: a little-endian CRC32 of the payload, then the payload. A
 #: record written before the checksum existed fails it and reads as a miss,
@@ -152,7 +156,8 @@ def dot(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
-def load(space: str, texts: list[str]) -> dict[str, list[float]]:
+def load(space: str, texts: list[str], *, sources: Mapping[str, compiled.WrittenInput] | None = None,
+         projection: str = 'body', instances: Mapping[str, object] | None = None) -> dict[str, list[float]]:
     """Cached unit vectors for `texts`, keyed by text. Misses are absent.
 
     Runs on every turn over every candidate, so it does the least it can: read
@@ -161,6 +166,13 @@ def load(space: str, texts: list[str]) -> dict[str, list[float]]:
     not match was corrupted in place. Both read as a miss, which costs a
     re-embed rather than a wrong ranking.
     """
+    with _history_batch(sources is not None) as request:
+        return _load(space, texts, sources, projection, instances, request)
+
+
+def _load(space: str, texts: list[str], sources: Mapping[str, compiled.WrittenInput] | None,
+          projection: str, instances: Mapping[str, object] | None,
+          request: compiled.Batch | None) -> dict[str, list[float]]:
     out: dict[str, list[float]] = {}
     for text in texts:
         if text in out:
@@ -180,10 +192,58 @@ def load(space: str, texts: list[str]) -> dict[str, list[float]]:
         if struct.unpack_from(_CRC, raw)[0] != zlib.crc32(payload):
             continue
         out[text] = list(struct.unpack(f"<{len(payload) // _WIDTH}f", payload))
+    if request is not None and sources:
+        try:
+            known = {text: sources[text] for text in out if text in sources}
+            _record_history(request, space, known, projection, instances or {})
+        except _HISTORY_ERRORS:
+            request.disabled = True  # Discard partial history, keep verified vectors.
     return out
 
 
-def save(space: str, text: str, vector: list[float]) -> None:
+@contextlib.contextmanager
+def _history_batch(enabled: bool) -> Iterator[compiled.Batch | None]:
+    # Pin the root/epoch AND durable delete boundary before vector key hashing
+    # or I/O. Opening a new batch after I/O could adopt a completed purge and
+    # reintroduce a deleted source path from the caller's earlier snapshot.
+    stack = contextlib.ExitStack()
+    request = None
+    try:
+        if enabled:
+            try:
+                request = stack.enter_context(compiled.batch())
+                request.begin_compute()
+            except _HISTORY_ERRORS:
+                if request is not None:
+                    request.disabled = True
+                request = None
+        try:
+            yield request
+        except BaseException:
+            if request is not None:
+                request.disabled = True
+            raise
+    finally:
+        # Only optional history publication is suppressed; exceptions from
+        # the vector operation itself still propagate through the yield.
+        with contextlib.suppress(*_HISTORY_ERRORS):
+            stack.close()
+
+
+def _record_history(request: compiled.Batch, space: str, sources: Mapping[str, compiled.WrittenInput],
+                    projection: str, instances: Mapping[str, object]) -> None:
+    if not sources:
+        return
+    # Metadata knows only bytes supplied by the caller. Neither vector files
+    # nor this context establishes source membership or a trustworthy stamp.
+    kind = f'vector:{projection}:{compiled.space_digest(space)}'
+    for text, source in sources.items():
+        request.mark_materialized(source.path, kind, instance=instances.get(text),
+                                  built_from=hashlib.sha256(source.data).hexdigest())
+
+
+def save(space: str, text: str, vector: list[float], *, source: compiled.WrittenInput | None = None,
+         projection: str = 'body', instance: object = None) -> None:
     """Cache `vector` for (`space`, `text`), normalized.
 
     A vector with no direction is dropped rather than stored: the caller must
@@ -192,6 +252,12 @@ def save(space: str, text: str, vector: list[float]) -> None:
     dropped too — it costs one re-embed next turn, and raising would cost the
     scene the recall was meant to improve.
     """
+    with _history_batch(source is not None) as request:
+        _save(space, text, vector, source, projection, instance, request)
+
+
+def _save(space: str, text: str, vector: list[float], source: compiled.WrittenInput | None,
+          projection: str, instance: object, request: compiled.Batch | None) -> None:
     normalized = unit(vector)
     if normalized is None:
         return
@@ -202,6 +268,12 @@ def save(space: str, text: str, vector: list[float]) -> None:
         atomic.write_bytes(_path(space, text), payload)
     except OSError:
         return
+    if request is not None and source is not None:
+        # Includes allocation of the optional singleton dictionaries.
+        try:
+            _record_history(request, space, {text: source}, projection, {text: instance})
+        except _HISTORY_ERRORS:
+            request.disabled = True
 
 
 def forget(space: str, text: str) -> None:

@@ -691,7 +691,9 @@ would answer neither question.
   `test_overlay_guard.py`, `test_pydantic_guard.py` (v1/v2-agnostic pydantic),
   `test_paths_guard.py` (filesystem access goes through the resolvers),
   `test_lock_order_guard.py` (only `locks.hold_all` holds more than one campaign
-  lock) and `test_lock_domain_guard.py` (below). Clear a genuinely-safe call with
+  lock), `test_lock_domain_guard.py` (below) and `test_compiled_guard.py` (only
+  `store.compiled` imports SQLite, and every cache read takes the caller's keys
+  or paths). Clear a genuinely-safe call with
   `# atomic-ok: <reason>` / `# overlay-ok: <reason>` / `# pydantic-ok: <reason>`
   / `# paths-ok: <reason>` / `# lock-order-ok: <reason>` /
   `# lock-domain-ok: <reason>` — a marker with no

@@ -30,17 +30,21 @@ def _world_row(d: Path, mp: Path) -> dict:
     copy it into a fresh dict per call, so nothing downstream can mutate the
     cached value.
     """
-    def compute() -> dict:
-        meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
-        return {"name": meta.get("name", d.name),
-                "created": meta.get("created", ""),
-                "updated": meta.get("updated", ""),
-                # for the shelf card (#38); "" for a world with no profile
-                "genre": meta.get("genre", "")}
-    sig = statcache.signature(mp)
-    if sig is None:
-        return compute()
-    return statcache.memo("world_row", sig, compute)
+    def compute():
+        observed = statcache.stamp(mp)  # Capture before the bytes it vouches for.
+        value = _world_row_value(d.name, mp.read_text(encoding="utf-8"))
+        return value, (observed,) if observed is not None else None
+    return statcache.memo_stamped(("world_row", str(mp), d.name), compute,
+                                  pool=statcache._cache, max_entries=statcache.MAX_ENTRIES)
+
+
+def _world_row_value(dirname: str, text: str) -> dict:
+    meta, _ = parse_frontmatter(text)
+    return {"name": meta.get("name", dirname),
+            "created": meta.get("created", ""),
+            "updated": meta.get("updated", ""),
+            # for the shelf card (#38); "" for a world with no profile
+            "genre": meta.get("genre", "")}
 
 
 def _listed() -> list[tuple[Path, Path]]:

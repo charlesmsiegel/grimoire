@@ -792,3 +792,24 @@ def test_a_scene_that_is_really_gone_is_still_scene_not_found(tmp_path, monkeypa
 
     with pytest.raises(store.scenes.paths.SceneNotFound):
         identity.ensure_identity(cid, "0001--nobody")
+
+
+@pytest.mark.parametrize("aged", [False, True])
+def test_slow_backfill_read_cannot_age_scene_into_identity_record(tmp_path, monkeypatch, aged):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    path = store.scenes.paths._scene_path(cid, sid)
+    info = path.stat()
+    now = [max(info.st_mtime_ns, info.st_ctime_ns) + (10**10 if aged else 0)]
+    original = migrations.scenes_identity.scene_identity
+    monkeypatch.setattr(migrations, "_clock", lambda: now[0])
+
+    def slow(*args):
+        now[0] += 10**10
+        return original(*args)
+
+    monkeypatch.setattr(migrations.scenes_identity, "scene_identity", slow)
+    assert migrations._backfill_campaign(cid)
+    assert (sid in migrations._read_identity_files(cid)) is aged

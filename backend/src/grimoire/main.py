@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
 import anyio
@@ -27,12 +27,14 @@ from .routes.common import NEWER_FORMAT
 from .store import (
     backups,
     campaigns,
+    compiled,
     config,
     inference_keys,
     locks,
     logs,
     migrations,
     module_edit,
+    paths,
     revision,
 )
 from .store.inference import migrate as inference_migrate
@@ -305,6 +307,14 @@ async def _lifespan(app: FastAPI):
     # or a half-applied migration is exactly the kind of thing that should be
     # visible in the log.
     log = logging.getLogger(__name__)
+    # BUILD names the code serving this process, so it is fingerprinted now,
+    # from the sources just imported -- not at the first cache use, when a
+    # `git pull` or an edited template since would file this code's artifacts
+    # under the new code's BUILD for the next process to trust.
+    compiled.prime_build()
+    # Another device's delete reaches this one at its next open (spec 03
+    # section 12), not at whichever cache consumer happens to run first.
+    await anyio.to_thread.run_sync(compiled.open_library)
     for step in (migrations.migrate_scene_ids, migrations.bake_char_macros,
                  migrations.backfill_scene_identities, module_edit.recover):
         try:
@@ -347,6 +357,13 @@ async def _lifespan(app: FastAPI):
         # FIRST, before any `await`, on every way out: the loop stops being an
         # app loop for the embed guard before it can end (01h-C4a).
         runner.uninstall(app)
+        # SQLite is optional worker-owned state. Close outside the cancelled
+        # run group and off the loop, before returning from any shutdown path.
+        try:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(compiled.close)
+        except Exception:  # noqa: BLE001 -- optional cache teardown cannot strand client pools
+            log.warning("closing compiled cache failed")
         # Closing the gateway clients' `httpx` pools (#215). Worth nothing
         # where the server *is* the process -- the pool dies with it -- and
         # everything where an app is rebuilt inside a living one: the Android
@@ -380,7 +397,7 @@ async def _lifespan(app: FastAPI):
             log.warning("closing the model test's embeddings client failed -- %s", exc)
 
 
-def _record_campaign_write(cid: str, stamp: bool, changed: bool) -> None:
+def _record_campaign_write(cid: str, stamp: bool, changed: bool, root: Path | None = None) -> None:
     """Both records a campaign write leaves behind, in one thread hop.
 
     The activity stamp orders the recents rail; the revision token (#409) is
@@ -410,10 +427,15 @@ def _record_campaign_write(cid: str, stamp: bool, changed: bool) -> None:
     Neither call raises, which is what makes it safe to run after the mutation
     has already committed -- see `campaigns.touch_quietly` and `revision.bump`.
     """
-    if stamp:
-        campaigns.touch_quietly(cid)
-    if changed:
-        revision.bump(cid)
+    # A delete's route pin ends before response middleware executes. Binding
+    # its captured library also here prevents a cross-process pointer switch
+    # from stamping the replacement campaign, including on a failed removal
+    # (Spec03 S5 independent review). Other mutations retain their resolver.
+    with paths.pin_library(root) if root is not None else nullcontext():
+        if stamp:
+            campaigns.touch_quietly(cid)
+        if changed:
+            revision.bump(cid)
 
 
 class _CampaignActivityStamp:
@@ -497,7 +519,7 @@ class _CampaignActivityStamp:
                     # middleware does not. Neither record raises, so this
                     # cannot turn a completed write into a failure.
                     await anyio.to_thread.run_sync(
-                        _record_campaign_write, cid, not streaming, changed)
+                        _record_campaign_write, cid, not streaming, changed, scope.get('grimoire_library_root'))
             await send(message)
 
         try:
@@ -532,7 +554,8 @@ class _CampaignActivityStamp:
             endpoint = getattr(scope.get("route"), "endpoint", None)
             if (cid and not getattr(endpoint, "grimoire_computes_only", False)
                     and not getattr(endpoint, "grimoire_leaves_campaign", False)):
-                await anyio.to_thread.run_sync(revision.bump, cid)
+                await anyio.to_thread.run_sync(
+                    _record_campaign_write, cid, False, True, scope.get('grimoire_library_root'))
             raise
 
 

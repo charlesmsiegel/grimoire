@@ -420,7 +420,8 @@ _CHILD = """
 import sys
 from pathlib import Path
 sys.path[:0] = {path!r}
-from grimoire.store import locks
+from grimoire.store import locks, proclock
+proclock.lock_dir = lambda: Path({lock_dir!r})
 lock = locks.image_name_lock(Path({d!r}), "AVATAR")
 with lock:
     print("HELD", flush=True)
@@ -430,7 +431,7 @@ with lock:
 
 def test_a_second_process_waits_for_the_stripe(monkeypatch, tmp_path):
     d = tmp_path / "v"
-    src = _CHILD.format(path=sys.path, d=str(d))
+    src = _CHILD.format(path=sys.path, d=str(d), lock_dir=str(proclock.lock_dir()))
     p = subprocess.Popen([sys.executable, "-c", src], text=True,
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          env={**os.environ, "GRIMOIRE_HOME": str(tmp_path / "home")})

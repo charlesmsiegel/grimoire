@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import entities, tokens
+from grimoire.store import entities, statcache, tokens
+from tests.test_token_counting import _Enc
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -190,11 +191,15 @@ def test_normalize_secrecy_is_lenient(tmp_path: Path):
 
 # ---- per-record token cost (#51) ----
 
-def _age(p: Path) -> None:
+def _age(p: Path, monkeypatch) -> None:
     """Move `p`'s mtime out of `statcache`'s racy window, so a signature taken
     on it is trusted and `record_tokens` is allowed to cache."""
     old = time.time() - 60
     os.utime(p, (old, old))
+    # Restoring mtime cannot age metadata change time. Advance the memo seam
+    # beyond both timestamps without sleeping or changing the real timer.
+    aged = time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: aged)
 
 
 def test_tokens_measure_the_body_the_prompt_would_get(tmp_path: Path):
@@ -245,9 +250,11 @@ def test_tokens_are_stable_across_a_relist_and_move_with_the_body(tmp_path: Path
 def test_an_unchanged_file_is_not_re_encoded(tmp_path: Path, monkeypatch):
     """The sweep reason the count is memoized: re-listing a world must not pay
     tiktoken again for every record whose bytes did not move."""
+    encoder = _Enc()
+    monkeypatch.setattr(tokens, '_encoder', lambda: encoder)
     p = tmp_path / "lore" / "rite.md"
     entities.create_entity(tmp_path, "lore", "Rite", "salt and rope")
-    _age(p)
+    _age(p, monkeypatch)
     calls = []
     real = tokens.count_tokens
     monkeypatch.setattr(tokens, "count_tokens", lambda t: calls.append(t) or real(t))
@@ -258,7 +265,7 @@ def test_an_unchanged_file_is_not_re_encoded(tmp_path: Path, monkeypatch):
     assert calls == ["salt and rope"]           # and the second sweep not at all
 
     entities.update_entity(tmp_path, "lore", "rite", body="salt, rope and a longer tail")
-    _age(p)
+    _age(p, monkeypatch)
     assert entities.list_entities(tmp_path, "lore")[0]["tokens"] > first
     assert calls[-1] == "salt, rope and a longer tail"  # new bytes, new encode
 
