@@ -14,8 +14,9 @@ Every optional field is nullable from the first commit, so a later slice
 filling one in is a value change rather than a schema change.
 
 *Nothing here reads a transcript body to find which scenes are open.*
-Open-scene detection comes off scene frontmatter (``done``), which is what
-``scenes.read.list_scenes`` already does through ``parse_frontmatter_head``.
+Open-scene detection comes off scene frontmatter (``done``), through
+``store.overview.scene_summary``, which folds the scene heads read head-only
+(``parse_frontmatter_head``) and remembers the fold in-process.
 A campaign can hold a great many scenes and this runs on every navigation, so
 the rail must never be the thing that scans all of them.
 
@@ -158,19 +159,21 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         return None
 
     wid = str(meta.get("world", ""))
-    scenes = store.scenes.read.list_scenes(cid)
-    # `done` is the absorbed mark. Read with the same tolerance
-    # `list_scenes` applies to it: the file is hand-editable, and a rail that
-    # called a scene open while the absorb guard called it done would be worse
-    # than either answer alone.
+    # The overview's scene summary, shared with Todo's open-scenes chore
+    # through `ctx`: head-only reads, remembered in-process. `done` is the
+    # absorbed mark, read with the same tolerance `list_scenes` applies to it:
+    # the file is hand-editable, and a rail that called a scene open while
+    # the absorb guard called it done would be worse than either answer
+    # alone. An unreadable scene is counted, never listed as open.
+    summary = ctx.scene_summary_or_raise()
     #
     # `turns` is read off the scene's OWN transcript, not derived from
     # frontmatter -- there is no cheap field for it. `_scene_turns` bounds the
     # cost to the scenes that are actually open, which is what makes reading a
     # transcript body acceptable on a route that runs on every navigation; see
     # the module docstring.
-    open_scenes = [{"sid": s["id"], "title": s["title"], "turns": _scene_turns(cid, s["id"])}
-                   for s in scenes if not s["done"] and not s.get("closed_by")]
+    open_scenes = [{"sid": s["sid"], "title": s["title"], "turns": _scene_turns(cid, s["sid"])}
+                   for s in summary["open"]]
 
     unreviewed, pending = _pending(cid)
 
@@ -195,7 +198,7 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         # below), and `world_name` alone cannot address one.
         "world": wid,
         "world_name": store.worlds.read.world_name(wid) or wid,
-        "scenes": len(scenes),
+        "scenes": summary["count"],
         "open": open_scenes,
         "ledger_open": _ledger_open(cid),
         "sheets": sheets,

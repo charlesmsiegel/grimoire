@@ -1,8 +1,15 @@
 """The list of everything the app noticed, and the ignore that silences one.
 
-Every entry is derived on the way out. There is no chore table on disk and
-nothing is cached: a chore whose count is zero does not appear, and the number
-in its label is the number this request computed. That is what makes the list
+Every entry is derived on the way out. There is no chore table on disk: a
+chore whose count is zero does not appear, and the number in its label is the
+number this request computed. Some of a chore's inputs are reused rather than
+re-derived -- the overview projections (`store/overview/`), under a key that
+covers every file they read -- and the chores whose inputs cannot all be named
+in a key stay live (spec 04 section 4.4 classifies every chore). A reused input
+describes the bytes as their stamps last showed them; the residual (a rewrite
+keeping size, mtime and ctime, possible on Windows and FAT, is believed until
+restart in process and for the life of a persisted `sources` row) is in
+`docs/store-guarantees.md`. That is what makes the list
 worth opening twice -- a to-do list that can go stale teaches the reader to
 distrust it, and then the one entry that mattered is the one they scroll past.
 One exception, read-only: the continuity chores read the reconciliation cache
@@ -34,7 +41,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 
 from .. import store
-from ..store import readstats
+from ..store import overview, readstats
 from ..store.continuity import candidates as continuity_candidates
 from ..store.continuity import effective as continuity_effective
 from ..store.continuity import pending as continuity_pending
@@ -66,10 +73,10 @@ class _Ctx:
     derivation asks the ctx for it and the second asker gets the first one's
     answer.
 
-    Deliberately per-request and thrown away after: nothing here is a cache
-    that can outlive the read it was computed for. "Every chore is a live
-    count" is the contract, and a memo with a lifetime is how it stops being
-    one.
+    Deliberately per-request and thrown away after: nothing on the ctx
+    outlives the read it was computed for. "Every chore is a live count" is
+    the contract. What does outlive a request is below it, in the overview
+    projections, and only under a key covering every file each one reads.
     """
 
     def __init__(self, cid: str) -> None:
@@ -81,18 +88,33 @@ class _Ctx:
             self._memo[key] = compute()
         return self._memo[key]
 
-    def _scenes_or_none(self) -> list[dict] | None:
-        def read() -> list[dict] | None:
+    def _summary_or_error(self) -> dict | Exception:
+        """The overview's scene summary for the campaign (spec 04 section
+        3.4), or the `CampaignNotFound` / `OSError` it raised, remembered
+        either way so the second asker meets the same answer."""
+        def read() -> dict | Exception:
             if not self.cid:
-                return None
+                return store.CampaignNotFound(self.cid)
             try:
-                return store.scenes.read.list_scenes(self.cid)
-            except (store.CampaignNotFound, OSError):
-                return None
-        return self._once("scenes", read)
+                return overview.scene_summary(self.cid)
+            except (store.CampaignNotFound, OSError) as e:
+                return e
+        return self._once("scene_summary", read)
 
-    def scenes(self) -> list[dict]:
-        return self._scenes_or_none() or []
+    def scene_summary(self) -> dict | None:
+        """The summary, or `None` for an unknown campaign or a `scenes/`
+        that cannot be listed -- the two `list_scenes` raised, mapped here
+        exactly as `_scenes_or_none` mapped them before it."""
+        found = self._summary_or_error()
+        return None if isinstance(found, Exception) else found
+
+    def scene_summary_or_raise(self) -> dict:
+        """The summary, raising what it raised -- for the shell's block,
+        which keeps its own mapping of each failure."""
+        found = self._summary_or_error()
+        if isinstance(found, Exception):
+            raise found
+        return found
 
     def has_campaign(self) -> bool:
         """Whether there is a readable campaign to ask campaign chores about.
@@ -103,10 +125,11 @@ class _Ctx:
         of what a bad cid means -- and several of them raise on the way to
         saying nothing, which is a 500 where the shell promises a null.
 
-        Distinct from "has no scenes", which `scenes()` flattens to the same
-        empty list. That is why the memo holds `None` rather than `[]`.
+        Distinct from "has no scenes", a summary whose count is zero. One
+        undecodable scene is not a reason to drop the campaign: the summary
+        degrades that member (spec 04 section 4.4).
         """
-        return self._scenes_or_none() is not None
+        return self.scene_summary() is not None
 
     def character_gaps(self) -> tuple[list[dict], list[dict]]:
         return self._once("gaps", lambda: _character_gaps(self.cid))
@@ -271,9 +294,10 @@ def _chore_unreviewed(ctx: _Ctx) -> dict | None:
 
 
 def _chore_open_scenes(ctx: _Ctx) -> dict | None:
-    cid, scenes = ctx.cid, ctx.scenes()
-    # A closed branch (a sibling was absorbed) is read-only, not unfinished.
-    n = sum(1 for s in scenes if not s["done"] and not s.get("closed_by"))
+    cid, summary = ctx.cid, ctx.scene_summary()
+    # A closed branch (a sibling was absorbed) is read-only, not unfinished;
+    # the summary's `open` already leaves it out.
+    n = len(summary["open"]) if summary else 0
     if not n:
         return None
     return {

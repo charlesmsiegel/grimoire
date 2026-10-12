@@ -1336,6 +1336,41 @@
       "owners": "pcs:winifred"
     }
   },
+  "overview.scene_summary[the-drowned-ledger]": {
+    "absorbed": 0,
+    "count": 2,
+    "open": [
+      {
+        "sid": "002--2026-01-02--the-long-quay",
+        "title": "The Long Quay"
+      },
+      {
+        "sid": "001--the-tide-comes-in",
+        "title": "The Tide Comes In"
+      }
+    ],
+    "rows": [
+      {
+        "closed_by": null,
+        "done": false,
+        "sid": "002--2026-01-02--the-long-quay",
+        "title": "The Long Quay",
+        "updated": "2026-01-01T09:11:00Z"
+      },
+      {
+        "closed_by": null,
+        "done": false,
+        "sid": "001--the-tide-comes-in",
+        "title": "The Tide Comes In",
+        "updated": "2026-01-01T09:07:00Z"
+      }
+    ],
+    "stamps": [
+      "2026-01-01T09:11:00Z",
+      "2026-01-01T09:07:00Z"
+    ],
+    "unreadable": 0
+  },
   "playing.greeting_ideas[the-drowned-ledger]": [
     {
       "cast": [],

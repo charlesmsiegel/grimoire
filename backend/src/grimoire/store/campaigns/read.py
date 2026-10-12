@@ -262,13 +262,29 @@ def _valid_stamp(text: str) -> bool:
     and demanding it match is what rejects it; a stamp this file wrote is
     unchanged by the round trip.
     """
+    parsed = _well_formed(text)
+    return parsed is not None and not _implausibly_future(parsed)
+
+
+def _well_formed(text: str) -> datetime | None:
+    """`text` parsed, when it is exactly what `now_iso()` writes; else None."""
     try:
         parsed = datetime.strptime(text, _STAMP_FORMAT)
     except ValueError:
-        return False
-    if parsed.strftime(_STAMP_FORMAT) != text:
-        return False
-    return not _implausibly_future(parsed)
+        return None
+    return parsed if parsed.strftime(_STAMP_FORMAT) == text else None
+
+
+def well_formed_stamp(text: str) -> bool:
+    """The clock-free half of `_valid_stamp`: the format round-trip alone.
+
+    For a value that is remembered across requests (the overview scene
+    summary's `stamps`): a remembered answer must not depend on when it was
+    computed, so the future check -- which reads the clock -- stays with
+    `best_stamp`, applied live by whoever folds the candidates. Dropping a
+    candidate that fails here never changes `best_stamp`'s answer, since
+    `best_stamp` would drop it too."""
+    return _well_formed(text) is not None
 
 
 #: How far ahead of this machine's clock a stamp may sit and still be believed.

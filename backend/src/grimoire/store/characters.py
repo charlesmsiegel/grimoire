@@ -8,6 +8,7 @@ Unlike generic entities (one markdown file each), a character is a directory:
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -777,7 +778,7 @@ def roster(root: Path) -> list[dict]:
     out: list[dict] = []
     for cd in _listed_dirs(root):
         row = statcache.memo_stamped(
-            ("roster_row", os.fspath(cd)), lambda cd=cd: _build_roster_row(root, cd.name),
+            ("roster_row", os.fspath(cd)), functools.partial(_build_roster_row, root, cd.name),
             pool=_IDENTITY_POOL, max_entries=POOL_ENTRIES)
         if row is not None:
             out.append(dict(row))

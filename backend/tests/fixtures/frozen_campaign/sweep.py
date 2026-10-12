@@ -65,6 +65,7 @@ import tempfile
 from pathlib import Path
 
 from grimoire import store
+from grimoire.store import overview
 from grimoire.store.continuity import candidates, drivers, effective, graph, pending, pressure
 from tests import frozen_copy
 
@@ -160,6 +161,10 @@ def _campaign(out: dict, cid: str) -> None:
     croot = store.campaigns.campaign_root(cid)
     out[f"campaigns.read_campaign[{cid}]"] = store.campaigns.read_campaign(cid)
     out[f"modules.resolve[{cid}]"] = store.modules.resolve(cid)
+    # The overview projections (roadmap 04) over files an older version
+    # wrote. The scene summary folds the scene heads; its `stamps` are the
+    # well-formed `updated` values, so nothing in it reads a clock.
+    out[f"overview.scene_summary[{cid}]"] = overview.scene_summary(cid)
     # The overlay's view, not the world's: what a campaign actually reads is
     # the merge of its own files over the world's, and every listing below is
     # the campaign-side call the app makes.

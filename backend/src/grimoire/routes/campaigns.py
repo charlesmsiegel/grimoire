@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import store
 from ..llm import LLMClient
-from ..store import compiled
+from ..store import compiled, overview
 from ..store import paths as library_paths
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
@@ -168,7 +168,10 @@ def get_campaigns():
 def _campaign_cards() -> list[dict]:
     out = []
     for c in store.campaigns.list_campaigns():
-        scene_list = store.scenes.list_scenes(c["id"])
+        # The scene half of the card is the overview's scene summary, folded
+        # from head-only reads and remembered in-process (spec 04 section 3.4):
+        # one undecodable scene degrades that scene's row, never the shelf.
+        scenes = overview.scene_summary(c["id"])
         # `updated` is campaign.md's, which only metadata writes advance --
         # playing a scene touches the scene file and nothing else, so ordering
         # by it ranks a campaign renamed months ago above one played into last
@@ -176,12 +179,13 @@ def _campaign_cards() -> list[dict]:
         # anything answering "what was I last working on".
         #
         # Through `best_stamp` rather than a bare `max`, and over EVERY scene
-        # rather than `scene_list[0]`. The fold is lexical, so one unparseable
-        # or far-future value anywhere in it outranks every genuine timestamp
-        # and then blocks its own replacement -- and `list_scenes` sorts by the
-        # very field that may be the bad one, so element zero is only the
-        # newest if the sort key can be trusted. The list is already in memory
-        # for the count; validating it costs a strptime per scene.
+        # stamp rather than the first row's. The fold is lexical, so one
+        # unparseable or far-future value anywhere in it outranks every genuine
+        # timestamp and then blocks its own replacement -- and the rows are
+        # sorted by the very field that may be the bad one, so the first is
+        # only the newest if the sort key can be trusted. The summary keeps
+        # the clock-free half (well-formed, de-duplicated); the future check
+        # reads the clock, so it is applied here, live.
         # How many scenes carry an absorb mark, which is how much of the
         # chronicle, the ledger and every dossier is caught up. It is not the
         # same question as "how many scenes are there" and a campaign answers
@@ -191,14 +195,13 @@ def _campaign_cards() -> list[dict]:
         # fraction of the scene count, and a gap in the middle (an older scene
         # left unabsorbed under a newer one that was) shows up in a count and
         # is invisible in a high-water mark.
-        absorbed = sum(1 for s in scene_list if s.get("done"))
-        out.append({**c, "scenes": len(scene_list),
+        out.append({**c, "scenes": scenes["count"],
                     "cover": store.covers.cover_version(c["id"]),
-                    "last_scene": scene_list[0]["title"] if scene_list else "",
-                    "absorbed": absorbed,
+                    "last_scene": scenes["rows"][0]["title"] if scenes["rows"] else "",
+                    "absorbed": scenes["absorbed"],
                     "activity": store.campaigns.best_stamp(
                         c["updated"], store.campaigns.read_activity(c["id"]),
-                        *(s["updated"] for s in scene_list))})
+                        *scenes["stamps"])})
     return out
 
 
