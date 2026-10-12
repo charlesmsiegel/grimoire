@@ -57,7 +57,7 @@ all of them have landed. `check` holds both to the slice checklist.
 | 01h | Embedding options, async embed, embedding evals | now (01a has landed, so C6 too) | [x] | [~] substitute | 7 | [x] |
 | 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
 | 02 | Decision integration (what 01's slices F–H did not land) | now (01a, 01b landed); 01c/01d per feature | [x] | [~] substitute | 8 | [ ] |
-| 03 | Content-addressed compiled cache | now | [x] | [~] substitute ×2 + PR Codex | 6 | [ ] |
+| 03 | Content-addressed compiled cache | now | [x] | [x] CLI Codex (2026-10-11) | 6 | [ ] |
 | 04 | Instant Worlds, Campaigns, Todo and shell | 03 | [x] | [~] substitute | 10 | [ ] |
 | 05 | Direct-edit cache sync | 03, 04 | [x] | [~] substitute | 7 | [ ] |
 | 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | 2 | [ ] |
@@ -269,20 +269,21 @@ These are headlines. The owning spec's Contract section is authoritative.
   default.
 
 ### 03: Compiled cache
-- [ ] **03-C1** Composite keys over collection digests and inputs that are not
+- [x] **03-C1** Composite keys over collection digests and inputs that are not
   files. A collection can take a member filter.
-- [ ] **03-C2** Liveness by construction.
-- [ ] **03-C3** `materialized`, keyed by `(path, kind, instance)`, with kind form
+- [x] **03-C2** Liveness by construction.
+- [x] **03-C3** `materialized`, keyed by `(path, kind, instance)`, with kind form
   `vector:<projection>:<space-digest>` (one spelling: `compiled.space_digest`).
-- [ ] **03-C4** One validate-and-hash primitive.
-- [ ] **03-C5** Artifacts can be stored at write time. The `sources` row waits
+- [x] **03-C4** One validate-and-hash primitive.
+- [x] **03-C5** Artifacts can be stored at write time. The `sources` row waits
   out the racy window.
-- [ ] **03-C6** Batch lookup over a live key set. An index ranks only within
+- [x] **03-C6** Batch lookup over a live key set. An index ranks only within
   that set. Lookups report hit and miss counts.
-- [ ] **03-C7** Vectors are keyed by text and never by `BUILD`.
-- [ ] **03-C8** A callable purge for a world or campaign delete, through a
-  purge marker.
-- [ ] **03-C9** A synthetic-library generator, owned by 03's plan and
+- [x] **03-C7** Vectors are keyed by text and never by `BUILD` (03-S1 golden-key and saved-byte regression).
+- [x] **03-C8** A callable purge for a world or campaign delete, through a
+  recoverable pre-delete intent and purge marker, pinned to the deleted-from
+  library root and covering obsolete local schemas too.
+- [x] **03-C9** A synthetic-library generator, owned by 03's plan and
   extended by 04-C3b.
 
 ### 04: Instant overview pages
@@ -521,12 +522,12 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 03-S1 | The cache file, its guards, and failing safe | L | 1 | — | [x] | [x] CLI Codex (2026-10-11) | [x] | [x] CLI Codex; findings fixed | [x] CLI Codex; finding fixed | [ ] |
+| 03-S2 | The trust point and the validate-and-hash primitive | L | 2 | 03-S1 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
+| 03-S3 | Collections and live-set lookups | M | 3 | 03-S2 | [x] | [x] CLI Codex (2026-10-11); waits for S2 | [x] | [ ] | [ ] | [ ] |
+| 03-S4 | Write-time artifacts and the `materialized` record | M | 3 | 03-S2 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
+| 03-S5 | Bounding, retention and the purge | M | 4 | 03-S4 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
+| 03-S6 | Synthetic library and the first consumers | L | 4 | 03-S3, 03-S4 | [x] | [x] CLI Codex (2026-10-11) | [x] | [ ] | [ ] | [ ] |
 
 ### 04
 

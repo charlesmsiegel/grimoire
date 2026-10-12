@@ -1021,12 +1021,14 @@ identical content hashes, because a renamed record may be a different record.
 That is the draft's rule, and it is right. The caller may state one:
 
 - `--renamed OLD=NEW` (and `renamed=` on the primitive) copies OLD's
-  `materialized` kinds, without their instances or `built_from`, to NEW before
-  NEW is classified, so NEW is rebuilt as hot. Each hook derives NEW's
-  instance from NEW's path. OLD is then handled as an intended delete. The
-  copy is 03-C3's `copy_materialized(old, new)`, which writes rows for NEW
-  naming the same kinds (multi-unit vector rows included), with an empty
-  `built_from`, and nothing else.
+  `materialized` kinds and unit identities to NEW before NEW is classified,
+  so NEW is rebuilt as hot. Each hook remaps path-dependent context from NEW's
+  path while preserving independent unit selectors such as passage positions.
+  OLD is then handled as an intended delete. The copy is 03-C3's
+  `copy_materialized(old, new, instance_map=...)`, which writes rows for NEW
+  naming the same kinds and distinct units, with an empty `built_from`, and
+  copies no artifact or vector. A test uses nonconsecutive embedded passages
+  and proves that only replacements of those units can be sent.
 - A wrong statement costs some compute and, at worst, embeddings of NEW's
   projections, up to the units OLD had embedded and each producer's lazy
   limit. That is the one way sync can embed text whose predecessor was not
@@ -1041,10 +1043,10 @@ has lost a whole world or campaign outside the app. When the app deletes one,
 03-C8 purges the cache, so that derived private text does not outlive it,
 either in this device's file or in other devices' synced copies. A delete made
 by hand deserves the same. So sync calls 03-C8's
-`compiled.purge_for_delete()` (the marker, plus this device's purge) and
-reports `purged`. That callable takes no root: it acts on whatever
-`paths.home()` names at call time, so sync calls it only after its root check
-(section 4.1) has passed. If 03-C8 has not landed, sync reports
+`compiled.purge_for_delete(root)` (the marker, plus this device's purge) and
+reports `purged`. It passes the library root pinned for the sync run, after
+its root check (section 4.1) has passed; a later root switch cannot redirect
+the purge to another library. If 03-C8 has not landed, sync reports
 the root as deleted and says the purge did not run.
 
 The purge is triggered **only** by an explicit `--deleted` naming the root.
@@ -1310,7 +1312,7 @@ S3). 05-C3 is complete when both S5 and S6 have landed.
 - **Needs (this spec):** 05-S2 (H).
 - **Needs (other specs):** 03-C3 (H: `built_from` and `copy_materialized`);
   03-C4 (H: the batch form over listed paths that returns their
-  `materialized` rows); 03-C8 (S: `compiled.purge_for_delete()`; until it
+  `materialized` rows); 03-C8 (S: `compiled.purge_for_delete(root)`; until it
   lands, a `--deleted` root is reported deleted with the purge not run).
 - **Needs (slices):** 03-S2 (H), 03-S4 (H), 03-S5 (S), 05-S2 (H)
 - **Scope:** Adds `backend/src/grimoire/cache.py` (section 7.1) with
@@ -1654,6 +1656,9 @@ turns the queue on.
 - A rate limit on the third chunk leaves the first two chunks' vectors saved,
   one ledger row per chunk sent.
 - A rename stated with `--renamed` whose text did not change embeds nothing.
+- A renamed transcript with only passages 1, 4 and 9 embedded retains those
+  selectors; an edit after rename embeds only their replacements and none of
+  its never-embedded passages.
 - With two producers' rows on one path (recall and search on a lore entry),
   each hook rebuilds only its own projection.
 - A connection-wide failure on the first group stops the rest, and the report
@@ -1833,7 +1838,9 @@ finding below was verified against the code before it was folded in.
   (6.2, 6.4, 11). `materialized` is keyed by `(path, kind, instance)`, rows
   may have no artifact and are touched on a hit, 03-C4's batch form returns
   the rows, a purge generation drops a batch that straddles a purge,
-  `compiled.purge_for_delete()` takes no root, and `compiled.space_digest` is
+  `compiled.purge_for_delete` was originally specified without a root (the
+  2026-10-11 spec gate corrected it to take the pinned library root), and
+  `compiled.space_digest` is
   the one spelling of the digest (4.4, 6.4, 6.5, 7.3, 7.5, 7.6, 11). 03 does
   not yet carry `built_from` or the rename-copy write call (Open question 6).
 - **Slices added (7 slices).** Slicing also folded in three upstream

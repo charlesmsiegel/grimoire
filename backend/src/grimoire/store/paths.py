@@ -2,17 +2,47 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 import re
 import stat
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 from . import atomic, failsoft, statcache
 
 DEFAULT_HOME = Path.home() / ".grimoire"  # paths-ok: this IS the resolver's default root
+
+
+_LIBRARY_PID = os.getpid()
+_LIBRARY_LOCK = threading.RLock()
+_PINNED_LIBRARY: contextvars.ContextVar[Path | None] = contextvars.ContextVar('grimoire_library', default=None)
+
+
+@contextlib.contextmanager
+def library_guard() -> Iterator[None]:
+    """Order cooperative root publication after a captured deletion."""
+    global _LIBRARY_PID, _LIBRARY_LOCK  # noqa: PLW0603 -- inherited mutexes cannot be acquired after fork
+    if os.getpid() != _LIBRARY_PID:
+        _LIBRARY_PID = os.getpid()
+        _LIBRARY_LOCK = threading.RLock()
+    with _LIBRARY_LOCK:
+        yield
+
+
+@contextlib.contextmanager
+def pin_library(root: Path) -> Iterator[Path]:
+    """Bind every store resolver even if another process repoints the pointer."""
+    root = Path(root)
+    token = _PINNED_LIBRARY.set(root)
+    try:
+        yield root
+    finally:
+        _PINNED_LIBRARY.reset(token)
 
 
 def pointer_path() -> Path:
@@ -117,13 +147,16 @@ def _pointer_data_dir() -> Path | None:
 def home() -> Path:
     """Resolve the data root.
 
-    Order: ``GRIMOIRE_HOME`` env var (override / test isolation) → the
+    Order: scoped explicit library pin ? ``GRIMOIRE_HOME`` env var (override / test isolation) → the
     user-chosen path from the bootstrap pointer → the default ``~/.grimoire``.
     Resolved live on every call so a path change takes effect immediately: the
     pointer is memoized, but only against its own stat signature (see
     `_read_pointer`), so a changed pointer is a miss rather than a stale hit and
     what this saves is the open and the parse, never the check.
     """
+    pinned = _PINNED_LIBRARY.get()
+    if pinned is not None:
+        return pinned
     env = os.environ.get("GRIMOIRE_HOME")
     if env:
         return Path(env)
@@ -133,14 +166,23 @@ def home() -> Path:
     return DEFAULT_HOME
 
 
-def ensure_home() -> Path:
-    base = home()
+def _ensure_root(base: Path) -> Path:
     (base / "worlds").mkdir(parents=True, exist_ok=True)
     (base / "campaigns").mkdir(parents=True, exist_ok=True)
     return base
 
 
+def ensure_home() -> Path:
+    return _ensure_root(home())
+
+
 def set_data_dir(path: str | Path | None) -> Path:
+    """Publish a chosen data root after cooperative deletions release it."""
+    with library_guard():
+        return _set_data_dir(path)
+
+
+def _set_data_dir(path: str | Path | None) -> Path:
     """Persist the data dir to the bootstrap pointer and return the new root.
 
     A falsy ``path`` clears the override, reverting to the default. The target
@@ -151,19 +193,22 @@ def set_data_dir(path: str | Path | None) -> Path:
     data = _read_pointer()
 
     if not path or not str(path).strip():
+        resolved = DEFAULT_HOME
         data.pop("data_dir", None)
-        atomic.write_text(pointer, json.dumps(data, indent=2) + "\n")
-        return ensure_home()
-
-    resolved = Path(str(path).strip()).expanduser()  # paths-ok: same, for a path arriving from the Configuration page
+    else:
+        resolved = Path(str(path).strip()).expanduser()  # paths-ok: same, for a path arriving from the Configuration page
+        data["data_dir"] = str(resolved)
     if resolved.exists() and not resolved.is_dir():
         raise ValueError(f"{resolved} exists but is not a directory")
-    resolved.mkdir(parents=True, exist_ok=True)
-
-    data["data_dir"] = str(resolved)
+    # Publish only after both the selected directory and the effective env
+    # override can be used. A failed worlds/campaigns mkdir must leave the
+    # old pointer selected, rather than return an error after moving libraries.
+    _ensure_root(resolved)
+    env = os.environ.get("GRIMOIRE_HOME")
+    effective = _ensure_root(Path(env)) if env else resolved
     pointer.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(pointer, json.dumps(data, indent=2) + "\n")
-    return ensure_home()
+    return effective
 
 
 def data_dir_info() -> dict:

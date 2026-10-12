@@ -629,6 +629,21 @@ def _remaining(deadline) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
+_campaign_holds_local = threading.local()
+
+
+def _campaign_holds() -> set[_ProcessScopedLock]:
+    if getattr(_campaign_holds_local, 'pid', None) != os.getpid():
+        _campaign_holds_local.pid = os.getpid()
+        _campaign_holds_local.held = set()
+    return _campaign_holds_local.held
+
+
+def campaign_locks_held() -> bool:
+    """Any campaign-domain hold on this thread, including reentrant/no-wait."""
+    return bool(_campaign_holds())
+
+
 class _ProcessScopedLock:
     """A ``threading.RLock`` plus an OS advisory file lock (#234).
 
@@ -687,6 +702,10 @@ class _ProcessScopedLock:
             self._fd = fd                   # installed BEFORE depth becomes 1
             fd = None                       # ownership transferred to self
             self._depth = 1
+            if self._domain == 'campaign':
+                # Track the outermost physical hold; reentrant releases keep
+                # the same entry, so nested/no-wait/hold_all paths agree.
+                _campaign_holds().add(self)
             return True
         except BaseException:
             # Three windows, and the handler has to tell them apart. `depth`
@@ -729,6 +748,8 @@ class _ProcessScopedLock:
                 proclock.release(fd)
         finally:                            # even if the unlock raises
             self._depth = 0
+            if self._domain == 'campaign':
+                _campaign_holds().discard(self)
             self._rlock.release()
 
     def __enter__(self):

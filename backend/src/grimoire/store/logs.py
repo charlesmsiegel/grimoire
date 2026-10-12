@@ -75,6 +75,7 @@ from __future__ import annotations
 import heapq
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -198,6 +199,28 @@ _size_guard = threading.Lock()
 # the four-thread log test reproduces it with every write reporting success.
 # The thread-local re-entry latch above prevents recursive acquisition.
 _append_guard = threading.Lock()
+_pid = os.getpid()
+
+
+def _reset_after_fork() -> None:
+    global _append_guard, _size_guard, _busy, _pid  # noqa: PLW0603 -- replace parent-owned guards
+    # A parent's other threads disappear in the child. Neither their locks
+    # nor a copied re-entry latch/byte accounting belong to the new process.
+    _append_guard = threading.Lock()
+    _size_guard = threading.Lock()
+    _busy = threading.local()
+    _written.clear()
+    _capped.clear()
+    _pid = os.getpid()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def _ensure_process() -> None:
+    if _pid != os.getpid():
+        _reset_after_fork()
 
 
 def _now() -> str:
@@ -323,6 +346,7 @@ def record(level_: str, module: str, message: str, *, kind: str = "",
     hold rather than coerced, because a value this module cannot serialize is
     a caller's mistake and must cost that key, not the row.
     """
+    _ensure_process()
     if getattr(_busy, "on", False):
         return None                      # nested: see `_busy`
     name = level_name(level_)
@@ -467,6 +491,7 @@ def forget_file_sizes() -> None:
     would silence a fresh log at the old one's size. `install` calls it for the
     same reason, one app at a time.
     """
+    _ensure_process()
     with _size_guard:
         _written.clear()
         _capped.clear()

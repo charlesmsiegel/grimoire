@@ -4,6 +4,8 @@ import hashlib
 import os
 import time
 
+import pytest
+
 from grimoire.store import characters, entities, statcache
 
 
@@ -183,3 +185,91 @@ def test_memo_pool_holds_working_set_larger_than_shared_budget(tmp_path):
     first = len(calls)
     sweep()
     assert len(calls) == first   # second sweep: all hits
+
+
+def test_windows_volume_serial_collision_cannot_inherit_support(monkeypatch):
+    def by_name(path, kind, result, size):
+        native = result._obj
+        native.volume = 1234  # Cloned volumes can share this serial number.
+        native.device_type = 7
+        native.creation = statcache.file_stats._FILETIME_EPOCH + 500
+        native.change = statcache.file_stats._FILETIME_EPOCH + 1000
+        native.write = statcache.file_stats._FILETIME_EPOCH + 500
+        native.size = 4
+        return 1
+    seam = statcache.file_stats
+    monkeypatch.setattr(seam, '_BY_NAME', by_name)
+    monkeypatch.setattr(seam, '_WINDOWS', object())
+    if hasattr(seam, '_SUPPORTED_DEVICES'):
+        monkeypatch.setattr(seam, '_SUPPORTED_DEVICES', {})
+    monkeypatch.setattr(seam, 'windows_change_supported', lambda path, device: path == 'Realm')
+    assert seam.fast_stamp('Realm') is not None
+    assert seam.fast_stamp('Saltmarch') is None
+
+
+def test_native_memory_metadata_does_not_vouch_for_persisted_sources(monkeypatch):
+    seam = statcache.file_stats
+    epoch = seam._FILETIME_EPOCH
+    creation = [epoch + 500]
+    def by_name(path, kind, result, size):
+        native = result._obj
+        native.volume, native.device_type, native.size = 1234, 7, 4
+        native.creation, native.change, native.write = creation[0], epoch + 1000, epoch + 500
+        return 1
+    monkeypatch.setattr(seam, '_BY_NAME', by_name)
+    monkeypatch.setattr(seam, '_WINDOWS', object())
+    monkeypatch.setattr(seam, 'windows_change_supported', lambda path, device: False)
+    assert seam.native_stamp('Realm') is not None
+    assert seam.fast_stamp('Realm') is None
+    creation[0] = epoch + 1500
+    observed = seam.native_stamp('Realm')
+    assert observed[1] == 150000  # CopyFile can preserve an older ChangeTime.
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: observed[1] + statcache.RACY_WINDOW_NS // 2)
+    pool = {}
+    stamped = ('Realm', *observed[:4])
+    assert statcache.memo_stamped('Realm', lambda: ('Mara', (stamped,)), pool=pool, max_entries=4) == 'Mara'
+    assert not pool  # Cannot age a newly created file using preserved metadata.
+
+
+def test_windows_same_mount_serial_replacement_rechecks_filesystem(monkeypatch):
+    seam = statcache.file_stats
+    filesystem = ['NTFS']
+    class NativeVolume:
+        @staticmethod
+        def GetVolumePathNameW(path, volume, length):  # noqa: N802 -- mirror the Win32 API name
+            volume.value = 'Realm'
+            return 1
+        @staticmethod
+        def GetDriveTypeW(volume):  # noqa: N802 -- mirror the Win32 API name
+            return 2
+        @staticmethod
+        def GetVolumeInformationW(volume, name, length, serial, component, flags, target, capacity):  # noqa: N802 -- mirror the Win32 API name
+            target.value = filesystem[0]
+            return 1
+    monkeypatch.setattr(seam, '_WINDOWS', NativeVolume())
+    assert seam.windows_change_supported('Realm', 1234)
+    filesystem[0] = 'FAT32'
+    assert not seam.windows_change_supported('Realm', 1234)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native metadata fallback')
+def test_legacy_windows_metadata_keeps_copied_creation_age_guard(monkeypatch):
+    seam = statcache.file_stats
+    epoch = seam._FILETIME_EPOCH
+    closed = []
+    class NativeHandle:
+        @staticmethod
+        def CreateFileW(*args):  # noqa: N802 -- mirror the Win32 API name
+            return 1
+        @staticmethod
+        def GetFileInformationByHandleEx(handle, kind, result, size):  # noqa: N802 -- mirror the Win32 API name
+            result._obj.creation, result._obj.change = epoch + 2000, epoch + 1000
+            return 1
+        @staticmethod
+        def CloseHandle(handle):  # noqa: N802 -- mirror the Win32 API name
+            closed.append(handle)
+    monkeypatch.setattr(seam, '_BY_NAME', None)
+    monkeypatch.setattr(seam, '_WINDOWS', NativeHandle())
+    monkeypatch.setattr(seam, 'windows_change_supported', lambda *args: True)
+    assert seam.change_ns('Realm', os.stat('.')) == 200000
+    assert closed == [1]

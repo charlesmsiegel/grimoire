@@ -14,6 +14,11 @@ import pytest
 
 from grimoire.store import proclock
 
+# The suite floors lock_dir before each test, including after an explicit
+# monkeypatch.undo(). Resolver tests retain the actual read-only resolver so
+# they still test account/Android behavior rather than the privacy fixture.
+_machine_lock_dir = proclock.lock_dir
+
 _CHILD = """
 import sys, time
 sys.path[:0] = {path!r}
@@ -64,7 +69,7 @@ def _open_fds() -> int:
 
 
 def test_lock_dir_is_outside_the_store_and_per_user(tmp_path):
-    d = proclock.lock_dir()
+    d = _machine_lock_dir()
     assert "grimoire" in d.parts and d.name == "locks"
     assert tmp_path not in d.parents and d != tmp_path
 
@@ -85,12 +90,12 @@ def test_locking_writes_nothing_into_the_store(tmp_path):
 def test_lock_dir_ignores_environment_overrides(monkeypatch):
     """The round-2 finding: an environment-conditional path means two
     processes of one user pick different lock files and exclude nothing."""
-    before = proclock.lock_dir()
+    before = _machine_lock_dir()
     for var in ("XDG_RUNTIME_DIR", "XDG_STATE_HOME", "LOCALAPPDATA", "TMPDIR"):
         monkeypatch.delenv(var, raising=False)
     if sys.platform != "win32":
         monkeypatch.setenv("HOME", "/nonexistent-home")
-    assert proclock.lock_dir() == before
+    assert _machine_lock_dir() == before
 
 
 def test_lock_path_separates_stores_and_names(tmp_path):
@@ -230,7 +235,7 @@ def test_android_uses_the_configured_home_not_the_passwd_entry(monkeypatch, tmp_
     monkeypatch.setattr(proclock, "_on_android", lambda: True)
     monkeypatch.setenv("HOME", str(app_home))
     monkeypatch.setenv("USERPROFILE", str(app_home))
-    assert app_home in proclock.lock_dir().parents
+    assert app_home in _machine_lock_dir().parents
 
 
 def test_an_unusable_passwd_home_falls_back_to_the_environment(monkeypatch, tmp_path):
@@ -243,7 +248,7 @@ def test_an_unusable_passwd_home_falls_back_to_the_environment(monkeypatch, tmp_
     monkeypatch.setattr(proclock.pwd, "getpwuid",
                         lambda uid: type("E", (), {"pw_dir": "/"})())
     monkeypatch.setenv("HOME", str(fake_home))
-    assert fake_home in proclock.lock_dir().parents
+    assert fake_home in _machine_lock_dir().parents
 
 
 def test_the_store_key_follows_filesystem_identity_not_spelling(tmp_path):

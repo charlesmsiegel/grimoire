@@ -17,6 +17,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
+from . import file_stats
+
 T = TypeVar("T")
 
 MAX_ENTRIES = 4096
@@ -117,25 +119,25 @@ def stamp(path: str | os.PathLike[str]) -> Stamp | None:
     Wider than `signature`'s tuple by `st_ctime_ns`. A file rewritten in place
     and then handed its old mtime back -- a sync client or `touch -r` restoring
     the origin's timestamp -- keeps mtime, size and inode, but not ctime, which
-    no user tool can set. (On Windows `st_ctime` is the creation time, which
-    buys nothing there and costs nothing either.)
+    ordinary timestamp restoration does not preserve. On Windows Python's
+    st_ctime is birth time, so the shared native seam supplies ChangeTime;
+    unavailable change metadata opts out of memoization.
     """
+    if os.name == 'nt' and file_stats._BY_NAME is not None:
+        fields = file_stats.native_stamp(path)
+        return (os.fspath(path), fields[0], fields[1], fields[2], fields[3]) if fields is not None else None
     try:
         st = os.stat(path)
     except OSError:
         return None
-    return (os.fspath(path), st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+    changed = file_stats.change_ns(path, st)
+    return (os.fspath(path), st.st_mtime_ns, changed, st.st_size, st.st_ino) if changed is not None else None
 
 
 def _unchanged(stamps: tuple[Stamp, ...]) -> bool:
-    for s in stamps:
-        try:
-            st = os.stat(s[0])
-        except OSError:
-            return False
-        if (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino) != s[1:]:
-            return False
-    return True
+    if len(stamps) == 1:
+        return stamp(stamps[0][0]) == stamps[0]
+    return all(stamp(s[0]) == s for s in stamps)
 
 
 def memo_stamped(key: object, compute: Callable[[], tuple[T, tuple[Stamp, ...] | None]],
@@ -167,7 +169,7 @@ def memo_stamped(key: object, compute: Callable[[], tuple[T, tuple[Stamp, ...] |
     value came from a state the next read is supposed to repair). The value is
     returned and nothing is stored.
 
-    Nothing touched inside `RACY_WINDOW_NS` before the computation started is
+    Neither mtime nor ctime may fall inside `RACY_WINDOW_NS` before the computation started. Nothing that recent is
     stored, for `memo`'s reason: a same-size rewrite within one timestamp tick
     of the stat would leave the stamp unchanged. Measured against the start,
     not the end, so a stamp taken late in a long computation is held to the
@@ -180,7 +182,7 @@ def memo_stamped(key: object, compute: Callable[[], tuple[T, tuple[Stamp, ...] |
         return entry[1]
     started = time.time_ns()
     value, stamps = compute()
-    if stamps is None or any(s[1] >= started - RACY_WINDOW_NS for s in stamps):
+    if stamps is None or any(max(s[1:3]) >= started - RACY_WINDOW_NS for s in stamps):
         pool.pop(key, None)
         return value
     _put(pool, key, (stamps, value), max_entries)

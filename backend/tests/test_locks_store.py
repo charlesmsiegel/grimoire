@@ -22,6 +22,7 @@ from grimoire.store import (
     campaigns,
     dice,
     locks,
+    proclock,
     proposals,
     rolls,
     scenes,
@@ -531,8 +532,10 @@ def test_fork_acquires_both_campaign_locks_in_sorted_order(monkeypatch, tmp_path
 
 _HOLDER = """
 import sys, time
+from pathlib import Path
 sys.path[:0] = {path!r}
-from grimoire.store import locks
+from grimoire.store import locks, proclock
+proclock.lock_dir = lambda: Path({lock_dir!r})
 lock = locks.{factory}
 with lock:
     print("HELD", flush=True)
@@ -541,8 +544,10 @@ with lock:
 
 _PROBE = """
 import sys
+from pathlib import Path
 sys.path[:0] = {path!r}
-from grimoire.store import locks
+from grimoire.store import locks, proclock
+proclock.lock_dir = lambda: Path({lock_dir!r})
 lock = locks.{factory}
 print("GOT" if lock.acquire(timeout={wait}) else "BUSY", flush=True)
 """
@@ -550,7 +555,8 @@ print("GOT" if lock.acquire(timeout={wait}) else "BUSY", flush=True)
 
 def _hold_in_child(tmp_path, factory, hold=30.0):
     """Spawn a process holding a lock; return once it actually holds it."""
-    src = _HOLDER.format(path=sys.path, factory=factory, hold=hold)
+    src = _HOLDER.format(path=sys.path, factory=factory, hold=hold,
+                         lock_dir=str(proclock.lock_dir()))
     p = subprocess.Popen([sys.executable, "-c", src], text=True,
                          stdout=subprocess.PIPE,
                          env={**os.environ, "GRIMOIRE_HOME": str(tmp_path)})
@@ -560,7 +566,8 @@ def _hold_in_child(tmp_path, factory, hold=30.0):
 
 def _probe(tmp_path, factory, wait=0.5) -> str:
     """Ask another process whether it can take the lock right now."""
-    src = _PROBE.format(path=sys.path, factory=factory, wait=wait)
+    src = _PROBE.format(path=sys.path, factory=factory, wait=wait,
+                        lock_dir=str(proclock.lock_dir()))
     r = subprocess.run([sys.executable, "-c", src], capture_output=True,
                        text=True, timeout=60,
                        env={**os.environ, "GRIMOIRE_HOME": str(tmp_path)})

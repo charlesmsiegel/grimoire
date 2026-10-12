@@ -63,6 +63,12 @@ export function StorageLocation(
         synced folder (Syncthing, Dropbox/Drive desktop, iCloud…) to share the
         same library across devices. Changes take effect immediately.
       </p>
+      <p className="field-hint">
+        Derived text, thumbnails, and embeddings share this folder too. Deleting
+        a world or campaign clears derived text on this device now and on other
+        devices when they next open the library. Dormant caches can remain for
+        90 days. Text-keyed vectors remain until you clear the embeddings folder.
+      </p>
       <div className="joined">
         <input
           id="cfg-data-dir"

@@ -30,6 +30,7 @@ from .. import (
 )
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store import compiled
 from ..store import inference_retired as retired
 from ..store.inference import capabilities, controls, facts, limits, providers
 from ..store.inference import migrate as inference_migrate
@@ -448,7 +449,8 @@ def put_data_dir(update: DataDirUpdate, request: Request):
                 "detail": "the model settings are being upgraded; try again when "
                           "that has finished"})
         try:
-            store.set_data_dir(update.data_dir)
+            with compiled.root_change():
+                store.set_data_dir(update.data_dir)
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400,
                                 detail={"detail": str(exc), "kind": "data_dir"})

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import os
 import pathlib
 import socket
 import sys
@@ -170,7 +171,7 @@ def entry_env(monkeypatch, tmp_path):
     """start_server writes the process environment and, through the USB step,
     the process umask. Record the first so monkeypatch restores it; replace the
     second, which would otherwise leak into every test that runs after."""
-    for var in ("HOME", "GRIMOIRE_DIST", "GRIMOIRE_TEMPLATES"):
+    for var in ("HOME", "GRIMOIRE_DIST", "GRIMOIRE_TEMPLATES", "GRIMOIRE_COMPILED_BUILD"):
         monkeypatch.setenv(var, str(tmp_path / "unused"))
     monkeypatch.delenv("GRIMOIRE_HOME", raising=False)
     events: list[str] = []
@@ -179,6 +180,19 @@ def entry_env(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     return types.SimpleNamespace(home=home, events=events, ports=[])
+
+
+def test_compiled_stamp_is_resolved_before_backend_imports(entry_env, monkeypatch):
+    """The APK cannot hash its compiled Python bundle. Resolve the stamp from
+    the extracted assets, before an import can decide whether caching is safe.
+    A stale environment value from another asset tree must not win."""
+    templates = entry_env.home / "assets" / "templates"
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+    cb = _Callback(entry_env.events, entry_env.ports)
+    with pytest.raises(ImportError):
+        android_entry.start_server(str(entry_env.home), "dist", str(templates), cb)
+    assert os.environ["GRIMOIRE_COMPILED_BUILD"] == str(
+        templates.parent / "compiled-build.json")
 
 
 @pytest.mark.parametrize("module", ["uvicorn", "grimoire.main"])

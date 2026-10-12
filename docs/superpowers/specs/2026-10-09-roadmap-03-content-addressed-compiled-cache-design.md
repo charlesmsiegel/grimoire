@@ -1,8 +1,8 @@
 # Content-addressed compiled cache: the files stay the database, SQLite caches what is compiled from them
 
-**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
-Three reviews are folded in (section 15): a substitute adversarial review, the
-PR's Codex review, and a substitute gate review of the cross-linked text.
+**Status:** Approved for slice planning — CLI Codex spec gate passed 2026-10-11.
+The historical substitute and PR reviews, plus the CLI gate's corrections and
+approval, are recorded in section 15.
 **Date:** 2026-10-09
 **Series:** 03. Depends on 01, the inference refactor
 (`2026-10-07-inference-backend-refactor-design.md`, landed as slices A
@@ -261,8 +261,17 @@ or `.cache/compiled` is a symlink or a junction, SQLite would write derived
 private text outside the root the user chose, and the purge and retention
 rules (sections 10 and 12) would act on a directory that is not the cache.
 So the cache is **off** for any process that finds a link or junction in
-either component. This is checked when the cache opens and again before any
-purge or removal, the same rule image GC applies (`image_gc._store_blocks`).
+either component, the `delete-intents` directory, or at a cache-owned leaf:
+the database, its journal, lease, clock sentinel, purge marker, deletion
+intent, or corruption-aside file. Check with `lstat`
+and Windows reparse-point attributes, without resolving through a link.
+Check before opening or creating a database and before each write, purge or
+removal; a linked leaf is never read, written, renamed or removed. In
+particular, ordinary parent directories do not authorize following a linked
+database. Tests plant links to an external target and prove it stays unchanged.
+These checks cover links present when an operation begins; they do not claim
+to defeat an adversary replacing filesystem entries between the check and
+SQLite's open. The chosen store root itself remains the user's boundary.
 
 **No handle stays open while the app is idle, and no sidecar file is left
 behind.**
@@ -328,11 +337,17 @@ Without the column, every file that has rows would be a sync candidate (05
 section 7.3). A row written without a known hash, such as a rename copy, has
 `built_from` empty, and an empty value is never current.
 
-**`copy_materialized(old, new)`** writes rows for `new` that name the same
-kinds as `old`'s rows, multi-unit vector rows included, with an empty
-`instance` and an empty `built_from`. It copies nothing else: no artifact and
-no vector. 05's `--renamed OLD=NEW` uses it so that a stated rename warms the
-new path (05 section 7.5).
+**`copy_materialized(old, new, *, instance_map=None)`** writes rows for `new`
+that name the same kinds and retain the same instances as `old`'s rows,
+multi-unit vector rows included, with an empty `built_from`. It copies no
+artifact or vector. The optional mapper takes `(kind, canonical_instance)`
+and returns a canonical instance with path-dependent context remapped by the
+owning hook; it must preserve independent unit selectors such as passage
+positions. With no mapper, instances are copied unchanged. Resetting them
+all to `""` would collapse distinct embedded units onto one primary key and
+lose the history that bounds re-embedding spend. 05's `--renamed OLD=NEW`
+supplies its hooks' mapper so a stated rename warms the new path (05 section
+7.5). Tests copy several nonconsecutive passage positions, not just one row.
 
 **The key is `(path, kind, instance)`.** A world entry read by two campaigns
 therefore has two rows, and 05 re-embeds and attributes each one for its own
@@ -819,13 +834,14 @@ and correctness never depends on the sweep. A cheaper rule is enough:
   than a generous retention period. A database's own mtime cannot be that
   signal: it records writes, and rules above keep a warm read from writing, so
   a fully warm cache in daily use would look abandoned. The lease is a small
-  file beside the database, `<device>.alive`, touched by the owning process
+  file beside the database, `<device>-v<SCHEMA>.alive`, touched by the owning process
   when it opens the cache and at most once a day while it stays open. A file
   with no lease is judged by its own mtime. The removal covers another
   device's file after that device stopped syncing, and a file left behind by a
   data-dir move or a schema change. Any device may remove it, because it is
   only a cache: an owner that was alive after all starts cold. This device's
-  own file is never removed this way.
+  current-schema file is never removed this way. Its obsolete schema files
+  are eligible under their own leases: opening v2 must not renew v1's lease.
 
 The cap, the low-water mark and the retention period are constants. The plan
 justifies them structurally and tunes them later.
@@ -837,14 +853,30 @@ another schema. Old-schema files age out under section 10. A kind whose
 derivation changes needs no migration, because `BUILD` has already moved its
 keys (section 6).
 
+Deletion also purges this device's obsolete schema files; waiting for lease
+retention alone would leave deleted private text behind after an upgrade.
+Every schema has a stable SQLite `application_id` identifying this cache and
+a stable metadata table containing the purge generation. A maintenance-only
+connection may open a recognized obsolete schema to securely delete its
+non-internal tables and record the generation, without interpreting or
+migrating its payloads. It uses the same short lock timeout and containment
+checks as the current schema. An active older process observes the shared
+marker before its next batch, and a busy obsolete file is retried at the next
+maintenance opportunity. Unrecognized files are never treated as cache-owned.
+
 ## 12. Failure semantics
 
 The cache can never be the reason a read fails.
 
 - **Corrupt database.** The plan checks `sqlite_errorcode`. Only on
-  `SQLITE_CORRUPT` or `SQLITE_NOTADB` is the file renamed aside and replaced,
-  under a proclock, so that two backends on one machine never both act on it.
-  The aside copy is deleted on the next successful open.
+  `SQLITE_CORRUPT` or `SQLITE_NOTADB`, with current ownership proof, is the file
+  renamed aside and replaced under a proclock, so that two backends on one
+  machine never both act on it. An unreadable ownership header/metadata is a
+  miss; a matching cache filename or error code cannot license destroying an
+  unproved file. An existing aside is deleted only after its own ownership
+  proof, containment checks and absence of an unproved journal. During durable
+  deletion maintenance, the owned-corruption exception below erases the
+  damaged file without creating a replacement when derivations are disabled.
   - `sqlite3.OperationalError("database is locked")` is also a
     `DatabaseError`. Renaming a merely locked file would delete a live
     database and its hot journal out from under another backend, which is
@@ -898,29 +930,80 @@ campaigns, in this device's file and in other devices' synced copies, and in
 SQLite's free pages. So:
 
 - The connection runs with `secure_delete=ON`.
-- **Deleting a world or a campaign purges the cache in place. It never unlinks
-  a database.** Two backends on one machine share this device's file, and on
+- **Deleting a world or a campaign purges a healthy cache in place.** Two backends on one machine share this device's file, and on
   Windows a file another process holds open cannot be removed. So "delete the
   file" would leave a choice between refusing the delete and keeping the
   private text. The purge works through SQLite's own locking instead:
-  1. The delete route writes a **purge marker**, `.cache/compiled/purge`
-     (through `store.atomic`), holding a new generation token.
-  2. In the same request, it purges this device's file: every row of every
-     table deleted in one transaction, under `secure_delete`, then
-     `incremental_vacuum`. It records the token in the file's own metadata.
-  3. Every process checks the marker each time it opens the cache or starts a
-     batch, which costs one stat. If a token differs from the one its file
+  1. **Before authoritative removal**, the delete route calls
+     `compiled.prepare_delete(root)`. It durably writes a unique intent under
+     `.cache/compiled/delete-intents/` through `store.atomic`, containing only
+     its token and owner device key, and holds the token's machine-local
+     proclock until completion. Concurrent deletes have distinct intents.
+     The intent is a write fence: while any intent is present, compiled reads
+     miss and batches cannot commit. The cache must not retain a batch started
+     before the intent either: commit rechecks the live intent set as well as
+     the purge generations. A cache failure still never refuses the deletion.
+  2. After the authoritative attempt and outside the root/campaign/maintenance
+     exclusions, the route calls `compiled.purge_for_delete(root, intent=...)`.
+     It writes a **purge marker**, `.cache/compiled/purge` (through
+     `store.atomic`), holding a new generation token.
+  3. In the same request, it attempts to purge this device's current and
+     obsolete schema files under `secure_delete`. Owned DELETE triggers are
+     removed first, so they cannot repopulate an already erased table. Owned
+     virtual tables and their shadow storage are dropped in place before
+     ordinary table erasure: contentless FTS tables cannot accept a row DELETE.
+     Views and ordinary table/index definitions are discarded too: private
+     literals in DEFAULT/CHECK expressions and views otherwise survive row
+     deletion. SQLite's protected planner/sequence tables have their rows
+     erased. The final transaction recreates the canonical public layout,
+     including cache_meta's definition, preserving only its proved schema
+     version and old generation. File identity and ownership remain valid at
+     every committed boundary; unknown obsolete layouts are disposable.
+     Schema work uses phases of at most 128 objects per transaction;
+     oversized obsolete schemas continue at later batches with a durable,
+     checksummed table cursor. The old completion generation remains until
+     every table is erased and a full `VACUUM` succeeds, then the file records
+     the token. Healthy files remain in place. This explicitly replaces the
+     original single-transaction/incremental-vacuum purge wording: bounded
+     schema transfer must not permanently exclude large owned schemas, and
+     completion must include physical erasure. Ordinary LRU eviction still
+     uses incremental vacuum. Row deletion and vacuum are SQLite work rather
+     than a fixed wall-clock or page-I/O budget.
+  4. Only after publishing the marker does it retire its own intent and release
+     the proclock; another delete's intent is never retired by this call.
+     A busy database may wait for the next batch, since the durable marker
+     continues to require a purge before use.
+     Completion does not wait for another preparation's in-process mutex:
+     its descriptor stays registered for fork safety, then a bounded queue
+     releases finished owners once that mutex is available. Its durable
+     intent remains recoverable, including when marker publication failed.
+  5. Every process checks the marker and pending intents each time it opens
+     the cache or starts a batch. If a token differs from the one its file
      records, it purges the same way before it reads or writes. That covers
      another backend on this machine, at its next batch, and another device,
      whose marker arrives by sync, at its next open.
+
+  **A crash cannot lose the purge request.** On the next cache open or batch,
+  a pending local-device intent is recoverable only if its proclock can be
+  acquired without waiting: its owner has finished or died. The recovery
+  publishes a new marker, purges, and retires that intent. If the owner is
+  still active, the cache stays fenced. Other devices conservatively purge
+  their own files on seeing a foreign intent and stay fenced until its owner
+  completes or recovers it; they never claim a remote process is dead from a
+  local lock result. This requires no authoritative-store startup sweep. A
+  crash after the directory disappears and a later 404 retry both leave the
+  intent recoverable. If durable intent or marker I/O itself fails, deletion
+  remains fail-soft and the failure is logged once; that storage failure is
+  a stated limit of the at-rest purge guarantee.
 
   **A batch prepared before a purge commits nothing after it.**
 
   - Each write batch captures the purge generation when its first read
     starts. The generation is the marker's token plus the token the file
     records.
-  - At commit, under the connection lock, the batch reads both again and drops
-    itself entirely if either has moved.
+  - At commit, under the connection lock, the batch reads both and the live
+    intent set again and drops itself entirely if either token has moved or
+    any intent is pending.
 
   Without this, a `GET /campaigns` that is computing when a delete lands could
   commit the deleted campaign's name and blurb into a freshly purged file. 04's
@@ -934,21 +1017,29 @@ SQLite's free pages. So:
   removes is data at rest. This is a whole-cache purge at the delete route,
   not a hook on record writes, and every device then starts cold.
 
-  **03-C8: the purge is one callable, `compiled.purge_for_delete()`.** It acts
-  on the store root `home()` resolves at call time. It is a whole-cache purge,
-  so it takes no record root. It writes the marker and purges this device's
-  file.
+  **03-C8: completion is `compiled.purge_for_delete(root: Path, *, intent=None)`;
+  `compiled.prepare_delete(root: Path)` supplies the recoverable intent.**
+  `root` is the pinned library root used by the authoritative deletion, not a
+  world or campaign directory. Every path, device key and connection used by
+  the purge comes from that argument; it never re-resolves `home()`. The delete
+  route must also keep root switching excluded while it captures that root,
+  prepares the intent, and performs the authoritative deletion. It releases
+  the exclusion before purging, so a subsequent root switch cannot redirect
+  the purge. It writes
+  the marker and purges this device's files in the pinned library.
 
   It is called from two places:
 
-  - the world and campaign delete routes, after the delete has landed and
-    outside `maintenance_excluded` (a delete that is refused calls nothing);
-  - 05's sync, when it finds that a world or campaign root has gone because
-    someone deleted it outside Grimoire.
+  - the world and campaign delete routes, in a `finally` after a prepared
+    authoritative attempt and outside `maintenance_excluded`. A refusal before
+    intent preparation calls nothing; a failed prepared attempt may harmlessly
+    make the cache cold;
+  - 05's sync, with its pinned library root, when it finds that a world or
+    campaign root has gone because someone deleted it outside Grimoire.
 
   It is idempotent, never raises into its caller, and logs one line on
-  failure. When the cache is off because `.cache` or `.cache/compiled` is a
-  link (section 3), it writes no marker and logs once.
+  failure. When containment checks fail (section 3), it writes no marker and
+  logs once.
 - **A dormant device is a stated residual.** Another device purges its own
   synced file at its next open. Until then, a device that is retired or rarely
   opened keeps the deleted record's derived text in a file that every other
@@ -972,7 +1063,7 @@ rejects.
 
 ```
 call site
-  ├─ statcache.memo / memo_stamped      in-process, stat-keyed     (unchanged)
+  ├─ statcache.memo_stamped             in-process, stat-keyed
   │    └─ compiled.derive(kind, …)      persistent, content-keyed  (new)
   │         └─ compute(bytes, path parts, params)
 ```
@@ -981,6 +1072,24 @@ A warm read in the same process is answered by statcache, and the SQLite file
 is never touched. The compiled layer is reached on a statcache miss: after a
 restart, after eviction from the in-process FIFO, or for the same bytes at a
 new path.
+
+Each wired file-derived consumer's outer memo must include ctime as well as mtime, size
+and inode, with its stamps taken before the read. `memo_stamped`'s insertion
+guard must reject both recent mtime and recent ctime, measured against the
+start of computation. Its existing guard tests only mtime; merely changing
+the call site would still admit two restored-mtime rewrites inside one coarse
+ctime tick. A deterministic test stages both rewrites and holds the clock
+and coarse ctime fixed. The existing `memo` signature
+omits ctime, so leaving that wrapper unchanged would hide a same-size rewrite
+with restored mtime before the compiled layer could validate it. Adapt these
+call sites to `memo_stamped`, retaining their owned pools and fast path.
+Supplied-text token measures have zero file inputs: exact supplied-text hash
+and actual encoder identity fully determine both their memory and persistent
+keys. They make no file-currency/materialization claim, so do not stat a path
+to validate that measure. A path stamp cannot vouch for supplied text. Their
+bounded digest memo compares complete immutable strings and retains at most
+two strings of at most16MiB each; other text is hashed live.
+This is a consumer adaptation, not a dependency from `statcache` to SQLite.
 
 - **Android.** `sqlite3` is in the standard library, so the base dependencies
   in `pyproject.toml` do not change. The plan's first task confirms, through
@@ -1001,6 +1110,9 @@ new path.
   diagnose a suspected stale read, to give section 5's Windows and FAT
   residuals a remedy short of deleting files, and to run the plan's
   cached-versus-uncached equivalence tests. It is not a user setting.
+  It disables derived lookups and writes; deletion intent and purge maintenance
+  still operate on existing safe cache files, without requiring `BUILD`, so
+  turning the cache off cannot preserve deleted text indefinitely.
 
 ## Slices
 
@@ -1123,16 +1235,20 @@ both need only S2 and can land in either order.
   - **Eviction.** Least-recently-used, measured on live pages under
     `auto_vacuum=INCREMENTAL`, with an explicit `incremental_vacuum`.
     `last_used` is batched.
-  - **Retention.** Device leases (`<device>.alive`) and lease-based removal.
-  - **Purge.** The purge marker; `purge_for_delete()`; the purge generation
+  - **Retention.** Device-and-schema leases (`<device>-v<SCHEMA>.alive`) and
+    lease-based removal.
+  - **Purge.** Recoverable pre-delete intents and their write fence; the purge
+    marker; `prepare_delete(root)` and `purge_for_delete(root, intent=...)` for current and
+    obsolete local schemas; the purge generation
     checked at commit; `secure_delete`.
-  - **Delete routes.** World and campaign deletes call the purge after the
-    delete lands.
+  - **Delete routes.** World and campaign deletes pin the library root while
+    root switching is excluded, then call the purge after the delete lands.
   - **Settings text.** The sharing boundary, the vectors residual and the
     dormant-device residual.
 - **Acceptance:** section 14's **Size**, **Deletes** and **Purge race**
-  items. A second connection purges at its next batch, and no file is
-  unlinked.
+  items. A second connection purges at its next batch; healthy owned files
+  remain in place. Section 11's bounded owned-corruption exception also
+  covers recognized recovery asides after a failed replacement.
 - **Size:** M
 
 ### 03-S6: Synthetic library and the first consumers
@@ -1146,9 +1262,15 @@ both need only S2 and can land in either order.
     non-empty target and writes placeholder names only.
   - **The first consumers** (section 8): `search.py`'s per-file extraction,
     and token measures (`tokens.record_tokens`, where only counts made by the
-    encoder persist). Each is composed at the call site under `statcache`.
-  - **The wiring check.** `world_row` and `campaign_row` are wired as the
-    end-to-end proof, with the directory name as a path-derived input.
+    encoder persist), subject to sections 8 and 14's mandatory measured-cost
+    gate. Selected file-derived consumers compose under ctime-aware outer
+    memos; pure supplied-text counts have zero file inputs and cover exact
+    supplied text plus the actual encoder (section 13).
+  - **The wiring check.** `world_row` and `campaign_row` are candidates for
+    end-to-end proof, with directory name as a path-derived input. A candidate
+    that fails the cost inequality remains unwired, with that ruling and its
+    measurements recorded. Retaining an unselected reader also retains its
+    existing memo policy and documented limits.
   - **The benchmark** for section 14's four cases.
 - **Acceptance:**
   - **Equivalence** (cold, warm, off, after a restart, including CRLF,
@@ -1193,9 +1315,25 @@ codebase's placeholder names.
   touches the rows for the paths it used.
 - **Deletes.** After a world or campaign is deleted, this device's file holds no
   rows. A second open connection, standing in for another backend, purges
-  at its next batch. No file under `.cache/compiled/` is unlinked to do this.
-- **Links.** A symlinked `.cache` or `.cache/compiled` turns the cache off, and
-  no purge or retention sweep acts through it.
+  at its next batch. Healthy database files are never unlinked to do this;
+  the owned-corruption exception above is tested in enabled and cache0 modes.
+  A real `SQLITE_CORRUPT`/`SQLITE_NOTADB` failure is the bounded exception:
+  under the same NO_WAIT operation proclock, a still-plain, re-proven-owned,
+  still-corrupt database without a hot journal may be removed. SQL cannot
+  erase its damaged pages. A failed removal leaves durable erasure work for
+  a later batch; cache0 performs this maintenance without creating a database.
+  Busy/locked/foreign/unproved files never enter this exception.
+  Switching libraries between the authoritative delete and the purge still
+  purges the deleted-from library and leaves the newly selected library alone.
+  Upgrade-then-delete purges obsolete local schemas too; opening a new schema
+  cannot keep an obsolete schema's lease fresh.
+  Crash injection after authoritative removal but before marker publication
+  recovers on the next cache batch, even after a 404 retry. Concurrent intents
+  cannot clear each other's fences, and an active owner's intent is never
+  mistaken for an abandoned one.
+- **Links.** A symlinked or junctioned `.cache`, `.cache/compiled`, or
+  cache-owned leaf turns the cache off. No open, write, purge or retention
+  sweep acts through it, and an external target stays unchanged.
 - **Size.** Evicting past the cap shrinks the physical file. A warm cache whose
   lease is fresh is never removed by another device.
 - **Contention.** A read made while a write batch holds the lock is a miss, not
@@ -1323,6 +1461,34 @@ Slices added (6 slices).
 The PR's Codex review is not the CLI's `/codex:adversarial-review`. That
 gate should still be run against this spec before the plan, if it can be.
 
+**2026-10-11 CLI spec gate.** Codex reviewed against main at
+`f816921c8d2bd91628cfe12e28bda9106a254f11` and returned `needs-attention`.
+Local reviewer reads were unavailable because the Windows sandbox helper
+failed, so it verified the committed code through the GitHub connector.
+The findings were confirmed locally and the contracts above corrected:
+
+- pin the library root across deletion and its later purge;
+- lease by device and schema, and securely purge obsolete local schemas;
+- reject linked database leaves and other cache-owned entries;
+- make the wired consumers' outer memos ctime-aware.
+
+The corrected spec must pass the CLI gate before S1 planning starts.
+
+**2026-10-11 CLI spec gate, round 2.** The reviewer confirmed the four
+previous corrections and returned `needs-attention` for three further gaps:
+recoverable intent must precede authoritative deletion; rename copies must
+retain embedded-unit identity; and the outer memo's insertion guard must
+cover recent ctime as well as mtime. These are folded into sections 4, 12,
+13 and the acceptance tests, with the rename contract aligned in spec 05.
+
+**2026-10-11 CLI spec gate, approved.** The corrected complete spec and branch
+diff were supplied as temporary read-only snapshots after the review runner's
+two-file inline limit omitted the three-file diff. Codex returned `approve`:
+all seven prior blockers were resolved, with no material findings. Review
+thread: `01a12ba7-f81b-75d1-a2e6-12692e73bdfc`. Local reviewer execution remained
+blocked by the Windows sandbox helper; the review used the supplied snapshots
+and base-source reads. S1 planning may proceed; its own gate remains required.
+
 ## 16. Non-goals
 
 - Moving any authoritative record into SQLite, or using a row id as a record
@@ -1341,3 +1507,22 @@ gate should still be run against this spec before the plan, if it can be.
   SearchDocument shape. Section 2a is what 03 owes them.
 - Replacing `vectors.py`, `usage_rollup.py` or the scene-identity record. Any
   of them could later become a kind, but none needs to.
+
+
+2026-10-12 reviewed implementation addendum: the original unconditional
+no-unlink deletion wording conflicted with its corruption-recovery rule when
+SQLITE_CORRUPT occurred inside purge. A one-byte damaged owned artifacts table
+left public placeholder text on disk indefinitely, with purge_generation never
+advancing, even in cache0. The exception above is limited to proved ownership,
+real SQLite corruption, a fresh integrity recheck, no hot journal and the
+existing NO_WAIT process exclusion. Healthy in-place purges are unchanged.
+The amendment remains subject to the final mandatory spec-fidelity gate.
+
+
+2026-10-12 supplied-measure clarification: the outer ctime rule above applies
+to file-derived consumers. The token kind deliberately declares zero file
+inputs and counts the caller's exact body, including an older body supplied
+beside a newer file. Its complete text/encoder memory key is stronger than a
+path stamp for that measure, avoids meaningless metadata I/O and retains no
+file-history assertion. Same-process digest reuse is bounded separately.
+This clarification is subject to the final mandatory original-spec gate.

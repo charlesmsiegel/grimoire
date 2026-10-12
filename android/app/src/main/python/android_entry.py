@@ -214,6 +214,8 @@ def start_server(home_dir: str, dist_dir: str, templates_dir: str, callback,
     os.environ["HOME"] = home_dir
     os.environ["GRIMOIRE_DIST"] = dist_dir
     os.environ["GRIMOIRE_TEMPLATES"] = templates_dir
+    os.environ["GRIMOIRE_COMPILED_BUILD"] = os.path.join(
+        os.path.dirname(templates_dir), "compiled-build.json")
     os.environ.pop("GRIMOIRE_HOME", None)
 
     # Nothing above this line imports anything heavier than the stdlib: see the

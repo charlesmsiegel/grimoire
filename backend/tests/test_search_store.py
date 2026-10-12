@@ -28,6 +28,7 @@ from grimoire.store import (
     relationships,
     scenes,
     search,
+    statcache,
     taglines,
     worlds,
 )
@@ -375,12 +376,14 @@ def test_the_snippet_frames_the_rarest_term_not_the_first_one(world):
     assert "drowned keeper" in snippet
 
 
-def test_a_search_does_not_evict_the_shared_stat_cache(world):
+def test_a_search_does_not_evict_the_shared_stat_cache(world, monkeypatch):
     """A sweep touches every file in the store. Through the process-wide cache
     that would evict every entity and card hash in it and hand the next sync
     sweep a cold one — search made cheap at everyone else's expense."""
     from grimoire.store import statcache
     _, root = world
+    aged = statcache.time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: aged)
     for n in range(20):
         entities.create_entity(root, "lore", f"Brine {n}", body="brine")
     # Past `statcache`'s racy window, or nothing is cached at all: a file whose
@@ -403,6 +406,8 @@ def test_a_library_bigger_than_the_shared_budget_is_still_remembered_whole(world
     cache's -- shrunk here so the test does not need thousands of files."""
     from grimoire.store import statcache
     _, root = world
+    aged = statcache.time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: aged)
     for n in range(12):
         entities.create_entity(root, "lore", f"Brine {n}", body="brine")
     for path in root.rglob("*"):
@@ -426,6 +431,8 @@ def test_an_edited_file_keeps_one_copy_in_the_pool_not_one_per_search(world, mon
     played on between searches would leave a whole flattened copy of itself
     behind each time."""
     _, root = world
+    aged = statcache.time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: aged)
     entities.create_entity(root, "lore", "Brine", body="brine")
     path = next((root / "lore").glob("*.md"))
     monkeypatch.setattr(search, "_POOL", {})

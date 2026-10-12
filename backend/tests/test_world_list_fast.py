@@ -146,6 +146,19 @@ def _age(root: Path) -> None:
         os.utime(p, ns=(old, old))
 
 
+@pytest.fixture(autouse=True)
+def aged_metadata_clock(monkeypatch):
+    # utime ages mtime but cannot backdate native metadata ChangeTime. Keep
+    # that real invalidation signal and move the test clock after _age runs.
+    real_now, original_age = time.time_ns, _age
+    offset = [0]
+    def age(root):
+        original_age(root)
+        offset[0] = 3 * statcache.RACY_WINDOW_NS
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: real_now() + offset[0])
+    monkeypatch.setattr(__name__ + '._age', age)
+
+
 def _bump(p: Path, seconds: int = 2) -> None:
     """Move `p`'s mtime to a different, still-old value."""
     st = p.stat()

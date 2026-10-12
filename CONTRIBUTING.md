@@ -205,6 +205,7 @@ cannot fail a test run.
 |---|---|---|
 | `test_record_art_description_guards.py` | stale placement and shared-caption saves refuse newer data; cleanup preserves a later writer | none (behavioral regressions) |
 | `test_atomic_guard.py` | every store write goes through `store.atomic` | `# atomic-ok:` |
+| `test_compiled_guard.py` | only `store.compiled` imports SQLite; reads require supplied keys/paths and literal SQL bounds; named decision hashes and resolvable wrappers cannot use persisted sources | — |
 | `test_overlay_guard.py` | campaign reads of inheritable records go through `store.overlay` | `# overlay-ok:` |
 | `test_pydantic_guard.py` | pydantic usage stays v1/v2-agnostic | `# pydantic-ok:` |
 | `test_paths_guard.py` | filesystem access goes through the resolvers | `# paths-ok:` |
@@ -232,6 +233,17 @@ given how often this caught a stated reason that was not actually true — the
 reason has to hold up, not merely be present. Marker parsing is shared in
 `backend/tests/guard_markers.py`; a marker inside a string literal does not
 count.
+
+The compiled-cache guard permits artifact selections by kind plus a caller's
+complete key (point or at most128 supplied key placeholders), supplied-path
+source selections, and the named metadata probes. Unknown SELECT tables and
+ranking readers without required keys fail; a future index must constrain
+its results to the caller's live set. It checks literal SQL syntax, not bound
+parameter values or SQLite query plans. Its named decision traversal follows
+ordinary imports, re-exports, aliases and helper references, distinguishes
+lexical bindings from definition-time evaluation, and rejects uncertain
+constructor effects or exhausted proof budgets. This is a conservative,
+flow-insensitive guard, not a proof of arbitrary dynamic Python data flow.
 
 Each guard's docstring states its own reach, including where it stops seeing
 things — read the one that failed you before arguing with it. Two of them fail

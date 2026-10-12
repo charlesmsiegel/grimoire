@@ -936,23 +936,26 @@ def _cached_art(tmp_path, pool):
         pool=pool, max_entries=4)
 
 
-def _age(root):
+def _age(root, monkeypatch):
     """Back-date everything under `root` past the racy window, so a memoized
     row is actually stored."""
-    old = time.time_ns() - 3 * statcache.RACY_WINDOW_NS
+    real_now = time.time_ns
+    old = real_now() - 3 * statcache.RACY_WINDOW_NS
     for p in [root, *root.rglob("*")]:
         os.utime(p, ns=(old, old))
+    # Native ChangeTime cannot be backdated by utime; age the test clock.
+    monkeypatch.setattr(statcache.time, 'time_ns', lambda: real_now() + 3 * statcache.RACY_WINDOW_NS)
 
 
 def _avatar_v(images):
     return next(i["v"] for i in images if i["name"] == assets.AVATAR)
 
 
-def test_version_art_stamps_the_avatars_object_and_blob(tmp_path):
+def test_version_art_stamps_the_avatars_object_and_blob(tmp_path, monkeypatch):
     data = _png(7)
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, data, "png")
     image_id = image_refs.resolve(_vdir(tmp_path), assets.AVATAR).image_id
-    _age(tmp_path)
+    _age(tmp_path, monkeypatch)
     pool: dict = {}
     first = _cached_art(tmp_path, pool)
     assert _avatar_v(first) == hashlib.sha256(data).hexdigest()
@@ -972,7 +975,7 @@ def test_version_art_stamps_the_avatars_object_and_blob(tmp_path):
         return raw
 
     image_store.update(image_id, adopt)
-    _age(image_store.store_root())          # the store's files only, not the folder's
+    _age(image_store.store_root(), monkeypatch)          # the store's files only, not the folder's
     again = _cached_art(tmp_path, pool)
     assert _avatar_v(again) == sha
     assert _cached_art(tmp_path, pool) is again

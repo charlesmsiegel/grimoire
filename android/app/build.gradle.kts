@@ -108,6 +108,26 @@ dependencies {
 // ---- assets pipeline: frontend dist + prompt templates into the APK ----
 
 val webAssets = layout.buildDirectory.dir("generated/grimoireAssets")
+val compiledStamp = layout.buildDirectory.file("generated/compiledBuild/compiled-build.json")
+
+val generateCompiledBuild = tasks.register<Exec>("generateCompiledBuild") {
+    description = "Fingerprints backend sources and templates for the compiled cache"
+    workingDir = repoRoot
+    val source = File(repoRoot, "backend/src/grimoire")
+    val templates = File(repoRoot, "templates")
+    inputs.dir(source)
+    inputs.dir(templates)
+    inputs.files(File(repoRoot, "backend/scripts/compiled_build.py"),
+                 File(source, "compiled_build.py"))
+    outputs.file(compiledStamp)
+    environment("PYTHONPATH", File(repoRoot, "backend/src").absolutePath +
+        File.pathSeparator + File(repoRoot, "backend").absolutePath)
+    // This stamp has only source identity. The APK adds its own runtime and
+    // distribution versions; build-machine Python must never stand in for it.
+    commandLine(buildPythonOverride ?: "python", "-m", "scripts.compiled_build",
+        "--package", source.absolutePath, "--templates", templates.absolutePath,
+        "--output", compiledStamp.get().asFile.absolutePath)
+}
 
 val buildFrontend = tasks.register<Exec>("buildFrontend") {
     description = "Builds the shared React frontend with Vite"
@@ -121,11 +141,12 @@ val buildFrontend = tasks.register<Exec>("buildFrontend") {
 }
 
 val stageGrimoireAssets = tasks.register<Sync>("stageGrimoireAssets") {
-    description = "Stages frontend dist and templates as APK assets"
-    dependsOn(buildFrontend)
+    description = "Stages frontend dist, templates and compiled-build stamp as APK assets"
+    dependsOn(buildFrontend, generateCompiledBuild)
     into(webAssets)
     from(File(frontendDir, "dist")) { into("grimoire/frontend") }
     from(File(repoRoot, "templates")) { into("grimoire/templates") }
+    from(compiledStamp) { into("grimoire") }
 }
 
 android.sourceSets.getByName("main").assets.srcDir(webAssets)

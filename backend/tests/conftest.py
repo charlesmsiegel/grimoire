@@ -19,8 +19,10 @@ from grimoire.store import (
     appearances,
     campaigns,
     characters,
+    compiled,
     modules,
     paths,
+    proclock,
     scenes,
     sheets,
     worlds,
@@ -71,14 +73,16 @@ def _default_home_never_the_real_one(tmp_path_factory):
     session pointer that is never written resolves nothing but this tree."""
     floor = tmp_path_factory.mktemp("default-home")
     pointer = tmp_path_factory.mktemp("bootstrap-pointer") / ".grimoire.json"
+    machine_locks = tmp_path_factory.mktemp("machine-lock-floor") / "grimoire" / "locks"
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(paths, "DEFAULT_HOME", floor)
         mp.setattr(paths, "pointer_path", lambda: pointer)
+        mp.setattr(proclock, "lock_dir", lambda: machine_locks)
         yield
 
 
 @pytest.fixture(autouse=True)
-def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
+def _isolate_bootstrap_pointer(monkeypatch, tmp_path, tmp_path_factory):
     """Keep every test off the developer's REAL `~/.grimoire.json`.
 
     `GRIMOIRE_HOME` isolates the data root, and almost everything here sets it
@@ -104,6 +108,20 @@ def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
     # root a test passes in), a store-level test that writes an image without
     # setting `GRIMOIRE_HOME` would otherwise put its blob in that real library.
     monkeypatch.setattr(paths, "DEFAULT_HOME", tmp_path / "default-home")
+    # Compiled filenames use a machine-local device id. Keep that id, and all
+    # process locks, off the developer's real machine directory too. A separate
+    # temporary tree keeps lock state outside this test's library; the session
+    # floor above remains in force after an explicit monkeypatch.undo().
+    machine_locks = tmp_path_factory.mktemp("machine-lock") / "grimoire" / "locks"
+    monkeypatch.setattr(proclock, "lock_dir", lambda: machine_locks)
+
+
+@pytest.fixture(autouse=True)
+def _close_compiled_handles(monkeypatch):
+    # Before monkeypatch restores a root or cache state: no test leaves a
+    # connection (or, once enabled, its idle timer) owning another test's file.
+    yield
+    compiled.close()
 
 
 def pytest_addoption(parser):

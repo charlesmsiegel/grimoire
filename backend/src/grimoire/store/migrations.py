@@ -284,6 +284,8 @@ def _backfill_campaign(cid: str) -> bool:
         scenes_dir = scenes_paths._scenes_dir(cid)
         for sid in sids:
             # Stamped BEFORE anything reads it (see `_identity_files_path`).
+            # A slow read must not age this fresh stamp into persistent trust.
+            started = _clock()
             stamp = statcache.stamp(scenes_dir / f"{sid}.md")
             # Check with the head-only read before calling `ensure_identity`,
             # which reads the whole file. This runs at every startup for the
@@ -330,7 +332,7 @@ def _backfill_campaign(cid: str) -> bool:
             # handed its mtime back inside that same ctime tick, and a record
             # taken then would vouch for the new bytes for good.
             if (stamp is not None
-                    and _clock() - max(stamp[1], stamp[2]) > statcache.RACY_WINDOW_NS):
+                    and started - max(stamp[1], stamp[2]) > statcache.RACY_WINDOW_NS):
                 kept[sid] = [*stamp[1:], token]
         # Under the campaign lock, like the reads it records: a second backend
         # passing over the same campaign waits rather than interleaving.

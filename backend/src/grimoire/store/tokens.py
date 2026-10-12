@@ -12,19 +12,23 @@ of them can import the other. `context` reads entities (through `overlay`), so
 an `entities` that imported `context.tokens` would close a cycle -- and the
 per-record badge (#51) is exactly the measure the context breakdown already
 reports, so the two must be the same function rather than two that agree for
-now. A leaf that imports nothing but `statcache` is what lets both have it;
+now. The acyclic compiled/statcache support leaves let both sides share it;
 `context` re-exports `count_tokens` so its own callers are unchanged.
 """
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import logging
+import os
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from . import statcache
+from . import compiled, statcache
 
 try:
     import tiktoken
@@ -238,7 +242,7 @@ def counting(model: str, kind: str = "", counted_with: str = "") -> dict:
 
 def record_tokens(path: Path, body: str) -> int:
     """What one record's body costs when it reaches a prompt, memoized on the
-    file's stat signature.
+    supplied text and the actual encoder.
 
     The BODY only, stripped: frontmatter never enters the context, and
     `context.world_state._world_info` hands the assembler `body.strip()`, so
@@ -262,25 +266,132 @@ def record_tokens(path: Path, body: str) -> int:
     per scene and per turn, so no single number is the answer, and a ceiling is
     the right direction for a figure someone is using to decide what to trim.
 
-    `body` must be the body parsed from `path` -- the memo persists, so a
-    caller that pairs one file's path with another's text poisons that
-    signature for every later reader, not just for itself. Given that, passing
-    the text in is what keeps an unchanged file from being re-encoded without
-    making any caller read it twice, and it is safe in both interleavings: a
-    write between the caller's read and this stat moves mtime to ~now, and
-    `statcache.memo` refuses to cache anything inside its racy window, so a
-    stale body can never be stored under the signature that replaced it.
+    The supplied body is authoritative: a caller can hold old text beside a
+    new file stamp, or pass different text for the same path. Exact text and the actual encoder therefore prove the memory measure;
+    the text hash and encoding select its persistent counterpart. File currency
+    is not an input to this supplied-text measure. A heuristic never enters
+    either cache, so recovery of an
+    offline encoder takes effect on the next call. Empty text clears ambiguous
+    attribution here; count_tokens keeps its existing public behavior.
 
     The memo kind names the MEASURE, not the caller: a future counter over a
     different slice of the same file (a card's description+personality, say)
     must pick its own kind, or it would read this one's answer back.
 
-    One capacity note, since `statcache` is shared and capped at MAX_ENTRIES:
-    an entity file now occupies two slots, this and `entities.entity_hash`, so
-    a world large enough to fill the cache starts evicting sooner than before.
-    Both derivations are cheap to recompute, so the failure mode is a slower
-    sweep rather than a wrong answer, and the cap is left alone deliberately --
-    raising it is a judgement about the cache, not about this measure.
+    The entry- and byte-bounded pool belongs to this measure, so badge scans do not evict the
+    sync hashes. Persistent entries contain only exact encoder counts, selected
+    by supplied text hash and encoding; no file is reopened to make that key.
+    A count is not a materialization written under the supplied path, so no
+    file-currency history is claimed for it.
     """
-    return statcache.memo("body_tokens", statcache.signature(path),
-                          lambda: count_tokens(body.strip()))
+    text = body.strip()
+    _last.counter = ''
+    if not text:
+        return 0
+    try:
+        encoder = _encoder()
+    except Exception:  # noqa: BLE001 -- the existing count fallback owns failures
+        encoder = None
+    if encoder is None:
+        return count_tokens(text)
+    # The path selects a bounded memory slot, not file currency. Exact body
+    # equality plus a retained encoder object proves the supplied inputs. A
+    # freshly parsed equal string can then hit without hashing it again.
+    key = (str(path), id(encoder))
+    with _RECORD_LOCK:
+        entry = _RECORD_POOL.get(key)
+        if entry is not None and entry[1] is encoder and entry[0] == text:
+            _last.counter = ENCODING
+            return entry[2]
+    try:
+        digest = _record_digest(text)
+    except (UnicodeEncodeError, MemoryError):
+        # The existing counter repairs lone surrogates and handles allocation
+        # failures. Optional UTF8 hashing must not turn those into failed reads.
+        return count_tokens(text)
+    value = _record_measure(text, digest)
+    if last_counter() == ENCODING:
+        _remember_record(key, text, encoder, value)
+    return value
+
+
+def _remember_record(key: tuple[str, int], text: str, encoder: object, value: int) -> None:
+    size = sys.getsizeof(text)
+    if size > MAX_RECORD_MEMO_BYTES:
+        return
+    try:
+        with _RECORD_LOCK:
+            _RECORD_POOL[key] = (text, encoder, value)
+            retained = sum(sys.getsizeof(entry[0]) for entry in _RECORD_POOL.values())
+            while retained > MAX_RECORD_MEMO_BYTES or len(_RECORD_POOL) > statcache.MAX_ENTRIES:
+                oldest = next(iter(_RECORD_POOL))
+                retained -= sys.getsizeof(_RECORD_POOL.pop(oldest)[0])
+    except MemoryError:
+        # Cache insertion is optional; the exact count has already succeeded.
+        # Drop a partially inserted row if allocation prevented budget accounting.
+        with _RECORD_LOCK:
+            _RECORD_POOL.clear()
+
+
+# Repeated supplied bodies retain their exact digest without rereading
+# all text on an outer-memo hit. stdlib's content-keyed cache is thread-safe;
+# two strings of at most16MiB each bound retained text to32MiB plus overhead.
+# Other inputs are hashed live, and hash collisions still compare full strings.
+MAX_DIGEST_MEMO_BYTES = 16 * 1024 * 1024
+
+
+@functools.lru_cache(maxsize=2)
+def _large_body_digest(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def _record_digest(text: str) -> str:
+    if sys.getsizeof(text) <= MAX_DIGEST_MEMO_BYTES:
+        return _large_body_digest(text)
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+MAX_RECORD_MEMO_BYTES = 32 * 1024 * 1024
+_RECORD_LOCK = threading.Lock()
+_RECORD_POOL: dict = {}
+def _after_record_fork() -> None:
+    global _RECORD_LOCK, _RECORD_POOL  # noqa: PLW0603 -- child hook replaces inherited process resources
+    # The child has no thread that can release an inherited held mutex.
+    _RECORD_LOCK = threading.Lock()
+    _RECORD_POOL = {}
+    _large_body_digest.cache_clear()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_after_record_fork)
+
+
+_RECORD_KIND = compiled.Kind('tokens:record_body', 1, (), ('text_hash', 'encoding'), False)
+compiled.KINDS[_RECORD_KIND.name] = _RECORD_KIND
+
+
+# The synthetic inequality fails for short bodies: the indexed lookup costs
+# more than encoding them, especially with fresh-process BUILD initialization.
+# The measured cutoff is eight MiB of supplied characters; ordinary record
+# badges still use the safe outer memo without paying for SQLite.
+PERSIST_MIN_CHARS = 8_388_608
+
+
+def _record_measure(text: str, digest: str) -> int:
+    if len(text) < PERSIST_MIN_CHARS:
+        return count_tokens(text)
+    computed = False
+    def compute(view, params):
+        nonlocal computed
+        computed = True
+        _last.counter = ''
+        count = count_tokens(text)
+        return count if last_counter() == ENCODING else compiled.Uncached(count)
+    with compiled.batch() as request:
+        value = request.derive(_RECORD_KIND, [], params={'text_hash': digest, 'encoding': ENCODING}, compute=compute)
+    if not computed:
+        _last.counter = ENCODING  # only encoder-counted rows are admitted
+    if type(value) is not int or value < 0:
+        # A native but structurally wrong optional row cannot change a badge.
+        return count_tokens(text)
+    return value

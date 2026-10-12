@@ -46,16 +46,26 @@ superseded.
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import errno
 import hashlib
 import json
 import sys
+import types
 from pathlib import Path
 
 from . import atomic, locks
 from .paths import now_iso
 from .scenes import paths as scenes_paths
+
+# The Windows metadata probe is optional on embedded Python distributions.
+# Missing libffi/ctypes must not prevent importing the authoritative store.
+ctypes: types.ModuleType | None
+try:
+    import ctypes as _ctypes_available
+except (ImportError, OSError):
+    ctypes = None
+else:
+    ctypes = _ctypes_available
 
 SCHEMA = 1
 """Stamped into every record. A file without it was written by something else."""
@@ -102,7 +112,7 @@ def _windows_name_limit(parent: Path) -> int | None:
     store. These queries follow that path and read only volume metadata; no
     file is opened or created to discover whether the sidecar would fit.
     """
-    if sys.platform == "win32":
+    if sys.platform == "win32" and ctypes is not None:
         kernel = ctypes.WinDLL("kernel32")
         volume_path = kernel.GetVolumePathNameW
         volume_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]

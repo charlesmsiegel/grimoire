@@ -28,6 +28,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient
+from ..store import compiled
+from ..store import paths as library_paths
 from . import runs
 from .common import (
     PC_HISTORY_MISSES,
@@ -143,17 +145,30 @@ def delete_world(wid: str, request: Request):
     # Held against image-store maintenance for the whole delete: a migration
     # placing this world's legacy files, or a collection walking its
     # placements, must not have the tree removed beneath it.
-    with runs.maintenance_excluded(request.app):
-        try:
-            store.worlds.delete_world(wid)
-        except store.worlds.WorldNotFound:
-            raise HTTPException(status_code=404, detail="world not found")
-        except store.worlds.WorldInUse as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-    # AFTER the delete, and for the campaign route's reason: world ids are
-    # slugs too, so a replacement of the same name would otherwise be handed
-    # this world's taglines and scenario proposals.
-    runs.forget_subject(request.app, runs.world_subject(wid))
+    root, intent, prepared = None, None, False
+    try:
+        with runs.maintenance_excluded(request.app):
+            with library_paths.library_guard():
+                root = library_paths.home()
+                with library_paths.pin_library(root):
+                    try:
+                        store.worlds.lifecycle._preflight_delete(wid)
+                        intent = compiled.prepare_delete(root)
+                        prepared = True
+                        store.worlds.delete_world(wid)
+                    except store.worlds.WorldNotFound:
+                        raise HTTPException(status_code=404, detail="world not found")
+                    except store.worlds.WorldInUse as exc:
+                        raise HTTPException(status_code=409, detail=str(exc))
+            # AFTER the delete, and for the campaign route's reason: world ids
+            # are slugs too, so a replacement of the same name would otherwise
+            # be handed this world's taglines and scenario proposals. The
+            # registry is entered after releasing the leaf root mutex.
+            runs.forget_subject(request.app, runs.world_subject(wid))
+    finally:
+        # Optional SQL erasure never holds a run, root or campaign exclusion.
+        if prepared and root is not None:
+            compiled.purge_for_delete(root, intent=intent)
     return {"ok": True}
 
 

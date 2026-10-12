@@ -325,7 +325,7 @@ def _restamp(wid: str, *, name: str | None = None) -> None:
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
-def delete_world(wid: str) -> None:
+def _preflight_delete(wid: str) -> Path:
     root = paths.world_root(wid)
     if not paths.world_meta_path(wid).exists() or not paths.names_its_directory(root):
         raise paths.WorldNotFound(wid)
@@ -337,6 +337,11 @@ def delete_world(wid: str) -> None:
                if w is None or paths.references_world(w, root)]
     if used_by:
         raise WorldInUse(wid, used_by)
+    return root
+
+
+def delete_world(wid: str) -> None:
+    root = _preflight_delete(wid)
     # The world's subject tags live on the shared image objects, which outlive
     # this directory; stripped, so a world created again under this slug starts
     # untagged (Review Focus 4). `remove_published` moves the tree aside first
