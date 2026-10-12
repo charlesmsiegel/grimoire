@@ -534,6 +534,29 @@ def _available() -> bool:
     return _build() is not None
 
 
+def unavailable_reason() -> str | None:
+    """Why the cache is off for this caller, or None when it is on.
+
+    For a report that must say so (spec 05 section 9, `cache: off` with this
+    module's reason) rather than a reader, which simply misses. The same tests
+    as `_available`, in the same order, each named. Never raises."""
+    try:
+        _process_state()
+        if os.environ.get("GRIMOIRE_COMPILED_CACHE") == "0":
+            return "disabled"
+        if _sqlite is None:
+            return "sqlite_unavailable"
+        if _on_loop():
+            return "event_loop"
+        if locks.campaign_locks_held():
+            return "campaign_lock_held"
+        if _build() is None:
+            return "build_unavailable"
+    except _CACHE_ERRORS:
+        return "unavailable"
+    return None
+
+
 def _scalar(value: object, limit: int) -> bool:
     if value is None or type(value) is bool:
         return True
