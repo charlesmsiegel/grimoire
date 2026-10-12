@@ -257,6 +257,25 @@ def test_record_body_pool_respects_retained_byte_budget(root, monkeypatch, encod
     assert len(tokens._RECORD_POOL) <= 2
 
 
+def test_record_body_pool_keeps_a_true_running_byte_total(root, monkeypatch, encoder):
+    # The budget is a running total, not a re-sum per insert; it must stay
+    # equal to the real sum through replacement, eviction and a bare clear().
+    tokens._RECORD_POOL.clear()
+    monkeypatch.setattr(tokens, 'MAX_RECORD_MEMO_BYTES', 400)
+    monkeypatch.setattr(tokens.statcache, 'MAX_ENTRIES', 3)
+
+    def real():
+        return sum(tokens.sys.getsizeof(entry[0]) for entry in tokens._RECORD_POOL.values())
+
+    for position, body in enumerate(['Mara', 'Mara ' * 20, 'Seraphine', 'Winifred ' * 5] * 3):
+        tokens.record_tokens(root / (str(position % 5) + '.md'), body)
+        assert tokens._RECORD_RETAINED[0] == real() <= 400
+        assert len(tokens._RECORD_POOL) <= 3
+    tokens._RECORD_POOL.clear()
+    tokens.record_tokens(root / 'Realm.md', 'Mara')
+    assert tokens._RECORD_RETAINED[0] == real()
+
+
 def test_fork_child_discards_inherited_token_pool_mutex(root, encoder):
     assert tokens.record_tokens(root / 'Realm.md', 'Mara') == 1
     parent_lock = tokens._RECORD_LOCK

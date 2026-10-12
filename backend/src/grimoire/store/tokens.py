@@ -321,16 +321,26 @@ def _remember_record(key: tuple[str, int], text: str, encoder: object, value: in
         return
     try:
         with _RECORD_LOCK:
-            _RECORD_POOL[key] = (text, encoder, value)
-            retained = sum(sys.getsizeof(entry[0]) for entry in _RECORD_POOL.values())
-            while retained > MAX_RECORD_MEMO_BYTES or len(_RECORD_POOL) > statcache.MAX_ENTRIES:
+            # A running total, not a re-sum: a sweep wider than the pool
+            # inserts on every call, and summing 4,096 sizes each time made
+            # that quadratic.
+            if not _RECORD_POOL:
+                _RECORD_RETAINED[0] = 0   # an emptied pool (a clear()) owes nothing
+            replaced = _RECORD_POOL.pop(key, None)
+            if replaced is not None:
+                _RECORD_RETAINED[0] -= replaced[3]
+            _RECORD_POOL[key] = (text, encoder, value, size)
+            _RECORD_RETAINED[0] += size
+            while _RECORD_POOL and (_RECORD_RETAINED[0] > MAX_RECORD_MEMO_BYTES
+                                    or len(_RECORD_POOL) > statcache.MAX_ENTRIES):
                 oldest = next(iter(_RECORD_POOL))
-                retained -= sys.getsizeof(_RECORD_POOL.pop(oldest)[0])
+                _RECORD_RETAINED[0] -= _RECORD_POOL.pop(oldest)[3]
     except MemoryError:
         # Cache insertion is optional; the exact count has already succeeded.
         # Drop a partially inserted row if allocation prevented budget accounting.
         with _RECORD_LOCK:
             _RECORD_POOL.clear()
+            _RECORD_RETAINED[0] = 0
 
 
 # Repeated supplied bodies retain their exact digest without rereading
@@ -354,11 +364,13 @@ def _record_digest(text: str) -> str:
 MAX_RECORD_MEMO_BYTES = 32 * 1024 * 1024
 _RECORD_LOCK = threading.Lock()
 _RECORD_POOL: dict = {}
+_RECORD_RETAINED = [0]  # sys.getsizeof of every text in _RECORD_POOL
 def _after_record_fork() -> None:
     global _RECORD_LOCK, _RECORD_POOL  # noqa: PLW0603 -- child hook replaces inherited process resources
     # The child has no thread that can release an inherited held mutex.
     _RECORD_LOCK = threading.Lock()
     _RECORD_POOL = {}
+    _RECORD_RETAINED[0] = 0
     _large_body_digest.cache_clear()
 
 
