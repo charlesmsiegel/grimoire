@@ -165,6 +165,25 @@ def test_before_visible_text_the_turn_is_bounded(monkeypatch):
     assert [r["status"] for r in result.rows] == ["ok", "aborted"]
 
 
+def test_text_the_caller_hides_does_not_lift_the_turn_bound(monkeypatch):
+    """With a visibility predicate (roadmap 02 §8.2), a leading perception
+    fence has shown the reader nothing: a turn that writes only that and
+    stalls is still cut, where text the reader sees would lift the bound."""
+    from grimoire.store import response_protocol
+
+    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
+    hidden = FakeToolTurns(("", [("read", {})]), ToolTurn(
+        deltas=("```perception\nShe waits.\n```\n", "", "late"), pause=1.2))
+    result = _events(hidden, budget=RunBudget(wall_seconds=1.0, reserve_final=False),
+                     visibility=lambda: response_protocol.opens_reply(True))[-1].result
+    assert (result.status, result.limit) == ("budget_exhausted", "wall")
+    shown = FakeToolTurns(("", [("read", {})]), ToolTurn(
+        deltas=("Mara ", "", "keeps it."), pause=1.2))
+    result = _events(shown, budget=RunBudget(wall_seconds=1.0, reserve_final=False),
+                     visibility=lambda: response_protocol.opens_reply(True))[-1].result
+    assert result.status == "completed" and result.text == "Mara keeps it."
+
+
 def test_entry_checks_are_raised_before_an_iterator_is_returned():
     with pytest.raises(ValueError):
         inference.stream_tools("chat", PROMPT, toolset=TOOLS,

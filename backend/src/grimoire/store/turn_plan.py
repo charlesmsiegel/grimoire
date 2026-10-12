@@ -183,21 +183,25 @@ def approach(intent: Mapping | None) -> str:
     reported 38%" (the weight the model reported for it, before the draw's
     cutoff and renormalising, so not the odds it was drawn at) or "most
     likely" (the answer itself) -- and, for a plan, the disclosure and
-    tension that were read. "" when nothing was read (skipped, abstained, or
-    no intent at all)."""
-    if not intent or intent.get("stance") not in STANCES:
+    tension that were read, each part on its own, as `block` renders them
+    into the prompt (a plan whose stance abstained still sent its disclosure
+    and tension). "" when nothing was read (skipped, abstained, or no intent
+    at all)."""
+    if not intent or intent.get("skipped"):
         return ""
-    stance = str(intent["stance"])
-    drawn = intent.get("draw") or {}
-    how = ""
-    if drawn.get("basis") == "sampled":
-        weights = {str(key): weight for key, weight in drawn.get("distribution") or ()}
-        weight = weights.get(stance)
-        how = (f" (sampled, reported {round(weight * 100)}%)"
-               if isinstance(weight, (int, float)) else " (sampled)")
-    elif drawn.get("basis") == "answer":
-        how = " (most likely)"
-    parts = [stance + how]
+    parts = []
+    stance = intent.get("stance")
+    if stance in STANCES:
+        drawn = intent.get("draw") or {}
+        how = ""
+        if drawn.get("basis") == "sampled":
+            weights = {str(key): weight for key, weight in drawn.get("distribution") or ()}
+            weight = weights.get(stance)
+            how = (f" (sampled, reported {round(weight * 100)}%)"
+                   if isinstance(weight, (int, float)) else " (sampled)")
+        elif drawn.get("basis") == "answer":
+            how = " (most likely)"
+        parts.append(str(stance) + how)
     if intent.get("disclosure") in DISCLOSURES:
         parts.append(str(intent["disclosure"]))
     tension = intent.get("tension")

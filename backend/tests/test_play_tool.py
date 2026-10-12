@@ -297,3 +297,23 @@ def test_a_call_after_any_fence_but_perception_is_declined(client, opening):
                                           ("never", [])))
     client.post(base + "/chat", json={"content": "Mara, the ledger?", "speaker_ref": MARA})
     assert fake.calls == 1 and _rows(cid, "turn-tool-decision") == []
+
+
+def test_a_stop_during_the_turn_decision_sends_no_generation(client, monkeypatch):
+    """A Stop that only set the run's flag while the turn decision was out
+    (before the run's scope could be cancelled) ends the turn there: nothing
+    is composed, and no scene generation is sent."""
+    cid, _sid, base = seed(client)
+    store.write_config(decide_turn_plan="intent")
+
+    async def decided_then_stopped(*_args, **_kwargs):
+        for run in client.app.state.runs.live_of_class("turn"):
+            run.cancel_requested = True
+        return {"task": "turn-intent", "stance": "deflect"}, store.responses.mint_id()
+
+    monkeypatch.setattr(character_turns, "_pre_generation", decided_then_stopped)
+    fake = _install(client, FakeLLM([["Mara answers." + _HANDOFF]]))
+    result = client.post(base + "/chat", json={"content": "Mara, the ledger?",
+                                                "speaker_ref": MARA})
+    assert "run_failed" not in result.text, result.text
+    assert fake.calls == 0 and _rows(cid, "chat") == []

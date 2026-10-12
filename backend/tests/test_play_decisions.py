@@ -335,6 +335,8 @@ def test_the_global_route_says_whether_the_pick_samples(client, monkeypatch):
     ({"stance": "press", "draw": {"basis": "answer", "selected": "press"}},
      "press (most likely)"),
     ({"stance": "deflect", "disclosure": "hint", "tension": 1}, "deflect · hint · hold steady"),
+    # A plan whose stance abstained still sent its other answers (`block`).
+    ({"stance": None, "disclosure": "hint", "tension": 1}, "hint · hold steady"),
     ({"task": "turn-intent", "skipped": "missing_key"}, ""),
     (None, ""),
 ])

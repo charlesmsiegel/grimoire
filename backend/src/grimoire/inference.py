@@ -2400,7 +2400,10 @@ class _Loop:
         turn's bound holds only until visible text: a turn that has shown
         text is never cut (spec 3.9), so the wall and the per-call ceiling
         are checked at each delta before the first visible one -- as often as
-        the provider or the facade's heartbeat speaks."""
+        the provider or the facade's heartbeat speaks. "Visible" is the
+        caller's `visibility` when it gave one: text it hides (a leading
+        perception fence, roadmap 02 §8.2) has shown its reader nothing, so a
+        turn that writes only that and stalls is still cut."""
         parts: list[str] = []
         started = time.monotonic()
         async with aclosing(source) as deltas:
@@ -2408,8 +2411,9 @@ class _Loop:
                 if delta:
                     self.shown = True
                     self.visible = self.visible or self._seen(delta)
-                elif (not self.shown and seconds is not None
-                      and time.monotonic() - started > seconds):
+                begun = self.visible if self._sees is not None else self.shown
+                if (not begun and seconds is not None
+                        and time.monotonic() - started > seconds):
                     raise overrun(seconds)
                 parts.append(delta)
                 self.emit(tool_calls.LoopEvent("text", turn=k, delta=delta))

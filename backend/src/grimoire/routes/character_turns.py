@@ -1597,6 +1597,12 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         # narrator or a turn the player directed. Off, nothing is read past
         # the switch, minted or asked, and `_prepare` is called as before.
         plan, response_id = await _pre_generation(cid, sid, client, turn, actor)
+        if run.cancel_requested:
+            # Stop during the decision: a cancel normally cancels the run's
+            # scope and the decision with it, but one that only set the flag
+            # (before the scope was installed) must not go on to compose and
+            # send a paid generation.
+            raise anyio.get_cancelled_exc_class()()
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
             plan=plan, response_id=response_id)
