@@ -80,7 +80,7 @@ def memo(kind: str, sig: tuple | None, compute: Callable[[], T],
     cache = _cache if pool is None else pool
     now = time.time_ns()
     if any(len(entry) == 4 and now - entry[1] < RACY_WINDOW_NS for entry in sig):
-        readstats.bump(f"statcache.miss.{kind}")
+        readstats.bump(f"statcache.miss.{_counter_kind(kind)}")
         return compute()  # too fresh to trust the signature; compute, don't cache
     key = (kind, sig)
     try:
@@ -88,9 +88,9 @@ def memo(kind: str, sig: tuple | None, compute: Callable[[], T],
     except KeyError:
         pass
     else:
-        readstats.bump(f"statcache.hit.{kind}")
+        readstats.bump(f"statcache.hit.{_counter_kind(kind)}")
         return val  # type: ignore[return-value]
-    readstats.bump(f"statcache.miss.{kind}")
+    readstats.bump(f"statcache.miss.{_counter_kind(kind)}")
     val = compute()
     _put(cache, key, val, MAX_ENTRIES if max_entries is None else max_entries)
     return val
@@ -157,11 +157,18 @@ def vouches(s: Stamp) -> bool:
     return s[2] != UNVOUCHED
 
 
+def _counter_kind(kind: str) -> str:
+    """`kind` as a counter name. A few callers key their memo on a path
+    rather than a kind name; a counter never carries one (the overview
+    benchmark's output holds counters, and must hold no path)."""
+    return "path" if ("/" in kind or "\\" in kind or os.sep in kind) else kind
+
+
 def _kind_of(key: object) -> str:
     """The counter name of a `memo_stamped` key: its leading string, by the
     convention every caller keeps (`("campaign_row", path, ...)`)."""
     if isinstance(key, tuple) and key and isinstance(key[0], str):
-        return key[0]
+        return _counter_kind(key[0])
     return "stamped"
 
 

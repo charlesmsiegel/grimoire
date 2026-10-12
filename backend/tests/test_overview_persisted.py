@@ -209,3 +209,41 @@ def test_content_determined_failures_are_cached(client):
     with readstats.collect() as counters:
         assert overview.continuity_summary(lib["b"]) == first
     assert counters.get("overview.computed.continuity_summary") == 0
+
+
+# ---- the shipped registration (04-S10's measured ruling) --------------------
+
+def test_only_scene_turns_is_registered_as_shipped():
+    shipped = {k for k in compiled.KINDS if k in compiled.OVERVIEW_CANDIDATES}
+    assert shipped == {"overview.scene_turns"}
+
+
+def test_a_short_scene_is_never_persisted_and_a_long_one_is(tmp_path, monkeypatch):
+    from grimoire.store.overview import read as overview_read
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
+    importlib.reload(store)
+    compiled.close()
+    clear_memos()
+    cache_clock_forward(monkeypatch)
+    wid = store.worlds.create_world("Saltmarch")
+    cid = store.campaigns.create_campaign("A Long Run", wid)
+    short = store.scenes.create_scene(cid, "Saltmarch Gate")
+    store.scenes.append_message(cid, short, "assistant", "Rain.", speaker="Mara")
+    long = store.scenes.create_scene(cid, "The Long Quay")
+    body = "salt lamp quay " * 2000
+    store.scenes.append_messages(cid, long, [{"role": "assistant", "content": body, "speaker": "Mara"}
+                                             for _ in range(15)])
+    assert store.scenes.paths._scene_path(cid, long).stat().st_size >= \
+        overview_read.SCENE_TURNS_PERSIST_MIN_BYTES
+    with readstats.collect() as counters:
+        assert overview.scene_turns(cid, short) == 1
+        assert overview.scene_turns(cid, long) == 15
+    assert counters.get("compiled.store.overview.scene_turns") == 1
+    restart()
+    with readstats.collect() as counters:
+        overview.scene_turns(cid, short)
+        overview.scene_turns(cid, long)
+    assert counters.get("compiled.hit.overview.scene_turns") == 1
+    assert counters.get("transcript.parse") == 1      # the short one, live
+    compiled.close()

@@ -42,6 +42,14 @@ from . import kinds, persist
 POOL_ENTRIES = scenes_read.POOL_ENTRIES
 _OVERVIEW_POOL: dict = {}
 
+#: Below this many bytes a scene's turn count is never persisted: parsing the
+#: transcript costs less than a compiled lookup's fixed cost (the bench's
+#: per-kind measurement, `scripts/bench_overview.py`), so a short scene keeps
+#: only the in-process memo. Admission starts at twice the crossover the
+#: synthetic profiles showed, as `tokens.PERSIST_MIN_CHARS` does; a structural
+#: bound, to be tuned against real prompts later, in conversation.
+SCENE_TURNS_PERSIST_MIN_BYTES = 384 * 1024
+
 #: The last stamp each scene member was folded under, by path. Lets the fold
 #: notice a head rewritten in place with its mtime restored -- the stamp moved
 #: (ctime) while the head memo's `signature` did not -- and re-read that head
@@ -249,6 +257,9 @@ def _turns(cid: str, sid: str, p: Path,
             return kinds.scene_turns_live(cid, sid)
         except UnicodeDecodeError:
             return None   # a property of the bytes: remembered
+    if observed is None or observed[3] < SCENE_TURNS_PERSIST_MIN_BYTES:
+        readstats.bump("overview.computed.scene_turns")
+        return live(), (observed,) if observed is not None else None
     value = persist.derive(compiled.OVERVIEW_SCENE_TURNS, [compiled.Input("scene", p)],
                            {"players": list(players)},
                            lambda files: kinds.scene_turns(files["scene"] or b"", players), live)

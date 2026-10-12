@@ -230,9 +230,18 @@ TOKENS_RECORD_BODY = Kind('tokens:record_body', 1, (), ('text_hash', 'encoding')
 # outside the cache), and may use persisted sources (spec 04 section 3.2, rule
 # 5): a stale answer is a stale card line or badge, never a decision. Declared
 # here, as every persisted kind is; REGISTERED below only when it won spec
-# 03's section 14 measurement, which the overview benchmark (04-C3b) takes. An
+# 03's section 14 measurement, which `scripts/bench_overview.py` takes. An
 # unregistered one is never looked up or stored: its reader takes its live
 # path at today's cost.
+#
+# The ruling (roadmap 04-S10, synthetic libraries only): a lookup costs more
+# than parsing one small `world.md` or `campaign.md`, and more than the whole
+# continuity summary at every ledger size the profiles reach -- the same
+# outcome spec 03 recorded for the shelf rows -- so those three stay declared
+# and unwired. `scene_turns` is registered: a transcript parse grows with the
+# transcript and passes a lookup's fixed cost for long scenes, so it persists
+# above an admission size (`overview.read.SCENE_TURNS_PERSIST_MIN_BYTES`), the
+# token-count kind's precedent, and a shorter scene keeps the in-process memo.
 OVERVIEW_WORLD_ROW = Kind('overview.world_row', 1, (), (), True)
 OVERVIEW_CAMPAIGN_ROW = Kind('overview.campaign_row', 1, (), (), True)
 OVERVIEW_SCENE_TURNS = Kind('overview.scene_turns', 1, (), ('players',), True)
@@ -242,7 +251,8 @@ OVERVIEW_CONTINUITY = Kind(
 OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
     OVERVIEW_WORLD_ROW, OVERVIEW_CAMPAIGN_ROW, OVERVIEW_SCENE_TURNS, OVERVIEW_CONTINUITY)}
 
-KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY}
+KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
+                          OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS}
 
 
 @dataclass(frozen=True)
@@ -1485,6 +1495,7 @@ class Batch:
         self._materialized.update(metadata)
         self._materialized_sizes.update(sizes)
         self._bytes += delta
+        readstats.bump(f"compiled.store.{key.kind}")
         return True
 
     def _refresh_family(self, key: Key, inputs: Sequence[ValidatedInput], instance: object) -> None:

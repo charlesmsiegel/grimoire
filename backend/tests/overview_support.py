@@ -106,6 +106,10 @@ def register_overview_kinds(monkeypatch, *names: str) -> None:
     for name in chosen:
         kinds[name] = compiled.OVERVIEW_CANDIDATES[name]
     monkeypatch.setattr(compiled, "KINDS", kinds)
+    # Persist every scene, however short, so a test's small fixture exercises
+    # the persisted layer the admission size keeps for long transcripts.
+    from grimoire.store.overview import read as overview_read
+    monkeypatch.setattr(overview_read, "SCENE_TURNS_PERSIST_MIN_BYTES", 0)
 
 
 def unregister_overview_kinds(monkeypatch) -> None:

@@ -29,6 +29,7 @@ from ..paths import safe_id
 from ..scenes import paths as scenes_paths
 from ..worlds import paths as worlds_paths
 from . import kinds, persist
+from . import read as overview_read
 
 #: The continuity files by their file name, as `warm_paths` meets them.
 _CONTINUITY_FILES = {
@@ -56,8 +57,12 @@ def _warm_scene(cid: str, sid: str) -> bool:
         return False
     # The names the shell will ask with. A cast change before that read
     # misses on `players` and computes: correct, only not warm.
+    if p.stat().st_size < overview_read.SCENE_TURNS_PERSIST_MIN_BYTES:
+        return False   # a short scene is never persisted: nothing to warm
     players = tuple(sorted(cast.player_names(cid, sid)))
     data = p.read_bytes()
+    if len(data) < overview_read.SCENE_TURNS_PERSIST_MIN_BYTES:
+        return False
     _store(kind, [compiled.WrittenInput("scene", p, data)],
            kinds.scene_turns(data, players), {"players": list(players)})
     return True

@@ -2046,3 +2046,45 @@ folded in. `/codex:adversarial-review` is still owed before the plan.
 - A "hash if known" mode on 03-C4 was raised as a soft edge (Open question 11). 03 has since added it as `known_hashes`.
 
 Slices added (10 slices).
+
+## 16. Implementation notes (2026-10-12)
+
+Recorded with the landing PR, for the final spec-fidelity gate. Subject to
+that gate.
+
+- **Open question 4: option (b)**, as recommended. The campaign card's
+  `module` is the campaign's raw setting over its world's raw default, no
+  pack loaded; `"none"` at either level draws no chip. `GET /worlds` gains the
+  raw `module`.
+- **Open question 6: `updated` descending, then `sid` ascending**, as
+  recommended. `list_scenes` is untouched.
+- **Open question 5** (marking the read-path spec's layer 3 superseded) is
+  left for the user, as the checklist says.
+- **Registration (S7, S8, S10).** 03's section 14 rule -- a kind that does not
+  win warm-after-restart is not wired -- takes precedence over S7 and S8
+  naming the kinds, as 03 itself ruled for the shelf rows. All four kinds are
+  declared in `compiled.py`, and the persisted layer
+  (`store/overview/persist.py`) is complete and tested with them registered.
+  The benchmark's per-kind measurement on synthetic libraries wired only
+  `scene_turns`, above an admission size; `world_row`, `campaign_row` and
+  `continuity_summary` stay unwired, their in-process layers answering. Goal
+  2 therefore holds in-process for all of them, and across a restart for
+  long transcripts, where the parse is the cost. No timing figure is
+  committed.
+- **The continuity text seam (3.3)** is the "one bundle" form: each of the
+  five readers asks `store/ledger_texts.text` and parses with a
+  `*_from_text` twin; `ledger_texts.feeding` hands the bytes in by context,
+  so the byte-fed compute is today's code and opens nothing.
+- **Continuity capstone Decision 17 is amended** (recorded there and in the
+  checklist): the shell's `ledger_open` comes off the shared continuity
+  summary, which runs the §18.2 live filter.
+- **`PUT /todo/{id}/ignored`** checks the campaign through a live
+  `list_scenes`, not `_Ctx.has_campaign`, so no write reaches a projection
+  (3.8). `tests/test_overview_guard.py` holds 3.8 for every decision site.
+- **The post-turn warm** is wired at both callers of `_fire_follow_up`:
+  `_fence_stream` and `character_turns`' per-response chain (the format-2
+  chat path).
+- **S2, two deviations in form:** the run registry signals a run's end on an
+  `appEvents` channel the client subscribes to (suites mock the client
+  wholesale, so a direct import would break them), and `reload()` returns a
+  `Promise<boolean>` so the fork flow keeps its refresh-failed message.
