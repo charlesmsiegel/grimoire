@@ -298,6 +298,34 @@ def _count(messages, needle):
     return sum(content_parts.text_of(m["content"]).count(needle) for m in messages)
 
 
+@pytest.mark.parametrize("action", ["extend", "regenerate"])
+@pytest.mark.parametrize("clear", [False, True])
+def test_historical_response_keeps_standing_fields_after_edit_or_clear(client, action, clear):
+    cid, sid = seed(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    texts = ("The river freezes each winter.", "This winter the harbor stays open.",
+             "Offer Mara a choice without promising agreement.")
+    store.default_prompts.set_world(wid, texts[0])
+    store.default_prompts.set_campaign(cid, texts[1])
+    store.scenes.focus.set(cid, sid, texts[2])
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    rid = _answer(client, base)
+    replacement = "" if clear else "The river is open now."
+    store.default_prompts.set_world(wid, replacement)
+    store.default_prompts.set_campaign(cid, replacement)
+    store.scenes.focus.set(cid, sid, replacement)
+    if action == "extend":
+        result, fake = _extend(client, base, rid, "Then Mara waited.")
+    else:
+        fake = FakeLLM([["Mara waited." + _HANDOFF]])
+        client.app.dependency_overrides[routes.get_llm] = lambda: fake
+        result = client.post(base + f"/responses/{rid}/regenerate")
+    assert result.status_code == 200 and "error" not in result.text, result.text
+    for text in texts:
+        assert _count(fake.messages, text) == 1
+    assert _count(fake.messages, "The river is open now.") == 0
+
+
 def test_a_multi_part_response_extends_from_its_resume_snapshot(client):
     cid, sid = seed(client)
     base, rid = _two_part(client, cid, sid)

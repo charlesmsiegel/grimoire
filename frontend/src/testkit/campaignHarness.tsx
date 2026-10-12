@@ -220,6 +220,9 @@ export function installCampaignMocks() {
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0,
     dropped_tokens: 0, budget_tokens: 0, sections: [] });
+  vi.mocked(api.getSceneFocus).mockResolvedValue({ text: "Let Mara choose.", status: "ok" });
+  vi.mocked(api.setSceneFocus).mockResolvedValue({ text: "Let Seraphine choose.", status: "ok" });
+  vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
   // No pins (#129), so the inspector's rail here is the one these suites were
   // written against.
   (api.getPins as any).mockResolvedValue({ pins: [] });

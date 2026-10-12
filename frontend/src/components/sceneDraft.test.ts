@@ -1,4 +1,4 @@
-import { greetingDraft, savedDraft, suggestionDraft, customDraft, BLANK_TITLE } from "./sceneDraft";
+import { greetingDraft, savedDraft, suggestionDraft, customDraft, BLANK_TITLE, normalizeSceneFocus } from "./sceneDraft";
 import type { SceneIdea } from "../api/client";
 
 const G = { id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true };
@@ -15,11 +15,38 @@ const IDEA: SceneIdea = {
   source: "llm", status: "active", created: "2026-03-01T00:00:00Z", used_scene: "",
 };
 
+test.each(["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])(
+  "focus collapses backend line boundary %j without metadata injection", (boundary) => {
+    expect(normalizeSceneFocus(`Let Mara choose.${boundary}clock: changed${boundary}---`))
+      .toBe("Let Mara choose. clock: changed ---");
+  },
+);
+
+test("focus edge whitespace matches Python strip, not JavaScript trim", () => {
+  expect(normalizeSceneFocus("\x1f Let Mara choose. \x1f")).toBe("Let Mara choose.");
+  expect(normalizeSceneFocus(" \ufeffLet Mara choose. ")).toBe("\ufeffLet Mara choose.");
+  expect(normalizeSceneFocus("Mara\r\nchooses.")).toBe("Mara  chooses.");
+  expect(normalizeSceneFocus("Mara\x1fchooses.")).toBe("Mara\x1fchooses.");
+});
+
+test("generated, saved and custom focus survive conversion independently of premise", () => {
+  const focus = " Let Mara choose.\nGently. ";
+  expect(suggestionDraft({ ...S, focus }, "", false).focus).toBe("Let Mara choose. Gently.");
+  expect(savedDraft({ ...IDEA, focus }, "", false).focus).toBe("Let Mara choose. Gently.");
+  const draft = customDraft("Mara waits.", { title: "Mara", date: "", location: null, cast: [], focus }, "", false);
+  expect(draft.focus).toBe("Let Mara choose. Gently.");
+  expect(draft.source !== "greeting" && draft.premise).toBe("Mara waits.");
+  expect(greetingDraft(G, "", false).focus).toBe("");
+  expect(customDraft("", null, "", false).focus).toBe("");
+  expect(suggestionDraft(S, "", false).focus).toBe("");
+  expect(savedDraft(IDEA, "", false).focus).toBe("");
+});
+
 test("a greeting draft takes its title from the greeting and its date from nextDate", () => {
   const d = greetingDraft(G, "2026-01-01", false);
   expect(d).toEqual({ source: "greeting", gid: "reck", title: "Reckoning",
                       defaultTitle: "Reckoning", date: "2026-01-01",
-                      location: "", pcless: false });
+                      location: "", pcless: false, focus: "" });
 });
 
 test("a greeting draft pre-fills the location the greeting names", () => {

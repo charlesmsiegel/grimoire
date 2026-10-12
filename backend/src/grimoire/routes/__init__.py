@@ -23,6 +23,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
                   apply and dismiss, /continuity/suppressions)
   ``scenes``      /campaigns/{cid}/scenes
   ``authors_notes`` /campaigns/{cid}/authors-notes and a scene's author's note
+  ``default_prompts`` world/campaign standing prompts and scene focus
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
   ``maintenance`` /maintenance/images, the image store's migration and
@@ -74,6 +75,7 @@ from . import (
     common,
     config,
     continuity,
+    default_prompts,
     entities,
     greetings,
     images,
@@ -188,7 +190,8 @@ def _compose(domain: APIRouter) -> None:
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, inference, modules, record_art, worlds, characters, world_images, images, greetings,
                 runs, maintenance, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
-                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
+                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies,
+                default_prompts):
     _compose(_domain.router)
 
 _compose(entities.router)  # keep last: generic /{kind} catch-alls

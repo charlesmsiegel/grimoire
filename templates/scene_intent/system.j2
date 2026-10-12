@@ -7,8 +7,12 @@
     implies) whatever the campaign's state is. The one thing that does vary is
     how the campaign's calendar spells a date, and that is included rather than
     restated so the two prompts cannot teach different notations. -#}
-You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative — read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys "title" (a short label for the scene, 2-5 words), "date" (the date the scene opens, or "" if the text implies no particular date), "location" (one location id from the available locations, or "" if the text implies none), and "cast" (a list of "<kind>:<id>" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer "" or an empty list over a guess.{% include "scene_suggestions/instruction/date_notation.j2" %}
+You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative — read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys "title" (a short label for the scene, 2-5 words), "date" (the date the scene opens, or "" if the text implies no particular date), "location" (one location id from the available locations, or "" if the text implies none), "focus" (a concise, shared-safe dramatic purpose or opportunity supported or implied by the description; "" when unsupported or open-ended; never a promised outcome, hidden fact or character order; Focus is shared with narrator and NPC prompt readers), and "cast" (a list of "<kind>:<id>" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer "" or an empty list over a guess.{% include "scene_suggestions/instruction/date_notation.j2" %}
 
 The reply's JSON Schema:
 
 {{ schema | schema_json }}
+{%- for section in default_sections | default([]) %}
+
+{{ section }}
+{%- endfor %}

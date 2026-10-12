@@ -13,6 +13,7 @@ import { getModels, type Model } from "../api/models";
 import { THUMB } from "../api/thumbs";
 import { onNoticesChanged } from "../appEvents";
 import { AuthorsNotesPanel } from "./AuthorsNotesPanel";
+import { SceneFocusEditor } from "./SceneFocusEditor";
 import { approxMark, ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
 import { CostPanel } from "./CostPanel";
@@ -280,6 +281,12 @@ export const SceneInspector = memo(function SceneInspector({
   const [notesNext, setNotesNext] = useState<{ cid: string; sid: string;
                                                data: AuthorsNotesNext } | null>(null);
   const [notesTick, setNotesTick] = useState(0);
+  // Focus's canonical PUT response already refreshes its own metadata. Only
+  // live composition is invalidated here: the parent's onSceneChanged reloads
+  // the transcript and clears in-flight NPC boundaries/Keep-writing seeds.
+  // Authorial editing is permitted during those runs and must not disturb them.
+  const [focusTick, setFocusTick] = useState(0);
+  const onFocusSaved = useCallback(() => setFocusTick((t) => t + 1), []);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -290,7 +297,7 @@ export const SceneInspector = memo(function SceneInspector({
   // figure that is still current from one a turn has since moved (see the
   // effect that reads it).
   const [ctx, setCtx] =
-    useState<{ cid: string; sid: string; key: number; data: SceneContext } | null>(null);
+    useState<{ cid: string; sid: string; key: string; data: SceneContext } | null>(null);
   // Held with the campaign and scene it came from, exactly like `brief` above
   // and for the same reason: the inspector stays mounted across both switches,
   // so a bare array keeps the previous scene's turns on screen until the new
@@ -316,7 +323,7 @@ export const SceneInspector = memo(function SceneInspector({
   // without clearing the comparison, and a diff still in flight for the turn
   // they left would otherwise be painted under the one they arrived at.
   const [diff, setDiff] = useState<
-    { cid: string; sid: string; eid: string; against: string; key: number;
+    { cid: string; sid: string; eid: string; against: string; key: string;
       data: PromptDiff } | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
@@ -959,7 +966,8 @@ export const SceneInspector = memo(function SceneInspector({
   // refresh is not asked for again when the section reopens.
   const liveShown = !collapsed.context && !seen;
   const ctxReq = useRef({ token: 0, key: "" });
-  const ctxKey = `${cid}/${sid}/${refreshKey}`;
+  const compositionKey = `${refreshKey}/${focusTick}`;
+  const ctxKey = `${cid}/${sid}/${compositionKey}`;
   const ctxHeld = ctx !== null && `${ctx.cid}/${ctx.sid}/${ctx.key}` === ctxKey;
   useEffect(() => {
     if (!liveShown || ctxHeld || ctxReq.current.key === ctxKey) return;
@@ -967,13 +975,16 @@ export const SceneInspector = memo(function SceneInspector({
     // write, whichever order the answers come back in.
     const req = { token: ctxReq.current.token + 1, key: ctxKey };
     ctxReq.current = req;
-    api.getSceneContext(cid, sid)
-      .then((data) => { if (ctxReq.current === req) setCtx({ cid, sid, key: refreshKey, data }); })
+    // This key denotes a NEW composition, not another reader of the old one.
+    // PUT invalidates cached values, but an in-flight GET may still describe
+    // the pre-save fields. Keep transport freshness aligned with the key.
+    api.getSceneContext(cid, sid, { fresh: true })
+      .then((data) => { if (ctxReq.current === req) setCtx({ cid, sid, key: compositionKey, data }); })
       .catch(() => { if (ctxReq.current === req) setCtx(null); })
       // Settled, so a later reopen for the same key may ask again if this one
       // failed; a success is `ctxHeld` from here on.
       .finally(() => { if (ctxReq.current === req) ctxReq.current = { ...req, key: "" }; });
-  }, [cid, sid, refreshKey, ctxKey, liveShown, ctxHeld]);
+  }, [cid, sid, compositionKey, ctxKey, liveShown, ctxHeld]);
   const liveCtx = ctx && ctx.cid === cid && ctx.sid === sid ? ctx.data : null;
   // A selected past turn wins over the live composition — that IS the feature.
   // Both are the same shape, so everything below reads one variable.
@@ -1002,7 +1013,7 @@ export const SceneInspector = memo(function SceneInspector({
   // diff is frozen at BOTH ends, so a completed turn cannot change it and
   // re-reading it on every `refreshKey` would be a request that can only return
   // what is already on screen. Against the live preview it is the whole point.
-  const liveKey = compare === LIVE_SIDE ? refreshKey : 0;
+  const liveKey = compare === LIVE_SIDE ? compositionKey : "";
   useEffect(() => {
     if (!compareWith || !compare) { setDiff(null); return; }
     if (seenDecides && compare === LIVE_SIDE) { setDiff(null); setCompare(""); return; }
@@ -1659,6 +1670,14 @@ export const SceneInspector = memo(function SceneInspector({
                      : undefined}>
         <AuthorsNotesPanel cid={cid} sid={sid} cast={cast} next={nextNotes}
                            onSaved={onNotesSaved} />
+      </SideSection>
+
+      {/* Authorial metadata, not a transcript/run mutation: editing remains
+          available during generation and affects future compositions only.
+          Refresh only live context, including comparisons against it. */}
+      <SideSection id="scene_focus" title="Scene focus"
+                   collapsed={collapsed.scene_focus ?? true} onToggle={toggleSection}>
+        <SceneFocusEditor cid={cid} sid={sid} onSaved={onFocusSaved} />
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>

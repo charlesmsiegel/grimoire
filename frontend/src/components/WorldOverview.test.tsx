@@ -8,6 +8,7 @@ vi.mock("../api/client", () => ({
     listCharacters: vi.fn(), listUntaggedImages: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
     getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
+    getWorldDefaultPrompt: vi.fn(), setWorldDefaultPrompt: vi.fn(), getPromptLayout: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -27,6 +28,8 @@ function show(props: Partial<Parameters<typeof WorldOverview>[0]> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getWorldDefaultPrompt).mockResolvedValue({ text: "The river freezes.", status: "ok" });
+  vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "",
     counts: { characters: 2, pcs: 1, locations: 3, lore: 5, items: 0, groups: 1, creatures: 0, greetings: 2 } });
   // Each row carries its plot-map edges, which is all the connections row needs.
@@ -46,6 +49,13 @@ beforeEach(() => {
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getCalendarProviders as any).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" }] });
+});
+
+test("world default editing appears beside About and reads the addressed world", async () => {
+  show({ wid: "realm" });
+  expect(await screen.findByRole("heading", { name: "World default prompt" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "About" })).toBeInTheDocument();
+  expect(api.getWorldDefaultPrompt).toHaveBeenCalledWith("realm");
 });
 
 test("renders count tiles that link to their section", async () => {

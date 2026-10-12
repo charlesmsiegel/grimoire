@@ -168,6 +168,10 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # Art append/reuse and guarded mutations resolve and publish campaign
     # placements under the same campaign hold as their overlay metadata.
     "store.record_art.write",
+    # A campaign's standing prompt is its own whole-text setting, not an
+    # overlay record. Validate its scope and publish under the same lock as
+    # other campaign settings; the wid-only writer remains world-scoped.
+    "store.default_prompts",
     # Reroll alternates read the transcript, decide against it, and write a
     # sidecar beside it -- and `promote` then drives two `scenes` mutators. All
     # of that has to be one critical section with the scene writes it brackets,
@@ -213,13 +217,14 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # reentrant acquire and buys the module a place in the domain rather than
     # another entry on `UNREVIEWED`'s frozen backlog.
     "store.provenance",
-    # The three `store.scenes` submodules that mutate. Each public mutator in
+    # The `store.scenes` submodules that mutate. Each public mutator in
     # them either wears the package's `@locking._serialized` -- `campaign_lock`
     # around the whole body -- or delegates to a private one that does, which is
     # how `create_scene` and `set_datetime` resolve a calendar before the lock.
     "store.scenes.write",
     "store.scenes.moment",
     "store.scenes.lifecycle",
+    "store.scenes.focus",
     # `attempts` records whether a send's post is still in the transcript, and
     # every one of its mutators is called from inside a campaign-lock hold that
     # brackets the scene write it describes -- `remember` beside the append,

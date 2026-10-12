@@ -71,6 +71,16 @@ def _midnight(cid: str, status: str = "open") -> None:
                       "The bells of Saltmarch.", "001--gate")
 
 
+def test_standing_focus_is_not_replaced_when_provenance_is_unioned(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    first = scene_ideas.add(cid, "Mara", "Mara waits.", drivers=[_d(MAP, "advance")], focus="Let Mara choose.")
+    again = scene_ideas.add(cid, "Mara", "Mara waits.", drivers=[_d(LEDGER, "advance")], focus="Offer Seraphine a choice.")
+    assert again == first
+    rec = scene_ideas.get(cid, first)
+    assert rec["focus"] == "Let Mara choose."
+    assert rec["drivers"] == [_d(MAP, "advance"), _d(LEDGER, "advance")]
+
+
 def _save(cid: str, title: str, drivers=(), anchor=None, **kw) -> str:
     """A save the way the route makes one: provenance validated, then stored."""
     prov = suggest.idea_provenance(cid, list(drivers), anchor)

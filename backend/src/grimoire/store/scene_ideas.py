@@ -63,7 +63,9 @@ the annotation in `suggest.validate_ideas` on read -- and for the same import
 reason as the references above, only stronger: deciding whether `thread:...`
 still exists, or `event:...` has fired, means reading continuity, and
 continuity reaches `scenes`. So this module checks shape only, and imports
-nothing it did not import before.
+no continuity or scene lifecycle module. The focus normalizer is the pure
+`scenes.focus` leaf, not the scenes facade; its dependencies stay below the
+scene_refs/lifecycle loop. It only normalizes text and reads no scene here.
 
 A re-save of a standing idea UNIONS provenance rather than replacing it (§17,
 "Provenance is never thrown away"): new driver refs are appended by ref (the
@@ -86,6 +88,7 @@ from pathlib import Path
 
 from . import atomic, locks, paths
 from .campaigns import paths as campaigns_paths
+from .scenes import focus as scenes_focus
 
 ACTIVE = "active"
 USED = "used"
@@ -261,7 +264,7 @@ def _standing_match(data: dict, title: str, premise: str, pcless: bool) -> str:
 def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
         location: str = "", date: str = "", pcless: bool = False,
         source: str = USER, *, drivers: list[dict] | None = None,
-        time_anchor: dict | None = None) -> str:
+        time_anchor: dict | None = None, focus: str = "") -> str:
     """Save an idea and return its id.
 
     `source` says where it came from -- a generated card the reader kept
@@ -307,6 +310,11 @@ def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
                "location": _field(location), "date": _field(date),
                "pcless": bool(pcless), "source": source, "status": ACTIVE,
                "created": paths.now_iso(), "used_scene": ""}
+        # Current authored metadata, not part of standing-match identity. A
+        # re-save unions provenance above but never replaces the first focus.
+        normalized_focus = scenes_focus.normalize(focus)
+        if normalized_focus:
+            rec["focus"] = normalized_focus
         _put_provenance(rec, drivers, time_anchor)
         data[lid] = rec
         _write(cid, data)
@@ -378,6 +386,7 @@ def _project(lid: str, rec: dict) -> dict:
     status = _field(rec.get("status"), ACTIVE).lower()
     return {"id": lid, "title": _field(rec.get("title"), lid),
             "premise": _field(rec.get("premise")),
+            "focus": scenes_focus.normalize(_field(rec.get("focus"))),
             "cast": _tokens(rec.get("cast")), "location": _field(rec.get("location")),
             "date": _field(rec.get("date")), "pcless": bool(rec.get("pcless")),
             "source": source if source in SOURCES else USER,

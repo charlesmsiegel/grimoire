@@ -35,6 +35,7 @@ from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id, slugify, uniquify
 from ..tracker import records as tracker_records
+from . import focus as focus_fields
 from . import identity, locking, paths, serialize
 
 log = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ def repad(cid: str, width: int) -> None:
 
 
 def create_scene(cid: str, title: str, suggested_date: str | None = None,
-                 pcless: bool = False, model: str = "") -> str:
+                 pcless: bool = False, model: str = "", *, focus: str = "") -> str:
     """A new scene; returns its id. `model` is what the scene's `model` field
     records -- the model chat would run on when it was created, which the
     caller resolves (`routes.scenes._chat_target`): the store does not choose
@@ -101,7 +102,8 @@ def create_scene(cid: str, title: str, suggested_date: str | None = None,
                                    # campaign that doesn't exist. Re-checked under the
                                    # lock, which is where it actually has to hold.
     # The date hint is normalized before the lock, not inside it — see _date_hint.
-    return _create_scene(cid, title, pcless, _date_hint(cid, suggested_date), model)
+    return _create_scene(cid, title, pcless, _date_hint(cid, suggested_date), model,
+                         focus=focus)
 
 
 def _date_hint(cid: str, suggested_date: str | None) -> str:
@@ -153,7 +155,8 @@ def create_would_repad(cid: str) -> bool:
 
 
 @locking._serialized
-def _create_scene(cid: str, title: str, pcless: bool, date_hint: str, model: str) -> str:
+def _create_scene(cid: str, title: str, pcless: bool, date_hint: str, model: str,
+                  *, focus: str = "") -> str:
     paths._require_campaign(cid)
     d = paths._scenes_dir(cid)
     d.mkdir(parents=True, exist_ok=True)
@@ -176,6 +179,11 @@ def _create_scene(cid: str, title: str, pcless: bool, date_hint: str, model: str
         meta["pcless"] = "true"
     if date_hint:
         meta["suggested_date"] = date_hint
+    # Include focus in the first publication: cast/opener work must never see
+    # a newly created scene waiting for a second metadata request to arrive.
+    normalized_focus = focus_fields.normalize(focus)
+    if normalized_focus:
+        meta["focus"] = normalized_focus
     atomic.write_text(paths._scene_path(cid, sid), dump_frontmatter(meta, ""))
     baselines.capture_baseline(cid, sid)
     return sid

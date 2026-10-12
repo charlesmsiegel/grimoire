@@ -52,6 +52,7 @@ from grimoire.store import (
     commitments,
     config,
     context,
+    default_prompts,
     entities,
     events,
     facts,
@@ -149,6 +150,61 @@ class Case:
 
 
 # --------------------------------------------------------------- shared pieces
+
+# Independent instruction-law checks, not a model-quality score. A deleted
+# clause must fail even though rendering the edited template would agree with
+# itself. Each has an explicit deletion counterexample in test_evals.py.
+FOCUS_CONTRACT = (
+    "not a required outcome", "Offer natural opportunities",
+    "do not force the outcome", "characters may refuse, fail, disagree",
+    "Do not rush, fast-forward, invent a player's decision",
+    "repeat the same invitation", "play has already addressed the focus",
+    "never dialogue, an established event", "knowledge they automatically have",
+    "does not override world/campaign facts", "Immediate user direction takes precedence",
+    "Failure to reach the focus is a valid scene outcome",
+)
+
+
+def standing_prompt_checks(messages: list[dict]) -> list[Check]:
+    """Offline checks over sent framing, with no inference about model behavior."""
+    text = graders.prompt_text(messages)
+    return [Check(f"prompt.focus.{index}", phrase in text, phrase)
+            for index, phrase in enumerate(FOCUS_CONTRACT)]
+
+
+def standing_prompt_accounting() -> dict:
+    """A synthetic consolidation example over real complete prompt counts.
+
+    Two cards repeat a substantial shared block. Appending it as a default
+    costs more; deliberately removing the copies costs less here. This is
+    neither an automatic migration nor a savings estimate for a real library.
+    The caller owns an isolated GRIMOIRE_HOME, as for the recorded cases.
+    """
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    shared = "\n".join(f"At winter tide {n}, the river freezes and Saltmarch's harbor closes."
+                       for n in range(40))
+    actors = []
+    for name in ("Mara", "Seraphine"):
+        card = characters.blank_card(name)
+        card["data"]["description"] = name + " waits by the river.\n" + shared
+        aid, _ = characters.create_character(root, name, "default", card)
+        actors.append(aid)
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    sid = scenes.create_scene(cid, "Mara")
+    for aid in actors:
+        appearances.appear(cid, sid, "characters", aid, "default", "npc", narrate=False)
+    _before, repeated = context.compose_turn(cid, sid)
+    default_prompts.set_world(wid, shared)
+    scenes.focus.set(cid, sid, "Offer Mara a choice without promising agreement.")
+    _appended, appended = context.compose_turn(cid, sid)
+    for aid in actors:
+        card = characters.read_card(campaigns.campaign_root(cid), aid, "default")
+        card["data"]["description"] = card["data"]["name"] + " waits by the river."
+        characters.update_version(campaigns.campaign_root(cid), aid, "default", card)
+    messages, consolidated = context.compose_turn(cid, sid)
+    return {"repeated": repeated["total_tokens"], "appended": appended["total_tokens"],
+            "consolidated": consolidated["total_tokens"], "messages": list(messages)}
 
 _SERA_CARD = {
     "description": "Tall, sharp-eyed smuggler with salt-cracked hands.",

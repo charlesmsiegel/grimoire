@@ -79,6 +79,19 @@ def test_no_route_is_shadowed_by_an_earlier_one():
     assert not shadowed, "\n".join(shadowed)
 
 
+@pytest.mark.parametrize("method", ["GET", "PUT"])
+@pytest.mark.parametrize("scope,param", [("worlds", "wid"), ("campaigns", "cid")])
+def test_default_prompt_literal_precedes_entity_route(method, scope, param):
+    table = _table()
+    literal = f"/api/{scope}/{{{param}}}/default-prompt"
+    generic = f"/api/{scope}/{{{param}}}/{{kind}}"
+    before = next(i for i, (methods, path) in enumerate(table) if method in methods and path == literal)
+    # Some generic collection routes support GET only. The GET pattern is
+    # enough to pin domain order; per-method shadowing is checked above.
+    after = next(i for i, (methods, path) in enumerate(table) if "GET" in methods and path == generic)
+    assert before < after
+
+
 # Pairs where neither pattern is more general than the other, but a concrete URL
 # matches both — so which handler runs is decided by include order alone and
 # nothing else would catch a change. Each entry is (winner, loser); the winners

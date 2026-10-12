@@ -3,7 +3,10 @@ pinned byte for byte as they were before Slice E (capstone spec §15, §15.1).
 
 The golden file was generated on pre-change code by `python -m
 tests.suggest_golden` and is never regenerated to make a test pass: these two
-prompts are promised unchanged, so a diff here is the promise breaking.
+prompts were promised unchanged for the driver feature. Standing prompts now
+intentionally add only the focus clause named below; the original file stays
+untouched and every other byte remains pinned, as does the existing schema
+paragraph exception.
 """
 
 from __future__ import annotations
@@ -16,7 +19,24 @@ from tests import suggest_golden
 
 
 def _golden() -> dict:
-    return json.loads(suggest_golden.GOLDEN.read_text(encoding="utf-8"))
+    golden = json.loads(suggest_golden.GOLDEN.read_text(encoding="utf-8"))
+    for label, messages in golden.items():
+        # A deliberate, narrow upgrade to the pre-feature expectation, not a
+        # regeneration from current code that could hide unrelated drift.
+        intent = label.startswith("intent/")
+        needle = ', and "cast"' if intent else ', "cast" (list'
+        clause = (', "focus" (a concise, shared-safe dramatic purpose or opportunity '
+                  'supported or implied by the description; "" when unsupported or '
+                  'open-ended; never a promised outcome, hidden fact or character order; '
+                  'Focus is shared with narrator and NPC prompt readers)'
+                  if intent else
+                  ', "focus" (a concise, shared-safe dramatic question or opportunity '
+                  'compatible with this scene; "" for open-ended play; never a promised '
+                  'outcome, hidden fact or character order; '
+                  'Focus is shared with narrator and NPC prompt readers)')
+        assert messages[0]["content"].count(needle) == 1, label
+        messages[0]["content"] = messages[0]["content"].replace(needle, clause + needle, 1)
+    return golden
 
 
 def test_the_instruction_section_is_pinned():

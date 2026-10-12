@@ -10,6 +10,18 @@ const ctx = (over: Partial<SceneContext> = {}): SceneContext => ({
 });
 const models = [{ id: "gpt-4", name: "GPT-4", context: 200, prompt: null, completion: null }];
 
+test("captured prompt-field warnings stay outside sent rows and token accounting", () => {
+  const { rerender, container } = render(<ContextBreakdown models={models} ctx={ctx({
+    prompt_field_statuses: { world_default_prompt: "unreadable", campaign_default_prompt: "ok", scene_focus: "unreadable" },
+  })} />);
+  expect(screen.getByText(/world default prompt.*could not be read/i)).toBeInTheDocument();
+  expect(screen.getByText(/scene focus.*could not be read/i)).toBeInTheDocument();
+  expect(container.querySelectorAll("details.ctx-section")).toHaveLength(1);
+  expect(screen.getByText(/100.*200 tok/)).toBeInTheDocument();
+  rerender(<ContextBreakdown models={models} ctx={ctx()} />);
+  expect(screen.queryByText(/could not be read/i)).toBeNull();
+});
+
 test("a count made with the model's own tokenizer is shown plain", () => {
   render(<ContextBreakdown models={models}
                            ctx={ctx({ token_count: { tokenizer: "cl100k_base", native: true } })} />);

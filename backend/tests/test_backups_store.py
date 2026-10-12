@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from grimoire.store import backups, campaigns, config, entities, locks, worlds
+from grimoire.store import backups, campaigns, config, default_prompts, entities, locks, worlds
 
 
 def home(monkeypatch, tmp_path):
@@ -35,6 +35,29 @@ AT = datetime(2026, 8, 14, 21, 0, 0, tzinfo=UTC)
 def names_in(path):
     with zipfile.ZipFile(path) as z:
         return set(z.namelist())
+
+
+def test_default_sidecars_survive_backup_and_restore(monkeypatch, tmp_path):
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    default_prompts.set_world("realm", "The river freezes.\nShared details.")
+    default_prompts.set_campaign("saltmarch", "This winter the harbor stays open.")
+    archive = backups.create_backup(when=AT)
+    with zipfile.ZipFile(archive) as zipped:
+        assert zipped.read("worlds/realm/default_prompt.md") == (
+            root / "worlds/realm/default_prompt.md").read_bytes()
+        assert zipped.read("campaigns/saltmarch/default_prompt.md") == (
+            root / "campaigns/saltmarch/default_prompt.md").read_bytes()
+        # This is our own controlled archive in a disposable fixture, not an
+        # import of an untrusted zip or a restore over the user's real store.
+        restored = tmp_path / "restored"
+        zipped.extractall(restored)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(restored))
+    assert default_prompts.resolve("saltmarch") == {
+        "text": "This winter the harbor stays open.", "status": "ok",
+        "world": {"id": None, "text": "", "status": "unavailable"},
+    }
+    assert default_prompts.read_world("realm")["text"] == "The river freezes.\nShared details."
 
 
 # ---- what an archive holds -------------------------------------------------

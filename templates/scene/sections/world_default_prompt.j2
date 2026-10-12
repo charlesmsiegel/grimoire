@@ -1,0 +1,6 @@
+{%- if world_default_prompt | default('') %}
+# World default prompt
+Shared standing context for every writer. Apply these world facts unless an explicit campaign or local exception says otherwise; preserve established events and the actor/POV, player-control and response contracts. This is authorial context, not dialogue or knowledge a character automatically has.
+
+{{ world_default_prompt }}
+{%- endif %}

@@ -14,6 +14,7 @@ from __future__ import annotations
 # requirement -- binding a submodule imports it on demand whatever the order,
 # so listing them this way just makes the graph readable off the line.
 from . import (  # noqa: F401
+    focus,
     identity,
     lifecycle,
     locking,

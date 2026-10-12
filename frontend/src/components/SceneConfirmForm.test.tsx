@@ -22,12 +22,14 @@ vi.mock("./CalendarDatePicker", () => ({
 import { api } from "../api/client";
 
 const GEN: SceneDraft = {
+  focus: "",
   source: "generated", title: "The creditor", defaultTitle: "The creditor",
   date: "2026-03-04", location: "saltmarch", pcless: false,
   premise: "A debt-collector arrives.",
   cast: [{ kind: "characters", id: "mara", name: "Mara" }],
 };
 const GRT: SceneDraft = {
+  focus: "",
   source: "greeting", gid: "reck", title: "Reckoning", defaultTitle: "Reckoning",
   date: "2026-03-04", location: "saltmarch", pcless: false,
 };
@@ -61,6 +63,34 @@ test("nothing is written until Create", async () => {
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
+test("reviewed focus is initially created independently of title, premise and no-opener choice", async () => {
+  renderForm({ ...GEN, focus: "Let Mara choose." });
+  const focus = await screen.findByRole("textbox", { name: "Scene focus" });
+  expect(focus).toHaveValue("Let Mara choose.");
+  fireEvent.change(focus, { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Mara" } });
+  fireEvent.change(screen.getByLabelText("Scene date"), { target: { value: "2026-05-01" } });
+  fireEvent.change(await screen.findByLabelText("Location"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Remove Mara" }));
+  fireEvent.click(screen.getByRole("radio", { name: /nothing/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "Mara", "2026-05-01", false, ""));
+  expect(api.addCastBatch).not.toHaveBeenCalled();
+  expect(api.setSceneLocation).not.toHaveBeenCalled();
+});
+
+test("focus editing keeps typed spaces, collapses pasted boundaries and submits a canonical paragraph", async () => {
+  renderForm({ ...GEN, focus: "" });
+  const input = await screen.findByRole("textbox", { name: "Scene focus" });
+  fireEvent.change(input, { target: { value: " Let Mara " } });
+  expect(input).toHaveValue(" Let Mara ");
+  fireEvent.change(input, { target: { value: " Let Mara choose.\x1cGently. " } });
+  expect(input).toHaveValue(" Let Mara choose. Gently. ");
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-03-04", false,
+    "Let Mara choose. Gently."));
+});
+
 test("Back writes nothing", async () => {
   const onBack = vi.fn();
   render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={onBack} onCreated={vi.fn()} />);
@@ -69,11 +99,37 @@ test("Back writes nothing", async () => {
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
+test.each(["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\u0085", "\u2028", "\u2029"])(
+  "focus input collapses hard boundary %j without trimming ordinary typing", async (boundary) => {
+    renderForm(GEN);
+    const input = await screen.findByRole("textbox", { name: "Scene focus" });
+    fireEvent.change(input, { target: { value: ` Mara${boundary}chooses. ` } });
+    expect(input).toHaveValue(" Mara chooses. ");
+    expect(input).toHaveAttribute("wrap", "soft");
+    fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+    await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-03-04", false, "Mara chooses."));
+  });
+
+test.each(["generated", "saved", "custom", "greeting"] as const)(
+  "%s confirmation publishes reviewed focus before opener-related writes", async (source) => {
+    const draft: SceneDraft = source === "greeting" ? { ...GRT, focus: "Mara chooses." }
+      : { ...GEN, source, ...(source === "saved" ? { lid: "mara" } : {}), focus: "Mara chooses." };
+    const onCreated = renderForm(draft);
+    fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(api.createScene).toHaveBeenCalledTimes(1);
+    expect(api.createScene).toHaveBeenCalledWith("c", draft.title, "2026-03-04", false, "Mara chooses.");
+    const publication = vi.mocked(api.createScene).mock.invocationCallOrder[0];
+    expect(publication).toBeLessThan(vi.mocked(api.setSceneLocation).mock.invocationCallOrder[0]);
+    if (source === "greeting") expect(publication).toBeLessThan(vi.mocked(api.startFromGreeting).mock.invocationCallOrder[0]);
+    if (source === "saved") expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "mara", "used", "s9-dated");
+  });
+
 test("a generated draft creates, casts, locates, dates, and hands off the premise", async () => {
   const onCreated = renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "A debt-collector arrives."));
-  expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-03-04", false);
+  expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-03-04", false, "");
   expect(api.addCastBatch).toHaveBeenCalledWith("c", "s9", [{ kind: "characters", id: "mara" }]);
   expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s9", "saltmarch");
   expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s9", "2026-03-04");
@@ -121,7 +177,7 @@ test("editing title, date, location, and premise reaches the write sequence", as
   fireEvent.change(screen.getByLabelText("Premise"), { target: { value: "A stranger returns." } });
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "A stranger returns."));
-  expect(api.createScene).toHaveBeenCalledWith("c", "The reckoning", "2026-05-01", false);
+  expect(api.createScene).toHaveBeenCalledWith("c", "The reckoning", "2026-05-01", false, "");
   expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s9", "harrow");
   expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s9", "2026-05-01");
 });
@@ -159,7 +215,7 @@ test("an emptied title falls back to defaultTitle, not to the backend default", 
   renderForm(GEN);
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "  " } });
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", expect.any(String), false));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", expect.any(String), false, ""));
 });
 
 test("a cast failure deletes the scene", async () => {
@@ -425,6 +481,7 @@ test("fields are disabled while the create sequence is writing", async () => {
   renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByLabelText("Title")).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "Scene focus" })).toBeDisabled();
   expect(screen.getByLabelText("Scene date")).toBeDisabled();
   expect(screen.getByLabelText("Location")).toBeDisabled();
   expect(screen.getByLabelText("Premise")).toBeDisabled();
@@ -435,13 +492,19 @@ test("fields are disabled while the create sequence is writing", async () => {
 
 test("fields stay disabled after a soft failure, since Continue cannot save further edits", async () => {
   (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
-  renderForm(GEN);
+  const onCreated = renderForm({ ...GEN, focus: "Mara chooses." });
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/gone/);
   expect(screen.getByLabelText("Title")).toBeDisabled();
   expect(screen.getByLabelText("Scene date")).toBeDisabled();
   expect(screen.getByLabelText("Location")).toBeDisabled();
   expect(screen.getByLabelText("Premise")).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "Scene focus" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "Scene focus" })).toHaveValue("Mara chooses.");
+  fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  expect(api.createScene).toHaveBeenCalledTimes(1);
+  expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-03-04", false, "Mara chooses.");
 });
 
 // ---- Finding 5 (PR #318 review): a characters-kind actor who is the
@@ -459,6 +522,7 @@ test("a character-kind player is seated with role player, not left to the backen
 
 // ---- issue #90: the first-post source selector ----
 const BLANK: SceneDraft = {
+  focus: "",
   source: "custom", title: "New scene", defaultTitle: "New scene",
   date: "2026-03-04", location: "", pcless: false, premise: "", cast: [],
 };

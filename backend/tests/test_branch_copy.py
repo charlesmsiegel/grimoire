@@ -52,6 +52,21 @@ def _hex():
     return uuid.uuid4().hex
 
 
+def test_scene_branch_retains_current_focus_independently(cid):
+    sid = store.scenes.create_scene(cid, "Mara", focus="Offer Mara a choice.")
+    store.scenes.append_message(cid, sid, "user", "Mara waits.")
+    store.scenes.append_message(cid, sid, "user", "Seraphine arrives.")
+    store.scenes.focus.set(cid, sid, "Let Mara decide whether to stay.")
+    sibling = store.branch.branch_scene(cid, sid, 0, title="Seraphine")
+    assert store.scenes.focus.read(cid, sibling)["text"] == "Let Mara decide whether to stay."
+    assert len(store.scenes.read_scene(cid, sibling)["messages"]) == 1
+    store.scenes.focus.set(cid, sibling, "Offer Seraphine a choice.")
+    assert store.scenes.focus.read(cid, sid)["text"] == "Let Mara decide whether to stay."
+    store.scenes.delete_from(cid, sid, 1)
+    store.scenes.mark_absorbed(cid, sid, "Mara waited.", "Mara waited.")
+    assert store.scenes.focus.read(cid, sid)["text"] == "Let Mara decide whether to stay."
+
+
 # --- responses ---------------------------------------------------------------
 
 

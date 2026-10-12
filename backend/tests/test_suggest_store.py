@@ -419,7 +419,7 @@ def test_parse_intent_drops_what_the_campaign_does_not_have(monkeypatch, tmp_pat
     reply = ('{"title": "T", "date": "the fourth of Never", "location": "atlantis", '
              '"cast": ["characters:nobody", "garbage"]}')
     got = suggest.parse_intent(reply, cid)
-    assert got == {"title": "T", "date": "", "location": "", "cast": []}
+    assert got == {"title": "T", "date": "", "location": "", "cast": [], "focus": ""}
 
 
 def test_parse_intent_takes_the_first_object_of_a_bare_array(monkeypatch, tmp_path):
@@ -430,7 +430,7 @@ def test_parse_intent_takes_the_first_object_of_a_bare_array(monkeypatch, tmp_pa
 def test_parse_intent_survives_garbage(monkeypatch, tmp_path):
     cid = _campaign_with_location_and_character(monkeypatch, tmp_path)
     assert suggest.parse_intent("I'm afraid I can't do that.", cid) == {
-        "title": "", "date": "", "location": "", "cast": []}
+        "title": "", "date": "", "location": "", "cast": [], "focus": ""}
 
 
 def test_parse_intent_honors_offscreen(monkeypatch, tmp_path):
@@ -448,7 +448,7 @@ def test_parse_intent_treats_a_non_string_field_as_missing(monkeypatch, tmp_path
     for bad in (None, 42, {"nested": "object"}):
         reply = json.dumps({"title": bad, "date": bad, "location": bad, "cast": []})
         got = suggest.parse_intent(reply, cid)
-        assert got == {"title": "", "date": "", "location": "", "cast": []}, bad
+        assert got == {"title": "", "date": "", "location": "", "cast": [], "focus": ""}, bad
 
 
 # ---- direction (#316) ----
@@ -1138,7 +1138,7 @@ def test_parse_output_resolves_labels_and_dates(monkeypatch, tmp_path):
     assert (row["date"], row["date_friendly"], row["in_days"], row["date_rejected"]) == (
         "2026-05-12", "12 May 2026", 2, False)
     assert (row["unmet_must"], row["avoided"]) == ([], [])
-    assert set(row) == {"title", "premise", "cast", "location", "date", "date_friendly",
+    assert set(row) == {"title", "premise", "focus", "cast", "location", "date", "date_friendly",
                         "in_days", "date_rejected", "date_rejected_by", "drivers",
                         "time_anchor", "unmet_must", "avoided"}
 
@@ -1277,6 +1277,7 @@ def test_the_intent_schema_offers_the_snapshots_ids():
                                                 ["characters:mara", "characters:winifred"]))
     schemas.check(schema)
     props = schema["properties"]
+    assert props["focus"] == {"type": "string"} and "focus" in schema["required"]
     assert props["title"] == {"type": "string"} and props["date"] == {"type": "string"}
     # "" first: the prompt asks for "" when the text implies no location.
     assert props["location"] == {"type": "string", "enum": ["", "saltmarch", "the-realm"]}

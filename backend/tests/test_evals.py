@@ -54,6 +54,22 @@ def test_every_case_has_a_recordable_baseline():
             f"{case.id} has no counterexample — its graders are unproven"
 
 
+def test_standing_prompt_accounting_requires_consolidation(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    measured = case_mod.standing_prompt_accounting()
+    assert measured["appended"] > measured["repeated"] > measured["consolidated"]
+    assert all(check.ok for check in case_mod.standing_prompt_checks(measured["messages"]))
+
+
+def test_gentle_focus_contract_checks_have_counterexamples(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    measured = case_mod.standing_prompt_accounting()
+    for phrase in case_mod.FOCUS_CONTRACT:
+        changed = [{**m, "content": m["content"].replace(phrase, "")} for m in measured["messages"]]
+        checks = case_mod.standing_prompt_checks(changed)
+        assert not all(check.ok for check in checks), phrase
+
+
 def test_no_orphan_recordings():
     """Every file in recordings/ is claimed by a case. Renaming a case without
     deleting its old files would otherwise leave dead fixtures behind that no

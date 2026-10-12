@@ -19,6 +19,7 @@ vi.mock("../api/client", async () => {
 });
 
 const DRAFT: SceneDraft = {
+  focus: "",
   source: "custom", title: "A quiet night", defaultTitle: "A quiet night",
   date: "", location: "", pcless: false, premise: "", cast: [],
 };
@@ -40,9 +41,18 @@ beforeEach(() => {
   (api.listAppearances as any).mockResolvedValue([]);
 });
 
-function renderForm() {
-  render(<SceneConfirmForm cid="c" draft={DRAFT} ready onBack={() => {}} onCreated={vi.fn()} />);
+function renderForm(draft: SceneDraft = DRAFT) {
+  render(<SceneConfirmForm cid="c" draft={draft} ready onBack={() => {}} onCreated={vi.fn()} />);
 }
+
+test("date fill cannot resurrect a focus the author cleared", async () => {
+  renderForm({ ...DRAFT, focus: "Let Mara choose." });
+  const focus = await screen.findByRole("textbox", { name: "Scene focus" });
+  fireEvent.change(focus, { target: { value: "" } });
+  fireEvent.click(await screen.findByRole("button", { name: /last scene's date/i }));
+  expect(await screen.findByLabelText("Scene date day")).toHaveValue("25");
+  expect(focus).toHaveValue("");
+});
 
 test("the fill lands in the year, month and day controls", async () => {
   renderForm();

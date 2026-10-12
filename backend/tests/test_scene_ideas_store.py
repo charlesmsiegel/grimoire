@@ -47,6 +47,38 @@ def test_read_missing_is_empty(monkeypatch, tmp_path):
     assert scene_ideas.records(cid) == []
 
 
+def test_legacy_idea_focus_reads_empty_without_rewriting(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Saltmarch", worlds.create_world("Realm"))
+    lid = scene_ideas.add(cid, "Mara", "Mara waits.")
+    before = _path(cid).read_bytes()
+    assert "focus" not in scene_ideas.get(cid, lid)
+    assert scene_ideas.records(cid)[0]["focus"] == ""
+    assert _path(cid).read_bytes() == before
+
+
+@pytest.mark.parametrize("value", [None, 42, [], {}])
+def test_hand_edited_nonstring_focus_reads_empty_without_rewriting(monkeypatch, tmp_path, value):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Saltmarch", worlds.create_world("Realm"))
+    lid = scene_ideas.add(cid, "Mara", "Mara waits.")
+    data = scene_ideas.read(cid)
+    data[lid]["focus"] = value
+    _path(cid).write_text(json.dumps(data), encoding="utf-8")
+    before = _path(cid).read_bytes()
+    assert scene_ideas.records(cid)[0]["focus"] == ""
+    assert _path(cid).read_bytes() == before
+
+
+def test_saved_focus_is_normalized_and_standing_match_keeps_first_value(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Saltmarch", worlds.create_world("Realm"))
+    lid = scene_ideas.add(cid, "Mara", "Mara waits.", focus=" Let Mara choose.\nGently. ")
+    assert scene_ideas.get(cid, lid)["focus"] == "Let Mara choose. Gently."
+    assert scene_ideas.add(cid, "Mara", "Mara waits.", focus="Offer Seraphine a choice.") == lid
+    assert scene_ideas.records(cid)[0]["focus"] == "Let Mara choose. Gently."
+
+
 def test_add_stores_an_idea(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     lid = scene_ideas.add(cid, "  The creditor  ", "  A debt-collector arrives.  ",
@@ -235,7 +267,7 @@ def test_a_hand_mangled_record_reads_as_defaults_rather_than_raising(monkeypatch
     }), encoding="utf-8")
     rows = scene_ideas.records(cid)
     assert [r["id"] for r in rows] == ["broken"]
-    assert rows[0] == {"id": "broken", "title": "broken", "premise": "", "cast": [],
+    assert rows[0] == {"id": "broken", "title": "broken", "premise": "", "cast": [], "focus": "",
                        "location": "", "date": "", "pcless": True, "source": "user",
                        "status": "active", "created": "", "used_scene": "",
                        "drivers": [], "time_anchor": None}

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from grimoire import store
+from grimoire import model_guidance, store
 from grimoire.store import response_snapshots
 
 
@@ -22,6 +22,20 @@ def test_snapshot_roundtrip_is_independent_of_later_in_memory_edits(campaign):
     loaded = response_snapshots.read(campaign, ref)
     assert loaded["profiles"][""][0]["content"] == "Wait here."
     assert response_snapshots.write(campaign, "a" * 32, "primary", loaded) == ref
+
+
+def test_old_snapshot_gains_no_current_standing_fields(campaign):
+    sid = store.scenes.create_scene(campaign, "Mara", focus="Offer Mara a choice.")
+    wid = store.campaigns.read_campaign(campaign)["meta"]["world"]
+    store.default_prompts.set_world(wid, "The river freezes.")
+    store.default_prompts.set_campaign(campaign, "The harbor stays open.")
+    old = {"version": 1, "primary_model": "unknown", "unprofiled": [
+        [{"role": "user", "content": "Mara waits."}], None], "profiles": {}}
+    ref = response_snapshots.write(campaign, "e" * 32, "primary", old)
+    restored = model_guidance.PreparedMessages.from_snapshot(response_snapshots.read(campaign, ref), "unknown")
+    assert list(restored) == [{"role": "user", "content": "Mara waits."}]
+    assert restored.breakdown is None
+    assert store.scenes.focus.read(campaign, sid)["status"] == "ok"
 
 
 def test_resume_snapshots_do_not_overwrite_the_previous_roll_context(campaign):

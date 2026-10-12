@@ -21,7 +21,7 @@ import {
   type Actor, type AdvanceDigest, type AuthorsNote, type AuthorsNotes, type AuthorsNotesNext, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type ImageBackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
-  type CampaignMeta,
+  type CampaignMeta, type CampaignDefaultPrompt, type PromptField, type PromptFieldStatuses,
   type CampaignModule, type Card,
   type CampaignBudget,
   type CampaignSceneCosts,
@@ -1714,9 +1714,9 @@ export const api = {
   // had no second asker to share with.
   listScenes: (cid: string) =>
     request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`, undefined, { fresh: true }),
-  createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean) =>
+  createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean, focus = "") =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
-      { title, suggested_date: suggestedDate, pcless }).then(notifyShell),
+      { title, suggested_date: suggestedDate, pcless, focus }).then(notifyShell),
   // Never shared, like the alternates and proposal reads. `selectScene` is the
   // refresh every mutating path funnels through, and a shared read is as old as
   // the request it joined — so a reroll or swap firing while an earlier refresh
@@ -2879,6 +2879,20 @@ export const api = {
   // right after a save, and a cached copy would show the note it just replaced.
   getAuthorsNotes: (cid: string) =>
     request<AuthorsNotes>("GET", `/api/campaigns/${cid}/authors-notes`, undefined, { fresh: true }),
+  // Authorial fields must not join a read opened before their save. They use
+  // the same explicit fresh boundary as author's notes, not another cache.
+  getWorldDefaultPrompt: (wid: string) =>
+    request<PromptField>("GET", `/api/worlds/${wid}/default-prompt`, undefined, { fresh: true }),
+  setWorldDefaultPrompt: (wid: string, text: string) =>
+    request<PromptField>("PUT", `/api/worlds/${wid}/default-prompt`, { text }),
+  getCampaignDefaultPrompt: (cid: string) =>
+    request<CampaignDefaultPrompt>("GET", `/api/campaigns/${cid}/default-prompt`, undefined, { fresh: true }),
+  setCampaignDefaultPrompt: (cid: string, text: string) =>
+    request<CampaignDefaultPrompt>("PUT", `/api/campaigns/${cid}/default-prompt`, { text }),
+  getSceneFocus: (cid: string, sid: string) =>
+    request<PromptField>("GET", `/api/campaigns/${cid}/scenes/${sid}/focus`, undefined, { fresh: true }),
+  setSceneFocus: (cid: string, sid: string, text: string) =>
+    request<PromptField>("PUT", `/api/campaigns/${cid}/scenes/${sid}/focus`, { text }),
   setCampaignAuthorsNote: (cid: string, note: AuthorsNote) =>
     request<AuthorsNotes>("PUT", `/api/campaigns/${cid}/authors-notes/campaign`, note),
   setCharacterAuthorsNote: (cid: string, ref: string, note: AuthorsNote) =>
@@ -2954,8 +2968,10 @@ export const api = {
     request<CampaignBudget>("GET", `/api/campaigns/${cid}/budget`, undefined, { fresh: true }),
   setCampaignBudget: (cid: string, body: { budget_usd: number | null; budget_period?: string }) =>
     request<CampaignBudget>("PUT", `/api/campaigns/${cid}/budget`, body),
-  getSceneContext: (cid: string, sid: string) =>
-    request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
+  // A caller asking for a newly composed revision must not join a GET that
+  // started before its write. Other consumers retain ordinary GET sharing.
+  getSceneContext: (cid: string, sid: string, options?: { fresh?: boolean }) =>
+    request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`, undefined, options),
   // Pins are campaign-scoped with the scene as a parameter: one read returns
   // this scene's rules and the campaign-wide ones they override. `fresh`,
   // because a pin is read straight after being set and a cached list would show
@@ -3072,7 +3088,7 @@ export const api = {
       ...rest, ...(after ? { after } : {}),
     };
     return draftRun<{ suggestions: SceneSuggestion[]; greeting_picks?: string[];
-                      next_date?: string }>(
+                      next_date?: string; prompt_field_statuses?: PromptFieldStatuses }>(
       { at: "campaign", id: cid }, (attempt) =>
         request<{ run: RunHandle }>(
           "POST", `/api/campaigns/${cid}/scene-suggestions`, body, { attempt, signal }),

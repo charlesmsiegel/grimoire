@@ -4,6 +4,8 @@ import { api, splitNativeDate, type CharacterSummary, type EntitySummary, type P
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errorText } from "../api/errors";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
+import { normalizeSceneFocus } from "./sceneDraft";
+import { SceneFocusInput } from "./SceneFocusInput";
 import { NeedsModel } from "./inference/NeedsModel";
 
 /** Where the scene's opening post comes from (issue #90).
@@ -56,6 +58,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   onSalvaged?: (sid: string) => void;
 }) {
   const [title, setTitle] = useState(draft.title);
+  const [focus, setFocus] = useState(draft.focus);
   const [date, setDate] = useState(draft.date);
   const [location, setLocation] = useState(draft.location);
   const [cast, setCast] = useState<DraftCast[]>(draft.source === "greeting" ? [] : draft.cast);
@@ -277,7 +280,10 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     try {
       // 1. the date also goes in as suggested_date, so a later failure still
       //    leaves CastPanel's date box pre-filled
-      ({ id: sid } = await api.createScene(cid, finalTitle, date || undefined, draft.pcless));
+      // Focus is already present for every later cast/opener step, including
+      // a salvaged scene. No second PUT can race the first scene publication.
+      ({ id: sid } = await api.createScene(cid, finalTitle, date || undefined, draft.pcless,
+                                          normalizeSceneFocus(focus)));
     } catch (err: any) {
       if (live.current) { setError(errorText(err)); setWriting(false); }
       return;
@@ -400,6 +406,9 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       <label className="role" htmlFor="confirm-title">Title</label>
       <input id="confirm-title" aria-label="Title" type="text" value={title} disabled={locked}
              onChange={(e) => setTitle(e.target.value)} />
+
+      <SceneFocusInput value={focus} onChange={setFocus} disabled={locked} />
+      <div className="field-hint">Gentle direction, not a required outcome or character knowledge. Shared with all actors; do not include hidden facts.</div>
 
       <div className="role">When</div>
       <div className="picker">

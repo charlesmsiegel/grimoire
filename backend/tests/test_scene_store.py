@@ -16,6 +16,16 @@ def _campaign(monkeypatch, tmp_path):
     return campaigns.create_campaign("Run", wid)
 
 
+def test_create_scene_keeps_old_positional_arguments_with_focus(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Saltmarch", worlds.create_world("Realm"))
+    sid = scenes.create_scene(cid, "Mara", None, True, "test-model", focus="Let Mara choose.")
+    meta = scenes.read_scene_meta(cid, sid)
+    assert meta["pcless"] == "true"
+    assert meta["model"] == "test-model"
+    assert meta["focus"] == "Let Mara choose."
+
+
 def test_create_list_and_read_empty(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "My First Scene")

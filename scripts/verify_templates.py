@@ -111,6 +111,7 @@ from grimoire.store import (  # noqa: E402
     absorb,
     chronicle,
     context,
+    default_prompts,
     dossiers,
     overlay,
     relationships,
@@ -634,7 +635,8 @@ for label, snap, cands, off, direction, controls in (
     view = suggest.driver_view(snap, controls)
     check(f"suggestions system ({label})", exp[0]["content"],
           render("scene_suggestions/system.j2", s=snap, offscreen=off,
-                 greeting_candidates=cands, direction=direction, drivers=True, view=view))
+                 greeting_candidates=cands, direction=direction, drivers=True, view=view,
+                 default_sections=[]))
     check(f"suggestions user ({label})", exp[1]["content"],
           render("scene_suggestions/user.j2", s=snap, offscreen=off,
                  greeting_candidates=cands, direction=direction, drivers=True, view=view))
@@ -1774,7 +1776,11 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     except styles.StyleNotFound:
         resolved_style = None
     world = worlds.read_world(campaign_meta["world"])
+    standing_fields = default_prompts.resolve(cid)
     return {"global_system_prompt": cfg.get("system_prompt", ""),
+            "world_default_prompt": standing_fields["world"]["text"],
+            "campaign_default_prompt": standing_fields["text"],
+            "scene_focus": scene["meta"].get("focus", ""),
             # Mirrors context._assemble: the campaign world's profile (#38).
             "world_overview": {"genre": world["meta"]["genre"], "tone": world["meta"]["tone"],
                                "themes": world["meta"]["themes"],
@@ -1848,6 +1854,9 @@ def rendered_system(data: dict, opener: bool = False) -> str:
                      + ("adapt_" if data.get("opener_adapt") else "")
                      + ("offscreen" if data["pcless"] else "standard") + ".j2")
     names += ["scene/sections/global_system_prompt.j2",
+              "scene/sections/world_default_prompt.j2",
+              "scene/sections/campaign_default_prompt.j2",
+              "scene/sections/scene_focus.j2",
               "scene/sections/prose_style.j2",
               "scene/sections/natural_prose.j2",
               "scene/sections/model_guidance.j2",
@@ -2055,7 +2064,8 @@ exp = suggest.build_prompt(snap, None)
 store_view = suggest.driver_view(snap, suggest.NO_CONTROLS)
 check("suggestions system (store)", exp[0]["content"],
       render("scene_suggestions/system.j2", s=snap, offscreen=False,
-             greeting_candidates=None, direction="", drivers=True, view=store_view))
+             greeting_candidates=None, direction="", drivers=True, view=store_view,
+             default_sections=[]))
 check("suggestions user (store)", exp[1]["content"],
       render("scene_suggestions/user.j2", s=snap, offscreen=False,
              greeting_candidates=None, direction="", drivers=True, view=store_view))
@@ -2067,7 +2077,7 @@ isnap = suggest.build_snapshot(cid, drivers=False)
 check("intent system (store)", iexp[0]["content"],
       render("scene_intent/system.j2", s=isnap, offscreen=False,
              greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED,
-             schema=suggest.intent_schema(isnap)))
+             schema=suggest.intent_schema(isnap), default_sections=[]))
 check("intent user (store)", iexp[1]["content"],
       render("scene_intent/user.j2", s=isnap, offscreen=False,
              greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
@@ -2174,6 +2184,42 @@ check("merged ids are canonical", "winifred-s-chart",
       ",".join(t["id"] for t in effective.threads(cid_merged)))
 
 # ---------------------------------------------------------------------------
+
+# The earlier comparisons exercised the empty baseline. Nonempty settings
+# now prove all three variable bindings and their catalog position, rather
+# than allowing an absent section to make the wiring check vacuous.
+default_prompts.set_world(wid, "The river freezes each winter.")
+default_prompts.set_campaign(cid, "This winter the harbor stays open.")
+scenes.focus.set(cid, sid, "Offer Mara a choice without promising agreement.")
+standing_data = gather(sid, pcless=False)
+check_messages("chat with standing fields", context.build_messages(cid, sid),
+               rendered_messages(sid, standing_data))
+for field_name in ("world_default_prompt", "campaign_default_prompt", "scene_focus"):
+    assert standing_data[field_name], f"fixture no longer exercises {field_name}"
+    check("empty " + field_name, "", render("scene/sections/" + field_name + ".j2",
+                                             **{field_name: ""}).strip())
+
+# Creation reuses the same defaults, but no scene focus, actor or date binding.
+creation_capture = suggest.creation_defaults(cid)
+for creation_offscreen in (False, True):
+    creation_snap = suggest.build_snapshot(cid, offscreen=creation_offscreen)
+    creation_vars = {"s": creation_snap, "offscreen": creation_offscreen,
+                     "greeting_candidates": None, "direction": "", "drivers": True,
+                     "view": suggest.driver_view(creation_snap, suggest.NO_CONTROLS),
+                     "default_sections": creation_capture["sections"]}
+    check_messages(f"suggestions with standing fields ({creation_offscreen})",
+                   suggest.build_prompt(creation_snap, offscreen=creation_offscreen,
+                                        defaults=creation_capture),
+                   [{"role": "system", "content": render("scene_suggestions/system.j2", **creation_vars)},
+                    {"role": "user", "content": render("scene_suggestions/user.j2", **creation_vars)}])
+    creation_vars.update(s=suggest.build_snapshot(cid, offscreen=creation_offscreen, drivers=False),
+                          drivers=False, view=None, typed=TYPED)
+    creation_vars["schema"] = suggest.intent_schema(creation_vars["s"])
+    check_messages(f"intent with standing fields ({creation_offscreen})",
+                   suggest.build_intent_request(cid, TYPED, creation_offscreen,
+                                                defaults=creation_capture)[0],
+                   [{"role": "system", "content": render("scene_intent/system.j2", **creation_vars)},
+                    {"role": "user", "content": render("scene_intent/user.j2", **creation_vars)}])
 
 print(REPORT.verdict())
 if REPORT.failures:

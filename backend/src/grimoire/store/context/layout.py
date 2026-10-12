@@ -70,6 +70,11 @@ def _clean_label(entry: dict, default: str) -> str:
     return default
 
 
+def _entry_enabled(entry: dict) -> bool:
+    """Only an explicit JSON false disables, on every read/write path."""
+    return entry.get("enabled") is not False
+
+
 #: Section ids that were RENAMED, old -> new. A stored layout naming the old id
 #: is rewritten before the merge sees it.
 _RENAMED = {"message_examples": "voice_examples",
@@ -148,7 +153,7 @@ def _ordered(catalog: list, stored: list) -> list[tuple]:
             continue
         seen.add(sid)
         out.append((by_id[sid]._replace(label=_clean_label(entry, by_id[sid].label)),
-                    entry.get("enabled") is not False))
+                    _entry_enabled(entry)))
 
     # Catalog sections the layout never mentioned, walked in catalog order so
     # two consecutive newcomers keep their relative order: each is findable as
@@ -246,7 +251,7 @@ def sanitize(entries) -> list[dict]:
         label = entry.get("label")
         out.append({"id": sid,
                     "label": label.strip()[:MAX_LABEL] if isinstance(label, str) else "",
-                    "enabled": entry.get("enabled") is not False})
+                    "enabled": _entry_enabled(entry)})
     return out
 
 
@@ -304,3 +309,17 @@ def apply(catalog: list) -> list:
     threading the resolved list from `_assemble` into `_render_sections` --
     changes four signatures to save a `stat`."""
     return merge(catalog, read_layout()) if enabled() else list(catalog)
+
+
+def enabled_ids(section_ids: tuple[str, ...]) -> frozenset[str]:
+    """Resolve requested IDs without importing the composer or mirroring its catalog.
+
+    The same sanitized, migrated, first-occurrence entries feed apply. Missing
+    IDs are newcomers, hence enabled; layout bypass keeps every requested ID.
+    """
+    requested = frozenset(section_ids)
+    if not enabled():
+        return requested
+    disabled = {entry["id"] for entry in _migrate(read_layout())
+                if entry["id"] in requested and not _entry_enabled(entry)}
+    return requested - disabled

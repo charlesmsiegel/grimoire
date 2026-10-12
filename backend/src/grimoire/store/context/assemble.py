@@ -30,6 +30,7 @@ from .. import (
     birthdays,
     characters,
     config,
+    default_prompts,
     entities,
     length_drift,
     locks,
@@ -49,6 +50,7 @@ from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..continuity import effective
 from ..regex import view as regex_view
+from ..scenes import focus as scenes_focus
 from ..scenes import identity as scenes_identity
 from ..scenes import read as scenes_read
 from ..scenes import serialize as scenes_serialize
@@ -166,6 +168,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # reply and nothing able to remove it. Under contention it reads unlocked.
     with locks.best_effort_campaign_lock(cid):
         scene = scenes_read.read_scene(cid, sid)
+        # Optional authorial fields are one fresh snapshot, shared by all
+        # prepared model variants. Never consult them on historical replay.
+        standing = default_prompts.resolve(cid)
+        focus_field = scenes_focus.read(cid, sid)
         # The tracked state as of the transcript's tail, read beside the scene
         # so the two describe one moment. A reroll never comes through here:
         # it replays the prompt frozen for the response it replaces, which
@@ -468,6 +474,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # round (`routes.character_turns._compose`). The handoff text says so.
         "response_repeat": any(e.get("responded") for e in (eligible_speakers or [])),
         "global_system_prompt": cfg.get("system_prompt", ""),
+        "world_default_prompt": standing["world"]["text"],
+        "campaign_default_prompt": standing["text"],
+        "scene_focus": focus_field["text"],
         # The campaign's world as its author describes it (#38), read live
         # through the world like every record the campaign inherits. Public
         # framing, so not on the actor-scoped blanking list below.
@@ -587,6 +596,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "notes": notes, "opener_notes": opener_notes,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "lore": lore,
+            "prompt_field_statuses": {"world_default_prompt": standing["world"]["status"],
+                                      "campaign_default_prompt": standing["status"],
+                                      "scene_focus": focus_field["status"]},
             "response_settings": {"style_id": budget["style_id"], "phase": phase,
                                   **targets[phase]},
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
@@ -921,6 +933,13 @@ SECTIONS = [
             pack.LOCK_IN, opener_only=True),
     Section("global_system_prompt", "Global system prompt",
             "scene/sections/global_system_prompt.j2", pack.LOCK_IN),
+    # Compact authorial settings stay whole under pressure. Their protection
+    # is a packing contract, not authority over player agency or actor POV.
+    Section("world_default_prompt", "World default prompt",
+            "scene/sections/world_default_prompt.j2", pack.LOCK_IN),
+    Section("campaign_default_prompt", "Campaign default prompt",
+            "scene/sections/campaign_default_prompt.j2", pack.LOCK_IN),
+    Section("scene_focus", "Scene focus", "scene/sections/scene_focus.j2", pack.LOCK_IN),
     Section("prose_style", "Prose style", "scene/sections/prose_style.j2", pack.LOCK_IN),
     Section("natural_prose", "Natural prose", "scene/sections/natural_prose.j2", pack.LOCK_IN),
     Section("model_guidance", "Model guidance", "scene/sections/model_guidance.j2", pack.LOCK_IN),
@@ -1544,7 +1563,8 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         if post_history:
             messages.append({"role": "system", "content": post_history})
         messages += after_post
-        detail = (_breakdown({"post_history": post_history, "notes": notes}, packed,
+        detail = (_breakdown({"post_history": post_history, "notes": notes,
+                              "prompt_field_statuses": a.get("prompt_field_statuses")}, packed,
                              list(extra), count=count)
                   if describe else None)
         return messages, detail
@@ -1931,6 +1951,10 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
                               + p["history_trimmed_tokens"]
                               + p.get("images_dropped_tokens", 0)),
            "budget_tokens": p["budget"]}
+    # Status is debug metadata, never a rendered row or token charge. Keep it
+    # with the original pass so frozen views do not warn about today's files.
+    if a.get("prompt_field_statuses") is not None:
+        out["prompt_field_statuses"] = dict(a["prompt_field_statuses"])
     # Which counter made these numbers, taken from the pass that made them
     # (`_token_memo`) -- `tokens.counting` turns it into the inspector's label.
     # Absent when `count` is a bare function that cannot say.

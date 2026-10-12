@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, PositiveInt
+from pydantic import BaseModel, PositiveInt, StrictStr
 
 
 # ---- models ----
@@ -785,10 +785,15 @@ class DemoteBody(BaseModel):
     target: str | None = None   # one campaign, rather than every dependent
 
 
+class PromptText(BaseModel):
+    text: StrictStr
+
+
 class NewScene(BaseModel):
     title: str | None = None
     suggested_date: str | None = None
     pcless: bool = False
+    focus: StrictStr = ""
 
 
 class RenameScene(BaseModel):
@@ -1077,6 +1082,7 @@ class SceneSuggestionsRequest(BaseModel):
 class SceneIdeaCreate(BaseModel):
     title: str = ""
     premise: str = ""
+    focus: StrictStr = ""
     cast: list[str] = []
     location: str = ""
     date: str = ""

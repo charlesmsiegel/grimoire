@@ -151,7 +151,8 @@ def post_scene(cid: str, body: NewScene, request: Request):
             if store.scenes.create_would_repad(cid):
                 runs.require_campaign_free(request.app, cid)
             return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
-                                                    pcless=body.pcless, model=model)}
+                                                    pcless=body.pcless, model=model,
+                                                    focus=body.focus)}
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except OSError as exc:
@@ -357,14 +358,16 @@ def post_scene_suggestions(cid: str, request: Request,
     # under the user's cursor, and the ranking is the expensive half of the prompt.
     candidates = (store.suggest.greeting_candidates(cid, req.after, pcless=req.offscreen)
                   if req.rank else [])
+    defaults = store.suggest.creation_defaults(cid)
     messages = store.suggest.build_prompt(snapshot, candidates, offscreen=req.offscreen,
-                                          direction=req.direction, controls=controls)
+                                          direction=req.direction, controls=controls,
+                                          defaults=defaults)
 
     async def work():
         return await draft_completion(
             client, resolved, messages, "suggestions",
             lambda text: _suggestions_payload(cid, text, candidates, req.offscreen,
-                                              snapshot, controls),
+                                              snapshot, controls, defaults=defaults),
             cid=cid)
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "suggestions",
@@ -390,7 +393,8 @@ def _controls_or_refuse(cid: str, snapshot: dict,
 
 
 def _suggestions_payload(cid: str, text: str, candidates: list[dict], offscreen: bool,
-                         snapshot: dict, controls: store.suggest.Controls) -> dict:
+                         snapshot: dict, controls: store.suggest.Controls, *,
+                         defaults: dict | None = None) -> dict:
     """The model's suggestions as the body this route has always returned,
     each row now carrying its validated provenance (spec §15.2): the claimed
     drivers, the time anchor, the date check and the constraint misses.
@@ -409,6 +413,7 @@ def _suggestions_payload(cid: str, text: str, candidates: list[dict], offscreen:
     picks = (store.suggest.parse_greeting_picks(text, {c["id"] for c in candidates})
              if candidates else [])
     return {"suggestions": out, "greeting_picks": picks,
+            **({"prompt_field_statuses": dict(defaults["statuses"])} if defaults is not None else {}),
             "next_date": store.suggest.parse_next_date(text, cid, snapshot=snapshot,
                                                        controls=controls)}
 
@@ -430,20 +435,22 @@ def post_scene_intent(cid: str, body: SceneIntent, request: Request,
     # The pilot of structured generation (01f-S4): the reply is asked for in
     # the schema the prompt carries, so a provider that enforces it cannot
     # invent a location id or a cast token. `parse_intent` still drops one.
+    defaults = store.suggest.creation_defaults(cid)
     messages, schema = store.suggest.build_intent_request(cid, body.text,
-                                                          offscreen=body.offscreen)
+                                                          offscreen=body.offscreen,
+                                                          defaults=defaults)
 
     async def work():
         return await draft_completion(
             client, resolved, messages, "intent",
-            lambda text: _intent_payload(cid, text, body.offscreen), cid=cid,
+            lambda text: _intent_payload(cid, text, body.offscreen, defaults=defaults), cid=cid,
             schema=schema)
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "intent",
                           x_grimoire_attempt, work)
 
 
-def _intent_payload(cid: str, text: str, offscreen: bool) -> dict:
+def _intent_payload(cid: str, text: str, offscreen: bool, *, defaults: dict | None = None) -> dict:
     """The parsed intent as the body this route has always returned -- see
     `_suggestions_payload` for why it is a function rather than inline."""
     got = store.suggest.parse_intent(text, cid, offscreen=offscreen)
@@ -451,6 +458,8 @@ def _intent_payload(cid: str, text: str, offscreen: bool) -> dict:
     loc = ({"id": got["location"], "name": loc_names.get(got["location"], got["location"])}
            if got["location"] else None)
     return {"title": got["title"], "date": got["date"], "location": loc,
+            "focus": got["focus"],
+            **({"prompt_field_statuses": dict(defaults["statuses"])} if defaults is not None else {}),
             "cast": _resolve_cast(cid, got["cast"])}
 
 
@@ -536,7 +545,7 @@ def post_scene_idea(cid: str, body: SceneIdeaCreate):
     return {"id": store.scene_ideas.add(cid, body.title, body.premise, refs["cast"],
                                         refs["location"], refs["date"], body.pcless,
                                         body.source, drivers=prov["drivers"],
-                                        time_anchor=prov["time_anchor"])}
+                                        time_anchor=prov["time_anchor"], focus=body.focus)}
 
 
 @router.put("/campaigns/{cid}/scene-ideas/{lid}")

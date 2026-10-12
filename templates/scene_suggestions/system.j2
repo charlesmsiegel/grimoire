@@ -15,3 +15,7 @@
 {%- if direction -%}{%- include "scene_suggestions/instruction/direction_addendum.j2" -%}{%- endif -%}
 {%- if drivers and view.index -%}{%- include "scene_suggestions/instruction/drivers_addendum.j2" -%}{%- endif -%}
 {%- if drivers and view.active -%}{%- include "scene_suggestions/instruction/controls_addendum.j2" -%}{%- endif -%}
+{%- for section in default_sections | default([]) %}
+
+{{ section }}
+{%- endfor %}

@@ -286,6 +286,61 @@ test("picking a card opens the confirm form and creates nothing yet", async () =
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
+test("generated confirmation keeps its captured warning through Back, then a clean replacement clears it", async () => {
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce({ suggestions: [{ title: "Mara", premise: "Mara waits.",
+    cast: [], location: null, focus: "Let Mara choose." }], prompt_field_statuses: { world_default_prompt: "unreadable" } });
+  render(<NewSceneChooser cid="saltmarch" afterSid="mara" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Mara"));
+  expect(await screen.findByRole("textbox", { name: "Scene focus" })).toHaveValue("Let Mara choose.");
+  expect(screen.getByText(/world default prompt.*could not be read/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  fireEvent.click(await screen.findByText("Mara"));
+  expect(screen.getByText(/world default prompt.*could not be read/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce({ suggestions: [{ title: "Seraphine", premise: "Seraphine waits.",
+    cast: [], location: null, focus: "Let Seraphine choose." }] });
+  fireEvent.click(await screen.findByRole("button", { name: /regenerate/i }));
+  fireEvent.click(await screen.findByText("Seraphine"));
+  expect(screen.getByRole("textbox", { name: "Scene focus" })).toHaveValue("Let Seraphine choose.");
+  expect(screen.queryByText(/could not be read/i)).toBeNull();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(2);
+});
+
+test("late old-campaign intent cannot replace the new confirmation focus or notice", async () => {
+  let finish!: (value: Awaited<ReturnType<typeof api.sceneIntent>>) => void;
+  vi.mocked(api.sceneIntent).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const { rerender } = render(<NewSceneChooser cid="saltmarch" afterSid="mara" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.change(await screen.findByLabelText("Your own scene"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  rerender(<NewSceneChooser cid="saltmarch-2" afterSid="seraphine" ready onClose={() => {}} onCreated={() => {}} />);
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce({ suggestions: [{ title: "Seraphine", premise: "Seraphine waits.",
+    cast: [], location: null, focus: "Let Seraphine choose." }] });
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await act(async () => finish({ title: "Mara", date: "", location: null, cast: [], focus: "Let Mara choose.",
+    prompt_field_statuses: { world_default_prompt: "unreadable" } }));
+  expect(screen.getByRole("textbox", { name: "Scene focus" })).toHaveValue("Let Seraphine choose.");
+  expect(screen.queryByText(/could not be read/i)).toBeNull();
+});
+
+test("typed intent carries its own captured warning and focus, not the generated batch's", async () => {
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce({ suggestions: [],
+    prompt_field_statuses: { world_default_prompt: "unreadable" } });
+  vi.mocked(api.sceneIntent).mockResolvedValueOnce({ title: "Mara", date: "", location: null, cast: [],
+    focus: "Let Mara choose.", prompt_field_statuses: { campaign_default_prompt: "unreadable" } });
+  render(<NewSceneChooser cid="saltmarch" afterSid="mara" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.change(await screen.findByLabelText("Your own scene"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  expect(await screen.findByRole("textbox", { name: "Scene focus" })).toHaveValue("Let Mara choose.");
+  expect(screen.getByText(/campaign default prompt.*could not be read/i)).toBeInTheDocument();
+  expect(screen.queryByText(/world default prompt.*could not be read/i)).toBeNull();
+  expect(api.sceneIntent).toHaveBeenCalledTimes(1);
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
 test("Back returns to the picker without writing", async () => {
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
@@ -442,7 +497,7 @@ test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   // With a date: the in-world estimate rides on the suggestions call, which
   // the mode pick now makes, so the confirm form opens already carrying it.
   await waitFor(() => expect(api.createScene)
-    .toHaveBeenCalledWith("c", "Cabal", "2026-01-01", true));
+    .toHaveBeenCalledWith("c", "Cabal", "2026-01-01", true, ""));
 });
 
 test("Cancel from the picker writes nothing", async () => {
@@ -505,8 +560,8 @@ test("changing cid discards the draft and returns to the mode step", async () =>
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   // the create call carries campaign b's own draft, not a's
   await waitFor(() => expect(api.createScene)
-    .toHaveBeenCalledWith("b", "Vow of silence", "2026-01-01", false));
-  expect(api.createScene).not.toHaveBeenCalledWith("b", "Reckoning", expect.anything(), expect.anything());
+    .toHaveBeenCalledWith("b", "Vow of silence", "2026-01-01", false, ""));
+  expect(api.createScene).not.toHaveBeenCalledWith("b", "Reckoning", expect.anything(), expect.anything(), expect.anything());
 });
 
 // A late `onPicked` (the picker's extraction resolves after another draft has

@@ -33,6 +33,7 @@ from grimoire.store import (
     assets,
     atomic,
     characters,
+    default_prompts,
     entities,
     greetings,
     image_scopes,
@@ -59,6 +60,19 @@ def _staging_is_empty() -> bool:
 
 def _repointed(text: str, old: str, new: str) -> bool:
     return f"/api/worlds/{new}/" in text and f"/api/worlds/{old}/" not in text
+
+
+def test_world_default_forks_independently_and_repoints_urls(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    default_prompts.set_world(wid, f"Map: /api/worlds/{wid}/assets/images/map.png\nThe river freezes.")
+    child = worlds.fork_world(wid, "Realm")
+    assert default_prompts.read_world(child)["text"] == (
+        f"Map: /api/worlds/{child}/assets/images/map.png\nThe river freezes.")
+    default_prompts.set_world(wid, "The harbor stays open.")
+    assert default_prompts.read_world(child)["text"].endswith("The river freezes.")
+    default_prompts.set_world(child, "Only the harbor is frozen.")
+    assert default_prompts.read_world(wid)["text"] == "The harbor stays open."
 
 
 # ---- the copy ----

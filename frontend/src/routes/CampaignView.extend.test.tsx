@@ -103,7 +103,7 @@ test("keep writing on a chosen route sends that route's overrides", async () => 
   expect(api.regenerateResponse).not.toHaveBeenCalled();
 });
 
-test("the extend bubble grows from the old text and hides the target post", async () => {
+test("the extend bubble retains its seed and hidden target across a focus save", async () => {
   playing();
   reads();
   let emit: (e: ChatEvent) => void = () => {};
@@ -114,7 +114,7 @@ test("the extend bubble grows from the old text and hides the target post", asyn
       finish = () => {
         (api.getScene as any).mockResolvedValue(scene([
           { role: "user", content: "hi" }, EARLIER, { role: "user", content: "and then?" },
-          { ...LAST, content: "The accepted response. Then more." }]));
+          { ...LAST, content: "The accepted response. Then more. Again." }]));
         onEvent({ done: true }); resolve();
       };
     }));
@@ -134,8 +134,22 @@ test("the extend bubble grows from the old text and hides the target post", asyn
   // The target row is not drawn beside the bubble that redraws it whole.
   expect(screen.queryByText("The accepted response.")).toBeNull();
   expect(screen.getByText("The first answer.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /What the model saw/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Scene focus/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Edit scene focus/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Scene focus" }), { target: { value: "Let Seraphine choose." } });
+  const sceneReads = vi.mocked(api.getScene).mock.calls.length;
+  const contextReads = vi.mocked(api.getSceneContext).mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+  await screen.findByText("Let Seraphine choose.");
+  await waitFor(() => expect(api.getSceneContext).toHaveBeenCalledTimes(contextReads + 1));
+  expect(api.getScene).toHaveBeenCalledTimes(sceneReads);
+  act(() => emit({ delta: " Again." }));
+  expect(screen.getByText("The accepted response. Then more. Again.").closest(".streaming-response"))
+    .toHaveTextContent("Mara");
+  expect(screen.queryByText("The accepted response.")).toBeNull();
   await act(async () => finish());
-  const landed = await screen.findByText("The accepted response. Then more.");
+  const landed = await screen.findByText("The accepted response. Then more. Again.");
   expect(landed.closest(".streaming-response")).toBeNull();
 });
 

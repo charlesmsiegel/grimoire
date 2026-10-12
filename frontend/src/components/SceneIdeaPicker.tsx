@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, type Availability, type DriverKind, type SceneIdea, type SceneIdeaDraft,
          type SceneSuggestion } from "../api/client";
 import { errorText } from "../api/errors";
 import { ErrorNote } from "./ErrorNote";
 import { ACTION_LABELS } from "./pressureControls";
-import { customDraft, greetingDraft, savedDraft, suggestionDraft,
+import { customDraft, greetingDraft, normalizeSceneFocus, savedDraft, suggestionDraft,
          type SceneDraft } from "./sceneDraft";
+import { promptFieldWarning } from "./promptFieldWarning";
 import type { SceneSuggestionsState } from "./useSceneSuggestions";
 import { NeedsModel } from "./inference/NeedsModel";
 
@@ -69,7 +70,8 @@ function refName(r: { kind: DriverKind; label: string }): string {
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
                                   asked, suggestions, picks, nextDate, busy, error: genError,
                                   suggest, onPicked, onCancel, storyPressure, pressureNote,
-                                  held = false, stale = false, controlled = false }: {
+                                  held = false, stale = false, controlled = false,
+                                  promptFieldStatuses = {} }: {
   cid: string;
   afterSid: string | null;
   ready: boolean;
@@ -82,8 +84,8 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   onCancel: () => void;
   storyPressure?: ReactNode;
   pressureNote?: string;
-} & Omit<SceneSuggestionsState, "controlled" | "held" | "stale">
-  & Partial<Pick<SceneSuggestionsState, "controlled" | "held" | "stale">>) {
+} & Omit<SceneSuggestionsState, "controlled" | "held" | "stale" | "promptFieldStatuses">
+  & Partial<Pick<SceneSuggestionsState, "controlled" | "held" | "stale" | "promptFieldStatuses">>) {
   const [greetings, setGreetings] = useState<Availability[]>([]);
   // The saved half of the ledger (#88). Greeting-sourced rows are dropped
   // here rather than server-side: they have their own group below, ordered by
@@ -117,6 +119,17 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   // Raw, so a generation the model could not be reached for reads as the
   // offline recovery rather than as a socket error (#210).
   const [error, setError] = useState<unknown>(null);
+
+  // Intent inference owns this question, not the chooser's next campaign or
+  // confirmation. Retire it synchronously on navigation/unmount, including
+  // failures: a late fallback must not replace a newly selected draft either.
+  const intentGeneration = useRef(0);
+  useLayoutEffect(() => {
+    const generation = intentGeneration;
+    generation.current++;
+    setInferring(false);
+    return () => { generation.current++; };
+  }, [cid, afterSid, pcless]);
 
   useEffect(() => {
     api.availableGreetings(cid, afterSid ?? undefined)
@@ -205,6 +218,13 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   // this render closed over.
   const latestDate = useRef(nextDate);
   useEffect(() => { latestDate.current = nextDate; }, [nextDate]);
+  const generatedWarning = promptFieldWarning(promptFieldStatuses);
+
+  function pick(draft: SceneDraft, warning: string) {
+    // Preserve the ordinary one-argument handoff when there is no notice.
+    if (warning) onPicked(draft, warning);
+    else onPicked(draft);
+  }
 
   async function useTyped() {
     setError(null);         // clear a stale greetings-fetch banner on every path, not just this one
@@ -218,15 +238,21 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       return;
     }
     setInferring(true);
+    const mine = ++intentGeneration.current;
     try {
       const intent = await api.sceneIntent(cid, text, pcless);
+      if (mine !== intentGeneration.current) return;
       const draft = customDraft(text, intent, latestDate.current, pcless);
       // fails or returns nothing -> a hint that metadata could not be inferred
       const empty = intent !== null && !intent.title && !intent.date
-        && !intent.location && intent.cast.length === 0;
-      if (empty) onPicked(draft, "Nothing could be inferred from that — fill in the details below.");
-      else onPicked(draft);
+        && !intent.location && intent.cast.length === 0 && !draft.focus;
+      // This response's fields were captured for THIS intent. A generated
+      // batch still on screen belongs to another question and contributes no
+      // warning here, nor to manual, saved or verbatim-greeting selections.
+      pick(draft, [empty ? "Nothing could be inferred from that — fill in the details below." : "",
+                   promptFieldWarning(intent?.prompt_field_statuses)].filter(Boolean).join(" "));
     } catch (err: any) {
+      if (mine !== intentGeneration.current) return;
       // A miss must leave a usable form, never a dead end — and the warning
       // travels with the draft, because this pane is about to unmount.
       //
@@ -238,7 +264,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       onPicked(customDraft(text, null, latestDate.current, pcless),
                `${errorText(err)} — continuing without inferred details.`);
     } finally {
-      setInferring(false);
+      if (mine === intentGeneration.current) setInferring(false);
     }
   }
 
@@ -247,6 +273,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
    *  again on every read. */
   function asDraft(s: SceneSuggestion): SceneIdeaDraft {
     const draft: SceneIdeaDraft = { title: s.title, premise: s.premise, date: s.date ?? "",
+                                    focus: normalizeSceneFocus(s.focus ?? ""),
                                     cast: s.cast.map((c) => `${c.kind}:${c.id}`),
                                     location: s.location?.id ?? "", source: "llm" };
     // Provenance, as refs and actions only: the server re-validates both and
@@ -354,6 +381,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       ))}
 
       <div className="role">Generated</div>
+      {generatedWarning && <div className="field-hint" role="status">{generatedWarning}</div>}
       {/* The direction box and its button sit in this group rather than at the
           top of the modal, where they read as steering the whole picker. They
           steer one group, and that group is the one that costs money: the
@@ -392,7 +420,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       {generatedCards.map((s, i) => (
         <div className="chooser-row" key={i}>
           <button className="chooser-card" disabled={inferring}
-                  onClick={() => onPicked(suggestionDraft(s, latestDate.current, pcless))}>
+                  onClick={() => pick(suggestionDraft(s, latestDate.current, pcless), generatedWarning)}>
             <span className="chooser-card-title">{s.title}</span>
             <span className="chooser-card-premise">{s.premise}</span>
             <span className="field-hint">
