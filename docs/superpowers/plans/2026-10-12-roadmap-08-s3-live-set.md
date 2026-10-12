@@ -18,6 +18,7 @@
   - A cold call built and stored the documents in roughly half a second.
 
   So the cache is asked only for what the memo lacks: after a restart, or past the bound. "One batch lookup per call" still holds, and answers are identical either way. The cost: a long-lived process does not refresh `last_used` on rows it keeps answering from memory, so 03's LRU can evict them first. The next restart then rebuilds those documents.
+- **Hits record their rows once per process.** A re-pad keeps the document key and moves the scene file. So a hit whose `materialized` rows this process has not written writes them: once per process, never on a warm call (Codex review).
 - **No persisted input projections** (spec section 5, open question 5). The cold restart above, about 150 ms for 400 scenes with the cache warm, does not justify them yet.
 
 ## Verification

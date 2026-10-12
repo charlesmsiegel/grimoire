@@ -12,7 +12,7 @@
 
 ## Deviations from the spec
 
-- **The document key is the kind, the version, the slice digests and `degraded`.** 03's `BUILD` joins only the compiled-cache key (S3), so a cache-off process and a cached one agree on which document is which. `degraded` is in it because a replaced lone surrogate reads like the character that replaced it.
+- **The document key** is 03-C1's composite: the kind, the version, `BUILD` (`compiled.build_fingerprint`), the slice digests, and `degraded`. `degraded` is in it because a replaced lone surrogate reads like the character that replaced it. A first draft left `BUILD` to the cache key alone. The Codex review pointed out that 09 keys term statistics by this key, so a rendering change has to move it.
 - **The intactness memo** is keyed on the scene file's stat signature, `regex.layers.signature` over the connections that produced the transcript's messages, and two values computed fresh on every call: the facts digest and the seated player's name. The spec instead listed the stat signatures of `appearances.json` and the current location's file. Those two values are exactly what the test reads from them, and they also cover a PC card rename that no stat of `appearances.json` would see.
 - **`degraded` is per scene**: a campaign ledger that would not read, plus what this scene's own slicing replaced (a lone surrogate, an unreadable card).
 
