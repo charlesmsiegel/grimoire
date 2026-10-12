@@ -10,7 +10,9 @@ what it cannot promise, on Windows, is that a bin exists to move *to*.
 mapped or removable drive) or one set to delete immediately, Windows then
 deletes the file permanently and *reports success*. Nothing in the call's
 result distinguishes the two, so `check` refuses those configurations before
-any file is touched: the outbox's volume must be a fixed drive
+any file is touched, and `send_batch` asks the whole question again at the
+start of every batch, since any answer can change between the two (a drive
+remounted, a policy pushed): the outbox's volume must be a fixed drive
 (`GetDriveTypeW`), answer `SHQueryRecycleBinW`, and carry neither the
 `NoRecycleFiles` policy (HKCU or HKLM) nor `NukeOnDelete`. The volume asked is
 the one the *outbox* sits on -- `GetVolumePathNameW` of its deepest existing
@@ -95,6 +97,8 @@ class BatchResult:
     code: str | None = None
     error: str | None = None
     unverified: list[Path] = field(default_factory=list)
+    #: `cancel` answered true: the files after the last one sent were not tried.
+    cancelled: bool = False
 
 
 def _platform() -> str:
@@ -117,8 +121,8 @@ if sys.platform == "win32":
     import winreg
     from ctypes import wintypes
 
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
-    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)  # type: ignore[attr-defined]
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     _GUID = re.compile(r"\{[0-9A-Fa-f-]+\}")
     _ulonglong_p = ctypes.POINTER(ctypes.c_ulonglong)
 
@@ -232,6 +236,27 @@ def _refusal(code: str) -> Availability:
     return Availability(False, code, MESSAGES[code])
 
 
+def _windows(root: Path) -> tuple[Availability, str | None, tuple[int, int] | None]:
+    """Windows' half of `check`, and what it read on the way: the availability,
+    the outbox's volume, and the bin's (size, item count) there. `send_batch`
+    asks this whole question again before every batch, because a drive, a
+    policy or a per-volume setting may have changed since `check` answered,
+    and keeps the bin reading as the batch's "before" for the backstop."""
+    volume = _outbox_volume(root)
+    if volume is None or _win.drive_type(volume) != DRIVE_FIXED:
+        return _refusal("volume_has_no_bin"), volume, None
+    state = _win.query_bin(volume)
+    if state is None:
+        return _refusal("volume_has_no_bin"), volume, None
+    for hive in ("HKCU", "HKLM"):
+        if _win.reg_dword(hive, _POLICY_KEY, "NoRecycleFiles") == 1:
+            return _refusal("bin_deletes_immediately"), volume, state
+    key = _volume_key(volume)
+    if key is not None and _win.reg_dword("HKCU", key, "NukeOnDelete") == 1:
+        return _refusal("bin_deletes_immediately"), volume, state
+    return Availability(True), volume, state
+
+
 def check(root: Path) -> Availability:
     """Whether pictures can be sent to a real recycle bin from this store."""
     if proclock.on_android():
@@ -240,18 +265,7 @@ def check(root: Path) -> Availability:
         return _refusal("not_installed")
     if _platform() != "windows":
         return Availability(True)
-    volume = _outbox_volume(root)
-    if volume is None or _win.drive_type(volume) != DRIVE_FIXED:
-        return _refusal("volume_has_no_bin")
-    if _win.query_bin(volume) is None:
-        return _refusal("volume_has_no_bin")
-    for hive in ("HKCU", "HKLM"):
-        if _win.reg_dword(hive, _POLICY_KEY, "NoRecycleFiles") == 1:
-            return _refusal("bin_deletes_immediately")
-    key = _volume_key(volume)
-    if key is not None and _win.reg_dword("HKCU", key, "NukeOnDelete") == 1:
-        return _refusal("bin_deletes_immediately")
-    return Availability(True)
+    return _windows(root)[0]
 
 
 def _capacity(volume: str) -> tuple[int | None, int | None]:
@@ -284,43 +298,77 @@ def _unverified(volume: str, pre: tuple[int, int] | None, estimate: int | None,
     return [] if may_have_purged else list(result.sent)
 
 
-def send_batch(root: Path, paths: list[Path],
-               before: Callable[[Path], None]) -> BatchResult:
+def _never() -> bool:
+    return False
+
+
+def send_batch(root: Path, paths: list[Path], before: Callable[[Path], None], *,
+               cancel: Callable[[], bool] = _never) -> BatchResult:
     """Send `paths` to the bin in order, `before(path)` ahead of each.
 
-    `before` raising stops the run and propagates. The run stops at the first
-    refusal (`refused`), or on Windows at a file larger than a known bin
-    capacity (`too_large_for_bin`, left unsent). On Windows the files that were
-    sent but not confirmed are returned in `unverified` (see the module
-    docstring); elsewhere that list is always empty."""
+    On Windows the whole availability check (`_windows`) runs first, every
+    batch: a refusal there refuses `paths[0]` with its code and sends nothing.
+    `cancel()` is asked before each file; once it answers true nothing more is
+    sent and `cancelled` is set. `before` raising stops the run and propagates.
+    The run stops at the first refusal (`refused`), or on Windows at a file
+    larger than a known bin capacity (`too_large_for_bin`, left unsent) or one
+    that cannot be sized (`refused`, with the error's class). A file gone
+    before it is sized is skipped: it is neither sent nor refused. On Windows
+    the files that were sent but not confirmed are returned in `unverified`
+    (see the module docstring), however the batch ended short of a raise;
+    elsewhere that list is always empty."""
     sender = _send2trash
     if sender is None:
         raise RuntimeError("send_batch called with no recycle-bin helper installed")
     result = BatchResult(sent=[])
     windows = _platform() == "windows"
-    volume = _outbox_volume(root) if windows else None
-    pre = _win.query_bin(volume) if volume is not None else None
-    if windows and (volume is None or pre is None):
-        # The same doubt `check` refuses on: with no bin to read, nothing is
-        # sent, because on Windows that is how a file gets deleted outright.
-        if paths:
-            result.refused, result.code = paths[0], "volume_has_no_bin"
-        return result
+    volume: str | None = None
+    pre: tuple[int, int] | None = None
+    if windows:
+        available, volume, pre = _windows(root)
+        if not available.ok or volume is None:
+            # With no bin to trust, nothing is sent: on Windows that is how a
+            # file gets deleted outright.
+            if paths:
+                result.refused, result.code = paths[0], available.code or "volume_has_no_bin"
+            return result
     known, estimate = _capacity(volume) if volume is not None else (None, None)
     sent_bytes = 0
     for path in paths:
+        if cancel():
+            result.cancelled = True
+            break
         before(path)
-        size = path.stat().st_size if windows else 0
-        if known is not None and size > known:
-            result.refused, result.code = path, "too_large_for_bin"
+        size = _send_one(path, sender, result, windows=windows, known=known)
+        if size is None:
             break
-        try:
-            sender(str(path))
-        except Exception as exc:  # noqa: BLE001 - any refusal from the OS bin ends the run
-            result.refused, result.code, result.error = path, "refused", type(exc).__name__
-            break
-        result.sent.append(path)
         sent_bytes += size
     if volume is not None:
         result.unverified = _unverified(volume, pre, estimate, result, sent_bytes)
     return result
+
+
+def _send_one(path: Path, sender: Callable[[str], None], result: BatchResult, *,
+              windows: bool, known: int | None) -> int | None:
+    """Hand one file to the bin: the bytes it took (0 for a file gone before
+    it could be sized, which is skipped), or None when the batch stops here,
+    with the refusal recorded on `result`."""
+    size = 0
+    if windows:
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return 0                     # gone from the outbox: nothing to send
+        except OSError as exc:
+            result.refused, result.code, result.error = path, "refused", type(exc).__name__
+            return None
+    if known is not None and size > known:
+        result.refused, result.code = path, "too_large_for_bin"
+        return None
+    try:
+        sender(str(path))
+    except Exception as exc:  # noqa: BLE001 - any refusal from the OS bin ends the run
+        result.refused, result.code, result.error = path, "refused", type(exc).__name__
+        return None
+    result.sent.append(path)
+    return size

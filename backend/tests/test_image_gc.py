@@ -1236,9 +1236,9 @@ def test_a_root_flip_before_a_bin_call_stops(root, monkeypatch, tmp_path, fake_b
     other.mkdir()
     real = recycle_bin.send_batch
 
-    def send_batch(rootp, paths, before):
+    def send_batch(rootp, paths, before, **kw):
         monkeypatch.setenv("GRIMOIRE_HOME", str(other))
-        return real(rootp, paths, before)
+        return real(rootp, paths, before, **kw)
 
     monkeypatch.setattr(recycle_bin, "send_batch", send_batch)
     done = _collect(root, report["token"])
@@ -1271,8 +1271,8 @@ def test_unverified_stops_the_run(root, monkeypatch, fake_bin):
     report = _ready(root)
     real = recycle_bin.send_batch
 
-    def send_batch(rootp, paths, before):
-        result = real(rootp, paths, before)
+    def send_batch(rootp, paths, before, **kw):
+        result = real(rootp, paths, before, **kw)
         result.unverified = list(result.sent[:1])
         return result
 
@@ -1295,3 +1295,92 @@ def test_a_name_already_waiting_gets_a_suffix(root, monkeypatch, fake_bin):
     assert done["state"] == "complete"
     assert _binned(fake_bin) == ["grimoire - Mara.png", "grimoire - Mara (2).png"]
     assert [r["name"] for r in done["recycled"]] == _binned(fake_bin)
+
+
+# ---- a cancel reaches the bin calls ---------------------------------------------
+
+def _waiting(root: Path, *names: str) -> list[Path]:
+    outbox = image_gc.outbox_dir(root)
+    outbox.mkdir(parents=True, exist_ok=True)
+    out = []
+    for i, name in enumerate(names):
+        (outbox / name).write_bytes(_png(40 + i))
+        out.append(outbox / name)
+    return out
+
+
+def test_a_cancel_asked_before_the_drain_sends_nothing(root, fake_bin):
+    stuck = _waiting(root, "grimoire - 0badcafe.png", "grimoire - 1badcafe.png")
+    orphan = _obj(1)
+    report = _ready(root)
+    assert report["outbox"] == [p.name for p in stuck]
+    done = image_gc.collect(root, report["token"], cancel=lambda: True, now=T + 60)
+    assert done["state"] == "cancelled"
+    assert fake_bin.paths == [] and done["recycled"] == []
+    assert all(p.is_file() for p in stuck)
+    assert done["outbox"] == [p.name for p in stuck]
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+
+
+def test_a_cancel_mid_drain_keeps_what_was_sent_and_leaves_the_rest(root, fake_bin):
+    stuck = _waiting(root, "grimoire - 0badcafe.png", "grimoire - 1badcafe.png",
+                     "grimoire - 2badcafe.png")
+    orphan = _obj(1)
+    report = _ready(root)
+    done = image_gc.collect(root, report["token"], cancel=lambda: len(fake_bin.paths) >= 1,
+                            now=T + 60)
+    assert done["state"] == "cancelled"
+    assert fake_bin.paths == [stuck[0]]
+    assert [r["name"] for r in done["recycled"]] == [stuck[0].name]
+    assert done["outbox"] == [stuck[1].name, stuck[2].name]
+    assert stuck[1].is_file() and stuck[2].is_file()
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+
+
+def test_a_cancel_mid_batch_send_keeps_what_was_sent_and_leaves_the_rest(root, fake_bin):
+    a, b = _obj(1), _obj(2)
+    report = _ready(root)
+    done = image_gc.collect(root, report["token"], cancel=lambda: len(fake_bin.paths) >= 1,
+                            now=T + 60)
+    assert done["state"] == "cancelled"
+    assert len(fake_bin.paths) == 1
+    assert [r["name"] for r in done["recycled"]] == _binned(fake_bin)
+    assert len(done["outbox"]) == 1
+    assert (image_gc.outbox_dir(root) / done["outbox"][0]).is_file()
+    # Both moved under the lock before the send; neither blob is left in the store.
+    assert not _blob(a).exists() and not _blob(b).exists()
+
+
+# ---- a blocked scan can still drain ---------------------------------------------
+
+def _block_with_a_case_variant(root: Path) -> None:
+    variant = _char_dir(root) / "Image-Refs"
+    variant.mkdir(parents=True)
+    (variant / "avatar.json").write_text(json.dumps({"format": 1, "image": "0" * 64}),
+                                         encoding="utf-8")
+
+
+def test_a_blocked_scan_with_waiting_files_issues_a_drain_only_token(root, fake_bin):
+    stuck = _waiting(root, "grimoire - 0badcafe.png")
+    orphan = _obj(1)
+    _block_with_a_case_variant(root)
+    report = _scan(root, now=T)
+    assert report["state"] == "blocked" and report["outbox"] == [stuck[0].name]
+    assert report["token"], "waiting files can always be drained"
+    rec = json.loads(image_gc.token_path(root, report["token"]).read_text(encoding="utf-8"))
+    assert rec["ids"] == [] and rec["blobs"] == []
+    assert report["collectable"] == [] and report["collectable_blobs"] == []
+
+    done = _collect(root, report["token"])
+    assert done["state"] == "blocked" and done["blocking"]
+    assert fake_bin.paths == stuck
+    assert [r["name"] for r in done["recycled"]] == [stuck[0].name]
+    assert done["outbox"] == []
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+
+
+def test_a_blocked_scan_with_an_empty_outbox_issues_no_token(root):
+    _obj(1)
+    _block_with_a_case_variant(root)
+    report = _scan(root, now=T)
+    assert report["state"] == "blocked" and report["token"] is None

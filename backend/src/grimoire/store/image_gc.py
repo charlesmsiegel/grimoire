@@ -7,8 +7,9 @@ collects it. Two calls, both run as the ``maintenance`` run class and both
 fail closed:
 
 * **`scan`** is the dry run. It walks every root strictly, lists the store,
-  and -- when something is collectable or waits in the outbox, and nothing
-  blocked the walk -- persists a single-use token naming exactly that.
+  and -- when something is collectable and nothing blocked the walk, or
+  something waits in the outbox -- persists a single-use token naming exactly
+  that (a blocked walk's names only the outbox: it drains, nothing more).
 * **`collect`** takes such a token and disposes of at most what it names,
   intersected with a fresh strict walk, in batches under the ingest/GC lock.
 
@@ -95,11 +96,14 @@ Finder call never holds up an upload. A file the bin takes is ``recycled``; a
 file it refuses stays in the outbox under its readable name and stops the run
 ``trash-unavailable``; a batch Windows did not confirm stops it
 ``recycle-bin-unverified`` (see `recycle_bin`). A cancel or a root change sends
-nothing: what moved waits in the outbox. A collection therefore begins, once
+nothing more -- the bin calls ask before each file: what moved and was not sent
+waits in the outbox. A collection therefore begins, once
 its token is claimed and before its first batch, by sending this device's
 outbox to the bin, and a refusal there stops it before anything else leaves
 the store. A scan reports what waits (``outbox``) and issues a token for it
-alone, so waiting files can always be drained; files in another device's
+alone -- even when the walk is blocked, a token naming no candidate, so the
+collection drains and then stops at the same walk -- so waiting files can
+always be drained; files in another device's
 outbox (or this one's under an earlier store path) are counted in
 ``foreign_outboxes`` and never touched. The outbox syncs with ``.cache``,
 which is accepted traffic.
@@ -481,14 +485,17 @@ class _BinGuard:
 
 
 def _send(root: Path, report: dict, files: list[Path],
-          origin: dict[Path, tuple[str | None, str | None]]) -> str | None:
-    """Send outbox `files` to the bin, never under a lock. Every file the bin
-    took is in `recycled`; a stop returns its state (`TRASH_UNAVAILABLE`,
-    `RECYCLE_BIN_UNVERIFIED`) and leaves the rest waiting in the outbox. A
-    root change or an unsafe path raises, as anywhere else in a collection."""
+          origin: dict[Path, tuple[str | None, str | None]],
+          cancel: Callable[[], bool]) -> str | None:
+    """Send outbox `files` to the bin, never under a lock, asking `cancel`
+    before each. Every file the bin took is in `recycled`; a stop returns its
+    state (`RECYCLE_BIN_UNVERIFIED`, which outranks the others because it is
+    the one the reader must act on, then `TRASH_UNAVAILABLE` or `CANCELLED`)
+    and leaves the rest waiting in the outbox. A root change or an unsafe path
+    raises, as anywhere else in a collection."""
     guard = _BinGuard(root)
     try:
-        result = recycle_bin.send_batch(root, files, before=guard)
+        result = recycle_bin.send_batch(root, files, before=guard, cancel=cancel)
     except (_RootChangedError, _UnsafePathError):
         _recycled(report, guard.seen[:-1], guard.sizes, origin)
         raise
@@ -498,7 +505,9 @@ def _send(root: Path, report: dict, files: list[Path],
     if result.unverified:
         report["unverified"] += [p.name for p in result.unverified]
         return RECYCLE_BIN_UNVERIFIED
-    return None if result.refused is None else TRASH_UNAVAILABLE
+    if result.refused is not None:
+        return TRASH_UNAVAILABLE
+    return CANCELLED if result.cancelled else None
 
 
 def _recycled(report: dict, sent: list[Path], sizes: dict[Path, int],
@@ -509,11 +518,11 @@ def _recycled(report: dict, sent: list[Path], sizes: dict[Path, int],
                                    "bytes": sizes.get(path, 0)})
 
 
-def _drain(root: Path, report: dict) -> str | None:
+def _drain(root: Path, report: dict, cancel: Callable[[], bool]) -> str | None:
     """Send whatever already waits in this device's outbox -- a crash, a
     refusal or a cancel left it there -- before anything more is collected."""
     files = _outbox_files(root)
-    return _send(root, report, files, {}) if files else None
+    return _send(root, report, files, {}, cancel) if files else None
 
 
 # ---- roots ------------------------------------------------------------------
@@ -1086,8 +1095,8 @@ def _prune_tokens(root: Path, device: str, now: float) -> None:
 def scan(root: Path, *, cancel: Callable[[], bool], run_id: str | None = None,
          now: float | None = None) -> dict:
     """The dry run (module docstring): what is collectable now, what will be
-    and when, and -- when something is and nothing blocked -- a token for
-    `collect`. Writes nothing but its report and the token. `root` is the
+    and when, and -- when something is and nothing blocked, or something
+    waits in the outbox -- a token for `collect`. Writes nothing but its report and the token. `root` is the
     pinned store root (``paths.home().resolve()`` when the run started)."""
     root = Path(root)
     run_id = _run_id(root, run_id)
@@ -1198,6 +1207,15 @@ def _scan(root: Path, report: dict, cancel: Callable[[], bool], at: float) -> st
     counts = report["counts"]
     counts.update(placements=len(roots.placements), objects=len(side.ids), blobs=len(blobs))
     if roots.blocking:
+        # Nothing is offered past a blocked walk, but what already waits in the
+        # outbox left the store before it: a token naming no candidate lets a
+        # collection drain it and then stop at the same walk.
+        report["outbox"], report["foreign_outboxes"] = _outbox_listing(root)
+        try:
+            _check_root(root)
+        except _RootChangedError:
+            return ROOT_CHANGED
+        _issue_token(root, report, device, at)
         return BLOCKED
     _classify(report, roots, side, blobs, GRACE_HOURS * 3600.0, at)
     counts.update(collectable=len(report["collectable"]),
@@ -1280,8 +1298,8 @@ def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
     report["token"] = token
     report["grace_hours"] = rec["grace_hours"]
     try:
-        if (stop := _drain(root, report)) is not None:
-            return stop                 # the bin is refusing: nothing more leaves
+        if (stop := _drain(root, report, cancel)) is not None:
+            return stop                 # refused or cancelled: nothing more leaves
         return _walk_and_collect(root, report, rec, cancel, at)
     except _RootChangedError:
         return ROOT_CHANGED
@@ -1317,8 +1335,9 @@ def _walk_and_collect(root: Path, report: dict, rec: dict, cancel: Callable[[], 
 def _batches(run: _Run, queue: list[tuple[str, str]], cancel: Callable[[], bool]) -> str:
     """Collect in batches, each one hold of the ingest/GC lock (M15), and
     send each batch's moved pictures to the bin once that hold is released.
-    A cancel or a root change sends nothing: what moved waits in the outbox
-    for the next collection's drain."""
+    A cancel or a root change sends nothing more -- the bin calls ask too,
+    before each file: what moved and was not sent waits in the outbox for the
+    next collection's drain."""
     while queue:
         if cancel():
             return CANCELLED
@@ -1341,17 +1360,17 @@ def _batches(run: _Run, queue: list[tuple[str, str]], cancel: Callable[[], bool]
                 done += 1
                 if done >= BATCH_OBJECTS or time.monotonic() - started >= BATCH_SECONDS:
                     break
-        if (stop := _flush(run)) is not None:
+        if (stop := _flush(run, cancel)) is not None:
             return stop
-    return _flush(run) or COMPLETE
+    return _flush(run, cancel) or COMPLETE
 
 
-def _flush(run: _Run) -> str | None:
+def _flush(run: _Run, cancel: Callable[[], bool]) -> str | None:
     """Send the pictures the last batch moved to the bin (`_send`)."""
     if not run.pending:
         return None
     pending, run.pending = run.pending, []
-    return _send(run.root, run.report, pending, run.origin)
+    return _send(run.root, run.report, pending, run.origin, cancel)
 
 
 def _young(run: _Run, mtimes: list[float]) -> str | None:
