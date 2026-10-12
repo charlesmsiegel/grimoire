@@ -165,3 +165,17 @@ test("turning a never-heard into knows names the posts again, as shown", async (
       expect: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16) }], expect_digest: "",
     }));
 });
+
+test("an unchanged edit cannot be saved, and an orphaned never-heard offers Remove", async () => {
+  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+    status: "unaware", scene: null, stale: true, stale_reason: "gone",
+    posts: [{ key: R1, part: "", index: null, speaker: "", text: "", missing: true }],
+  })], intact: true });
+  renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
+  expect(await screen.findByText("No longer applies")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(await screen.findByRole("button", { name: "Save statement" })).toBeDisabled();
+  fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "x" } });
+  expect(screen.getByRole("button", { name: "Save statement" })).toBeEnabled();
+});

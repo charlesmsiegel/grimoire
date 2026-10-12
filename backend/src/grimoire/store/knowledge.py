@@ -273,16 +273,20 @@ def get_strict(cid: str, kid: str) -> dict | None:
     return normalize(doc["entries"][kid])
 
 
-def require_readable(cid: str) -> None:
-    """Preflight for a delete that will prune statements: refuse, before
-    anything is removed, when the file cannot be read, rather than delete the
-    actor and leave its grants for the next holder of the id."""
+def require_readable(cid: str, *, intact: bool = False) -> None:
+    """Preflight for a write that depends on the file: refuse, before anything
+    happens, when it cannot be read -- rather than delete an actor and leave
+    its grants for the next holder of the id. `intact` also refuses a file
+    holding an entry that does not read, which a branch needs: the entry it
+    could not copy might be an `unaware`."""
     try:
         _load_strict(cid)
+        if intact and not read_checked(cid)[1]:
+            raise KnowledgeError("an entry cannot be read")
     except KnowledgeError as exc:
         raise group_refs.GroupIdentityConflict(
-            "knowledge.json cannot be read; repair it before deleting an actor or "
-            "group it may name") from exc
+            "knowledge.json cannot be read; repair it before deleting, reclassifying "
+            "or branching what it names") from exc
 
 
 # -------------------------------------------------------------------- mutators
@@ -489,10 +493,9 @@ def copy_for_branch(cid: str, src: str, dst: str, rid_map: Mapping[str, str],
         doc = _load_strict(cid)
         fresh: dict[str, dict] = {}
         for entry in doc["entries"].values():
-            try:
-                record = normalize(entry)
-            except KnowledgeError:
-                continue
+            # Fail closed: an entry that does not read cannot be told apart
+            # from an `unaware` the branch must carry.
+            record = normalize(entry)
             if record["subject"]["scene"] != src:
                 continue
             copy_ = _branch_copy(record, dst, rid_map, kept)

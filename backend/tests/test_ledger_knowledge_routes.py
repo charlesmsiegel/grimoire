@@ -306,3 +306,28 @@ def test_every_write_journals_as_manual_and_undo_reverses_it(client, world):
 
     store.undo.undo(cid, created["id"])
     assert store.knowledge.get(cid, kid) is None
+
+
+def test_an_orphaned_unaware_reads_gone(client, world):
+    _post(client, world, status="unaware")
+    store.scenes.delete_scene(world["cid"], world["sid"])
+    row = _entries(client, world)[0]
+    assert row["stale"] and row["stale_reason"] == "gone"
+
+
+def test_a_garbled_response_ledger_marks_the_entry_not_the_list(client, world):
+    _post(client, world)
+    store.responses._path(world["cid"]).write_text("[]", encoding="utf-8")
+    [row] = _entries(client, world)
+    assert row["unverifiable"] and row["stale_reason"] == "unverifiable"
+    r = client.get(f"{world['base']}/scenes/{world['sid']}")
+    assert r.status_code == 409 and r.json()["kind"] == "malformed"
+
+
+def test_an_empty_edit_writes_nothing(client, world):
+    kid = _post(client, world).json()["id"]
+    before = store.knowledge._path(world["cid"]).read_text(encoding="utf-8")
+    rows = len(store.journal.read(world["cid"]))
+    assert client.put(world["base"] + f"/{kid}", json={}).status_code == 200
+    assert store.knowledge._path(world["cid"]).read_text(encoding="utf-8") == before
+    assert len(store.journal.read(world["cid"])) == rows

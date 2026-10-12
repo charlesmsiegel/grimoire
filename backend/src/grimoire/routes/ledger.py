@@ -670,7 +670,13 @@ def _scene_posts(cid: str, sid: str) -> tuple[list[dict], dict, list[dict]]:
         raise HTTPException(status_code=404, detail="scene not found") from exc
     except scenes_identity.UnreadableError as exc:
         raise _busy() from exc
-    variants = store.responses.variants_by_response(cid, sid, token=token) if token else {}
+    try:
+        variants = store.responses.variants_by_response(cid, sid, token=token) if token else {}
+    except ValueError as exc:   # responses.json is not a response ledger
+        raise _bad("malformed", "responses.json cannot be read; repair it and try again",
+                   409) from exc
+    except OSError as exc:
+        raise _busy() from exc
     return messages, variants, regex_view.view(messages, cid=cid, phase="display")
 
 
@@ -796,7 +802,8 @@ def _scene_view(cid: str, identity: str) -> _SceneView | str | None:
     try:
         messages, variants, shown = _scene_posts(cid, sid)
         title = store.scenes.read_scene(cid, sid)["meta"].get("title") or sid
-    except HTTPException:
+    except (HTTPException, ValueError, OSError):
+        # One damaged scene or response ledger marks its entries, never the list.
         return "unverifiable"
     return _SceneView(sid, str(title), shown,
                       store.knowledge_scene.scene_facts(messages, variants))
@@ -825,17 +832,19 @@ def _listed_posts(entry: dict, scene: _SceneView | None) -> list[dict]:
 
 
 def _stale_reason(entry: dict, held, posts: list[dict], now: str | None) -> str | None:
-    """Why a grant no longer grants, or None (an `unaware` is never stale)."""
-    if entry["status"] not in store.knowledge.GRANTS:
-        return None
-    if entry["audience"] != store.knowledge.EVERYONE and now != entry["audience_name"]:
-        return "audience"
+    """Why a statement no longer applies, or None. Structural loss applies to
+    every statement; a fingerprint or a renamed audience only stops a grant,
+    since an `unaware` never consults either."""
     if held == "unverifiable":
         # Not "gone": the scene could not be read just now, and the statement
         # may well be fine.
         return "unverifiable"
     if not isinstance(held, _SceneView) or any(p["missing"] for p in posts):
         return "gone"
+    if entry["status"] not in store.knowledge.GRANTS:
+        return None
+    if entry["audience"] != store.knowledge.EVERYONE and now != entry["audience_name"]:
+        return "audience"
     if store.knowledge.holds(entry, held.facts):
         return None
     hidden = entry["subject"]["kind"] == "posts" and any(
@@ -903,6 +912,24 @@ def post_knowledge(cid: str, body: KnowledgeSave):
     return {"id": kid}
 
 
+def _edited(cid: str, stored: dict, body: KnowledgeEdit) -> tuple[dict, bool]:
+    """`stored` with the body's status, audience and note applied, and whether
+    a new audience makes it a new statement for recency."""
+    entry = dict(stored)
+    if body.status is not None:
+        if body.status not in store.knowledge.STATUSES:
+            raise _bad("bad_status", "a status is knows, suspects or unaware")
+        entry["status"] = body.status
+    renew = False
+    if body.audience is not None:
+        entry["audience"] = body.audience
+        entry["audience_name"] = _knowledge_audience(cid, body.audience)
+        renew = body.audience != stored["audience"]
+    if body.note is not None:
+        entry["note"] = body.note
+    return entry, renew
+
+
 def _restamped(cid: str, subject: dict, status: str, body: KnowledgeEdit) -> dict:
     """The stored subject's posts fingerprinted again, against the text the
     client was shown (`expect`): the ledger's "confirm against current text"."""
@@ -936,18 +963,7 @@ def put_knowledge(cid: str, kid: str, body: KnowledgeEdit):
             raise _malformed() from exc
         if stored is None:
             raise HTTPException(status_code=404, detail="statement not found")
-        entry = dict(stored)
-        if body.status is not None:
-            if body.status not in store.knowledge.STATUSES:
-                raise _bad("bad_status", "a status is knows, suspects or unaware")
-            entry["status"] = body.status
-        renew = False
-        if body.audience is not None:
-            entry["audience"] = body.audience
-            entry["audience_name"] = _knowledge_audience(cid, body.audience)
-            renew = body.audience != stored["audience"]
-        if body.note is not None:
-            entry["note"] = body.note
+        entry, renew = _edited(cid, stored, body)
         grant = entry["status"] in store.knowledge.GRANTS
         if body.scene is not None:
             entry["subject"] = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene,
@@ -961,6 +977,8 @@ def put_knowledge(cid: str, kid: str, body: KnowledgeEdit):
                                       "suspecting it")
         elif body.restamp:
             entry["subject"] = _restamped(cid, stored["subject"], entry["status"], body)
+        if entry == stored and not renew:
+            return {"ok": True}   # nothing moved: no write, no journal row, no stamp
         _knowledge_write(cid, kid, entry,
                          lambda: store.knowledge.update(cid, kid, entry, renew=renew))
     return {"ok": True}

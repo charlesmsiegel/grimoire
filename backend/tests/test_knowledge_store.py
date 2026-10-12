@@ -607,3 +607,30 @@ def test_a_world_group_reclassify_prunes_the_grants_of_campaigns_that_followed_i
     knowledge.add(cid, _entry(audience=f"groups:{gid}", name="The Saltmarch Watch"))
     reclassify.world_entity(wid, "groups", gid, "locations")
     assert knowledge.read(cid) == {}
+
+
+def test_a_branch_refuses_when_any_entry_does_not_read(cid):
+    """A malformed entry might be an `unaware` the branch has to carry."""
+    sid, rid = _scene(cid)
+    knowledge.add(cid, _entry(audience="*", status="unaware"))
+    doc = json.loads(knowledge._path(cid).read_text(encoding="utf-8"))
+    doc["entries"]["k-deadbeef"] = {"audience": "*", "status": "unaware"}   # no subject
+    knowledge._path(cid).write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(group_refs.GroupIdentityConflict):
+        branch.branch_scene(cid, sid, _index(cid, sid, rid))
+    with pytest.raises(knowledge.KnowledgeError):
+        knowledge.copy_for_branch(cid, "a" * 32, "b" * 32, {}, set())
+
+
+def test_an_unreadable_file_does_not_block_a_world_delete_of_what_it_cannot_name(cid):
+    from grimoire.store import entities
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    wroot = worlds.world_root(wid)
+    lid = entities.create_entity(wroot, "locations", "The Pier")
+    knowledge._path(cid).write_text("{not json", encoding="utf-8")
+    with overlay.world_identity_change(wroot, record=("locations", lid)):
+        pass
+    gid = entities.create_entity(wroot, "groups", "The Saltmarch Watch")
+    with pytest.raises(group_refs.GroupIdentityConflict), \
+            overlay.world_identity_change(wroot, record=("groups", gid)):
+        pass

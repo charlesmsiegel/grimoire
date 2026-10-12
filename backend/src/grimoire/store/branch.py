@@ -188,7 +188,7 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
         # Before anything is written: the knowledge copy below reads the file
         # strictly, and a garbled one must refuse the branch (409) rather than
         # build half a sibling or drop a statement that withholds.
-        knowledge.require_readable(cid)
+        knowledge.require_readable(cid, intact=True)
         scene = scenes_read.read_scene(cid, sid)
         meta, messages = scene["meta"], scene["messages"]
         if str(meta.get("done", "")).lower() == "true":

@@ -245,6 +245,22 @@ def _suspend_membership_lifetimes(wroot: Path, kind: str, eid: str, new_kind: st
     return operations, commit_operations, inherited_operations
 
 
+def _knowledge_preflight(kind: str, cids) -> None:
+    """A group's statements are pruned by the move: refuse first if a bound
+    campaign's knowledge file cannot be read (spec 11 §7.5)."""
+    if kind == "groups":
+        for cid in cids:
+            knowledge.require_readable(cid)
+
+
+def _forget_group_audience(kind: str, eid: str, following) -> None:
+    """Each campaign that followed the World record loses the group under this
+    id; a same-named one created later must not inherit its grants."""
+    if kind == "groups":
+        for cid in following:
+            knowledge.forget_audience(cid, f"groups:{eid}")
+
+
 def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
     """Reclassify a world record and sweep every campaign that inherits it.
 
@@ -265,6 +281,7 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
         for cid in cids:
             overlay.require_identity_ledgers(cid)
             journal.require_readable(cid)
+        _knowledge_preflight(kind, cids)
         # Invalid or same-kind requests cannot suspend an otherwise live
         # offer. These checks have no durable effects (spec 07).
         if new_kind not in entities.ENTITY_KINDS:
@@ -290,13 +307,7 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
                 wroot, kind, eid, new_kind, lifetime.captured, following)
             affected.update(cids)  # every held view may change when the World moves
             new_eid = entities.reclassify(wroot, kind, eid, new_kind)
-            if kind == "groups":
-                # Each campaign that followed the World record loses the group
-                # under this id; a same-named one created later must not
-                # inherit its grants (spec 11 §7.5). `world_identity_scope`
-                # preflighted every captured campaign's knowledge file.
-                for cid in following:
-                    knowledge.forget_audience(cid, f"groups:{eid}")
+            _forget_group_audience(kind, eid, following)
             for cid, operation in inherited_operations.items():
                 if operation is not None:
                     commits.complete_membership_relocation(cid, operation, new_kind, new_eid)

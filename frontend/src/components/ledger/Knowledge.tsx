@@ -33,7 +33,7 @@ const STALE_HINT: Record<string, string> = {
   changed: "The text changed since this was written, so it no longer grants anything. "
     + "Confirm it against the current text, or remove it.",
   hidden: "A post it names is hidden from context, so it reaches no one and grants nothing.",
-  gone: "It points at a deleted scene or post, so it grants nothing. Remove it.",
+  gone: "It points at a deleted scene or post, so it no longer applies. Remove it.",
   audience: "The audience was renamed or no longer exists, so it grants nothing. If it is "
     + "still the same one, confirm it under its current name.",
   unverifiable: "Its scene could not be read just now (a synced folder mid-write?), so it is "
@@ -303,7 +303,7 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
           </div>
           {entry.stale && (
             <div className="side-section">
-              <h4>No longer grants</h4>
+              <h4>{entry.status === "unaware" ? "No longer applies" : "No longer grants"}</h4>
               <p className="field-hint">{STALE_HINT[entry.stale_reason ?? "changed"]}</p>
               <div className="form-actions">
                 {entry.stale_reason === "changed" && (
@@ -333,7 +333,10 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
   const flipToGrant = !!entry && original.status === "unaware" && grant;
   // An edit that leaves the subject alone needs no scene read -- so the note
   // of a statement about a deleted scene can still be corrected.
-  const ready = !!form.audience && (entry && sameSubject && !flipToGrant
+  // An edit that changes nothing has nothing to save.
+  const dirty = !entry || !sameSubject || flipToGrant || form.audience !== original.audience
+    || form.status !== original.status || form.note !== original.note;
+  const ready = dirty && !!form.audience && (entry && sameSubject && !flipToGrant
     || (!!form.scene && !!shown && (form.whole || form.posts.length > 0)));
   return (
     <div className="form">
