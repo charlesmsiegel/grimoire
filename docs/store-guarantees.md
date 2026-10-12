@@ -887,10 +887,11 @@ Deleting a placement deletes only the placement. An object and its blob go only
 when the collector, run from Settings as the `gc` kind of a maintenance run,
 finds them unreferenced for long enough. A run is a **scan** (a dry run) or a
 **collection** (which needs the scan's token), and it **fails closed**: when it
-cannot be sure what is reachable it collects nothing. **A collected picture is
-never deleted.** Its blob leaves the store only by a move into this device's
-outbox and then into the operating system's recycle bin, and nothing falls back
-to deletion.
+cannot be sure what is reachable it collects nothing. **Grimoire never deletes
+a collected picture itself.** Its blob leaves the store only by a move into this
+device's outbox and then into the operating system's recycle bin, and nothing
+falls back to deletion. What the bin does with a file it was handed is the
+operating system's; on Windows that is the residual stated below.
 
 - **Roots are strict.** Every file in every `image-refs/` folder below an
   `assets/` component counts, whatever it is called, so a sync client's conflict copy of a placement keeps its image
@@ -966,19 +967,34 @@ to deletion.
   (`test_bin_runs_after_the_ingest_lock_is_released`). A file the bin refuses
   stays in the outbox under its readable name and stops the run
   `trash-unavailable`, naming the files waiting
-  (`test_a_refused_bin_leaves_the_file_in_the_outbox`). A cancel or a root
-  change sends nothing; what moved waits in the outbox.
+  (`test_a_refused_bin_leaves_the_file_in_the_outbox`). On macOS and Linux
+  `recycle_bin.check` answers ok, and a volume with no trash makes the bin call
+  itself raise: that is a refusal at send time like any other, so the token is
+  already spent and the picture waits in the outbox, `trash-unavailable`. A
+  cancel or a root change sends nothing more: the bin calls ask before each
+  file, so what the bin already took is in `recycled` and the rest waits in the
+  outbox
+  (`test_a_cancel_mid_batch_send_keeps_what_was_sent_and_leaves_the_rest`).
 - **A collection drains the outbox first.** After its token is claimed and
   before its first batch it sends this device's outbox to the bin, so a refusal
   there stops it before another picture leaves the store
   (`test_drain_refusal_stops_before_the_first_batch`,
-  `test_cancel_after_outbox_move_drains_next_time`). A scan reports what waits
-  (`outbox`) and issues a token for that alone. Files in another device's outbox,
+  `test_cancel_after_outbox_move_drains_next_time`). The drain asks for a cancel
+  before each file too (`test_a_cancel_asked_before_the_drain_sends_nothing`,
+  `test_a_cancel_mid_drain_keeps_what_was_sent_and_leaves_the_rest`). A scan
+  reports what waits (`outbox`) and issues a token for that alone, even when its
+  walk is blocked: that token names no candidate, so the collection drains and
+  then stops at the same walk
+  (`test_a_blocked_scan_with_waiting_files_issues_a_drain_only_token`). Files in
+  another device's outbox,
   or this one's under an earlier store path, are counted in `foreign_outboxes`
   and never touched (`test_another_devices_outbox_is_counted_not_touched`). The
   outbox syncs with `.cache`, which is accepted traffic.
-- **Nothing is unlinked.** Outside `image-store/` a collection deletes only
-  the matching cache entries (`test_nothing_outside_image_store_is_deleted`).
+- **No picture is unlinked.** A blob leaves `blobs/` only by the move into the
+  outbox. What a collection does unlink is bookkeeping: the collected objects'
+  sidecars under `image-store/objects/`, their blob-index entries and
+  thumbnails under `.cache`, and its own spent tokens; nothing else in the
+  store or outside it (`test_nothing_outside_image_store_is_deleted`).
   `_delete_file` refuses any path outside its few trees and any path reached
   through a link, and the outbox is deliberately not among those trees, so it
   can never unlink a waiting picture. The move and the bin call have their own
@@ -992,8 +1008,7 @@ to deletion.
   returns a `refused` report (`test_collect_refuses_without_a_bin`). A scan is
   always allowed and reports the answer as `recycle_bin`. Android has no bin; a
   desktop whose install lacks the Send2Trash helper (the `desktop` extra) is
-  refused as `not_installed`. macOS and Linux raise, and so refuse, when a
-  volume has no trash.
+  refused as `not_installed`.
 - **Windows needs more than the helper's word.** Send2Trash 2.1 calls the
   shell without the flag that makes Windows warn, so on a volume with no
   Recycle Bin, or one set to delete immediately, the shell deletes the file
@@ -1001,8 +1016,16 @@ to deletion.
   any file is touched unless the outbox's own volume is a fixed drive, answers
   the bin query, and is covered by neither the `NoRecycleFiles` policy nor the
   volume's delete-immediately setting (`test_windows_network_drive_refuses`,
-  `test_windows_nuke_on_delete_refuses`). A file larger than a known bin
-  capacity stops the run unsent as `too_large_for_bin`
+  `test_windows_nuke_on_delete_refuses`). Because any of those can change after
+  that answer, `send_batch` asks the whole question again at the start of every
+  batch and sends nothing when it fails
+  (`test_a_guard_that_flips_after_check_refuses_the_batch`). A file that has
+  left the outbox before it is sized is skipped, and one that cannot be sized
+  stops the run as a refusal; either way what was already sent is reported and
+  checked by the backstop below
+  (`test_a_file_that_cannot_be_sized_is_refused_and_the_backstop_runs`). A
+  file larger than a known bin capacity stops the run unsent as
+  `too_large_for_bin`
   (`test_too_large_for_bin`), because a bin purges to fit and deletes outright a
   file bigger than all of it. When Windows names no capacity it is estimated as
   10% of the volume, at or above Windows' own default, so a wrong estimate errs
