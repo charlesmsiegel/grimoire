@@ -439,7 +439,8 @@ def _chronicle(inputs: CampaignInputs, head: Head, damage: _Damage) -> dict | No
                          if isinstance(k, str) and k.strip()],
             "date": damage.text(rec.get("date"), CAPS["date"], src),
             "location": damage.text(rec.get("location"), CAPS["location"], src),
-            "cast": sorted({canon.actor_ref(t) for t in (cast if isinstance(cast, list) else ())
+            "cast": sorted({damage.text(canon.actor_ref(t), CAPS["ref"], src)
+                            for t in (cast if isinstance(cast, list) else ())
                             if isinstance(t, str) and t}),
             "source": "chronicle",
         }
@@ -472,7 +473,7 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
             used.append(name.source)
         if name.unreadable:
             damage.add(token)
-        ref = canon.actor_ref(token)
+        ref = damage.text(canon.actor_ref(token), CAPS["ref"], token)
         out[ref] = {"ref": ref, "kind": kind, "id": aid,
                     "name": damage.text(name.text, CAPS["name"], token),
                     "role": rec.get("role") if isinstance(rec.get("role"), str) else "",
