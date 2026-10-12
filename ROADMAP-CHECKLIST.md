@@ -364,12 +364,17 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
 - **Landed in [PR #507](https://github.com/charlesmsiegel/grimoire/pull/507):** S1-S7 implemented. S8's persistent inverse-index tier was **measured and withheld** under the Spec 03 cost gate; its benchmark harness and report were merged, and the in-process memo remains. This closes S8 as a documented negative result, not a shipped persistent tier. Outstanding review and final gates remain unticked.
 
 ### 08: History SearchDocuments
-- [ ] **08-C1** A bounded `SceneDocument` with no transcript text, keyed by
+- [x] **08-C1** A bounded `SceneDocument` with no transcript text, keyed by
   per-scene slices.
 - [ ] **08-C2a** Lazy build plus batch lookup. **08-C2b** Document vectors.
   **08-C2c** A hot-rebuild hook for 05.
 - [ ] **08-C3a** A `history-index` embed task. **08-C3b** `expand(...)`, where
   the caller names the phase.
+- **In progress (S1, S2, S3, S4, S6 coded on `claude/intelligent-mccarthy-igivlo`):**
+  08-C1, 08-C2a and 08-C3b are delivered in full, and 08-C2b's no-network half
+  (`vector_kind`, `record_embedded`). 08-C2b's `vectors_for`, 08-C2c and 08-C3a
+  are 08-S5's and wait for 05-S6 (the `WarmHook` protocol). The plan, review
+  and final gates are owed to the Codex review on the PR.
 
 ### 09: Hybrid historical retrieval
 - [ ] **09-C1** `history.retrieve(Query) -> Evidence`, RRF merge, a
@@ -628,12 +633,12 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 | 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 
 ### 09
 
