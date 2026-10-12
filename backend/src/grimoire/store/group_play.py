@@ -133,15 +133,19 @@ def _name(entry: dict) -> str:
     return n.strip() if isinstance(n, str) else ""
 
 
-def _named(text: str, entries: list[dict]) -> list[str]:
-    """Refs of the entries `text` names, in order of first mention."""
+def named(text: str, entries: list[dict], author_ref: str | None = None) -> list[str]:
+    """Refs of the entries `text` names, in order of first mention, less
+    `author_ref`: a character naming themselves does not summon themselves.
+    Public for the speaker pick's addressed narrowing (roadmap 02 §5.2,
+    `response_protocol.addressed`), which reads a trigger the same way the
+    planner does."""
     by_name: dict[str, str] = {}
     for e in entries:
         by_name.setdefault(_name(e), e["ref"])
     # Duplicates stay in the list on purpose: that is what makes their name
     # ambiguous, and an ambiguous name is one `mentioned` never returns.
     names = speaker.mentioned(text, [_name(e) for e in entries])
-    return [by_name[n] for n in names if n in by_name]
+    return [by_name[n] for n in names if n in by_name and by_name[n] != author_ref]
 
 
 def _by_silence(entries: list[dict], history: list[dict]) -> list[str]:
@@ -179,10 +183,10 @@ def _natural_sequence(settings: dict, avail: list[dict], text: str, history: lis
     if not avail:
         return [GRIMOIRE]
     # A character naming themselves does not summon themselves.
-    named = [r for r in _named(text, avail) if r != author]
-    rest = [e["ref"] for e in avail if e["ref"] not in named]
+    called = named(text, avail, author_ref=author)
+    rest = [e["ref"] for e in avail if e["ref"] not in called]
     rng.shuffle(rest)
-    order = named + [r for r in rest if rng.random() * 100 < _talk(settings, r)]
+    order = called + [r for r in rest if rng.random() * 100 < _talk(settings, r)]
     if order and order[0] == author and len(order) > 1:
         # The author spoke last: opening with them would be the same speaker
         # twice in a row. They still speak, after the first other entry.
@@ -196,7 +200,7 @@ def _natural_sequence(settings: dict, avail: list[dict], text: str, history: lis
 def _directed(settings: dict, roster: list[dict], avail: list[dict], trigger: str,
               history: list[dict], rng: random.Random, force: tuple[str, ...],
               author: str | None) -> list[dict]:
-    named = set(_named(trigger, avail)) - {author}
+    called = set(named(trigger, avail, author_ref=author))
     # Every available entry rolls, named or not and set or not (an unset 100
     # always passes: `random()` is below 1), so the draw count depends on the
     # cast alone and a seeded rng reads the same however the post words it or
@@ -205,7 +209,7 @@ def _directed(settings: dict, roster: list[dict], avail: list[dict], trigger: st
     # An explicit pick wins over sitting out: a forced ref stays eligible.
     eligible = [e for e in roster
                 if e["ref"] in force
-                or (e["ref"] in rolls and (e["ref"] in named or rolls[e["ref"]]))]
+                or (e["ref"] in rolls and (e["ref"] in called or rolls[e["ref"]]))]
     if eligible or not avail:
         return eligible
     silence = _by_silence(avail, history)

@@ -154,7 +154,17 @@ class TaskPolicy(NamedTuple):
 #: is added to a task's `native_first` only with its spec 01c §4.3 evidence
 #: in `evals/README.md`, "Decision distributions", and the entry's comment
 #: names that section, the kind and the run's date.
-TASK_POLICY: dict[str, TaskPolicy] = {}
+TASK_POLICY: dict[str, TaskPolicy] = {
+    # Roadmap 02-C2a: the pick's caller may draw WHO speaks from a reported
+    # distribution (only when the campaign samples, `play_decisions`).
+    # Escalation stays off until C2a's play gate measures it, and would be on
+    # `refused` only, with `reads_declines` (an abstention hands control
+    # back): a sampling task never escalates on margin (01c §4.1).
+    "response-selector": TaskPolicy(question="next", samples=True),
+    # Roadmap 02-C2b: the stance is drawn where a report allows. Escalation
+    # off: the feature is soft, so a failure costs only the intent.
+    "turn-intent": TaskPolicy(question="stance", samples=True),
+}
 
 _DEFAULT = TaskPolicy()
 

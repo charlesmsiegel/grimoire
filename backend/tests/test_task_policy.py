@@ -58,7 +58,7 @@ _READS_DECLINES = frozenset({"response-selector"})
 #: does: a verdict about what happened in the fiction must not change between
 #: two runs of the same input). The speaker pick is 02-C2's sampled path; a
 #: task 02 or 13 adds that samples joins it in the change that adds it.
-_SAMPLES = frozenset({"response-selector"})
+_SAMPLES = frozenset({"response-selector", "turn-intent"})
 
 
 class _Vocab(NamedTuple):
@@ -363,11 +363,14 @@ def test_every_task_is_off_at_landing():
     (spec 01c §3.3). The change that switches a task on edits this test
     together with its evidence in `evals/README.md`: "Decision escalation"
     (01d §6.3) or "Decision distributions" (01c §4.3)."""
-    assert routing.TASK_POLICY == {}
+    # Roadmap 02-S3 lists the two sampling tasks -- sampling is the caller's,
+    # and runs only where a campaign switches it on -- with escalation off.
+    assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent"}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
-        assert not p.samples and p.native_first == (), task
+        assert p.native_first == (), task
+        assert p.samples == (task in _SAMPLES), task
 
 
 def test_every_decide_task_is_pinned():

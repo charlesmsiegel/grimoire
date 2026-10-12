@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from .. import decisions, prompts
+from .. import decisions, draws, prompts
 from . import tokens
 
 #: The intent's one question, and the plan's first.
@@ -145,3 +145,32 @@ def stance_of(result: decisions.ItemResult) -> tuple[str | None, str]:
     if isinstance(answer.answer, str) and answer.answer in STANCES:
         return answer.answer, ""
     return None, answer.reason or "unreadable"
+
+
+def stance_eligibility() -> draws.Eligibility:
+    """The stance draw's one reshaping (§6.5): the none excluded (whether a
+    stance applies at all is the model's answer), and a cutoff at half of
+    indifference over the `n` stances, the none not counted; no floor."""
+    return draws.Eligibility(exclude=(decisions.NONE_KEY,),
+                             cutoff=1 / (2 * len(STANCES)))
+
+
+def drawn_stance(item: decisions.Item, result: decisions.ItemResult,
+                 seed: int) -> tuple[str | None, str, dict | None]:
+    """`(stance, reason, draw record)` (roadmap 02 §6.5). An answer of None --
+    abstained, refused, unreadable, an error -- is never drawn: `stance_of`'s
+    reading, with no record. Otherwise the stance is drawn through
+    `draws.draw` with `stance_eligibility()`: `sampled` is the drawn stance;
+    `answer` (no usable report: always the case on a structured stage) is the
+    plain answer; and a cutoff that empties the set leaves the plain answer as
+    the stance. The record is 01c's, unchanged, stored with the intent.
+    Raises only `draws.draw`'s `ValueError` for misuse."""
+    stance, reason = stance_of(result)
+    if stance is None:
+        return None, reason, None
+    question = next(q for q in item.questions if q.id == STANCE_ID)
+    drawn = draws.draw(question, result, seed=seed, purpose=STANCE_ID,
+                       eligibility=stance_eligibility())
+    if drawn.basis in ("sampled", "answer") and drawn.value in STANCES:
+        return str(drawn.value), "", drawn.record
+    return stance, "", drawn.record

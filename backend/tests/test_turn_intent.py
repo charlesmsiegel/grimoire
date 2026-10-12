@@ -103,7 +103,11 @@ def test_one_decision_before_the_reply_and_its_block_after_the_history(client):
     assert chat[at]["role"] == "system"
     assert "Mara, where were you?" in content_parts.text_of(chat[at - 1]["content"])
     record = _last_response(cid, sid)
-    assert record["intent"] == {"task": "turn-intent", "skipped": "", "stance": "deflect"}
+    intent = dict(record["intent"])
+    drawn = intent.pop("draw")
+    assert intent == {"task": "turn-intent", "skipped": "", "stance": "deflect"}
+    # A structured answer carries no report: the plain answer, never a sample.
+    assert (drawn["basis"], drawn["why"], drawn["selected"]) == ("answer", "no_report", "deflect")
     # The decision is metered under the response it shaped.
     (row,) = _rows(cid, "turn-intent")
     assert row["response_id"] == record["id"] and row["operation"] == "decide"

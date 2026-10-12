@@ -7,8 +7,8 @@ import json
 import re
 from collections.abc import Callable
 
-from .. import decisions, prompts
-from . import fence, state_fence
+from .. import decisions, draws, prompts
+from . import fence, group_play, state_fence
 from .scenes import serialize as scenes_serialize
 
 _HANDOFF = re.compile(r"```[ \t]*handoff\b", re.IGNORECASE)
@@ -143,6 +143,72 @@ def selection_of(result: decisions.ItemResult) -> tuple[str | None, str | None]:
     if answer is not None and answer.detail == decisions.NOT_AN_OPTION:
         return None, INELIGIBLE
     return None, INVALID_HANDOFF
+
+
+# --- sampling the pick (roadmap 02-C2a) -------------------------------------
+#
+# The pick's answer is read first and unchanged (`selection_of`); only when
+# it named a speaker, and the campaign samples, is WHO drawn from the report
+# (`draws.draw`). Whether anyone speaks stays the model's answer: the none is
+# excluded from every draw.
+
+#: The draw's purpose, recorded with it: the pick's question id.
+PICK_PURPOSE = SELECTOR_QUESTION
+
+
+def addressed(trigger: str, eligible: list[dict], author_ref: str | None) -> tuple[str, ...]:
+    """The eligible refs the round's trigger names (§5.2 rule 2): the
+    player-typed note when the round carries one, else the newest
+    non-synthetic post in the pick's window -- less that post's author, who
+    does not summon themselves. Read by group play's own name matcher, so a
+    name is addressed exactly when the planner would call it named."""
+    return tuple(group_play.named(trigger or "", eligible, author_ref=author_ref))
+
+
+def pick_eligibility(offered: list[str] | tuple[str, ...],
+                     addressed_refs: tuple[str, ...]) -> draws.Eligibility:
+    """The pick's one reshaping (§5.2): the none excluded (whether anyone
+    speaks is the model's answer, never the draw's), narrowed to the
+    addressed actors when the trigger addressed any, and a cutoff at half of
+    indifference over the `n` offered keys (the eligible refs and
+    `grimoire`), with no floor. Argued structurally -- an actor the model
+    rated below half of indifference is one it argued against -- and to be
+    tuned through the play gate's `cutoff` axis."""
+    return draws.Eligibility(exclude=(decisions.NONE_KEY,),
+                             only=tuple(addressed_refs) or None,
+                             cutoff=1 / (2 * len(offered)))
+
+
+def sampled_pick(item: decisions.Item, result: decisions.ItemResult, offered: list[str],
+                 addressed_refs: tuple[str, ...], seed: int) -> draws.Draw:
+    """The pick's draw over `result`, with the §5.2 rule 3 fallback: when the
+    narrowing leaves nothing (`ineligible` -- the answer lies outside
+    `addressed` with no usable report -- or `cutoff`), it draws once more
+    with the same seed and purpose, the none excluded and nothing else, so a
+    narrowing never turns an answered speaker into "nobody". A draw over an
+    answer of None is `none` with its reason. Raises only `draws.draw`'s
+    `ValueError` for misuse."""
+    (question,) = item.questions
+    first = draws.draw(question, result, seed=seed, purpose=PICK_PURPOSE,
+                       eligibility=pick_eligibility(offered, addressed_refs))
+    answer = result.answers.get(SELECTOR_QUESTION)
+    if (first.basis == "none" and first.record["why"] in ("ineligible", "cutoff")
+            and answer is not None and answer.answer is not None):
+        return draws.draw(question, result, seed=seed, purpose=PICK_PURPOSE,
+                          eligibility=draws.Eligibility(exclude=(decisions.NONE_KEY,)))
+    return first
+
+
+def next_of(selection: tuple[str | None, str | None], drawn: draws.Draw) -> str | None:
+    """The speaker after the draw (§5.2 rule 3): only a pick `selection_of`
+    read as a speaker is ever drawn over, and only a `sampled` or `answer`
+    draw names one -- a sampled key is an offered one, never the none."""
+    nxt, issue = selection
+    if nxt is None or issue is not None:
+        return nxt
+    if drawn.basis in ("sampled", "answer") and isinstance(drawn.value, str):
+        return drawn.value
+    return nxt
 
 
 class _PreparationPrefix:

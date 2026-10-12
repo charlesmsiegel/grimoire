@@ -15,7 +15,7 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import decisions, llm_reasoning, prompts, store, wire
+from .. import decisions, draws, llm_reasoning, prompts, store, wire
 from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
@@ -472,12 +472,32 @@ def _selector_item(cid, sid, round_record):
     the observable transcript gathered by `response_protocol` through the
     prompt-phase regex view (stored text is raw; the pick reads what a model
     is shown)."""
+    return _selector_inputs(cid, sid, round_record)[0]
+
+
+def _selector_inputs(cid, sid, round_record):
+    """`(item, trigger, author_ref)`: the pick's item, and what the round
+    answers for the addressed narrowing (roadmap 02 §5.2 rule 2) -- the
+    player-typed note when the round carries one (the player's, so no
+    author), else the newest post in the pick's window as the model is shown
+    it, with its writer's ref (None for the player's post, or for a post the
+    response ledger never saw)."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
     conversation = store.response_protocol.observable_conversation(
         messages, lambda posts, offset, total: store.regex.view.view(
             posts, cid=cid, phase="prompt", offset=offset, total=total))
-    return store.response_protocol.selector_item(
+    item = store.response_protocol.selector_item(
         round_record["eligible"], conversation, round_record.get("note", ""))
+    if round_record.get("typed_note"):
+        return item, round_record["typed_note"], None
+    newest = next((m for m in reversed(messages)
+                   if not store.scenes.is_excluded(m)
+                   and m.get("speaker") not in store.scenes.SYNTHETIC_SPEAKERS), None)
+    if newest is None or not conversation:
+        return item, "", None
+    author = (None if newest["role"] == "user"
+              else store.responses.actor_refs(cid, sid).get(newest.get("response_id") or ""))
+    return item, conversation[-1]["content"], author
 
 
 def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, plan=None,
@@ -737,7 +757,7 @@ def _round_state(cid, sid, round_record, **fields):
 
 
 async def _select(cid, sid, client, round_record):
-    """`(next, issue)` for a round with no lead: one `decide()` item, a choice
+    """`(next, issue, pick)` for a round with no lead: one `decide()` item, a choice
     over the eligible refs and `grimoire`, null allowed (spec 7.4). A round
     of one or none needs no question. The seam's 409 comes first, as before;
     an `LLMError` propagates as before, filed by the meter `decide` opens.
@@ -753,13 +773,22 @@ async def _select(cid, sid, client, round_record):
     A request `decide` refuses before sending (two eligible refs that read as
     one once normalised, or more than 254 of them, which with `grimoire` is
     past a choice's 255 options) is today's invalid handoff: the round raises the
-    issue and control returns to the player, never a 500 mid-turn."""
+    issue and control returns to the player, never a 500 mid-turn.
+
+    With the campaign sampling the pick (`decide_speaker_sampling`, roadmap
+    02-C2a), the issue mapping is read first and unchanged, and only then is
+    WHO drawn from the report (`response_protocol.sampled_pick`), the draw's
+    record returned as `pick` for `_first_actor` to store with the speaker.
+    Off, `pick` is None and nothing is read past the switch. A `ValueError`
+    from the draw is a defect: the answer stands, no pick is stored, and it
+    is logged at ERROR by class only."""
     eligible = round_record["eligible"]
     if len(eligible) <= 1:
-        return (eligible[0]["ref"] if eligible else "grimoire"), None
+        return (eligible[0]["ref"] if eligible else "grimoire"), None, None
     resolved = await run_in_threadpool(
         lambda: require_inference("response-selector", cid, operation="decide"))
-    item = await run_in_threadpool(_selector_item, cid, sid, round_record)
+    sampling = await run_in_threadpool(_samples_pick, cid)
+    item, trigger, author = await run_in_threadpool(_selector_inputs, cid, sid, round_record)
     try:
         async with decision_capture.capturing(cid, sid, "response-selector") as scope:
             decision = await operations.decide(
@@ -769,8 +798,30 @@ async def _select(cid, sid, client, round_record):
     except decisions.DecideRequestError as exc:
         _log.warning("speaker pick refused for %s/%s, control returns to the player: %s",
                      cid, sid, exc)
-        return None, store.response_protocol.INVALID_HANDOFF
-    return store.response_protocol.selection_of(decision.items[0])
+        return None, store.response_protocol.INVALID_HANDOFF, None
+    selection = store.response_protocol.selection_of(decision.items[0])
+    if not sampling:
+        return (*selection, None)
+    try:
+        offered = [entry["ref"] for entry in eligible] + [store.response_protocol.GRIMOIRE_REF]
+        drawn = store.response_protocol.sampled_pick(
+            item, decision.items[0], offered,
+            store.response_protocol.addressed(trigger, eligible, author), draws.new_seed())
+    except ValueError as exc:
+        _log.error("speaker draw for %s/%s failed, the answer stands: %s",
+                   cid, sid, type(exc).__name__)
+        return (*selection, None)
+    return store.response_protocol.next_of(selection, drawn), selection[1], drawn.record
+
+
+def _samples_pick(cid):
+    """Whether this campaign samples the speaker pick; fail-soft, since an
+    optional step that cannot read its own switch leaves the pick as it was."""
+    try:
+        return store.play_decisions.speaker_sampling(cid)
+    except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn
+        _log.error("speaker sampling switch unreadable for %s: %s", cid, type(exc).__name__)
+        return False
 
 
 #: The task each turn-plan mode asks under (roadmap 02 §6.4).
@@ -853,8 +904,9 @@ async def _turn_plan(cid, sid, client, round_record, actor, response_id):
                 campaign=cid, scene=sid, post=round_record["post"],
                 round_id=round_record["id"], response_id=response_id,
                 capture=scope.hook(), around=plan_deadline())
-        stance, reason = store.turn_plan.stance_of(decision.items[0])
-        return {**record, "stance": stance, **({"reason": reason} if reason else {})}
+        stance, reason, drawn = _drawn_stance(cid, sid, item, decision.items[0])
+        return {**record, "stance": stance, **({"reason": reason} if reason else {}),
+                **({"draw": drawn} if drawn is not None else {})}
     except LLMError as exc:
         return {**record, "skipped": exc.kind or "error"}
     except decisions.DecideRequestError:
@@ -862,6 +914,19 @@ async def _turn_plan(cid, sid, client, round_record, actor, response_id):
     except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn (§3.3)
         _log.error("turn intent for %s/%s skipped: %s", cid, sid, type(exc).__name__)
         return {**record, "skipped": f"error:{type(exc).__name__}"}
+
+
+def _drawn_stance(cid, sid, item, result):
+    """The stance, drawn where the report allows (`turn_plan.drawn_stance`,
+    roadmap 02 §6.5). A `ValueError` from the draw is a defect: the plain
+    answer stands with no record, logged at ERROR by class only."""
+    try:
+        return store.turn_plan.drawn_stance(item, result, draws.new_seed())
+    except ValueError as exc:
+        _log.error("stance draw for %s/%s failed, the answer stands: %s",
+                   cid, sid, type(exc).__name__)
+        stance, reason = store.turn_plan.stance_of(result)
+        return stance, reason, None
 
 
 def _reasoning_frame(event, watcher, liveness):
@@ -989,11 +1054,17 @@ async def _first_actor(cid, sid, client, round_record):
         round_record = await run_in_threadpool(
             _round_state, cid, sid, round_record, status="complete")
         return None, round_record
+    if actor is None and round_record.get("pick") is not None:
+        # Decided (roadmap 02 §5.3): a drawn pick is stored with its speaker,
+        # so a round that holds one is never asked or drawn again -- not by a
+        # retry, a recovery or a roll resume, and not when it handed back.
+        return None, round_record
     if actor is None:
-        actor, issue = await _select(cid, sid, client, round_record)
+        actor, issue, pick = await _select(cid, sid, client, round_record)
         round_record = await run_in_threadpool(
             _round_state, cid, sid, round_record, actor_ref=actor,
-            status="pending" if actor else "complete", issue=issue)
+            status="pending" if actor else "complete", issue=issue,
+            **({"pick": pick} if pick is not None else {}))
     return actor, round_record
 
 
