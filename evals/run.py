@@ -477,7 +477,7 @@ def run_play(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                                        repeat=args.repeat or play.DEFAULT_REPEAT,
                                        selected=selected, real_home=real_home, rates=rates,
                                        run_id=args.run_id)
-    except play.PlayRefusedError as exc:
+    except (play.PlayRefusedError, runner.FollowUpsRunningError) as exc:
         print(runner.ascii_safe(f"play: {exc}"), file=sys.stderr)
         return 1
     print(runner.report(results))

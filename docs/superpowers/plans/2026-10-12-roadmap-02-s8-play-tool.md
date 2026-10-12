@@ -43,13 +43,26 @@ recorded per variant. Delivers 02-C4 (full).
   - `_opened` runs the loop's entry checks up front, with literal tasks
     (`chat` for a fresh contribution, `regenerate` for a reroll). A refusal
     falls back to a plain generation.
-  - `PLAY_TOOL_BUDGET` is 2 turns, 1 call and 1 decision.
+  - `PLAY_TOOL_BUDGET` is 2 turns, 1 call and 1 decision, with no run wall,
+    no output cap of its own (`RunBudget.max_output_tokens=None`: each turn
+    is sent the scene preset's cap, or none, as a plain contribution is) and
+    no finalize instruction (`RunBudget.finalize_note=False`: after a call,
+    turn 2 is the contribution continued from the tool result, never "give
+    your final answer now").
   - `_tool_events` yields `llm_reasoning.stream`-shaped events, resets the
     watcher between turns, and records `called` and `declined: after_text`.
     A failed loop raises its `LLMError`, as any stream failure does.
   - `_LoopMeter` stands in for the contribution's meter (the loop meters
-    each turn under the run id) and takes the serving stamp from the last
-    row.
+    each turn under the run id). Its `usage` is the latest loop turn's live
+    holder (`stream_tools(holders=)`), so the display rules, `made_by` and
+    the served connection name the attempt that served, a fallback and a
+    loop closed early (a roll fence, a failure) included.
+  - A loop that fails, or ends, before the reader saw any reply text falls
+    back to a plain generation under a meter of its own, recorded as
+    `fell_back` (§3.3: the optional tool never fails or empties a turn).
+    Visible text already shown is final.
+  - The decision row carries the round's `post` (`decision_tool(post=)`).
+  - The plan ceiling is read off the event loop, as is `_offers_tool`.
   - Offered on a fresh contribution (`fresh`: no pending response, no
     appended block, no continuation) and on a reroll; never on a retry, a
     roll resume or Keep writing. The record goes to `save_variant(tool=)`
@@ -76,3 +89,17 @@ recorded per variant. Delivers 02-C4 (full).
 - an invalid request is a result, not a failure.
 
 `test_play_gate.py` covers the tool feature's offers.
+
+Review follow-up: the tests above also cover no output cap and no finalize
+instruction on the loop turns, the decision row's `post`, the variant's
+`made_by`, the plain fallback (a failed loop, and a loop that showed only a
+hidden fence), and the live holder.
+
+**Kept as is, deliberately.**
+- A decision the play ceiling cuts files its meter `aborted`, not
+  `error/timeout` (§3.4): the deadline is the app's constant, so this is the
+  caller's clock rather than the provider failing, as 01g files a budget-cut
+  call.
+- Each loop turn is still bounded by `llm_call_budget` until its first
+  delta, which a plain stream is not. A loop that runs past it fails before
+  showing anything, so it falls back to a plain generation.

@@ -338,6 +338,9 @@ class _Asking:
     prices: dict
     max_tokens: int
     guarded: bool = False
+    #: The transcript index the decision answers, filed on its rows the way
+    #: the loop's turns file theirs (02 §3.5), or None.
+    post: int | None = None
 
 
 def _late_pricing(asking: _Asking) -> tuple[dict, str]:
@@ -461,8 +464,8 @@ async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
     try:
         decision = await operations.decide(  # capture-ok: the caller's capture, passed through to the inner decide (01g 3.12; 01b-C1)
             using.task, [item], client=asking.client, resolved=using, campaign=asking.cid,
-            scene=asking.scene, round_id=asking.round_id, response_id=asking.response_id,
-            run_id=ctx.run_id, loop_turn=ctx.turn, capture=asking.capture,
+            scene=asking.scene, post=asking.post, round_id=asking.round_id,
+            response_id=asking.response_id, run_id=ctx.run_id, loop_turn=ctx.turn, capture=asking.capture,
             max_tokens=asking.max_tokens, around=around)
     except decisions.DecideRequestError as exc:
         _noted(ctx, "invalid_request")
@@ -491,8 +494,8 @@ async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
 
 
 def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClient, *,
-                  cid: str, scene: str = "", round_id: str = "", response_id: str = "",
-                  why: str = "", shape: ToolShape | None = None,
+                  cid: str, scene: str = "", post: int | None = None, round_id: str = "",
+                  response_id: str = "", why: str = "", shape: ToolShape | None = None,
                   context: Callable[[dict], str] | str = "",
                   select: Callable[[decisions.ItemResult], dict] | None = None,
                   capture: operations.Capture | None = None,
@@ -525,7 +528,8 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
     if refused or resolved is None:
         return None, why or refused
     asking = _Asking(resolved, client, cid, scene, round_id, response_id, shape, context,
-                     select, capture, prices, max_tokens, guarded=spend is not None)
+                     select, capture, prices, max_tokens, guarded=spend is not None,
+                     post=post)
 
     async def ask(args: dict, ctx: tool_calls.ToolContext) -> tool_calls.ToolOutput:
         return await _asked(asking, args, ctx)

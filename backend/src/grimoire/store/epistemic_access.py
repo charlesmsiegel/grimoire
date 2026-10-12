@@ -46,6 +46,11 @@ UNKNOWN = "unknown"
 #: `narrator_only` is already safe, and escalating it would only spend.
 PERMISSIVE: tuple[str, ...] = ("known", "suspected", "experienced")
 
+#: Every reading from the most withholding to the least: a pair asked twice
+#: keeps the earlier of its two (`access_of`). Hearsay (`known`) withholds
+#: more than having been there (`experienced`).
+WITHHOLDING: tuple[str, ...] = (UNKNOWN, "narrator_only", "suspected", "known", "experienced")
+
 #: The task 11's call site names, on the `epistemic` route it lands.
 TASK = "epistemic-access"
 
@@ -114,7 +119,7 @@ def access_of(questions: Sequence[AccessQuestion],
     """`(actor_ref, evidence_ref) -> class`, failing closed (module
     docstring): a read class stands only when no escalation of its item
     ended other than `answered`; everything else is `UNKNOWN`. A pair handed
-    twice keeps the more withholding reading (UNKNOWN beats any class)."""
+    twice keeps the more withholding reading (`WITHHOLDING`)."""
     unanswered = {e.index for e in decision.escalations if e.outcome != "answered"}
     out: dict[tuple[str, str], str] = {}
     for index, q in enumerate(questions):
@@ -125,5 +130,6 @@ def access_of(questions: Sequence[AccessQuestion],
                     and answer.answer in CLASSES:
                 access = answer.answer
         key = (q.actor_ref, q.evidence_ref)
-        out[key] = UNKNOWN if out.get(key) == UNKNOWN else access
+        held = out.get(key)
+        out[key] = access if held is None else min(held, access, key=WITHHOLDING.index)
     return out

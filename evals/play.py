@@ -344,9 +344,16 @@ def play(fixture: Fixture, conf: PlayConfig, *, client=None, repeat: int = 0,
     drain_ctx = {"app": app, "shutdown": lambda: tc.__exit__(None, None, None)}
     run = PlayRun(fixture, conf, repeat, cid=ctx["cid"], refs=ctx["refs"], ctx=ctx)
     started = time.monotonic()
-    with _cutoff(conf):
-        response = tc.post(f"/api/campaigns/{ctx['cid']}/scenes/{ctx['sid']}/chat",
-                           json=fixture.send)
+    try:
+        with _cutoff(conf):
+            response = tc.post(f"/api/campaigns/{ctx['cid']}/scenes/{ctx['sid']}/chat",
+                               json=fixture.send)
+    except Exception as exc:  # noqa: BLE001 - the run fails; the caller still drains
+        # The app is still up: handing back the drain context is what lets
+        # the caller drain and shut it down before the isolate restores.
+        run.wall_ms = int((time.monotonic() - started) * 1000)
+        run.error = f"the send raised {type(exc).__name__}"
+        return run, drain_ctx
     run.wall_ms = int((time.monotonic() - started) * 1000)
     if response.status_code != 200 or '"error"' in response.text:
         run.error = f"status {response.status_code}" if response.status_code != 200 \
@@ -514,20 +521,25 @@ def gate(graded: Sequence[Graded]) -> list[Check]:
     for name in sorted({c.name for c in every}):
         bad = [c.detail for c in every if c.name == name and not c.ok]
         out.append(Check(name, not bad, "; ".join(bad[:3])))
-    # Consistent turn-check regression, per fixture.
+    # Consistent turn-check regression, per fixture and per "on"
+    # configuration: each against the "off" runs of that fixture, so one
+    # configuration that always regresses is never masked by another that
+    # passes.
     regressions = []
-    for fx in {g.run.fixture.id for g in graded}:
+    for fx in sorted({g.run.fixture.id for g in graded}):
         off = [g for g in graded if g.run.fixture.id == fx and not g.run.config.on]
-        on = [g for g in graded if g.run.fixture.id == fx and g.run.config.on]
-        for name in {c.name for g in off + on for c in g.checks if c.name.startswith("turn.")}:
-            passes_off = off and all(_ok(g, name) for g in off)
-            fails_on = on and all(not _ok(g, name) for g in on)
-            if passes_off and fails_on:
-                regressions.append(f"{fx}: {name}")
+        for conf in sorted({g.run.config.id for g in graded if g.run.config.on}):
+            on = [g for g in graded if g.run.fixture.id == fx and g.run.config.id == conf]
+            for name in sorted({c.name for g in off + on for c in g.checks
+                                if c.name.startswith("turn.")}):
+                passes_off = off and all(_ok(g, name) for g in off)
+                fails_on = on and all(not _ok(g, name) for g in on)
+                if passes_off and fails_on:
+                    regressions.append(f"{fx} [{conf}]: {name}")
     out.append(Check("gate.no_turn_regression", not regressions, "; ".join(regressions)))
-    off_rows = [g.run.config.id for g in graded if not g.run.config.on and feature_rows(g.run)]
+    off_rows = [g.run.config.id for g in graded if not g.run.config.on and _not_off(g.run)]
     out.append(Check("gate.off_is_free", not off_rows,
-                     f"configs {sorted(set(off_rows))} filed rows under the feature's task"))
+                     f"configs {sorted(set(off_rows))} ran the feature with it off"))
     not_on = sorted({g.run.config.id for g in graded if g.run.config.on and _not_on(g.run)})
     out.append(Check("gate.on_is_on", not not_on,
                      f"configs {not_on} skipped the feature or filed none of its calls"))
@@ -536,6 +548,17 @@ def gate(graded: Sequence[Graded]) -> list[Check]:
 
 def _ok(g: Graded, name: str) -> bool:
     return all(c.ok for c in g.checks if c.name == name)
+
+
+def _not_off(run: PlayRun) -> bool:
+    """Whether a run labelled "off" ran its feature anyway: a row under the
+    feature's task, or -- for the speaker draw, which adds no call -- a draw
+    stored on a round, or a tool offered to a contribution."""
+    if run.config.feature == "speaker":
+        return bool(run.picks)
+    if run.config.feature == "tool":
+        return any((r.get("tool") or {}).get("offered") for r in run.replies)
+    return bool(feature_rows(run))
 
 
 def _not_on(run: PlayRun) -> bool:
@@ -626,9 +649,10 @@ def adherence_item(reply: str) -> decisions.Item:
 
 
 class PlayRefusedError(RuntimeError):
-    """A play run refused before anything was sent (a selection the real
-    store does not have), or stopped because a run's follow-ups outlived the
-    drain."""
+    """A play run refused before anything was sent: a selection the real
+    store does not have, or an isolate that resolves to the real home. A run
+    whose follow-ups outlive the drain raises `runner.FollowUpsRunningError`
+    instead, which the isolate keeps its home for."""
 
 
 def _case(feature: str, fixture: Fixture):
@@ -651,9 +675,10 @@ def run_all(feature: str, configs: Sequence[PlayConfig], isolate, *, repeat: int
     only then harvested, behind the tripwire before the fixture is built and
     again before the harvest. Returns the `runner.Result`s the report and the
     run file read, and the graded runs the gate reads. A run whose follow-ups
-    outlive the drain stops the whole run (`PlayRefusedError`), as `live_all`
-    does: a straggler would write into whatever home came next."""
-    from grimoire.store import paths, usage
+    outlive the drain stops the whole run, as `live_all` does: a straggler
+    would write into whatever home came next, so it raises
+    `runner.FollowUpsRunningError`, which `temp_home` keeps the home for."""
+    from grimoire.store import usage
 
     from . import costs, runner
 
@@ -671,10 +696,11 @@ def run_all(feature: str, configs: Sequence[PlayConfig], isolate, *, repeat: int
                     seed(conf, selected)
                     run, drain_ctx = play(fixture, conf, client=client, repeat=n)
                     if not runner.drain(drain_ctx):
-                        raise PlayRefusedError(
-                            f"{case.id} [{conf.id} #{n + 1}]: follow-ups still running "
-                            f"past {runner.DRAIN_CEILING_S}s; its isolate is kept at "
-                            f"{paths.home()}")
+                        # `FollowUpsRunningError`, never `PlayRefusedError`:
+                        # it is the one the isolate keeps its home (and the
+                        # environment) for, while the app is still running.
+                        raise runner._still_running(case, "", run_day, run_id, rates,
+                                                    run.wall_ms or 0)
                     if runner._is_real_home(real_home):
                         raise PlayRefusedError(runner.ISOLATE_ERROR)
                     run.rows = runner.harvest(run_day, run_id, case.id)

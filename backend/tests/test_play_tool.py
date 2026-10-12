@@ -98,6 +98,17 @@ def test_a_call_before_any_text_is_answered_with_the_selection_only(client):
     assert [r["loop_turn"] for r in chat] == [1, 2] and len({r["run_id"] for r in chat}) == 1
     (decided,) = _rows(cid, "turn-tool-decision")
     assert decided["response_id"] == _record["id"]
+    # The decision is attributed to the post its turns answer (§3.5).
+    assert decided["post"] == chat[0]["post"] is not None
+    # Each loop turn is sent the preset's cap, which here is none -- as a
+    # plain contribution is -- never the loop's own default (§8.3).
+    loop_turns = (fake.requests[0], fake.requests[2])
+    assert all("max_tokens" not in r["target"].sampling.params for r in loop_turns)
+    # Turn 2 continues from the tool result: no finalize instruction (§8.5).
+    assert fake.requests[2]["messages"][-1]["role"] == "tool"
+    # The variant names what served it, as a plain contribution's does.
+    assert variant["made_by"]["connection_id"] == "openrouter"
+    assert variant["made_by"]["model"]
 
 
 def test_a_call_after_visible_text_is_declined(client):
@@ -182,6 +193,8 @@ def test_the_budget_holds_one_call_and_a_cap_is_a_result():
     assert character_turns.PLAY_TOOL_CALLS == 1
     budget = character_turns.PLAY_TOOL_BUDGET
     assert (budget.max_turns, budget.max_tool_calls, budget.max_decisions) == (2, 1, 1)
+    assert (budget.max_output_tokens, budget.finalize_note, budget.wall_seconds) == (
+        None, False, 0)
     shape = character_turns.PLAY_TOOL_SHAPE
     assert (shape.result, shape.on_cap, shape.context) == ("selection", "result", False)
     assert (shape.min_options, shape.max_options, shape.max_question_chars) == (2, 6, 300)
@@ -202,3 +215,43 @@ def test_an_invalid_request_is_a_result_not_a_failure(client, args, reason):
                if m.get("role") == "tool"]
     assert results == [{"selected": None, "reason": reason}]
     assert _replies(cid, sid) == ["Mara shrugs."]
+
+
+@pytest.mark.parametrize("first", [
+    pytest.param("error", id="a failed loop"),
+    pytest.param("hidden", id="a loop that showed nothing"),
+])
+def test_a_loop_that_ends_before_any_text_falls_back_to_a_plain_generation(client, first):
+    """§3.3: the optional tool never fails, or empties, a turn a plain
+    contribution would have played."""
+    from grimoire.llm_errors import LLMError
+
+    cid, sid, base = seed(client)
+    store.write_config(decide_play_tool="on")
+    opening = (LLMError("bad_response", "garbled") if first == "error"
+               else ToolTurn(deltas=("```perception\nShe waits.\n```\n",)))
+    fake = _install(client, FakeToolTurns(opening, ToolTurn(deltas=("Mara answers.", _HANDOFF))))
+    result = _send(client, base)
+    assert '"error"' not in result.text, result.text
+    assert _replies(cid, sid) == ["Mara answers."]
+    assert not fake.requests[-1].get("tools")
+    _record, variant = _variant(cid, sid)
+    assert variant["tool"]["fell_back"] == ("bad_response" if first == "error" else "empty")
+    plain = [r for r in _rows(cid, "chat") if not r.get("loop_turn")]
+    assert len(plain) == 1 and plain[0]["status"] == "ok"
+
+
+def test_a_loop_meter_reads_the_serving_turns_holder():
+    meter = character_turns._LoopMeter("chat", holders := [])
+    assert meter.usage == {}
+    holders.append({"model": "a"})
+    holders.append({"model": "b"})
+    assert meter.usage["model"] == "b" and meter.done() is None
+
+
+def test_an_uncapped_run_takes_no_spend_ceiling():
+    from grimoire import tool_calls
+
+    assert tool_calls.RunBudget(max_output_tokens=None).max_output_tokens is None
+    with pytest.raises(ValueError):
+        tool_calls.RunBudget(max_output_tokens=None, spend_ceiling_usd=1.0)

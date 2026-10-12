@@ -1962,8 +1962,13 @@ class _Loop:
                  prices: dict[tuple[str, str], Price | None] | None = None,
                  streaming: bool = False, decline_after_text: bool = False,
                  reasoning: llm_reasoning.Buffer | None = None,
-                 visibility: Callable[[], Callable[[str], bool]] | None = None):
+                 visibility: Callable[[], Callable[[str], bool]] | None = None,
+                 holders: list[dict] | None = None):
         prices = prices or {}
+        #: The caller's list each turn's usage holder is appended to as its
+        #: meter opens (02 §8.5): the facade stamps the holder in place, so
+        #: the caller reads which attempt is serving while the turn streams.
+        self.holders = holders
         #: 01g-C6: each turn through `client.stream`, the caller's display
         #: reasoning buffer in each turn's holder, and visible text final.
         self.streaming, self.decline_after_text = streaming, decline_after_text
@@ -2118,8 +2123,9 @@ class _Loop:
     async def _finalize(self, *, stopped: bool) -> tool_calls.LoopResult:
         """The finalize turn (spec 3.7 step 7)."""
         self.finalized = True
-        note = await asyncio.to_thread(partial(finalize_message, self.final_schema,
-                                               stopped=stopped))
+        note = (await asyncio.to_thread(partial(finalize_message, self.final_schema,
+                                                stopped=stopped))
+                if self.budget.finalize_note or self.final_schema is not None else None)
         turn = await self._turn(final=True, extra=note)
         if turn is None:
             return self._result("budget_exhausted")
@@ -2267,7 +2273,9 @@ class _Loop:
         the last, on top of that send's reported (else projected) count --
         and the completion is the turn's cap; the maximum over the attempts
         that could serve it."""
-        if self.budget.spend_ceiling_usd is None:
+        cap = self.budget.max_output_tokens
+        if self.budget.spend_ceiling_usd is None or cap is None:
+            # `RunBudget` refuses an uncapped run beside a ceiling.
             return None
         if self.last_prompt is None:
             counted = await asyncio.to_thread(_prompt_count, list(sending), self.defs)
@@ -2278,7 +2286,7 @@ class _Loop:
             prompt = self.last_prompt + counted * tool_calls.PROJECTION_MARGIN
         self.next_prompt = prompt
         costs = [_cost(self.prices.get((t.provider_id, t.model)), prompt,
-                       clamp_to_max_output(t, self.budget.max_output_tokens))
+                       clamp_to_max_output(t, cap))
                  for t in chain.attempts]
         known = [c for c in costs if c is not None]
         # Every attempt was priced at entry (`tool_run_refusal`); one that
@@ -2335,6 +2343,8 @@ class _Loop:
         try:
             with meter as m:
                 m.usage[tool_calls.KEY] = collector
+                if self.holders is not None:
+                    self.holders.append(m.usage)
 
                 def overrun(limit: float) -> LLMError:
                     if by_wall:
@@ -2758,6 +2768,7 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
                  reasoning: llm_reasoning.Buffer | None = None,
                  streaming: bool = True,
                  visibility: Callable[[], Callable[[str], bool]] | None = None,
+                 holders: list[dict] | None = None,
                  ) -> AsyncGenerator[tool_calls.LoopEvent, None]:
     """`run_tools`' loop as it happens (spec 3.8; 01g-C6): an async iterator
     of `tool_calls.LoopEvent`s in the order `text* turn_end (tool_start
@@ -2780,6 +2791,8 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
     the caller's to say when it hides some text from its reader (a hidden
     preparation fence, roadmap 02 §8.2): `visibility` makes a fresh
     predicate per turn, fed each delta, True once the reader would see it.
+    `holders`, a caller's list, is handed each turn's usage holder as its
+    meter opens, the dict the facade stamps the serving attempt into.
 
     The entry checks (`ValueError`) are made here, before an iterator is
     returned; the spend preflight (`RunRefused`) on the first step.
@@ -2792,7 +2805,7 @@ def stream_tools(task: str, messages: list[dict], *, toolset: tool_calls.Toolset
                "scene_identity": scene_identity, "cancelled": cancelled,
                "final_schema": final_schema, "tool_choice": tool_choice, "capture": capture,
                "streaming": streaming, "decline_after_text": decline_after_text,
-               "reasoning": reasoning, "visibility": visibility}
+               "reasoning": reasoning, "visibility": visibility, "holders": holders}
     return _loop_events(task, messages, options)
 
 

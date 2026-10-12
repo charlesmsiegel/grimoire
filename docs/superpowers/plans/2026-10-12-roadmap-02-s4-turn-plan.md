@@ -32,9 +32,17 @@ tension in one item and one call, in place of the intent call, with an
   extra items to the same `decide()`. Only the stance is drawn. The record
   gains `disclosure`, `tension` and, when there are extras, `extra`. The
   block renders the plan's three lines and nothing of the extras.
-- **Eval.** `decide-turn-plan` covers compliant, undecodable, forthcoming
-  (disclosure and tension wrong) and off-scale (a tension level read as
-  None).
+  §7.3 says an extra is stored "under the owner's key in `intent`". It is
+  stored one level down, under `intent["extra"][owner]`, so an owner can
+  never be named after one of the plan's own keys (`stance`, `draw`,
+  `skipped` and the rest) and overwrite it.
+- **Eval.** `decide-turn-plan` covers these recordings:
+  - compliant and undecodable;
+  - forthcoming (disclosure and tension wrong);
+  - off-scale (a tension level read as None);
+  - abstained (a null stance);
+  - native (OpenAI's decisions endpoint, the stance carrying a distribution
+    and the tension a score).
 - `verify_templates.py` holds the plan item's questions and options. The
   templates README describes the plan.
 

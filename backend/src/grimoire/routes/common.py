@@ -755,7 +755,7 @@ def plan_ceiling() -> float:
     return PLAN_CEILING_S if budget <= 0 else min(PLAN_CEILING_S, budget)
 
 
-def plan_deadline() -> operations.Around:
+def plan_deadline(ceiling: float | None = None) -> operations.Around:
     """One monotonic deadline for ONE play decision, as `decide`'s `around`.
 
     Each facade call is bounded by what is left of it (`_bounded_call` with
@@ -765,8 +765,10 @@ def plan_deadline() -> operations.Around:
     the connection (`_noting` is deliberately absent): this deadline is the
     app's constant, not the user's `llm_call_budget`, so a slow and healthy
     reasoning model must not read as failing on the Models page because of
-    it. Built per decision: the clock starts here."""
-    end = _plan_clock() + plan_ceiling()
+    it. Built per decision: the clock starts here. `ceiling` is
+    `plan_ceiling()` read by a caller off the event loop (it reads the
+    store); None reads it here, for a caller already off the loop."""
+    end = _plan_clock() + (plan_ceiling() if ceiling is None else ceiling)
 
     async def bound(call, _holder):
         left = end - _plan_clock()

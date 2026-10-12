@@ -1732,6 +1732,8 @@ def grade_decide_turn_plan(ctx: dict, output: str) -> list[Check]:
                     "the actor's own card brief is not in the prompt")]
     checks += graders.grade_decision(output, ctx["items"], explain=False,
                                      question=turn_plan.STANCE_ID, expected="deflect")
+    checks += graders.grade_distribution(ctx["items"][0], turn_plan.STANCE_ID,
+                                         ctx.get("native_results", {}).get(0))
     if decisions.find_object(output) is not None:
         (result,) = decisions.parse(output, ctx["items"], explain=False)
         got = turn_plan.plan_answers(result)
@@ -2413,7 +2415,14 @@ CASES: tuple[Case, ...] = (
              # The stance right, the secret given away and the stakes raised.
              Recording("forthcoming", ("plan.disclosure", "plan.tension"), "json"),
              # A tension level the scale does not have: unread, never clamped.
-             Recording("off-scale", ("plan.tension",), "json"))),
+             Recording("off-scale", ("plan.tension",), "json"),
+             # Well formed, and a null stance: a real answer, not this
+             # fixture's, and never drawn from (§6.5).
+             Recording("abstained", ("decide.answer",), "json"),
+             # The compliant plan from OpenAI's decisions endpoint: the stance
+             # with a distribution the draw would sample from, and the tension
+             # as a score on the level scale.
+             Recording("native", (), "json", native="openai"))),
     Case(id="decide-play-tool",
          task="turn-tool-decision",
          hypothesis="asked through the decide tool, mid-reply, whether a character who "

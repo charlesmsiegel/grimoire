@@ -181,6 +181,32 @@ def test_a_consistent_turn_regression_fails_the_gate():
     assert mixed["gate.no_turn_regression"].ok
 
 
+def test_one_configuration_that_always_regresses_is_not_masked_by_another():
+    """§4.3 criterion 3 is per configuration: a plan matrix's cheap scene
+    model that always regresses fails the gate even when the default scene
+    model passes on every repeat."""
+    cheap = play.Selection("openrouter", "vendor/cheap", "low")
+    confs = play.matrix("plan", [SCENE, cheap], [DECIDER])
+    off, good, bad = confs
+
+    def graded(conf, ok):
+        return play.Graded(play.PlayRun(play.FIXTURES[0], conf, 0),
+                           (Check("turn.authority", ok),))
+    verdict = {c.name: c for c in play.gate([graded(off, True), graded(off, True),
+                                             graded(good, True), graded(good, True),
+                                             graded(bad, False), graded(bad, False)])}
+    assert not verdict["gate.no_turn_regression"].ok
+    assert bad.id in verdict["gate.no_turn_regression"].detail
+
+
+def test_a_speaker_draw_stored_with_sampling_off_fails_off_is_free():
+    off = play.matrix("speaker", [SCENE], [DECIDER])[0]
+    run = play.PlayRun(play.FIXTURES[0], off, 0)
+    run.picks.append({"basis": "sampled", "selected": "characters:mara"})
+    verdict = {c.name: c for c in play.gate([play.Graded(run, ())])}
+    assert not verdict["gate.off_is_free"].ok
+
+
 def test_mass_on_intended_reads_the_weights_actually_drawn():
     pick = {"basis": "sampled", "selected": "a", "answer": "a",
             "distribution": [["a", 0.5], ["b", 0.3], ["grimoire", 0.15], ["<none>", 0.05]],
@@ -215,3 +241,43 @@ def test_the_tool_gate_reports_its_offers(real):
     on = [g for g in graded if g.run.config.on]
     assert all(r["tool"]["offered"] for g in on for r in g.run.replies)
     assert all(not r.get("tool") for g in graded if not g.run.config.on for r in g.run.replies)
+
+
+def test_a_drain_timeout_keeps_the_isolate_and_the_environment(real, monkeypatch):
+    """Follow-ups that outlive the drain leave the app running, so the run
+    stops with `FollowUpsRunningError` -- the one the isolate keeps its home
+    and the environment for -- and the real home is never restored under it."""
+    import os
+
+    from evals import runner
+
+    # The app is shut down here (a real timeout would leave it up), so the
+    # test leaves nothing running; the drain still reports it did not settle.
+    monkeypatch.setattr(runner, "drain", lambda ctx: ctx["shutdown"]() and False)
+    kept: list[str] = []
+    with pytest.raises(runner.FollowUpsRunningError) as stopped:
+        try:
+            _run("intent", _Scripted(), fixtures=play.FIXTURES[:1])
+        finally:
+            kept.append(os.environ["GRIMOIRE_HOME"])
+    assert kept[0] != str(real) and Path(kept[0]).is_dir()
+    assert "isolate is kept at" in stopped.value.result.error
+    monkeypatch.setenv("GRIMOIRE_HOME", str(real))
+    import shutil
+    shutil.rmtree(kept[0], ignore_errors=True)
+
+
+def test_a_send_that_raises_is_a_failed_run_the_caller_still_drains(real, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    def broken(self, *_a, **_k):
+        raise RuntimeError("socket gone")
+
+    monkeypatch.setattr(TestClient, "post", broken)
+    drained: list[dict] = []
+    from evals import runner
+
+    real_drain = runner.drain
+    monkeypatch.setattr(runner, "drain", lambda ctx: drained.append(ctx) or real_drain(ctx))
+    _results, graded = _run("intent", _Scripted(), fixtures=play.FIXTURES[:1])
+    assert drained and all(g.run.error == "the send raised RuntimeError" for g in graded)

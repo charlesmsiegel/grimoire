@@ -1563,9 +1563,9 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         system = compose([s["text"] for s in packed["sections"] if not s["dropped"]])
         messages = [{"role": "system", "content": system}] if system or opener else []
         # A play decision's block (`after_history`, roadmap 02 §6.5) follows
-        # the last post, as an author's note at depth 0 does. It is never a
-        # carrier, so a trailing carrier stays where it is beside it.
-        messages += _merged_carrier([*packed["history"], *after_history], before_post)
+        # the last post, as an author's note at depth 0 does, and precedes a
+        # director note -- also one a trailing carrier is folded into (#377).
+        messages += _merged_carrier(packed["history"], before_post, after_history)
         if post_history:
             messages.append({"role": "system", "content": post_history})
         messages += after_post
@@ -1590,20 +1590,24 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     return prepared, prepared.breakdown
 
 
-def _merged_carrier(history: list[dict], before_post: tuple[dict, ...]) -> list[dict]:
-    """`history + before_post`, with a trailing carrier folded into a user
-    message the prompt appends right after it (a director note, #377), so the
-    carrier never sits beside another user message. New list, new dicts: the
-    packed history and `before_post` are shared by every guidance variant."""
+def _merged_carrier(history: list[dict], before_post: tuple[dict, ...],
+                    between: tuple[dict, ...] = ()) -> list[dict]:
+    """`history + between + before_post`, with a trailing carrier folded into
+    a user message the prompt appends right after it (a director note, #377),
+    so the carrier never sits beside another user message -- `between` (a
+    play decision's system block) included, which a provider that lifts
+    system messages out of the list would otherwise leave the two beside.
+    New list, new dicts: the packed history and `before_post` are shared by
+    every guidance variant."""
     tail = history[-1] if history else None
     first = before_post[0] if before_post else None
     if not (tail and tail.get(content_parts.CARRIER) and first and first["role"] == "user"):
-        return [*history, *before_post]
+        return [*history, *between, *before_post]
     content = first["content"]
     note = {**first, "content": [*tail["content"],
                                  *([{"type": "text", "text": content}]
                                    if isinstance(content, str) else content)]}
-    return [*history[:-1], note, *before_post[1:]]
+    return [*history[:-1], *between, note, *before_post[1:]]
 
 
 def _token_memo():

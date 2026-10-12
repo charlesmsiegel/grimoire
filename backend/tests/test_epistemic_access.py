@@ -89,6 +89,18 @@ def test_a_pair_asked_twice_keeps_the_withholding_reading():
     assert mapped == {("characters:mara", "ev1"): ea.UNKNOWN}
 
 
+@pytest.mark.parametrize("first,second,kept", [
+    ("narrator_only", "known", "narrator_only"),
+    ("known", "narrator_only", "narrator_only"),
+    ("experienced", "suspected", "suspected"),
+    ("known", "experienced", "known"),
+])
+def test_a_pair_asked_twice_keeps_the_more_withholding_class(first, second, kept):
+    mapped = ea.access_of([Q, Q], _decision(_result(first), _result(second)))
+    assert mapped == {("characters:mara", "ev1"): kept}
+    assert set(ea.WITHHOLDING) == {*ea.CLASSES, ea.UNKNOWN}
+
+
 def test_escalation_fires_only_on_permissive_answers():
     """01d-C2a's answer filter, through the real trigger evaluation: a
     low-margin `narrator_only` is already safe and is never escalated."""
