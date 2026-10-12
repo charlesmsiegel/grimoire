@@ -204,6 +204,15 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "tracker": cfg.get("tracker", store.config.DEFAULT_TRACKER),
             "perception_rider": cfg.get("perception_rider",
                                         store.config.DEFAULT_PERCEPTION_RIDER),
+            # The play-decision switches (roadmap 02 §3.6), reported as
+            # stored so a write reads back; no page shows them until a
+            # switch's play gate is ratified (02-S6).
+            "decide_speaker_sampling": cfg.get("decide_speaker_sampling",
+                                               store.config.DEFAULT_DECIDE_SPEAKER_SAMPLING),
+            "decide_turn_plan": cfg.get("decide_turn_plan",
+                                        store.config.DEFAULT_DECIDE_TURN_PLAN),
+            "decide_play_tool": cfg.get("decide_play_tool",
+                                        store.config.DEFAULT_DECIDE_PLAY_TOOL),
             "send_images": cfg.get("send_images", store.config.DEFAULT_SEND_IMAGES),
             "send_images_limit": cfg.get("send_images_limit",
                                          store.config.DEFAULT_SEND_IMAGES_LIMIT),

@@ -74,9 +74,10 @@ all of them have landed. `check` holds both to the slice checklist.
 - **Landed:** 01s, 01a, 01b, 01c, 01d, 01e, 01f, 01g, 01h, 01i. 01s was ticked after the fact:
   every task of its plan is in the tree and its tests pass, but the history
   that would show its Codex review gates was not available to check.
-- **Now:** 02, 03, 07, 13 (II-A to II-D). No task samples, goes native-first
-  or escalates yet: each is switched on by the change that carries its live
-  evidence (`evals/README.md`).
+- **Now:** 02 (S6, behind ratified play-gate reports), 03, 07, 13 (II-A to
+  II-D). No task goes native-first or escalates yet: each is switched on by
+  the change that carries its live evidence (`evals/README.md`). Four tasks
+  may sample (02), each only behind a play-decision switch, all off.
 - **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → 02 → 11 (Decision stage).
   01e (landed) feeds 02, 09 and 13.
 - **Generate lane:** ~~01f~~ → ~~01g~~ → 12.
@@ -258,15 +259,30 @@ These are headlines. The owning spec's Contract section is authoritative.
   context breakdowns.
 
 ### 02: Decision integration
-- [ ] **02-C1** A record of what 01's slices F–H landed.
-- [ ] **02-C2a** A sampled next speaker. **02-C2b** A turn intent.
-- [ ] **02-C3** A per-contribution turn plan, with an `extra` slot for 13-C3.
-- [ ] **02-C4** Decision as a tool in play, at most one per contribution.
-- [ ] **02-C5a** Epistemic access, as a kit for 11.
-- [ ] **02-C5b** History relevance (`history_check` route), as a kit for 09
+- [x] **02-C1** A record of what 01's slices F–H landed.
+- [x] **02-C2a** A sampled next speaker. **02-C2b** A turn intent.
+- [x] **02-C3** A per-contribution turn plan, with an `extra` slot for 13-C3.
+- [x] **02-C4** Decision as a tool in play, at most one per contribution.
+- [x] **02-C5a** Epistemic access, as a kit for 11.
+- [x] **02-C5b** History relevance (`history_check` route), as a kit for 09
   and 10.
 - [ ] **02-C6** Play-decision rules and the play gate. Everything is off by
   default.
+- S1-S5, S7 and S8 in one PR, each slice its own commit (plans in
+  `docs/superpowers/plans/2026-10-12-roadmap-02-s*.md`). Every plan gate,
+  review and final gate was a **substitute** review (no Codex CLI); the
+  Codex gates are owed. C6 waits on S6, which needs each switch's live
+  play-gate report and the user's explicit yes (spec §4.3): until then every
+  switch stays dark, honoured by the backend and shown by no UI.
+- Readings: `decide(response_id=)` had already landed with 01g-S3, so S1
+  adds only `responses.mint_id()` and `prepare(response_id=, intent=)`.
+  `routing.NO_LEGACY` and `NO_LEGACY_TASKS` land with 02-S2. Since 01e-C1 has
+  landed, C5b ships the `Rank` form beside the Score form. Each kit's route
+  entry is exported unregistered (`ROUTE`) for its consumer to add. The tool
+  loop gains a per-turn `visibility` predicate, so a hidden perception fence
+  is not "visible text" (§8.2), and `TOOLS_OPTIONAL` gains `scene`. The
+  `decide-speaker` native recording with a distribution was already there
+  (01c-S3).
 
 ### 03: Compiled cache
 - [ ] **03-C1** Composite keys over collection digests and inputs that are not
@@ -508,14 +524,14 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 02-S1 | Record and plumbing | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 02-S2 | Turn intent, dark (answers only) | L | 3 | 01b-S2, 02-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 02-S3 | Sampling (speaker and stance) | M | 4 | 01c-S1, 01c-S2, 01d-S1, 02-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 02-S4 | Turn plan, dark | M | 5 | 01e-S4 (S), 02-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 02-S5 | Play gate harness | L | 4 | 01a-S2, 01a-S3, 01a-S4, 02-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S1 | Record and plumbing | M | 1 | — | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 02-S2 | Turn intent, dark (answers only) | L | 3 | 01b-S2, 02-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 02-S3 | Sampling (speaker and stance) | M | 4 | 01c-S1, 01c-S2, 01d-S1, 02-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 02-S4 | Turn plan, dark | M | 5 | 01e-S4 (S), 02-S3 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 02-S5 | Play gate harness | L | 4 | 01a-S2, 01a-S3, 01a-S4, 02-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 | 02-S6 | Exposure of ratified features | M | 5 | 02-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 02-S7 | Decide kits for 11 and 09 | M | 3 | 01d-S3, 01e-S5 (S), 02-S1 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 02-S8 | Decision as a tool from play, dark | L | 7 | 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 02-S7 | Decide kits for 11 and 09 | M | 3 | 01d-S3, 01e-S5 (S), 02-S1 (S) | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 02-S8 | Decision as a tool from play, dark | L | 7 | 01c-S1, 01g-S1, 01g-S4, 01g-S5, 01g-S6, 01g-S7, 01g-S8 (S), 02-S2, 02-S5 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 
 ### 03
 
@@ -659,9 +675,11 @@ alone. This table is generated: after a spec's slices change, run
 - `ItemResult.served`: 01d, read by 01c.
 - `routing.NO_LEGACY` sentinel for routes new at format 2: 01g
   (`tool-decision`), 09 and 10 (`history_check`, `history_plan`), 02-C5.
+  **Landed by 02-S2** (`turn_plan`), with `NO_LEGACY_TASKS`.
   Any of these may add it, together with its test mechanism: a
   `NO_LEGACY_TASKS` set that the frozen inference baselines exclude.
-- `decide(response_id=)` and `responses.mint_id()`: 02.
+- `decide(response_id=)` and `responses.mint_id()`: 02. **Landed** (the first
+  by 01g-S3, the second by 02-S1).
 
 ## Cross-spec decisions
 

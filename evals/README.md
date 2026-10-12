@@ -523,9 +523,12 @@ A play decision -- the sampled next speaker, the turn intent, the turn plan,
 Decision as a tool -- has no legacy parse to compare with, so `--gate` cannot
 judge it. `--live --play FEATURE` measures what it does to play instead:
 
-    backend/.venv/Scripts/python.exe evals/run.py --live --play intent \
+    backend/.venv/bin/python evals/run.py --live --play intent \
         --scene openrouter/vendor/writer --decision openrouter/vendor/decider \
         --out evals/out/intent.json
+
+(on Windows, `backend/.venv/Scripts/python.exe` in place of
+`backend/.venv/bin/python`).
 
 `evals/play.py` holds the synthetic fixtures (Seraphine, Mara and Winifred
 on the night dock: an addressed NPC, an open remark, a pending player

@@ -643,7 +643,9 @@ def _round_trip_every_key(client, writable: list[str]) -> None:
     # than the string that was stored, so an invented id reads back as "" --
     # correctly. `claude` is the other connection every store is seeded with,
     # which makes this a real round trip rather than an exemption.
-    live = {"active_connection_id": "claude", "character_response_mode": "individual"}
+    live = {"active_connection_id": "claude", "character_response_mode": "individual",
+            # A turn-plan mode is one of three words, refused otherwise.
+            "decide_turn_plan": "intent"}
     for key in writable:
         before = client.get("/api/config").json()
         wanted = live.get(key) or _other_config_value(str(before.get(key, "")))

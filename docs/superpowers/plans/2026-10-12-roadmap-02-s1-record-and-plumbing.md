@@ -30,7 +30,8 @@ with no UI).
 - **Config.** `decide_speaker_sampling`, `decide_turn_plan` and
   `decide_play_tool` join `_CONFIG_KEYS`, the defaults (`off`) and
   `ConfigUpdate`. `PUT /config` refuses a value outside each vocabulary.
-  `GET /config` does not report them: no UI shows one before 02-S6.
+  `GET /config` reports them as stored (so a write reads back); no page
+  shows one before 02-S6.
 - **`routes/common.py`.** `PLAN_CEILING_S = 20.0`, `plan_ceiling()` (lower of
   it and a positive `llm_call_budget`), `plan_deadline()` (one monotonic
   deadline per decision; a call is bounded by what is left through
