@@ -76,14 +76,19 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import math
+import os
 import struct
+import threading
 import zlib
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from . import atomic, compiled
 from .paths import home
+
+_log = logging.getLogger(__name__)
 
 #: Bytes per component. Little-endian float32, spelled out rather than left to
 #: the platform: a store shared between machines must read back the vector it
@@ -242,6 +247,66 @@ def _record_history(request: compiled.Batch, space: str, sources: Mapping[str, c
                                   built_from=hashlib.sha256(source.data).hexdigest())
 
 
+#: Why the history of a vector saved now cannot be recorded now, but can be
+#: later: the caller holds a campaign lock (a turn's context build), or is on
+#: the event loop. 03 keeps SQL out of both, so the row waits (`_DEFERRED`).
+_DEFERRABLE = frozenset({"campaign_lock_held", "event_loop"})
+
+#: History waiting for a moment with no lock: `(root, space, text, source,
+#: projection, instance)`. Process-wide and bounded -- it is memory, and an
+#: entry lost costs one cold warm-up, never a wrong answer.
+_DEFERRED: list[tuple[Path, str, str, compiled.WrittenInput, str, object]] = []
+_DEFERRED_LOCK = threading.Lock()
+MAX_DEFERRED = 512
+_deferred_overflowed = False
+
+
+def _defer(space: str, text: str, source: compiled.WrittenInput, projection: str,
+           instance: object) -> None:
+    global _deferred_overflowed
+    with _DEFERRED_LOCK:
+        if len(_DEFERRED) < MAX_DEFERRED:
+            _DEFERRED.append((home(), space, text, source, projection, instance))
+            return
+        warn, _deferred_overflowed = not _deferred_overflowed, True
+    if warn:
+        _log.warning("vector history backlog full; later rows warm lazily")
+
+
+def has_deferred() -> bool:
+    """Whether any vector history waits for `flush_deferred`. One length
+    read, so a boundary can ask on every request."""
+    return bool(_DEFERRED)
+
+
+def flush_deferred() -> int:
+    """Record the history parked while a lock was held (spec 05 section
+    6.4). Called off the loop and outside every lock -- at each request's and
+    each run's write-set handoff, and at the start of a sync batch. An entry
+    is dropped, not recorded, when its root is no longer the store's or its
+    source no longer holds the bytes the vector was made from (edited or
+    deleted since): a row must never vouch for bytes it was not built from.
+    Returns how many rows were recorded. Never raises."""
+    if compiled.unavailable_reason() is not None:
+        return 0
+    with _DEFERRED_LOCK:
+        taken = list(_DEFERRED)
+        _DEFERRED.clear()
+    recorded = 0
+    current = os.path.normcase(os.path.abspath(home()))
+    for root, space, text, source, projection, instance in taken:
+        try:
+            if os.path.normcase(os.path.abspath(root)) != current or source.path.read_bytes() != source.data:
+                continue
+            with compiled.batch(root) as request:
+                request.begin_compute()
+                _record_history(request, space, {text: source}, projection, {text: instance})
+            recorded += 1
+        except _HISTORY_ERRORS:
+            continue
+    return recorded
+
+
 def save(space: str, text: str, vector: list[float], *, source: compiled.WrittenInput | None = None,
          projection: str = 'body', instance: object = None) -> None:
     """Cache `vector` for (`space`, `text`), normalized.
@@ -252,6 +317,11 @@ def save(space: str, text: str, vector: list[float], *, source: compiled.Written
     dropped too — it costs one re-embed next turn, and raising would cost the
     scene the recall was meant to improve.
     """
+    if source is not None and compiled.unavailable_reason() in _DEFERRABLE:
+        _save(space, text, vector, None, projection, instance, None)
+        if unit(vector) is not None:
+            _defer(space, text, source, projection, instance)
+        return
     with _history_batch(source is not None) as request:
         _save(space, text, vector, source, projection, instance, request)
 

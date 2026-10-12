@@ -164,3 +164,11 @@ def read_record(path: Path, what: str, *,
         raise RecordUnreadableError(f"{what} holds no {require}; "
                                     "it is left as it is and retried on the next start")
     return meta, body
+
+
+def text_of(data: bytes) -> str:
+    """A record's bytes as `Path.read_text(encoding="utf-8")` gives them:
+    UTF-8 with universal newlines. For a projection computed from bytes
+    already in hand (spec 05's vector rows) that must agree with the reader
+    that opened the file. Raises `UnicodeDecodeError` as `read_text` would."""
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")

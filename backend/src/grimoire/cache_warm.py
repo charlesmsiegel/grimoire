@@ -25,7 +25,7 @@ from pathlib import Path
 
 import anyio
 
-from .store import cache_sync, paths
+from .store import cache_sync, paths, vectors
 
 _log = logging.getLogger(__name__)
 
@@ -47,7 +47,18 @@ def hand_off(app, snapshot: frozenset[str]) -> None:
 async def hand_off_async(app, snapshot: frozenset[str]) -> None:
     """`hand_off` from the event loop: off it, shielded, and only when there
     is something to give and somebody to give it to, so a request that wrote
-    nothing -- or an app with no queue -- pays no thread hop."""
+    nothing -- or an app with no queue -- pays no thread hop.
+
+    Also the moment a boundary's parked vector history is recorded (spec 05
+    section 6.4): a turn embeds recall's candidates under its campaign lock,
+    where the compiled cache takes no SQL, so their `materialized` rows wait
+    until the boundary ends, off the loop and outside every lock."""
+    if vectors.has_deferred():
+        try:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(vectors.flush_deferred)
+        except Exception:                                  # noqa: BLE001 -- see the module docstring
+            _log.debug("vector history flush dropped", exc_info=True)
     state = getattr(app, "state", None)
     if not snapshot or getattr(state, "cache_warm", None) is None:
         return
@@ -216,10 +227,22 @@ def install(app, tg) -> WriteThroughQueue | None:
 
 def stop(app) -> None:
     """Lifespan shutdown, before the task group is cancelled: a running batch
-    stops at its next check. Pending paths are lost and rebuilt lazily."""
-    flag = getattr(getattr(getattr(app, "state", None), "cache_warm", None), "stopping", None)
+    -- the queue's, or an API `cache-sync` run's -- stops at its next check.
+    Pending paths are lost and rebuilt lazily."""
+    state = getattr(app, "state", None)
+    flag = getattr(getattr(state, "cache_warm", None), "stopping", None)
     if flag is not None:
         flag.set()
+    registry = getattr(state, "runs", None)
+    if registry is not None:
+        for run in registry.live_of_class("background"):
+            if run.kind == CACHE_SYNC_KIND:
+                run.cancel_requested = True
+
+
+#: `routes.runs.CACHE_SYNC_KIND`, spelled here because the run machinery
+#: imports this module and the registry module imports the run machinery.
+CACHE_SYNC_KIND = "cache-sync"
 
 
 def clear(app) -> None:

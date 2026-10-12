@@ -51,7 +51,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
-from . import atomic, compiled, embed_space, paths, revision, writeset
+from .. import embeddings
+from ..llm_errors import LLMError
+from . import atomic, compiled, embed_space, paths, revision, semsearch, vectors, writeset
+from .context import art, semantic
+from .inference import embed
 
 _log = logging.getLogger(__name__)
 
@@ -128,8 +132,8 @@ class WarmContext:
     mode: str
     dry_run: bool
     verify: bool
-    embed: bool
-    space: Mapping | None
+    embedding: bool
+    space: dict | None
     space_digest: str | None
     stop: Callable[[], bool]
 
@@ -154,8 +158,12 @@ class LocalResult:
 
 @dataclass
 class NetworkResult:
+    """A network phase's answer: outcomes, embedding counts, and the failure
+    kind that stopped it, if one did."""
+
     outcomes: dict[tuple[str, str], str] = field(default_factory=dict)
-    embedding: dict[str, object] = field(default_factory=dict)
+    embedding: dict[str, int] = field(default_factory=dict)
+    failure: str = ""
 
 
 class WarmHook(Protocol):
@@ -287,12 +295,309 @@ class _FilesHook:
 
 FILES = _FilesHook()
 
+
+# -- the `vectors` hook: the three existing producers (section 6.4) ------------
+
+
+@dataclass(frozen=True)
+class Projection:
+    """One producer's embedded projection: the embed task it spends under,
+    whether write-through may spend on it, the producer's own text function
+    (`texts(path, data, instance)`, unit-indexed, None when the row no longer
+    serves anyone), its lazy limit per path, and whether it embeds a file in
+    units (one row per unit, `{"unit": n}`)."""
+
+    name: str
+    task: str
+    on_write: Literal["quiet", "explicit"]
+    texts: Callable[[Path, bytes, object], list[str] | None]
+    limit: int
+    units: bool = False
+
+
+#: The producers' projections. Recall and art run on every turn of a campaign
+#: that has them on and embed any candidate whose text is missing, so warming
+#: them after a quiet period moves spend earlier and adds none (`quiet`).
+#: Library search spends only when a reader searches, so only an explicit sync
+#: rebuilds it (`explicit`).
+VECTOR_PROJECTIONS: dict[str, Projection] = {
+    semantic.PROJECTION: Projection(semantic.PROJECTION, "semantic-recall", "quiet",
+                                    semantic.projection_texts, semantic.WARM_LIMIT),
+    art.PROJECTION: Projection(art.PROJECTION, "art-catalog", "quiet",
+                               art.projection_texts, embeddings.BATCH - 1),
+    semsearch.PROJECTION: Projection(semsearch.PROJECTION, "semantic-search", "explicit",
+                                     semsearch.projection_texts, semsearch.WARM_LIMIT, units=True),
+}
+
+#: One process-wide sync client, for its connection pool -- the producers'
+#: own pattern.
+_CLIENT = embeddings.EmbeddingsClient()
+
+
+def _vector_kind(kind: str) -> tuple[Projection, str] | None:
+    """`(projection, space digest)` for a `vector:<projection>:<digest>` kind."""
+    head, _, rest = kind.partition(":")
+    name, _, digest = rest.partition(":")
+    projection = VECTOR_PROJECTIONS.get(name)
+    if head != "vector" or projection is None or not digest:
+        return None
+    return projection, digest
+
+
+@dataclass
+class _Wanted:
+    """One text the batch would embed: who pays (one campaign, or "" for
+    shared or library-wide text), the rows it replaces, and the bytes their
+    `materialized` rows are rewritten from once it lands."""
+
+    task: str
+    claims: set[str] = field(default_factory=set)
+    rows: list[tuple[str, str, Path, bytes, str, object]] = field(default_factory=list)
+
+
+class _VectorsHook:
+    """Re-embed, for each hot vector row, the next version of the unit it
+    names -- only in the batch's space, only text the vector cache lacks, and
+    no more units per path than the producer would embed lazily."""
+
+    name = "vectors"
+    on_write: Literal["quiet", "explicit"] = "quiet"
+
+    def owns(self, kind: str) -> bool:
+        return _vector_kind(kind) is not None
+
+    def remap(self, kind: str, instance: str, old: str, new: str) -> object:
+        """A stated rename: recall's instance names its entity by id, which is
+        the file's stem; a unit position is independent of the path."""
+        value = json.loads(instance) if instance else None
+        if not isinstance(value, dict):
+            return instance
+        entity = value.get("entity")
+        if isinstance(entity, list) and len(entity) == 2 and entity[1] == Path(old).stem:
+            return {**value, "entity": [entity[0], Path(new).stem]}
+        return value
+
+    def local(self, ctx: WarmContext,
+              hot: Mapping[str, tuple[compiled.Materialized, ...]]) -> LocalResult:
+        result = LocalResult()
+        plan: dict[str, _Wanted] = {}
+        for rel, rows in hot.items():
+            if ctx.halted():
+                break
+            try:
+                data = ctx.path(rel).read_bytes()
+            except OSError as exc:
+                for row in rows:
+                    result.outcomes[(rel, row.kind)] = f"failed:{type(exc).__name__}"
+                continue
+            self._path(ctx, rel, rows, data, plan, result)
+        result.plan = plan or None
+        return result
+
+    def _path(self, ctx: WarmContext, rel: str, rows: tuple[compiled.Materialized, ...],
+              data: bytes, plan: dict[str, _Wanted], result: LocalResult) -> None:
+        path = ctx.path(rel)
+        spent: dict[str, int] = {}
+        for row in sorted(rows, key=lambda r: (r.kind, r.instance)):
+            parsed = _vector_kind(row.kind)
+            assert parsed is not None
+            projection, digest = parsed
+            outcome = self._row(ctx, rel, path, row, projection, digest, data, plan, spent, result)
+            result.outcomes[(rel, row.kind)] = _worse(result.outcomes.get((rel, row.kind)), outcome) \
+                if (rel, row.kind) in result.outcomes else outcome
+
+    def _row(self, ctx: WarmContext, rel: str, path: Path, row: compiled.Materialized,
+             projection: Projection, digest: str, data: bytes, plan: dict[str, _Wanted],
+             spent: dict[str, int], result: LocalResult) -> str:
+        if ctx.mode == "write" and projection.on_write == "explicit":
+            return "deferred"
+        if (problem := self._space_problem(ctx, digest)) is not None:
+            result.embedding[problem] = result.embedding.get(problem, 0) + 1
+            return "skipped"
+        try:
+            instance = _instance(row)
+            texts = projection.texts(path, data, instance)
+        except Exception as exc:                          # noqa: BLE001 -- the reader's failure
+            return f"failed:{type(exc).__name__}"
+        text = self._unit(projection, texts, instance)
+        if text is None:
+            return "skipped"
+        # The producer's own lazy limit, per path: a rebuild never sends more
+        # for one file than one ordinary read could.
+        if spent.get(projection.name, 0) >= projection.limit:
+            return "lazy"
+        spent[projection.name] = spent.get(projection.name, 0) + 1
+        assert ctx.space is not None                      # `_space_problem` said so
+        space_id = ctx.space["space"]
+        source = compiled.WrittenInput("source", path, data)
+        if vectors.load(space_id, [text]):
+            if not ctx.dry_run:
+                # Held already: only its row moves to the current bytes, so a
+                # scoped sync can prove this file current next time.
+                vectors.load(space_id, [text], sources={text: source}, projection=projection.name,
+                             instances={text: instance})
+            result.embedding["held"] = result.embedding.get("held", 0) + 1
+            return "hit"
+        if ctx.dry_run:
+            result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
+            return "planned"
+        if not ctx.embedding:
+            result.embedding["deferred"] = result.embedding.get("deferred", 0) + 1
+            return "deferred"
+        wanted = plan.setdefault(text, _Wanted(projection.task))
+        campaign = instance.get("campaign", "") if isinstance(instance, dict) else ""
+        wanted.claims.add(campaign if isinstance(campaign, str) else "")
+        wanted.rows.append((rel, row.kind, path, data, projection.name, instance))
+        return "planned"
+
+    @staticmethod
+    def _space_problem(ctx: WarmContext, digest: str) -> str | None:
+        """Section 6.5 step 1: a row embedded in a space the role has moved
+        away from is `stale_space` -- re-embedding it would be embedding
+        content never embedded there -- and with embedding off it is
+        `embedding_off`. Either way nothing is sent."""
+        if ctx.space is None:
+            return "embedding_off"
+        if digest != ctx.space_digest:
+            return "stale_space"
+        return None
+
+    @staticmethod
+    def _unit(projection: Projection, texts: list[str] | None, instance: object) -> str | None:
+        """The text that replaces the one unit this row says was embedded."""
+        if not texts:
+            return None
+        if not projection.units:
+            return texts[0]
+        unit = instance.get("unit") if isinstance(instance, dict) else None
+        if type(unit) is not int or not 0 <= unit < len(texts):
+            return None
+        return texts[unit]
+
+    def network(self, ctx: WarmContext, plan: object) -> NetworkResult:
+        result = NetworkResult()
+        assert isinstance(plan, dict) and ctx.space is not None
+        space = ctx.space
+        # The role may have moved since the local phase compared rows with
+        # the batch's space: sending now would put texts into a space nothing
+        # was ever embedded in, which is the move `confirm_embedding` asks
+        # about. The texts go with the batch's space, never the re-read one.
+        try:
+            now = embed_space.endpoint()
+        except Exception:                                 # noqa: BLE001 -- unreadable is not "the same"
+            now = None
+        if now is None or compiled.space_digest(now["space"]) != ctx.space_digest:
+            self._settle(result, plan, plan, "skipped")
+            result.embedding["stale_space"] = len(plan)
+            return result
+        by_task: dict[str, list[tuple[str, str]]] = {}
+        for text, wanted in plan.items():
+            claims = wanted.claims if len(wanted.claims) == 1 else {""}
+            by_task.setdefault(wanted.task, []).extend((c, text) for c in sorted(claims))
+        failure = ""
+        for task, claims in by_task.items():
+            for group in embed.attribute(claims):
+                for start in range(0, len(group.texts), embeddings.BATCH):
+                    chunk = list(group.texts[start:start + embeddings.BATCH])
+                    if failure or ctx.halted():
+                        result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
+                        continue
+                    chunk = self._arrived(space["space"], chunk, plan, result)
+                    if chunk:
+                        got = _embed_chunk(task, embed.EmbedGroup(group.campaign, texts=tuple(chunk)),
+                                           space)
+                        failure = self._landed(space["space"], chunk, got, plan, result)
+        result.failure = failure
+        return result
+
+    def _arrived(self, space_id: str, chunk: list[str], plan: dict[str, _Wanted],
+                 result: NetworkResult) -> list[str]:
+        """Checked again just before sending: texts that arrived meanwhile
+        (another process, a turn) are recorded and dropped from the chunk."""
+        arrived = vectors.load(space_id, chunk)
+        for text in arrived:
+            self._save(space_id, text, None, plan[text])
+            self._settle(result, plan, [text], "hit")
+        return [text for text in chunk if text not in arrived]
+
+    def _landed(self, space_id: str, chunk: list[str], got: embed.GroupResult,
+                plan: dict[str, _Wanted], result: NetworkResult) -> str:
+        """Save a chunk's vectors as they land. Returns the failure that stops
+        the run, or ""."""
+        if got.vectors is None or len(got.vectors) != len(chunk):
+            kind = got.error or "bad_response"
+            self._settle(result, plan, chunk, f"failed:{kind}")
+            if kind == embed.GROUP_NOT_SENT:
+                result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
+            # A failure of the input (`bad_response`) costs this chunk; any
+            # other -- auth, a missing key, a rate limit, the network, the
+            # deadline -- is the endpoint's, and stops the rest.
+            return "" if kind == "bad_response" else kind
+        result.embedding["requests"] = result.embedding.get("requests", 0) + 1
+        result.embedding["sent"] = result.embedding.get("sent", 0) + len(chunk)
+        for text, raw in zip(chunk, got.vectors, strict=True):
+            self._save(space_id, text, raw, plan[text])
+            self._settle(result, plan, [text], "built")
+        return ""
+
+    @staticmethod
+    def _save(space_id: str, text: str, raw: list[float] | None, wanted: _Wanted) -> None:
+        """Store the vector, and rewrite each row it replaces against the
+        bytes it was made from (`built_from`)."""
+        for _rel, _kind, path, data, projection, instance in wanted.rows:
+            source = compiled.WrittenInput("source", path, data)
+            if raw is not None:
+                vectors.save(space_id, text, raw, source=source, projection=projection,
+                             instance=instance)
+            else:
+                vectors.load(space_id, [text], sources={text: source}, projection=projection,
+                             instances={text: instance})
+
+    @staticmethod
+    def _settle(result: NetworkResult, plan: Mapping[str, _Wanted], texts: Iterable[str],
+                outcome: str) -> None:
+        for text in texts:
+            for rel, kind, *_ in plan[text].rows:
+                key = (rel, kind)
+                result.outcomes[key] = _worse(result.outcomes.get(key), outcome) \
+                    if key in result.outcomes else outcome
+
+
+def _embed_chunk(task: str, group: embed.EmbedGroup, space: dict) -> embed.GroupResult:
+    """One chunk through the grouped door (01h-C5): one ledger row, charged
+    to the group's campaign, never a request spanning campaigns, documents
+    only, on the client's own per-request timeout. The task is spelled as a
+    literal per producer, so the operation guard can read it. A failure the
+    door did not turn into a result (an error raised before it sent) is the
+    chunk's failure, by kind."""
+    try:
+        return _embed_chunk_literal(task, group, space)
+    except LLMError as exc:
+        return embed.GroupResult(None, exc.kind)
+    except OSError:
+        return embed.GroupResult(None, "network")
+
+
+def _embed_chunk_literal(task: str, group: embed.EmbedGroup, space: dict) -> embed.GroupResult:
+    if task == "semantic-recall":
+        (got,) = embed.embed_groups_sync("semantic-recall", [group], space=space, client=_CLIENT)
+    elif task == "art-catalog":
+        (got,) = embed.embed_groups_sync("art-catalog", [group], space=space, client=_CLIENT)
+    elif task == "semantic-search":
+        (got,) = embed.embed_groups_sync("semantic-search", [group], space=space, client=_CLIENT)
+    else:
+        raise ValueError(f"{task!r} is no vector producer's task")
+    return got
+
+
+VECTORS = _VectorsHook()
+
 #: The hooks, in their fixed order: `files`, `overview` (04-C2a), `searchdocs`
 #: (08-C2c), `vectors`. A tuple naming each hook by module rather than a
 #: registry filled by import side effects, so a process that imports only this
 #: module -- the CLI -- still has every hook. An owner not yet landed is
 #: absent, never stubbed.
-HOOKS: tuple[WarmHook, ...] = (FILES,)
+HOOKS: tuple[WarmHook, ...] = (FILES, VECTORS)
 
 _ORDER = {o: i for i, o in enumerate(("failed", "built", "planned", "hit", "skipped", "deferred", "lazy"))}
 
@@ -349,7 +654,8 @@ class SyncReport:
     def counts(self) -> dict[str, int]:
         out = dict.fromkeys(PATH_STATUSES, 0)
         for item in self.paths:
-            out[item.status] += 1
+            if item.status in out:            # a batch in progress also holds `pending` ones
+                out[item.status] += 1
         return out
 
     @property
@@ -536,7 +842,7 @@ def _context(root: Path, mode: str, *, dry_run: bool, verify: bool, embed: bool,
         _warn_once("embedding_space")
         space = None
     digest = compiled.space_digest(space["space"]) if space and space.get("space") else None
-    return WarmContext(root=root, mode=mode, dry_run=dry_run, verify=verify, embed=embed,
+    return WarmContext(root=root, mode=mode, dry_run=dry_run, verify=verify, embedding=embed,
                        space=space, space_digest=digest, stop=stop)
 
 
@@ -566,7 +872,8 @@ def sync_paths(relpaths: Iterable[str], *,
                root: Path | None = None,
                stop: Callable[[], bool] = lambda: False,
                hooks: tuple[WarmHook, ...] | None = None,
-               known: Mapping[str, str] | None = None) -> SyncReport:
+               known: Mapping[str, str] | None = None,
+               progress: Callable[[dict], None] | None = None) -> SyncReport:
     """Warm what was hot for `relpaths` (spec 05 section 3.3). Never raises
     for one path's failure -- that is its status; raises only for a
     programming error, such as an unknown mode.
@@ -577,12 +884,15 @@ def sync_paths(relpaths: Iterable[str], *,
     world or campaign root among them that is gone purges the cache (7.6).
     `known` carries paths a scope listing already classified as `cold` or
     `current` (7.3), which are reported and bump their campaign's token but
-    are not read again."""
+    are not read again. `progress`, when given, is told the counts (never a
+    path) as the batch passes each phase -- the API run's progress frames."""
     if mode not in MODES:
         raise ValueError(f"unknown sync mode {mode!r}")
     root = Path(root) if root is not None else paths.home()
     hooks = HOOKS if hooks is None else hooks
     report = SyncReport(root=str(root), root_source=_root_source(root), mode=mode, dry_run=dry_run)
+    # History a turn parked under its lock is what makes its paths hot.
+    vectors.flush_deferred()
     quiet = mode == "write"               # refusals and missing paths are not news to the queue
     items = _classify_arguments(root, relpaths, deleted, report, quiet=quiet,
                                 renamed=renamed or {}, known=known or {})
@@ -599,10 +909,12 @@ def sync_paths(relpaths: Iterable[str], *,
         _bump(root, report)
     copied = _copy_renames(root, items, hooks, dry_run=dry_run) if report.cache == "on" else {}
     hot = _find_hot(root, items, report, stop, copied) if report.stopped is None else {}
+    _progress(progress, "classified", report)
 
     if report.cache == "on" and hot and report.stopped is None:
         _run_hooks(root, mode, hooks, hot, report, embed=embed, dry_run=dry_run,
                    verify=verify, stop=stop)
+    _progress(progress, "rebuilt", report)
     if not dry_run and mode == "explicit":
         _purge_roots(root, report, stop)
     for item in report.paths:
@@ -611,6 +923,17 @@ def sync_paths(relpaths: Iterable[str], *,
     _log.info("cache sync: mode=%s dry_run=%s %s", mode, dry_run,
               " ".join(f"{k}={v}" for k, v in report.counts().items() if v))
     return report
+
+
+def _progress(progress: Callable[[dict], None] | None, phase: str, report: SyncReport) -> None:
+    if progress is None:
+        return
+    try:
+        pending = sum(item.status == "pending" for item in report.paths)
+        progress({"phase": phase, "counts": {k: v for k, v in report.counts().items() if v},
+                  "pending": pending, "tokens_bumped": report.tokens_bumped})
+    except Exception:                                     # noqa: BLE001 -- a frame is not the batch
+        _warn_once("progress")
 
 
 def _find_hot(root: Path, items: list[PathReport], report: SyncReport, stop: Callable[[], bool],
@@ -889,8 +1212,10 @@ def _network_phases(ctx: WarmContext, plans: list[tuple[WarmHook, object]],
             _warn_once(f"hook:{hook.name}:network")
             report.embedding["failure"] = type(exc).__name__
             continue
-        _merge(by_rel, net.outcomes, report.hooks.setdefault(hook.name, {}))
+        _merge(by_rel, net.outcomes, report.hooks.setdefault(hook.name, {}), final=True)
         _add_embedding(report, net.embedding)
+        if net.failure:
+            report.embedding["failure"] = net.failure
 
 
 def _add_embedding(report: SyncReport, figures: Mapping[str, object]) -> None:
@@ -909,13 +1234,16 @@ def _add_embedding(report: SyncReport, figures: Mapping[str, object]) -> None:
 
 
 def _merge(by_rel: Mapping[str, PathReport], outcomes: Mapping[tuple[str, str], str],
-           summary: dict) -> None:
+           summary: dict, *, final: bool = False) -> None:
+    """Fold a phase's outcomes into the paths. A network phase's outcome is
+    `final`: it replaces the local phase's `planned` for the same kind."""
     kinds = set(summary.get("kinds", ()))
     for (rel, kind), outcome in outcomes.items():
         item = by_rel.get(rel)
         if item is None:
             continue
-        item.kinds[kind] = _worse(item.kinds.get(kind), outcome) if kind in item.kinds else outcome
+        item.kinds[kind] = (outcome if final or kind not in item.kinds
+                            else _worse(item.kinds.get(kind), outcome))
         kinds.add(kind)
         word = outcome.split(":", 1)[0]
         summary[word] = summary.get(word, 0) + 1
@@ -1022,7 +1350,8 @@ def run(relpaths: Iterable[str] = (), *, campaigns: Iterable[str] = (), worlds: 
         all_records: bool = False, renamed: Mapping[str, str] | None = None,
         deleted: Iterable[str] = (), embed: bool = True, dry_run: bool = False,
         verify: bool = False, root: Path | None = None,
-        stop: Callable[[], bool] = lambda: False) -> SyncReport:
+        stop: Callable[[], bool] = lambda: False,
+        progress: Callable[[dict], None] | None = None) -> SyncReport:
     """One explicit batch over named paths and scopes: the CLI's and the API's
     door. The batch is the union of what was named."""
     root = Path(root) if root is not None else paths.home()
@@ -1032,7 +1361,7 @@ def run(relpaths: Iterable[str] = (), *, campaigns: Iterable[str] = (), worlds: 
                           stop=stop) if scoped else ScopeResult()
     report = sync_paths([*relpaths, *scope.candidates], mode="explicit", embed=embed,
                         dry_run=dry_run, verify=verify, renamed=renamed, deleted=deleted,
-                        root=root, stop=stop, known=scope.known)
+                        root=root, stop=stop, known=scope.known, progress=progress)
     report.paths.extend(scope.refused)
     report.truncated = report.truncated or scope.truncated
     if scoped:

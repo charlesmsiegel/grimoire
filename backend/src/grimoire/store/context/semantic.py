@@ -88,7 +88,8 @@ import time
 
 from ... import embeddings
 from ...llm_errors import LLMError
-from .. import config, embed_space, vectors
+from .. import compiled, config, embed_space, entities, overlay, vectors
+from ..frontmatter import parse_frontmatter, text_of
 from ..inference import embed
 
 #: UTF-8 *bytes* of an entry's text that get embedded — not characters.
@@ -215,6 +216,61 @@ def entry_text(entry: dict) -> str:
     return _clip("\n".join(p for p in parts if p), DOC_BYTES).strip()
 
 
+#: The projection recall embeds, named on its `materialized` rows
+#: (`vector:lore-entry:<space digest>`, spec 05 section 6.4) so a warm-up after
+#: an edit re-embeds an entry recall had embedded, and nothing else.
+PROJECTION = "lore-entry"
+
+
+def record_text(eid: str, data: bytes) -> str:
+    """`entry_text` of one entity record's bytes, built as the world-info
+    layer builds a candidate from the record it read (`world_state`: name or
+    id, keys split on commas, body stripped); "" for a record recall would
+    not score, one with no body."""
+    meta, body = parse_frontmatter(text_of(data))
+    body = body.strip()
+    if not body:
+        return ""
+    keys = [k.strip() for k in str(meta.get("keys", "")).split(",") if k.strip()]
+    return entry_text({"name": meta.get("name", eid), "keys": keys, "body": body})
+
+
+def projection_texts(path, data: bytes, instance: object) -> list[str] | None:
+    """The warm-up's text for one recall row: `[text]`, `[]` for an entry that
+    would no longer be scored, or None when `path` is no longer the file the
+    row's campaign reads for that entry (it gained its own copy, or deleted
+    it) -- the vector would then serve no campaign's recall."""
+    try:
+        cid = instance["campaign"]                       # type: ignore[index]
+        kind, eid = instance["entity"]                   # type: ignore[index]
+        if overlay.entity_source(cid, kind, eid) != path:
+            return None
+    except (KeyError, TypeError, ValueError, OSError, entities.EntityNotFound):
+        return None
+    text = record_text(eid, data)
+    return [text] if text else []
+
+
+def _history(campaign: str, candidate: dict, text: str) -> dict:
+    """What `vectors.save` records beside a vector recall embedded: the file
+    the candidate was read from, its bytes and the row's instance -- or
+    nothing, when there is no campaign, no file in the store, or the file no
+    longer yields this text (edited since it was read), so a row never names
+    bytes its vector was not made from."""
+    kind, eid = candidate.get("kind"), candidate.get("id")
+    if not campaign or kind not in entities.ENTITY_KINDS or not isinstance(eid, str):
+        return {}
+    try:
+        path = overlay.entity_source(campaign, kind, eid)
+        data = path.read_bytes() if path is not None else None
+        if path is None or data is None or record_text(eid, data) != text:
+            return {}
+    except (OSError, ValueError, entities.EntityNotFound):
+        return {}
+    return {"source": compiled.WrittenInput("body", path, data), "projection": PROJECTION,
+            "instance": {"campaign": campaign, "entity": [kind, eid]}}
+
+
 def recall(candidates: list[dict], recent_text: str) -> list[dict]:
     """The `candidates` closest to `recent_text`, most similar first.
 
@@ -274,8 +330,11 @@ def recall_scored(candidates: list[dict], recent_text: str, *,
     query = vectors.unit(got[0])
     if query is None:
         return []
+    first: dict[str, dict] = {}
+    for i in scored_idx:
+        first.setdefault(texts[i], candidates[i])
     for text, raw in zip(missing, got[1:]):
-        vectors.save(cfg["space"], text, raw)
+        vectors.save(cfg["space"], text, raw, **_history(campaign, first[text], text))
         fresh = vectors.unit(raw)
         if fresh is not None:
             known[text] = fresh

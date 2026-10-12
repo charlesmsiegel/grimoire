@@ -107,6 +107,7 @@ catalogue was built from and the one that is actually speaking.
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import quote
 
@@ -116,9 +117,11 @@ from .. import (
     assets,
     campaign_images,
     characters,
+    compiled,
     config,
     embed_space,
     entities,
+    image_store,
     overlay,
     pcs,
     vectors,
@@ -126,6 +129,7 @@ from .. import (
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
+from ..frontmatter import text_of
 from ..inference import embed
 from . import world_state
 
@@ -547,6 +551,66 @@ def _keyword_scores(cid: str, cands: list[dict],
     return out, was_named
 
 
+#: The projection the art catalog embeds, named on its `materialized` rows
+#: (`vector:art-description:<space digest>`, spec 05 section 6.4). A picture's
+#: description lives on its image object, so the row names the object's
+#: sidecar; a legacy description with no object records no row (lazy).
+PROJECTION = "art-description"
+
+
+def object_text(data: bytes) -> str:
+    """What the catalog embeds for an image object's sidecar bytes: its
+    description, stripped and clipped as a candidate's is; "" for none."""
+    try:
+        raw = json.loads(text_of(data))
+    except (UnicodeDecodeError, ValueError):
+        return ""
+    desc = raw.get("description") if isinstance(raw, dict) else None
+    if not isinstance(desc, str) or not desc.strip():
+        return ""
+    return embed_space.clip(desc.strip(), DOC_BYTES)
+
+
+def projection_texts(path, data: bytes, instance: object) -> list[str] | None:
+    """The warm-up's text for one art row: the object's description now."""
+    text = object_text(data)
+    return [text] if text else []
+
+
+def _history(campaign: str, candidate: dict, text: str) -> dict:
+    """What `vectors.save` records beside a catalog vector: the image
+    object's sidecar, when the candidate has one and its description still
+    yields this text (a legacy description that outranks the object's, or an
+    edit since, records nothing)."""
+    image_id = candidate.get("image_id")
+    if not campaign or not isinstance(image_id, str):
+        return {}
+    try:
+        path = image_store.object_path(image_id)
+        data = path.read_bytes()
+    except (OSError, ValueError):
+        return {}
+    if object_text(data) != text:
+        return {}
+    return {"source": compiled.WrittenInput("object", path, data), "projection": PROJECTION,
+            "instance": {"campaign": campaign}}
+
+
+def _save_warmed(cfg: dict, cands: list[dict], texts: list[str], missing: list[str],
+                 got: list[list[float]], known: dict, campaign: str) -> None:
+    """Save this turn's warm run, each vector with the history of the first
+    candidate (one with an image object) that has its text."""
+    first: dict[str, dict] = {}
+    for cand, text in zip(cands, texts, strict=True):
+        if cand.get("image_id"):
+            first.setdefault(text, cand)
+    for text, raw in zip(missing, got, strict=False):
+        vectors.save(cfg["space"], text, raw, **_history(campaign, first.get(text, {}), text))
+        fresh = vectors.unit(raw)
+        if fresh is not None:
+            known[text] = fresh
+
+
 def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
                      campaign: str = "", scene: str = "") -> list[float] | None:
     """Cosines against the scan window, or None if the provider could not be
@@ -582,11 +646,7 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
     query = vectors.unit(got[0])
     if query is None:
         return None
-    for text, raw in zip(missing, got[1:], strict=False):
-        vectors.save(cfg["space"], text, raw)
-        fresh = vectors.unit(raw)
-        if fresh is not None:
-            known[text] = fresh
+    _save_warmed(cfg, cands, texts, missing, got[1:], known, campaign)
 
     out = []
     for text in texts:

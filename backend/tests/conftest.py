@@ -88,6 +88,16 @@ def _default_home_never_the_real_one(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_parked_vector_history():
+    """Vector history parked under a lock (`store.vectors._DEFERRED`) is
+    process state; one test's leftovers must not be another's rows."""
+    from grimoire.store import vectors
+    vectors._DEFERRED.clear()
+    yield
+    vectors._DEFERRED.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_bootstrap_pointer(monkeypatch, tmp_path, tmp_path_factory):
     """Keep every test off the developer's REAL `~/.grimoire.json`.
 

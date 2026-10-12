@@ -89,6 +89,15 @@ endpoint key of its own, a name rebound by unpacking, `+=`, a `for` or a
 followed), and a function handed around as a value outside a partial or a
 forwarding helper, whose call sites are out of sight.
 
+**The warm-up's one exception** (spec 05 section 6.6). A cache-sync hook's
+network phase sends with the batch's space, `ctx.space`: an attribute, and a
+method parameter, both refused above. It is accepted only where `ctx` is the
+second parameter of a `network` method on a class whose instance is named in
+`cache_sync.HOOKS`, never rebound there, and every `WarmContext` in the
+package is built inside `cache_sync._context()` alone, with a `space=` that
+itself traces to `embed_space.endpoint` -- so the space a hook sends with is
+the one the batch resolved, and a hook cannot build its own.
+
 **What it does not trace** -- it is a guard against a space built by hand at
 an embed call site, not a proof. It reads a function's assignments
 flow-insensitively and does not see: a comprehension, `except ... as` or
@@ -340,6 +349,12 @@ def test_the_walk_finds_the_embed_call_sites():
 
 # ---- where the space comes from ----
 
+#: Spec 05's warm-up: the module holding the hooks, the context they are
+#: handed, and the one function allowed to build it.
+WARM_MODULE = "grimoire.store.cache_sync"
+WARM_CONTEXT = "WarmContext"
+WARM_FACTORY = "_context"
+
 #: The role's one reader, as the dict `embed_sync` takes.
 SPACE_SOURCES = frozenset({("grimoire.store.embed_space", "endpoint"),
                            ("grimoire.store.embed_space", "endpoint_of")})
@@ -459,7 +474,81 @@ class Provenance:
             return self.ok(expr.body, ctx) and self.ok(expr.orelse, ctx)
         if isinstance(expr, ast.Name):
             return self._name(expr.id, ctx)
+        if isinstance(expr, ast.Attribute):
+            return self._warm_space(expr, ctx)
         return False
+
+    # -- the warm-up's `ctx.space` (spec 05 section 6.6) --
+    def _warm_space(self, expr: ast.Attribute, ctx: _Ctx) -> bool:
+        mod, fn, _bound = ctx
+        if (mod != WARM_MODULE or fn is None or expr.attr != "space"
+                or not isinstance(expr.value, ast.Name) or fn.name != "network"
+                or self._hook_classes().get(id(fn)) is None):
+            return False
+        positional = [a.arg for a in (*fn.args.posonlyargs, *fn.args.args)]
+        return (len(positional) >= 2 and expr.value.id == positional[1]
+                and self._assigned(fn, expr.value.id) == [] and self._warm_contexts_ok())
+
+    @functools.cached_property
+    def _warm_classes(self) -> dict[int, str]:
+        """Each method's id to its class name, in the warm-up module."""
+        tree = self.trees.get(WARM_MODULE, (None, False))[0]
+        out: dict[int, str] = {}
+        for node in ast.walk(tree) if tree is not None else ():
+            if isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        out[id(item)] = node.name
+        return out
+
+    def _hook_classes(self) -> dict[int, str]:
+        """The methods of the classes whose instances `HOOKS` names."""
+        tree = self.trees.get(WARM_MODULE, (None, False))[0]
+        if tree is None:
+            return {}
+        named: set[str] = set()
+        instances: dict[str, str] = {}
+        for node in tree.body:
+            targets, value = self._targets(node)
+            for t in targets:
+                if not isinstance(t, ast.Name) or value is None:
+                    continue
+                if t.id == "HOOKS" and isinstance(value, ast.Tuple):
+                    named |= {e.id for e in value.elts if isinstance(e, ast.Name)}
+                elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+                    instances[t.id] = value.func.id
+        hooks = {instances[n] for n in named if n in instances}
+        return {k: v for k, v in self._warm_classes.items() if v in hooks}
+
+    @functools.cached_property
+    def _warm_built(self) -> bool:
+        return self._warm_contexts_check()
+
+    def _warm_contexts_ok(self) -> bool:
+        return self._warm_built
+
+    def _warm_contexts_check(self) -> bool:
+        """Every `WarmContext(...)` is built in `cache_sync._context()`, whose
+        `space=` traces to the role; nothing `replace`s a context's space."""
+        built = 0
+        for mod, (tree, _is_pkg) in self.trees.items():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else (
+                    node.func.id if isinstance(node.func, ast.Name) else None)
+                if name == "replace" and any(k.arg == "space" for k in node.keywords):
+                    return False
+                if name != WARM_CONTEXT:
+                    continue
+                encl = self.parent.get(id(node))
+                if mod != WARM_MODULE or encl is None or encl.name != WARM_FACTORY:
+                    return False
+                space = next((k.value for k in node.keywords if k.arg == "space"), None)
+                if space is None or not self.ok(space, (mod, encl, None)):
+                    return False
+                built += 1
+        return built > 0
 
     def _call(self, call: ast.Call, ctx: _Ctx) -> bool:
         mod, _fn, bound = ctx
@@ -721,6 +810,77 @@ def _planted_space_problems(src: str) -> list[str]:
 
 _PRELUDE = ("from .. import embed_space\n"
             "from ..inference import embed\n")
+
+
+_WARM_PRELUDE = ("from . import embed_space\n"
+                 "from .inference import embed\n"
+                 "class WarmContext:\n"
+                 "    pass\n"
+                 "def _context(root):\n"
+                 "    space = embed_space.endpoint()\n"
+                 "    return WarmContext(root=root, space=space)\n")
+_WARM_HOOK = ("class _Vectors:\n"
+              "    def network(self, ctx, plan):\n"
+              "        space = ctx.space\n"
+              "        embed.embed_groups_sync('semantic-recall', g, space=space, client=c)\n"
+              "VECTORS = _Vectors()\n"
+              "HOOKS = (VECTORS,)\n")
+
+
+def _planted_warm_problems(src: str) -> list[str]:
+    return Provenance({WARM_MODULE: (ast.parse(src), False)}).problems()
+
+
+def test_the_warm_up_space_is_accepted_through_its_one_context():
+    assert _planted_warm_problems(_WARM_PRELUDE + _WARM_HOOK) == []
+
+
+@pytest.mark.parametrize("src", [
+    # A hook that builds its own context with a hand-made space.
+    (_WARM_PRELUDE + _WARM_HOOK
+     + "class _Rogue:\n"
+       "    def network(self, ctx, plan):\n"
+       "        mine = WarmContext(root=r, space={'space': 's'})\n"
+       "        space = mine.space\n"
+       "        embed.embed_sync('semantic-recall', t, space=space, client=c)\n"
+       "ROGUE = _Rogue()\n"
+       "HOOKS = (VECTORS, ROGUE)\n"),
+    # `_context` whose space is a literal dict.
+    ("from . import embed_space\n"
+     "from .inference import embed\n"
+     "def _context(root):\n"
+     "    return WarmContext(root=root, space={'model': 'm', 'space': 's'})\n" + _WARM_HOOK),
+    # `ctx.space` in a method of a class no hook names.
+    (_WARM_PRELUDE
+     + "class _Loose:\n"
+       "    def network(self, ctx, plan):\n"
+       "        space = ctx.space\n"
+       "        embed.embed_sync('semantic-recall', t, space=space, client=c)\n"
+       "HOOKS = ()\n"),
+    # `ctx.space` in a hook method that is not the network phase.
+    (_WARM_PRELUDE
+     + "class _Vectors:\n"
+       "    def local(self, ctx, hot):\n"
+       "        space = ctx.space\n"
+       "        embed.embed_sync('semantic-recall', t, space=space, client=c)\n"
+       "VECTORS = _Vectors()\n"
+       "HOOKS = (VECTORS,)\n"),
+    # The context rebound inside the network phase.
+    (_WARM_PRELUDE
+     + "class _Vectors:\n"
+       "    def network(self, ctx, plan):\n"
+       "        ctx = other\n"
+       "        space = ctx.space\n"
+       "        embed.embed_sync('semantic-recall', t, space=space, client=c)\n"
+       "VECTORS = _Vectors()\n"
+       "HOOKS = (VECTORS,)\n"),
+    # A context's space swapped through `dataclasses.replace`.
+    (_WARM_PRELUDE + _WARM_HOOK
+     + "def g(ctx):\n"
+       "    return replace(ctx, space={'space': 's'})\n"),
+])
+def test_the_warm_up_exception_flags_planted_cases(src):
+    assert _planted_warm_problems(src), src
 
 
 @pytest.mark.parametrize("src", [

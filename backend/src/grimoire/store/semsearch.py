@@ -69,7 +69,7 @@ from collections.abc import Iterator
 
 from .. import embeddings
 from ..llm_errors import LLMError
-from . import embed_space, search, vectors
+from . import compiled, embed_space, search, vectors
 from .inference import embed
 
 #: The mode name this module answers to, on the route and in the response.
@@ -111,6 +111,43 @@ _CLIENT = embeddings.EmbeddingsClient()
 #: cannot masquerade as one, and zero-width so the marker stays with the post
 #: it introduces.
 _POST = re.compile(r"(?=\*\*[^*\n]{1,60}:\*\*)")
+
+
+#: The projection library search embeds, one `materialized` row per embedded
+#: passage (`vector:search-passage:<space digest>`, instance `{"unit": n}`,
+#: spec 05 section 6.4), so a warm-up re-embeds only replacements of passages
+#: that were embedded, never a transcript's never-indexed tail.
+PROJECTION = "search-passage"
+
+
+def document_texts(path, data: bytes) -> list[str]:
+    """What search embeds for a single-file document whose file holds
+    `data`: its passage texts, in unit order (`_records`' rule)."""
+    name, text, _prose = search.markdown_document(data, path.stem)
+    return [_passage_text(name, c) for c in passages(text or name)]
+
+
+def projection_texts(path, data: bytes, instance: object) -> list[str] | None:
+    """The warm-up's texts for a search row: every passage, by position."""
+    return document_texts(path, data)
+
+
+def _history(source: tuple | None, text: str) -> dict:
+    """What `vectors.save` records beside a passage vector: the document's
+    file and the passage's position, when the file still yields this text
+    there (an edit since the walk records nothing)."""
+    if source is None:
+        return {}
+    path, unit = source
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return {}
+    units = document_texts(path, data)
+    if unit >= len(units) or units[unit] != text:
+        return {}
+    return {"source": compiled.WrittenInput("document", path, data), "projection": PROJECTION,
+            "instance": {"unit": unit}}
 
 
 class Unavailable(Exception):
@@ -316,7 +353,7 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     # two) was rejected: a file that exists and fails its checksum has to count
     # as missing, or it is never re-embedded and its record is unscorable for
     # good — the exact permanent-stuck failure `warm_window` exists to avoid.
-    uncached, hits = _uncached(space, _records(scope, root))
+    uncached, hits, sources = _uncached(space, _records(scope, root))
     query_text = embed_space.clip(query, QUERY_BYTES)
     missing = embed_space.warm_window(uncached, query_text, WARM_LIMIT)
     misses = len(uncached)
@@ -335,8 +372,8 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     # not counted as indexed rather than scored from memory this once and
     # missing on the next query.
     for text, raw in zip(missing, got[1:]):
-        vectors.save(space, text, raw)
-    del missing, got
+        vectors.save(space, text, raw, **_history(sources.get(text), text))
+    del missing, got, sources
 
     matched: list[dict] = []
     counted: set[bytes] = set()
@@ -369,9 +406,11 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
             "indexed": indexed, "corpus": len(counted)}
 
 
-def _uncached(space: str, records: Iterator[dict]) -> tuple[list[str], int]:
+def _uncached(space: str, records: Iterator[dict]) -> tuple[list[str], int, dict]:
     """The corpus's passages that have no vector yet, in walk order, deduped,
-    and how many of the deduped passages do (the capture line's hits).
+    how many of the deduped passages do (the capture line's hits), and where
+    each missing passage first appears: `(source file, position)` for a
+    single-file document, so its vector's row can name the unit.
 
     Reads the cache and keeps none of it — see `search_semantic`. Existence
     would be cheaper than a read, but a file that exists and fails its checksum
@@ -380,16 +419,20 @@ def _uncached(space: str, records: Iterator[dict]) -> tuple[list[str], int]:
     """
     seen: set[bytes] = set()
     out: list[str] = []
+    sources: dict[str, tuple] = {}
     for rec in records:
         cached = vectors.load(space, rec["texts"])
-        for text in rec["texts"]:
+        source = rec["doc"].get("source")
+        for unit, text in enumerate(rec["texts"]):
             key = _key(text)
             if key in seen:
                 continue
             seen.add(key)
             if text not in cached:
                 out.append(text)
-    return out, len(seen) - len(out)
+                if source is not None:
+                    sources[text] = (source, unit)
+    return out, len(seen) - len(out), sources
 
 
 def _best_passage(space: str, known: dict, query_vector: list[float],

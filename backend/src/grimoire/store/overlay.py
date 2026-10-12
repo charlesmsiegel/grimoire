@@ -1014,6 +1014,23 @@ def read_entity(cid: str, kind: str, eid: str, *, v: View | None = None) -> dict
         return entities.read_entity(v.wroot, kind, eid)
 
 
+def entity_source(cid: str, kind: str, eid: str, *, v: View | None = None) -> Path | None:
+    """The file `read_entity` reads for this campaign's view of `kind/eid`:
+    the campaign's own copy, else the world's unless the campaign deleted it;
+    None when neither exists. One or two stats, no read. Spec 05's vector rows
+    name it, so a warm-up rebuilds an entry from the file the campaign reads."""
+    v = _view(cid, v)
+    try:
+        return entities.require_entity(v.croot, kind, eid)
+    except entities.EntityNotFound:
+        if _flat_ref(kind, eid) in v.gone:
+            return None
+    try:
+        return entities.require_entity(v.wroot, kind, eid)
+    except entities.EntityNotFound:
+        return None
+
+
 def read_entity_rev(cid: str, kind: str, eid: str) -> dict:
     """`read_entity` carrying the rev of whichever layer answered (#35)."""
     try:
