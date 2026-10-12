@@ -103,7 +103,7 @@ def post_cache_sync(body: CacheSyncRequest, request: Request) -> dict:
                 report = cache_sync.run(
                     asked["paths"], campaigns=asked["campaigns"], worlds=asked["worlds"],
                     all_records=body.all_records, renamed=renamed, deleted=asked["deleted"],
-                    embed=body.embed, dry_run=body.dry_run, verify=body.verify, root=root,
+                    embed=asked["embed"], dry_run=body.dry_run, verify=body.verify, root=root,
                     stop=lambda: r.cancel_requested,
                     progress=lambda counts: _progress(r, counts))
             out = report.as_dict()

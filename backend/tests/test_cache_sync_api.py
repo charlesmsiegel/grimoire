@@ -141,3 +141,12 @@ def test_a_data_dir_move_is_refused_while_a_sync_is_live(api, gated, tmp_path):
     release.set()
     _wait(client, got.json()["run"]["id"])
     assert moved.status_code == 409
+
+
+def test_an_attempt_id_is_scoped_to_the_sync_kind(api):
+    app, client, _home = api
+    other, _ = app.state.runs.start_or_existing(("global",), "draft", "model-refresh", "shared",
+                                                None, {})
+    got = client.post("/api/cache/sync", json={"paths": ["worlds/realm"], "attempt_id": "shared"})
+    assert got.status_code == 202 and got.json()["run"]["id"] != other.id
+    _wait(client, got.json()["run"]["id"])

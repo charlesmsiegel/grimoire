@@ -164,6 +164,7 @@ class NetworkResult:
     outcomes: dict[tuple[str, str], str] = field(default_factory=dict)
     embedding: dict[str, int] = field(default_factory=dict)
     failure: str = ""
+    verify_failed: set[str] = field(default_factory=set)
 
 
 class WarmHook(Protocol):
@@ -313,6 +314,19 @@ class Projection:
     texts: Callable[[Path, bytes, object], list[str] | None]
     limit: int
     units: bool = False
+    #: Whether the producer is switched on now. Write-through spends only
+    #: where the next ordinary read would embed the same text anyway, so a
+    #: producer switched off is deferred in `write` mode; an explicit sync is
+    #: the user's own request and asks nothing of it.
+    enabled: Callable[[], bool] = lambda: True
+
+
+def _recall_on() -> bool:
+    return semantic.settings() is not None
+
+
+def _art_on() -> bool:
+    return art.settings()["depth"] > 0
 
 
 #: The producers' projections. Recall and art run on every turn of a campaign
@@ -322,9 +336,10 @@ class Projection:
 #: rebuilds it (`explicit`).
 VECTOR_PROJECTIONS: dict[str, Projection] = {
     semantic.PROJECTION: Projection(semantic.PROJECTION, "semantic-recall", "quiet",
-                                    semantic.projection_texts, semantic.WARM_LIMIT),
+                                    semantic.projection_texts, semantic.WARM_LIMIT,
+                                    enabled=_recall_on),
     art.PROJECTION: Projection(art.PROJECTION, "art-catalog", "quiet",
-                               art.projection_texts, embeddings.BATCH - 1),
+                               art.projection_texts, embeddings.BATCH - 1, enabled=_art_on),
     semsearch.PROJECTION: Projection(semsearch.PROJECTION, "semantic-search", "explicit",
                                      semsearch.projection_texts, semsearch.WARM_LIMIT, units=True),
 }
@@ -332,6 +347,22 @@ VECTOR_PROJECTIONS: dict[str, Projection] = {
 #: One process-wide sync client, for its connection pool -- the producers'
 #: own pattern.
 _CLIENT = embeddings.EmbeddingsClient()
+
+
+def _enabled(projection: Projection) -> bool:
+    try:
+        return projection.enabled()
+    except Exception:                                     # noqa: BLE001 -- unreadable settings spend nothing
+        return False
+
+
+def _unit_order(row: compiled.Materialized) -> tuple:
+    """Rows in unit order: `{"unit": 10}` after `{"unit": 9}`."""
+    try:
+        unit = json.loads(row.instance).get("unit") if row.instance else None
+    except (ValueError, AttributeError):
+        unit = None
+    return (row.kind, unit if type(unit) is int else -1, row.instance)
 
 
 def _vector_kind(kind: str) -> tuple[Projection, str] | None:
@@ -398,7 +429,7 @@ class _VectorsHook:
               data: bytes, plan: dict[str, _Wanted], result: LocalResult) -> None:
         path = ctx.path(rel)
         spent: dict[str, int] = {}
-        for row in sorted(rows, key=lambda r: (r.kind, r.instance)):
+        for row in sorted(rows, key=_unit_order):
             parsed = _vector_kind(row.kind)
             assert parsed is not None
             projection, digest = parsed
@@ -409,7 +440,7 @@ class _VectorsHook:
     def _row(self, ctx: WarmContext, rel: str, path: Path, row: compiled.Materialized,
              projection: Projection, digest: str, data: bytes, plan: dict[str, _Wanted],
              spent: dict[str, int], result: LocalResult) -> str:
-        if ctx.mode == "write" and projection.on_write == "explicit":
+        if ctx.mode == "write" and (projection.on_write == "explicit" or not _enabled(projection)):
             return "deferred"
         if (problem := self._space_problem(ctx, digest)) is not None:
             result.embedding[problem] = result.embedding.get(problem, 0) + 1
@@ -422,11 +453,6 @@ class _VectorsHook:
         text = self._unit(projection, texts, instance)
         if text is None:
             return "skipped"
-        # The producer's own lazy limit, per path: a rebuild never sends more
-        # for one file than one ordinary read could.
-        if spent.get(projection.name, 0) >= projection.limit:
-            return "lazy"
-        spent[projection.name] = spent.get(projection.name, 0) + 1
         assert ctx.space is not None                      # `_space_problem` said so
         space_id = ctx.space["space"]
         source = compiled.WrittenInput("source", path, data)
@@ -438,6 +464,11 @@ class _VectorsHook:
                              instances={text: instance})
             result.embedding["held"] = result.embedding.get("held", 0) + 1
             return "hit"
+        # The producer's own lazy limit, per path, counted in texts it would
+        # SEND: a rebuild never sends more for one file than one ordinary read
+        # could, and a held text costs nothing.
+        if not self._within_limit(projection, text, plan, spent):
+            return "lazy"
         if ctx.dry_run:
             result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
             return "planned"
@@ -449,6 +480,18 @@ class _VectorsHook:
         wanted.claims.add(campaign if isinstance(campaign, str) else "")
         wanted.rows.append((rel, row.kind, path, data, projection.name, instance))
         return "planned"
+
+    @staticmethod
+    def _within_limit(projection: Projection, text: str, plan: Mapping[str, _Wanted],
+                      spent: dict[str, int]) -> bool:
+        """Whether one more distinct text may be planned for this path under
+        the producer's lazy limit; a text already planned costs nothing more."""
+        if text in plan:
+            return True
+        if spent.get(projection.name, 0) >= projection.limit:
+            return False
+        spent[projection.name] = spent.get(projection.name, 0) + 1
+        return True
 
     @staticmethod
     def _space_problem(ctx: WarmContext, digest: str) -> str | None:
@@ -482,11 +525,7 @@ class _VectorsHook:
         # the batch's space: sending now would put texts into a space nothing
         # was ever embedded in, which is the move `confirm_embedding` asks
         # about. The texts go with the batch's space, never the re-read one.
-        try:
-            now = embed_space.endpoint()
-        except Exception:                                 # noqa: BLE001 -- unreadable is not "the same"
-            now = None
-        if now is None or compiled.space_digest(now["space"]) != ctx.space_digest:
+        if self._role_moved(ctx):
             self._settle(result, plan, plan, "skipped")
             result.embedding["stale_space"] = len(plan)
             return result
@@ -500,7 +539,12 @@ class _VectorsHook:
                 for start in range(0, len(group.texts), embeddings.BATCH):
                     chunk = list(group.texts[start:start + embeddings.BATCH])
                     if failure or ctx.halted():
+                        # Unsent: a failure names its kind on every row it
+                        # stopped; a stop leaves them `planned`, which the
+                        # batch reports `unsynced`.
                         result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
+                        if failure:
+                            self._settle(result, plan, chunk, f"failed:{failure}")
                         continue
                     chunk = self._arrived(space["space"], chunk, plan, result)
                     if chunk:
@@ -508,7 +552,30 @@ class _VectorsHook:
                                            space)
                         failure = self._landed(space["space"], chunk, got, plan, result)
         result.failure = failure
+        if ctx.verify:
+            self._verify(space["space"], plan, result)
         return result
+
+    @staticmethod
+    def _role_moved(ctx: WarmContext) -> bool:
+        """Whether the Embedding role names a different space now than the
+        one the batch read -- or none, or cannot be read."""
+        try:
+            now = embed_space.endpoint()
+        except Exception:                                 # noqa: BLE001 -- unreadable is not "the same"
+            return True
+        return now is None or compiled.space_digest(now["space"]) != ctx.space_digest
+
+    def _verify(self, space_id: str, plan: dict[str, _Wanted], result: NetworkResult) -> None:
+        """Section 7.7 for a vector kind: every text this batch reports built
+        now has a vector."""
+        built = [text for text, wanted in plan.items()
+                 if any(result.outcomes.get((rel, kind)) == "built" for rel, kind, *_ in wanted.rows)]
+        held = vectors.load(space_id, built) if built else {}
+        for text in built:
+            if text not in held:
+                result.verify_failed.update(rel for rel, *_ in plan[text].rows)
+                _log.warning("cache sync verify: a built vector is missing")
 
     def _arrived(self, space_id: str, chunk: list[str], plan: dict[str, _Wanted],
                  result: NetworkResult) -> list[str]:
@@ -537,7 +604,11 @@ class _VectorsHook:
         result.embedding["sent"] = result.embedding.get("sent", 0) + len(chunk)
         for text, raw in zip(chunk, got.vectors, strict=True):
             self._save(space_id, text, raw, plan[text])
-            self._settle(result, plan, [text], "built")
+        # `vectors.save` drops a write it cannot make (a full or read-only
+        # cache) rather than raise: a text is `built` only once it reads back.
+        held = vectors.load(space_id, chunk)
+        for text in chunk:
+            self._settle(result, plan, [text], "built" if text in held else "failed:not_saved")
         return ""
 
     @staticmethod
@@ -621,6 +692,9 @@ class PathReport:
     rel: str | None = None
     #: For the NEW side of a stated rename, OLD's store-relative path.
     renamed_from: str | None = None
+    #: The OLD side of a stated rename: deleted, but never by `--deleted`,
+    #: so it never purges (section 7.6).
+    from_rename: bool = False
 
     def as_dict(self) -> dict:
         out: dict[str, object] = {"path": self.given, "status": self.status}
@@ -661,9 +735,11 @@ class SyncReport:
     @property
     def ok(self) -> bool:
         """No path failed, was refused, is missing, failed verify or was left
-        unsynced by a batch that stopped early."""
-        return not any(item.status in ("failed", "refused", "missing", "verify_failed", "unsynced")
-                       for item in self.paths)
+        unsynced, and the batch did not stop early -- "stopped looking" never
+        reads as "found nothing"."""
+        return self.stopped is None and not any(
+            item.status in ("failed", "refused", "missing", "verify_failed", "unsynced")
+            for item in self.paths)
 
     def as_dict(self) -> dict:
         shown = self.paths if self.listed == "all" else [
@@ -873,6 +949,7 @@ def sync_paths(relpaths: Iterable[str], *,
                stop: Callable[[], bool] = lambda: False,
                hooks: tuple[WarmHook, ...] | None = None,
                known: Mapping[str, str] | None = None,
+               listed: Iterable[str] = (),
                progress: Callable[[dict], None] | None = None) -> SyncReport:
     """Warm what was hot for `relpaths` (spec 05 section 3.3). Never raises
     for one path's failure -- that is its status; raises only for a
@@ -895,7 +972,7 @@ def sync_paths(relpaths: Iterable[str], *,
     vectors.flush_deferred()
     quiet = mode == "write"               # refusals and missing paths are not news to the queue
     items = _classify_arguments(root, relpaths, deleted, report, quiet=quiet,
-                                renamed=renamed or {}, known=known or {})
+                                renamed=renamed or {}, known=known or {}, listed=listed)
 
     reason = compiled.unavailable_reason()
     if reason is not None:
@@ -1006,10 +1083,17 @@ class _Collector:
             self.add(PathReport(checked.given, "deleted", rel=checked.rel))
 
     def renamed(self, root: Path, old: str, new: str) -> None:
-        """OLD is an intended delete; NEW is a path that inherits OLD's rows."""
+        """OLD is an intended delete; NEW is a path that inherits OLD's rows.
+        Both sides count against the batch's quota."""
+        if self.full(old):
+            return
         before = len(self.items)
         self.deleted(root, old)
         gone = self.items[before:] and self.items[-1].status == "deleted"
+        if gone:
+            self.items[-1].from_rename = True
+        if self.full(new):
+            return
         checked = _check(root, new)
         if checked.reason is not None:
             self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
@@ -1020,6 +1104,15 @@ class _Collector:
         else:
             self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel,
                                                  renamed_from=self.items[before].rel if gone else None))
+
+    def listed(self, root: Path, rel: str) -> None:
+        """A scope listing's candidate: held to section 8 like any path, but
+        bounded by `MAX_SCOPE_FILES` where it was listed, not by `MAX_PATHS`."""
+        checked = _check(root, rel)
+        if checked.reason is not None:
+            self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
+        elif checked.kind == "file":
+            self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
     def argument(self, root: Path, given: str) -> None:
         if self.full(given):
@@ -1040,7 +1133,7 @@ class _Collector:
 
 def _classify_arguments(root: Path, relpaths: Iterable[str], deleted: Iterable[str],
                         report: SyncReport, *, quiet: bool, renamed: Mapping[str, str],
-                        known: Mapping[str, str]) -> list[PathReport]:
+                        known: Mapping[str, str], listed: Iterable[str] = ()) -> list[PathReport]:
     collector = _Collector(report, quiet)
     for old, new in renamed.items():
         collector.renamed(root, old, new)
@@ -1048,6 +1141,8 @@ def _classify_arguments(root: Path, relpaths: Iterable[str], deleted: Iterable[s
         collector.deleted(root, given)
     for given in relpaths:
         collector.argument(root, given)
+    for rel in listed:
+        collector.listed(root, rel)
     for rel, status in known.items():
         if status in ("cold", "current"):
             collector.add(PathReport(rel, status, rel=rel))
@@ -1103,6 +1198,7 @@ def _purge_roots(root: Path, report: SyncReport, stop: Callable[[], bool]) -> No
     or a plain path naming a missing root is `not_found` or `missing` -- since
     03-C8's purge makes every device start cold."""
     named = [item for item in report.paths if item.status == "deleted" and item.rel is not None
+             and not item.from_rename
              and len(parts := item.rel.split("/")) == 2 and parts[0] in _ROOT_SCOPES]
     if not named:
         return
@@ -1152,7 +1248,10 @@ def _run_hooks(root: Path, mode: str, hooks: tuple[WarmHook, ...],
         if item.status != "pending":
             continue
         reached = all(row.kind in item.kinds for row in hot[rel])
-        item.status = _status(item) if report.stopped is None or reached else "unsynced"
+        # A kind still `planned` after a real batch was never sent: a stop,
+        # or a network phase that raised.
+        unsent = not dry_run and any(o == "planned" for o in item.kinds.values())
+        item.status = _status(item) if (report.stopped is None or reached) and not unsent else "unsynced"
 
 
 def _mark_lazy(hooks: tuple[WarmHook, ...], hot: Mapping[str, tuple[compiled.Materialized, ...]],
@@ -1216,6 +1315,10 @@ def _network_phases(ctx: WarmContext, plans: list[tuple[WarmHook, object]],
         _add_embedding(report, net.embedding)
         if net.failure:
             report.embedding["failure"] = net.failure
+        for rel in net.verify_failed & by_rel.keys():
+            by_rel[rel].status = "verify_failed"
+    if report.stopped is None and (halt := ctx.halted()) is not None:
+        report.stopped = halt                     # stopped inside a network phase
 
 
 def _add_embedding(report: SyncReport, figures: Mapping[str, object]) -> None:
@@ -1276,6 +1379,8 @@ class ScopeResult:
     known: dict[str, str] = field(default_factory=dict)
     refused: list[PathReport] = field(default_factory=list)
     truncated: bool = False
+    #: Why the listing stopped before it classified every file, if it did.
+    stopped: str | None = None
 
 
 def _scope_dirs(root: Path, campaigns: Iterable[str], worlds: Iterable[str], all_records: bool,
@@ -1327,15 +1432,19 @@ def expand_scopes(root: Path, *, campaigns: Iterable[str] = (), worlds: Iterable
     with compiled.batch(root) as request:
         try:
             for offset in range(0, len(listed), compiled.SOURCE_CHUNK):
-                if _halted(root, stop) is not None:
+                if (halt := _halted(root, stop)) is not None:
+                    result.stopped, result.truncated = halt, True
                     break
                 chunk = listed[offset:offset + compiled.SOURCE_CHUNK]
                 absolute = [root.joinpath(*rel.split("/")) for rel in chunk]
                 hashes = request.known_hashes(compiled.SYNC_SOURCES, absolute)
                 for rel, path in zip(chunk, absolute, strict=True):
-                    rows = request.materialized([path]).get(path, ())
+                    answer = request.materialized_answer([path])
+                    rows = answer.get(path, ()) if answer is not None else None
                     digest = hashes.get(path)
-                    if not rows:
+                    if rows is None:
+                        result.candidates.append(rel)   # unanswered: read it, never call it cold
+                    elif not rows:
                         result.known[rel] = "cold"
                     elif digest and all(row.built_from == digest for row in rows):
                         result.known[rel] = "current"
@@ -1359,11 +1468,12 @@ def run(relpaths: Iterable[str] = (), *, campaigns: Iterable[str] = (), worlds: 
     scoped = bool(campaigns or worlds or all_records)
     scope = expand_scopes(root, campaigns=campaigns, worlds=worlds, all_records=all_records,
                           stop=stop) if scoped else ScopeResult()
-    report = sync_paths([*relpaths, *scope.candidates], mode="explicit", embed=embed,
+    report = sync_paths(list(relpaths), listed=scope.candidates, mode="explicit", embed=embed,
                         dry_run=dry_run, verify=verify, renamed=renamed, deleted=deleted,
                         root=root, stop=stop, known=scope.known, progress=progress)
     report.paths.extend(scope.refused)
     report.truncated = report.truncated or scope.truncated
+    report.stopped = report.stopped or scope.stopped
     if scoped:
         report.listed = "notable"
     return report

@@ -94,6 +94,10 @@ TICK_S = 5.0
 MAX_PENDING = 20_000
 
 
+_WARNED: set[str] = set()
+_WARNED_LOCK = threading.Lock()
+
+
 def enabled() -> bool:
     return os.environ.get(ENV) != "0"
 
@@ -120,7 +124,6 @@ class WriteThroughQueue:
         self._clock = clock
         self.stopping = threading.Event()
         self._overflowed = False
-        self._warned: set[str] = set()
 
     def __len__(self) -> int:
         with self._lock:
@@ -140,15 +143,25 @@ class WriteThroughQueue:
                     _log.warning("write-through queue full at %d paths; later writes warm lazily",
                                  MAX_PENDING)
 
-    def clear(self) -> None:
-        """Forget everything pending: the store root moved."""
+    def clear(self, keep_root: str | None = None) -> None:
+        """Forget what was collected under any root but `keep_root` (all of it
+        when None): the store root moved, and a request that finished against
+        the new root in the meantime has already queued valid paths."""
         with self._lock:
-            self._pending.clear()
+            if keep_root is None:
+                self._pending.clear()
+            else:
+                for key in [k for k in self._pending if k[0] != keep_root]:
+                    del self._pending[key]
 
     def _take_quiet(self) -> dict[str, list[str]]:
         now = self._clock()
         with self._lock:
-            ready = [key for key, at in self._pending.items() if now - at >= WRITE_QUIET_S]
+            # At most one batch's worth: `sync_paths` refuses past MAX_PATHS,
+            # and a write batch is quiet about refusals, so a larger take
+            # would lose the rest. They stay queued for the next pass.
+            ready = [key for key, at in self._pending.items()
+                     if now - at >= WRITE_QUIET_S][:cache_sync.MAX_PATHS]
             for key in ready:
                 del self._pending[key]
         grouped: dict[str, list[str]] = {}
@@ -164,9 +177,13 @@ class WriteThroughQueue:
                 self._pending.setdefault((root, rel), at)
 
     def _warn_once(self, kind: str) -> None:
-        if kind not in self._warned:
-            self._warned.add(kind)
-            _log.warning("write-through warm-up failed: %s", kind)
+        """One log line per failure kind per PROCESS (spec 05 section 5.4),
+        not per app: a test suite or a reload builds several."""
+        with _WARNED_LOCK:
+            if kind in _WARNED:
+                return
+            _WARNED.add(kind)
+        _log.warning("write-through warm-up failed: %s", kind)
 
     def drain(self, app) -> cache_sync.SyncReport | None:
         """One pass, synchronously: warm every path that has gone quiet.
@@ -249,4 +266,4 @@ def clear(app) -> None:
     """The store root moved: drop every pending path (`PUT /config/data-dir`)."""
     queue = getattr(getattr(app, "state", None), "cache_warm", None)
     if isinstance(queue, WriteThroughQueue):
-        queue.clear()
+        queue.clear(keep_root=str(paths.home()))

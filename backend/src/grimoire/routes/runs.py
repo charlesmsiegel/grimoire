@@ -2454,10 +2454,14 @@ def reserve_cache_sync(app, attempt_id: str | None) -> tuple[Run, bool]:
     One at a time and never merged: while one is live a new request is
     refused with `sync_in_flight` naming it, whatever its options, so the
     caller can poll and retry; a repeat of the live run's own attempt id is
-    handed that run back. A `def` caller only, like every reservation."""
+    handed that run back. Attempt ids are only unique within a subject, and
+    the global subject also holds drafts, so the id is scoped to this kind:
+    a repeat of a model refresh's id never hands a sync caller that refresh.
+    A `def` caller only, like every reservation."""
     try:
         return app.state.runs.start_or_existing(
-            GLOBAL_SUBJECT, "background", CACHE_SYNC_KIND, attempt_id or uuid.uuid4().hex,
+            GLOBAL_SUBJECT, "background", CACHE_SYNC_KIND,
+            f"{CACHE_SYNC_KIND}:{attempt_id or uuid.uuid4().hex}",
             None, _subject_labels(GLOBAL_SUBJECT), refuse_live=True)
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={

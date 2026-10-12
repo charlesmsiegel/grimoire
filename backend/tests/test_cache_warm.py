@@ -146,10 +146,12 @@ def test_a_raising_route_hands_its_paths_to_the_real_queue(warm):
         _wait_offered(app.state.cache_warm)
 
 
-def test_a_data_dir_move_clears_the_queue(warm, tmp_path):
+def test_a_data_dir_move_clears_the_old_roots_paths(warm, tmp_path, monkeypatch):
     _app, client, queue, _clock, home = warm
     queue.offer(frozenset({str(home / "worlds" / "realm" / "world.md")}))
     assert len(queue) == 1
+    # The pointer, not the env override, decides the root from here on.
+    monkeypatch.delenv("GRIMOIRE_HOME")
     other = tmp_path / "other-library"
     assert client.put("/api/config/data-dir", json={"data_dir": str(other)}).status_code == 200
     assert len(queue) == 0
@@ -208,6 +210,7 @@ def test_past_max_pending_paths_are_dropped_with_one_log_line(warm, monkeypatch,
 
 def test_a_failed_warm_up_is_swallowed_and_logged_once(warm, monkeypatch, caplog):
     app, _client, queue, clock, home = warm
+    monkeypatch.setattr(cache_warm, "_WARNED", set())     # once per process
 
     def broken(relpaths, **kwargs):
         raise RuntimeError("the warm-up broke")
@@ -326,3 +329,21 @@ def test_the_queue_collects_under_the_root_of_the_offer(warm):
     queue.offer(frozenset({str(home / "worlds" / "realm" / "world.md")}))
     assert list(queue._pending) == [(str(home), "worlds/realm/world.md")]
     assert Path(str(home)) == home
+
+
+def test_a_drain_takes_at_most_one_batch_and_keeps_the_rest(warm, monkeypatch):
+    app, _client, queue, clock, home = warm
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    calls = _spy(monkeypatch)
+    queue.offer(frozenset(str(home / "worlds" / "realm" / f"{n}.md") for n in range(5)))
+    clock.advance(cache_warm.WRITE_QUIET_S)
+    queue.drain(app)
+    assert len(calls[0][0]) == 2 and len(queue) == 3
+
+
+def test_a_move_drops_only_the_old_roots_paths(warm, tmp_path):
+    _app, _client, queue, _clock, home = warm
+    queue.offer(frozenset({str(home / "worlds" / "realm" / "world.md")}))
+    queue._pending[(str(tmp_path / "new-root"), "worlds/realm/world.md")] = 0.0
+    queue.clear(keep_root=str(tmp_path / "new-root"))
+    assert list(queue._pending) == [(str(tmp_path / "new-root"), "worlds/realm/world.md")]

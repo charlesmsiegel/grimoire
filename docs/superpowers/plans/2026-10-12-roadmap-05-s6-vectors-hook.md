@@ -113,3 +113,28 @@ planted cases are in `tests/test_operation_guard.py`.
 ## Gates
 
 Substitute reviews, recorded in the PR; `@codex review` on the PR.
+
+## Review fixes folded in (second substitute review and Codex on PR #512)
+
+- A stop, a moved root or a network-phase exception after the local phase
+  leaves every unsent path `unsynced` (a kind still `planned` after a real
+  batch was never sent) and sets `stopped`; a connection-wide failure names
+  its kind (`failed:<kind>`) on every chunk it stopped; a batch that stopped
+  is never `ok`.
+- A text is `built` only once it reads back from the vector cache
+  (`failed:not_saved` otherwise), and `--verify` checks built vectors exist.
+- The lazy cap counts distinct texts the path would send, in unit order (a
+  held text and a text already planned cost nothing).
+- Write-through defers recall and art while the producer is switched off
+  (`Projection.enabled`); an explicit sync is the user's own request.
+- Scoped syncs read history strictly (`materialized_answer`): an unanswered
+  file is a candidate, never `cold`; scope candidates are bounded by
+  `MAX_SCOPE_FILES`, not `MAX_PATHS`; a stop while listing reaches the
+  report as `stopped` and `truncated`.
+- A stated rename's OLD side never purges, and both sides count against the
+  quota; the API scopes `attempt_id` to the `cache-sync` kind and reads
+  `embed` off the dumped body; the queue drains at most `MAX_PATHS` per pass
+  and keeps the rest, logs once per failure kind per process, and a data-dir
+  move drops only paths collected under another root.
+- The operation guard also refuses a `replace(**...)` in the warm-up module
+  and any `.network(...)` call outside it or not handed its `ctx`.

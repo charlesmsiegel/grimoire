@@ -288,3 +288,53 @@ def test_collecting_is_isolated_from_an_enclosing_scope(home):
     with writeset.collecting() as outer, cache_sync.collecting():
         atomic.write_text(home / "worlds/realm/lore/pact.md", "x")
     assert str(home / "worlds/realm/lore/pact.md") not in outer.close()
+
+
+# -- second review regressions -----------------------------------------------------
+
+
+def test_a_stated_rename_of_a_root_never_purges(home, monkeypatch):
+    purges = []
+    monkeypatch.setattr(compiled, "purge_for_delete", purges.append)
+    (home / "campaigns" / "saltmarch").mkdir(parents=True, exist_ok=True)
+    (home / "campaigns" / "saltmarch").rename(home / "campaigns" / "moved")
+    report = cache_sync.run(renamed={"campaigns/saltmarch": "campaigns/moved"})
+    assert purges == [] and report.purged is None
+
+
+def test_a_busy_cache_never_makes_a_scoped_file_cold(home, upper, monkeypatch):
+    _write(home, "worlds/realm/lore/pact.md", "x")
+    _read(home, upper, "worlds/realm/lore/pact.md")
+    _write(home, "worlds/realm/lore/pact.md", "edited")
+    monkeypatch.setattr(compiled, "STRICT_LOCK_SECONDS", 0.01)
+    with compiled._state.lock:
+        scope = cache_sync.expand_scopes(home, worlds=["realm"])
+    assert scope.candidates == ["worlds/realm/lore/pact.md"]
+
+
+def test_scope_candidates_are_not_held_to_max_paths(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 1)
+    for name in "abc":
+        _write(home, f"worlds/realm/lore/{name}.md", "x")
+    monkeypatch.setattr(cache_sync, "expand_scopes", lambda root, **kw: cache_sync.ScopeResult(
+        candidates=[f"worlds/realm/lore/{n}.md" for n in "abc"]))
+    report = cache_sync.run(worlds=["realm"])
+    assert report.counts()["cold"] == 3 and not report.truncated and report.ok
+
+
+def test_both_sides_of_a_rename_count_against_the_quota(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 3)
+    renamed = {}
+    for n in range(4):
+        _write(home, f"worlds/realm/lore/new{n}.md", "x")
+        renamed[f"worlds/realm/lore/old{n}.md"] = f"worlds/realm/lore/new{n}.md"
+    report = cache_sync.sync_paths([], mode="explicit", renamed=renamed)
+    accepted = [p for p in report.paths if p.reason != "too_many"]
+    assert len(accepted) <= 3 and report.truncated
+
+
+def test_a_stop_while_listing_a_scope_reaches_the_report(home):
+    for n in range(3):
+        _write(home, f"worlds/realm/lore/{n}.md", "x")
+    report = cache_sync.run(worlds=["realm"], stop=lambda: True)
+    assert report.stopped == "cancelled" and report.truncated and not report.ok

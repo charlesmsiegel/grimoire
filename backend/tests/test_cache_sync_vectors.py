@@ -528,3 +528,87 @@ def test_the_art_catalog_names_the_image_object(home):
     assert got["source"].path == image_store.object_path(cand["image_id"])
     assert got["projection"] == art.PROJECTION and got["instance"] == {"campaign": cid}
     assert art.projection_texts(got["source"].path, got["source"].data, got["instance"]) == [text]
+
+
+# -- second review regressions -----------------------------------------------------
+
+
+def test_a_stop_inside_the_network_phase_leaves_unsent_paths_unsynced(home, fake, monkeypatch):
+    _configure()
+    wid, cid = _realm()
+    paths = []
+    for n in range(3):
+        eid, path = _lore(home, wid, name=f"Pact {n}", body=f"Clause {n}.")
+        _recall(wid, cid, eid)
+        entities.update_entity(worlds.world_root(wid), "lore", eid, body=f"Clause {n}, amended.")
+        paths.append(_rel(home, path))
+    monkeypatch.setattr(embeddings, "BATCH", 1)
+    sent_before = len(fake.calls)
+    report = cache_sync.sync_paths(paths, mode="explicit",
+                                   stop=lambda: len(fake.calls) > sent_before)
+    assert report.stopped == "cancelled" and not report.ok
+    assert sorted(p.status for p in report.paths) == ["refreshed", "unsynced", "unsynced"]
+    assert report.embedding["not_sent"] == 2
+
+
+def test_a_connection_wide_failure_names_its_kind_on_every_unsent_path(home, fake, monkeypatch):
+    _configure()
+    wid, cid = _realm()
+    paths = []
+    for n in range(3):
+        eid, path = _lore(home, wid, name=f"Pact {n}", body=f"Clause {n}.")
+        _recall(wid, cid, eid)
+        entities.update_entity(worlds.world_root(wid), "lore", eid, body=f"Clause {n}, amended.")
+        paths.append(_rel(home, path))
+    monkeypatch.setattr(embeddings, "BATCH", 1)
+    fake.error, fake.fail_after = embeddings.EmbeddingsError("auth", "no"), len(fake.calls)
+    report = cache_sync.sync_paths(paths, mode="explicit")
+    assert all(p.status == "failed" for p in report.paths) and not report.ok
+    assert {o for p in report.paths for o in p.kinds.values()} == {"failed:auth"}
+
+
+def test_the_lazy_cap_counts_texts_sent_in_unit_order(home, fake, monkeypatch):
+    _configure()
+    _wid, cid = _realm()
+    path = _transcript(home, cid, [_post(n) for n in range(12)])
+    texts = _embed_units(home, path, range(11))
+    monkeypatch.setitem(cache_sync.VECTOR_PROJECTIONS, semsearch.PROJECTION, cache_sync.Projection(
+        semsearch.PROJECTION, "semantic-search", "explicit", semsearch.projection_texts, 2, units=True))
+    # Only units 9 and 10 change; the nine held ones cost nothing against the cap.
+    data = path.read_text()
+    tail = texts[9][-40:]
+    path.write_text(data.replace(tail, tail.upper()))
+    new = semsearch.document_texts(path, path.read_bytes())
+    changed = [u for u in range(11) if new[u] != texts[u]]
+    before = len(fake.calls)
+    cache_sync.sync_paths([_rel(home, path)], mode="explicit")
+    sent = [t for call in fake.calls[before:] for t in call]
+    assert set(sent) == {new[u] for u in changed[:2]}
+
+
+def test_a_vector_the_cache_could_not_keep_is_never_reported_built(home, fake, monkeypatch):
+    """`vectors.save` drops a write it cannot make (a full or read-only cache):
+    a text is `built` only once it reads back, so neither the report nor
+    `--verify` can pass it."""
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="Verified edit.")
+    monkeypatch.setattr(vectors, "save", lambda *a, **k: None)      # a save that silently loses it
+    report = cache_sync.sync_paths([_rel(home, path)], mode="explicit", verify=True)
+    assert list(report.paths[0].kinds.values()) == ["failed:not_saved"] and not report.ok
+
+
+def test_write_through_defers_recall_when_recall_is_off(home, fake):
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    config.write_config(semantic_recall_depth="0")
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited with recall off.")
+    before = len(fake.calls)
+    written = cache_sync.sync_paths([_rel(home, path)], mode="write")
+    assert len(fake.calls) == before and list(written.paths[0].kinds.values()) == ["deferred"]
+    cache_sync.sync_paths([_rel(home, path)], mode="explicit")   # the user's own request
+    assert len(fake.calls) == before + 1

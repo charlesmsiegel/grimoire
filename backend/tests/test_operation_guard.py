@@ -529,7 +529,11 @@ class Provenance:
 
     def _warm_contexts_check(self) -> bool:
         """Every `WarmContext(...)` is built in `cache_sync._context()`, whose
-        `space=` traces to the role; nothing `replace`s a context's space."""
+        `space=` traces to the role; nothing `replace`s a context's space
+        (by name or through a `**` spread); and every `.network(...)` call --
+        the one door a context reaches a hook by -- is in the warm-up module,
+        handed that module's own `ctx`, so no caller elsewhere can hand a
+        hook a stand-in carrying a space of its own."""
         built = 0
         for mod, (tree, _is_pkg) in self.trees.items():
             for node in ast.walk(tree):
@@ -537,8 +541,15 @@ class Provenance:
                     continue
                 name = node.func.attr if isinstance(node.func, ast.Attribute) else (
                     node.func.id if isinstance(node.func, ast.Name) else None)
-                if name == "replace" and any(k.arg == "space" for k in node.keywords):
+                if name == "replace" and any(
+                        k.arg == "space" or (k.arg is None and mod == WARM_MODULE)
+                        for k in node.keywords):
                     return False
+                if name == "network" and isinstance(node.func, ast.Attribute):
+                    first = node.args[0] if node.args else None
+                    if (mod != WARM_MODULE or not isinstance(first, ast.Name)
+                            or first.id != "ctx"):
+                        return False
                 if name != WARM_CONTEXT:
                     continue
                 encl = self.parent.get(id(node))
@@ -878,6 +889,14 @@ def test_the_warm_up_space_is_accepted_through_its_one_context():
     (_WARM_PRELUDE + _WARM_HOOK
      + "def g(ctx):\n"
        "    return replace(ctx, space={'space': 's'})\n"),
+    # ... or through a spread.
+    (_WARM_PRELUDE + _WARM_HOOK
+     + "def g(ctx):\n"
+       "    return replace(ctx, **{'space': {'space': 's'}})\n"),
+    # A hook handed a stand-in rather than the batch's context.
+    (_WARM_PRELUDE + _WARM_HOOK
+     + "def g(plan):\n"
+       "    return VECTORS.network(SimpleNamespace(space={'space': 's'}), plan)\n"),
 ])
 def test_the_warm_up_exception_flags_planted_cases(src):
     assert _planted_warm_problems(src), src
