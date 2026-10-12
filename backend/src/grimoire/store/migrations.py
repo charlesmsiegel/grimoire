@@ -236,7 +236,7 @@ def _prune_identity_files(live: set[str]) -> None:
 
 def _recorded_token(entry: object, stamp: statcache.Stamp | None) -> str | None:
     """The identity `entry` recorded, if the file still stamps as it did then."""
-    if (stamp is None or not isinstance(entry, list) or len(entry) != 5
+    if (stamp is None or not statcache.vouches(stamp) or not isinstance(entry, list) or len(entry) != 5
             or not isinstance(entry[4], str) or not entry[4]):
         return None
     return entry[4] if entry[:4] == list(stamp[1:]) else None
@@ -331,7 +331,7 @@ def _backfill_campaign(cid: str) -> bool:
             # stamp whose ctime is still fresh could be rewritten in place and
             # handed its mtime back inside that same ctime tick, and a record
             # taken then would vouch for the new bytes for good.
-            if (stamp is not None
+            if (stamp is not None and statcache.vouches(stamp)
                     and started - max(stamp[1], stamp[2]) > statcache.RACY_WINDOW_NS):
                 kept[sid] = [*stamp[1:], token]
         # Under the campaign lock, like the reads it records: a second backend

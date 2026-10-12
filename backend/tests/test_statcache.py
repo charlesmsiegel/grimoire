@@ -273,3 +273,40 @@ def test_legacy_windows_metadata_keeps_copied_creation_age_guard(monkeypatch):
     monkeypatch.setattr(seam, 'windows_change_supported', lambda *args: True)
     assert seam.change_ns('Realm', os.stat('.')) == 200000
     assert closed == [1]
+
+
+def _unsupported_change_time(monkeypatch):
+    """The Windows answer for an EXISTING file on a network, FAT/exFAT or
+    reparse-point volume: no change time can be had."""
+    monkeypatch.setattr(statcache.file_stats, "change_ns", lambda path, info: None)
+    if statcache.file_stats._BY_NAME is not None:
+        monkeypatch.setattr(statcache.file_stats, "native_stamp", lambda path: None)
+
+
+def test_unavailable_change_time_still_exists_but_never_vouches(tmp_path, monkeypatch):
+    p = tmp_path / "Realm.md"
+    p.write_text("Mara", encoding="utf-8")
+    _age(p)
+    _unsupported_change_time(monkeypatch)
+    s = statcache.stamp(p)
+    assert s is not None and s[2] == statcache.UNVOUCHED and not statcache.vouches(s)
+    assert statcache.stamp(tmp_path / "Saltmarch.md") is None   # gone is still None
+    pool, calls = {}, []
+    for _ in range(2):
+        got = statcache.memo_stamped("k", lambda: (calls.append(1) or "Mara", (statcache.stamp(p),)),
+                                     pool=pool, max_entries=4)
+        assert got == "Mara"
+    assert len(calls) == 2 and not pool                          # opted out of the memo
+
+
+def test_characters_list_and_summarise_without_change_time(tmp_path, monkeypatch):
+    root = tmp_path / "Realm"
+    root.mkdir()
+    cid, vid = characters.create_character(root, "Seraphine")
+    _age_tree(root)
+    _unsupported_change_time(monkeypatch)
+    for pool in (characters._ROW_POOL, characters._SUMMARY_POOL, characters._IDENTITY_POOL):
+        pool.clear()
+    assert [r["id"] for r in characters.list_characters(root)] == [cid]
+    assert characters._card_summary(root, cid, vid)["greeting_count"] == 0
+    assert not characters._SUMMARY_POOL and not characters._ROW_POOL

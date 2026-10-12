@@ -104,6 +104,10 @@ def _put(cache: dict, key: object, val: object, budget: int) -> None:
 
 #: One `stamp()`: (path, st_mtime_ns, st_ctime_ns, st_size, st_ino).
 Stamp = tuple[str, int, int, int, int]
+#: The change-time field of a stamp for a file that EXISTS but whose change
+#: time cannot be had (a Windows network, FAT/exFAT or reparse-point file).
+#: Such a stamp still says the file is there; it never vouches for a memo.
+UNVOUCHED = -1
 
 
 def stamp(path: str | os.PathLike[str]) -> Stamp | None:
@@ -120,18 +124,32 @@ def stamp(path: str | os.PathLike[str]) -> Stamp | None:
     and then handed its old mtime back -- a sync client or `touch -r` restoring
     the origin's timestamp -- keeps mtime, size and inode, but not ctime, which
     ordinary timestamp restoration does not preserve. On Windows Python's
-    st_ctime is birth time, so the shared native seam supplies ChangeTime;
-    unavailable change metadata opts out of memoization.
+    st_ctime is birth time, so the shared native seam supplies ChangeTime.
+
+    None means the path is GONE, and callers read it that way. A path that
+    exists but whose change time is unavailable stamps with `UNVOUCHED` in the
+    change field: it lists, reads and compares like any other (so a
+    character on a network share is still found), but `memo_stamped` stores
+    nothing it vouches for -- unavailable change metadata opts out of
+    memoization, it does not opt out of existing.
     """
     if os.name == 'nt' and file_stats._BY_NAME is not None:
         fields = file_stats.native_stamp(path)
-        return (os.fspath(path), fields[0], fields[1], fields[2], fields[3]) if fields is not None else None
+        if fields is not None:
+            return (os.fspath(path), fields[0], fields[1], fields[2], fields[3])
+        # Unsupported (remote, reparse) or missing: the stat below says which.
     try:
         st = os.stat(path)
     except OSError:
         return None
     changed = file_stats.change_ns(path, st)
-    return (os.fspath(path), st.st_mtime_ns, changed, st.st_size, st.st_ino) if changed is not None else None
+    return (os.fspath(path), st.st_mtime_ns, UNVOUCHED if changed is None else changed,
+            st.st_size, st.st_ino)
+
+
+def vouches(s: Stamp) -> bool:
+    """Whether `s` may vouch for a remembered or persisted value."""
+    return s[2] != UNVOUCHED
 
 
 def _unchanged(stamps: tuple[Stamp, ...]) -> bool:
@@ -169,8 +187,9 @@ def memo_stamped(key: object, compute: Callable[[], tuple[T, tuple[Stamp, ...] |
     value came from a state the next read is supposed to repair). The value is
     returned and nothing is stored.
 
-    Neither mtime nor ctime may fall inside `RACY_WINDOW_NS` before the computation started. Nothing that recent is
-    stored, for `memo`'s reason: a same-size rewrite within one timestamp tick
+    A stamp that does not vouch (`UNVOUCHED`) stores nothing either. Neither
+    mtime nor ctime may fall inside `RACY_WINDOW_NS` before the computation
+    started. Nothing that recent is stored, for `memo`'s reason: a same-size rewrite within one timestamp tick
     of the stat would leave the stamp unchanged. Measured against the start,
     not the end, so a stamp taken late in a long computation is held to the
     same bar as the first one.
@@ -182,7 +201,8 @@ def memo_stamped(key: object, compute: Callable[[], tuple[T, tuple[Stamp, ...] |
         return entry[1]
     started = time.time_ns()
     value, stamps = compute()
-    if stamps is None or any(max(s[1:3]) >= started - RACY_WINDOW_NS for s in stamps):
+    if stamps is None or any(not vouches(s) or max(s[1:3]) >= started - RACY_WINDOW_NS
+                             for s in stamps):
         pool.pop(key, None)
         return value
     _put(pool, key, (stamps, value), max_entries)
