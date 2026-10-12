@@ -71,6 +71,7 @@ from grimoire.store import (
     steering,
     styles,
     suggest,
+    turn_plan,
     voice_anchors,
     voice_drift,
     worlds,
@@ -1606,6 +1607,95 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
                                         ctx.get("native_results", {}).get(0))]
 
 
+# ------------------------------------------------ decide, turn intent (02-S2)
+#
+# The turn intent as `_turn_plan` sends it (roadmap 02 §6): Mara, whose card
+# says she never answers a question about her own whereabouts straight, is
+# asked one directly by the player. The stance that fits her is `deflect`.
+
+DECIDE_INTENT_POSTS = [
+    ("user", "", "I find Mara on the night dock, coat still wet from the tide."),
+    ("assistant", "Mara", "You are late. The lantern has been out for an hour."),
+    ("user", "", "Mara, where were you when the tide bell rang?"),
+]
+
+_INTENT_CARD = {
+    "description": "A Saltmarch dock hand with salt-cracked hands and a ledger she never shows.",
+    "personality": "Guarded and quick-witted. Never answers a question about where she has "
+                   "been; turns it into a question about the asker instead.",
+}
+
+
+def build_decide_turn_intent() -> dict:
+    """Mara and Winifred on the night dock; the player has just asked Mara
+    where she was."""
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    mara_card = characters.blank_card("Mara")
+    mara_card["data"].update(_INTENT_CARD)
+    mara, _ = characters.create_character(wroot, "Mara", "default", mara_card)
+    winifred, _ = characters.create_character(wroot, "Winifred", "default",
+                                              characters.blank_card("Winifred"))
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    sid = scenes.create_scene(cid, "The Night Dock")
+    for npc in (mara, winifred):
+        appearances.appear(cid, sid, "characters", npc, "default", "npc")
+    for role, speaker, content in DECIDE_INTENT_POSTS:
+        scenes.append_message(cid, sid, role, content, **({"speaker": speaker} if speaker
+                                                          else {}))
+    return {"cid": cid, "sid": sid, "actor": f"characters:{mara}"}
+
+
+def _decide_turn_intent_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item `_turn_plan` sends, gathered as
+    `routes.character_turns._intent_item` gathers it: the actor's own card
+    brief through the locked version, and the observable transcript through
+    the prompt-phase regex view."""
+    cid, sid = ctx["cid"], ctx["sid"]
+    entry = next(a for a in appearances.scene_cast(cid, sid)
+                 if f"{a['kind']}:{a['id']}" == ctx["actor"])
+    card = characters.read_card(appearances.locked_actor_root(cid), entry["id"],
+                                appearances.locked_version(cid, entry["kind"],
+                                                           entry["id"]))["data"]
+    messages = scenes.read_scene(cid, sid)["messages"]
+    # The twin of `_intent_item`'s lambda, which `test_regex_prompt_guard.py`
+    # holds to the prompt phase.
+    conversation = response_protocol.observable_conversation(
+        messages, lambda posts, offset, total: regex_view.view(
+            posts, cid=cid, phase="prompt", offset=offset, total=total))
+    brief = turn_plan.brief_of(card)
+    item = turn_plan.intent_item(entry["name"], conversation, brief)
+    ctx.update(items=(item,), conversation=conversation, brief=brief, name=entry["name"])
+    return inference.structured_messages([item])
+
+
+def _decide_turn_intent_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=False)
+
+
+def grade_decide_turn_intent(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    wanted = [f"- {turn_plan.STANCE_ID} (choice, or null for none of these): ",
+              *(f"- {s}: {turn_plan.stance_description(s)}" for s in turn_plan.STANCES)]
+    missing = [line for line in wanted if line not in text]
+    heard = [turn["content"] for turn in ctx["conversation"] if turn["content"] not in text]
+    return [*graders.grade_prompt_section(messages, "question",
+                                          "turn_plan/stance_question.j2"),
+            Check("prompt.options", not missing,
+                  f"a stance or the null is missing from the choice: {missing}"),
+            Check("prompt.context", ctx["items"][0].context in text and not heard,
+                  f"the observable transcript is not in the prompt: {heard}"),
+            Check("prompt.brief", bool(ctx["brief"]) and ctx["brief"] in text,
+                  "the actor's own card brief is not in the prompt"),
+            Check("prompt.private", "Winifred" not in ctx["brief"],
+                  "another actor's material reached the brief"),
+            *graders.grade_decision(output, ctx["items"], explain=False,
+                                    question=turn_plan.STANCE_ID, expected="deflect"),
+            *graders.grade_distribution(ctx["items"][0], turn_plan.STANCE_ID,
+                                        ctx.get("native_results", {}).get(0))]
+
+
 # ------------------------------------- case 13: decide, continuity identity
 #
 # The duplicate check as `decide()` will send it after the switch: the same
@@ -2195,6 +2285,28 @@ CASES: tuple[Case, ...] = (
              # it no weight: the answer stands, the report is no draw of it.
              Recording("native-inconsistent", ("decide.distribution",), "json",
                        native="openrouter"))),
+    Case(id="decide-turn-intent",
+         task="turn-intent",
+         hypothesis="asked through decide() how a guarded character whose card says she "
+                    "never answers a question about her whereabouts approaches her reply "
+                    "to one, the reply is the schema's object and picks deflect",
+         build=build_decide_turn_intent,
+         prompt=_decide_turn_intent_prompt,
+         grade=grade_decide_turn_intent,
+         schema=_decide_turn_intent_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-stance: nothing decodes, so the answer check is not
+             # reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # Well formed, naming no stance the vocabulary offers.
+             Recording("off-option", ("decide.answer",), "json"),
+             # Well formed, and a null: no particular stance -- a real answer,
+             # but not this fixture's.
+             Recording("abstained", ("decide.answer",), "json"),
+             # The compliant stance from OpenAI's decisions endpoint, with a
+             # distribution the stance draw would sample from (02-S3).
+             Recording("native", (), "json", native="openai"))),
     Case(id="decide-rank",
          task="continuity-reconcile",
          hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "

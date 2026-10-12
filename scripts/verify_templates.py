@@ -496,6 +496,56 @@ REPORT.require("selector options are the item's",
                        len(SELECTOR_ROSTER):],
                f"carried descriptions for {list(SELECTOR_OPTIONS)}")
 
+# --- the turn intent (roadmap 02 §6): its item, and the block it sends -------
+#
+# `turn_plan.intent_item` renders `turn_plan/item.j2` as the item's context
+# (its brief line only when there is a brief) and one choice,
+# `turn_plan/stance_question.j2`, over `turn_plan.STANCES`, each described by
+# `turn_plan/stance.j2`, null allowed. `turn_plan.block` renders
+# `scene/turn_intent.j2` from the descriptions of the answers it was handed.
+from grimoire.store import turn_plan  # noqa: E402
+
+for brief in ("", "Guarded <and> quick."):
+    label = f"brief={bool(brief)}"
+    item = turn_plan.intent_item("Mara", SELECTOR_CONVERSATION, brief)
+    check(f"intent item context ({label})", item.context,
+          render("turn_plan/item.j2", name="Mara", brief=brief,
+                 conversation=SELECTOR_CONVERSATION))
+    REPORT.require(f"intent item brief line ({label})",
+                   ("What Mara is like:" in item.context) == bool(brief),
+                   "the brief line does not follow the brief")
+    (stance,) = item.questions
+    check(f"intent item question ({label})", stance.instructions,
+          render("turn_plan/stance_question.j2").strip())
+    REPORT.require(f"intent item options ({label})",
+                   stance.id == turn_plan.STANCE_ID and stance.allow_none
+                   and [o.id for o in stance.options] == list(turn_plan.STANCES),
+                   f"offers {[o.id for o in stance.options]} (allow_none={stance.allow_none})")
+    for option in stance.options:
+        check(f"intent option {option.id} ({label})", option.description,
+              render("turn_plan/stance.j2", stance=option.id).strip())
+        REPORT.require(f"intent option {option.id} described", bool(option.description),
+                       "turn_plan/stance.j2 renders nothing for it")
+for plan in ({"stance": "deflect"}, {"stance": "press", "disclosure": "hint", "tension": 2},
+             {"disclosure": "withhold"}):
+    expected = render("scene/turn_intent.j2", name="Mara",
+                      stance=(render("turn_plan/stance.j2", stance=plan["stance"]).strip()
+                              if "stance" in plan else ""),
+                      disclosure=(render("turn_plan/disclosure.j2",
+                                         disclosure=plan["disclosure"]).strip()
+                                  if "disclosure" in plan else ""),
+                      tension=(render("turn_plan/tension.j2", level=plan["tension"]).strip()
+                               if "tension" in plan else "")).strip()
+    check(f"intent block ({sorted(plan)})", turn_plan.block(plan, "Mara"), expected)
+for value in turn_plan.DISCLOSURES:
+    REPORT.require(f"disclosure {value} described",
+                   bool(render("turn_plan/disclosure.j2", disclosure=value).strip()),
+                   "turn_plan/disclosure.j2 renders nothing for it")
+for level in range(len(turn_plan.TENSION_LEVELS)):
+    REPORT.require(f"tension {level} described",
+                   bool(render("turn_plan/tension.j2", level=level).strip()),
+                   "turn_plan/tension.j2 renders nothing for it")
+
 #: The driver keys of the suggestion snapshot (`build_snapshot(drivers=True)`,
 #: which has no `upcoming`), empty.
 DRIVER_KEYS = {"commitments": [], "timeline": [], "driver_index": [], "anchors": [],

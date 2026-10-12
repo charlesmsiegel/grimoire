@@ -189,7 +189,7 @@ def extra(ctx: dict) -> dict:
     cid = ctx["cid"]
     return {
         "lowered": {task: {"global": _sent(task, ""), "campaign": _sent(task, cid)}
-                    for task in [*sorted(routing.TASK_ROUTE), ""]},
+                    for task in [*sorted(set(routing.TASK_ROUTE) - routing.NO_LEGACY_TASKS), ""]},
         "image_description": {"global": _seam("image-description", ""),
                               "campaign": _seam("image-description", cid)},
     }

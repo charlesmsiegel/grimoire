@@ -32,10 +32,12 @@ from .common import (
     _dump,
     _record_prompt,
     _require_scene,
+    _soft_resolved,
     _turn_override,
     get_llm,
     model_window,
     override_inference,
+    plan_deadline,
     require_inference,
 )
 from .models import GroupSettings, RegenerateBody
@@ -82,7 +84,7 @@ def _handoff_pool(cid, sid, round_record):
     return [entry for entry in round_record["eligible"] if entry["ref"] not in out]
 
 
-def _compose(cid, sid, round_record, actor, resolved, appended=()):
+def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None):
     # The prompt must offer the same remaining slots that the engine accepts.
     # Offering the current/used actors teaches an invalid handoff; omitting the
     # narrator hides a valid slot. Explicit one-response requests have no next,
@@ -112,6 +114,10 @@ def _compose(cid, sid, round_record, actor, resolved, appended=()):
     }
     if appended:
         kwargs["appended"] = appended
+    if plan:
+        # A play decision's record (roadmap 02 §6.5): its block follows the
+        # history. Absent, the call is exactly what it was before 02.
+        kwargs["plan"] = plan
     if round_record.get("note"):
         return store.context.compose_director_turn(cid, sid, round_record["note"], **kwargs)
     return store.context.compose_turn(cid, sid, **kwargs)
@@ -474,7 +480,17 @@ def _selector_item(cid, sid, round_record):
         round_record["eligible"], conversation, round_record.get("note", ""))
 
 
-def _prepare(cid, sid, run, token, round_record, actor, resolved, appended):
+def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, plan=None,
+             response_id=""):
+    """Compose (or resume) the contribution and record it.
+
+    `plan` is the turn decision's record asked for THIS contribution
+    (`_turn_plan`), stored on the new response as `intent` and composed into
+    its prompt; `response_id` is the id that decision was metered under. A roll
+    resume asks nothing: it recomposes with the record the pending response
+    already holds (roadmap 02 §3.1 rule 5), so the resume snapshot -- and Keep
+    writing after it -- carries the same block. A retry replays its snapshot,
+    which already carries it."""
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         pending = round_record.get("pending_response")
@@ -495,7 +511,10 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended):
                 if record.get("resume_snapshot"):
                     return record, messages, "resume", record.get("resume_settings")
                 return record, messages, "primary", None
-        messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended)
+        if pending and appended:
+            plan = store.responses.get(cid, sid, pending, private=True).get("intent")
+        messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended,
+                                        plan=plan)
         # The round's eligible first, then the whole present cast: an explicit
         # pick a talkativeness roll filtered out is still who they are.
         speaker = next(
@@ -513,6 +532,8 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended):
             record = store.responses.prepare(
                 cid, sid, round_record["id"], actor, speaker, messages.snapshot(),
                 getattr(messages, "settings", None),
+                **({"response_id": response_id} if response_id else {}),
+                **({"intent": plan} if plan is not None else {}),
             )
         _capture(cid, sid, "continuation" if appended else "chat", messages, resolved.chain)
         if pending and appended:
@@ -750,6 +771,97 @@ async def _select(cid, sid, client, round_record):
                      cid, sid, exc)
         return None, store.response_protocol.INVALID_HANDOFF
     return store.response_protocol.selection_of(decision.items[0])
+
+
+#: The task each turn-plan mode asks under (roadmap 02 §6.4).
+_PLAN_TASKS = {"intent": "turn-intent"}
+
+
+def _plan_mode(cid, round_record, actor, appended):
+    """The turn decision this contribution asks ("intent"), or "" for none
+    (roadmap 02 §6.3): the switch is off; the actor is the narrator, who has
+    no stance; the round resumes a pending response (a retry replays its
+    snapshot, a roll resume carries the stored record); a roll continuation
+    is appended; or the player typed the round's direction, which IS the
+    direction a sampled stance could contradict. An empty send's app-worded
+    note is not the player's, so it does not count.
+
+    Reads the same state `_prepare` does, outside the lock: the run owns the
+    round, so the two disagree only when the fence is about to fail anyway.
+    Fail-soft: an optional step that cannot read its own switch asks
+    nothing, rather than failing the turn (§3.3)."""
+    if actor in (None, "grimoire") or appended:
+        return ""
+    if round_record.get("pending_response") or round_record.get("typed_note"):
+        return ""
+    try:
+        mode = store.play_decisions.turn_plan_mode(cid)
+    except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn
+        _log.error("turn plan switch unreadable for %s: %s", cid, type(exc).__name__)
+        return ""
+    return mode if mode in _PLAN_TASKS else ""
+
+
+def _intent_item(cid, sid, actor):
+    """The turn intent's item for `actor`: their name, their OWN card brief
+    (through the locked version the writer reads; "" when it cannot be read)
+    and the observable transcript the speaker pick reads, through the
+    prompt-phase regex view. Renders templates, so it runs in the
+    threadpool."""
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    conversation = store.response_protocol.observable_conversation(
+        messages, lambda posts, offset, total: store.regex.view.view(
+            posts, cid=cid, phase="prompt", offset=offset, total=total))
+    entry = next(a for a in store.appearances.scene_cast(cid, sid)
+                 if f"{a['kind']}:{a['id']}" == actor)
+    try:
+        card = store.characters.read_card(
+            store.appearances.locked_actor_root(cid), entry["id"],
+            store.appearances.locked_version(cid, entry["kind"], entry["id"]))["data"]
+    except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
+        card = {}
+    return store.turn_plan.intent_item(entry["name"], conversation,
+                                       store.turn_plan.brief_of(card))
+
+
+async def _turn_plan(cid, sid, client, round_record, actor, response_id):
+    """The turn intent's record for one contribution (roadmap 02 §6.4), which
+    never raises an `Exception`: the stance (or none, with why), or what
+    skipped it.
+
+    Soft (§3.2): a resolution the seam refuses -- a missing key, an incapable
+    Decision model -- skips with the refusal's kind and calls nothing. Bounded
+    (§3.4): one `plan_deadline` across every call `decide` makes. And caught
+    whole (§3.3): a failed or refused call skips with its kind (a spent
+    deadline is `timeout`), and anything else -- a builder, a template, the
+    mapping -- with its class name, logged at ERROR with that name only. A
+    cancel is not an `Exception`, so Stop passes through as ever. An abstained
+    stance is an answer of "no particular stance", recorded and never asked
+    again elsewhere."""
+    task = "turn-intent"
+    record: dict = {"task": task, "skipped": ""}
+    try:
+        resolved, _why, kind = await run_in_threadpool(
+            _soft_resolved,
+            lambda: require_inference("turn-intent", cid, operation="decide"))
+        if resolved is None:
+            return {**record, "skipped": kind or "unresolved"}
+        item = await run_in_threadpool(_intent_item, cid, sid, actor)
+        async with decision_capture.capturing(cid, sid, task) as scope:
+            decision = await operations.decide(
+                "turn-intent", [item], client=client, resolved=resolved,
+                campaign=cid, scene=sid, post=round_record["post"],
+                round_id=round_record["id"], response_id=response_id,
+                capture=scope.hook(), around=plan_deadline())
+        stance, reason = store.turn_plan.stance_of(decision.items[0])
+        return {**record, "stance": stance, **({"reason": reason} if reason else {})}
+    except LLMError as exc:
+        return {**record, "skipped": exc.kind or "error"}
+    except decisions.DecideRequestError:
+        return {**record, "skipped": "invalid_request"}
+    except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn (§3.3)
+        _log.error("turn intent for %s/%s skipped: %s", cid, sid, type(exc).__name__)
+        return {**record, "skipped": f"error:{type(exc).__name__}"}
 
 
 def _reasoning_frame(event, watcher, liveness):
@@ -1031,9 +1143,18 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             actor = turn.round_record.get("actor_ref")
             continue
         turn.made_by = None
+        # The turn decision (roadmap 02 §6.3), asked before the contribution
+        # is composed and never by a resume, a roll continuation, the
+        # narrator or a turn the player directed. Off, nothing is read past
+        # the switch, minted or asked, and `_prepare` is called as before.
+        plan, response_id = None, ""
+        mode = await run_in_threadpool(_plan_mode, cid, turn.round_record, actor, turn.appended)
+        if mode:
+            response_id = store.responses.mint_id()
+            plan = await _turn_plan(cid, sid, client, turn.round_record, actor, response_id)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
-            _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended
-        )
+            _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
+            plan=plan, response_id=response_id)
         record = turn.record
         turn.appended = ()
         turn.watcher = watcher = store.response_protocol.ResponseWatcher(

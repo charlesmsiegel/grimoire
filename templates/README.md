@@ -812,6 +812,33 @@ a decide-era template verbatim (`SELECTOR_CARRIED`) and that
 (`SELECTOR_OPTIONS`). The capture the prompt log keeps for the pick is this
 decide prompt.
 
+### `turn_plan/` — the `turn_plan` route's decide items, and the intent block
+When Play decisions are switched on (`decide_turn_plan`, off by default and
+shown in no UI until its play gate is ratified; roadmap 02 §3.6),
+`routes.character_turns._turn_plan` asks one `decide()` item about how the
+assigned actor approaches their contribution, before it is composed. No
+messages of its own: `store/turn_plan.py:intent_item` makes the item and
+`decide/` renders the prompt around it.
+- `turn_plan/item.j2` is the item's context. Vars: `name` (the actor's name),
+  `brief` (the actor's OWN card description and personality, clipped to
+  `turn_plan.INTENT_BRIEF_TOKENS` by `store/turn_plan.py:brief_of`; `""`
+  renders no line) and `conversation` (the speaker pick's observable window,
+  through the prompt-phase regex view).
+- `turn_plan/stance_question.j2` is the stance choice's instructions (id
+  `stance`, null allowed). No vars. Its options are `turn_plan.STANCES`, each
+  described by `turn_plan/stance.j2` (var `stance`).
+- `turn_plan/disclosure.j2` (var `disclosure`) and `turn_plan/tension.j2` (var
+  `level`, an index into `turn_plan.TENSION_LEVELS`) describe the turn plan's
+  other two answers.
+
+What was chosen reaches the writer through `scene/turn_intent.j2`
+(`store/turn_plan.py:block`): one system message after the history, placed as
+an author's note at depth 0 is and never a catalog section. Vars: `name`, and
+`stance`, `disclosure`, `tension` -- each the description of an answer that
+was read, or `""`. Nothing is sent when every one is `""`.
+`scripts/verify_templates.py` holds the item, its options and the block to
+these templates.
+
 ## Keeping templates honest
 
 The verification harness checks the WIRING (each builder passes the documented

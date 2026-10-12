@@ -62,8 +62,16 @@ class Route(NamedTuple):
     requires: tuple[str, ...] = ()
     #: For a route split out of a legacy one, the legacy route's key: stored
     #: settings (connection and preset keys) are still read from it. "" means
-    #: this route IS a legacy route.
+    #: this route IS a legacy route. `NO_LEGACY` means it was born at format
+    #: 2 and has no legacy key at all: nothing is read for it at format 1,
+    #: and it adds nothing to `LEGACY_ROUTES` or `CONFIG_KEYS`.
     legacy: str = ""
+
+
+#: `Route.legacy` for a route new at format 2 (roadmap shared structure;
+#: 02-S2 lands it): no legacy key names it, so a format-1 store resolves it
+#: through its role alone. Spelled so that no route key can equal it.
+NO_LEGACY = "<no legacy>"
 
 
 OPERATIONS: tuple[str, ...] = ("generate", "decide")
@@ -158,7 +166,10 @@ def policy(task: str) -> TaskPolicy:
 
 
 def legacy_key(route: Route) -> str:
-    """The key this route's stored settings live under."""
+    """The key this route's stored settings live under at format 1, or "" for
+    a route born at format 2 (`NO_LEGACY`), which has none."""
+    if route.legacy == NO_LEGACY:
+        return ""
     return route.legacy or route.key
 
 
@@ -184,6 +195,11 @@ ROUTES: tuple[Route, ...] = (
           "Which character speaks next in group play.",
           ("response-selector",), True, operation="decide", default_role="decision",
           legacy="scene"),
+    Route("turn_plan", "Turn planning",
+          "How each character approaches their reply in play, decided before it is "
+          "written. Off unless Play decisions are switched on.",
+          ("turn-intent",), True, operation="decide", default_role="decision",
+          legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",
@@ -249,8 +265,15 @@ def _legacy_routes() -> tuple[Route, ...]:
     return tuple(out)
 
 
-#: The twelve routes `ROUTES` held before the split.
+#: The twelve routes `ROUTES` held before the split. A `NO_LEGACY` route is
+#: in none of them (`_legacy_routes` skips every route with a `legacy`).
 LEGACY_ROUTES: tuple[Route, ...] = _legacy_routes()
+
+#: Every task on a `NO_LEGACY` route. The frozen inference baselines, recorded
+#: before such a route existed, enumerate `TASK_ROUTE` less these: a task on a
+#: route with no legacy key equals no sibling's resolution on a format-1 store.
+NO_LEGACY_TASKS: frozenset[str] = frozenset(
+    task for r in ROUTES if r.legacy == NO_LEGACY for task in r.tasks)
 
 #: Tasks a call meters under that NO route claims, on purpose: the connection
 #: test call runs on the connection it is testing, so no routing setting may

@@ -26,7 +26,7 @@ from typing import NamedTuple
 import pytest
 
 from grimoire import adapters, decisions
-from grimoire.store import response_protocol, routing, scene_break, voice_drift
+from grimoire.store import response_protocol, routing, scene_break, turn_plan, voice_drift
 from grimoire.store.continuity import identity, reconcile
 from grimoire.store.inference import resolve
 
@@ -43,6 +43,7 @@ _QUESTION: dict[str, str] = {
     "continuity-reconcile": reconcile.DECISION_ID,
     "scene-break": scene_break.QUESTION_ID,
     "voice-drift": voice_drift.QUESTION_ID,
+    "turn-intent": turn_plan.STANCE_ID,
 }
 
 #: The tasks whose caller maps `abstained`/`refused` on the deciding question
@@ -125,6 +126,8 @@ def _answers() -> dict[str, _Vocab]:
                                     _QUESTION["scene-break"])),
         "voice-drift": _Vocab(_keys(voice_drift.build_item("Seraphine", "anchor", "transcript"),
                                     _QUESTION["voice-drift"])),
+        "turn-intent": _Vocab(_keys(turn_plan.intent_item("Seraphine", [], ""),
+                                    _QUESTION["turn-intent"])),
     }
 
 
@@ -372,7 +375,7 @@ def test_every_decide_task_is_pinned():
     assert set(_QUESTION) == set(_answers()) == decide
     assert _QUESTION == {"response-selector": "next", "continuity-identity": "decision",
                          "continuity-reconcile": "decision", "scene-break": "over",
-                         "voice-drift": "verdict"}
+                         "voice-drift": "verdict", "turn-intent": "stance"}
     assert not _answers()["continuity-reconcile"].exact & {
         "duplicate", "continuation", "subthread", "pays_off"}
     # The builders' vocabularies, as each call site offers them.
@@ -381,6 +384,7 @@ def test_every_decide_task_is_pinned():
     assert _answers()["scene-break"].exact == {"true", "false"}
     assert _answers()["voice-drift"].exact == {voice_drift.DRIFT, voice_drift.IN_VOICE,
                                                voice_drift.NOT_ENOUGH}
+    assert _answers()["turn-intent"].exact == set(turn_plan.STANCES)
 
 
 # ---- the checker accepts what it should ----
