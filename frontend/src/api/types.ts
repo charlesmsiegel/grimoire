@@ -2839,7 +2839,7 @@ export type KnowledgeEntry = {
            missing: boolean; variant?: string; digest?: string }[];
   /** A grant that no longer grants, and why. */
   stale: boolean;
-  stale_reason: "changed" | "hidden" | "gone" | "audience" | null;
+  stale_reason: "changed" | "hidden" | "gone" | "unverifiable" | "audience" | null;
 };
 /** What a statement about one scene could name (`.../knowledge/scenes/{sid}`). */
 export type KnowledgeScene = {

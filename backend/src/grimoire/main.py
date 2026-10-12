@@ -31,6 +31,7 @@ from .store import (
     config,
     group_refs,
     inference_keys,
+    knowledge,
     locks,
     logs,
     migrations,
@@ -742,6 +743,15 @@ def create_app() -> FastAPI:
         # One handler rather than a try/except at every one of the ~35 call
         # sites that can take a campaign or module-edit lock (#234).
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(knowledge.KnowledgeError)
+    async def knowledge_handler(request: Request, exc: knowledge.KnowledgeError):
+        # knowledge.json (roadmap 11) is read strictly by every writer, and a
+        # branch or a replay now copies it: a garbled file refuses those as a
+        # conflict to repair, never as a 500 or as "no statements".
+        return JSONResponse(status_code=409, content={
+            "kind": "malformed",
+            "detail": f"knowledge.json cannot be read ({exc}); repair it and try again"})
 
     @app.exception_handler(group_refs.GroupIdentityConflict)
     async def group_identity_handler(request: Request, exc: group_refs.GroupIdentityConflict):

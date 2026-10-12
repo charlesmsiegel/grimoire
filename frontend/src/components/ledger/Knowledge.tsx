@@ -34,8 +34,10 @@ const STALE_HINT: Record<string, string> = {
     + "Confirm it against the current text, or remove it.",
   hidden: "A post it names is hidden from context, so it reaches no one and grants nothing.",
   gone: "It points at a deleted scene or post, so it grants nothing. Remove it.",
-  audience: "The audience was renamed or no longer exists, so it grants nothing. Choose "
-    + "the audience again to confirm it is still the same one.",
+  audience: "The audience was renamed or no longer exists, so it grants nothing. If it is "
+    + "still the same one, confirm it under its current name.",
+  unverifiable: "Its scene could not be read just now (a synced folder mid-write?), so it is "
+    + "not counted until it can be. Nothing needs doing; look again shortly.",
 };
 
 /** Who the statement is about, by its current name where it still has one. */
@@ -148,6 +150,8 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
   }, [cid, form.scene, mode]);
 
   const original = useMemo(() => formOf(entry), [entry]);
+  const sameSubject = form.scene === original.scene && form.whole === original.whole
+    && [...form.posts].sort().join() === [...original.posts].sort().join();
 
   async function write(run: () => Promise<unknown>, kid?: string) {
     if (busy) return;
@@ -194,9 +198,20 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
     if (form.audience !== original.audience) body.audience = form.audience;
     if (form.status !== original.status) body.status = form.status;
     if (form.note !== original.note) body.note = form.note;
-    if (form.scene !== original.scene || form.whole !== original.whole
-        || form.posts.join() !== original.posts.join()) Object.assign(body, subject());
+    // A subject moves when the reader changed it -- and when an `unaware` is
+    // becoming a grant, which the server accepts only with the posts named
+    // again (and fingerprinted as shown), since a keyless part's `unaware` is
+    // stored about the whole scene.
+    if (!sameSubject || (original.status === "unaware" && form.status !== "unaware")) {
+      Object.assign(body, subject());
+    }
     void write(() => api.ledgerSaveKnowledge(cid, entry.id, body), entry.id);
+  }
+
+  function confirmAudience(e: KnowledgeEntry) {
+    // Records the audience's current name again: the reader is saying it is
+    // still the same character or group.
+    void write(() => api.ledgerSaveKnowledge(cid, e.id, { audience: e.audience }), e.id);
   }
 
   function restamp(e: KnowledgeEntry) {
@@ -296,6 +311,11 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
                     Confirm against current text
                   </button>
                 )}
+                {entry.stale_reason === "audience" && entry.audience_now && (
+                  <button className="subtle" disabled={busy} onClick={() => confirmAudience(entry)}>
+                    {`Confirm it is still ${entry.audience_now}`}
+                  </button>
+                )}
                 {(entry.stale_reason === "gone" || entry.stale_reason === "hidden") && (
                   <button className="subtle" disabled={busy} onClick={() => remove(entry)}>
                     Remove
@@ -310,7 +330,11 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
   }
 
   const grant = form.status !== "unaware";
-  const ready = form.audience && form.scene && shown && (form.whole || form.posts.length > 0);
+  const flipToGrant = !!entry && original.status === "unaware" && grant;
+  // An edit that leaves the subject alone needs no scene read -- so the note
+  // of a statement about a deleted scene can still be corrected.
+  const ready = !!form.audience && (entry && sameSubject && !flipToGrant
+    || (!!form.scene && !!shown && (form.whole || form.posts.length > 0)));
   return (
     <div className="form">
       <h3>{entry ? "Edit statement" : "New statement"}</h3>

@@ -51,8 +51,9 @@ def _expect(client, w, key):
 def _post(client, w, **body):
     key = f"r-{w['rid']}"
     payload = {"audience": f"characters:{w['aid']}", "status": "knows", "scene": w["sid"],
-               "posts": [{"key": key, "part": ""}], "expect": _expect(client, w, key),
-               "note": "Told on the walk.", **body}
+               "posts": [{"key": key, "part": ""}], "note": "Told on the walk.", **body}
+    if "expect" not in body:
+        payload["expect"] = _expect(client, w, key)
     return client.post(w["base"], json=payload)
 
 
@@ -184,6 +185,42 @@ def test_an_unreadable_scan_marks_the_entry_not_the_list(client, world, monkeypa
     monkeypatch.setattr(scenes_identity, "find_by_identity", unreadable)
     [row] = _entries(client, world)
     assert row["unverifiable"] and row["scene"] is None and row["stale"]
+
+
+def test_an_unreadable_scene_reads_unverifiable_not_gone(client, world, monkeypatch):
+    _post(client, world)
+
+    def unreadable(cid, identity):
+        raise scenes_identity.UnreadableError("mid-sync")
+    monkeypatch.setattr(scenes_identity, "find_by_identity", unreadable)
+    assert _entries(client, world)[0]["stale_reason"] == "unverifiable"
+
+
+def test_a_write_against_an_unreadable_scene_is_busy(client, world, monkeypatch):
+    expect = _expect(client, world, f"r-{world['rid']}")
+
+    def unreadable(cid, sid):
+        raise scenes_identity.UnreadableError("mid-sync")
+    monkeypatch.setattr(scenes_identity, "scene_identity", unreadable)
+    r = _post(client, world, expect=expect)
+    assert r.status_code == 409 and r.json()["kind"] == "busy"
+    assert client.get(f"{world['base']}/scenes/{world['sid']}").status_code == 409
+    assert store.knowledge.read(world["cid"]) == {}
+
+
+def test_a_restamp_cannot_turn_an_unaware_into_a_grant(client, world):
+    kid = _post(client, world, posts=[{"key": "", "part": ""}], status="unaware").json()["id"]
+    r = client.put(world["base"] + f"/{kid}", json={
+        "status": "knows", "restamp": True, "expect_digest": _shown(client, world)["digest"]})
+    assert r.status_code == 400 and r.json()["kind"] == "bad_subject"
+    assert store.knowledge.get(world["cid"], kid)["status"] == "unaware"
+
+
+def test_a_garbled_file_refuses_a_branch_as_a_conflict(client, world):
+    store.knowledge._path(world["cid"]).write_text("{not json", encoding="utf-8")
+    r = client.post(f"/api/campaigns/{world['cid']}/scenes/{world['sid']}/branch",
+                    json={"through": 0})
+    assert r.status_code == 409
 
 
 def test_unknown_ids_are_404(client, world):

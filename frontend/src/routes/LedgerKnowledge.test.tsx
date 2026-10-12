@@ -122,3 +122,46 @@ test("a statement about a deleted scene offers Remove", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
   await waitFor(() => expect(api.ledgerDeleteKnowledge).toHaveBeenCalledWith("run", "k-0000000a"));
 });
+
+test("a renamed audience is confirmed under its current name", async () => {
+  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+    audience_now: "Mara Vance", stale: true, stale_reason: "audience",
+  })], intact: true });
+  renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm it is still Mara Vance" }));
+  await waitFor(() => expect(api.ledgerSaveKnowledge).toHaveBeenCalledWith(
+    "run", "k-0000000a", { audience: "characters:mara" }));
+});
+
+test("an unverifiable scene is not offered for removal", async () => {
+  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+    scene: null, unverifiable: true, stale: true, stale_reason: "unverifiable",
+  })], intact: true });
+  renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
+  expect(await screen.findByText(/could not be read just now \(a synced/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+});
+
+test("turning a never-heard into knows names the posts again, as shown", async () => {
+  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({ status: "unaware" })],
+                                                   intact: true });
+  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+    sid: "0001-pier", digest: "e".repeat(64), keyless: 0,
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), index: 1,
+              speaker: "Winifred", text: "Winifred whispers the code.", hidden: false }],
+  });
+  renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(await screen.findByRole("combobox", { name: "Status" }),
+                   { target: { value: "knows" } });
+  const save = screen.getByRole("button", { name: "Save statement" });
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
+  await waitFor(() => expect(api.ledgerSaveKnowledge).toHaveBeenCalledWith(
+    "run", "k-0000000a", {
+      status: "knows", scene: "0001-pier", posts: [{ key: R1, part: "" }], whole_scene: false,
+      expect: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16) }], expect_digest: "",
+    }));
+});

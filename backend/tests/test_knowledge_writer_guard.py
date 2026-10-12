@@ -13,7 +13,9 @@ The writers, each for a reason that is not a model's:
 
 - `routes/ledger.py` -- the hand edits, journalled as ``manual``;
 - `store/knowledge.py` itself;
-- `store/overlay.py` -- `forget_audience`, beside an actor or group delete;
+- `store/overlay.py` -- `forget_audience`, beside an actor or group delete
+  or a campaign's group reclassify;
+- `store/reclassify.py` -- `forget_audience`, for a World group reclassify;
 - `store/undo.py` -- `restore`, putting back a journalled hand edit;
 - `store/branch.py` -- `copy_for_branch` and `drop_scene`, which carry the
   user's statements to a branch and drop a failed one's.
@@ -41,6 +43,7 @@ ALLOWED: dict[str, frozenset[str]] = {
     "routes/ledger.py": frozenset({"add", "update", "remove"}),
     "store/knowledge.py": MUTATORS,
     "store/overlay.py": frozenset({"forget_audience"}),
+    "store/reclassify.py": frozenset({"forget_audience"}),
     "store/undo.py": frozenset({"restore"}),
     "store/branch.py": frozenset({"copy_for_branch", "drop_scene"}),
 }

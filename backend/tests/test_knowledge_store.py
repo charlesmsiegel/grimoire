@@ -560,6 +560,27 @@ def test_a_reclassified_group_expands_to_nobody(cid):
     assert _group_decide(cid, "characters:mara", {**entry, "status": "unaware"}) is None
 
 
+def test_a_reclassified_groups_grants_do_not_pass_to_a_new_group_of_its_name(cid):
+    """The id is free once the group moves, so a new group of the same name
+    takes it -- the name backstop cannot tell them apart, so the prune must."""
+    _actors(cid)
+    gid = _group(cid, members="characters:mara")
+    knowledge.add(cid, _entry(audience=f"groups:{gid}", name="The Saltmarch Watch"))
+    overlay.reclassify_entity(cid, "groups", gid, "locations")
+    assert knowledge.read(cid) == {}
+    again = _group(cid, members="characters:seraphine")
+    assert again == gid
+
+
+def test_a_branch_refuses_before_writing_when_the_file_is_unreadable(cid):
+    sid, rid = _scene(cid)
+    knowledge._path(cid).write_text("{not json", encoding="utf-8")
+    before = {s["id"] for s in scenes.list_scenes(cid)}
+    with pytest.raises(group_refs.GroupIdentityConflict):
+        branch.branch_scene(cid, sid, _index(cid, sid, rid))
+    assert {s["id"] for s in scenes.list_scenes(cid)} == before
+
+
 def test_a_branch_carries_withholding_narrowed_to_the_kept_posts(cid):
     sid = scenes.create_scene(cid, "Pier")
     rid = _reply(cid, sid, "Mara whispers the code.")
@@ -577,3 +598,12 @@ def test_a_branch_carries_withholding_narrowed_to_the_kept_posts(cid):
         [("unaware", "posts"), ("unaware", "scene")]
     narrowed = next(e for e in copied if e["subject"]["kind"] == "posts")
     assert len(narrowed["subject"]["posts"]) == 1
+
+
+def test_a_world_group_reclassify_prunes_the_grants_of_campaigns_that_followed_it(cid):
+    from grimoire.store import entities, reclassify
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    gid = entities.create_entity(worlds.world_root(wid), "groups", "The Saltmarch Watch")
+    knowledge.add(cid, _entry(audience=f"groups:{gid}", name="The Saltmarch Watch"))
+    reclassify.world_entity(wid, "groups", gid, "locations")
+    assert knowledge.read(cid) == {}

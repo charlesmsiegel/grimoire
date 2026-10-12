@@ -120,3 +120,21 @@ routes (no Codex CLI here). What changed:
 | M2 identity written by a refused request | Fixed: `ensure_identity` runs after every check |
 | M3 empty journal diffs | Fixed: `undo._display` renders a statement as "who: status — note" |
 | M4 re-pointed statements keep their age | Fixed: a new audience or subject dates it now (`update(renew=)`) |
+
+## Code review and final gate (substitute, covering 11-S1 and 11-S4)
+
+An independent reviewer agent reviewed the diff and checked it against the
+spec as amended (no Codex CLI here; `@codex review` on the PR stands in for
+the Codex gates). Final gate: both slices deliver what the spec says, the
+accept button's move to 11-S3/11-S6 is explicit in all three slices, and
+nothing was dropped. Findings:
+
+| Finding | Disposition |
+|---|---|
+| A reclassified group's grants pass to a new group of the same name (the id is reissued) | Fixed: a campaign group reclassify (`overlay.reclassify_entity`, preflighted) and a World one (`reclassify.world_entity`, for every following campaign) prune the audience like a delete; both tested, and the writer guard allows `store/reclassify.py` |
+| The UI could not re-confirm a renamed audience, nor turn an `unaware` into a grant | Fixed: "Confirm it is still {name}" sends the audience; a flip to a grant always sends the subject with `expect` |
+| A garbled `knowledge.json` 500s every branch and replay | Fixed: `branch_scene` preflights it before writing (409), and `KnowledgeError` has a 409 `malformed` handler |
+| A restamp could flip an `unaware` into a whole-scene grant | Fixed: any `unaware` → grant without a new subject is 400 `bad_subject`, restamp included |
+| `UnreadableError` from `scene_identity` was a 500 | Fixed: 409 `busy` on the scene read and every write, tested |
+| An unreadable scene read as deleted (and offered Remove) | Fixed: `stale_reason: "unverifiable"`, no Remove |
+| A note could not be edited on a statement about a deleted scene | Fixed: an edit that keeps the subject needs no scene read |

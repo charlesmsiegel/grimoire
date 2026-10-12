@@ -95,6 +95,7 @@ from . import (
     group_proposals,
     group_refs,
     journal,
+    knowledge,
     locks,
     overlay,
     record_refs,
@@ -289,6 +290,13 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
                 wroot, kind, eid, new_kind, lifetime.captured, following)
             affected.update(cids)  # every held view may change when the World moves
             new_eid = entities.reclassify(wroot, kind, eid, new_kind)
+            if kind == "groups":
+                # Each campaign that followed the World record loses the group
+                # under this id; a same-named one created later must not
+                # inherit its grants (spec 11 §7.5). `world_identity_scope`
+                # preflighted every captured campaign's knowledge file.
+                for cid in following:
+                    knowledge.forget_audience(cid, f"groups:{eid}")
             for cid, operation in inherited_operations.items():
                 if operation is not None:
                     commits.complete_membership_relocation(cid, operation, new_kind, new_eid)

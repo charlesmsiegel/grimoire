@@ -691,10 +691,10 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 11-S1 | The knowledge store | M | 1 | 07-S2 (S) | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 11-S1 | The knowledge store | M | 1 | 07-S2 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 11-S2 | The deterministic classifier | L | 6 | 08-S4 (S), 09-S1, 11-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 11-S3 | Perspective-aware retrieval and prompt separation | L | 7 | 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [x] | [x] | [x] | [ ] | [ ] | [x] |
+| 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 11-S5 | Live leakage evals | S | 8 | 01a-S2 (S), 01a-S3 (S), 11-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | 11-S6 | The Decision stage | L | 8 | 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 

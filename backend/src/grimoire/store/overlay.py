@@ -1416,6 +1416,8 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
         _, gone = require_identity_ledgers(cid)
         croot, wroot = croot_of(cid), wroot_of(cid)
         journal.require_readable(cid)
+        if kind == "groups":
+            knowledge.require_readable(cid)
         require_group_materialization(cid, kind, eid)
         def taken(c: str) -> bool:
             # the destination's namespace as this campaign sees it: what the world
@@ -1438,6 +1440,11 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
                 journal.complete_membership_relocation(cid, token, new_kind, landed)
             if commit_move is not None:
                 commits.complete_membership_relocation(cid, commit_move, new_kind, landed)
+            if kind == "groups":
+                # The group's id is free once it moves, and a new group of the
+                # same name would take it -- and every grant made to this one
+                # (spec 11 §7.5), so they go as on a delete.
+                knowledge.forget_audience(cid, f"groups:{eid}")
             return landed
 
 

@@ -52,6 +52,7 @@ may. `PUT .../facts/{fid}` is that edit, and it is the only caller of
 from __future__ import annotations
 
 import logging
+from typing import NamedTuple
 
 from fastapi import APIRouter, HTTPException
 
@@ -664,11 +665,58 @@ def _scene_posts(cid: str, sid: str) -> tuple[list[dict], dict, list[dict]]:
     """A scene's raw messages, its response variants, and the display text."""
     try:
         messages = store.scenes.read_scene(cid, sid)["messages"]
+        token = scenes_identity.scene_identity(cid, sid)
     except store.scenes.SceneNotFound as exc:
         raise HTTPException(status_code=404, detail="scene not found") from exc
-    token = scenes_identity.scene_identity(cid, sid)
+    except scenes_identity.UnreadableError as exc:
+        raise _busy() from exc
     variants = store.responses.variants_by_response(cid, sid, token=token) if token else {}
     return messages, variants, regex_view.view(messages, cid=cid, phase="display")
+
+
+def _subject_form(posts: list[KnowledgePost] | None, whole_scene: bool,
+                  grant: bool) -> list[KnowledgePost] | None:
+    """The posts a request names, None for the whole scene, or a refusal.
+
+    A post with no key cannot be named by itself: a grant about it is 400
+    `unkeyed` (as a whole-scene grant it would also cover the summary, which
+    the user did not judge), and an `unaware` is stored about the whole
+    scene, which only withholds more (spec 11 §7.4).
+    """
+    if posts is not None and whole_scene:
+        raise _bad("bad_subject", "name posts or the whole scene, not both")
+    if posts is not None and any(not p.key for p in posts):
+        if grant:
+            raise _bad("unkeyed", "a post with no key can only be marked unaware; knowing "
+                                  "it would have to grant the whole scene, summary included")
+        return None
+    if posts is None and not whole_scene:
+        raise _bad("bad_subject", "name the posts, or say it is the whole scene")
+    if posts is not None and not posts:
+        raise _bad("bad_subject", "name at least one post, or the whole scene")
+    return posts
+
+
+def _fingerprinted(messages: list[dict], variants: dict, posts: list[KnowledgePost],
+                   grant: bool, expect: list[KnowledgeFingerprint] | None,
+                   gone_is: int) -> list[dict]:
+    """Each named post's stored fingerprint. A grant must be about a visible
+    post that still reads as the client was shown it."""
+    shown = {(e.key, e.part): (e.variant, e.digest) for e in expect or []}
+    out = []
+    for p in posts:
+        found = [m for m in messages if store.knowledge.post_key(m) == p.key
+                 and store.knowledge.post_part(m) == p.part]
+        if len(found) != 1:
+            raise (_bad("gone", "that post is no longer in the scene", 409) if gone_is == 409
+                   else _bad("unknown_post", "the scene holds no single post with that key"))
+        fp = store.knowledge.fingerprint(found[0], variants)
+        if grant and store.scenes.serialize.is_excluded(found[0]):
+            raise _bad("hidden", "a hidden post reaches no one, so it cannot be known")
+        if grant and shown.get((p.key, p.part)) != (fp["variant"], fp["digest"]):
+            raise _bad("moved", "that post changed since it was shown; look again", 409)
+        out.append(fp)
+    return out
 
 
 def _knowledge_subject(cid: str, sid: str, posts: list[KnowledgePost] | None,
@@ -677,54 +725,23 @@ def _knowledge_subject(cid: str, sid: str, posts: list[KnowledgePost] | None,
                        *, gone_is: int = 400) -> dict:
     """The subject a statement about `sid` stores, fingerprinted from the scene
     as it reads under the caller's hold. Everything is validated before the
-    scene is given an identity, so a refused request writes nothing.
-
-    A post with no key cannot be named by itself: a grant about it is 400
-    `unkeyed` (as a whole-scene grant it would also cover the summary, which
-    the user did not judge), and an `unaware` is stored about the whole
-    scene, which only withholds more (spec 11 §7.4).
-    """
+    scene is given an identity, so a refused request writes nothing."""
     grant = status in store.knowledge.GRANTS
-    if posts is not None and whole_scene:
-        raise _bad("bad_subject", "name posts or the whole scene, not both")
-    if posts is not None and any(not p.key for p in posts):
-        if grant:
-            raise _bad("unkeyed", "a post with no key can only be marked unaware; knowing "
-                                  "it would have to grant the whole scene, summary included")
-        posts, whole_scene = None, True
-    if posts is None and not whole_scene:
-        raise _bad("bad_subject", "name the posts, or say it is the whole scene")
+    named = _subject_form(posts, whole_scene, grant)
     messages, variants, _shown = _scene_posts(cid, sid)
-    if whole_scene:
+    if named is None:
         digest = store.responses.transcript_hash(messages)
         if grant and expect_digest != digest:
             raise _bad("moved", "the scene changed since it was shown; look again", 409)
-        subject_posts = None
+        subject: dict = {"kind": "scene", "digest": digest}
     else:
-        if not posts:
-            raise _bad("bad_subject", "name at least one post, or the whole scene")
-        shown = {(e.key, e.part): (e.variant, e.digest) for e in expect or []}
-        subject_posts = []
-        for p in posts:
-            found = [m for m in messages if store.knowledge.post_key(m) == p.key
-                     and store.knowledge.post_part(m) == p.part]
-            if len(found) != 1:
-                raise (_bad("gone", "that post is no longer in the scene", 409) if gone_is == 409
-                       else _bad("unknown_post", "the scene holds no single post with that key"))
-            fp = store.knowledge.fingerprint(found[0], variants)
-            if grant:
-                if store.scenes.serialize.is_excluded(found[0]):
-                    raise _bad("hidden", "a hidden post reaches no one, so it cannot be known")
-                if shown.get((p.key, p.part)) != (fp["variant"], fp["digest"]):
-                    raise _bad("moved", "that post changed since it was shown; look again", 409)
-            subject_posts.append(fp)
+        subject = {"kind": "posts",
+                   "posts": _fingerprinted(messages, variants, named, grant, expect, gone_is)}
     try:
-        token = scenes_identity.ensure_identity(cid, sid)
+        subject["scene"] = scenes_identity.ensure_identity(cid, sid)
     except scenes_identity.UnreadableError as exc:
         raise _busy() from exc
-    if subject_posts is None:
-        return {"kind": "scene", "scene": token, "digest": digest}
-    return {"kind": "posts", "scene": token, "posts": subject_posts}
+    return subject
 
 
 def _knowledge_write(cid: str, kid: str, entry: dict, write) -> None:
@@ -757,69 +774,103 @@ def get_knowledge_scene(cid: str, sid: str):
             "posts": posts}
 
 
+class _SceneView(NamedTuple):
+    """One read of a scene for the list: its id, title, display messages and
+    current fingerprints."""
+    sid: str
+    title: str
+    shown: list[dict]
+    facts: store.knowledge.SceneFacts
+
+
+def _scene_view(cid: str, identity: str) -> _SceneView | str | None:
+    """The scene a statement is about, None when it was deleted, or
+    ``"unverifiable"`` when the scan could not finish (a synced folder
+    mid-write) -- which marks that one entry rather than failing the list."""
+    try:
+        sid = scenes_identity.find_by_identity(cid, identity)
+    except scenes_identity.UnreadableError:
+        return "unverifiable"
+    if sid is None:
+        return None
+    try:
+        messages, variants, shown = _scene_posts(cid, sid)
+        title = store.scenes.read_scene(cid, sid)["meta"].get("title") or sid
+    except HTTPException:
+        return "unverifiable"
+    return _SceneView(sid, str(title), shown,
+                      store.knowledge_scene.scene_facts(messages, variants))
+
+
+def _listed_posts(entry: dict, scene: _SceneView | None) -> list[dict]:
+    """Each named post as the scene shows it now, with the fingerprint of that
+    text -- what a re-stamp sends back as `expect`."""
+    if entry["subject"]["kind"] != "posts":
+        return []
+    rows = []
+    for p in entry["subject"]["posts"]:
+        row = {"key": p["key"], "part": p["part"], "index": None,
+               "speaker": "", "text": "", "missing": True}
+        for i, m in enumerate(scene.shown if scene else ()):
+            if (store.knowledge.post_key(m) == p["key"]
+                    and store.knowledge.post_part(m) == p["part"]):
+                variant, digest, _hidden = scene.facts.posts.get(  # type: ignore[union-attr]
+                    (p["key"], p["part"]), ("", "", False))
+                row.update(index=i, speaker=str(m.get("speaker") or ""),
+                           text=str(m.get("content") or ""), missing=False,
+                           variant=variant, digest=digest)
+                break
+        rows.append(row)
+    return rows
+
+
+def _stale_reason(entry: dict, held, posts: list[dict], now: str | None) -> str | None:
+    """Why a grant no longer grants, or None (an `unaware` is never stale)."""
+    if entry["status"] not in store.knowledge.GRANTS:
+        return None
+    if entry["audience"] != store.knowledge.EVERYONE and now != entry["audience_name"]:
+        return "audience"
+    if held == "unverifiable":
+        # Not "gone": the scene could not be read just now, and the statement
+        # may well be fine.
+        return "unverifiable"
+    if not isinstance(held, _SceneView) or any(p["missing"] for p in posts):
+        return "gone"
+    if store.knowledge.holds(entry, held.facts):
+        return None
+    hidden = entry["subject"]["kind"] == "posts" and any(
+        (held.facts.posts.get((p["key"], p["part"])) or ("", "", False))[2]
+        for p in entry["subject"]["posts"])
+    return "hidden" if hidden else "changed"
+
+
 @router.get("/campaigns/{cid}/ledger/knowledge")
 def get_knowledge(cid: str):
     """Every statement, with what the ledger needs to show it: the scene it is
     about (null when deleted; `unverifiable` when the scan could not finish),
     the current text of each named post (display phase), and why a grant no
     longer grants -- `stale` with `stale_reason` `changed`, `hidden`, `gone`
-    (its scene or post was deleted) or `audience` (the audience was renamed
-    or no longer resolves, §7.3/§7.5)."""
+    (its scene or post was deleted), `unverifiable` (its scene could not be
+    read just now) or `audience` (the audience was renamed or no longer
+    resolves, §7.3/§7.5)."""
     _campaign_or_404(cid)
     entries, intact = store.knowledge.read_checked(cid)
     who = store.knowledge_scene.audiences_for(cid)
-    scenes: dict[str, tuple | str | None] = {}
+    scenes: dict[str, _SceneView | str | None] = {}
     out = []
     for kid, entry in sorted(entries.items(), key=lambda kv: kv[1].get("created", ""),
                              reverse=True):
         identity = entry["subject"]["scene"]
         if identity not in scenes:
-            try:
-                sid = scenes_identity.find_by_identity(cid, identity)
-            except scenes_identity.UnreadableError:
-                scenes[identity] = "unverifiable"
-            else:
-                if sid is None:
-                    scenes[identity] = None
-                else:
-                    messages, variants, shown = _scene_posts(cid, sid)
-                    title = store.scenes.read_scene(cid, sid)["meta"].get("title") or sid
-                    scenes[identity] = (sid, str(title), shown,
-                                        store.knowledge_scene.scene_facts(messages, variants))
+            scenes[identity] = _scene_view(cid, identity)
         held = scenes[identity]
-        scene = held if isinstance(held, tuple) else None
-        posts = []
-        if entry["subject"]["kind"] == "posts":
-            for p in entry["subject"]["posts"]:
-                row = {"key": p["key"], "part": p["part"], "index": None,
-                       "speaker": "", "text": "", "missing": True}
-                for i, m in enumerate(scene[2] if scene else ()):
-                    if (store.knowledge.post_key(m) == p["key"]
-                            and store.knowledge.post_part(m) == p["part"]):
-                        variant, digest, _hidden = scene[3].posts.get(
-                            (p["key"], p["part"]), ("", "", False))
-                        # What a re-stamp sends back as `expect`: the text
-                        # this row shows, fingerprinted.
-                        row.update(index=i, speaker=str(m.get("speaker") or ""),
-                                   text=str(m.get("content") or ""), missing=False,
-                                   variant=variant, digest=digest)
-                        break
-                posts.append(row)
+        scene = held if isinstance(held, _SceneView) else None
+        posts = _listed_posts(entry, scene)
         now = _audience_now(who, entry["audience"])
-        reason = None
-        if entry["status"] in store.knowledge.GRANTS:
-            if entry["audience"] != store.knowledge.EVERYONE and now != entry["audience_name"]:
-                reason = "audience"
-            elif scene is None or any(p["missing"] for p in posts):
-                reason = "gone"
-            elif not store.knowledge.holds(entry, scene[3]):
-                hidden = entry["subject"]["kind"] == "posts" and any(
-                    (scene[3].posts.get((p["key"], p["part"])) or ("", "", False))[2]
-                    for p in entry["subject"]["posts"])
-                reason = "hidden" if hidden else "changed"
+        reason = _stale_reason(entry, held, posts, now)
         out.append({
             "id": kid, **entry,
-            "scene": ({"sid": scene[0], "title": scene[1], "digest": scene[3].digest}
+            "scene": ({"sid": scene.sid, "title": scene.title, "digest": scene.facts.digest}
                       if scene else None),
             "unverifiable": held == "unverifiable",
             "posts": posts,
@@ -850,6 +901,21 @@ def post_knowledge(cid: str, body: KnowledgeSave):
             raise _malformed() from exc
         _knowledge_write(cid, kid, entry, lambda: store.knowledge.add(cid, entry, kid=kid))
     return {"id": kid}
+
+
+def _restamped(cid: str, subject: dict, status: str, body: KnowledgeEdit) -> dict:
+    """The stored subject's posts fingerprinted again, against the text the
+    client was shown (`expect`): the ledger's "confirm against current text"."""
+    try:
+        sid = scenes_identity.find_by_identity(cid, subject["scene"])
+    except scenes_identity.UnreadableError as exc:
+        raise _busy() from exc
+    if sid is None:
+        raise _bad("gone", "the scene this is about was deleted", 409)
+    posts = (None if subject["kind"] == "scene" else
+             [KnowledgePost(key=p["key"], part=p["part"]) for p in subject["posts"]])
+    return _knowledge_subject(cid, sid, posts, posts is None, status, body.expect,
+                              body.expect_digest, gone_is=409)
 
 
 @router.put("/campaigns/{cid}/ledger/knowledge/{kid}")
@@ -887,22 +953,14 @@ def put_knowledge(cid: str, kid: str, body: KnowledgeEdit):
             entry["subject"] = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene,
                                                   entry["status"], body.expect, body.expect_digest)
             renew = True
-        elif body.restamp:
-            subject = stored["subject"]
-            try:
-                sid = scenes_identity.find_by_identity(cid, subject["scene"])
-            except scenes_identity.UnreadableError as exc:
-                raise _busy() from exc
-            if sid is None:
-                raise _bad("gone", "the scene this is about was deleted", 409)
-            posts = (None if subject["kind"] == "scene" else
-                     [KnowledgePost(key=p["key"], part=p["part"]) for p in subject["posts"]])
-            entry["subject"] = _knowledge_subject(
-                cid, sid, posts, posts is None, entry["status"], body.expect,
-                body.expect_digest, gone_is=409)
         elif grant and stored["status"] == store.knowledge.UNAWARE:
+            # Neither a plain edit nor a restamp chooses text: an `unaware`
+            # stored whole-scene for a keyless part would come out as the
+            # whole-scene grant `unkeyed` refuses.
             raise _bad("bad_subject", "name the posts again to turn this into knowing or "
                                       "suspecting it")
+        elif body.restamp:
+            entry["subject"] = _restamped(cid, stored["subject"], entry["status"], body)
         _knowledge_write(cid, kid, entry,
                          lambda: store.knowledge.update(cid, kid, entry, renew=renew))
     return {"ok": True}
