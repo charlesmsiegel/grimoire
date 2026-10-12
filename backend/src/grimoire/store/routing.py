@@ -164,6 +164,9 @@ TASK_POLICY: dict[str, TaskPolicy] = {
     # Roadmap 02-C2b: the stance is drawn where a report allows. Escalation
     # off: the feature is soft, so a failure costs only the intent.
     "turn-intent": TaskPolicy(question="stance", samples=True),
+    # Roadmap 02-C3: the plan replaces the intent call, and draws only its
+    # stance; disclosure and tension are taken as answered.
+    "turn-plan": TaskPolicy(question="stance", samples=True),
 }
 
 _DEFAULT = TaskPolicy()
@@ -208,7 +211,7 @@ ROUTES: tuple[Route, ...] = (
     Route("turn_plan", "Turn planning",
           "How each character approaches their reply in play, decided before it is "
           "written. Off unless Play decisions are switched on.",
-          ("turn-intent",), True, operation="decide", default_role="decision",
+          ("turn-intent", "turn-plan"), True, operation="decide", default_role="decision",
           legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),

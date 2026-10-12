@@ -216,7 +216,7 @@ def test_any_exception_skips_by_class_and_a_retry_does_not_loop(client, monkeypa
     def broken(*_args):
         raise RuntimeError("a builder bug")
 
-    monkeypatch.setattr(character_turns, "_intent_item", broken)
+    monkeypatch.setattr(character_turns, "_turn_inputs", broken)
     fake = _fake(client, ["Mara answers." + _HANDOFF])
     _send(client, base)
     assert fake.calls == 1

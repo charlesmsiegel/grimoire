@@ -16,7 +16,8 @@ templates so revising one is a template edit plus a recording update.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, NamedTuple
 
 from .. import decisions, draws, prompts
 from . import tokens
@@ -174,3 +175,79 @@ def drawn_stance(item: decisions.Item, result: decisions.ItemResult,
     if drawn.basis in ("sampled", "answer") and drawn.value in STANCES:
         return str(drawn.value), "", drawn.record
     return stance, "", drawn.record
+
+
+# --- the turn plan (02-C3) ---------------------------------------------------
+
+
+def disclosure_question() -> decisions.Choice:
+    """Of what the character already knows, how much they let out: a choice
+    over `DISCLOSURES`, null allowed. Read as answered, never drawn (§7.2): a
+    random reveal of a secret is a continuity event nobody chose."""
+    return decisions.Choice(
+        DISCLOSURE_ID, prompts.render("turn_plan/disclosure_question.j2").strip(),
+        tuple(decisions.Option(d, disclosure_description(d)) for d in DISCLOSURES),
+        allow_none=True)
+
+
+def tension_question() -> decisions.Score:
+    """Whether the reply cools, holds or raises the scene: a three-level
+    score, read as answered and never drawn (pacing is not a coin flip)."""
+    return decisions.Score(TENSION_ID, prompts.render("turn_plan/tension_question.j2").strip(),
+                           TENSION_LEVELS)
+
+
+def plan_item(name: str, conversation: Sequence[dict], brief: str) -> decisions.Item:
+    """The turn plan as ONE item over `intent_item`'s context: (stance,
+    disclosure, tension), answered together in one call (02-C3)."""
+    return decisions.Item(context(name, conversation, brief),
+                          (stance_question(), disclosure_question(), tension_question()))
+
+
+class Extra(NamedTuple):
+    """One item another feature rides on the plan's `decide()` call (§7.3,
+    the slot 13-C3's NPC Action choice uses). Its `owner` key names it in the
+    record; `read` turns its `ItemResult` into what is stored (a draw
+    included, which is the owner's to make), and None stores the result's
+    capture form (`decisions.outcome`). The plan renders none of it, and it
+    is never conditioned on this call's stance: both are answered together."""
+
+    owner: str
+    item: decisions.Item
+    read: Callable[[decisions.ItemResult], Any] | None = None
+
+
+def plan_items(plan: decisions.Item, extra: Sequence[Extra] = ()) -> tuple[decisions.Item, ...]:
+    """`(plan, *extra items)`: one `decide("turn-plan", ...)` call -- one
+    request on a structured stage while they fit one chunk, one request per
+    item on a native one. Refuses two extras under one owner key."""
+    owners = [e.owner for e in extra]
+    if len(set(owners)) != len(owners) or not all(owners):
+        raise ValueError(f"extra items need distinct, non-empty owners: {owners}")
+    return (plan, *(e.item for e in extra))
+
+
+def plan_answers(result: decisions.ItemResult) -> dict[str, Any]:
+    """The plan's two never-drawn answers as the record stores them: a known
+    disclosure (else None) and a tension level index (else None)."""
+    disclosure = result.answers.get(DISCLOSURE_ID)
+    tension = result.answers.get(TENSION_ID)
+    level = tension.answer if tension is not None else None
+    return {
+        "disclosure": (disclosure.answer if disclosure is not None
+                       and disclosure.answer in DISCLOSURES else None),
+        "tension": (level if isinstance(level, int) and not isinstance(level, bool)
+                    and 0 <= level < len(TENSION_LEVELS) else None),
+    }
+
+
+def extra_records(extra: Sequence[Extra],
+                  results: Sequence[decisions.ItemResult]) -> dict[str, Any]:
+    """Each extra item's result under its owner's key, as its owner reads it
+    (`Extra.read`) or in its capture form -- stored untouched, rendered by
+    nobody."""
+    out: dict[str, Any] = {}
+    for spec, result in zip(extra, results, strict=True):
+        out[spec.owner] = (spec.read(result) if spec.read is not None
+                           else decisions.outcome("", "", "", [result])["items"][0])
+    return out

@@ -322,6 +322,8 @@ NOT_IN_CASSETTE = {
                           "drive with scripted decide replies"),
     "turn-intent": ("the play decision before a contribution, off unless switched on, "
                     "which `test_turn_intent.py` drives with scripted decide replies"),
+    "turn-plan": ("the play decision that replaces the intent when switched to `plan`, "
+                  "which `test_turn_plan.py` drives with scripted decide replies"),
 }
 
 

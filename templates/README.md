@@ -827,9 +827,14 @@ messages of its own: `store/turn_plan.py:intent_item` makes the item and
 - `turn_plan/stance_question.j2` is the stance choice's instructions (id
   `stance`, null allowed). No vars. Its options are `turn_plan.STANCES`, each
   described by `turn_plan/stance.j2` (var `stance`).
-- `turn_plan/disclosure.j2` (var `disclosure`) and `turn_plan/tension.j2` (var
-  `level`, an index into `turn_plan.TENSION_LEVELS`) describe the turn plan's
-  other two answers.
+- With `decide_turn_plan=plan`, `store/turn_plan.py:plan_item` asks the same
+  context with two more questions in the same item, and the plan replaces the
+  intent call: `turn_plan/disclosure_question.j2` (id `disclosure`, a choice
+  over `turn_plan.DISCLOSURES`, each described by `turn_plan/disclosure.j2`,
+  var `disclosure`; null allowed) and `turn_plan/tension_question.j2` (id
+  `tension`, a score over `turn_plan.TENSION_LEVELS`, whose answers
+  `turn_plan/tension.j2`, var `level`, describes). No vars in either
+  question. Only the stance is ever drawn.
 
 What was chosen reaches the writer through `scene/turn_intent.j2`
 (`store/turn_plan.py:block`): one system message after the history, placed as

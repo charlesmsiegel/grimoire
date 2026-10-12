@@ -824,18 +824,19 @@ def _samples_pick(cid):
         return False
 
 
-#: The task each turn-plan mode asks under (roadmap 02 §6.4).
-_PLAN_TASKS = {"intent": "turn-intent"}
+#: The task each turn-plan mode asks under (roadmap 02 §6.4, §7.2): the plan
+#: REPLACES the intent call, so a contribution never pays for both.
+_PLAN_TASKS = {"intent": "turn-intent", "plan": "turn-plan"}
 
 
 def _plan_mode(cid, round_record, actor, appended):
-    """The turn decision this contribution asks ("intent"), or "" for none
-    (roadmap 02 §6.3): the switch is off; the actor is the narrator, who has
-    no stance; the round resumes a pending response (a retry replays its
-    snapshot, a roll resume carries the stored record); a roll continuation
-    is appended; or the player typed the round's direction, which IS the
-    direction a sampled stance could contradict. An empty send's app-worded
-    note is not the player's, so it does not count.
+    """The turn decision this contribution asks ("intent" or "plan"), or ""
+    for none (roadmap 02 §6.3): the switch is off; the actor is the narrator,
+    who has no stance; the round resumes a pending response (a retry replays
+    its snapshot, a roll resume carries the stored record); a roll
+    continuation is appended; or the player typed the round's direction,
+    which IS the direction a sampled stance could contradict. An empty send's
+    app-worded note is not the player's, so it does not count.
 
     Reads the same state `_prepare` does, outside the lock: the run owns the
     round, so the two disagree only when the fence is about to fail anyway.
@@ -853,12 +854,12 @@ def _plan_mode(cid, round_record, actor, appended):
     return mode if mode in _PLAN_TASKS else ""
 
 
-def _intent_item(cid, sid, actor):
-    """The turn intent's item for `actor`: their name, their OWN card brief
-    (through the locked version the writer reads; "" when it cannot be read)
-    and the observable transcript the speaker pick reads, through the
-    prompt-phase regex view. Renders templates, so it runs in the
-    threadpool."""
+def _turn_inputs(cid, sid, actor):
+    """`(name, conversation, brief)` for a turn decision about `actor`: their
+    name, the observable transcript the speaker pick reads (through the
+    prompt-phase regex view) and their OWN card brief, through the locked
+    version the writer reads ("" when it cannot be read). Renders templates,
+    so it runs in the threadpool."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
     conversation = store.response_protocol.observable_conversation(
         messages, lambda posts, offset, total: store.regex.view.view(
@@ -871,14 +872,20 @@ def _intent_item(cid, sid, actor):
             store.appearances.locked_version(cid, entry["kind"], entry["id"]))["data"]
     except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
         card = {}
-    return store.turn_plan.intent_item(entry["name"], conversation,
-                                       store.turn_plan.brief_of(card))
+    return entry["name"], conversation, store.turn_plan.brief_of(card)
 
 
-async def _turn_plan(cid, sid, client, round_record, actor, response_id):
-    """The turn intent's record for one contribution (roadmap 02 §6.4), which
-    never raises an `Exception`: the stance (or none, with why), or what
-    skipped it.
+def _plan_extras(cid, sid, round_record, actor) -> tuple[store.turn_plan.Extra, ...]:
+    """The items another feature rides on a turn plan's call (§7.3: 13-C3's
+    NPC Action choice). 02 adds none; each owner keeps every 02-C6 rule."""
+    return ()
+
+
+async def _turn_plan(cid, sid, client, round_record, actor, response_id, mode="intent"):
+    """The turn decision's record for one contribution (roadmap 02 §6.4,
+    §7), which never raises an `Exception`: the stance (or none, with why) --
+    and, for a plan, the disclosure, the tension and any extra items' results
+    -- or what skipped it.
 
     Soft (§3.2): a resolution the seam refuses -- a missing key, an incapable
     Decision model -- skips with the refusal's kind and calls nothing. Bounded
@@ -889,30 +896,55 @@ async def _turn_plan(cid, sid, client, round_record, actor, response_id):
     cancel is not an `Exception`, so Stop passes through as ever. An abstained
     stance is an answer of "no particular stance", recorded and never asked
     again elsewhere."""
-    task = "turn-intent"
+    task = _PLAN_TASKS[mode]
     record: dict = {"task": task, "skipped": ""}
     try:
-        resolved, _why, kind = await run_in_threadpool(
-            _soft_resolved,
-            lambda: require_inference("turn-intent", cid, operation="decide"))
+        if mode == "plan":
+            resolved, _why, kind = await run_in_threadpool(
+                _soft_resolved,
+                lambda: require_inference("turn-plan", cid, operation="decide"))
+        else:
+            resolved, _why, kind = await run_in_threadpool(
+                _soft_resolved,
+                lambda: require_inference("turn-intent", cid, operation="decide"))
         if resolved is None:
             return {**record, "skipped": kind or "unresolved"}
-        item = await run_in_threadpool(_intent_item, cid, sid, actor)
-        async with decision_capture.capturing(cid, sid, task) as scope:
-            decision = await operations.decide(
-                "turn-intent", [item], client=client, resolved=resolved,
-                campaign=cid, scene=sid, post=round_record["post"],
-                round_id=round_record["id"], response_id=response_id,
-                capture=scope.hook(), around=plan_deadline())
-        stance, reason, drawn = _drawn_stance(cid, sid, item, decision.items[0])
-        return {**record, "stance": stance, **({"reason": reason} if reason else {}),
-                **({"draw": drawn} if drawn is not None else {})}
+        name, conversation, brief = await run_in_threadpool(_turn_inputs, cid, sid, actor)
+        extra: tuple[store.turn_plan.Extra, ...] = ()
+        if mode == "plan":
+            extra = await run_in_threadpool(_plan_extras, cid, sid, round_record, actor)
+            items = await run_in_threadpool(
+                lambda: store.turn_plan.plan_items(
+                    store.turn_plan.plan_item(name, conversation, brief), extra))
+            async with decision_capture.capturing(cid, sid, task) as scope:
+                decision = await operations.decide(
+                    "turn-plan", list(items), client=client, resolved=resolved,
+                    campaign=cid, scene=sid, post=round_record["post"],
+                    round_id=round_record["id"], response_id=response_id,
+                    capture=scope.hook(), around=plan_deadline())
+        else:
+            items = (await run_in_threadpool(
+                store.turn_plan.intent_item, name, conversation, brief),)
+            async with decision_capture.capturing(cid, sid, task) as scope:
+                decision = await operations.decide(
+                    "turn-intent", list(items), client=client, resolved=resolved,
+                    campaign=cid, scene=sid, post=round_record["post"],
+                    round_id=round_record["id"], response_id=response_id,
+                    capture=scope.hook(), around=plan_deadline())
+        stance, reason, drawn = _drawn_stance(cid, sid, items[0], decision.items[0])
+        out = {**record, "stance": stance, **({"reason": reason} if reason else {}),
+               **({"draw": drawn} if drawn is not None else {})}
+        if mode == "plan":
+            out.update(store.turn_plan.plan_answers(decision.items[0]))
+            if extra:
+                out["extra"] = store.turn_plan.extra_records(extra, decision.items[1:])
+        return out
     except LLMError as exc:
         return {**record, "skipped": exc.kind or "error"}
     except decisions.DecideRequestError:
         return {**record, "skipped": "invalid_request"}
     except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn (§3.3)
-        _log.error("turn intent for %s/%s skipped: %s", cid, sid, type(exc).__name__)
+        _log.error("turn decision for %s/%s skipped: %s", cid, sid, type(exc).__name__)
         return {**record, "skipped": f"error:{type(exc).__name__}"}
 
 
@@ -1222,7 +1254,8 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         mode = await run_in_threadpool(_plan_mode, cid, turn.round_record, actor, turn.appended)
         if mode:
             response_id = store.responses.mint_id()
-            plan = await _turn_plan(cid, sid, client, turn.round_record, actor, response_id)
+            plan = await _turn_plan(cid, sid, client, turn.round_record, actor, response_id,
+                                    mode)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
             plan=plan, response_id=response_id)

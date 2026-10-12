@@ -537,6 +537,29 @@ for plan in ({"stance": "deflect"}, {"stance": "press", "disclosure": "hint", "t
                       tension=(render("turn_plan/tension.j2", level=plan["tension"]).strip()
                                if "tension" in plan else "")).strip()
     check(f"intent block ({sorted(plan)})", turn_plan.block(plan, "Mara"), expected)
+# The turn plan (§7.2): the same context, then stance, disclosure (a choice
+# over `DISCLOSURES` described by `turn_plan/disclosure.j2`, null allowed)
+# and tension (a score over `TENSION_LEVELS`).
+plan = turn_plan.plan_item("Mara", SELECTOR_CONVERSATION, "Guarded.")
+check("plan item context", plan.context,
+      render("turn_plan/item.j2", name="Mara", brief="Guarded.",
+             conversation=SELECTOR_CONVERSATION))
+REPORT.require("plan item questions",
+               [q.id for q in plan.questions]
+               == [turn_plan.STANCE_ID, turn_plan.DISCLOSURE_ID, turn_plan.TENSION_ID],
+               f"asks {[q.id for q in plan.questions]}")
+_, disclosure, tension = plan.questions
+check("plan disclosure question", disclosure.instructions,
+      render("turn_plan/disclosure_question.j2").strip())
+check("plan tension question", tension.instructions,
+      render("turn_plan/tension_question.j2").strip())
+REPORT.require("plan disclosure options",
+               [(o.id, o.description) for o in disclosure.options]
+               == [(d, render("turn_plan/disclosure.j2", disclosure=d).strip())
+                   for d in turn_plan.DISCLOSURES] and disclosure.allow_none,
+               f"offers {[o.id for o in disclosure.options]}")
+REPORT.require("plan tension levels", tension.levels == turn_plan.TENSION_LEVELS,
+               f"levels {tension.levels}")
 for value in turn_plan.DISCLOSURES:
     REPORT.require(f"disclosure {value} described",
                    bool(render("turn_plan/disclosure.j2", disclosure=value).strip()),

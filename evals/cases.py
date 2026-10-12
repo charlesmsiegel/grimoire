@@ -1648,7 +1648,7 @@ def build_decide_turn_intent() -> dict:
 
 def _decide_turn_intent_prompt(ctx: dict) -> list[dict]:
     """The structured prompt for the item `_turn_plan` sends, gathered as
-    `routes.character_turns._intent_item` gathers it: the actor's own card
+    `routes.character_turns._turn_inputs` gathers it: the actor's own card
     brief through the locked version, and the observable transcript through
     the prompt-phase regex view."""
     cid, sid = ctx["cid"], ctx["sid"]
@@ -1658,7 +1658,7 @@ def _decide_turn_intent_prompt(ctx: dict) -> list[dict]:
                                 appearances.locked_version(cid, entry["kind"],
                                                            entry["id"]))["data"]
     messages = scenes.read_scene(cid, sid)["messages"]
-    # The twin of `_intent_item`'s lambda, which `test_regex_prompt_guard.py`
+    # The twin of `_turn_inputs`'s lambda, which `test_regex_prompt_guard.py`
     # holds to the prompt phase.
     conversation = response_protocol.observable_conversation(
         messages, lambda posts, offset, total: regex_view.view(
@@ -1694,6 +1694,50 @@ def grade_decide_turn_intent(ctx: dict, output: str) -> list[Check]:
                                     question=turn_plan.STANCE_ID, expected="deflect"),
             *graders.grade_distribution(ctx["items"][0], turn_plan.STANCE_ID,
                                         ctx.get("native_results", {}).get(0))]
+
+
+# ------------------------------------------------- decide, turn plan (02-S4)
+#
+# The turn plan over the same fixture (roadmap 02 §7): one item, three
+# questions. Mara deflects, keeps what she knows to herself, and holds the
+# scene where it is -- she is dodging, not escalating.
+
+def _decide_turn_plan_prompt(ctx: dict) -> list[dict]:
+    """`_decide_turn_intent_prompt`'s gathering, asked as the plan item."""
+    _decide_turn_intent_prompt(ctx)
+    item = turn_plan.plan_item(ctx["name"], ctx["conversation"], ctx["brief"])
+    ctx.update(items=(item,))
+    return inference.structured_messages([item])
+
+
+def grade_decide_turn_plan(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    wanted = [f"- {turn_plan.DISCLOSURE_ID} (choice, or null for none of these): ",
+              *(f"- {d}: {turn_plan.disclosure_description(d)}"
+                for d in turn_plan.DISCLOSURES)]
+    missing = [line for line in wanted if line not in text]
+    levels = [level for level in turn_plan.TENSION_LEVELS if level not in text]
+    checks = [*graders.grade_prompt_section(messages, "stance",
+                                            "turn_plan/stance_question.j2"),
+              *graders.grade_prompt_section(messages, "disclosure",
+                                            "turn_plan/disclosure_question.j2"),
+              *graders.grade_prompt_section(messages, "tension",
+                                            "turn_plan/tension_question.j2"),
+              Check("prompt.options", not missing and not levels,
+                    f"a disclosure option or a tension level is missing: {missing + levels}"),
+              Check("prompt.brief", bool(ctx["brief"]) and ctx["brief"] in text,
+                    "the actor's own card brief is not in the prompt")]
+    checks += graders.grade_decision(output, ctx["items"], explain=False,
+                                     question=turn_plan.STANCE_ID, expected="deflect")
+    if decisions.find_object(output) is not None:
+        (result,) = decisions.parse(output, ctx["items"], explain=False)
+        got = turn_plan.plan_answers(result)
+        checks += [Check("plan.disclosure", got["disclosure"] == "withhold",
+                         f"disclosure {got['disclosure']!r}, not 'withhold'"),
+                   Check("plan.tension", got["tension"] == 1,
+                         f"tension {got['tension']!r}, not 1 (hold steady)")]
+    return checks
 
 
 # ------------------------------------- case 13: decide, continuity identity
@@ -2307,6 +2351,24 @@ CASES: tuple[Case, ...] = (
              # The compliant stance from OpenAI's decisions endpoint, with a
              # distribution the stance draw would sample from (02-S3).
              Recording("native", (), "json", native="openai"))),
+    Case(id="decide-turn-plan",
+         task="turn-plan",
+         hypothesis="asked through decide() for the turn plan of a guarded character "
+                    "dodging a question about her whereabouts, the reply is the schema's "
+                    "object and answers deflect, withhold and hold steady in one item",
+         build=build_decide_turn_intent,
+         prompt=_decide_turn_plan_prompt,
+         grade=grade_decide_turn_plan,
+         schema=_decide_turn_intent_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-plan: nothing decodes, so no answer check is
+             # reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # The stance right, the secret given away and the stakes raised.
+             Recording("forthcoming", ("plan.disclosure", "plan.tension"), "json"),
+             # A tension level the scale does not have: unread, never clamped.
+             Recording("off-scale", ("plan.tension",), "json"))),
     Case(id="decide-rank",
          task="continuity-reconcile",
          hypothesis="asked through decide() to rank five earlier Saltmarch scenes for a "
