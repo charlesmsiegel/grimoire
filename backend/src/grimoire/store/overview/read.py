@@ -182,27 +182,34 @@ def continuity_summary(cid: str) -> dict:
 
 
 def _continuity(cid: str, root: Path) -> tuple[dict, tuple | None]:
-    readstats.bump("overview.computed.continuity_summary")
+    """The in-process miss: every input stamped first (the root too, which
+    vouches for an absent one), then the value through the persisted layer."""
     here = statcache.stamp(root)
-    files: dict[str, bytes | None] = {}
-    stamps: list[statcache.Stamp] = []
-    vouched = True
-    absent = False
-    for name, path in kinds.continuity_paths(cid).items():
-        observed = statcache.stamp(path)   # before the bytes it vouches for
-        if observed is None:
-            files[name], absent = None, True
-            continue
-        try:
-            files[name] = path.read_bytes()
-        except FileNotFoundError:
-            files[name], absent, vouched = None, True, False   # gone since its stamp
-            continue
-        except OSError:
-            return kinds.continuity_live(cid), None
-        stamps.append(observed)
-    value = kinds.continuity(cid, files)
-    if absent:
+    paths = kinds.continuity_paths(cid)
+    observed = {name: statcache.stamp(path) for name, path in paths.items()}
+    failed: list[bool] = []
+
+    def live() -> dict:
+        # Today's code, fed the bytes it would have read. A read that fails
+        # (anything but absence) answers through the path readers instead,
+        # and nothing is remembered.
+        files: dict[str, bytes | None] = {}
+        for name, path in paths.items():
+            try:
+                files[name] = path.read_bytes()
+            except FileNotFoundError:
+                files[name] = None
+            except OSError:
+                failed.append(True)
+                return kinds.continuity_live(cid)
+        return kinds.continuity(cid, files)
+
+    value = persist.derive(compiled.OVERVIEW_CONTINUITY,
+                           [compiled.Input(name, path) for name, path in paths.items()], {},
+                           lambda files: kinds.continuity(cid, files), live)
+    stamps = [s for s in observed.values() if s is not None]
+    vouched = not failed
+    if len(stamps) < len(observed):   # an absent file: the root vouches for it
         if here is None:
             vouched = False
         else:
@@ -231,14 +238,20 @@ def scene_turns(cid: str, sid: str) -> int | None:
 
 def _turns(cid: str, sid: str, p: Path,
            players: tuple[str, ...]) -> tuple[int | None, tuple | None]:
-    """The live path: `read_scene` and `_model_blocks`, exactly as the shell
-    counted before 04. A read that raises is not remembered."""
-    readstats.bump("overview.computed.scene_turns")
+    """The in-process miss: the file stamped first, then the count through the
+    persisted layer (the byte-fed `kinds.scene_turns`), whose live path is
+    `read_scene` and `_model_blocks`, exactly as the shell counted before 04.
+    A read that raises is not remembered."""
     observed = statcache.stamp(p)   # before the bytes it vouches for
-    try:
-        value: int | None = kinds.scene_turns_live(cid, sid)
-    except UnicodeDecodeError:
-        value = None   # a property of the bytes: remembered
+
+    def live() -> int | None:
+        try:
+            return kinds.scene_turns_live(cid, sid)
+        except UnicodeDecodeError:
+            return None   # a property of the bytes: remembered
+    value = persist.derive(compiled.OVERVIEW_SCENE_TURNS, [compiled.Input("scene", p)],
+                           {"players": list(players)},
+                           lambda files: kinds.scene_turns(files["scene"] or b"", players), live)
     return value, (observed,) if observed is not None else None
 
 
