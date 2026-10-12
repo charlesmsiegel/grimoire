@@ -50,7 +50,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .. import atomic, locks
+from .. import atomic, ledger_texts, locks
 from ..campaigns import paths as campaigns_paths
 
 VERSION = 1
@@ -100,10 +100,15 @@ def empty() -> dict:
 
 def _load(cid: str):
     """The parsed file, None when absent; raises the parse failure."""
-    p = _path(cid)
-    if not p.exists():
+    return load_from_text(ledger_texts.text(cid, "candidates", _path(cid)))
+
+
+def load_from_text(text: str | None):
+    """`_load`'s parse of continuity_candidates.json's text (None: absent)
+    -- the one parser for this file (`store.ledger_texts`)."""
+    if text is None:
         return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    return json.loads(text)
 
 
 def _split(ref) -> tuple[str, str] | None:

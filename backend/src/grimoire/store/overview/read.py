@@ -21,6 +21,7 @@ from ..campaigns import read as campaigns_read
 from ..paths import safe_id
 from ..scenes import paths as scenes_paths
 from ..scenes import read as scenes_read
+from . import kinds
 
 #: One entry per campaign per projection, so sized like the scene-head pool
 #: it sits beside rather than the shared FIFO of 4096. A structural bound, to
@@ -147,3 +148,50 @@ def scene_summary(cid: str) -> dict:
 def _counted(cid: str, d: Path) -> tuple[dict, tuple | None]:
     readstats.bump("overview.computed.scene_summary")
     return _fold(cid, d)
+
+
+def continuity_summary(cid: str) -> dict:
+    """The campaign's ledger figures for the shell's badge and Todo's `owed`
+    and continuity chores (`kinds.continuity_live` for the shape), computed
+    from the bytes of the five files it reads and remembered in-process on
+    their stamps -- an absent file vouched for by the campaign root's stamp,
+    whose mtime its creation moves (spec 04 section 3.6).
+
+    A file that cannot be read (anything but absence) answers through the
+    live path for this request and nothing is remembered. Raises only
+    `campaign_root`'s `CampaignNotFound` for an id that cannot name a
+    campaign; every other failure is already part of the value."""
+    root = campaigns_paths.campaign_root(cid)
+    value = statcache.memo_stamped(("overview.continuity_summary", os.fspath(root)),
+                                   lambda: _continuity(cid, root),
+                                   pool=_OVERVIEW_POOL, max_entries=POOL_ENTRIES)
+    return dict(value)
+
+
+def _continuity(cid: str, root: Path) -> tuple[dict, tuple | None]:
+    readstats.bump("overview.computed.continuity_summary")
+    here = statcache.stamp(root)
+    files: dict[str, bytes | None] = {}
+    stamps: list[statcache.Stamp] = []
+    vouched = True
+    absent = False
+    for name, path in kinds.continuity_paths(cid).items():
+        observed = statcache.stamp(path)   # before the bytes it vouches for
+        if observed is None:
+            files[name], absent = None, True
+            continue
+        try:
+            files[name] = path.read_bytes()
+        except FileNotFoundError:
+            files[name], absent, vouched = None, True, False   # gone since its stamp
+            continue
+        except OSError:
+            return kinds.continuity_live(cid), None
+        stamps.append(observed)
+    value = kinds.continuity(cid, files)
+    if absent:
+        if here is None:
+            vouched = False
+        else:
+            stamps.insert(0, here)
+    return value, tuple(stamps) if vouched else None

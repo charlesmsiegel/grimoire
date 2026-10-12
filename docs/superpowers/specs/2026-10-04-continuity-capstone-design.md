@@ -2308,6 +2308,8 @@ Todo and shell badge reads must not perform embedding calls or full transcript r
 
 The rule binds what the capstone adds to Todo and the shell (Slice G plan, Decision 17). `GET /shell` read each open scene's transcript to count its model replies before the capstone (`routes/shell._scene_turns`), a cost its docstring bounds by the open scenes, and removing that rail count is not the capstone's to do (§33). The shell's transcript reads stay exactly those, whatever the continuity records and findings number, and it does no continuity review work: `test_continuity_read_cost.py::test_the_shell_read_does_no_continuity_review_work`.
 
+*Amended by roadmap 04 (2026-10-12):* the shell's `ledger_open` now comes off `store.overview.continuity_summary`, the one value Todo's `owed` and continuity chores also read (roadmap 04 spec, section 4.3). The shell therefore runs §18.2's live filter (`pending.findings`, which reads the candidate cache), remembered in-process on the five files' stamps. It still makes no embedding call, reads no transcript beyond the open scenes', and does no review work (`reconcile.discover`, `pressure.build`, `drivers.snapshot`).
+
 ---
 
 # 26. Failure/degradation matrix

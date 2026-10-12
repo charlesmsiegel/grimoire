@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, fieldtext
+from . import atomic, fieldtext, ledger_texts
 from .campaigns import paths as campaigns_paths
 
 STATUSES = ("open", "advanced", "closed")
@@ -20,10 +20,15 @@ def _path(cid: str) -> Path:
 
 
 def read(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
+    return read_from_text(ledger_texts.text(cid, "plot", _path(cid)))
+
+
+def read_from_text(text: str | None) -> dict:
+    """`read`'s parse of plot.json's text (None: the file is absent) -- the
+    one parser for this file (`store.ledger_texts`)."""
+    if text is None:
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return json.loads(text)
 
 
 def _write(cid: str, data: dict) -> None:

@@ -305,7 +305,9 @@ def test_candidates_is_a_leaf():
             reached.add(node.module)
         elif isinstance(node, ast.Import):
             reached.update(a.name for a in node.names if a.name.startswith("grimoire"))
-    assert reached == {"..:atomic", "..:locks", "..campaigns:paths"}
+    # `ledger_texts` is the stdlib-only text seam every ledger reader asks for
+    # its file (roadmap 04); it imports nothing back.
+    assert reached == {"..:atomic", "..:ledger_texts", "..:locks", "..campaigns:paths"}
 
 
 @pytest.mark.parametrize(("stored", "read"), [

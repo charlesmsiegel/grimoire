@@ -59,7 +59,6 @@ import json
 from fastapi import APIRouter
 
 from .. import store
-from ..store.continuity import effective as continuity_effective
 from . import todo as todo_routes
 from .overview_log import overview_read
 
@@ -200,7 +199,7 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         "world_name": store.worlds.read.world_name(wid) or wid,
         "scenes": summary["count"],
         "open": open_scenes,
-        "ledger_open": _ledger_open(cid),
+        "ledger_open": ctx.continuity()["ledger_open"],
         "sheets": sheets,
         "unreviewed": unreviewed,
         # Which scenes are holding one, so the hub can name them and link
@@ -214,18 +213,6 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         # no shape in which they arrive together. See `_money`.
         "money": _money(cid),
     }
-
-
-def _ledger_open(cid: str) -> int | None:
-    """Live canonical commitments -- a merged pair is one -- or `None` when
-    they cannot be counted. The cost rule: a garbled commitments.json is a
-    count nobody could take, which is neither a 500 on every navigation nor a
-    `0`. A garbled continuity.json is not a failure here: its aliases read as
-    none, so the count is the physical one."""
-    try:
-        return len(continuity_effective.commitments(cid))
-    except Exception:  # noqa: BLE001 -- the badge is never worth the rail's whole read; an uncountable ledger draws no tail
-        return None
 
 
 def _money(cid: str) -> dict:

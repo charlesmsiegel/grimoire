@@ -420,8 +420,14 @@ def test_the_shell_read_does_no_continuity_review_work(client, monkeypatch):
             # Counters first, so each recorder wraps whatever `_reads` put on
             # `candidates.read` rather than being replaced by it.
             counts = _reads(m, cid, sids[0])
-            for owner, attr in ((pending, "findings"), (candidates, "read"),
-                                (reconcile, "discover"), (pressure, "build"),
+            # Roadmap 04 amends Decision 17: the shell's `ledger_open` comes off
+            # the overview's continuity summary, the one value Todo's `owed` and
+            # continuity chores read too (spec 04 section 4.3), so the shell
+            # may run the §18.2 live filter (`pending.findings`, which reads the
+            # candidate cache) -- small JSON files, remembered in-process on
+            # their stamps. Review work is still never done here, and the
+            # transcript reads below stay exactly the open scenes'.
+            for owner, attr in ((reconcile, "discover"), (pressure, "build"),
                                 (drivers, "snapshot")):
                 real = getattr(owner, attr)
 

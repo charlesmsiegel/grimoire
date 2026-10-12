@@ -751,6 +751,10 @@ should change this section rather than drift from it.
   `POST /api/cache/sync`).
 - `2026-10-04-mechanics-ii-design.md` is partly superseded by 13, as section
   3 of 13 records.
+- Continuity capstone §25.4 (Decision 17: the shell does no continuity review
+  work) is amended by 04: the shell's `ledger_open` comes off the overview's
+  continuity summary, which runs §18.2's live filter. Review work stays off the
+  shell, as do transcript reads beyond the open scenes'.
 
 ## Found on main, outside the roadmap
 

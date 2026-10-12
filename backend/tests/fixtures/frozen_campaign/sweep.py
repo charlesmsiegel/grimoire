@@ -165,6 +165,9 @@ def _campaign(out: dict, cid: str) -> None:
     # wrote. The scene summary folds the scene heads; its `stamps` are the
     # well-formed `updated` values, so nothing in it reads a clock.
     out[f"overview.scene_summary[{cid}]"] = overview.scene_summary(cid)
+    # The five continuity ledgers, fed to today's readers as bytes: the shell's
+    # badge and Todo's owed and continuity chores, in one value.
+    out[f"overview.continuity_summary[{cid}]"] = overview.continuity_summary(cid)
     # The overlay's view, not the world's: what a campaign actually reads is
     # the merge of its own files over the world's, and every listing below is
     # the campaign-side call the app makes.

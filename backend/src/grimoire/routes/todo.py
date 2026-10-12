@@ -134,20 +134,21 @@ class _Ctx:
     def character_gaps(self) -> tuple[list[dict], list[dict]]:
         return self._once("gaps", lambda: _character_gaps(self.cid))
 
-    def continuity(self) -> list[tuple[str, dict]]:
-        """The cached continuity findings whose verdict is ``live`` now, as
-        ``(candidate id, record)``, read once for both continuity chores.
+    def continuity(self) -> dict:
+        """The overview's continuity summary for the campaign
+        (`store.overview.continuity_summary`), read once for the shell's
+        ledger badge and the `owed` and continuity chores.
 
-        Through `pending.findings`, the GET's own live filter (§18.2), so the
-        count cannot disagree with what the Ledger lists. A cache or ledger
-        that cannot be read is no findings -- memoized as such, so the second
-        chore does not pay for the same failure again."""
-        def read() -> list[tuple[str, dict]]:
+        Its findings go through `pending.findings`, the GET's own live filter
+        (§18.2), so a count cannot disagree with what the Ledger lists. A
+        cache or ledger that cannot be read is unknown -- `None` for a count,
+        no findings for the chores (spec 04 section 3.5)."""
+        def read() -> dict:
             try:
-                found = continuity_pending.findings(self.cid)
-            except (OSError, ValueError, store.CampaignNotFound):
-                return []
-            return [(key, record) for key, record, verdict in found if verdict == "live"]
+                return overview.continuity_summary(self.cid)
+            except store.CampaignNotFound:
+                return {"ledger_open": None, "owed": None, "overlaps": 0, "closures": 0,
+                        "closures_threads": False}
         return self._once("continuity", read)
 
     def avatar_gaps(self) -> list[dict]:
@@ -406,10 +407,9 @@ def _owed(cid: str) -> list[dict]:
 
 def _chore_owed(ctx: _Ctx) -> dict | None:
     cid = ctx.cid
-    try:
-        n = len(_owed(cid))
-    except (OSError, ValueError):
-        return None
+    # `_owed`'s count, off the continuity summary: any failure is unknown and
+    # the chore is absent (spec 04 section 3.5).
+    n = ctx.continuity()["owed"]
     if not n:
         return None
     return {
@@ -421,13 +421,8 @@ def _chore_owed(ctx: _Ctx) -> dict | None:
     }
 
 
-def _continuity_live(ctx: _Ctx, chore_id: str) -> list[tuple[str, dict]]:
-    return [(key, record) for key, record in ctx.continuity()
-            if continuity_pending.CHORE_OF.get(record["kind"]) == chore_id]
-
-
 def _chore_continuity_overlaps(ctx: _Ctx) -> dict | None:
-    n = len(_continuity_live(ctx, "continuity-overlaps"))
+    n = ctx.continuity()["overlaps"]
     if not n:
         return None
     return {
@@ -442,13 +437,13 @@ def _chore_continuity_overlaps(ctx: _Ctx) -> dict | None:
 
 
 def _chore_continuity_closures(ctx: _Ctx) -> dict | None:
-    found = _continuity_live(ctx, "continuity-closures")
-    n = len(found)
+    summary = ctx.continuity()
+    n = summary["closures"]
     if not n:
         return None
     # The chore counts both lifecycle kinds, which the Ledger lists in two
     # groups: a campaign with resolutions only must not land on an empty one.
-    threads = any(r["kind"] == "possible_thread_closure" for _k, r in found)
+    threads = summary["closures_threads"]
     return {
         "id": "continuity-closures", "scope": "campaign", "group": "Continuity",
         "severity": "note", "n": n,

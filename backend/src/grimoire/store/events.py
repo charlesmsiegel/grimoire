@@ -45,7 +45,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, calendars, fieldtext, locks, paths
+from . import atomic, calendars, fieldtext, ledger_texts, locks, paths
 from .campaigns import paths as campaigns_paths
 
 #: A name is a label in a list, and a note is the paragraph behind it. Both are
@@ -74,12 +74,26 @@ def read(cid: str) -> dict:
     cannot name a campaign at all still raises `CampaignNotFound` out of
     `campaign_root`, which is where that check belongs.
     """
-    p = _path(cid)
-    if not p.exists():
+    try:
+        text = _file_text(cid)
+    except (OSError, UnicodeDecodeError):
+        return {}
+    return read_from_text(text)
+
+
+def _file_text(cid: str) -> str | None:
+    return ledger_texts.text(cid, "events", _path(cid))
+
+
+def read_from_text(text: str | None) -> dict:
+    """`read`'s parse of events.json's text (None: the file is absent), with
+    its tolerance -- the one reader's parser for this file
+    (`store.ledger_texts`)."""
+    if text is None:
         return {}
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        raw = json.loads(text)
+    except json.JSONDecodeError:
         return {}
     return raw if isinstance(raw, dict) else {}
 
@@ -93,11 +107,11 @@ def _mutable(cid: str) -> dict:
     `facts._read_ledger` draw the same line for the same reason — the difference
     is only that this one also has to catch the parse, since `read` swallows it.
     """
-    p = _path(cid)
-    if not p.exists():
-        return {}
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
+        text = _file_text(cid)
+        if text is None:
+            return {}
+        raw = json.loads(text)
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         raise EventError("events.json cannot be read") from e
     if not isinstance(raw, dict):

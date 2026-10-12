@@ -1336,6 +1336,13 @@
       "owners": "pcs:winifred"
     }
   },
+  "overview.continuity_summary[the-drowned-ledger]": {
+    "closures": 0,
+    "closures_threads": false,
+    "ledger_open": 1,
+    "overlaps": 0,
+    "owed": 1
+  },
   "overview.scene_summary[the-drowned-ledger]": {
     "absorbed": 0,
     "count": 2,

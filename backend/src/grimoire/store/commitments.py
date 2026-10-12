@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, fieldtext, locks
+from . import atomic, fieldtext, ledger_texts, locks
 from .campaigns import paths as campaigns_paths
 
 KINDS = ("promise", "threat", "foreshadowing")
@@ -43,10 +43,15 @@ def _path(cid: str) -> Path:
 
 
 def read(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
+    return read_from_text(ledger_texts.text(cid, "commitments", _path(cid)))
+
+
+def read_from_text(text: str | None) -> dict:
+    """`read`'s parse of commitments.json's text (None: the file is absent)
+    -- the one parser for this file (`store.ledger_texts`)."""
+    if text is None:
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return json.loads(text)
 
 
 def _write(cid: str, data: dict) -> None:
