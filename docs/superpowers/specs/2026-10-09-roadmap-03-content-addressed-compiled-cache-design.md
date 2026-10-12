@@ -1526,3 +1526,43 @@ beside a newer file. Its complete text/encoder memory key is stronger than a
 path stamp for that measure, avoids meaningless metadata I/O and retains no
 file-history assertion. Same-process digest reuse is bounded separately.
 This clarification is subject to the final mandatory original-spec gate.
+
+
+2026-10-12 PR follow-up: the section 14 gate, re-run on a lean cache. The
+first run withheld every candidate, but a hit then cost far more than section
+8's "a stat, one indexed lookup and a decode". Each fence call re-read the
+marker and listed `delete-intents/`. Each SQL operation re-ran the purge pass,
+opening a probe connection per file, and re-proved its location's links. A
+cached token count also paid BUILD in every fresh process.
+
+The implementation now remembers a passing fence, a finished synchronize pass
+and a proved location for as long as a four-lstat control snapshot stands. A
+commit still reads strictly. BUILD is fingerprinted at startup. On the
+synthetic library a token-count hit costs about 0.7 ms. Measured
+warm-after-restart outcomes:
+
+| Candidate | Live cost | Cached hit | Ruling |
+|---|---|---|---|
+| Token measures (`tokens:record_body`) | tiktoken: 3.4 ms at 32,000 chars, 14 ms at 128,000 | about 0.7 ms | Wired; admission starts at 16,384 supplied characters, twice the measured crossover |
+| `search.py` per-file extraction | about 0.45 ms per 24 KB record | 1.1 to 1.3 ms per record, fully batched | Unwired |
+| `world_row` | about 29 µs | 0.7 ms or more | Unwired |
+| `campaign_row` | about 90 µs | 0.7 ms or more | Unwired |
+
+Search extraction is unwired for a structural reason, not an overhead one.
+Its payload, the name plus the searchable text plus the prose, is about twice
+its input, so a checked decode cannot beat re-reading and flattening it.
+
+The shelf rows are unwired because section 8's own note holds: their parse
+costs less than any lookup could. Section 14's rule, that a kind which does
+not win is not wired, takes precedence over S6's naming them as the wiring
+check. The token kind carries that end-to-end proof instead: a production
+consumer through `derive`, and the frozen-campaign test reads it back after a
+restart with the encoder forbidden. Every persisted kind is declared in
+`compiled.KINDS`.
+
+Section 12 dormant-device amendment: an intent written by another device stops
+fencing once its file has not moved for `RETENTION_S`. By then section 10's
+lease sweep has removed that device's database too. Such an intent is ignored
+and never deleted, and this device's own intents never age out.
+
+These follow-ups are subject to the final mandatory spec-fidelity gate.

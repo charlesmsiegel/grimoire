@@ -39,3 +39,36 @@ Persisted file-source trust requires known local metadata and filesystem provena
 At source `61a5c7c069` on main `246a0e73a8`, the same synthetic 8,400,025-character body was measured in seven actual fresh Python workers for each path. Median direct encoding was 1,104.696 ms; cached `record_tokens` was 799.168 ms, including encoder, BUILD and database initialization. The seven cached workers made zero `count_tokens` calls, while the seven direct workers each made one. This confirms the selected large-body restart benefit after the rebase. Full process-wall samples and distinct worker PIDs are in the JSON report.
 
 The host also ran backend tests and an APK build during this confirmation; OS page cache was not cleared. The earlier page, kind and warm-list measurements remain explicitly tied to their original source checkpoints. The confirmation does not broaden persistence to the unselected consumers.
+
+## Lean-cache re-measurement (PR follow-up, 2026-10-12)
+
+The selection above measured a cache whose hit re-read the control files on
+every call, and each fresh worker paid BUILD on its first token count. After
+the control-snapshot memos and the startup BUILD prime landed, the same
+synthetic shapes were measured again. These measurements ran under Python 3.11
+on a shared Linux container, with OS page caches warm and medians of seven.
+
+Token counts compared `count_tokens` with a persisted `record_tokens` hit on
+an open connection, using a placeholder body:
+
+| Supplied characters | Direct encoding (ms) | Persisted hit (ms) |
+|---:|---:|---:|
+| 2,000 | 0.22 | 0.73 |
+| 8,000 | 0.84 | 0.67 |
+| 32,000 | 3.36 | 0.79 |
+| 128,000 | 13.72 | 1.29 |
+| 512,000 | 53.53 | 1.13 |
+
+The two cross between 8,000 and 32,000 characters, so admission now begins at
+16,384 (`tokens.PERSIST_MIN_CHARS`), replacing 8,388,608.
+
+Search-shaped extraction used 200 placeholder records of about 24 KB each.
+Batched `validate` plus `lookup_many` took 1.1 to 1.3 ms per record, against
+about 0.45 ms to extract each record directly. The payload is about twice the
+input, so the loss is structural, and search stays live.
+
+The world and campaign rows were measured on `scripts.synth_library` with 40
+worlds and 5 campaigns each. A live row costs about 29 µs for a world and
+90 µs for a campaign, against at least 0.7 ms for a hit, so they stay live
+too.
+

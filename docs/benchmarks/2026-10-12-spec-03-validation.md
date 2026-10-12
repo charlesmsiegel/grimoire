@@ -17,7 +17,8 @@ The measured-cost gate in the originating spec (§§8/14) withheld search,
 card and shelf SQL persistence after they lost their cost comparisons. Their
 live behavior remains. Encoder-counted supplied text uses explicit zero-file
 identity: exact body and encoder for bounded memory, SHA/encoding/BUILD for
-persistence. Persistent admission requires 8,388,608 characters. These are
+persistence. Persistent admission required 8,388,608 characters (16,384 after
+the PR follow-up below). These are
 recorded decisions, not claims that every tentative consumer was wired.
 See the [synthetic measurement report](2026-10-11-spec-03-compiled-cache.md).
 
@@ -189,4 +190,24 @@ fresh-process pairs, run twice.
 
 That is within run-to-run noise. Windows, where the stamp makes a native
 ChangeTime query, was not re-measured.
+
+The section 14 gate was then re-run on a lean cache. A hit had re-read the
+control files on every call and paid BUILD in each fresh process. Both costs
+were removed: control-snapshot memos, which the cache fixture now exercises
+in every scenario both settled and fresh, and a BUILD primed at startup.
+
+Outcome:
+
+- **Token counts:** wired, admitting bodies from 16,384 characters.
+- **Search extraction:** stays live; its payload outweighs its input.
+- **Shelf rows:** stay live; a parse costs less than any lookup.
+
+The figures are in the benchmark report and the spec's closing record.
+
+Three audit gaps were closed:
+
+- An abandoned foreign delete intent no longer fences every device forever.
+- The frozen-campaign test now reads the wired kind back after a restart.
+- Section 14 now has tests for a truncated database and a skewed filesystem
+  clock.
 

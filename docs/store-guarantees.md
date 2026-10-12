@@ -1386,7 +1386,9 @@ names afterwards.
   opened still holds the deleted record's derived text, and every other device
   still receives that file through the sync client, until the device opens the
   library again or another device's lease sweep removes a file whose lease has
-  not been renewed in 90 days (`RETENTION_S`).
+  not been renewed in 90 days (`RETENTION_S`). A delete intent such a device
+  left mid-delete fences every other device's cache off until the same 90 days
+  pass; after that it is ignored (never deleted), as the device is.
 - **Vectors are not purged per record.** `.cache/embeddings/*.vec` is keyed by
   space and text, never by campaign, so a deleted campaign's vectors stay until
   the user clears that folder. Thumbnails under `.cache/` likewise.
