@@ -3,8 +3,11 @@
 `image_gc.scan` is the dry run: it walks every root strictly and -- when
 something is collectable and nothing blocked the walk -- hands back a
 single-use token.
-`image_gc.collect(token)` deletes at most what that scan reported, intersected
-with a fresh strict walk, in batches under the ingest/GC lock.
+`image_gc.collect(token)` disposes of at most what that scan reported,
+intersected with a fresh strict walk, in batches under the ingest/GC lock: a
+picture's blob is moved into this device's outbox under the lock and sent to
+the recycle bin (the suite's `fake_bin`) after it; its sidecar, index entry and
+thumbnails are deleted.
 
 Everything here fails closed, so most tests are about what is NOT deleted.
 Every image is drawn with Pillow from arithmetic; every name is invented. The
@@ -35,6 +38,7 @@ from grimoire.store import (
     locks,
     maintenance_reports,
     proclock,
+    recycle_bin,
     thumbs,
 )
 from grimoire.store.module_edit import staging as module_staging
@@ -403,7 +407,10 @@ def test_a_shared_blob_survives_its_unreachable_object(root):
     assert report["reclaimable_bytes"] == _sidecar_size(sharer)
     done = _collect(root, report["token"])
     assert {r["id"] for r in done["deleted"]["objects"]} == {sharer}
-    assert done["deleted"]["blobs"] == []
+    assert "blobs" not in done["deleted"]
+    assert done["released"] == [{"id": sharer, "blob": kept.blob_sha256 + ".png",
+                                 "reason": "shared"}]
+    assert done["recycled"] == []
     assert _blob(kept).is_file()
     assert image_refs.resolve(_char_dir(root), "avatar") is not None
 
@@ -455,10 +462,11 @@ def test_held_objects_are_protected_not_offered(root):
 
 
 @pytest.mark.parametrize("hold", ["unreadable-sidecars", "unarrived-objects"])
-def test_a_hold_that_appears_after_the_scan_keeps_the_blob(root, hold):
+def test_a_hold_that_appears_after_the_scan_keeps_the_blob(root, hold, fake_bin):
     """The scan was clean, then a sync delivered a placement whose sidecar has
     not arrived, or a sidecar went bad: the collection re-checks the hold and
-    must not take the blob (the sidecar's own fate is not what is asserted)."""
+    skips the whole object -- its sidecar would carry the description away and
+    bin nothing."""
     orphan = _obj(1)
     report = _ready(root)
     assert _ids(report) == {orphan.id} and report["token"]
@@ -470,9 +478,11 @@ def test_a_hold_that_appears_after_the_scan_keeps_the_blob(root, hold):
         image_refs.write(_char_dir(root), "avatar", "px1-" + "ef" * 32)
     done = _collect(root, report["token"])
     assert _blob(orphan).is_file(), "the blob survives a hold that arrived after the scan"
+    assert _sidecar(orphan).is_file(), "and so does its sidecar"
     assert {"id": orphan.id, "blob": orphan.blob_sha256 + ".png", "reason": hold} \
-        in done["kept_blobs"]
-    assert done["deleted"]["blobs"] == []
+        in done["skipped"]
+    assert done["deleted"]["objects"] == [] and done["recycled"] == []
+    assert fake_bin.paths == []
 
 
 def test_an_orphan_blob_is_a_candidate_after_grace(root):
@@ -487,7 +497,9 @@ def test_an_orphan_blob_is_a_candidate_after_grace(root):
     assert [r["blob"] for r in report["collectable_blobs"]] == [blob.name]
     assert report["reclaimable_bytes"] == blob.stat().st_size
     done = _collect(root, report["token"])
-    assert [r["blob"] for r in done["deleted"]["blobs"]] == [blob.name]
+    name = f"grimoire - {gone.blob_sha256[:8]}.png"
+    assert done["recycled"] == [{"id": None, "blob": blob.name, "name": name,
+                                 "bytes": report["reclaimable_bytes"]}]
     assert not blob.exists()
     assert not thumb.exists()
 
@@ -509,12 +521,16 @@ def test_a_collected_objects_index_entry_and_thumbnails_go_with_its_blob(root):
 
 # ---- a racing ingest ----------------------------------------------------------
 
-def test_a_concurrent_ingest_is_never_left_dangling(root, monkeypatch):
+def test_a_concurrent_ingest_is_never_left_dangling(root, monkeypatch, fake_bin):
+    """The blob goes to the outbox before the sidecar is deleted, both under
+    the ingest/GC lock and the object's stripe: an ingest of the same picture
+    queued on the lock finds no sidecar and recreates the object with a fresh
+    blob, never a sidecar naming the blob that just left."""
     orphan = _obj(1)
     report = _ready(root)
     assert _ids(report) == {orphan.id}
 
-    real = image_gc._delete_file
+    real = image_gc._move_to_outbox
     started = threading.Event()
     result: dict = {}
 
@@ -524,19 +540,22 @@ def test_a_concurrent_ingest_is_never_left_dangling(root, monkeypatch):
 
     worker = threading.Thread(target=ingest)
 
-    def delete_file(rootp, path):
+    def move(rootp, blob, name):
         # Inside the batch, holding the ingest/GC lock: start an ingest of the
         # same bytes and give it time to queue on that lock.
         if not worker.is_alive() and "obj" not in result:
             worker.start()
             started.wait(5)
             time.sleep(0.3)
-        return real(rootp, path)
+        assert "obj" not in result, "the ingest waits on the lock"
+        return real(rootp, blob, name)
 
-    monkeypatch.setattr(image_gc, "_delete_file", delete_file)
-    _collect(root, report["token"])
+    monkeypatch.setattr(image_gc, "_move_to_outbox", move)
+    done = _collect(root, report["token"])
     worker.join(10)
     assert not worker.is_alive()
+    assert done["state"] == "complete"
+    assert [r["id"] for r in done["recycled"]] == [orphan.id]
     got = result["obj"]
     assert got.id == orphan.id
     assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
@@ -626,7 +645,7 @@ def test_a_root_flip_mid_collect_deletes_nothing(root, monkeypatch, tmp_path):
     monkeypatch.setattr(locks, "image_object_lock", flip)
     done = _collect(root, report["token"])
     assert done["state"] == "root-changed"
-    assert done["deleted"]["objects"] == [] and done["deleted"]["blobs"] == []
+    assert done["deleted"]["objects"] == [] and done["recycled"] == []
     after = _tree(root, skip=(".cache/image-store",)), _tree(other)
     assert after[0] == {k: v for k, v in before[0].items()
                         if not k.startswith(".cache/image-store/")}
@@ -644,7 +663,7 @@ def test_a_root_that_is_not_the_live_one_is_refused(root, tmp_path):
     assert _sidecar(orphan).is_file()
 
 
-def test_nothing_outside_image_store_is_deleted(root, tmp_path):
+def test_nothing_outside_image_store_is_deleted(root, tmp_path, fake_bin):
     placed, orphan = _obj(1), _obj(2)
     _place(root, placed)
     (root / "worlds" / "realm" / "world.md").write_text("---\nname: Realm\n---\n",
@@ -667,6 +686,10 @@ def test_nothing_outside_image_store_is_deleted(root, tmp_path):
             if p.is_file()}
     assert _sidecar(placed).relative_to(root).as_posix() in left
     assert _blob(placed).relative_to(root).as_posix() in left
+    # The orphan's picture left through the outbox, to the bin, and only it.
+    assert [p.parent for p in fake_bin.paths] == [image_gc.outbox_dir(root)]
+    assert [r["id"] for r in done["recycled"]] == [orphan.id]
+    assert list(image_gc.outbox_dir(root).iterdir()) == []
 
 
 # ---- batching ---------------------------------------------------------------------
@@ -822,7 +845,7 @@ def test_an_unarrived_object_keeps_every_orphan_blob(root):
             "collectable_at": None} in held["protected"]
 
     done = _collect(root, report["token"], now=T + 120)
-    assert done["deleted"]["blobs"] == []
+    assert done["recycled"] == []
     assert {"id": None, "blob": _blob(gone).name, "reason": "unarrived-objects"} \
         in done["skipped"]
     assert _blob(gone).is_file()
@@ -851,32 +874,39 @@ def test_a_linked_cache_blocks(root, tmp_path):
     assert {"path": ".cache", "reason": "symlink"} in report["blocking"]
 
 
-def test_a_root_flip_between_sidecar_and_blob_reports_the_sidecar(root, monkeypatch, tmp_path):
+def test_a_root_flip_between_sidecar_and_blob_reports_the_sidecar(root, monkeypatch, tmp_path,
+                                                                 fake_bin):
+    """The blob is moved to the outbox first, then the sidecar is deleted. A
+    root flip between the two stops the run with the move waiting in the
+    outbox and the sidecar intact (it names a missing blob, which no
+    placement reaches; the next collection releases it)."""
     first, second = _obj(1), _obj(2)
     report = _ready(root)
     other = tmp_path / "other-home"
     other.mkdir()
-    real = image_gc._delete_file
-    deleted: list[Path] = []
+    real = image_gc._move_to_outbox
+    moved: list[Path] = []
 
-    def delete_file(rootp, path):
-        freed = real(rootp, path)
-        deleted.append(path)
-        monkeypatch.setenv("GRIMOIRE_HOME", str(other))     # flips after the sidecar
-        return freed
+    def move(rootp, blob, name):
+        out = real(rootp, blob, name)
+        moved.append(out)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))     # flips after the move
+        return out
 
     files = {o.id: (_sidecar(o), _blob(o)) for o in (first, second)}   # before the flip
-    monkeypatch.setattr(image_gc, "_delete_file", delete_file)
+    data = {o.id: _blob(o).read_bytes() for o in (first, second)}
+    monkeypatch.setattr(image_gc, "_move_to_outbox", move)
     done = _collect(root, report["token"])
     assert done["state"] == "root-changed"
-    assert len(deleted) == 1
-    gone = next(o for o in (first, second) if not files[o.id][0].exists())
+    assert len(moved) == 1 and moved[0].is_file()
+    assert moved[0].parent == image_gc.outbox_dir(root)
+    gone = next(o for o in (first, second) if not files[o.id][1].exists())
     kept = first if gone is second else second
-    assert deleted == [files[gone.id][0]]
-    assert done["deleted"]["objects"] == [
-        {"id": gone.id, "blob": gone.blob_sha256 + ".png", "bytes": done["deleted"]["bytes"]}]
-    assert done["deleted"]["blobs"] == []
-    assert files[gone.id][1].is_file()
+    assert moved[0].read_bytes() == data[gone.id]
+    assert files[gone.id][0].is_file(), "the sidecar is intact"
+    assert done["deleted"]["objects"] == [] and done["recycled"] == []
+    assert done["outbox"] == [moved[0].name]
+    assert fake_bin.paths == []
     assert files[kept.id][0].is_file() and files[kept.id][1].is_file()
     assert list(other.iterdir()) == []
 
@@ -889,7 +919,7 @@ def test_cache_cleanup_is_best_effort(root):
     done = _collect(root, report["token"])
     assert done["state"] == "complete"
     assert [r["id"] for r in done["deleted"]["objects"]] == [orphan.id]
-    assert [r["blob"] for r in done["deleted"]["blobs"]] == [_blob(orphan).name]
+    assert [r["blob"] for r in done["recycled"]] == [_blob(orphan).name]
     assert done["cache_cleanup"] == [{"path": stuck.relative_to(root).as_posix(),
                                       "reason": "_UnsafePathError"}]
 
@@ -902,7 +932,7 @@ def test_a_gone_blobs_thumbnails_still_go(root):
     os.unlink(_blob(orphan))                       # a partial earlier collection
     done = _collect(root, report["token"])
     assert [r["id"] for r in done["deleted"]["objects"]] == [orphan.id]
-    assert done["deleted"]["blobs"] == []
+    assert done["recycled"] == []
     assert not thumb.exists()
 
 
@@ -931,3 +961,337 @@ def test_a_blob_shared_with_an_unarrived_object_is_kept(root):
     assert {"id": a.id, "blob": a.blob_sha256 + ".png", "why": "unarrived-objects",
             "collectable_at": None} in report["protected"]
     assert _sidecar(a).is_file() and _blob(a).is_file()
+
+
+# ---- disposal: the outbox and the recycle bin -------------------------------------
+
+SHA = "ab12cd34" + "0" * 56
+
+
+def _describe(obj, text: str, **extra) -> None:
+    """Give `obj`'s sidecar a description (and any other raw fields), aged."""
+    raw = json.loads(_sidecar(obj).read_text(encoding="utf-8"))
+    raw["description"] = text
+    raw.update(extra)
+    _sidecar(obj).write_text(json.dumps(raw), encoding="utf-8")
+    _age(obj, OLD)
+
+
+def _binned(fake_bin) -> list[str]:
+    return [p.name for p in fake_bin.paths]
+
+
+@pytest.mark.parametrize("description, expected", [
+    ("Mara at the harbour", "grimoire - Mara at the harbour - ab12cd34.png"),
+    (None, "grimoire - ab12cd34.png"),
+    ("", "grimoire - ab12cd34.png"),
+    ('a/b:c*d?"e<f>g|h\\i', "grimoire - abcdefghi - ab12cd34.png"),
+    ("Seraphine at dusk. ", "grimoire - Seraphine at dusk - ab12cd34.png"),
+    ("Seraphine at dusk...", "grimoire - Seraphine at dusk - ab12cd34.png"),
+    ("  Mara\n\tat   the\x07 harbour  ", "grimoire - Mara at the harbour - ab12cd34.png"),
+    ('<>:"/\\|?*', "grimoire - ab12cd34.png"),
+    ("\x01\x02 . ", "grimoire - ab12cd34.png"),
+    (" ".join(["Saltmarch"] * 12),
+     "grimoire - " + " ".join(["Saltmarch"] * 6) + " - ab12cd34.png"),
+    ("W" * 100, "grimoire - " + "W" * 60 + " - ab12cd34.png"),
+    ("Mara\ud800 harbour", "grimoire - Mara harbour - ab12cd34.png"),
+])
+def test_bin_name(description, expected):
+    name = image_gc.bin_name(description, SHA, "png")
+    assert name == expected
+    middle = name[len("grimoire - "):-len(" - ab12cd34.png")]
+    assert len(middle) <= 60
+
+
+def test_a_bin_name_fits_a_file_name_in_bytes():
+    """Sixty four-byte characters are within the character cap and past the
+    255 bytes a file name may take; the description is cut further."""
+    name = image_gc.bin_name("\U0001F600" * 60, SHA, "webp")
+    assert name.startswith("grimoire - \U0001F600") and name.endswith(" - ab12cd34.webp")
+    assert len(f"{name[:-5]} (99).webp".encode()) <= 255
+
+
+def test_a_collected_blob_goes_to_the_bin_named_and_its_rest_is_deleted(root, fake_bin):
+    orphan, placed = _obj(1), _obj(2)
+    _place(root, placed)
+    _describe(orphan, "Mara at the harbour")
+    thumb = thumbs.thumbnail(_blob(orphan), 128)
+    idx = image_store.index_path(orphan.blob_sha256, root=root)
+    assert thumb is not None and thumb.is_file() and idx.is_file()
+    data = _blob(orphan).read_bytes()
+    _age(orphan, OLD)
+    report = _ready(root)
+    assert report["recycle_bin"] == {"ok": True, "code": None, "message": None}
+    done = _collect(root, report["token"])
+    name = f"grimoire - Mara at the harbour - {orphan.blob_sha256[:8]}.png"
+    assert done["state"] == "complete"
+    assert _binned(fake_bin) == [name]
+    assert fake_bin.paths[0].parent == image_gc.outbox_dir(root)
+    assert fake_bin._dir is not None and (fake_bin._dir / f"0-{name}").read_bytes() == data
+    assert done["recycled"] == [{"id": orphan.id, "blob": orphan.blob_sha256 + ".png",
+                                 "name": name, "bytes": len(data)}]
+    assert not _sidecar(orphan).exists() and not _blob(orphan).exists()
+    assert not thumb.exists() and not idx.exists()
+    assert [r["id"] for r in done["deleted"]["objects"]] == [orphan.id]
+    assert set(done["deleted"]) == {"objects", "bytes"}
+    assert done["released"] == [] and done["outbox"] == [] and done["unverified"] == []
+    assert done["recycle_bin"]["ok"] is True
+    assert _sidecar(placed).is_file() and _blob(placed).is_file()
+
+
+def test_description_conflicts_bins_without_a_description(root, fake_bin):
+    orphan = _obj(1)
+    _describe(orphan, "Mara", description_conflicts=[{"text": "Seraphine"}])
+    done = _collect(root, _ready(root)["token"])
+    assert _binned(fake_bin) == [f"grimoire - {orphan.blob_sha256[:8]}.png"]
+    assert done["recycled"][0]["name"] == _binned(fake_bin)[0]
+
+
+def test_held_object_keeps_its_sidecar_at_collect(root, fake_bin):
+    """A placement whose object has not arrived appears between the scan and
+    the collection: the object is skipped whole, with the hold as reason."""
+    orphan = _obj(1)
+    _describe(orphan, "Seraphine in the rain")
+    report = _ready(root)
+    assert _ids(report) == {orphan.id}
+    image_refs.write(_char_dir(root), "avatar", "px1-" + "12" * 32)
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    assert {"id": orphan.id, "blob": orphan.blob_sha256 + ".png",
+            "reason": "unarrived-objects"} in done["skipped"]
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+    assert json.loads(_sidecar(orphan).read_text(encoding="utf-8"))["description"] \
+        == "Seraphine in the rain"
+    assert done["deleted"]["objects"] == [] and done["recycled"] == [] and done["released"] == []
+    assert fake_bin.paths == []
+
+
+def test_a_missing_blob_releases_the_sidecar(root, fake_bin):
+    orphan = _obj(1)
+    thumb = thumbs.thumbnail(_blob(orphan), 256)
+    assert thumb is not None and thumb.is_file()
+    _age(orphan, OLD)
+    report = _ready(root)
+    os.unlink(_blob(orphan))             # a crash after an earlier move, or a sync
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    assert not _sidecar(orphan).exists()
+    assert not thumb.exists()
+    assert done["released"] == [{"id": orphan.id, "blob": orphan.blob_sha256 + ".png",
+                                 "reason": "blob-missing"}]
+    assert [r["id"] for r in done["deleted"]["objects"]] == [orphan.id]
+    assert done["recycled"] == [] and fake_bin.paths == []
+
+
+def test_bin_runs_after_the_ingest_lock_is_released(root, monkeypatch, fake_bin):
+    a, b = _obj(1), _obj(2)
+    report = _ready(root)
+    free: list[bool] = []
+
+    def send(path: str) -> None:
+        def probe() -> None:
+            lock = locks.image_ingest_gc_lock()
+            got = lock.acquire(timeout=2)
+            free.append(got)
+            if got:
+                lock.release()
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join(10)
+        fake_bin.send(path)
+
+    monkeypatch.setattr(recycle_bin, "_send2trash", send)
+    monkeypatch.setattr(image_gc, "BATCH_OBJECTS", 1)
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    assert free == [True, True], "every bin call runs with the ingest/GC lock free"
+    assert {r["id"] for r in done["recycled"]} == {a.id, b.id}
+
+
+def _refuse(path: str) -> None:
+    raise OSError("the bin said no")
+
+
+def test_a_refused_bin_leaves_the_file_in_the_outbox(root, monkeypatch, fake_bin):
+    orphan = _obj(1)
+    _describe(orphan, "Winifred's lantern")
+    size = _blob(orphan).stat().st_size
+    report = _ready(root)
+    name = f"grimoire - Winifred's lantern - {orphan.blob_sha256[:8]}.png"
+    with monkeypatch.context() as m:
+        m.setattr(recycle_bin, "_send2trash", _refuse)
+        done = _collect(root, report["token"])
+    assert done["state"] == image_gc.TRASH_UNAVAILABLE == "trash-unavailable"
+    assert done["error"] == "OSError"
+    waiting = image_gc.outbox_dir(root) / name
+    assert waiting.is_file() and done["outbox"] == [name]
+    assert not _blob(orphan).exists() and not _sidecar(orphan).exists()
+    assert done["recycled"] == []
+
+    again = _scan(root, now=T + 120)
+    assert again["outbox"] == [name]
+    assert again["collectable"] == [] and again["collectable_blobs"] == []
+    assert again["token"], "waiting files can always be drained"
+
+    final = _collect(root, again["token"], now=T + 180)
+    assert final["state"] == "complete"
+    assert _binned(fake_bin) == [name]
+    assert final["recycled"] == [{"id": None, "blob": None, "name": name, "bytes": size}]
+    assert final["outbox"] == [] and not waiting.exists()
+
+
+def test_drain_refusal_stops_before_the_first_batch(root, monkeypatch, fake_bin):
+    outbox = image_gc.outbox_dir(root)
+    outbox.mkdir(parents=True)
+    stuck = outbox / "grimoire - 0badcafe.png"
+    stuck.write_bytes(_png(9))
+    orphan = _obj(1)
+    report = _ready(root)
+    assert report["outbox"] == [stuck.name] and _ids(report) == {orphan.id}
+    with monkeypatch.context() as m:
+        m.setattr(recycle_bin, "_send2trash", _refuse)
+        done = _collect(root, report["token"])
+    assert done["state"] == "trash-unavailable" and done["error"] == "OSError"
+    assert done["deleted"]["objects"] == [] and done["skipped"] == []
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+    assert stuck.is_file() and done["outbox"] == [stuck.name]
+    assert fake_bin.paths == []
+    assert not image_gc.token_path(root, report["token"]).exists(), "the token is spent"
+
+
+def test_cancel_after_outbox_move_drains_next_time(root, monkeypatch, fake_bin):
+    _obj(1), _obj(2)
+    report = _ready(root)
+    real = image_gc._move_to_outbox
+    moved: list[Path] = []
+
+    def move(rootp, blob, name):
+        out = real(rootp, blob, name)
+        moved.append(out)
+        return out
+
+    monkeypatch.setattr(image_gc, "_move_to_outbox", move)
+    done = image_gc.collect(root, report["token"], cancel=lambda: bool(moved), now=T + 60)
+    assert done["state"] == "cancelled"
+    assert len(moved) == 1 and moved[0].is_file()
+    assert fake_bin.paths == []
+    assert done["outbox"] == [moved[0].name]
+
+    again = _scan(root, now=T + 120)
+    assert again["outbox"] == [moved[0].name]
+    final = _collect(root, again["token"], now=T + 180)
+    assert final["state"] == "complete"
+    assert fake_bin.paths[0] == moved[0]
+    assert _binned(fake_bin).count(moved[0].name) == 1 and len(fake_bin.paths) == 2
+    assert final["outbox"] == []
+
+
+def test_another_devices_outbox_is_counted_not_touched(root, fake_bin):
+    foreign = root / ".cache" / "image-store" / "recycle" / ("f" * 64)
+    foreign.mkdir(parents=True)
+    theirs = foreign / "grimoire - 12345678.png"
+    theirs.write_bytes(_png(7))
+    assert image_gc.outbox_dir(root) != foreign
+    orphan = _obj(1)
+    report = _ready(root)
+    assert report["foreign_outboxes"] == 1 and report["outbox"] == []
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete" and done["foreign_outboxes"] == 1
+    assert theirs.read_bytes() == _png(7)
+    assert [r["id"] for r in done["recycled"]] == [orphan.id]
+    assert all(p.parent == image_gc.outbox_dir(root) for p in fake_bin.paths)
+
+
+def test_a_symlinked_outbox_blocks(root, tmp_path, fake_bin):
+    orphan = _obj(1)
+    report = _ready(root)
+    elsewhere = tmp_path / "outside" / "outbox"
+    elsewhere.mkdir()
+    planted = elsewhere / "grimoire - 0badcafe.png"
+    planted.write_bytes(_png(8))
+    outbox = image_gc.outbox_dir(root)
+    outbox.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        outbox.symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("no symlink rights here")
+    blocked = _scan(root, now=T + 30)
+    assert blocked["state"] == "blocked" and blocked["token"] is None
+    assert {"path": outbox.relative_to(root).as_posix(), "reason": "symlink"} \
+        in blocked["blocking"]
+    done = _collect(root, report["token"])
+    assert done["state"] == "blocked"
+    assert done["blocking"]
+    assert fake_bin.paths == [] and done["recycled"] == []
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+    assert planted.read_bytes() == _png(8)
+    assert done["outbox"] == []
+
+
+def test_a_root_flip_before_a_bin_call_stops(root, monkeypatch, tmp_path, fake_bin):
+    orphan = _obj(1)
+    report = _ready(root)
+    other = tmp_path / "other-home"
+    other.mkdir()
+    real = recycle_bin.send_batch
+
+    def send_batch(rootp, paths, before):
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        return real(rootp, paths, before)
+
+    monkeypatch.setattr(recycle_bin, "send_batch", send_batch)
+    done = _collect(root, report["token"])
+    assert done["state"] == "root-changed"
+    assert fake_bin.paths == [] and done["recycled"] == []
+    name = f"grimoire - {orphan.blob_sha256[:8]}.png"
+    assert done["outbox"] == [name]
+    assert (image_gc.outbox_dir(root) / name).is_file()
+    assert list(other.iterdir()) == []
+
+
+def test_collect_refuses_without_a_bin(root, monkeypatch, fake_bin):
+    orphan = _obj(1)
+    report = _ready(root)
+    no = recycle_bin.Availability(False, "not_installed", recycle_bin.MESSAGES["not_installed"])
+    monkeypatch.setattr(recycle_bin, "check", lambda r: no)
+    done = _collect(root, report["token"])
+    assert done["state"] == "refused" and done["error"] == "no_recycle_bin"
+    assert done["recycle_bin"] == no.to_dict()
+    assert image_gc.token_path(root, report["token"]).is_file(), "the token is not spent"
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+    assert fake_bin.paths == []
+    scan = _scan(root, now=T + 120)
+    assert scan["recycle_bin"] == {"ok": False, "code": "not_installed",
+                                   "message": recycle_bin.MESSAGES["not_installed"]}
+
+
+def test_unverified_stops_the_run(root, monkeypatch, fake_bin):
+    a, b = _obj(1), _obj(2)
+    report = _ready(root)
+    real = recycle_bin.send_batch
+
+    def send_batch(rootp, paths, before):
+        result = real(rootp, paths, before)
+        result.unverified = list(result.sent[:1])
+        return result
+
+    monkeypatch.setattr(recycle_bin, "send_batch", send_batch)
+    monkeypatch.setattr(image_gc, "BATCH_OBJECTS", 1)
+    done = _collect(root, report["token"])
+    assert done["state"] == image_gc.RECYCLE_BIN_UNVERIFIED == "recycle-bin-unverified"
+    assert len(fake_bin.paths) == 1
+    assert done["unverified"] == [fake_bin.paths[0].name]
+    assert len(done["recycled"]) == 1
+    left = [o for o in (a, b) if _sidecar(o).exists()]
+    assert len(left) == 1 and _blob(left[0]).is_file(), "nothing more is collected"
+
+
+def test_a_name_already_waiting_gets_a_suffix(root, monkeypatch, fake_bin):
+    _obj(1), _obj(2)
+    report = _ready(root)
+    monkeypatch.setattr(image_gc, "bin_name", lambda description, sha, ext: "grimoire - Mara.png")
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    assert _binned(fake_bin) == ["grimoire - Mara.png", "grimoire - Mara (2).png"]
+    assert [r["name"] for r in done["recycled"]] == _binned(fake_bin)

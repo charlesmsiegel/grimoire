@@ -626,7 +626,10 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
         found = read(image_id)
         if found is None:
             # New: blob first, so a crash leaves an orphan blob and never a
-            # sidecar naming nothing.
+            # sidecar naming nothing. (The collector reverses the order for an
+            # object nothing reaches -- blob to its outbox, then the sidecar --
+            # so a *collected* object may briefly be a sidecar naming nothing,
+            # and only while unreachable; this path then recreates it.)
             _publish_blob(sha, ext, data)
             obj = _finish(image_id, _new_raw(sha, ext, len(data), pid), True, source_url)
         else:

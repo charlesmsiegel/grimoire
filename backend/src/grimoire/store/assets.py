@@ -582,8 +582,9 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
     """Remove logical image `name` in `d`: its placement and every legacy file.
 
     Deleting a placement never deletes an object or a blob: they stay until
-    the collector (`image_gc`, run from Settings) finds them unreferenced past
-    its grace period and two scans apart. Failures are swallowed here, as they
+    the collector (`image_gc`, run from Settings) finds them unreferenced with
+    their files at least an hour old, and sends the picture to the recycle
+    bin. Failures are swallowed here, as they
     always were -- callers that need the removal *confirmed*
     (`covers.delete_cover`) re-resolve afterwards. The one exception is an
     `OSError` from `_recover_before_write`, raised while an unfinished

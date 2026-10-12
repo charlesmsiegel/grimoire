@@ -1,14 +1,15 @@
-"""Image garbage collection: remove what nothing anywhere reaches (stage 4).
+"""Image garbage collection: dispose of what nothing anywhere reaches (stage 4).
 
-Spec section 12 and stage-4 rulings M12-M15. Deleting a placement deletes only
-its ref; there is no reference count, so an object nothing names any more
-stays until this collects it. Two calls, both run as the ``maintenance`` run
-class and both fail closed:
+Spec section 12 and stage-4 rulings M12-M15, amended by the viewer-removal
+spec (sections 2 and 3). Deleting a placement deletes only its ref; there is
+no reference count, so an object nothing names any more stays until this
+collects it. Two calls, both run as the ``maintenance`` run class and both
+fail closed:
 
 * **`scan`** is the dry run. It walks every root strictly, lists the store,
-  and -- when something is collectable and nothing blocked the walk --
-  persists a single-use token naming exactly that.
-* **`collect`** takes such a token and deletes at most what it names,
+  and -- when something is collectable or waits in the outbox, and nothing
+  blocked the walk -- persists a single-use token naming exactly that.
+* **`collect`** takes such a token and disposes of at most what it names,
   intersected with a fresh strict walk, in batches under the ingest/GC lock.
 
 **Roots** (M12) are where a reference is kept that is not itself an image:
@@ -20,9 +21,10 @@ count), the migration work map's pending entries, and the same placements and
 manifests inside staged work directories (``.world-staging``,
 ``.module-staging``). Anything among them that does not list, parse or name a
 known format -- and any symlink -- BLOCKS: the walk is all or nothing, the
-report names each blocking path, and nothing is deleted. So does a staged work
-directory touched within the last hour (`STAGING_MIN_AGE_SECONDS`): a fork or
-an import is still filling it, and what it will place is not on disk yet.
+report names each blocking path, and nothing is collected. So does a staged
+work directory touched within the last hour (`STAGING_MIN_AGE_SECONDS`): a
+fork or an import is still filling it, and what it will place is not on disk
+yet.
 
 **Candidates** (M13; viewer-removal spec 2.1). An object is collectable only
 when all of these hold:
@@ -43,40 +45,84 @@ object whose blob would be held (`_orphan_hold`: an unreadable sidecar, or an
 unarrived object) is protected with that reason and is not offered or named
 by the token.
 
-**Blobs** (M14). A blob goes only when no surviving readable sidecar names it:
-the ``blob -> sidecars`` map is built over every file in ``objects/`` and
-rebuilt under the ingest/GC lock at each batch. One sidecar that does not
-read (or an ``objects/`` folder that does not list) keeps EVERY blob, because
-it may name any of them. A blob nothing names is a candidate under the same
-grace rule as an object -- except while some placement names an
-object with no readable sidecar (one that has not arrived yet, mid-sync), when
-every orphan blob is kept: the unarrived object's blob may be among them. An
-``objects/`` folder that is absent beside a ``blobs/`` one blocks outright. A blob-index entry is deleted only if
-it names the object being collected; a blob's thumbnails go with the blob.
+**Blobs** (M14). A blob leaves the store only when no surviving readable
+sidecar names it: the ``blob -> sidecars`` map is built over every file in
+``objects/`` and rebuilt under the ingest/GC lock at each batch. One sidecar
+that does not read (or an ``objects/`` folder that does not list) holds EVERY
+blob, because it may name any of them. A blob nothing names is a candidate
+under the same grace rule as an object -- except while some placement names
+an object with no readable sidecar (one that has not arrived yet, mid-sync),
+when every orphan blob is held: the unarrived object's blob may be among
+them. An ``objects/`` folder that is absent beside a ``blobs/`` one blocks
+outright. A blob-index entry is deleted only if it names the object being
+collected; a blob's thumbnails go with the blob.
 
-**Deleting** (M15) needs the token of a dry run made on THIS device for THIS
-root, at most `TOKEN_HOURS` old, and consumes it whether or not the collection
-completes. Each batch -- up to `BATCH_OBJECTS` objects or `BATCH_SECONDS` --
-holds `locks.image_ingest_gc_lock` and then, per object, its stripe, the order
+**Disposal** (M15; viewer-removal spec 3). It needs the token of a dry run
+made on THIS device for THIS root, at most `TOKEN_HOURS` old, and consumes it
+whether or not the collection completes -- unless `recycle_bin.check` finds no
+real bin here, which refuses the collection (``no_recycle_bin``) before the
+token is touched. A picture is never deleted: its blob goes to the operating
+system's recycle bin, through this device's **outbox**
+(`outbox_dir`, ``.cache/image-store/recycle/<device key>/``), under a readable
+name (`bin_name`). Its sidecar, index entry and thumbnails are deleted.
+
+Each batch -- up to `BATCH_OBJECTS` objects or `BATCH_SECONDS` -- holds
+`locks.image_ingest_gc_lock` and then, per object, its stripe, the order
 ingest takes them in. Under them every candidate is re-checked (mtime, root,
-reachability by the fresh walk, the blob refcount) and then the sidecar goes,
-then -- refcount permitting -- the blob, its index entry and its thumbnails.
-Each deletion is in the report the moment it happens; the cache entries are
-best effort, reported and never a reason to stop.
-An ingest that waited on the lock finds no sidecar and recreates the object;
-one that got in first touched the mtime, and the re-check skips the object.
+reachability by the fresh walk, the blob refcount), and then:
+
+1. an object whose blob is held (an unreadable sidecar, an unarrived object)
+   is skipped whole, sidecar included -- deleting the sidecar would lose its
+   description and bin nothing;
+2. an object whose blob another sidecar names loses only its sidecar, and is
+   reported ``released`` (``shared``): the picture is still in the store;
+3. otherwise the blob is moved into the outbox with one ``os.replace`` and
+   THEN the sidecar is deleted. The move is the commit: a crash after it
+   leaves a sidecar naming a missing blob, which no placement reaches and the
+   next collection releases (``blob-missing``) -- the same as a blob already
+   gone at this step. This reverses ingest's order (blob, then sidecar) and is
+   safe for the same reason: both steps happen under the lock and the stripe,
+   so an ingest of the same id waits, finds no sidecar and recreates the
+   object with a fresh blob, and nothing places an id except through ingest.
+   An orphan blob is moved the same way, with no description.
+
+Only after the lock is released are the batch's moved files sent to the bin
+(`recycle_bin.send_batch`), the root checked before each, so a slow shell or
+Finder call never holds up an upload. A file the bin takes is ``recycled``; a
+file it refuses stays in the outbox under its readable name and stops the run
+``trash-unavailable``; a batch Windows did not confirm stops it
+``recycle-bin-unverified`` (see `recycle_bin`). A cancel or a root change sends
+nothing: what moved waits in the outbox. A collection therefore begins, once
+its token is claimed and before its first batch, by sending this device's
+outbox to the bin, and a refusal there stops it before anything else leaves
+the store. A scan reports what waits (``outbox``) and issues a token for it
+alone, so waiting files can always be drained; files in another device's
+outbox (or this one's under an earlier store path) are counted in
+``foreign_outboxes`` and never touched. The outbox syncs with ``.cache``,
+which is accepted traffic.
+
+**Accepted risk.** A placement made on another device that has not synced here
+yet does not reach its picture, so this device can bin it after an hour; the
+deletion then syncs back and that placement resolves to nothing. Uploading the
+binned file again, on the same decoder, lands under the same object id and
+heals it -- without its description and tags.
 
 **The root is pinned** (M4). Every path is built from the `root` the caller
 captured, and ``paths.home().resolve() == root`` is asserted before every
-destructive step: on a mismatch the run stops, deletes nothing more, and its
-report says ``root-changed``. Nothing outside ``assets/image-store/`` is ever
-deleted, apart from the collected blobs' index entries and thumbnails under
-``.cache`` and this module's own tokens; `_delete_file` refuses any other path
-and any path reached through a link.
+destructive step -- each deletion, each move and each bin call: on a mismatch
+the run stops, disposes of nothing more, and its report says
+``root-changed``. Nothing outside ``assets/image-store/`` is ever deleted,
+apart from the collected blobs' index entries and thumbnails under ``.cache``
+and this module's own tokens; `_delete_file` refuses any other path and any
+path reached through a link, and the outbox is not among the trees it deletes
+in. A blob is moved only from ``blobs/`` into the outbox, and a file is sent
+to the bin only from the outbox, each a regular file reached through no link.
 
 Both calls leave a report (`maintenance_reports.write`) on every ending --
-complete, blocked, refused, cancelled, root-changed or failed -- and return it.
-The two share one shape. Nothing here takes a campaign lock or writes campaign
+complete, blocked, refused, cancelled, root-changed, trash-unavailable,
+recycle-bin-unverified or failed -- and return it. The two share one shape,
+and each carries ``recycle_bin`` (the availability answer), ``outbox`` and
+``foreign_outboxes``. Nothing here takes a campaign lock or writes campaign
 state.
 """
 
@@ -106,6 +152,7 @@ from . import (
     locks,
     maintenance_reports,
     paths,
+    recycle_bin,
     thumbs,
 )
 
@@ -137,11 +184,23 @@ FORMAT = 2
 
 _GC_DIR = (".cache", "image-store", "gc")
 _THUMBS_DIR = (".cache", "thumbs")
+_RECYCLE_DIR = (".cache", "image-store", "recycle")
+_BLOBS_DIR = ("assets", "image-store", "blobs")
 _TOKEN = re.compile(r"[0-9a-f]{32}")
 _BLOB_NAME = re.compile(r"([0-9a-f]{64})\.([a-z]+)")
-#: The only trees a collection deletes in, relative to the root.
-_DELETABLE = (("assets", "image-store", "objects"), ("assets", "image-store", "blobs"),
+#: The only trees a collection deletes in, relative to the root. The outbox is
+#: deliberately not one: a picture waiting there leaves only for the bin.
+_DELETABLE = (("assets", "image-store", "objects"), _BLOBS_DIR,
               (".cache", "image-store", "blob-index"), _THUMBS_DIR)
+
+#: What a bin name may carry of a description, in characters.
+BIN_DESCRIPTION_CHARS = 60
+#: ... and in UTF-8 bytes, so the whole name (about 30 bytes besides) stays
+#: under the 255 a file name may take: 60 four-byte characters would not.
+BIN_DESCRIPTION_BYTES = 200
+#: Characters a Windows file name may not hold, every control character, and
+#: lone surrogates (which no file system can encode).
+_NOT_IN_A_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f-\x9f\ud800-\udfff]')
 
 #: A report's `state`.
 COMPLETE = "complete"
@@ -150,6 +209,10 @@ CANCELLED = "cancelled"
 REFUSED = "refused"
 ROOT_CHANGED = "root-changed"
 FAILED = "failed"
+#: The bin refused a file: it waits in the outbox, and nothing more is collected.
+TRASH_UNAVAILABLE = "trash-unavailable"
+#: Windows did not confirm a batch reached the bin (`recycle_bin.send_batch`).
+RECYCLE_BIN_UNVERIFIED = "recycle-bin-unverified"
 
 
 class _RootChangedError(Exception):
@@ -206,6 +269,38 @@ def _split_key(key: str) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m and m.group(2) in image_store.MIME else None
 
 
+def outbox_dir(root: Path) -> Path:
+    """This device's outbox for this store: where a collected picture waits,
+    under its bin name, between leaving ``blobs/`` and reaching the recycle
+    bin. Per device key, so a synced ``.cache`` never hands one device's
+    waiting pictures to another's collector."""
+    return Path(root).joinpath(*_RECYCLE_DIR, maintenance_reports.device_key(root))
+
+
+def bin_name(description: str | None, sha: str, ext: str) -> str:
+    """The file name a collected picture reaches the bin under:
+    ``grimoire - <description> - <sha8>.<ext>``, or ``grimoire - <sha8>.<ext>``
+    when there is no description or it sanitises to nothing. The description
+    loses what a Windows file name cannot hold and its control characters, has
+    its whitespace collapsed, is cut to `BIN_DESCRIPTION_CHARS` at a word
+    boundary where one exists (and to `BIN_DESCRIPTION_BYTES`), and loses
+    trailing dots and spaces."""
+    text = ""
+    if isinstance(description, str):
+        text = " ".join(description.split())
+        text = " ".join(_NOT_IN_A_NAME.sub("", text).split())
+        if len(text) > BIN_DESCRIPTION_CHARS:
+            head = text[:BIN_DESCRIPTION_CHARS]
+            if text[BIN_DESCRIPTION_CHARS] != " " and " " in head:
+                head = head[:head.rindex(" ")]
+            text = head
+        while len(text.encode("utf-8")) > BIN_DESCRIPTION_BYTES:
+            text = text[:-1]
+        text = text.rstrip(". ")
+    sha8 = sha[:8]
+    return f"grimoire - {text} - {sha8}.{ext}" if text else f"grimoire - {sha8}.{ext}"
+
+
 # ---- the pinned root ----------------------------------------------------------
 
 def _live_root() -> Path | None:
@@ -249,6 +344,173 @@ def _delete_file(root: Path, path: Path) -> int:
     except FileNotFoundError:
         return 0
     return st.st_size
+
+
+# ---- the outbox -------------------------------------------------------------------
+
+def _real_dirs(root: Path, target: Path, *, create: bool) -> bool:
+    """Whether every component from `root` down to `target` is a real
+    directory (never a link). A missing one is made when `create`, else the
+    answer is False; anything else there raises `_UnsafePathError`."""
+    cur = Path(root)
+    for part in Path(target).relative_to(root).parts:
+        cur = cur / part
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            if not create:
+                return False
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(cur)
+            st = os.lstat(cur)
+        if not stat.S_ISDIR(st.st_mode):       # a link, or anything else
+            raise _UnsafePathError(cur)
+    return True
+
+
+def _free_name(outbox: Path, name: str) -> Path:
+    """`name` in `outbox`, or the first of ``<stem> (2).<ext>``,
+    ``<stem> (3).<ext>``, ... that nothing there holds yet."""
+    stem, dot, ext = name.rpartition(".")
+    target, n = outbox / name, 2
+    while os.path.lexists(target):
+        target = outbox / (f"{stem} ({n}).{ext}" if dot else f"{name} ({n})")
+        n += 1
+    return target
+
+
+def _move_to_outbox(root: Path, blob: Path, name: str) -> Path | None:
+    """Move one blob into this device's outbox under bin name `name` (or a
+    suffixed one), after checking the live root is still `root`: the blob a
+    regular file under ``blobs/`` and the outbox a real directory, neither
+    reached through a link (`_UnsafePathError` otherwise). Returns where it
+    went, or None when the blob was already gone. The move is one
+    ``os.replace`` on one volume, so the picture is in exactly one place."""
+    _check_root(root)
+    rel = Path(blob).relative_to(root).parts     # ValueError: not ours at all
+    if rel[:len(_BLOBS_DIR)] != _BLOBS_DIR or len(rel) != len(_BLOBS_DIR) + 2:
+        raise _UnsafePathError(Path(blob))
+    if not _real_dirs(root, Path(blob).parent, create=False):
+        return None
+    try:
+        st = os.lstat(blob)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        raise _UnsafePathError(Path(blob))
+    outbox = outbox_dir(root)
+    _real_dirs(root, outbox, create=True)
+    target = _free_name(outbox, name)
+    try:
+        os.replace(blob, target)
+    except FileNotFoundError:
+        if os.path.lexists(blob):
+            raise                  # the outbox went, not the blob: stop, blob in place
+        return None
+    return target
+
+
+def _outbox_files(root: Path) -> list[Path]:
+    """The regular files waiting in this device's outbox, by name. Raises
+    `_UnsafePathError` when the way to it runs through a link."""
+    outbox = outbox_dir(root)
+    if not _real_dirs(root, outbox, create=False):
+        return []
+    with os.scandir(outbox) as it:
+        return sorted(Path(e.path) for e in it
+                      if e.is_file(follow_symlinks=False)
+                      and e.name.casefold() not in image_refs.OS_LITTER)
+
+
+def _outbox_listing(root: Path) -> tuple[list[str], int]:
+    """(this device's waiting file names, how many files wait in other
+    devices' outboxes). Read-only and fail-soft: an outbox reached through a
+    link lists nothing (the scan blocks on it), and one that does not list
+    counts as empty."""
+    try:
+        mine = [p.name for p in _outbox_files(root)]
+    except (OSError, _UnsafePathError):
+        mine = []
+    recycle = Path(root).joinpath(*_RECYCLE_DIR)
+    own = outbox_dir(root).name
+    foreign = 0
+    try:
+        if not _real_dirs(root, recycle, create=False):
+            return mine, 0
+        with os.scandir(recycle) as it:
+            others = [Path(e.path) for e in it
+                      if e.name != own and e.is_dir(follow_symlinks=False)]
+        for d in others:
+            with os.scandir(d) as it:
+                foreign += sum(1 for e in it if e.is_file(follow_symlinks=False))
+    except (OSError, _UnsafePathError):
+        pass
+    return mine, foreign
+
+
+class _BinGuard:
+    """`recycle_bin.send_batch`'s `before`: ahead of each bin call, the live
+    root is still the pinned one and the file is a regular file directly in
+    this device's outbox, reached through no link. Records each file's size
+    (before it is sent) and every file it was asked about, so a stop it raises
+    still reports what the bin already took: every file before the last."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.outbox = outbox_dir(root)
+        self.seen: list[Path] = []
+        self.sizes: dict[Path, int] = {}
+
+    def __call__(self, path: Path) -> None:
+        self.seen.append(path)
+        _check_root(self.root)
+        if Path(path).parent != self.outbox:
+            raise _UnsafePathError(Path(path))
+        if not _real_dirs(self.root, self.outbox, create=False):
+            return                 # gone: the bin refuses it, and the run stops
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(st.st_mode):
+            raise _UnsafePathError(Path(path))
+        self.sizes[path] = st.st_size
+
+
+def _send(root: Path, report: dict, files: list[Path],
+          origin: dict[Path, tuple[str | None, str | None]]) -> str | None:
+    """Send outbox `files` to the bin, never under a lock. Every file the bin
+    took is in `recycled`; a stop returns its state (`TRASH_UNAVAILABLE`,
+    `RECYCLE_BIN_UNVERIFIED`) and leaves the rest waiting in the outbox. A
+    root change or an unsafe path raises, as anywhere else in a collection."""
+    guard = _BinGuard(root)
+    try:
+        result = recycle_bin.send_batch(root, files, before=guard)
+    except (_RootChangedError, _UnsafePathError):
+        _recycled(report, guard.seen[:-1], guard.sizes, origin)
+        raise
+    _recycled(report, result.sent, guard.sizes, origin)
+    if result.refused is not None:
+        report["error"] = result.error or result.code
+    if result.unverified:
+        report["unverified"] += [p.name for p in result.unverified]
+        return RECYCLE_BIN_UNVERIFIED
+    return None if result.refused is None else TRASH_UNAVAILABLE
+
+
+def _recycled(report: dict, sent: list[Path], sizes: dict[Path, int],
+              origin: dict[Path, tuple[str | None, str | None]]) -> None:
+    for path in sent:
+        image_id, key = origin.get(path, (None, None))
+        report["recycled"].append({"id": image_id, "blob": key, "name": path.name,
+                                   "bytes": sizes.get(path, 0)})
+
+
+def _drain(root: Path, report: dict) -> str | None:
+    """Send whatever already waits in this device's outbox -- a crash, a
+    refusal or a cancel left it there -- before anything more is collected."""
+    files = _outbox_files(root)
+    return _send(root, report, files, {}) if files else None
 
 
 # ---- roots ------------------------------------------------------------------
@@ -538,8 +800,9 @@ def _orphan_hold(side: _Sidecars, unarrived: list[str]) -> str | None:
 
 def _store_blocks(root: Path) -> list[tuple[Path, str]]:
     """What about the store's own folders blocks a run: a link between the
-    root and them, or the cache this writes and deletes in -- a deletion
-    through one would land outside the pinned root -- and an ``objects/``
+    root and them, or the cache this writes and deletes in, or the outbox it
+    moves pictures into -- a deletion or a move through one would land outside
+    the pinned root -- and an ``objects/``
     that is absent while ``blobs/`` is there, which is a store whose
     sidecars have not arrived (mid-sync), not one whose blobs nothing names."""
     store = image_store.store_root(root)
@@ -547,7 +810,8 @@ def _store_blocks(root: Path) -> list[tuple[Path, str]]:
     candidates = [store.parent, store, store / "objects", store / "blobs",
                   cache, cache / "image-store", _gc_dir(root),
                   image_store.index_path("0" * 64, root=root).parent.parent,
-                  Path(root).joinpath(*_THUMBS_DIR)]
+                  Path(root).joinpath(*_THUMBS_DIR),
+                  Path(root).joinpath(*_RECYCLE_DIR), outbox_dir(root)]
     out = [(p, image_refs.SYMLINK) for p in candidates if p.is_symlink()]
     if not os.path.lexists(store / "objects") and os.path.lexists(store / "blobs"):
         out.append((store / "objects", "objects-missing"))
@@ -686,8 +950,10 @@ def _new_report(mode: str | None, run_id: str, now: float,
         "collectable": [], "collectable_blobs": [], "protected": [],
         "reclaimable_bytes": 0, "blocking": [], "unreadable_sidecars": [],
         "clock_skew": [], "token": None, "token_expires_at": None,
-        "deleted": {"objects": [], "blobs": [], "bytes": 0},
-        "skipped": [], "kept_blobs": [], "unarrived_objects": [],
+        "deleted": {"objects": [], "bytes": 0},
+        "recycled": [], "released": [], "outbox": [], "foreign_outboxes": 0,
+        "unverified": [], "recycle_bin": {"ok": None, "code": None, "message": None},
+        "skipped": [], "unarrived_objects": [],
         "cache_cleanup": [], "error": None,
     }
 
@@ -704,8 +970,13 @@ def failed_report(mode: str | None, run_id: str, error: str) -> dict:
 
 
 def _finish(root: Path, run_id: str, report: dict) -> None:
-    """Write the report, whatever the ending. A report that cannot be
-    written is logged, never raised over the error that ended the run."""
+    """Write the report, whatever the ending, with what waits in the outboxes
+    at that moment. A report that cannot be written is logged, never raised
+    over the error that ended the run."""
+    try:
+        report["outbox"], report["foreign_outboxes"] = _outbox_listing(root)
+    except Exception:                                        # noqa: BLE001
+        _log.warning("could not list the image collection outbox", exc_info=True)
     report["finished_at"] = time.time()
     try:
         maintenance_reports.write(root, run_id, report)
@@ -723,8 +994,8 @@ def _run_id(root: Path, run_id: str | None) -> str:
 def _issue_token(root: Path, report: dict, device: str, now: float) -> None:
     ids = [row["id"] for row in report["collectable"]]
     blobs = [row["blob"] for row in report["collectable_blobs"]]
-    if not ids and not blobs:
-        return
+    if not ids and not blobs and not report["outbox"]:
+        return                      # waiting files alone earn a token: they drain
     token = secrets.token_hex(16)
     path = token_path(root, token)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -902,6 +1173,7 @@ def _classify_blobs(report: dict, side: _Sidecars, blobs: dict[str, os.stat_resu
 
 
 def _scan(root: Path, report: dict, cancel: Callable[[], bool], at: float) -> str:
+    report["recycle_bin"] = recycle_bin.check(root).to_dict()
     try:
         _check_root(root)
     except _RootChangedError:
@@ -928,6 +1200,7 @@ def _scan(root: Path, report: dict, cancel: Callable[[], bool], at: float) -> st
     counts.update(collectable=len(report["collectable"]),
                   collectable_blobs=len(report["collectable_blobs"]),
                   protected=len(report["protected"]))
+    report["outbox"], report["foreign_outboxes"] = _outbox_listing(root)
     try:
         _check_root(root)
     except _RootChangedError:
@@ -946,10 +1219,12 @@ def _clear_candidates(report: dict) -> None:
 
 def collect(root: Path, token: str, *, cancel: Callable[[], bool],
             run_id: str | None = None, now: float | None = None) -> dict:
-    """Delete what the dry run that issued `token` found collectable, and
-    nothing else (module docstring). The token is consumed even when the
-    collection then stops; a blocked walk, a root change or a cancel leaves
-    the rest for the next scan."""
+    """Dispose of what the dry run that issued `token` found collectable, and
+    nothing else (module docstring): pictures to the recycle bin through this
+    device's outbox, the rest deleted. Refused, with the token unspent, where
+    `recycle_bin.check` finds no bin. The token is consumed even when the
+    collection then stops; a blocked walk, a root change, a cancel or a bin
+    that refuses leaves the rest for the next scan."""
     root = Path(root)
     run_id = _run_id(root, run_id)
     at = time.time() if now is None else now
@@ -974,6 +1249,10 @@ class _Run:
     now: float
     #: `_unarrived`, recomputed after each refresh under the lock.
     unarrived: list[str] = field(default_factory=list)
+    #: Outbox files this batch moved, sent to the bin once the lock is released.
+    pending: list[Path] = field(default_factory=list)
+    #: Each moved file's object id (None for an orphan blob) and blob key.
+    origin: dict[Path, tuple[str | None, str | None]] = field(default_factory=dict)
 
     def skip(self, image_id: str | None, blob: str | None, reason: str) -> None:
         self.report["skipped"].append({"id": image_id, "blob": blob, "reason": reason})
@@ -981,10 +1260,15 @@ class _Run:
 
 def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
              at: float) -> str:
+    availability = recycle_bin.check(root)
+    report["recycle_bin"] = availability.to_dict()
     try:
         _check_root(root)
     except _RootChangedError:
         return ROOT_CHANGED
+    if not availability.ok:
+        report["error"] = "no_recycle_bin"      # before the token: it stays good
+        return REFUSED
     device = maintenance_reports.device_key(root)
     rec, why = _read_token(root, token, device, at)
     if rec is None or not _claim_token(root, token, rec):
@@ -992,7 +1276,22 @@ def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
         return REFUSED
     report["token"] = token
     report["grace_hours"] = rec["grace_hours"]
-    roots = _walk_roots(root, at, cancel)          # fresh, and outside the lock
+    try:
+        if (stop := _drain(root, report)) is not None:
+            return stop                 # the bin is refusing: nothing more leaves
+        return _walk_and_collect(root, report, rec, cancel, at)
+    except _RootChangedError:
+        return ROOT_CHANGED
+    except _UnsafePathError as exc:
+        report["blocking"].append({"path": _rel(root, exc.path), "reason": "unsafe-path"})
+        return BLOCKED
+
+
+def _walk_and_collect(root: Path, report: dict, rec: dict, cancel: Callable[[], bool],
+                      at: float) -> str:
+    """A fresh strict walk, outside the lock, and then the token's candidates
+    that it does not reach, in batches."""
+    roots = _walk_roots(root, at, cancel)
     if roots is None:
         return CANCELLED
     side = _list_objects(root)
@@ -1009,17 +1308,14 @@ def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
         else:
             queue.append(("object", image_id))
     queue += [("blob", key) for key in rec["blobs"]]
-    try:
-        return _batches(run, queue, cancel)
-    except _RootChangedError:
-        return ROOT_CHANGED
-    except _UnsafePathError as exc:
-        report["blocking"].append({"path": _rel(root, exc.path), "reason": "unsafe-path"})
-        return BLOCKED
+    return _batches(run, queue, cancel)
 
 
 def _batches(run: _Run, queue: list[tuple[str, str]], cancel: Callable[[], bool]) -> str:
-    """Delete in batches, each one hold of the ingest/GC lock (M15)."""
+    """Collect in batches, each one hold of the ingest/GC lock (M15), and
+    send each batch's moved pictures to the bin once that hold is released.
+    A cancel or a root change sends nothing: what moved waits in the outbox
+    for the next collection's drain."""
     while queue:
         if cancel():
             return CANCELLED
@@ -1042,7 +1338,17 @@ def _batches(run: _Run, queue: list[tuple[str, str]], cancel: Callable[[], bool]
                 done += 1
                 if done >= BATCH_OBJECTS or time.monotonic() - started >= BATCH_SECONDS:
                     break
-    return COMPLETE
+        if (stop := _flush(run)) is not None:
+            return stop
+    return _flush(run) or COMPLETE
+
+
+def _flush(run: _Run) -> str | None:
+    """Send the pictures the last batch moved to the bin (`_send`)."""
+    if not run.pending:
+        return None
+    pending, run.pending = run.pending, []
+    return _send(run.root, run.report, pending, run.origin)
 
 
 def _young(run: _Run, mtimes: list[float]) -> str | None:
@@ -1054,10 +1360,12 @@ def _young(run: _Run, mtimes: list[float]) -> str | None:
 
 
 def _collect_object(run: _Run, image_id: str) -> None:
-    """One object, under its stripe: re-check, then the sidecar, then -- when
-    nothing else names it -- the blob, and best effort its index entry and
-    thumbnails. Each deletion is in the report the moment it has happened, so
-    a run stopped between two of them (a root change) never under-reports."""
+    """One object, under its stripe: re-check; skip it whole when its blob is
+    held; delete only its sidecar when another sidecar names its blob; else
+    move the blob to the outbox, THEN delete the sidecar (the move is the
+    commit), and best effort its index entry and thumbnails. Each step is in
+    the report the moment it has happened, so a run stopped between two of
+    them (a root change) never under-reports."""
     root = run.root
     with locks.image_object_lock(image_id):
         _check_root(root)
@@ -1081,37 +1389,43 @@ def _collect_object(run: _Run, image_id: str) -> None:
         if (why := _young(run, mtimes)) is not None:
             run.skip(image_id, key, why)
             return
-        freed = _delete_file(root, path)
-        run.side.drop(path)
-        _deleted(run, "objects", image_id, key, freed)
-        if run.side.keep_all_blobs():
-            run.report["kept_blobs"].append({"id": image_id, "blob": key,
-                                             "reason": "unreadable-sidecars"})
-        elif run.unarrived:
-            # A reachable object whose sidecar has not arrived may share this
-            # blob; deleting it would leave that object pointing at nothing.
-            run.report["kept_blobs"].append({"id": image_id, "blob": key,
-                                             "reason": "unarrived-objects"})
-        elif run.side.refs.get(key):
-            run.report["kept_blobs"].append({"id": image_id, "blob": key, "reason": "shared"})
+        if (hold := _orphan_hold(run.side, run.unarrived)) is not None:
+            # Deleting the sidecar would lose its description and bin nothing:
+            # the blob may be the one an unarrived or unreadable object names.
+            run.skip(image_id, key, hold)
+            return
+        if run.side.refs.get(key, set()) - {path}:
+            _delete_sidecar(run, path, image_id, key)
+            _released(run, image_id, key, "shared")
         else:
-            _delete_blob(run, image_id, obj.blob_sha256, obj.ext)
+            raw = obj.raw
+            text = None if "description_conflicts" in raw else raw.get("description")
+            name = bin_name(text if isinstance(text, str) else None, obj.blob_sha256, obj.ext)
+            moved = _move_to_outbox(root, blob, name)
+            if moved is not None:
+                run.pending.append(moved)
+                run.origin[moved] = (image_id, key)
+            _delete_sidecar(run, path, image_id, key)
+            if moved is None:
+                _released(run, image_id, key, "blob-missing")
+            _delete_thumbnails(run, obj.blob_sha256)
         _drop_index_entry(run, obj.blob_sha256, image_id)
 
 
-def _deleted(run: _Run, what: str, image_id: str | None, key: str, freed: int) -> None:
-    run.report["deleted"][what].append({"id": image_id, "blob": key, "bytes": freed})
+def _delete_sidecar(run: _Run, path: Path, image_id: str, key: str) -> None:
+    freed = _delete_file(run.root, path)
+    run.side.drop(path)
+    run.report["deleted"]["objects"].append({"id": image_id, "blob": key, "bytes": freed})
     run.report["deleted"]["bytes"] += freed
 
 
-def _delete_blob(run: _Run, image_id: str | None, sha: str, ext: str) -> None:
-    """The blob (reported once it is gone), then its thumbnails -- those even
-    when the blob was gone already, since nothing else will ask for them."""
-    blob = image_store.blob_path(sha, ext, root=run.root)
-    existed = os.path.lexists(blob)
-    freed = _delete_file(run.root, blob)
-    if existed:
-        _deleted(run, "blobs", image_id, _blob_key(sha, ext), freed)
+def _released(run: _Run, image_id: str, key: str, reason: str) -> None:
+    run.report["released"].append({"id": image_id, "blob": key, "reason": reason})
+
+
+def _delete_thumbnails(run: _Run, sha: str) -> None:
+    """A blob's thumbnails, once the blob has left the store -- or was gone
+    already, since nothing else will ask for them."""
     for thumb in blob_thumbnails(run.root, sha):
         _cache_delete(run, thumb)
 
@@ -1140,7 +1454,8 @@ def _drop_index_entry(run: _Run, sha: str, image_id: str) -> None:
 
 def _collect_blob(run: _Run, key: str) -> None:
     """One orphan blob, under the ingest/GC lock (an ingest publishing it
-    holds the same lock until its sidecar is written)."""
+    holds the same lock until its sidecar is written): to the outbox, with no
+    description, and its thumbnails deleted."""
     root = run.root
     _check_root(root)
     split = _split_key(key)
@@ -1162,4 +1477,10 @@ def _collect_blob(run: _Run, key: str) -> None:
     if (why := _young(run, [mtime])) is not None:
         run.skip(None, key, why)
         return
-    _delete_blob(run, None, sha, ext)
+    moved = _move_to_outbox(root, blob, bin_name(None, sha, ext))
+    if moved is None:
+        run.skip(None, key, "gone")
+    else:
+        run.pending.append(moved)
+        run.origin[moved] = (None, key)
+    _delete_thumbnails(run, sha)
