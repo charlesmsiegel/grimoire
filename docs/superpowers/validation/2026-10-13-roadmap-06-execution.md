@@ -245,3 +245,26 @@ Completion metadata now marks 06-C1 delivered and both slices implemented,
 reviewed and verified. Landed remains clear until merge. The user authorized
 pushing this branch and opening a PR, then stopping; the worktree is preserved
 for later review.
+
+## CI repair and Linux application run
+
+The PR's first CI run failed both backend jobs on two
+`test_serving_compression.py` bundle tests, identically on `main`: the runner
+had resolved Starlette 1.8, whose `FileResponse` listens for a disconnect while
+it streams under ASGI < 2.4, and the raw-ASGI harness reported a disconnect the
+moment the request was read. The harness now disconnects once the response has
+ended, as a client does (bounded by a timeout). The tests pass on Starlette 1.8
+and on the Android set's 0.46. No product code changed.
+
+The section 9 dry run was repeated on Linux against a scratch `GRIMOIRE_HOME`
+holding only the placeholder World Realm. The skill's Python example, copied
+verbatim, wrote Seraphine's anchor and deleted the tidewatch lore entry inside
+`collecting(embed=False, deleted=...)`: exit 0, one `cold` and one `deleted`
+path, zero tokens failed, zero embeddings sent. The skill's macOS/Linux CLI
+sync of the same two paths with `--no-embed`, and a `--verify --quiet` rerun,
+each exited 0 with the same statuses. No model request was made.
+
+A Linux `make check-py` (four workers) passed every test but
+`test_atomic.py::test_a_read_only_record_is_not_silently_replaced`, which
+cannot fail closed when the suite runs as root (a `0o444` file is writable to
+root); it is unaffected by this branch and passes on CI. Coverage was 93.63%.
