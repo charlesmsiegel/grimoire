@@ -206,3 +206,22 @@ gate). Every finding is taken; where these differ from §§1–3, these win.
 |---|---|---|
 | A | Finding 4's test also asked that "changing a withheld summary leaves the actor's candidates unchanged". Lexical and semantic scoring read 08's search documents, and a document carries its scene's summary, so an actor's query (words it heard) can match a summary's words and admit or order a scene. Keeping it out would need a second document set and a second vector cache per actor. | **Accepted as a residual, recorded in the spec.** A summary can steer which scenes an actor's retrieval looks at, never what reaches its prompt: classification still gates every slice, and a summary reaches an actor only on a whole-scene grant (S1). The rerank (which reads rendered summaries as text to grade) is skipped for actors, and the test pins that instead. Two other actors' relationship history is tested as specified |
 | A | `observed_indices` needs each post's role, for the legacy rule (no recorded presence reads from the last player post), so it takes the transcript rather than a count | **Taken.** `appearances.paths.observed_indices(cid, sid, ref, history)` |
+
+## 6. Code review dispositions
+
+Code gate: an independent adversarial reviewer over `ef71e69..HEAD`
+(substitute for the Codex CLI gate). It found no leakage path into an NPC
+prompt; every finding is taken except where noted.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Reserving the second section's share first starved `history_recall` at the 80-token floor (budget 200, depth 3: the top recalled item dropped while withheld items rendered) | **Fixed.** The first section of a pair fits as 09's did, and the second fits in what it left (`Part.spent`). Test in the floor regime (fails on the old split) |
+| 2 | An NPC capture offered grants on parts whose text the capture never showed; a keyless unaware silently covered the whole scene | **Fixed.** On an NPC's turn a part it was not given offers only unaware; a keyless unaware's button says "(whole scene)" |
+| 3 | `by_ref` was emitted but never rendered; `Known to:` showed raw refs | **Fixed.** The narrator's rows show each present ref's class per part, and every ref is shown by name |
+| 4 | Each item of the second section appeared twice in a capture, with two sets of accept buttons | **Fixed.** The classification rows ride the first section only. The repeated coverage line under both rows stays: it is the same retrieval, said once per section row |
+| 5 | The settings copy over-counted queries for a round | **Fixed:** a query per contribution, the narrator's only when it writes |
+| 6 | A momentarily unreadable scene header failed the turn through `_check_view` | **Fixed.** The strict identity read; a header that cannot be read costs the compose its history, never the turn |
+| 7 | Structural ranking for an actor still reads the chronicle's cast and location | **Accepted as a residual**, recorded beside the summary one in the spec: it ranks or admits, never renders |
+| 8 | An unstamped player post read `**You:**` under "You were there:" | **Fixed.** "The player" in an NPC's own sections; the narrator's rendering is 09's |
+| 9 | `_actor("narrator")`; `gather`/`gather_sync` have no production caller; a mis-indented keyword | `_actor` and the indent fixed. `gather`/`gather_sync` stay: the evidence-only doors 09's tests and the lock guard name, and what `gather_view` composes |
+| 10 | Tests that did not test their claims | **Fixed:** an empty view sends what recall off sends; the aside tier is dropped first under real packing pressure; an empty title leaves no `****`; an identity mismatch on the same scene is refused |

@@ -889,10 +889,10 @@ export default function ConfigView() {
               totals read incomplete until you set per-token rates for its model.
             </p>
             <p className="config-copy">
-              Each speaker recalls for itself: the narrator, and every character who speaks
-              in a round, runs its own retrieval, so with an Embedding role a round where
-              two characters speak embeds three queries. A character sees only what it was
-              present for or you marked it as knowing. Reranking adds a decision call for the
+              Each speaker recalls for itself: every contribution the narrator or a character
+              writes runs its own retrieval, so with an Embedding role a round in which two
+              characters speak embeds two queries, and three if the narrator writes too. A
+              character sees only what it was present for or you marked it as knowing. Reranking adds a decision call for the
               narrator and may cost money. The live inspector previews the narrator's structural and
               keyword recall without embedding or reranking calls.
             </p>

@@ -9,14 +9,15 @@ const create = vi.mocked(api.ledgerCreateKnowledge);
 
 const KEY = { key: "p-aaaa", part: "", variant: "", digest: "d1", shown: "s1" };
 
-function detail(keys = [KEY], perspective = "actor:characters:winifred"): EpistemicDetail {
+function detail(keys = [KEY], perspective = "actor:characters:winifred",
+                access: "witnessed" | "unknown" = "unknown"): EpistemicDetail {
   return {
     perspective, decided: 0,
     names: { "characters:winifred": "Winifred", "characters:mara": "Mara", "characters:seraphine": "Seraphine" },
     items: [{
       key: "a".repeat(32), scene: "001--pier", admitted: true, state: "unattributed", header: {},
       known_to: [], suspected_by: [],
-      slices: [{ part: "posts", posts: [0], access: "unknown", basis: ["not_recorded_present"], keys },
+      slices: [{ part: "posts", posts: [0], access, basis: ["not_recorded_present"], keys },
                { part: "summary", posts: [], access: "unknown", basis: ["summary_needs_grant"], keys: [] }],
     }],
   };
@@ -36,7 +37,7 @@ function ctx(epistemic: EpistemicDetail): SceneContext {
 test("a captured turn's part posts the user's word with the fingerprints it had then", async () => {
   create.mockClear();
   create.mockResolvedValue({} as never);
-  render(<ContextBreakdown models={[]} ctx={ctx(detail())} acceptCid="saltmarch" />);
+  render(<ContextBreakdown models={[]} ctx={ctx(detail([KEY], undefined, "witnessed"))} acceptCid="saltmarch" />);
   fireEvent.click(screen.getAllByRole("button", { name: "Mark as known" })[0]);
   expect(create).toHaveBeenCalledWith("saltmarch", {
     audience: "characters:winifred", status: "knows", scene: "001--pier",
@@ -53,7 +54,7 @@ test("a part that moved since the turn says so instead of granting", async () =>
   const moved = Object.assign(new Error("moved"),
     { kind: "moved", detail: "that post changed since it was shown" });
   create.mockRejectedValue(moved);
-  render(<ContextBreakdown models={[]} ctx={ctx(detail())} acceptCid="saltmarch" />);
+  render(<ContextBreakdown models={[]} ctx={ctx(detail([KEY], undefined, "witnessed"))} acceptCid="saltmarch" />);
   fireEvent.click(screen.getByRole("button", { name: "Mark as suspected" }));
   expect(await screen.findByText(/changed since this turn/)).toBeInTheDocument();
 });
@@ -63,8 +64,8 @@ test("a keyless part shows unkeyed and offers only unaware, with no expectation"
   create.mockResolvedValue({} as never);
   render(<ContextBreakdown models={[]} ctx={ctx(detail([{ ...KEY, key: "" }]))} acceptCid="saltmarch" />);
   expect(screen.getByText("unkeyed")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Mark as known" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Mark as unaware" }));
+  expect(screen.queryByRole("button", { name: /Mark as known/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Mark as unaware (whole scene)" }));
   expect(create.mock.calls[0][1]).toMatchObject({ status: "unaware", expect: null });
 });
 
@@ -81,4 +82,12 @@ test("the live panel offers no accept", () => {
   render(<ContextBreakdown models={[]} ctx={ctx(detail())} />);
   expect(screen.queryByRole("button", { name: /Mark as/ })).toBeNull();
   expect(screen.getByText(/Access, for Winifred/)).toBeInTheDocument();
+});
+
+test("a part an NPC was not given can only be withheld, never granted", () => {
+  // Its text was not in this turn's prompt, so the capture never showed it.
+  render(<ContextBreakdown models={[]} ctx={ctx(detail())} acceptCid="saltmarch" />);
+  expect(screen.queryByRole("button", { name: "Mark as known" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Mark as suspected" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Mark as unaware" })).toBeInTheDocument();
 });

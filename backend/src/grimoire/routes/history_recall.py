@@ -54,7 +54,7 @@ def _on(cfg):
 
 def _actor(actor_ref):
     """The NPC a step is written for, None for the narrator."""
-    return None if actor_ref in (None, "grimoire") else actor_ref
+    return None if actor_ref in (None, "grimoire", "narrator") else actor_ref
 
 
 def enabled() -> bool:

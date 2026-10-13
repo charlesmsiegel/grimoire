@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, replace
 
 from ... import prompts
 from .. import config
+from ..appearances import cast as appearances_cast
 from ..history import budget, model, query, retrieval, settings
 from ..scenes import identity as scenes_identity
 from . import archive, epistemic, layout, story
@@ -56,20 +57,51 @@ class Part:
     frame: str = budget.FRAME
     frame_vars: Mapping[str, object] = field(default_factory=dict)
     rows: Mapping[str, object] = field(default_factory=dict)
-    #: How many items the other section of the pair holds.
-    other: int = 0
+    #: Shared by the two sections of a pair: what the first one spent, for
+    #: the second to fit inside what is left. The first renders before the
+    #: second (the catalog, and `layout.COUPLED`, keep them in that order).
+    spent: dict = field(default_factory=dict, compare=False)
 
-    def cap(self, cap: int, share: int) -> int:
-        """This section's part of 09's ceiling: the second of a pair reserves
-        a share per item; the first has the rest, so with the second empty it
-        has all of it, as 09's section did."""
-        if self.id in (NARRATOR_SECTIONS[1], ACTOR_SECTIONS[1]):
-            return min(cap, share * len(self.items))
-        return cap - min(cap, share * self.other)
+    @property
+    def second(self) -> bool:
+        return self.id in (NARRATOR_SECTIONS[1], ACTOR_SECTIONS[1])
+
+    def room(self, cap: int) -> int:
+        """This section's ceiling: 09's for the first of a pair, what the
+        first left for the second -- so the second gives way first, each
+        item keeps 09's share, and the pair never spends more than 09 would."""
+        return max(0, cap - self.spent.get("first", 0)) if self.second else cap
+
+    def spend(self, tokens: int) -> None:
+        if not self.second:
+            self.spent["first"] = tokens
 
 
 def _excerpts(slices) -> tuple[model.Excerpt, ...]:
     return tuple(model.Excerpt(s.source, s.text) for s in slices if s.part == "posts" and s.text)
+
+
+#: An NPC's own sections say this for an unstamped player post: the
+#: transcript's `You` (`appearances.cast.UNSTAMPED_PLAYER_LABEL`), directly
+#: under "You were there:", would read as the NPC itself.
+ACTOR_PLAYER_LABEL = "The player"
+
+
+def _actor_excerpts(slices) -> tuple[model.Excerpt, ...]:
+    """`_excerpts` for an NPC: the same posts, an unstamped player post
+    relabelled so its speaker cannot be mistaken for the NPC."""
+    out = []
+    for s in slices:
+        if s.part != "posts" or not s.text:
+            continue
+        if any(p.speaker == appearances_cast.UNSTAMPED_PLAYER_LABEL for p in s.source):
+            posts = tuple(replace(p, speaker=ACTOR_PLAYER_LABEL)
+                          if p.speaker == appearances_cast.UNSTAMPED_PLAYER_LABEL else p
+                          for p in s.source)
+            out.append(budget._excerpt(posts))
+        else:
+            out.append(model.Excerpt(s.source, s.text))
+    return tuple(out)
 
 
 def _labels(slices) -> list[str]:
@@ -116,24 +148,23 @@ def parts(view: epistemic.EpistemicView, names: Mapping[str, str],
                     continue
                 summary = next((s for s in slices if s.part == "summary"), None)
                 item = replace(c.item, summary=summary.text if summary else "",
-                               excerpts=_excerpts(slices), evidence_ids=())
+                               excerpts=_actor_excerpts(slices), evidence_ids=())
                 out.setdefault(sid, []).append((origin, item))
                 notes.setdefault(sid, {})[item.scene.key] = {
                     "labels": _labels(slices),
                     "summary_label": summary.access if summary else ""}
         frame_vars = {"history_actor_name": actor_name}
-    result = {}
-    for sid in (first, second):
-        held = out.get(sid, [])
-        listed = view.items if sid == first else tuple(c for c, _i in held)
-        result[sid] = Part(
-            sid, tuple(i for _c, i in held), notes.get(sid, {}), FRAMES[sid], frame_vars,
-            {"perspective": detail["perspective"], "decided": detail["decided"],
-             # Who the rows' refs are, for the capture's accept to name.
-             "names": {r: names[r] for r in view.perspective.present if r in names},
-             "items": [rows[id(c)] for c in listed]},
-            other=len(out.get(second, [])) if sid == first else len(out.get(first, [])))
-    return result
+    spent: dict = {}
+    # The classification rides the first section's row alone, every item of
+    # the view in it: listing the second's items again would show each part
+    # (and its accept) twice.
+    first_rows = {"perspective": detail["perspective"], "decided": detail["decided"],
+                  # Who the rows' refs are, for the inspector and the accept.
+                  "names": {r: names[r] for r in view.perspective.present if r in names},
+                  "items": [rows[id(c)] for c in view.items]}
+    return {sid: Part(sid, tuple(i for _c, i in out.get(sid, [])), notes.get(sid, {}),
+                      FRAMES[sid], frame_vars, first_rows if sid == first else {}, spent)
+            for sid in (first, second)}
 
 
 def summary_omissions(cid: str, sid: str, archive_scan_text: str, full_recap: int = 0) -> dict[str, str]:
@@ -367,9 +398,7 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
     configured = settings.read(cfg)
     depth = evidence.depth or (configured.depth if configured else len(items))
     share = max(budget.MIN_ITEM_TOKENS, cap // max(depth, 1))
-    # Two sections split 09's one ceiling: each item keeps 09's share, and
-    # together they never spend more than 09's section would.
-    cap = min(cap, part.cap(cap, share))
+    cap = part.room(cap)
     kept: set[str] = set()
     fitted = []
     for item in items:
@@ -392,6 +421,7 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
         row["posts"] = [{"index": p.index, "key": p.key, "part": p.part,
                          "speaker": p.speaker, "text": p.text}
                         for excerpt in item.excerpts for p in excerpt.posts]
+    part.spend(count(render(frozenset(kept))) if kept else 0)
     if part.rows:
         detail["epistemic"] = dict(part.rows)
     detail["budget_from"] = ["config"]

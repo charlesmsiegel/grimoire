@@ -168,8 +168,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     read and its lock waits would buy the opener nothing. (The opener composes
     in a worker, `routes.greetings._compose_opener_call`, never on the event
     loop.)"""
-    if history_view is not None:
-        _check_view(history_view, cid, sid, actor_ref)
+    if history_view is not None and not _check_view(history_view, cid, sid, actor_ref):
+        history_view = None
     # BEST-EFFORT, not `campaign_lock`: `post_chat` appends the player's post
     # before calling this and only wires the undo that would take it back off
     # afterwards, so a `StoreBusy` raised here would strand that post with no
@@ -1805,15 +1805,25 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
 
 
 def _check_view(view: epistemic.EpistemicView, cid: str, sid: str,
-                actor_ref: str | None) -> None:
+                actor_ref: str | None) -> bool:
     """Refuse a history view built for another compose (spec 11 §6.4): another
     campaign, scene, scene identity or speaker -- narrator matching narrator.
-    A programming error, raised before anything renders, never a narrowing."""
+    A mismatch is a programming error, raised before anything renders. A scene
+    header that cannot be read just now (a synced folder mid-write) proves
+    nothing either way, so it costs the turn its history, never the turn:
+    False, and the compose goes on with none."""
     p = view.perspective
     actor_ = None if actor_ref in (None, "grimoire") else actor_ref
-    if (p.cid, p.sid, p.actor) != (cid, sid, actor_) or \
-            p.identity != scenes_identity.scene_identity(cid, sid):
+    if (p.cid, p.sid, p.actor) != (cid, sid, actor_):
         raise ValueError("history view was built for another compose")
+    try:
+        identity = scenes_identity.scene_identity_strict(cid, sid)
+    except OSError:
+        log.warning("History dropped from a compose: the scene header could not be read")
+        return False
+    if p.identity != identity:
+        raise ValueError("history view was built for another compose")
+    return True
 
 
 def _plan_block(a: dict, plan: dict | None) -> str:

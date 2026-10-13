@@ -212,15 +212,24 @@ test("the narrator's access rows name who knows and who suspects", () => {
       items: [],
       coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
       ceiling: 1200, budget_from: ["config"],
-      epistemic: { perspective: "narrator", decided: 0, items: [{
+      epistemic: { perspective: "narrator", decided: 0,
+        names: { "characters:mara": "Mara", "characters:winifred": "Winifred" },
+        items: [{
         key: "k", scene: "001--pier", admitted: true, state: "attributed",
         header: { title: "The Pier" }, known_to: ["characters:mara"],
         suspected_by: ["characters:winifred"],
-        slices: [{ part: "summary", posts: [], access: "known", basis: ["narrator"] }],
+        slices: [{ part: "posts", posts: [0, 1], access: "known", basis: ["narrator"] }],
+        by_ref: {
+          "characters:mara": { "0": ["witnessed", "presence_interval"], "1": ["witnessed", "authored"],
+                               summary: ["unknown", "summary_needs_grant"] },
+          "characters:winifred": { "0": ["unknown", "not_recorded_present"], "1": ["suspected", "override"],
+                                   summary: ["unknown", "summary_needs_grant"] },
+        },
       }] },
     },
   }] })} />);
-  for (const value of [/Access, for the narrator/, /Known to: characters:mara/,
-    /Suspected by: characters:winifred/, /Summary: known \(narrator\)/])
+  for (const value of [/Access, for the narrator/, /Known to: Mara/,
+    /Suspected by: Winifred/, /Posts 0, 1: known \(narrator\)/,
+    /Mara: witnessed; Winifred: unknown\/suspected/])
     expect(screen.getByText(value)).toBeInTheDocument();
 });

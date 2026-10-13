@@ -12,13 +12,18 @@ const LABEL: Record<KnowledgeStatus, string> = {
  *  as an `accepted` Knowledge statement. A grant sends the fingerprints the
  *  part had WHEN THIS TURN WAS COMPOSED, so the server refuses it as `moved`
  *  when the post has changed since -- the user never grants text they were
- *  not shown. A post with no key can only be marked unaware, which is stored
- *  about the whole scene (it withholds more, never less). The summary is not
- *  offered: a whole-scene grant would expose more than this turn showed.
- *  Offered on a captured turn only, never the live panel. */
-export function EpistemicAccept({ cid, item, slice, readers, names }: {
+ *  not shown. Only a part this turn's prompt carried can be granted: on an
+ *  NPC's turn a part it was not given appears here by its class alone, so it
+ *  can only be marked unaware. A post with no key can only be marked unaware
+ *  too, which is stored about the whole scene (it withholds more, never
+ *  less), and the button says so. The summary is not offered: a whole-scene
+ *  grant would expose more than this turn showed. Offered on a captured turn
+ *  only, never the live panel. */
+export function EpistemicAccept({ cid, item, slice, readers, names, shown }: {
   cid: string; item: EpistemicItem; slice: EpistemicSlice;
   readers: string[]; names: Record<string, string>;
+  /** Whether the prompt carried this part's text. */
+  shown: boolean;
 }) {
   const [who, setWho] = useState(readers[0] ?? "");
   const [note, setNote] = useState<string | null>(null);
@@ -50,9 +55,10 @@ export function EpistemicAccept({ cid, item, slice, readers, names }: {
         </select>
       ) : <span className="field-hint">{names[who] ?? who}:</span>}
       {unkeyed && <span className="chip on">unkeyed</span>}
-      {(unkeyed ? (["unaware"] as const) : (["knows", "suspects", "unaware"] as const)).map((s) => (
+      {(unkeyed || !shown ? (["unaware"] as const)
+        : (["knows", "suspects", "unaware"] as const)).map((s) => (
         <button key={s} type="button" className="subtle" onClick={() => mark(s)}>
-          {LABEL[s]}
+          {LABEL[s]}{unkeyed ? " (whole scene)" : ""}
         </button>
       ))}
       {note && <div className="field-hint">{note}</div>}

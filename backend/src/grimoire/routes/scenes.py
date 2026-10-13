@@ -1514,7 +1514,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         view = history_recall.gather_view_sync(
             request.app, cid, sid, seed="", resolved=resolved,
             llm_client=client, embed_client=embed_client, run_id=run.id,
-        identity=run.scene_identity)
+            identity=run.scene_identity)
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),

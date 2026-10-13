@@ -823,7 +823,11 @@ thing 03 refuses to cache.
   summary's words. That admits or orders a scene; it never renders one:
   classification still gates every slice, and a summary reaches an actor only
   on a whole-scene grant (S1). Keeping summaries out of an actor's scoring
-  would need a second document set and vector cache per actor.
+  would need a second document set and vector cache per actor. **The same
+  holds for structural ranking:** the `shared_cast`, `actor` and `location`
+  reasons read the chronicle's cast and location for each candidate scene,
+  which is the narrator's record. It can rank or admit a scene for an actor;
+  it never renders one.
 - **The archive and recap are the narrator's**, so an actor's
   `summary_omissions` are `{}`, and the narrator's are computed whenever the
   narrator's view has items in either of its sections.
@@ -914,22 +918,32 @@ leakage suite (section 8) adds needles that must be **absent**.
   `context/history.section`, which takes each section's frame, notes and
   share; 09's pin on the functions that carry a shed hook is unchanged, and a
   test holds each section's units to its items.
-- **Budget.** The two sections of a pair split 09's one ceiling: each item
-  keeps 09's per-item share, the second section reserves a share per item,
-  and the first has the rest, so with the second empty the first has all of
-  it, as 09's section did.
+- **Budget.** The two sections of a pair split 09's one ceiling: the first
+  (`history_recall`, or `history_known`) fits exactly as 09's section did,
+  and the second fits in what the first left. So the second gives way first
+  however small the ceiling, every item keeps 09's per-item share, and the
+  pair never spends more than 09's section would. (Amended by the code
+  review: reserving the second's share first starved the first at the
+  per-item floor.)
 - **Rendering.** An unsplit narrator slice reuses 09's own excerpt text, and
   the annotation lines go directly after the header line, so an
   `unattributed` item renders byte-identical to 09. An empty title is left
   out, and an empty header with it. Each actor slice is labelled where its
-  access changes. A section that cannot render drops alone; the turn goes on.
+  access changes, and an unstamped player post is "The player" in an
+  actor's sections rather than the transcript's `You`, which under "You
+  were there" would read as the actor itself. A section that cannot render drops alone; the turn goes on.
 - **Layout.** `layout.COUPLED` maps each new id to `history_recall`: the
   editor shows one row, each renders directly after its parent and is on
   exactly when it is, and a stored entry for a coupled id is stripped on read.
 - **Refusal.** The view's campaign, scene, identity and actor are compared
   with the compose's before anything renders. Every view on the turn path is
   built from the run's scene identity, so a pass-through never trips it.
-- **The inspector** carries each section's classification rows; an actor
+- **The capture's accept** grants only a part the turn's prompt carried:
+  on an actor's turn a part it was not given shows its class alone and can
+  only be marked unaware, and a keyless part's unaware says it covers the
+  whole scene.
+- **The inspector** carries the pair's classification rows on its first
+  section (each item once), with each present ref's per-part classes; an actor
   compose with nothing visible keeps a `history_known` row saying why. The
   live inspector composes the narrator, so it shows the narrator's
   classification; an NPC's appears in its turn's capture.

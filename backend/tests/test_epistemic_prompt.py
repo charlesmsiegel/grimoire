@@ -8,6 +8,8 @@ message, and with no view nothing renders at all.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from evals.epistemic import synth
@@ -88,6 +90,18 @@ def test_an_actor_prompt_holds_only_what_it_witnessed(stage):
     assert not rows.get("history_suspected", {}).get("text")
 
 
+def test_an_npcs_history_never_calls_the_player_you(stage):
+    # The pier's first post is an unstamped player post: `You` in the
+    # transcript, which under "You were there:" would read as Winifred.
+    synth.grant(stage["pier"], stage["win"], "Winifred", keys=(synth.key(stage["pier"], 0),))
+    _messages, detail = _compose(stage, stage["win"], _view(stage, stage["win"]))
+    text = _sections(detail)["history_known"]["text"]
+    assert BEFORE in text and "**You:**" not in text and "**The player:**" in text
+    # The narrator's rendering is 09's.
+    _messages, detail = _compose(stage, None, _view(stage, None))
+    assert "**You:**" in _sections(detail)["history_recall"]["text"]
+
+
 def test_a_whole_scene_grant_brings_the_summary_and_title_labelled(stage):
     stage["pier"].absorb(A_SUMMARY)
     synth.grant(stage["pier"], stage["win"], "Winifred")
@@ -161,6 +175,45 @@ def test_an_unattributed_item_renders_byte_identical_to_09(stage):
     assert ours == theirs and VAULT in ours
 
 
+def test_a_withheld_section_never_starves_recalled_history(stage):
+    # The floor regime: a ceiling so small that each item's share is the
+    # 80-token floor. The recalled item still fits first; the withheld ones
+    # get what is left, and give way.
+    synth.grant(stage["vault"], stage["mara"], "Mara", "unaware")
+    extra = synth.Stage(stage["cid"], "The Crypt")
+    extra.say("Seraphine buries a second VAULTNEEDLE.")
+    synth.grant(extra, stage["mara"], "Mara", "unaware")
+    items = (*stage["items"], extra.item())
+    config.write_config(history_recall_budget="200")
+    view = synth.for_compose(stage["cid"], stage["now"].sid, None, items, ceiling=200)
+    _messages, detail = _compose(stage, None, view)
+    rows = _sections(detail)
+    assert SHARED in rows["history_recall"]["text"]
+    spent = sum(tokens.count_tokens(rows[k]["text"]) for k in history_section.NARRATOR_SECTIONS
+                if k in rows)
+    assert spent <= 200
+
+
+def test_the_aside_tier_is_dropped_before_recalled_history_under_pressure():
+    big = {"id": "history_known", "label": "k", "text": "known " * 60,
+           "tier": packer.HISTORY_RECALL}
+    small = {"id": "history_suspected", "label": "s", "text": "suspected " * 10,
+             "tier": packer.HISTORY_ASIDE}
+    result = packer.pack([big, small], [], budget=len(big["text"]) + 2, count=len)
+    by_id = {s["id"]: s for s in result["sections"]}
+    # Smaller, and still first to go: the tier decides, not the size.
+    assert by_id["history_suspected"]["dropped"] and not by_id["history_known"]["dropped"]
+
+
+def test_an_empty_title_leaves_no_empty_bold():
+    from grimoire.store.history import budget
+    item = model.EvidenceItem(model.SceneRef("", "a" * 32), "", date="Day 3",
+                              excerpts=(model.Excerpt((), "Mara: hello"),))
+    rendered = budget.render_item(item)
+    assert "****" not in rendered and rendered.startswith("Day 3")
+    assert budget.render_item(replace(item, date="")).startswith("Mara: hello")
+
+
 def test_the_two_narrator_sections_split_one_ceiling(stage):
     synth.grant(stage["vault"], stage["mara"], "Mara", "unaware")
     config.write_config(history_recall_budget="200")
@@ -173,6 +226,23 @@ def test_the_two_narrator_sections_split_one_ceiling(stage):
 
 
 # ------------------------------------------------------------ refusals
+
+
+def test_a_view_for_another_identity_of_the_same_scene_is_refused(stage):
+    view = _view(stage, None)
+    stale = replace(view, perspective=replace(view.perspective, identity="f" * 32))
+    with pytest.raises(ValueError):
+        _compose(stage, None, stale)
+
+
+def test_an_unreadable_scene_header_costs_the_history_not_the_turn(stage, monkeypatch):
+    from grimoire.store.scenes import identity as scenes_identity
+
+    def unreadable(*_a):
+        raise scenes_identity.UnreadableError("mid-sync")
+    monkeypatch.setattr(scenes_identity, "scene_identity_strict", unreadable)
+    messages, detail = _compose(stage, None, _view(stage, None))
+    assert SHARED not in str(messages) and not _sections(detail)
 
 
 def test_a_view_for_another_reader_is_refused(stage):
@@ -200,10 +270,15 @@ def test_the_basis_never_reaches_the_prompt(stage):
 # ------------------------------------------------------------ off and layout
 
 
-def test_depth_on_with_no_view_is_byte_identical_to_depth_off(stage):
-    on = assemble.compose_turn(stage["cid"], stage["now"].sid, actor_ref=stage["win"])
+@pytest.mark.parametrize("actor", [None, "win"])
+def test_an_empty_view_sends_what_depth_off_sends(stage, actor):
+    # Depth on and a view with nothing in it: every history section is empty,
+    # so the messages are the ones recall off composes (the inspector still
+    # keeps its row, which is detail and never sent).
+    ref = stage[actor] if actor else None
+    on, _detail = _compose(stage, ref, _view(stage, ref, ()))
     config.write_config(history_recall_depth="0")
-    off = assemble.compose_turn(stage["cid"], stage["now"].sid, actor_ref=stage["win"])
+    off, _detail = assemble.compose_turn(stage["cid"], stage["now"].sid, actor_ref=ref)
     assert on == off
 
 

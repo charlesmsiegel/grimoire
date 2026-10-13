@@ -2,7 +2,7 @@ import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
 import { EpistemicAccept } from "./EpistemicAccept";
 import { SamplingSummary } from "./SamplingSummary";
-import { type ContextSection, type EpistemicDetail } from "../api/types";
+import { type ContextSection, type EpistemicDetail, type EpistemicItem, type EpistemicSlice } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
 import { promptFieldWarning } from "./promptFieldWarning";
 
@@ -192,30 +192,46 @@ export function contextPercent(ctx: SceneContext, models: Model[]): number {
 function EpistemicRows({ detail, acceptCid }: { detail: EpistemicDetail; acceptCid?: string }) {
   const actor = detail.perspective === "narrator" ? null : detail.perspective.replace(/^actor:/, "");
   const names = detail.names ?? {};
-  const reader = actor === null ? "the narrator" : names[actor] ?? actor;
+  const named = (ref: string) => names[ref] ?? ref;
+  const reader = actor === null ? "the narrator" : named(actor);
   // Who a part can be marked for: the NPC the turn was written for, or for
   // the narrator's turn, any character on stage.
   const readers = (actor === null ? Object.keys(names) : [actor])
     .filter((r) => r.startsWith("characters:"));
+  // Each classified ref's own class of a part: per post, the class it has
+  // for each of the slice's posts; the summary, its whole-scene class.
+  const classesOf = (item: EpistemicItem, slice: EpistemicSlice) =>
+    Object.entries(item.by_ref ?? {}).map(([ref, parts]) => {
+      const found = slice.part === "summary" ? [parts.summary]
+        : slice.posts.map((i) => parts[String(i)]);
+      const access = [...new Set(found.filter(Boolean).map(([a]) => a))];
+      return access.length ? `${named(ref)}: ${access.join("/")}` : "";
+    }).filter(Boolean);
   return <>
     <div className="field-hint">Access, for {reader}:</div>
     <ul className="ctx-entries">
       {detail.items.map((item) => <li key={`${item.key}:${item.scene}:${item.slices.map((x) => x.posts.join(".")).join("/")}`}>
         {item.header.title ? <span className="chip on">{item.header.title}</span> : <span className="chip on">{item.scene || item.key}</span>}{" "}
         {item.state}{!item.admitted && "; dropped"}
-        {item.known_to.length > 0 && <div className="field-hint">Known to: {item.known_to.join(", ")}</div>}
-        {item.suspected_by.length > 0 && <div className="field-hint">Suspected by: {item.suspected_by.join(", ")}</div>}
+        {item.known_to.length > 0 && <div className="field-hint">Known to: {item.known_to.map(named).join(", ")}</div>}
+        {item.suspected_by.length > 0 && <div className="field-hint">Suspected by: {item.suspected_by.map(named).join(", ")}</div>}
         {item.slices.map((slice) => <div key={`${slice.part}:${slice.posts.join(",")}`}>
           <div className="field-hint">
             {slice.part === "summary" ? "Summary" : `Posts ${slice.posts.join(", ")}`}: {slice.access} ({slice.basis.join(", ")})
           </div>
+          {actor === null && classesOf(item, slice).length > 0 && (
+            <div className="field-hint">{classesOf(item, slice).join("; ")}</div>)}
           {acceptCid && <EpistemicAccept cid={acceptCid} item={item} slice={slice}
-                                         readers={readers} names={names} />}
+                                         readers={readers} names={names}
+                                         shown={VISIBLE.has(slice.access)} />}
         </div>)}
       </li>)}
     </ul>
   </>;
 }
+
+/** The classes whose text a prompt carries (spec 11 §3.3). */
+const VISIBLE = new Set(["witnessed", "known", "suspected"]);
 
 /** Historical reasons are kept beside the sent text, including scenes shed by packing. */
 function HistoryEntries({ section, acceptCid }: { section: ContextSection; acceptCid?: string }) {
