@@ -357,3 +357,20 @@ tiers, and found them sound apart from these:
   and the cut files an error row rather than `aborted`. Section 10.2 and its
   acceptance test ask for the memo on a stalled endpoint; telling "stalled"
   from "slow" is a design call recorded on the PR rather than made here.
+
+**Acceptance runs.** The offline matrix (`--history`, inside `pytest
+backend`) and the opt-in long matrix (`--history --long`, archives past the
+64-document pool and the 1000-document bound) both pass section 12.5's
+ordering on the recorded synthetic vectors: `hybrid` at or above every arm on
+recall at 3 and strictly above `context-only` and `lexical`, every rule case
+passing in every arm, and the packed section within its ceiling. These are
+synthetic scoring fixtures, not a provider-quality claim. The live arm
+(`--history --live`) needs a configured Embedding and Decision role and was
+not run here.
+
+An isolated end-to-end check (scratch store, mocked provider, cassette
+replies) drove a narrator turn with recall on and off: on, the sent prompt
+carried "Earlier in the campaign" with the earlier scene's header, summary
+and excerpt lines and no signal or rank text, the prompt-log capture carried
+the history row, and the live inspector sent no request; off, the prompt was
+unchanged. It also caught a missing space in the Settings copy, fixed.
