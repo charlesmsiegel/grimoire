@@ -2505,14 +2505,19 @@ def _purge_local_files(root: Path, token: str, current: _Session | None = None) 
     return done
 
 
-def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> None:
-    """Publish durable erasure work, then attempt owned in-place purges."""
+def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> bool:
+    """Publish durable erasure work, then attempt owned in-place purges.
+    True once the marker is published -- every device purges at its next open
+    from then on -- and False when it could not be, so a caller that reports
+    the purge (spec 05's sync) never claims one that was not requested."""
     _process_state()
+    published_marker = False
     try:
         root = Path(root)
         token = _publish_marker(root)
         if token is None:
-            return
+            return False
+        published_marker = True
         if _state.lock.acquire(blocking=False):
             try:
                 _purge_local_files(root, token)
@@ -2531,6 +2536,7 @@ def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> None:
                 with contextlib.suppress(*_CACHE_ERRORS):
                     _state.finished_intents.append(intent)
             _release_finished_intents()
+    return published_marker
 
 
 def _recover_pending(root: Path, current: _Session | None = None) -> bool:

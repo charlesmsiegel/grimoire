@@ -598,14 +598,19 @@ def _history(campaign: str, candidate: dict, text: str) -> dict:
 
 def _save_warmed(cfg: dict, cands: list[dict], texts: list[str], missing: list[str],
                  got: list[list[float]], known: dict, campaign: str) -> None:
-    """Save this turn's warm run, each vector with the history of the first
-    candidate (one with an image object) that has its text."""
-    first: dict[str, dict] = {}
+    """Save this turn's warm run: one vector per text, with a history row for
+    every distinct image object whose description it is, so an edit to any
+    of them finds it was embedded. A consumer with nothing to record does not
+    write the vector again."""
+    consumers: dict[str, dict[str, dict]] = {}
     for cand, text in zip(cands, texts, strict=True):
-        if cand.get("image_id"):
-            first.setdefault(text, cand)
+        if isinstance(image_id := cand.get("image_id"), str) and image_id:
+            consumers.setdefault(text, {}).setdefault(image_id, cand)
     for text, raw in zip(missing, got, strict=False):
-        vectors.save(cfg["space"], text, raw, **_history(campaign, first.get(text, {}), text))
+        for n, cand in enumerate(list(consumers.get(text, {}).values()) or [{}]):
+            history = _history(campaign, cand, text)
+            if n == 0 or history:
+                vectors.save(cfg["space"], text, raw, **history)
         fresh = vectors.unit(raw)
         if fresh is not None:
             known[text] = fresh

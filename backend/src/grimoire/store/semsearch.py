@@ -132,6 +132,13 @@ def projection_texts(path, data: bytes, instance: object) -> list[str] | None:
     return document_texts(path, data)
 
 
+#: The most documents one passage's vector records history for. Each costs a
+#: read of its file when the vector is saved, and a passage repeated across a
+#: whole library (boilerplate) would otherwise cost a read per copy; a copy
+#: past the bound is warmed lazily, as before spec 05.
+MAX_CONSUMERS = 8
+
+
 def _history(source: tuple | None, text: str) -> dict:
     """What `vectors.save` records beside a passage vector: the document's
     file and the passage's position, when the file still yields this text
@@ -371,8 +378,7 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     # so a vector that failed to save (read-only store, full disk) is simply
     # not counted as indexed rather than scored from memory this once and
     # missing on the next query.
-    for text, raw in zip(missing, got[1:]):
-        vectors.save(space, text, raw, **_history(sources.get(text), text))
+    _save_passages(space, missing, got[1:], sources)
     del missing, got, sources
 
     matched: list[dict] = []
@@ -406,6 +412,20 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
             "indexed": indexed, "corpus": len(counted)}
 
 
+def _save_passages(space: str, missing: list[str], vectors_got: list[list[float]],
+                   sources: dict[str, list[tuple]]) -> None:
+    """One vector per passage, and a history row for each document that holds
+    it (up to `MAX_CONSUMERS`), so an edit to any of them finds it was
+    embedded (spec 05). A consumer with nothing to record does not write the
+    vector again."""
+    for text, raw in zip(missing, vectors_got):
+        consumers: list[tuple | None] = [*sources.get(text, [])] or [None]
+        for n, source in enumerate(consumers):
+            history = _history(source, text)
+            if n == 0 or history:
+                vectors.save(space, text, raw, **history)
+
+
 def _uncached(space: str, records: Iterator[dict]) -> tuple[list[str], int, dict]:
     """The corpus's passages that have no vector yet, in walk order, deduped,
     how many of the deduped passages do (the capture line's hits), and where
@@ -419,19 +439,21 @@ def _uncached(space: str, records: Iterator[dict]) -> tuple[list[str], int, dict
     """
     seen: set[bytes] = set()
     out: list[str] = []
-    sources: dict[str, tuple] = {}
+    sources: dict[str, list[tuple]] = {}
     for rec in records:
         cached = vectors.load(space, rec["texts"])
         source = rec["doc"].get("source")
         for unit, text in enumerate(rec["texts"]):
             key = _key(text)
-            if key in seen:
-                continue
-            seen.add(key)
-            if text not in cached:
+            if key not in seen:
+                seen.add(key)
+                if text in cached:
+                    continue
                 out.append(text)
-                if source is not None:
-                    sources[text] = (source, unit)
+            elif text not in sources:
+                continue                  # held, or a composite document's: no row to add
+            if source is not None and len(held := sources.setdefault(text, [])) < MAX_CONSUMERS:
+                held.append((source, unit))
     return out, len(seen) - len(out), sources
 
 

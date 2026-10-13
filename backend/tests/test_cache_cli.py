@@ -137,7 +137,7 @@ def test_a_read_that_refreshed_sources_does_not_hide_a_stale_built_from(home, up
 
 def test_a_missing_scope_is_not_found_and_purges_nothing(home, monkeypatch):
     purges = []
-    monkeypatch.setattr(compiled, "purge_for_delete", purges.append)
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: purges.append(root) or True)
     report = cache_sync.run(campaigns=["mara-typo"], worlds=["../realm"])
     assert {(p.given, p.reason) for p in report.paths} == {
         ("campaigns/mara-typo", "not_found"), ("../realm", "bad_id")}
@@ -165,7 +165,7 @@ def test_a_scoped_campaign_bumps_its_token_even_when_everything_is_cold(home):
 
 def test_a_deleted_campaign_root_purges_and_a_plain_path_does_not(home, monkeypatch):
     purges = []
-    monkeypatch.setattr(compiled, "purge_for_delete", purges.append)
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: purges.append(root) or True)
     report = cache_sync.run(["campaigns/winifred"])
     assert [p.status for p in report.paths] == ["missing"] and purges == []
     report = cache_sync.run(campaigns=["winifred"])
@@ -176,7 +176,7 @@ def test_a_deleted_campaign_root_purges_and_a_plain_path_does_not(home, monkeypa
 
 def test_a_deleted_file_does_not_purge_and_a_dry_run_never_does(home, monkeypatch):
     purges = []
-    monkeypatch.setattr(compiled, "purge_for_delete", purges.append)
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: purges.append(root) or True)
     cache_sync.run(deleted=["campaigns/saltmarch/gone.json"])
     cache_sync.run(deleted=["worlds/vanished"], dry_run=True)
     assert purges == []
@@ -295,7 +295,7 @@ def test_collecting_is_isolated_from_an_enclosing_scope(home):
 
 def test_a_stated_rename_of_a_root_never_purges(home, monkeypatch):
     purges = []
-    monkeypatch.setattr(compiled, "purge_for_delete", purges.append)
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: purges.append(root) or True)
     (home / "campaigns" / "saltmarch").mkdir(parents=True, exist_ok=True)
     (home / "campaigns" / "saltmarch").rename(home / "campaigns" / "moved")
     report = cache_sync.run(renamed={"campaigns/saltmarch": "campaigns/moved"})
@@ -396,7 +396,7 @@ def test_a_root_purge_runs_before_any_rebuild_and_leaves_nothing_hot(home, upper
     _read(home, upper, "worlds/realm/lore/pact.md")
     _write(home, "worlds/realm/lore/pact.md", "edited")
     order = []
-    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: order.append("purge"))
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: order.append("purge") or True)
     monkeypatch.setattr(cache_sync, "_run_hooks", lambda *a, **k: order.append("rebuild"))
     report = cache_sync.run(["worlds/realm/lore/pact.md"], deleted=["campaigns/winifred"])
     assert order == ["purge"] and report.purged is True
@@ -433,3 +433,10 @@ def test_a_scoped_verify_rebuilds_paths_the_listing_proved_current(home, upper, 
     report = cache_sync.run(worlds=["realm"], verify=True)
     assert "current.md" in reads                      # through its hook, not trusted from stamps
     assert _by_path(report)["worlds/realm/lore/current.md"].kinds and report.ok
+
+
+def test_a_purge_that_could_not_be_published_fails_the_sync(home, monkeypatch):
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: False)
+    report = cache_sync.run(deleted=["campaigns/winifred"])
+    assert report.purged is False and not report.ok
+    assert [p.status for p in report.paths] == ["failed"]

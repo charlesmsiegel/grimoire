@@ -206,3 +206,15 @@ Substitute reviews, recorded in the PR; `@codex review` on the PR.
   `LANE_POLL_S`.
 - `--verify` with a scope sends the paths the listing proved `current`
   through their hooks too.
+
+## Codex review, sixth round
+
+- Every distinct selector counts against `MAX_PATHS`, a refused or missing one
+  too, so the report is bounded whatever was sent.
+- Library search and the art catalog record history for every consumer of a
+  text, as recall does (search keeps at most `semsearch.MAX_CONSUMERS`
+  documents per passage, since each costs a read of its file at save time).
+- `compiled.purge_for_delete` returns whether the purge marker was published;
+  a sync whose purge was not is not `ok`, and its deleted roots are `failed`.
+- A reply that lands after the root moved is dropped before any save, since
+  `vectors.save` resolves the root again; its rows stay `unsynced`.

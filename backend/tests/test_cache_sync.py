@@ -588,3 +588,11 @@ def test_an_explicit_batch_waiting_for_the_lane_hears_a_cancel(home, upper):
     finally:
         cache_sync._lane.release()
     assert out[0].stopped == "cancelled" and not out[0].ok
+
+
+def test_refused_and_missing_selectors_count_toward_the_bound(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    names = [f"worlds/realm/lore/gone{n}.md" for n in range(50)] + ["logs/x.jsonl"] * 3
+    report = cache_sync.sync_paths(names, mode="explicit")
+    assert [p.reason for p in report.paths].count("too_many") == 1
+    assert len(report.paths) == 3 and report.truncated and not report.ok

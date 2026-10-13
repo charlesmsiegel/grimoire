@@ -572,23 +572,38 @@ class _VectorsHook:
             for group in embed.attribute(claims):
                 for start in range(0, len(group.texts), embeddings.BATCH):
                     chunk = list(group.texts[start:start + embeddings.BATCH])
-                    if failure or ctx.halted():
-                        # Unsent: a failure names its kind on every row it
-                        # stopped; a stop leaves them `planned`, which the
-                        # batch reports `unsynced`.
-                        result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
-                        if failure:
-                            self._settle(result, plan, chunk, f"failed:{failure}")
-                        continue
-                    chunk = self._arrived(space["space"], chunk, plan, result)
+                    chunk = self._ready(ctx, space["space"], chunk, plan, result, failure)
                     if chunk:
                         got, went = _embed_chunk(task, embed.EmbedGroup(group.campaign, texts=tuple(chunk)),
                                                  space)
-                        failure = self._landed(space["space"], chunk, got, went, plan, result)
-        result.failure = failure
+                        failure = self._after(ctx, space["space"], chunk, got, went, plan, result)
+        result.failure = "" if failure == _MOVED else failure
         if ctx.verify:
             self._verify(space["space"], plan, result)
         return result
+
+    def _ready(self, ctx: WarmContext, space_id: str, chunk: list[str], plan: dict[str, _Wanted],
+               result: NetworkResult, failure: str) -> list[str]:
+        """The part of one chunk to send: nothing after a failure or a stop
+        (counted unsent -- a failure names its kind on every row it stopped,
+        a stop leaves them `planned`, which the batch reports `unsynced`), and
+        never a text that arrived meanwhile."""
+        if failure or ctx.halted():
+            result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
+            if failure and failure != _MOVED:
+                self._settle(result, plan, chunk, f"failed:{failure}")
+            return []
+        return self._arrived(space_id, chunk, plan, result)
+
+    def _after(self, ctx: WarmContext, space_id: str, chunk: list[str], got: embed.GroupResult,
+               went: bool, plan: dict[str, _Wanted], result: NetworkResult) -> str:
+        """A sent chunk's reply. The root may have moved while the request was
+        out: `vectors.save` resolves the root again, so a reply saved now
+        would land in the other library. Dropped; its rows stay `planned`,
+        so `unsynced`. Returns the failure that stops the rest, or ""."""
+        if _root_moved(ctx.root):
+            return _MOVED
+        return self._landed(space_id, chunk, got, went, plan, result)
 
     @staticmethod
     def _role_moved(ctx: WarmContext) -> bool:
@@ -669,6 +684,14 @@ class _VectorsHook:
                 key = (rel, kind)
                 result.outcomes[key] = _worse(result.outcomes.get(key), outcome) \
                     if key in result.outcomes else outcome
+
+
+#: The network phase's own stop: the root moved under an in-flight request.
+_MOVED = "root_moved"
+
+
+def _root_moved(root: Path) -> bool:
+    return _norm(os.path.abspath(paths.home())) != _norm(os.path.abspath(root))
 
 
 def _embed_chunk(task: str, group: embed.EmbedGroup, space: dict) -> tuple[embed.GroupResult, bool]:
@@ -1201,11 +1224,11 @@ class _Collector:
             return
         checked = _check(root, new)
         if checked.reason is not None:
-            self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
+            self.accepted += self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
         elif checked.kind == "absent":
-            self.add(PathReport(checked.given, "missing", rel=checked.rel))
+            self.accepted += self.add(PathReport(checked.given, "missing", rel=checked.rel))
         elif checked.kind != "file":
-            self.add(PathReport(checked.given, "refused", "not_a_file", rel=checked.rel))
+            self.accepted += self.add(PathReport(checked.given, "refused", "not_a_file", rel=checked.rel))
         else:
             self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel,
                                                  renamed_from=self.items[before].rel if gone else None))
@@ -1220,13 +1243,15 @@ class _Collector:
             self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
     def argument(self, root: Path, given: str) -> None:
+        # Every distinct selector counts against `MAX_PATHS` -- a refused or
+        # missing one too -- so the report is bounded whatever was sent.
         checked = _check(root, given)
         if self.repeats(checked) or self.full(given):
             return
         if checked.reason is not None:
-            self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
+            self.accepted += self.add(PathReport(checked.given, "refused", checked.reason, rel=checked.rel))
         elif checked.kind == "absent":
-            self.add(PathReport(checked.given, "missing", rel=checked.rel))
+            self.accepted += self.add(PathReport(checked.given, "missing", rel=checked.rel))
         elif checked.kind == "dir" and checked.rel is not None:
             walk = _expand(root, checked.rel, MAX_PATHS - self.accepted, skip=self.seen)
             for rel in walk.files:
@@ -1329,8 +1354,10 @@ def _purge_roots(root: Path, report: SyncReport, stop: Callable[[], bool]) -> No
         report.stopped = report.stopped or halt
         report.purged = False
         return
-    compiled.purge_for_delete(root)
-    report.purged = True
+    report.purged = compiled.purge_for_delete(root)
+    if not report.purged:                 # the request was never published: not done
+        for item in named:
+            item.status = "failed"
 
 
 def _bump(root: Path, report: SyncReport) -> None:

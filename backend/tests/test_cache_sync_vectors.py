@@ -103,6 +103,18 @@ def _rel(home, path):
     return path.relative_to(home).as_posix()
 
 
+def _png(rgb: bytes) -> bytes:
+    """A 1x1 PNG of one colour: distinct pixels, so a distinct image object."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\x00" + rgb)) + chunk(b"IEND", b""))
+
+
 def _docs(fake_client):
     """Every document text the endpoint was sent (queries dropped)."""
     out = []
@@ -735,3 +747,61 @@ def test_a_world_record_moved_into_a_campaign_is_warmed_for_that_campaign(home, 
     [row] = _rows_at(home, new_path)                  # both readers' rows coalesce into one
     assert json.loads(row.instance) == {"campaign": cid, "entity": ["lore", eid]}
     assert report.embedding["held"] == 1 and report.ok
+
+
+def test_every_document_holding_a_passage_records_its_own_history(home, fake):
+    _configure()
+    wid, _cid = _realm()
+    paths = [_lore(home, wid, name="Pact", body="The pact binds the coast.")[1] for _ in range(2)]
+    texts = [semsearch.document_texts(p, p.read_bytes()) for p in paths]
+    [shared] = sorted(set(texts[0]) & set(texts[1]))     # the same passage in both documents
+    _missing, _hits, sources = semsearch._uncached(_space(), semsearch._records("world", wid))
+    assert sorted(path for path, _unit in sources[shared]) == sorted(paths)
+    semsearch._save_passages(_space(), [shared], [[1.0, 0.0]], sources)
+    for path, units in zip(paths, texts, strict=True):
+        recorded = {json.loads(r.instance)["unit"] for r in _rows_at(home, path)
+                    if semsearch.PROJECTION in r.kind}
+        assert units.index(shared) in recorded
+
+
+def test_every_image_object_sharing_a_description_records_its_own_history(home):
+    from grimoire.store import campaign_images, image_descriptions
+
+    _configure()
+    _wid, cid = _realm()
+    for name, colour in (("coastline", b"\x00\x00\x00"), ("harbour", b"\xff\xff\xff")):
+        campaign_images.put_image(cid, name, _png(colour), "png")
+        image_descriptions.set_in(campaign_images.images_dir(cid), name,
+                                  "A hand-drawn map of the northern coastline.")
+    cands = art._library_candidates(cid)
+    assert len({c["image_id"] for c in cands}) == 2
+    texts = [art.embed_space.clip(c["description"], art.DOC_BYTES) for c in cands]
+    assert len(set(texts)) == 1
+    art._save_warmed({"space": _space()}, cands, texts, texts[:1], [[1.0, 0.0]], {}, cid)
+    from grimoire.store import image_store
+    for cand in cands:
+        assert _rows_at(home, image_store.object_path(cand["image_id"]))
+
+
+def test_a_reply_that_lands_after_the_root_moved_is_never_saved(home, fake, monkeypatch, tmp_path):
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited before a move.")
+    text = semantic.record_text(eid, path.read_bytes())
+    space = _space()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    real = cache_sync._embed_chunk
+
+    def moved_meanwhile(*args, **kwargs):
+        got = real(*args, **kwargs)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(elsewhere))
+        return got
+
+    monkeypatch.setattr(cache_sync, "_embed_chunk", moved_meanwhile)
+    report = cache_sync.sync_paths([_rel(home, path)], mode="explicit", root=home)
+    assert report.stopped == "root_moved" and not report.ok
+    assert report.paths[0].status == "unsynced"
+    assert not vectors.load(space, [text])            # nothing landed in the other library
