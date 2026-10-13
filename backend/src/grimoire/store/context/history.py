@@ -153,11 +153,18 @@ def _marked_item(item: model.EvidenceItem) -> str:
     return budget.render_item(marked)
 
 
-def _unmark(block: str) -> tuple[str, dict[str, tuple[int, int]]]:
-    """Expanded markers become offsets in the exact frozen, unmarked block."""
+def _unmark(block: str) -> tuple[str, dict[str, tuple[int, int]] | None]:
+    """Expanded markers become offsets in the exact frozen, unmarked block.
+
+    None when a marker lost its partner: a `{{` in one part closed by a `}}`
+    in a later one (another post, an excerpt, or the summary after a title) is
+    one macro to the expander, which rewrites the text between -- markers
+    included. The posts it covered can no longer be named, so the item cannot
+    be frozen as evidence; the caller drops it rather than guess."""
     out, cursor, length = [], 0, 0
-    starts = {}
-    spans = {}
+    starts: dict[str, int] = {}
+    spans: dict[str, tuple[int, int]] = {}
+    broken = False
     for match in _SPAN.finditer(block):
         piece = block[cursor:match.start()]
         out.append(piece)
@@ -165,11 +172,13 @@ def _unmark(block: str) -> tuple[str, dict[str, tuple[int, int]]]:
         name, edge = match.groups()
         if edge == "s":
             starts[name] = length
+        elif name in starts:
+            spans[name] = (starts.pop(name), length)
         else:
-            spans[name] = (starts[name], length)
+            broken = True
         cursor = match.end()
     out.append(block[cursor:])
-    return "".join(out), spans
+    return "".join(out), (None if broken or starts else spans)
 
 
 def _retained(item: model.EvidenceItem, original: str, fitted: str,
@@ -225,8 +234,10 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
         def fits(text, key=key):
             blocks[key] = text
             return count(text) <= share and count(render(frozenset(kept | {key}))) <= cap
-        block = _fit_block(original, fits, boundaries[key]) if cap >= budget.MIN_ITEM_TOKENS else ""
-        retained, block = _retained(item, original, block, spans[key]) if block else (item, "")
+        marks = spans[key]
+        usable = cap >= budget.MIN_ITEM_TOKENS and marks is not None
+        block = _fit_block(original, fits, boundaries[key]) if usable else ""
+        retained, block = _retained(item, original, block, marks) if block and marks else (item, "")
         if block and (retained.excerpts or (retained.summary and not retained.summary_omission)) and fits(block):
             kept.add(key)
             fitted.append(replace(retained, tokens=count(block)))

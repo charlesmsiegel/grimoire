@@ -383,3 +383,29 @@ def test_world_info_and_history_are_the_only_shedding_sections():
                     found.add((path.stem, fn.name))
     assert found == {("assemble", "_world_info_section"), ("history", "section")}, found
     assert packer.DROP_ORDER[0] == packer.HISTORY_RECALL
+
+
+@pytest.mark.parametrize("opening, closing", [("She typed {{ name", "and then }} laughed."),
+                                              ("She typed {{random:a,b", "and then }} laughed.")])
+def test_a_macro_spanning_two_posts_drops_that_item_not_the_turn(cid, opening, closing):
+    """Each part of an item is marked before the block expands whole, so a
+    `{{` in one post closed by a `}}` in the next is one macro to the
+    expander and swallows the markers between. That item can no longer name
+    its posts and is dropped; the other recalled scene and the turn stand."""
+    sid = played(cid)
+    posts = (model.EvidencePost(3, "p-3", None, "Mara", opening),
+             model.EvidencePost(4, "p-4", None, "Seraphine", closing))
+    text = prompts.render("snippets/transcript.j2", messages=[
+        {"role": "assistant", "speaker": p.speaker, "content": p.text} for p in posts])
+    spanning = model.EvidenceItem(model.SceneRef("001--saltmarch", None), "Saltmarch", "", "",
+                                  "", (model.Excerpt(posts, text),))
+    _messages, detail = assemble.compose_turn(
+        cid, sid, history=evidence(spanning, item("002--realm", text="Mara kept the ledger.")))
+    got = row(detail)
+    scenes_kept = [i["scene"] for i in got["history"]["items"]]
+    assert "002--realm" in scenes_kept and "Mara kept the ledger." in got["text"]
+    if "{{random" not in opening:
+        assert scenes_kept == ["002--realm"] and "laughed" not in got["text"]
+    # A draw that keeps the option carrying every marker leaves an intact item;
+    # any other draw drops it. Neither raises.
+    assert assemble.context_breakdown(cid, sid)

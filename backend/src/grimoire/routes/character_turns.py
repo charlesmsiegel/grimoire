@@ -1593,6 +1593,9 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
     """
     if not enabled or actor != "grimoire" or turn.appended or turn.continuation:
         return None
+    # Off reads nothing past the config: no replay peek, no transcript.
+    if not await run_in_threadpool(history_recall.enabled):
+        return None
     if await run_in_threadpool(_history_replays, cid, sid, turn.round_record):
         return None
     rid = turn.round_record["id"]

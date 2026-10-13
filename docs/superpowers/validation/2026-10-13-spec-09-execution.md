@@ -333,3 +333,27 @@ Kept as they are, with reasons:
 - The Windows missing-`ctypes` failure (`test_compiled.py`, through
   `recycle_bin.py`) is on clean `main` and is not this branch's; it is left
   to its own change.
+
+**Adversarial review of the whole diff.** An independent review probed the
+turn paths, locks, prompt leaks, freezing, budget, semantic publication and
+tiers, and found them sound apart from these:
+
+- Fixed: a `{{` in one recalled post closed by a `}}` in a later part is one
+  macro to the block expander, which swallowed the span markers between and
+  raised `KeyError` in compose — on legacy `post_chat`, after the player's
+  post was appended. An item whose markers lost a partner is now dropped
+  (its posts can no longer be named), and the section call in compose is
+  guarded so recalled history can never fail a turn. Reproduced first.
+- Fixed: with recall off, the round driver still peeked at the pending
+  response and read the transcript before `gather` read the settings; it now
+  asks `history_recall.enabled()` first.
+- Not built: `gather_sync` blocks a threadpool worker on the portal while
+  `gather` needs threadpool tokens itself, so about forty concurrent turns
+  could starve the pool. A single-user app does not reach that; a bounded
+  wait is the fix if it ever does.
+- Open for the user: the phase deadline (4 s, which includes the file
+  stages and a warm of up to 63 documents) cutting a slow but healthy
+  endpoint sets the shared outage memo, so lore recall backs off for 60 s,
+  and the cut files an error row rather than `aborted`. Section 10.2 and its
+  acceptance test ask for the memo on a stalled endpoint; telling "stalled"
+  from "slow" is a design call recorded on the PR rather than made here.

@@ -1317,8 +1317,12 @@ def _expanded_section(section: Section, data: dict, body: str, head: str, lore: 
     `_world_info_section`. Recalled lore is expanded whole, as
     every other section is, and only gains its inspector detail."""
     if section.id == "history_recall" and recalled_history is not None:
-        return history_section.section(recalled_history, expand, tokens.count_tokens,
-                                       history_omissions or {}, config.read_config())
+        try:
+            return history_section.section(recalled_history, expand, tokens.count_tokens,
+                                           history_omissions or {}, config.read_config())
+        except Exception:  # noqa: BLE001 -- recalled history is additive; it never costs the turn
+            log.warning("Recalled history dropped from a compose: it could not be rendered")
+            return "", {}
     if lore is not None and section.id == _WORLD_INFO_SECTION:
         return _world_info_section(section, data, lore, head, expand)
     body = expand(body).strip()

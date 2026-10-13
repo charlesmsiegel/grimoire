@@ -264,6 +264,9 @@ def test_pending_retry_and_regenerate_replay_without_retrieval(client, monkeypat
     absorbed(campaign, old, "CHANGED_HISTORY_SENTINEL")
     gathers = []
     if stale_peek:
+        # A peek that missed the replay, for a recall still on as far as the
+        # driver knows: the gather is wasted, and the snapshot still wins.
+        monkeypatch.setattr(history_recall, "enabled", lambda: True)
         monkeypatch.setattr(character_turns, "_history_replays", lambda *a: False)
         async def stale(*a, **k):
             gathers.append(True)
@@ -370,3 +373,18 @@ def test_explicit_replay_never_gathers(client, monkeypatch):
     reply = client.post(f"/api/campaigns/{campaign}/scenes/{sid}/replay/turn")
     assert reply.status_code == 200 and '"error"' not in reply.text, reply.text
     assert "# Earlier in the campaign" not in str(fake.messages)
+
+
+def test_an_off_round_reads_nothing_past_the_config(cid, monkeypatch):
+    """9.1 on the round path: with recall off the driver never peeks at the
+    pending response or the transcript, let alone gathers."""
+    store.config.write_config(history_recall_depth="0")
+    monkeypatch.setattr(character_turns, "_history_replays",
+                        lambda *a: pytest.fail("peeked while off"))
+    monkeypatch.setattr(character_turns, "_round_post", lambda *a: pytest.fail("read while off"))
+    monkeypatch.setattr(history_recall, "gather", lambda *a, **k: pytest.fail("gathered while off"))
+    turn = SimpleNamespace(appended=(), continuation=None, history_by_round={},
+                           round_record={"id": "r1", "pending_response": "x", "typed_note": True})
+    got = asyncio.run(character_turns._round_history(None, cid, "001--saltmarch", None, None,
+                                                     None, turn, "grimoire"))
+    assert got is None

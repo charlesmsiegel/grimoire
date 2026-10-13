@@ -43,10 +43,25 @@ def _error(cid, sid):
     return model.Evidence(coverage=model.Coverage("error", semantic="off"))
 
 
-def _prepare(cid, sid, seed, resolved):
-    cfg = store.config.read_config()
+def _on(cfg):
+    """The settings when recall is on and its section is in the layout, else
+    None: the one off check, so off reads nothing else (9.1)."""
     history_settings = settings.read(cfg)
     if history_settings is None or "history_recall" not in layout.enabled_ids(("history_recall",)):
+        return None
+    return history_settings
+
+
+def enabled() -> bool:
+    """Whether a turn would gather at all -- for a caller with reads of its
+    own to skip (the round driver's replay peek), in a worker."""
+    return _on(store.config.read_config()) is not None
+
+
+def _prepare(cid, sid, seed, resolved):
+    cfg = store.config.read_config()
+    history_settings = _on(cfg)
+    if history_settings is None:
         return None
     cap = budget.ceiling(cfg, resolved)
     if not cap:
