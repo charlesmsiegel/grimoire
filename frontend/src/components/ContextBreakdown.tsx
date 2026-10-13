@@ -1,7 +1,7 @@
 import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
 import { SamplingSummary } from "./SamplingSummary";
-import { type ContextSection } from "../api/types";
+import { type ContextSection, type EpistemicDetail } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
 import { promptFieldWarning } from "./promptFieldWarning";
 
@@ -180,6 +180,28 @@ export function contextPercent(ctx: SceneContext, models: Model[]): number {
 }
 
 
+/** Who has which part of each item (roadmap 11): for the narrator, who on
+ *  stage knows or suspects it; for an NPC, what it has and why, its withheld
+ *  parts included. The basis codes are shown here and sent nowhere. */
+function EpistemicRows({ detail }: { detail: EpistemicDetail }) {
+  const reader = detail.perspective === "narrator" ? "the narrator"
+    : detail.perspective.replace(/^actor:/, "");
+  return <>
+    <div className="field-hint">Access, for {reader}:</div>
+    <ul className="ctx-entries">
+      {detail.items.map((item) => <li key={`${item.key}:${item.scene}:${item.slices.map((x) => x.posts.join(".")).join("/")}`}>
+        {item.header.title ? <span className="chip on">{item.header.title}</span> : <span className="chip on">{item.scene || item.key}</span>}{" "}
+        {item.state}{!item.admitted && "; dropped"}
+        {item.known_to.length > 0 && <div className="field-hint">Known to: {item.known_to.join(", ")}</div>}
+        {item.suspected_by.length > 0 && <div className="field-hint">Suspected by: {item.suspected_by.join(", ")}</div>}
+        {item.slices.map((slice) => <div className="field-hint" key={`${slice.part}:${slice.posts.join(",")}`}>
+          {slice.part === "summary" ? "Summary" : `Posts ${slice.posts.join(", ")}`}: {slice.access} ({slice.basis.join(", ")})
+        </div>)}
+      </li>)}
+    </ul>
+  </>;
+}
+
 /** Historical reasons are kept beside the sent text, including scenes shed by packing. */
 function HistoryEntries({ section }: { section: ContextSection }) {
   const history = section.history;
@@ -211,6 +233,7 @@ function HistoryEntries({ section }: { section: ContextSection }) {
         </div>)}
       </li>)}
     </ul>
+    {history.epistemic && <EpistemicRows detail={history.epistemic} />}
     {!!history.unselected && <>
       <div className="field-hint">Found, not selected: {history.unselected}</div>
       <ul className="ctx-entries">

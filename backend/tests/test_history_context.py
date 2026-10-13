@@ -9,7 +9,7 @@ import pytest
 
 from grimoire import prompts
 from grimoire.store import campaigns, chronicle, config, entities, locks, pins, scenes, tokens
-from grimoire.store.context import assemble, layout, macros
+from grimoire.store.context import assemble, epistemic, layout, macros
 from grimoire.store.context import pack as packer
 from grimoire.store.history import model, query
 from grimoire.store.history import retrieval as retrieve
@@ -35,6 +35,11 @@ def item(sid="001--saltmarch", text="Mara kept the ledger.", summary="Seraphine 
                               summary, (model.Excerpt((post,), "Mara: " + text),))
 
 
+def _view(cid, sid, ev):
+    """09's evidence as the narrator's unclassified view (11-S3)."""
+    return epistemic.narrator_view(cid, sid, ev)
+
+
 def row(detail):
     return next(s for s in detail["sections"] if s["id"] == "history_recall")
 
@@ -42,7 +47,7 @@ def row(detail):
 def test_fixed_golden_and_reasons_are_inspection_only(cid):
     sid = played(cid)
     ev = evidence(item())
-    messages, detail = assemble.compose_turn(cid, sid, history=ev)
+    messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, ev))
     got = row(detail)
     golden = json.loads(Path(__file__).with_name("fixtures").joinpath("history_golden.json").read_text(encoding="utf-8"))
     assert got["text"] == golden["text"]
@@ -61,7 +66,7 @@ def test_macro_expanded_ceiling_independent_of_packer(cid, monkeypatch, context_
     config.write_config(context_budget=context_budget, history_recall_budget="100")
     monkeypatch.setattr(macros, "expand_macros", lambda text, *args, **kwargs: text.replace("{{user}}", "Seraphine " * 200))
     ev = evidence(item(text="{{user}} " * 10), item("002--realm", text="short"), ceiling=100)
-    _messages, detail = assemble.compose_turn(cid, sid, history=ev)
+    _messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, ev))
     got = row(detail)
     assert got["tokens"] <= 100
     assert "{{user}}" not in got["text"]
@@ -101,7 +106,7 @@ def test_summary_omission_uses_enabled_archive(cid, archive_on):
     absorbed(cid, old, "Seraphine found the key.")
     sid = played(cid, text="silver ledger")
     ev = evidence(replace(item(old), summary="Seraphine found the key."))
-    messages, detail = assemble.compose_turn(cid, sid, history=ev)
+    messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, ev))
     got = row(detail)
     assert ("Seraphine found the key." in got["text"]) is not archive_on
     assert "Seraphine found the key." in str(messages)
@@ -126,7 +131,7 @@ def test_depth_one_preview_refills_before_compose_with_unclipped_archive_scan(ci
     assert row(detail)["history"]["items"][0]["scene"] == usable
     ev = real(cid, current, query.prepare(cid, current).query, 1200, summary_omissions=captured[0])
     monkeypatch.setattr(retrieve, "retrieve_preview", lambda *a, **k: pytest.fail("compose retrieved"))
-    assemble.compose_turn(cid, current, history=ev)
+    assemble.compose_turn(cid, current, history_view=_view(cid, current, ev))
 
 
 @pytest.mark.parametrize("off", ["depth", "layout"])
@@ -149,17 +154,26 @@ def test_off_is_identical_and_never_prepares_or_retrieves(cid, monkeypatch, off)
     monkeypatch.setattr(embed_space, "endpoint", lambda *a, **k: pytest.fail("space resolved while off"))
     monkeypatch.setattr(embeddings, "AsyncEmbeddingsClient",
                         lambda *a, **k: pytest.fail("embed client built while off"))
-    assert assemble.compose_turn(cid, sid, history=evidence(item())) == baseline
+    assert assemble.compose_turn(cid, sid, history_view=_view(cid, sid, evidence(item()))) == baseline
     assert assemble.context_breakdown(cid, sid) == baseline[1]
 
 
-def test_actor_blank_and_narrator_keeps_frozen_history(cid):
+def test_an_npc_gets_only_its_own_view_and_the_narrator_keeps_frozen_history(cid):
+    # 11-C2: an NPC is handed its own view, never the narrator's, and
+    # composes only that view's visible slices. A view for another reader is
+    # refused before anything renders.
     sid = played(cid)
     aid, _vid = actor(cid, sid, "Mara")
     ev = evidence(item())
-    _messages, npc = assemble.compose_turn(cid, sid, actor_ref="characters:"+aid, history=ev)
-    assert all(s["id"] != "history_recall" for s in npc["sections"])
-    _messages, narrator = assemble.compose_director_turn(cid, sid, "Continue", actor_ref="grimoire", history=ev)
+    with pytest.raises(ValueError):
+        assemble.compose_turn(cid, sid, actor_ref="characters:"+aid, history_view=_view(cid, sid, ev))
+    own = epistemic.classify_evidence(epistemic.Perspective.of(
+        cid, sid, "characters:"+aid, ("characters:"+aid,),
+        identity=scenes.identity.scene_identity(cid, sid)), ev)
+    messages, npc = assemble.compose_turn(cid, sid, actor_ref="characters:"+aid, history_view=own)
+    assert all(not s["text"] for s in npc["sections"] if s["id"].startswith("history"))
+    assert "Mara kept the ledger." not in str(messages)
+    _messages, narrator = assemble.compose_director_turn(cid, sid, "Continue", actor_ref="grimoire", history_view=_view(cid, sid, ev))
     assert row(narrator)["text"]
 
 
@@ -315,7 +329,7 @@ def test_preview_archive_scan_omission_matches_actual_compose_window(cid, monkey
     ev = real(cid, current, prepared.query, 1200, summary_omissions=expected)
     monkeypatch.setattr(retrieve, "retrieve_preview", lambda *a, **k: pytest.fail("compose retrieved"))
     with locks.campaign_lock(cid):
-        _messages, detail = assemble.compose_turn(cid, current, history=ev)
+        _messages, detail = assemble.compose_turn(cid, current, history_view=_view(cid, current, ev))
     assert row(detail)["history"]["items"][0]["scene"] == usable
 
 
@@ -358,7 +372,7 @@ def test_empty_summary_macro_does_not_render_history_header(cid):
     # Unresolved user/char macros stay literal under the existing contract;
     # an unknown macro exercises actual empty expansion through compose.
     supplied = replace(item(summary="{{missing}}"), date="", excerpts=())
-    messages, detail = assemble.compose_turn(cid, current, history=evidence(supplied))
+    messages, detail = assemble.compose_turn(cid, current, history_view=_view(cid, current, evidence(supplied)))
     got = row(detail)  # text-less: it only says why nothing was carried
     assert got["text"] == "" and got["history"]["items"] == []
     assert "**Saltmarch**" not in str(messages)
@@ -384,7 +398,9 @@ def test_world_info_and_history_are_the_only_shedding_sections():
                         and isinstance(v, ast.Dict) for k, v in zip(node.keys, node.values, strict=True)):
                     found.add((path.stem, fn.name))
     assert found == {("assemble", "_world_info_section"), ("history", "section")}, found
-    assert packer.DROP_ORDER[0] == packer.HISTORY_RECALL
+    # 11-S3: the history set gives way first, its aside tier (the narrator's
+    # withheld items, an NPC's suspicions) before the recalled tier.
+    assert packer.DROP_ORDER[:2] == (packer.HISTORY_ASIDE, packer.HISTORY_RECALL)
 
 
 @pytest.mark.parametrize("opening, closing", [("She typed {{ name", "and then }} laughed."),
@@ -402,7 +418,7 @@ def test_a_macro_spanning_two_posts_drops_that_item_not_the_turn(cid, opening, c
     spanning = model.EvidenceItem(model.SceneRef("001--saltmarch", None), "Saltmarch", "", "",
                                   "", (model.Excerpt(posts, text),))
     _messages, detail = assemble.compose_turn(
-        cid, sid, history=evidence(spanning, item("002--realm", text="Mara kept the ledger.")))
+        cid, sid, history_view=_view(cid, sid, evidence(spanning, item("002--realm", text="Mara kept the ledger."))))
     got = row(detail)
     scenes_kept = [i["scene"] for i in got["history"]["items"]]
     assert "002--realm" in scenes_kept and "Mara kept the ledger." in got["text"]
@@ -418,13 +434,13 @@ def test_an_empty_retrieval_still_explains_itself_in_the_row(cid):
     while the inspector row still says why; off, there is no row at all."""
     sid = played(cid)
     failed = model.Evidence(coverage=model.Coverage("error", semantic="failed:network"))
-    messages, detail = assemble.compose_turn(cid, sid, history=failed)
+    messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, failed))
     got = row(detail)
     assert got["text"] == ""
     assert got["history"]["coverage"]["verdict"] == "error"
     assert got["history"]["coverage"]["semantic"] == "failed:network"
     config.write_config(history_recall_depth="0")
-    off_messages, off_detail = assemble.compose_turn(cid, sid, history=failed)
+    off_messages, off_detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, failed))
     assert messages == off_messages
     assert all(s["id"] != "history_recall" for s in off_detail["sections"])
 
@@ -437,10 +453,10 @@ def test_compose_refits_to_the_selection_depth_not_the_setting(cid):
     sid = played(cid)
     long = " ".join(["The silver ledger was hidden beneath the boathouse floor."] * 12)
     one = replace(evidence(item(text=long), ceiling=400), depth=1)
-    _messages, detail = assemble.compose_turn(cid, sid, history=one)
+    _messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, one))
     assert row(detail)["history"]["items"][0]["tokens"] > 400 // 5
     clipped = replace(one, depth=0)  # the setting's share: a fifth of the ceiling
-    _messages, detail = assemble.compose_turn(cid, sid, history=clipped)
+    _messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, clipped))
     got = row(detail)["history"]["items"]
     assert not got or got[0]["tokens"] <= 400 // 5
 
@@ -454,7 +470,7 @@ def test_the_row_lists_what_was_found_but_not_selected(cid, monkeypatch):
     chosen = item()
     found = evidence(chosen, *(item(sid=f"00{n}--saltmarch") for n in range(2, 6)))
     ev = replace(found, items=(chosen,))
-    messages, detail = assemble.compose_turn(cid, sid, history=ev)
+    messages, detail = assemble.compose_turn(cid, sid, history_view=_view(cid, sid, ev))
     got = row(detail)["history"]
     assert [i["scene"] for i in got["items"]] == ["001--saltmarch"]
     assert got["unselected"] == 4

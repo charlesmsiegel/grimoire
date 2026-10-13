@@ -34,6 +34,8 @@ env = Environment(loader=FileSystemLoader(str(REPO / "templates")),
 # environment registers: a template and `inference.generate`'s in-prompt check
 # must agree on it, so this harness does not restate it.
 from grimoire import schemas  # noqa: E402
+from grimoire.store.context import epistemic  # noqa: E402
+from grimoire.store.context import history as history_section  # noqa: E402
 from grimoire.store.history import model as history_model  # noqa: E402
 
 env.filters["schema_json"] = schemas.render
@@ -2131,9 +2133,26 @@ history_item = history_model.EvidenceItem(
     summary="Mara kept the silver ledger.")
 config.write_config(history_recall_depth="1")
 check_messages("chat frozen history",
-               context.compose_turn(cid, sid, history=history_model.Evidence(
-                   (history_item,), ceiling=1200))[0],
+               context.compose_turn(cid, sid, history_view=epistemic.narrator_view(
+                   cid, sid, history_model.Evidence((history_item,), ceiling=1200)))[0],
                rendered_messages(sid, {**data, "history_evidence": [history_item]}))
+# 11-S3's sections, and the narrator's annotation lines: each renders the same
+# text through its template's data key as through `history.section`, the
+# fitted path a compose takes.
+_annotated = {history_item.scene.key: {"known_to": ["Mara", "Seraphine"],
+                                       "suspected_by": ["Winifred"]}}
+_labelled = {history_item.scene.key: {"labels": [], "summary_label": "known"}}
+for _section_id, _notes in (("history_recall", _annotated), ("history_narrator_only", {}),
+                            ("history_known", _labelled), ("history_suspected", {})):
+    _part = history_section.Part(_section_id, (history_item,), _notes,
+                                 history_section.FRAMES[_section_id],
+                                 {"history_actor_name": "Mara"})
+    _fitted, _ = history_section.section(history_model.Evidence((history_item,), ceiling=1200),
+                                         lambda text: text, len, {}, config.read_config(), _part)
+    check(f"history section {_section_id}", _fitted,
+          render(history_section.FRAMES[_section_id], history_actor_name="Mara",
+                 history_notes=_notes,
+                 **{history_section.DATA_KEYS[_section_id]: [history_item]}).strip())
 config.write_config(history_recall_depth="0")
 profile_data = {**data, "model_guidance": render("scene/model_guidance/glm-5.3.j2", **data)}
 for model_id in ("glm-5.3", "z-ai/glm-5.3"):

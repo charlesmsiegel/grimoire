@@ -31,7 +31,7 @@ from grimoire import embeddings, inference, wire
 from grimoire.llm import LLMClient
 from grimoire.routes import common, history_recall
 from grimoire.store import embed_space, tokens, usage, vectors
-from grimoire.store.context import assemble
+from grimoire.store.context import assemble, epistemic
 from grimoire.store.history import model, retrieval, semantic
 from grimoire.store.inference import resolve
 from grimoire.store.searchdocs import live as live_docs
@@ -95,7 +95,8 @@ def _report_case(case):
 
 
 def _packed(planted, evidence):
-    messages, detail = assemble.compose_turn(planted.cid, planted.sid, history=evidence)
+    view = epistemic.narrator_view(planted.cid, planted.sid, evidence)
+    messages, detail = assemble.compose_turn(planted.cid, planted.sid, history_view=view)
     text = "\n".join(str(m.get("content", "")) for m in messages)
     rows = detail["sections"] if detail else []
     row = next((r for r in rows if r["id"] == "history_recall"), {})

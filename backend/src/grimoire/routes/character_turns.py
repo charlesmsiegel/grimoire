@@ -88,7 +88,8 @@ def _handoff_pool(cid, sid, round_record):
     return [entry for entry in round_record["eligible"] if entry["ref"] not in out]
 
 
-def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None, history=None):
+def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None,
+             history_view=None):
     # The prompt must offer the same remaining slots that the engine accepts.
     # Offering the current/used actors teaches an invalid handoff; omitting the
     # narrator hides a valid slot. Explicit one-response requests have no next,
@@ -115,7 +116,7 @@ def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None, hi
         "describe": store.prompt_log.capturing(),
         "model": resolved.chain.primary.model,
         "images": store.post_images.images_for(resolved.chain.primary),
-        "history": history,
+        "history_view": history_view,
     }
     if appended:
         kwargs["appended"] = appended
@@ -513,7 +514,7 @@ def _selector_inputs(cid, sid, round_record):
 
 
 def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, plan=None,
-             response_id="", history=None):
+             response_id="", history_view=None):
     """Compose (or resume) the contribution and record it.
 
     `plan` is the turn decision's record asked for THIS contribution
@@ -546,7 +547,7 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
         if pending and appended:
             plan = store.responses.get(cid, sid, pending, private=True).get("intent")
         messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended,
-                                        plan=plan, history=history)
+                                        plan=plan, history_view=history_view)
         # The round's eligible first, then the whole present cast: an explicit
         # pick a talkativeness roll filtered out is still who they are.
         speaker = next(
@@ -1587,8 +1588,8 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
                          enabled=True, run=None):
     """The outside-lock hint only avoids wasted work; _prepare owns replay.
 
-    The driver keeps one immutable evidence value per round, including an empty
-    or failed result. A stale pending peek may waste a gather but cannot replace
+    The driver keeps one immutable view per round, including an empty or
+    failed result. A stale pending peek may waste a gather but cannot replace
     the snapshot _prepare chooses under its campaign hold.
     """
     if not enabled or actor != "grimoire":
@@ -1611,10 +1612,11 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
             # field records player-role posts only. An untyped continue stays
             # unattributed, rather than charging some earlier visible post.
             post = await run_in_threadpool(_round_post, cid, sid)
-        turn.history_by_round[rid] = await history_recall.gather(
+        turn.history_by_round[rid] = await history_recall.gather_view(
             app, cid, sid, seed=turn.round_record.get("note") or "", resolved=resolved,
             llm_client=client, embed_client=embed_client,
             post=post, run_id=run.id if run is not None else "",
+            identity=run.scene_identity if run is not None else None,
         )
     if run is not None and run.cancel_requested:
         raise anyio.get_cancelled_exc_class()()
@@ -1672,7 +1674,7 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             enabled=history_enabled, run=run)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
-            plan=plan, response_id=response_id, history=history)
+            plan=plan, response_id=response_id, history_view=history)
         record = turn.record
         turn.appended = ()
         turn.watcher = watcher = store.response_protocol.ResponseWatcher(

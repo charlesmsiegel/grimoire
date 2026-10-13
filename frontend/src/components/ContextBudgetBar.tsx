@@ -31,6 +31,7 @@ const BUCKET_OF: Record<string, string> = {
   archive: "recalled",
   recalled: "recalled",
   "history-recall": "recalled",
+  "history-aside": "recalled",
 };
 
 /** One prompt, drawn against the ceiling it was packed to.

@@ -1936,6 +1936,25 @@ export type HistoryEvidenceRow = {
     ranks: { round: number; signal: string; rank: number }[];
   }[];
   unselected?: number;
+  /** Roadmap 11's classification of this section's items for the reader it
+   *  was composed for: the narrator, or one NPC (`actor:characters:<id>`).
+   *  Inspector data only -- no basis code reaches a message. Absent on a
+   *  capture taken before 11-S3. */
+  epistemic?: EpistemicDetail;
+};
+/** One perspective's access to retrieved history (spec 11 §3). */
+export type EpistemicDetail = {
+  perspective: string;
+  decided: number;
+  items: {
+    key: string; scene: string; admitted: boolean;
+    state: "attributed" | "withheld" | "unattributed";
+    header: { title?: string; date?: string; location?: string };
+    known_to: string[]; suspected_by: string[];
+    slices: { part: "posts" | "summary"; posts: number[];
+              access: "witnessed" | "known" | "suspected" | "narrator_only" | "unknown";
+              basis: string[] }[];
+  }[];
 };
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
@@ -1943,7 +1962,7 @@ export type ContextSection = {
    *  too, so their labels are still unique and are a safe fallback key. */
   id?: string;
   label: string; text: string; tokens: number;
-  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history-recall" | "history";
+  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history-recall" | "history-aside" | "history";
   dropped: boolean; trimmed: number;
   /** The section carries content the reader pinned, so the packer left it alone
    *  whatever its tier (#129). Optional: snapshots frozen before pins existed

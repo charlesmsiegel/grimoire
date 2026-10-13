@@ -1075,13 +1075,14 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         # message and `_project_history` drops the stored copy, so the prompt
         # is byte-identical to what it was before notes were persisted.
         note = content or prompts.render("scene/director_note.j2")
-        evidence = history_recall.gather_sync(
+        view = history_recall.gather_view_sync(
             request.app, cid, sid, seed=note, resolved=resolved,
-            llm_client=client, embed_client=embed_client, run_id=run.id, post=note_at)
+            llm_client=client, embed_client=embed_client, run_id=run.id, post=note_at,
+            identity=run.scene_identity)
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
             describe=store.prompt_log.capturing(), model=primary.model,
-            images=store.post_images.images_for(primary), history=evidence)
+            images=store.post_images.images_for(primary), history_view=view)
         # AFTER the stream is constructed, not before. `_chat_stream` claims the
         # turn under the campaign lock synchronously, before it returns -- so a
         # contended campaign raises StoreBusy there and nothing is ever sent.
@@ -1106,13 +1107,14 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         runs.start_detached(request.app, run, lambda: stream.body_iterator,
                             outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
-    evidence = history_recall.gather_sync(
+    view = history_recall.gather_view_sync(
         request.app, cid, sid, seed="", resolved=resolved,
-        llm_client=client, embed_client=embed_client, run_id=run.id, post=posted_at)
+        llm_client=client, embed_client=embed_client, run_id=run.id, post=posted_at,
+        identity=run.scene_identity)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn),
         describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(primary), history=evidence)
+        images=store.post_images.images_for(primary), history_view=view)
 
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
@@ -1233,13 +1235,14 @@ def _retry_run(cid: str, sid: str, body, request: Request,
         _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     primary = resolved.chain.primary
-    evidence = history_recall.gather_sync(
+    view = history_recall.gather_view_sync(
         request.app, cid, sid, seed="", resolved=resolved,
-        llm_client=client, embed_client=embed_client, run_id=run.id)
+        llm_client=client, embed_client=embed_client, run_id=run.id,
+        identity=run.scene_identity)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body),
         describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(primary), history=evidence)
+        images=store.post_images.images_for(primary), history_view=view)
     outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, resolved, client,   # claims the turn; see above
                           task="retry", identity=run.scene_identity, outcome=outcome,
@@ -1508,14 +1511,15 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         # `appended` rather than reserved-then-appended, so the snapshot reports
         # the guidance the model actually read (#157).
         block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
-        evidence = history_recall.gather_sync(
+        view = history_recall.gather_view_sync(
             request.app, cid, sid, seed="", resolved=resolved,
-            llm_client=client, embed_client=embed_client, run_id=run.id)
+            llm_client=client, embed_client=embed_client, run_id=run.id,
+        identity=run.scene_identity)
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),
             describe=store.prompt_log.capturing(), model=primary.model,
-            images=store.post_images.images_for(primary), history=evidence)
+            images=store.post_images.images_for(primary), history_view=view)
     except BaseException:
         if restore is not None:
             restore()

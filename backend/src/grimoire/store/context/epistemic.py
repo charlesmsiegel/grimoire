@@ -22,8 +22,10 @@ file, an override that cannot be checked, a lock not acquired, a group that
 cannot be expanded -- each makes less visible to an actor, never more. The
 narrator is never narrowed by any of it: the narrator sees what 09 returned.
 
-Nothing calls this on the turn path yet (11-S3 does), so no prompt changes.
-The basis codes are inspector data; they never reach a prompt.
+11-S3 calls it on what each compose step's retrieval returned
+(`routes/history_recall.gather_view`), and compose renders only what the view
+allows (`context/history.parts`). The basis codes are inspector data; they
+never reach a prompt.
 """
 
 from __future__ import annotations
@@ -116,6 +118,10 @@ class Slice:
     access: str
     basis: tuple[str, ...]
     text: str
+    #: The excerpt posts the text was rendered from, for a section to mark
+    #: and fit (`context/history.section`); empty on an invisible slice.
+    #: Never in `detail()`.
+    source: tuple[model.EvidencePost, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -148,6 +154,10 @@ class EpistemicView:
         """For an actor, the items with a visible slice, holding only those
         slices; an item with none is omitted, header and all. For the
         narrator, every admitted item without its dropped (`moved`) posts."""
+        return tuple(shown for _c, shown in self.visible_pairs())
+
+    def visible_pairs(self) -> tuple[tuple[Classified, Classified], ...]:
+        """`visible()`, each beside the item it was cut from."""
         out = []
         for c in self.items:
             if not c.admitted:
@@ -155,7 +165,7 @@ class EpistemicView:
             shown = tuple(s for s in c.slices if s.access in VISIBLE)
             if self.perspective.actor is not None and not shown:
                 continue
-            out.append(replace(c, slices=shown))
+            out.append((c, replace(c, slices=shown)))
         return tuple(out)
 
     def detail(self) -> dict:
@@ -513,10 +523,11 @@ def _classes(env: _Env, ref: str, indices: Sequence[int]) -> _Classes:
     return _Classes({i: _post_class(env, ref, i) for i in indices}, _scene_class(env, ref))
 
 
-def _runs(posts: Sequence[tuple[model.EvidencePost, int | None]],
+def _runs(excerpt: model.Excerpt, posts: Sequence[tuple[model.EvidencePost, int | None]],
           classes: _Classes | None) -> tuple[Slice, ...]:
     """An excerpt split into contiguous runs of one access; `classes` None is
-    the narrator, who has every re-matched post."""
+    the narrator, who has every re-matched post. A run that is the whole
+    excerpt keeps 09's own text, so an unsplit item renders as 09 rendered it."""
     out: list[Slice] = []
     run: list[tuple[model.EvidencePost, int, str]] = []
     access = ""
@@ -526,8 +537,13 @@ def _runs(posts: Sequence[tuple[model.EvidencePost, int | None]],
             return
         basis = tuple(sorted({b for _p, _i, b in run}))
         shown = access in VISIBLE
-        text = history_budget._excerpt(tuple(p for p, _i, _b in run)).text if shown else ""
-        out.append(Slice("posts", tuple(i for _p, i, _b in run), access, basis, text))
+        source = tuple(p for p, _i, _b in run)
+        text = ""
+        if shown:
+            text = (excerpt.text if source == excerpt.posts
+                    else history_budget._excerpt(source).text)
+        out.append(Slice("posts", tuple(i for _p, i, _b in run), access, basis, text,
+                         source if shown else ()))
         run.clear()
 
     for post, i in posts:
@@ -600,7 +616,7 @@ def _unclassified(item: model.EvidenceItem, perspective: Perspective,
         return Classified(_redacted(item, {}), slices, {}, "unattributed", (), (),
                           admitted=admitted and perspective.actor is None)
     slices = tuple(Slice("posts", tuple(p.index for p in e.posts), "known", ("narrator",),
-                         e.text) for e in item.excerpts)
+                         e.text, e.posts) for e in item.excerpts)
     summary = _summary_slice(item, None, None)
     header = {"title": item.title, "date": item.date, "location": item.location}
     return Classified(item, (*slices, *([summary] if summary else [])), header,
@@ -617,7 +633,8 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
     own = per_ref.get(perspective.actor) if perspective.actor else None
     if perspective.actor is not None and own is None:
         own = _classes(env, perspective.actor, indices)
-    slices = [s for e in excerpts for s in _runs(e, own)]
+    slices = [s for e, posts in zip(item.excerpts, excerpts, strict=True)
+              for s in _runs(e, posts, own)]
     summary = _summary_slice(item, sc, own.scene if own else None)
     if summary:
         slices.append(summary)
@@ -648,13 +665,20 @@ def present_roster(cid: str, sid: str) -> tuple[str, ...]:
                  if (ref := f"{a['kind']}:{a['id']}") not in excluded)
 
 
+_READ = object()
+
+
 def narrator_view(cid: str, sid: str, evidence: model.Evidence, present: Sequence[str] = (), *,
-                  identity: str | None = None) -> EpistemicView:
+                  identity: str | object | None = _READ) -> EpistemicView:
     """`evidence` as the narrator has it, unclassified: 09's rendering, every
     item `unattributed`. For hand-built evidence (a preview, an eval, a
     template check) and the turn path's pass-through when classification
-    fails -- which costs the narrator its annotations and nothing else."""
-    perspective = Perspective(cid, sid, identity, None, tuple(present))
+    fails -- which costs the narrator its annotations and nothing else.
+    `identity` defaults to the scene's own, which is what compose checks."""
+    if identity is _READ:
+        identity = scenes_identity.scene_identity(cid, sid)
+    perspective = Perspective(cid, sid, identity if isinstance(identity, str) else None, None,
+                              tuple(present))
     return EpistemicView(perspective, tuple(_unclassified(item, perspective, admitted=True)
                                             for item in evidence.items), evidence=evidence)
 

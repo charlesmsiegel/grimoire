@@ -1,0 +1,17 @@
+{#- What the assigned NPC has of earlier scenes (spec 11): what it was there
+    for, and what it was established to know. Rendered only from the view's
+    visible slices; nothing here is anyone else's.
+    Vars: history_actor_name (str), and history_blocks ([str]) or
+    history_known ([EvidenceItem]). -#}
+{%- set blocks = history_blocks if history_blocks is defined else [] -%}
+{%- if history_blocks is not defined -%}
+{%- for item in history_known -%}
+{%- set block -%}{%- include "scene/sections/history_item.j2" -%}{%- endset -%}
+{%- set _ = blocks.append(block.strip()) -%}
+{%- endfor -%}
+{%- endif -%}
+{%- if blocks %}# What {{ history_actor_name }} remembers or knows
+
+Being there means what {{ history_actor_name }} could see or hear, never another person's private thoughts.
+
+{{ blocks | join("\n\n") }}{% endif -%}

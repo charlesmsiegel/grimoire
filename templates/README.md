@@ -983,3 +983,29 @@ these exact templates to charge the complete section, heading and joins
 included; `store/context/history.py` freezes macro-expanded frame runs and item
 blocks from the same templates before fitting or shedding, so neither re-draws
 a macro.
+
+### History by perspective (roadmap 11-S3)
+
+`history_item.j2` also reads `history_notes` (`{scene key: note}`), optional:
+a note's `known_to` and `suspected_by` (names) render as `Known to:` and
+`Suspected by:` lines directly after the header line, and its `labels` (one
+access per excerpt, said where it changes) and `summary_label` put "You were
+there:", "You know this:" or "Suspected, unconfirmed:" above an NPC's slices.
+An empty title is left out, and an empty header with it. With no note an item
+renders exactly as 09 rendered it.
+
+Three frames follow `history_recall.j2`'s shape (`history_blocks`, or items
+under their own key), and `store/context/history.py` fits and sheds all four
+through one `section`:
+
+- `scene/sections/history_narrator_only.j2` (`history_withheld`): the
+  narrator's items the user marked a present character as not knowing, under
+  `_secrecy.j2`'s `secret_block` instruction. Never in an NPC's prompt.
+- `scene/sections/history_actor_known.j2` and
+  `scene/sections/history_actor_suspected.j2` (`history_known`,
+  `history_suspected`, and `history_actor_name`): an NPC's own witnessed and
+  known slices, and its suspected ones, each restating the perception rule
+  in one sentence.
+
+Which item goes where is `store/context/epistemic.py`'s classification, never
+a template's; its basis codes are inspector data and never rendered.

@@ -44,6 +44,15 @@ survived the merge, at the front when it has none. The mirror rule is that an
 id the catalog no longer has is ignored, which retires a removed section with
 no migration.
 
+Coupled sections
+----------------
+Some catalog sections are one section to a reader. Spec 11's three history
+sections (`COUPLED`) split "Recalled history" by who may read what, and a
+reader who switched it off has switched them all off: the editor shows one
+row, each renders directly after its parent, and none is placed, enabled or
+labelled on its own. A stored entry for a coupled id is stripped on read, so
+the merge, the editor and `enabled_ids` cannot disagree about one.
+
 Off by default, and off is byte-identical: `apply` hands back the catalog
 untouched, so an install that never opens the editor sends what it always sent.
 Same discipline as `context_budget: 0` and `semantic_recall_depth: 0`.
@@ -59,6 +68,13 @@ from ..paths import ensure_home, home
 #: Longest stored label. A row name, not prose — and the cap is also what stops
 #: a hand-edited file from putting a paragraph in the inspector's rail.
 MAX_LABEL = 60
+
+
+#: A section that follows another's layout entry, child -> parent: placed
+#: directly after it, in catalog order, and on exactly when it is.
+COUPLED = {"history_narrator_only": "history_recall",
+           "history_known": "history_recall",
+           "history_suspected": "history_recall"}
 
 
 def _path():
@@ -119,6 +135,8 @@ def _migrate(stored: list) -> list:
         if not isinstance(entry, dict):
             continue
         sid = entry.get("id")
+        if sid in COUPLED:
+            continue              # follows its parent; never stored on its own
         renamed = entry
         if sid in _RENAMED:
             new_id = _RENAMED[sid]
@@ -165,7 +183,7 @@ def _ordered(catalog: list, stored: list) -> list[tuple]:
     # a newcomer lands beside its catalog neighbour whether that neighbour is
     # switched on or off. Searching only the enabled ones would make switching
     # a section off silently move the next one up.
-    for sid in [s for s in order if s not in seen]:
+    for sid in [s for s in order if s not in seen and s not in COUPLED]:
         idx = order.index(sid)
         pos = 0
         for prev in reversed(order[:idx]):
@@ -174,6 +192,14 @@ def _ordered(catalog: list, stored: list) -> list[tuple]:
                 pos = at + 1
                 break
         out.insert(pos, (by_id[sid], True))
+    for child in [s for s in order if s in COUPLED]:
+        at = next((n for n, (s, _on) in enumerate(out) if s.id == COUPLED[child]), None)
+        if at is None:
+            continue
+        # After the parent and any sibling already placed behind it.
+        while at + 1 < len(out) and COUPLED.get(out[at + 1][0].id) == COUPLED[child]:
+            at += 1
+        out.insert(at + 1, (by_id[child], out[at][1]))
     return out
 
 
@@ -230,7 +256,7 @@ def describe(catalog: list, stored: list) -> list[dict]:
             overrides.setdefault(e["id"], e.get("label", ""))
     return [{"id": s.id, "label": overrides.get(s.id, "") or "",
              "default_label": defaults[s.id], "tier": s.tier, "enabled": on}
-            for s, on in _ordered(catalog, stored)]
+            for s, on in _ordered(catalog, stored) if s.id not in COUPLED]
 
 
 def sanitize(entries) -> list[dict]:
@@ -323,5 +349,6 @@ def enabled_ids(section_ids: tuple[str, ...]) -> frozenset[str]:
     if not enabled():
         return requested
     disabled = {entry["id"] for entry in _migrate(read_layout())
-                if entry["id"] in requested and not _entry_enabled(entry)}
-    return requested - disabled
+                if not _entry_enabled(entry)}
+    # A coupled id answers through its parent (`COUPLED`).
+    return frozenset(i for i in requested if COUPLED.get(i, i) not in disabled)

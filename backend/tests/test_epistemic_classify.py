@@ -1,20 +1,18 @@
 """The deterministic epistemic classifier (roadmap 11-S2, spec 11 §4).
 
-Every store here is real: presence comes from `appearances.transitions`,
-replies from the responses ledger, overrides from `knowledge.add` with the
-scene's own fingerprints, and the evidence from 08's prompt-phase expansion
-mapped the way 09's adapter maps it. So a post text is exactly what 09 would
-hand over, and re-matching is exercised against the real thing.
+Every store here is real, through `evals/epistemic/synth.py`'s recipes
+(shared with the leakage suite), so a post text is exactly what 09 would hand
+over, and re-matching is exercised against the real thing.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
-import uuid
 
 import pytest
 
+from evals.epistemic import synth
 from grimoire.store import (
     campaigns,
     chronicle,
@@ -27,15 +25,9 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.appearances import paths as appearances_paths
-from grimoire.store.appearances import transitions
 from grimoire.store.context import epistemic
 from grimoire.store.history import budget, model
 from grimoire.store.scenes import identity as scenes_identity
-from grimoire.store.searchdocs import expand as searchdocs_expand
-
-
-def _hex() -> str:
-    return uuid.uuid4().hex
 
 
 @pytest.fixture
@@ -45,94 +37,14 @@ def cid(monkeypatch, tmp_path):
     return campaigns.create_campaign("Saltmarch", wid)
 
 
-class Stage:
-    """A source scene and the helpers that play into it."""
-
-    def __init__(self, cid: str, title: str = "The Pier"):
-        self.cid = cid
-        self.sid = scenes.create_scene(cid, title)
-        self.identity = scenes_identity.ensure_identity(cid, self.sid)
-
-    def say(self, text: str, speaker: str | None = None) -> int:
-        return scenes.append_message(self.cid, self.sid, "user", text, speaker=speaker,
-                                     post_id=_hex())
-
-    def legacy(self, text: str) -> int:
-        """A post with no key, as an older store holds them."""
-        return scenes.append_message(self.cid, self.sid, "assistant", text)
-
-    def reply(self, ref: str, name: str, text: str) -> str:
-        rnd = responses.new_round(self.cid, self.sid, eligible=[], automatic=False,
-                                  post=None, run_id="test")
-        rec = responses.prepare(self.cid, self.sid, rnd["id"], ref, name, {})
-        responses.save_variant(self.cid, self.sid, rec["id"], text, "complete")
-        return rec["id"]
-
-    def index_of(self, needle: str) -> int:
-        return next(i for i, m in enumerate(self.messages()) if needle in m["content"])
-
-    def messages(self) -> list[dict]:
-        return scenes.read_scene(self.cid, self.sid)["messages"]
-
-    def item(self, *, summary: str = "", title: str | None = None,
-             identity: str | bool | None = True) -> model.EvidenceItem:
-        """The whole scene as 09 would hand it over: one excerpt of every
-        eligible post, through 08's prompt expansion."""
-        found = searchdocs_expand.expand(self.cid, self.sid, phase="prompt", terms=(),
-                                         identity=self.identity, allow_whole=True,
-                                         max_bytes=200_000, max_posts=200)
-        assert found is not None
-        excerpts = tuple(model.Excerpt(
-            tuple(model.EvidencePost(p.index, p.key, p.part, p.speaker, p.content)
-                  for p in e.posts), e.text) for e in found.excerpts)
-        ident = self.identity if identity is True else identity
-        meta_title = str(scenes.read_scene(self.cid, self.sid)["meta"].get("title") or "")
-        return model.EvidenceItem(model.SceneRef(self.sid, ident),
-                                  meta_title if title is None else title,
-                                  date="Day 3", location="The pier", summary=summary,
-                                  excerpts=excerpts)
-
-    def facts(self):
-        return knowledge_scene.current(self.cid, self.sid)[2]
-
-
-def _npc(cid: str, name: str) -> tuple[str, str, str]:
-    aid, vid = overlay.create_character(cid, name)
-    return f"characters:{aid}", aid, vid
-
-
-def _enter(st: Stage, aid: str, vid: str, role: str = "npc") -> None:
-    transitions.appear(st.cid, st.sid, "characters", aid, vid, role, narrate=False)
-
-
-def _leave(st: Stage, aid: str) -> None:
-    transitions.leave(st.cid, st.sid, "characters", aid)
-
-
-def _grant(st: Stage, audience: str, name: str, status: str = "knows", *,
-           keys: tuple[str, ...] | None = None, created: str | None = None) -> str:
-    """An override about `keys` (whole scene when None), fingerprinted now."""
-    facts = st.facts()
-    if keys is None:
-        subject = {"kind": "scene", "scene": st.identity, "digest": facts.digest}
-    else:
-        subject = {"kind": "posts", "scene": st.identity, "posts": [
-            {"key": k, "part": "", "variant": facts.posts[(k, "")][0],
-             "digest": facts.posts[(k, "")][1]} for k in keys]}
-    entry = {"audience": audience, "audience_name": name, "status": status,
-             "subject": subject, "note": "", "source": "manual"}
-    if created:
-        entry["created"] = created
-    return knowledge.add(st.cid, entry)
-
-
-def _key(st: Stage, i: int) -> str:
-    return knowledge.post_key(st.messages()[i])
-
-
-def _view(st: Stage, actor: str | None, items, present=()):
-    p = epistemic.Perspective.of(st.cid, st.sid, actor, present, identity=st.identity)
-    return epistemic.classify(p, items)
+Stage = synth.Stage
+_hex = synth.hex_id
+_npc = synth.npc
+_enter = synth.enter
+_leave = synth.leave
+_grant = synth.grant
+_key = synth.key
+_view = synth.view
 
 
 def _post_classes(view) -> dict[int, tuple[str, tuple[str, ...]]]:

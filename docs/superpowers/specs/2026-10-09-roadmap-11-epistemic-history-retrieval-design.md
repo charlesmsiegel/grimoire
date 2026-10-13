@@ -795,6 +795,43 @@ thing 03 refuses to cache.
   removed. The narrator's view wraps the narrator's evidence, so there is one
   path to the section.
 
+**Amended by 11-S3, against the landed 09 code** (plan
+`docs/superpowers/plans/2026-10-13-roadmap-11-s3-perspective-retrieval.md`):
+
+- The per-step hook is 09's `_round_history`, between `_pre_generation` and
+  `_prepare` in `_round_frames`, cached per (round, speaker). The legacy doors
+  (`post_chat` without rounds, the director turn, retry, regenerate) compose
+  the narrator and pass a narrator view. A roll resume still recomposes with
+  no history: storing the view on the response record is 11-S6's. A director
+  note seeds only the narrator's query; no character heard it.
+- `query.prepare(actor_ref=)` builds the actor's query. Its window is the
+  actor's presence intervals (`appearances.paths.observed_indices`, the rule
+  `actor.observed_history` now calls), counted over every post before hidden
+  posts and director notes are filtered. Its seeds are the present roster,
+  the scene's location, the actor's own relationship targets, and records
+  named in that window. Its catalog names no thread or commitment, its
+  `Query.scopes` drop `thread`, and `query.subjects` returns an actor query's
+  own seeds rather than re-deriving the narrator's joins (groups,
+  involvement). The structural relationship reason reads only pairs the actor
+  is in.
+- **An actor's retrieval is never reranked.** The rerank grades rendered
+  items, summaries included, which would be narrator-only material steering
+  an actor's pick.
+- **Residual: a summary can steer which scenes an actor's retrieval looks
+  at.** Lexical and semantic scoring read 08's search documents, and a
+  document carries its scene's summary, so an actor's query can match a
+  summary's words. That admits or orders a scene; it never renders one:
+  classification still gates every slice, and a summary reaches an actor only
+  on a whole-scene grant (S1). Keeping summaries out of an actor's scoring
+  would need a second document set and vector cache per actor.
+- **The archive and recap are the narrator's**, so an actor's
+  `summary_omissions` are `{}`, and the narrator's are computed whenever the
+  narrator's view has items in either of its sections.
+- `classify` runs after retrieval in `routes/history_recall.gather_view`
+  (there is one retrieval round until 10). A failure narrows: the narrator
+  keeps 09's items unannotated (`epistemic.narrator_view`, also what
+  hand-built evidence uses), an actor gets no history.
+
 ### 6.2 The sections
 
 - **Narrator** (`actor_ref` `None` or `"grimoire"`):
@@ -865,6 +902,37 @@ leakage suite (section 8) adds needles that must be **absent**.
   turn, the withheld parts with their basis. Decision answers appear only in
   the turn's prompt-log capture. The basis appears in the inspector and the
   capture, never in a message (`test_epistemic_basis_never_reaches_the_prompt`).
+
+**Amended by 11-S3, against the landed 09 code:**
+
+- **Tiers.** Within a tier the packer drops the largest section first, so
+  "narrator-only before recall, suspected before known" cannot be one tier. A
+  new tier, `HISTORY_ASIDE`, is first in `DROP_ORDER` and holds
+  `history_narrator_only` and `history_suspected` (which never share a
+  prompt); `HISTORY_RECALL` holds `history_recall` and `history_known`.
+- **Shedding.** All four shed per item through one generalized
+  `context/history.section`, which takes each section's frame, notes and
+  share; 09's pin on the functions that carry a shed hook is unchanged, and a
+  test holds each section's units to its items.
+- **Budget.** The two sections of a pair split 09's one ceiling: each item
+  keeps 09's per-item share, the second section reserves a share per item,
+  and the first has the rest, so with the second empty the first has all of
+  it, as 09's section did.
+- **Rendering.** An unsplit narrator slice reuses 09's own excerpt text, and
+  the annotation lines go directly after the header line, so an
+  `unattributed` item renders byte-identical to 09. An empty title is left
+  out, and an empty header with it. Each actor slice is labelled where its
+  access changes. A section that cannot render drops alone; the turn goes on.
+- **Layout.** `layout.COUPLED` maps each new id to `history_recall`: the
+  editor shows one row, each renders directly after its parent and is on
+  exactly when it is, and a stored entry for a coupled id is stripped on read.
+- **Refusal.** The view's campaign, scene, identity and actor are compared
+  with the compose's before anything renders. Every view on the turn path is
+  built from the run's scene identity, so a pass-through never trips it.
+- **The inspector** carries each section's classification rows; an actor
+  compose with nothing visible keeps a `history_known` row saying why. The
+  live inspector composes the narrator, so it shows the narrator's
+  classification; an NPC's appears in its turn's capture.
 
 ### 6.5 Before 11 lands
 
