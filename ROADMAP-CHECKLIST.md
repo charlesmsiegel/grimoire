@@ -329,8 +329,8 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   runs on synthetic libraries only.
 - **Implemented in one PR, a commit per slice** (plans in
   `docs/superpowers/plans/2026-10-12-roadmap-04-s*.md`). Plan gates, reviews
-  and final gates are owed to the PR's Codex review and stay unticked until
-  its findings are answered. By 03's measured rule only `overview.scene_turns`
+  and final gates were met by the PR's Codex review (PR #513): two rounds of
+  findings fixed and answered, then a clean review of the fixed head. By 03's measured rule only `overview.scene_turns`
   is registered (above an admission size); the row kinds and
   `continuity_summary` are declared and unwired, their in-process layers
   answering (spec 04 section 16). Open question 4 took option (b).
@@ -575,16 +575,16 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S2 | Client first paint, then revalidate | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S2 | Client first paint, then revalidate | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [x] | [x] | [x] | [x] | [x] | [ ] |
 
 ### 05
 
