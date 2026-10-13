@@ -26,7 +26,8 @@ A_SUMMARY = "SUMMARYNEEDLE"
 B_SUMMARY = "VAULTSUMMARYNEEDLE"
 BASIS_CODES = ("presence_interval", "not_recorded_present", "summary_needs_grant",
                "override_group", "override_all", "pc_speaker", "scene_cast", "no_record",
-               "unverifiable", "decision_abstained")
+               "unverifiable", "decision_abstained", "decision_failed", "decision_skipped",
+               "unkeyed")
 
 
 @pytest.fixture
@@ -160,6 +161,7 @@ def test_a_withheld_item_is_the_narrators_alone_and_in_one_section(stage):
     aside = rows["history_narrator_only"]["text"]
     assert VAULT in aside and "kept from the cast" in aside and "Secret knowledge" in aside
     assert VAULT not in rows["history_recall"]["text"]
+    assert SHARED in rows["history_recall"]["text"] and SHARED not in aside
     assert rows["history_narrator_only"]["tier"] == packer.HISTORY_ASIDE
 
 
@@ -255,15 +257,25 @@ def test_a_view_for_another_reader_is_refused(stage):
     elsewhere = synth.for_compose(stage["cid"], stage["pier"].sid, None, stage["items"])
     with pytest.raises(ValueError):
         _compose(stage, None, elsewhere)
+    # The same NPC, but a view built for another scene.
+    hers_elsewhere = synth.for_compose(stage["cid"], stage["pier"].sid, stage["win"],
+                                       stage["items"])
+    with pytest.raises(ValueError):
+        _compose(stage, stage["win"], hers_elsewhere)
 
 
-def test_the_basis_never_reaches_the_prompt(stage):
-    synth.grant(stage["vault"], stage["win"], "Winifred", "suspects")
+def test_epistemic_basis_never_reaches_the_prompt(stage):
+    """Spec 11 §11: the basis codes and the user's override notes are
+    inspector data, never a message, for any reader."""
+    synth.grant(stage["vault"], stage["win"], "Winifred", "suspects", note="NOTENEEDLESUSPECTS")
+    synth.grant(stage["pier"], stage["win"], "Winifred", note="NOTENEEDLEKNOWS")
+    synth.grant(stage["vault"], stage["mara"], "Mara", "unaware", note="NOTENEEDLEUNAWARE")
     for actor in (None, stage["win"], stage["mara"]):
         messages, detail = _compose(stage, actor, _view(stage, actor))
         sent = str(messages)
         for code in BASIS_CODES:
             assert code not in sent, (actor, code)
+        assert "NOTENEEDLE" not in sent, actor
         assert any(r.get("history", {}).get("epistemic") for r in _sections(detail).values())
 
 

@@ -99,7 +99,8 @@ def leave(st: Stage, aid: str) -> None:
 
 
 def grant(st: Stage, audience: str, name: str, status: str = "knows", *,
-          keys: tuple[str, ...] | None = None, created: str | None = None) -> str:
+          keys: tuple[str, ...] | None = None, created: str | None = None,
+          note: str = "") -> str:
     """An override about `keys` (whole scene when None), fingerprinted now."""
     facts = st.facts()
     if keys is None:
@@ -109,7 +110,7 @@ def grant(st: Stage, audience: str, name: str, status: str = "knows", *,
             {"key": k, "part": "", "variant": facts.posts[(k, "")][0],
              "digest": facts.posts[(k, "")][1]} for k in keys]}
     entry = {"audience": audience, "audience_name": name, "status": status,
-             "subject": subject, "note": "", "source": "manual"}
+             "subject": subject, "note": note, "source": "manual"}
     if created:
         entry["created"] = created
     return knowledge.add(st.cid, entry)

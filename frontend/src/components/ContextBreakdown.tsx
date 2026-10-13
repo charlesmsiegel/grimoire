@@ -32,6 +32,7 @@ export function ContextBreakdown({ ctx, models, acceptCid }: {
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
   const approx = approxMark(ctx);
   const fieldWarning = promptFieldWarning(ctx.prompt_field_statuses);
+  const carried = carriedPosts(ctx.sections);
 
   return (
     <>
@@ -82,7 +83,7 @@ export function ContextBreakdown({ ctx, models, acceptCid }: {
           {/* A World info row with nothing sent still lists what it held back. */}
           {s.text && <pre className="ctx-text">{s.text}</pre>}
           <LoreEntries section={s} />
-          <HistoryEntries section={s} acceptCid={acceptCid} />
+          <HistoryEntries section={s} acceptCid={acceptCid} carried={carried} />
         </details>
       ))}
     </>
@@ -189,7 +190,9 @@ export function contextPercent(ctx: SceneContext, models: Model[]): number {
 /** Who has which part of each item (roadmap 11): for the narrator, who on
  *  stage knows or suspects it; for an NPC, what it has and why, its withheld
  *  parts included. The basis codes are shown here and sent nowhere. */
-function EpistemicRows({ detail, acceptCid }: { detail: EpistemicDetail; acceptCid?: string }) {
+function EpistemicRows({ detail, acceptCid, carried }: {
+  detail: EpistemicDetail; acceptCid?: string; carried: Set<string>;
+}) {
   const actor = detail.perspective === "narrator" ? null : detail.perspective.replace(/^actor:/, "");
   const names = detail.names ?? {};
   const named = (ref: string) => names[ref] ?? ref;
@@ -223,7 +226,8 @@ function EpistemicRows({ detail, acceptCid }: { detail: EpistemicDetail; acceptC
             <div className="field-hint">{classesOf(item, slice).join("; ")}</div>)}
           {acceptCid && <EpistemicAccept cid={acceptCid} item={item} slice={slice}
                                          readers={readers} names={names}
-                                         shown={VISIBLE.has(slice.access)} />}
+                                         shown={VISIBLE.has(slice.access) && (slice.keys ?? [])
+                                           .every((k) => carried.has(k.key))} />}
         </div>)}
       </li>)}
     </ul>
@@ -234,7 +238,24 @@ function EpistemicRows({ detail, acceptCid }: { detail: EpistemicDetail; acceptC
 const VISIBLE = new Set(["witnessed", "known", "suspected"]);
 
 /** Historical reasons are kept beside the sent text, including scenes shed by packing. */
-function HistoryEntries({ section, acceptCid }: { section: ContextSection; acceptCid?: string }) {
+/** The post keys this prompt actually carried in a history section: a
+ *  section the packer dropped carries none, and an item it shed carries none
+ *  of its posts. What the capture's accept may grant (11-S3). */
+function carriedPosts(sections: ContextSection[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of sections) {
+    if (s.dropped || !s.history) continue;
+    for (const item of s.history.items) {
+      if (item.shed) continue;
+      for (const post of item.posts ?? []) if (post.key) out.add(post.key);
+    }
+  }
+  return out;
+}
+
+function HistoryEntries({ section, acceptCid, carried }: {
+  section: ContextSection; acceptCid?: string; carried: Set<string>;
+}) {
   const history = section.history;
   if (!history) return null;
   const coverage = history.coverage;
@@ -264,7 +285,8 @@ function HistoryEntries({ section, acceptCid }: { section: ContextSection; accep
         </div>)}
       </li>)}
     </ul>
-    {history.epistemic && <EpistemicRows detail={history.epistemic} acceptCid={acceptCid} />}
+    {history.epistemic && <EpistemicRows detail={history.epistemic} acceptCid={acceptCid}
+                                         carried={carried} />}
     {!!history.unselected && <>
       <div className="field-hint">Found, not selected: {history.unselected}</div>
       <ul className="ctx-entries">

@@ -225,3 +225,20 @@ prompt; every finding is taken except where noted.
 | 8 | An unstamped player post read `**You:**` under "You were there:" | **Fixed.** "The player" in an NPC's own sections; the narrator's rendering is 09's |
 | 9 | `_actor("narrator")`; `gather`/`gather_sync` have no production caller; a mis-indented keyword | `_actor` and the indent fixed. `gather`/`gather_sync` stay: the evidence-only doors 09's tests and the lock guard name, and what `gather_view` composes |
 | 10 | Tests that did not test their claims | **Fixed:** an empty view sends what recall off sends; the aside tier is dropped first under real packing pressure; an empty title leaves no `****`; an identity mismatch on the same scene is refused |
+
+## 7. Final gate dispositions
+
+Final gate: an independent reviewer asking whether `ef71e69..HEAD`
+implements the spec. No blocker, no leak.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Narrator-only material (summaries in 08's documents, the chronicle's cast and location) still steers which scenes an NPC's retrieval ranks; NPCs are never reranked | **Put to the user.** Recorded as residuals in §6.1's amendment; the alternative is a per-actor document set and vector cache |
+| 2 | The override-notes half of `test_epistemic_basis_never_reaches_the_prompt` was missing, and some basis codes unchecked | **Fixed.** Notes planted on every status for every reader, the remaining codes added, the test given the spec's name |
+| 3 | The accept was offered on parts the packer shed or dropped | **Fixed.** A grant needs every post of the part in a fitted, unshed item of an undropped section |
+| 4 | The summary is not offered for accept, recorded only in the plan | **Amended in the spec**, with the reason |
+| 5 | Case 13 lacked the unaware edit leg and a positive control | **Fixed:** both legs for the unaware, and unchanged grants of both shapes as controls |
+| 6 | The evals path and the golden amendments lived only in the plan | **Amended in the spec** |
+| 7 | "Never in both" was one-directional; the same-actor other-scene refusal untested | **Fixed** |
+| 8 | Checklist and spec status text | **Fixed:** Review and Final gate ticked; the spec header says where the slices stand |
+| 9 | §14 Q7 (report the per-round embed count in the history row) | **Put to the user**; the cost is stated in the settings copy today |

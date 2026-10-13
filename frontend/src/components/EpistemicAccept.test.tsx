@@ -23,11 +23,19 @@ function detail(keys = [KEY], perspective = "actor:characters:winifred",
   };
 }
 
-function ctx(epistemic: EpistemicDetail): SceneContext {
+/** The section as a capture holds it: `carried` puts the post in its fitted
+ *  items (the prompt carried it); `shed` marks that item shed by the packer. */
+function ctx(epistemic: EpistemicDetail, carried = true, shed = false): SceneContext {
+  const items = carried ? [{
+    scene: "001--pier", identity: null, key: "a".repeat(32), title: "", tier: 1,
+    admitted_by: ["structural"], rounds: [], ranks: [], excerpts: [[0]],
+    posts: [{ index: 0, key: "p-aaaa", part: null, speaker: "Mara", text: "x" }],
+    summary: "included", tokens: 10, shed,
+  }] : [];
   const section: ContextSection = {
     id: "history_known", label: "Recalled history · what the speaker knows", text: "", tokens: 0,
     tier: "history-recall", dropped: false, trimmed: 0,
-    history: { items: [], coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
+    history: { items, coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
                ceiling: 1200, budget_from: ["config"], epistemic },
   };
   return { sections: [section], history: [], total_tokens: 0, history_tokens: 0 } as unknown as SceneContext;
@@ -89,5 +97,12 @@ test("a part an NPC was not given can only be withheld, never granted", () => {
   render(<ContextBreakdown models={[]} ctx={ctx(detail())} acceptCid="saltmarch" />);
   expect(screen.queryByRole("button", { name: "Mark as known" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Mark as suspected" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Mark as unaware" })).toBeInTheDocument();
+});
+
+test("a part the packer shed was never sent, so it can only be withheld", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx(detail([KEY], undefined, "witnessed"), true, true)}
+                           acceptCid="saltmarch" />);
+  expect(screen.queryByRole("button", { name: "Mark as known" })).toBeNull();
   expect(screen.getByRole("button", { name: "Mark as unaware" })).toBeInTheDocument();
 });

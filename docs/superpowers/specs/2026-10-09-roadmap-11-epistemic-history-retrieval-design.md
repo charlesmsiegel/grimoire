@@ -1,6 +1,9 @@
 # 11. Epistemic history retrieval
 
-**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
+**Status:** Draft, being implemented slice by slice. The spec gate and each
+slice's plan, code and final gates ran as substitute reviews (the Codex CLI
+is not available here); 11-S1, 11-S2, 11-S3 and 11-S4 are implemented, and
+the "Amended by" notes record where they moved the text.
 **Date:** 2026-10-09
 **Roadmap:** 11 in `ROADMAP-CHECKLIST.md`. Lane: retrieval (08 + 01e + 01h +
 01i → 09 → 10 → **11** → 12), fed by the decision lane (02-C5a).
@@ -938,10 +941,13 @@ leakage suite (section 8) adds needles that must be **absent**.
 - **Refusal.** The view's campaign, scene, identity and actor are compared
   with the compose's before anything renders. Every view on the turn path is
   built from the run's scene identity, so a pass-through never trips it.
-- **The capture's accept** grants only a part the turn's prompt carried:
-  on an actor's turn a part it was not given shows its class alone and can
-  only be marked unaware, and a keyless part's unaware says it covers the
-  whole scene.
+- **The capture's accept** is offered on each classified post, never the
+  summary: a summary statement is a whole-scene one, which exposes the
+  title, the summary and every post, more than any one turn showed, so it
+  stays the Knowledge ledger's form, which shows all of it. It grants only a
+  post the turn's prompt carried (not shed, not dropped): on an actor's turn
+  a part it was not given shows its class alone and can only be marked
+  unaware, and a keyless part's unaware says it covers the whole scene.
 - **The inspector** carries the pair's classification rows on its first
   section (each item once), with each present ref's per-part classes; an actor
   compose with nothing visible keeps a `history_known` row saying why. The
@@ -1175,7 +1181,9 @@ form.
 
 ### 8.1 Corpus
 
-`evals/cases/epistemic/` holds synthetic campaigns built with placeholder names
+`evals/epistemic/` (**amended by 11-S3:** not `evals/cases/epistemic/`, which
+would shadow `evals/cases.py`, as 09's suite went in `evals/history/`) holds
+synthetic campaigns built with placeholder names
 only (Seraphine, Mara, Winifred, Realm, Saltmarch), through the real store
 APIs as 09's suite builds its recipes. Each case is a store recipe, an
 evidence set, a perspective, and two sets of needles: propositions the actor
@@ -1599,7 +1607,11 @@ stays off behind its switch until its gates pass.
 - `test_epistemic_basis_never_reaches_the_prompt`, extended to override
   notes;
 - `history_view=None` is byte-identical to the baseline (a golden in the
-  style of `test_lore_golden.py`, recorded before 09 lands);
+  style of `test_lore_golden.py`, recorded before 09 lands); **amended by
+  11-S3:** that golden is `fixtures/lore_golden.json` itself, which predates
+  09 and already pins every scenario with no history, and a test adds depth
+  on with no view (`test_off_is_identical_and_never_prepares_or_retrieves`)
+  and with an empty one (`test_an_empty_view_sends_what_depth_off_sends`);
 - turning `history_recall` off in the layout removes all four sections;
 - each section sheds per item, and the drop order holds;
 - an item appears in `history_recall` or `history_narrator_only`, never both.

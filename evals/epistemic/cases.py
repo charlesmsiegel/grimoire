@@ -226,8 +226,24 @@ def _fingerprints(cast):
     synth.grant(kept, cast.mara, "Mara", "unaware", keys=(synth.key(kept, i),))
     responses.save_variant(cid, kept.sid, rid2, "Winifred names the UNAWARENEEDLE13.",
                            "complete")
-    return (swiped.item(), edited.item(), kept.item()), (
-        Check(cast.mara, forbidden=("SWIPENEEDLE13", "EDITNEEDLE13", "UNAWARENEEDLE13")),
+    held = _src(cast, "The Weir")
+    _here(held, cast, "Mara")
+    held.say("The weir keeper counts the eels.")
+    synth.grant(held, cast.mara, "Mara", "unaware", keys=(synth.key(held, 0),))
+    scenes.edit_message(cid, held.sid, 0, "The weir keeper hides the HELDNEEDLE13.")
+    # The control: the same grants, unchanged, do reach her -- so the
+    # forbidden needles above are absent because the text moved, not because
+    # a grant of this shape never matches.
+    steady = _src(cast, "The Toll")
+    steady.reply(cast.win, "Winifred", "Winifred reveals the STEADYNEEDLE13.")
+    synth.grant(steady, cast.mara, "Mara", "knows", keys=(synth.key(steady, 0),))
+    still = _src(cast, "The Beacon")
+    still.say("The keeper lights the STILLNEEDLE13.")
+    synth.grant(still, cast.mara, "Mara", "knows")
+    return (swiped.item(), edited.item(), kept.item(), held.item(), steady.item(),
+            still.item()), (
+        Check(cast.mara, allowed=("STEADYNEEDLE13", "STILLNEEDLE13"),
+              forbidden=("SWIPENEEDLE13", "EDITNEEDLE13", "UNAWARENEEDLE13", "HELDNEEDLE13")),
     )
 
 
@@ -260,7 +276,7 @@ CASES = (
     Case("12", "a group audience: member, leader, non-member", _group),
     Case("12b", "a group member added after the grant", _group_joined_later),
     Case("12c", "a group recreated under another name", _group_recreated),
-    Case("13", "fingerprints: a swipe and an edit stop a grant, not an unaware",
+    Case("13", "fingerprints: a swipe and an edit stop a grant, neither stops an unaware",
          _fingerprints),
     Case("14", "a cut between retrieval and classification", _cut),
 )
