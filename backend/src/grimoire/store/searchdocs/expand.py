@@ -201,8 +201,20 @@ def _rarest(text: str, terms: Sequence[str]) -> int | None:
     the score used, so a post scored as a hit is always framed on its term;
     `None` when no term occurs."""
     folded, starts = _folded(text)
-    hits = [(folded.count(term), folded.find(term)) for term in terms if term in folded]
+    hits = _term_hits(folded, terms)
     return starts[min(hits)[1]] if hits else None
+
+
+def _term_hits(folded: str, terms: Sequence[str]) -> list[tuple[int, int, str]]:
+    """(count, first offset, term) for each term in the folded text: `min`
+    of it is the rarest, ties to the earliest."""
+    return [(folded.count(term), folded.find(term), term) for term in terms if term in folded]
+
+
+def _rarest_term(text: str, terms: Sequence[str]) -> str | None:
+    """The term `_rarest` frames `text` on; `None` when no term occurs."""
+    hits = _term_hits(_folded(text)[0], terms)
+    return min(hits)[2] if hits else None
 
 
 def _cut(text: str, budget: int, *, keep: str, terms: Sequence[str] = ()) -> tuple[str, bool]:
@@ -310,12 +322,15 @@ class _Plan:
         """A hit first placed as another hit's neighbour was cut from the end
         nearer THAT hit, which can leave its own term out. Cut it again,
         framed on its own rarest term, if that fits what is left once its
-        current cost is given back; otherwise it keeps the cut it has."""
+        current cost is given back; otherwise it keeps the cut it has. A cut
+        that kept some other term but not the rarest is reframed too: the
+        rarest is what the post is framed on everywhere else."""
         window = next(w for w in self.windows if hit in w.contents)
         text, clipped = window.contents[hit]
-        if not clipped or any(t in text.casefold() for t in self.terms):
-            return
         post = self.posts[hit]
+        rarest = _rarest_term(post["content"], self.terms)
+        if not clipped or rarest is None or rarest in _folded(text)[0]:
+            return
         available = self.remaining + _cost(post, text)
         room = min(MESSAGE_BYTES, available - _cost(post, ""))
         if room < MIN_POST_BYTES:

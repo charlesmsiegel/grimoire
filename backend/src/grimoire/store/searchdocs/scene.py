@@ -242,7 +242,8 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
                    for g in values["groups"]],
         "keywords": bounded("keywords", _dedupe_folded(
             [k.casefold() for k in chron.get("keywords", [])])),
-        "degraded": bounded("degraded", degraded),
+        # A damaged ref can be the degraded name itself: capped like any ref.
+        "degraded": bounded("degraded", (slices_mod.clip(n, ref) for n in degraded)),
         "bytes": len(text.encode("utf-8")),
         "backstop": backstop,
         "slices": dict(digests),

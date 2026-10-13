@@ -351,3 +351,14 @@ def test_a_scenes_directory_that_cannot_be_listed_raises(cid, monkeypatch):
     monkeypatch.setattr(live.os, "scandir", unreadable)
     with pytest.raises(OSError):
         live.scene_documents(cid)
+
+
+def test_the_recorded_memo_holds_a_fixed_size_key_per_document(cid):
+    """However many input files a document reads, the recorded-rows memo keeps
+    one digest of them, not the paths themselves."""
+    _three(cid)
+    live.scene_documents(cid)
+    assert live._RECORDED
+    for key in live._RECORDED:
+        assert not any(isinstance(part, (tuple, list)) for part in key)
+        assert all(isinstance(part, str) for part in key)

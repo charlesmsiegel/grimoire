@@ -75,7 +75,8 @@ CAPS = {
 }
 
 _TOKEN = re.compile(r"\A[0-9a-f]{32}\Z")
-_JSON_ERRORS = (OSError, ValueError, UnicodeDecodeError)
+#: RecursionError: valid JSON nested past the parser's depth (as `continuity`).
+_JSON_ERRORS = (OSError, ValueError, UnicodeDecodeError, RecursionError)
 
 #: Degraded inputs already logged, by kind, so each says so once per process.
 _logged: set[str] = set()
@@ -251,6 +252,8 @@ class CampaignInputs:
         self.appearances: dict = loaded["appearances"]  # type: ignore[assignment]
         self.facts: dict = loaded["facts"]  # type: ignore[assignment]
         links = loaded["continuity"].get("links")  # type: ignore[attr-defined]
+        if links is not None and not isinstance(links, dict):
+            self.damage.add("continuity.json")    # a section of the wrong shape
         self.links: dict = links if isinstance(links, dict) else {}
         self.threads, self.commitments, bad_records = _records(cid)
         for name in sorted(bad_records):
@@ -468,9 +471,18 @@ def _chronicle(inputs: CampaignInputs, head: Head, damage: _Damage) -> dict | No
     if isinstance(rec, dict):
         keywords = rec.get("keywords")
         cast = rec.get("cast")
+        # Per field: a chronicle record whose summary (or one-liner) is blank
+        # falls back to the head's, which the priority puts next.
+        one_line = damage.text(rec.get("one_line"), CAPS["one_line"], src) \
+            or damage.text(head.meta.get("one_line"), CAPS["one_line"], "head")
+        summary = damage.text(rec.get("summary"), CAPS["summary"], src)
+        source = "chronicle"
+        if not summary:
+            summary = damage.text(head.meta.get("summary"), CAPS["summary"], "head")
+            source = "frontmatter"
         return {
-            "one_line": damage.text(rec.get("one_line"), CAPS["one_line"], src),
-            "summary": damage.text(rec.get("summary"), CAPS["summary"], src),
+            "one_line": one_line,
+            "summary": summary,
             "keywords": [damage.text(k, CAPS["keyword"], src)
                          for k in (keywords if isinstance(keywords, list) else ())
                          if isinstance(k, str) and k.strip()],
@@ -478,7 +490,7 @@ def _chronicle(inputs: CampaignInputs, head: Head, damage: _Damage) -> dict | No
             "location": damage.text(rec.get("location"), CAPS["location"], src),
             "cast": sorted({canon.actor_ref(t) for t in (cast if isinstance(cast, list) else ())
                             if isinstance(t, str) and t}),
-            "source": "chronicle",
+            "source": source,
         }
     one_line = damage.text(head.meta.get("one_line"), CAPS["one_line"], "head")
     summary = damage.text(head.meta.get("summary"), CAPS["summary"], "head")

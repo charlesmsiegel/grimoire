@@ -667,3 +667,46 @@ def test_a_lone_surrogate_in_an_actor_ref_degrades_instead_of_raising(cid, caplo
     json.dumps(d.meta, ensure_ascii=False).encode("utf-8")
     for record in caplog.records:
         record.getMessage().encode("utf-8")
+
+
+def test_a_links_section_of_the_wrong_shape_is_degraded(cid):
+    sid = _played(cid)
+    (campaigns.campaign_root(cid) / "continuity.json").write_text('{"links": []}',
+                                                                  encoding="utf-8")
+    d = doc(cid, sid)
+    assert "continuity.json" in d.meta["degraded"] and d.meta["links"] == []
+
+
+def test_a_ledger_nested_past_the_parser_is_degraded_not_raised(cid):
+    sid = _played(cid)
+    deep = "[" * 100_000 + "]" * 100_000
+    (campaigns.campaign_root(cid) / "facts.json").write_text('{"f1": ' + deep + "}",
+                                                             encoding="utf-8")
+    d = doc(cid, sid)
+    assert "facts.json" in d.meta["degraded"]
+
+
+def test_a_blank_chronicle_summary_falls_back_to_the_frontmatter(cid):
+    sid = _played(cid)
+    _absorb(cid, sid, summary="Seraphine corners Mara in the counting room.")
+    p = campaigns.campaign_root(cid) / "chronicle.json"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data[sid]["summary"] = ""
+    data[sid]["one_line"] = None
+    p.write_text(json.dumps(data), encoding="utf-8")
+    d = doc(cid, sid)
+    assert d.meta["summary_source"] == "frontmatter"
+    assert "Summary: Seraphine corners Mara in the counting room." in d.text
+    assert "In brief: Mara gives up the ledger." in d.text
+    assert "Keywords: harbour ledger" in d.text      # the rest of the record still reads
+
+
+def test_a_long_damaged_ref_is_capped_in_degraded(cid):
+    sid = _played(cid)
+    long_ref = "characters/" + "x" * 400 + "\\ud800"
+    p = campaigns.campaign_root(cid) / "appearances.json"
+    p.write_text('{"' + long_ref + '": {"version": "default", "role": "npc", "scenes": ["'
+                 + sid + '"]}}', encoding="utf-8")
+    d = doc(cid, sid)
+    assert d.meta["degraded"]
+    assert all(len(n.encode("utf-8")) <= slices.CAPS["ref"] for n in d.meta["degraded"])

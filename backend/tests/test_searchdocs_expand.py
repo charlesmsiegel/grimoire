@@ -346,3 +346,17 @@ def test_a_hit_first_placed_as_a_neighbour_is_reframed_on_its_own_term(cid):
                         max_bytes=8000, max_posts=8)
     posts = {p.index: p for e in got.excerpts for p in e.posts}
     assert "tide tax" in posts[6].content.casefold()
+
+
+def test_a_neighbour_cut_that_kept_a_commoner_term_is_reframed_on_the_rarest(cid):
+    """The head cut kept "common" but not "rare", the term the post is framed
+    on everywhere else: it is reframed, not left head-cut."""
+    filler = " ".join(f"word{k}" for k in range(500))
+    messages = _plain(10)
+    messages[5] = _reply("common rare common rare common rare.", 5)
+    messages[6] = _user(f"{'common ' * 5}{filler} and at last the rare one.", 6)
+    sid = _scene(cid, messages)
+    got = expand.expand(cid, sid, phase="prompt", terms=["common", "rare"], radius=1,
+                        max_bytes=8000, max_posts=8)
+    posts = {p.index: p for e in got.excerpts for p in e.posts}
+    assert "rare" in posts[6].content.casefold()

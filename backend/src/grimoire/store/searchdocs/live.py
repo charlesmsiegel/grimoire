@@ -38,6 +38,7 @@ Called from threadpool workers and detached runs, never the event loop.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,10 +54,10 @@ from . import slices as slices_mod
 DOC_MEMO_ENTRIES = 8192
 _MEMO: dict = {}
 #: Which documents this process has written `materialized` rows for, by the
-#: rows' content (document key, campaign, identity, paths). A hit is served
-#: without a store, but a re-pad or a rename keeps the key while moving the
-#: scene file, so a hit whose paths this process has not recorded records
-#: them -- once per process, which is what keeps a warm call free of writes.
+#: rows' content (document key, campaign, identity, a digest of the paths). A
+#: hit is served without a store, but a re-pad or a rename keeps the key while
+#: moving the scene file, so a hit whose paths this process has not recorded
+#: records them -- once per process, which keeps a warm call free of writes.
 _RECORDED: dict = {}
 
 #: 03 stages at most this many rows per request (`compiled.MAX_STAGED_ROWS`):
@@ -148,7 +149,10 @@ def _remember(doc: scene_mod.SceneDocument) -> None:
 
 
 def _recorded(cid: str, sl: slices_mod.Slices, doc: scene_mod.SceneDocument) -> tuple:
-    return (doc.key, cid, sl.identity, sl.paths)
+    """The memo key for written rows: the paths as one digest, so the memo
+    holds a fixed size per document however many group files a cast spans."""
+    paths_digest = hashlib.sha256(b"\0".join(os.fsencode(p) for p in sl.paths)).hexdigest()
+    return (doc.key, cid, sl.identity, paths_digest)
 
 
 def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
