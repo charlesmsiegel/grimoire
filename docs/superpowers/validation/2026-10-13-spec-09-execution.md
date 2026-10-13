@@ -35,8 +35,13 @@ All six slice plans written. The first plan-gate attempt could not read the
 local sandbox. The second reviewed supplied plans/current spec patch and passed
 S3–S6, conditional on corrected prerequisites. It found S1 renderer staging
 and S2 frozen-evidence refill gaps, now corrected; scoped re-review approved with no material findings.
-No product implementation yet. S1's implementer has performed read-only API
-preparation only and is waiting for plan approval.
+S1 core is implemented in `dbbcada84`, with review corrections in `0d22d1fc7`.
+The independent task review reproduced protected constituent-term leakage and
+loss of previously expanded evidence across query rounds. Three regressions
+failed before fixes; 41 focused tests pass after them. Scoped re-review
+approved both fixes with no new blocking findings. The original S1 run passed
+363 focused tests, the lint/type ratchets
+and all 527 template checks. Frozen campaign files remain unchanged.
 
 Ruling: Move the authoritative templates/shared renderer into S1 — its budget
 tests must count real template output — the cost if wrong is earlier template
@@ -52,4 +57,4 @@ unselected Candidate records do not contain header/summary — the cost if wrong
 is adapting the callback when spec 10 integrates, with no change to the
 low-level excerpt contract or public candidate schema.
 
-Plan gate approved: Codex thread 01a134d3-3cc9-7082-84f9-d64733ec7f58. All six plans pass, with the revised S1 renderer, full-item expansion callback and out-of-lock omission handoff as prerequisites. S1 implementation starts next; code/review/final/landed boxes remain unticked.
+Plan gate approved: Codex thread 01a134d3-3cc9-7082-84f9-d64733ec7f58. All six plans pass, with the revised S1 renderer, full-item expansion callback and out-of-lock omission handoff as prerequisites. Code/review/final/landed boxes remain unticked until their corresponding evidence exists.
