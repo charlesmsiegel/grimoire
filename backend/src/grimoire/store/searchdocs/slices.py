@@ -220,7 +220,10 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
         _opt(d.get("links"), dict) and _each(d.get("links") or {}, lambda _r: True)),
     "relationship_history.json": lambda d: not isinstance(d, dict) or (
         _opt(d.get("entries"), list)
-        and all(isinstance(e, dict) for e in d.get("entries") or ())),
+        and all(isinstance(e, dict)
+                and all(_opt(e.get(k), str)
+                        for k in ("scene", "source", "kind", "a", "b", "label", "before", "after"))
+                for e in d.get("entries") or ())),
 }
 
 
@@ -527,6 +530,7 @@ class Slices:
     digests: dict[str, str]
     paths: tuple[Path, ...]
     degraded: tuple[str, ...]
+    scene_path: Path | None = None   # the scene's own file, first of `paths`
 
 
 def _beats_here(record: dict, sid: str, damage: _Damage, source: str) -> list[str]:
@@ -852,6 +856,6 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
     }
     values = _visible(values)
     mine = tuple(_capped(sorted(damage.names | set(inputs.degraded)), ""))
-    return Slices(sid=sid, identity=head.identity, values=values,
+    return Slices(sid=sid, identity=head.identity, values=values, scene_path=head.path,
                   digests={name: digest(value) for name, value in values.items()},
                   paths=tuple(dict.fromkeys(used)), degraded=mine)

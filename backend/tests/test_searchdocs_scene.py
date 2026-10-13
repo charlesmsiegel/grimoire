@@ -996,3 +996,13 @@ def test_a_world_that_will_not_resolve_degrades_instead_of_raising(cid, monkeypa
     d = doc(cid, sid)
     assert "campaign.md" in d.meta["degraded"]
     assert "Cast: Mara" in d.text and "Where: Saltmarch harbour" in d.text
+
+
+def test_a_relationship_entry_with_a_field_of_the_wrong_shape_is_degraded(cid):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    (campaigns.campaign_root(cid) / "relationship_history.json").write_text(json.dumps(
+        {"entries": [{"scene": sid, "source": "absorb", "kind": "bond", "a": "characters:mara",
+                      "b": "pcs:seraphine", "label": {}, "before": "wary", "after": "warm"}]}),
+        encoding="utf-8")
+    assert "relationship_history.json" in doc(cid, sid).meta["degraded"]

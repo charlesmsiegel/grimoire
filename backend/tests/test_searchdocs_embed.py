@@ -178,11 +178,14 @@ def test_record_embedded_writes_the_space_kind_with_the_identity(home, fake):
     kind = f"vector:searchdocs.scene:{compiled.space_digest(space['space'])}"
     assert embedded.vector_kind(space) == kind
     chron = campaigns.campaign_root(cid) / "chronicle.json"
+    scene_file = live.scene_file(cid, doc)
     with compiled.batch(home) as request:
-        rows = request.materialized([chron])[chron]
+        rows = request.materialized([chron, scene_file])
         request.disabled = True
-    mine = [json.loads(r.instance) for r in rows if r.kind == kind]
-    assert mine == [{"campaign": cid, "identity": doc.doc.meta["identity"]}]
+    # The scene's own file names the scene; a shared ledger, the campaign.
+    assert [json.loads(r.instance) for r in rows[scene_file] if r.kind == kind] == \
+        [{"campaign": cid, "identity": doc.doc.meta["identity"]}]
+    assert [json.loads(r.instance) for r in rows[chron] if r.kind == kind] == [{"campaign": cid}]
 
 
 # -- the hook (08-C2c) -----------------------------------------------------------
@@ -322,3 +325,59 @@ def test_the_hook_is_registered_in_order_and_owns_its_kinds():
     assert cache_sync.SEARCHDOCS.owns("vector:searchdocs.scene:" + "a" * 64)
     assert not cache_sync.VECTORS.owns("vector:searchdocs.scene:" + "a" * 64)
     assert not cache_sync.SEARCHDOCS.owns("vector:semantic-recall:" + "a" * 64)
+
+
+# -- review round fourteen -----------------------------------------------------
+
+
+def test_a_shared_ledger_carries_one_row_per_campaign_however_many_scenes(home, fake,
+                                                                           monkeypatch):
+    """One row per scene on `chronicle.json` would pass 03's history bound in
+    a long campaign and hide the file from every hook: a shared file carries
+    one campaign row per kind, and a sync of it still reaches every scene."""
+    monkeypatch.setattr(compiled, "MAX_HISTORY_ROWS", 4)
+    _configure()
+    _wid, cid = _campaign()
+    sids = [_absorbed(cid, f"Scene {n}", f"Mara's summary number {n}.") for n in range(6)]
+    docs = _docs(cid)
+    for sid in sids:
+        _embed(cid, docs[sid])
+    chron = campaigns.campaign_root(cid) / "chronicle.json"
+    with compiled.batch(home) as request:
+        rows = request.materialized([chron])[chron]
+        request.disabled = True
+    assert sorted(json.loads(r.instance)["campaign"] for r in rows) == [cid, cid]
+    fake.calls.clear()
+    _summarize(cid, sids[4], "Mara's summary, rewritten.")
+    report = cache_sync.sync_paths([_rel(home, chron)], mode="explicit")
+    kinds = _kinds(report, _rel(home, chron))
+    assert kinds["searchdocs.scene"] == "built"
+    assert _sent(fake) == [_docs(cid)[sids[4]].doc.text]
+
+
+def test_documents_outside_a_failed_window_stay_lazy(home, monkeypatch):
+    _configure()
+    _wid, cid = _campaign()
+    sids = [_absorbed(cid, f"Scene {n}", f"Mara's summary number {n}.") for n in range(3)]
+    docs = _docs(cid)
+    plan = {cid: [(docs[sid], [(f"rel-{n}", "k")]) for n, sid in enumerate(sids)]}
+    monkeypatch.setattr(searchdocs_hook, "_CLIENT", FakeEmbeddings(error=LLMError("network", "down")))
+    got = searchdocs_hook.reembed(plan, space=embed_space.endpoint(), halted=lambda: None,
+                                  root_moved=lambda: False)
+    outcomes = sorted(o for _r, _k, o in got.outcomes)
+    assert outcomes == ["failed:network", "failed:network", "lazy"]     # a window of two
+    assert got.failure == "network"
+
+
+def test_a_reply_after_the_root_moved_is_never_saved(home, fake):
+    _configure()
+    _wid, cid = _campaign()
+    a = _absorbed(cid, "Saltmarch", "Mara counts the tide tax.")
+    doc = _docs(cid)[a]
+    space = embed_space.endpoint()
+    got = searchdocs_hook.reembed({cid: [(doc, [("rel", "k")])]}, space=space,
+                                  halted=lambda: None, root_moved=lambda: True)
+    assert len(fake.calls) == 1                        # the request went out...
+    assert got.outcomes == []                          # ...and its rows stay `planned`
+    assert not vectors.load(space["space"], [doc.doc.text])
+

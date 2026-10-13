@@ -23,7 +23,8 @@ re-embedded because of it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from ... import embeddings
@@ -43,10 +44,13 @@ class DocVectors:
     embedded: int                     # vectors saved by this call
     sent: int                         # texts the request carried (0: nothing sent)
     error: str | None                 # the embed failure's kind, if one
+    tried: frozenset[str] = frozenset()   # the texts the request carried
+    dropped: bool = False             # a reply discarded because `keep` said no
 
 
 def vectors_for(cid: str, docs: Sequence, *, space: dict,
-                client: embeddings.EmbeddingsClient, limit: int) -> DocVectors:
+                client: embeddings.EmbeddingsClient, limit: int,
+                keep: Callable[[], bool] = lambda: True) -> DocVectors:
     """Vectors for `docs` (`live.LiveDocument`s) under `space["space"]` and
     each document's exact text -- the key 09's turn warm reads and writes --
     embedding at most `limit` of the texts the cache lacks, in one call.
@@ -55,7 +59,12 @@ def vectors_for(cid: str, docs: Sequence, *, space: dict,
     so a document the provider refuses never holds the head of every run.
     One `history-index` ledger row, campaign-attributed, no scene: a warm-up
     is not part of playing one. `space` is the caller's, never re-resolved
-    here. Never raises: a failure returns what is held, with its kind."""
+    here. Never raises: a failure returns what is held, with its kind.
+
+    `keep` is asked once the reply is in, before anything is saved: a sync
+    whose store root moved while the request was out passes one that says
+    no, since `vectors.save` resolves the root again and would put this
+    campaign's vectors in the other library. The reply is then dropped."""
     texts = list(dict.fromkeys(d.doc.text for d in docs))
     held = vectors.load(space["space"], texts)
     misses = [t for t in texts if t not in held]
@@ -71,6 +80,9 @@ def vectors_for(cid: str, docs: Sequence, *, space: dict,
         except OSError:
             error = "network"
         else:
+            if not keep():
+                return DocVectors(vectors={}, embedded=0, sent=len(window), error=None,
+                                  tried=frozenset(window), dropped=True)
             if len(got) == len(window):
                 for text, vector in zip(window, got, strict=True):
                     vectors.save(space["space"], text, vector)
@@ -82,7 +94,8 @@ def vectors_for(cid: str, docs: Sequence, *, space: dict,
     embedded = sum(1 for text in window if text in held) if error is None else 0
     record_embedded(cid, docs, space=space)
     return DocVectors(vectors={d.doc.key: held[d.doc.text] for d in docs if d.doc.text in held},
-                      embedded=embedded, sent=len(window), error=error)
+                      embedded=embedded, sent=len(window), error=error,
+                      tried=frozenset(window))
 
 
 def vector_kind(space: dict) -> str:
@@ -102,13 +115,15 @@ def record_embedded(cid: str, docs: Sequence, *, space: dict) -> None:
             return
         held = vectors.load(sid_space, list(dict.fromkeys(d.doc.text for d in docs)))
         kind = vector_kind(space)
-        rows = [(path, {"campaign": cid, "identity": d.doc.meta.get("identity", "")})
-                for d in docs if d.doc.text in held for path in live.input_paths(cid, d)]
+        rows = list(dict.fromkeys(
+            (path, json.dumps(live.row_instance(cid, d.doc.meta.get("identity", ""), path,
+                                                live.scene_file(cid, d)), sort_keys=True))
+            for d in docs if d.doc.text in held for path in live.input_paths(cid, d)))
         # 03 stages a bounded number of rows per request; past it a row is
         # dropped silently, so the rows go in batches that fit.
         for start in range(0, len(rows), compiled.MAX_STAGED_ROWS):
             with compiled.batch() as request:
                 for path, instance in rows[start:start + compiled.MAX_STAGED_ROWS]:
-                    request.mark_materialized(path, kind, instance=instance)
+                    request.mark_materialized(path, kind, instance=json.loads(instance))
     except (KeyError, TypeError, ValueError, OSError):
         return

@@ -838,7 +838,8 @@ class _SearchDocsHook:
             result.outcomes = dict.fromkeys(planned, "skipped")
             result.embedding["stale_space"] = sum(len(entries) for entries in plan.values())
             return result
-        got = searchdocs_hook.reembed(plan, space=ctx.space, halted=ctx.halted)
+        got = searchdocs_hook.reembed(plan, space=ctx.space, halted=ctx.halted,
+                                      root_moved=lambda: _root_moved(ctx.root))
         result.outcomes = _fold(got.outcomes)
         result.embedding = got.embedding
         result.failure = got.failure

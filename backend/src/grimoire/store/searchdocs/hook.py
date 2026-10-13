@@ -7,13 +7,18 @@ overview hook's arrangement. The functions are not named `local` and `network`:
 those are the protocol's, and the operation guard holds every `.network(...)`
 call to the warm-up module.
 
-**The rows name the documents.** Every `searchdocs.scene` row, and every
-`vector:searchdocs.scene:<digest>` row `record_embedded` writes, sits on each
-file the document read and carries `{"campaign", "identity"}`. So the documents
-an edited file touches are exactly the identities on its rows, a world file
-included -- its rows name each campaign whose documents read it. An identity
-no live scene carries belongs to a deleted scene, or to one whose sid a new
-scene took under a new identity; its rows rebuild and embed nothing.
+**The rows name the documents.** A document's rows (`searchdocs.scene`, and
+the `vector:searchdocs.scene:<digest>` rows `record_embedded` writes) sit on
+each file it read. On the scene's own file a row names the scene,
+`{"campaign", "identity"}`; on a shared file -- a ledger, a card, a world
+record -- it names the campaign alone, one row per campaign, so a long
+campaign never pushes a shared file past 03's `MAX_HISTORY_ROWS` and out of
+every hook's sight (`live.row_instance`). A scene row rebuilds that scene; a
+campaign row rebuilds every live scene of the campaign, and a campaign vector
+row re-embeds those whose own scene file carries the same kind's row under
+their identity. An identity no live scene carries belongs to a deleted
+scene, or to one whose sid a new scene took under a new identity; its rows
+rebuild and embed nothing.
 
 **What is re-embedded.** Only a document that was embedded (it has a vector
 row) in the batch's space, under the same scene identity, whose text the cache
@@ -73,7 +78,9 @@ class Reembedded:
     failure: str = ""
 
 
-def _instance(row: compiled.Materialized) -> tuple[str, str] | None:
+def _instance(row: compiled.Materialized) -> tuple[str, str | None] | None:
+    """`(campaign, identity)` for a scene's own row, `(campaign, None)` for
+    a campaign row on a shared file; None for a row that names nothing."""
     try:
         value = json.loads(row.instance) if row.instance else None
     except ValueError:
@@ -81,13 +88,24 @@ def _instance(row: compiled.Materialized) -> tuple[str, str] | None:
     if not isinstance(value, dict):
         return None
     cid, identity = value.get("campaign"), value.get("identity")
-    if not (isinstance(cid, str) and cid and isinstance(identity, str) and identity):
+    if not (isinstance(cid, str) and cid):
         return None
-    return cid, identity
+    if identity is None:
+        return cid, None
+    return (cid, identity) if isinstance(identity, str) and identity else None
 
 
 def _count(counts: dict[str, int], name: str, n: int = 1) -> None:
     counts[name] = counts.get(name, 0) + n
+
+
+@dataclass
+class _Wanted:
+    """One campaign's hot rows: those naming a scene, by identity, and those
+    naming the whole campaign (a shared file's)."""
+
+    scenes: dict[str, list[tuple[str, compiled.Materialized]]] = field(default_factory=dict)
+    campaign: list[tuple[str, compiled.Materialized]] = field(default_factory=list)
 
 
 def rebuild(hot: Mapping[str, Sequence[compiled.Materialized]], *, space: dict | None,
@@ -96,7 +114,7 @@ def rebuild(hot: Mapping[str, Sequence[compiled.Materialized]], *, space: dict |
     """Rebuild the documents the hot rows name, and judge each vector row.
     No network. A dry run stores nothing and plans nothing to send."""
     out = Rebuilt()
-    wanted: dict[str, dict[str, list[tuple[str, compiled.Materialized]]]] = {}
+    wanted: dict[str, _Wanted] = {}
     for rel, rows in hot.items():
         for row in rows:
             named = _instance(row)
@@ -104,7 +122,11 @@ def rebuild(hot: Mapping[str, Sequence[compiled.Materialized]], *, space: dict |
                 out.outcomes.append((rel, row.kind, "skipped"))
                 continue
             cid, identity = named
-            wanted.setdefault(cid, {}).setdefault(identity, []).append((rel, row))
+            entry = wanted.setdefault(cid, _Wanted())
+            if identity is None:
+                entry.campaign.append((rel, row))
+            else:
+                entry.scenes.setdefault(identity, []).append((rel, row))
     plan: dict[str, list[tuple[live.LiveDocument, list[tuple[str, str]]]]] = {}
     for cid in sorted(wanted):
         if halted():
@@ -115,20 +137,23 @@ def rebuild(hot: Mapping[str, Sequence[compiled.Materialized]], *, space: dict |
     return out
 
 
-def _campaign(cid: str, by_identity: dict[str, list[tuple[str, compiled.Materialized]]],
-              out: Rebuilt, plan: dict, *, space: dict | None, space_digest: str | None,
-              embedding: bool, dry_run: bool) -> None:
+def _campaign(cid: str, wanted: _Wanted, out: Rebuilt, plan: dict, *, space: dict | None,
+              space_digest: str | None, embedding: bool, dry_run: bool) -> None:
+    rows_here = [*(r for rows in wanted.scenes.values() for r in rows), *wanted.campaign]
     try:
         sids = live.identities(cid)
-        only = frozenset(sids[i] for i in by_identity if i in sids)
+        # A campaign row is every live scene of the campaign; a scene row is
+        # that scene, while it is still live under that identity.
+        only = frozenset(sids.values()) if wanted.campaign else \
+            frozenset(sids[i] for i in wanted.scenes if i in sids)
         live_set, rendered = live.build(cid, only=only, store=not dry_run) if only \
             else (None, frozenset())
+        docs = {d.doc.meta.get("identity", ""): d for d in live_set.documents} if live_set else {}
+        embedded_ids = _embedded(cid, docs, wanted.campaign)
     except Exception as exc:  # noqa: BLE001 -- one campaign's failure is its rows' status
-        for rows in by_identity.values():
-            out.outcomes.extend((rel, row.kind, f"failed:{type(exc).__name__}") for rel, row in rows)
+        out.outcomes.extend((rel, row.kind, f"failed:{type(exc).__name__}") for rel, row in rows_here)
         return
-    docs = {d.doc.meta.get("identity", ""): d for d in live_set.documents} if live_set else {}
-    for identity, rows in by_identity.items():
+    for identity, rows in wanted.scenes.items():
         doc = docs.get(identity)
         for rel, row in rows:
             if doc is None:
@@ -139,22 +164,80 @@ def _campaign(cid: str, by_identity: dict[str, list[tuple[str, compiled.Material
                 built = "built" if doc.doc.key in rendered else "hit"
                 out.outcomes.append((rel, row.kind, "planned" if dry_run else built))
             else:
-                _vector(cid, rel, row, doc, out, plan, space=space, space_digest=space_digest,
-                        embedding=embedding, dry_run=dry_run)
+                _vector(cid, rel, row.kind, doc, out, plan, space=space,
+                        space_digest=space_digest, embedding=embedding, dry_run=dry_run)
+    _campaign_rows(cid, wanted.campaign, docs, rendered, embedded_ids, out, plan, space=space,
+                   space_digest=space_digest, embedding=embedding, dry_run=dry_run)
 
 
-def _vector(cid: str, rel: str, row: compiled.Materialized, doc: live.LiveDocument,
-            out: Rebuilt, plan: dict, *, space: dict | None, space_digest: str | None,
-            embedding: bool, dry_run: bool) -> None:
-    """One vector row: re-embed only in the batch's space, only a text the
-    cache lacks."""
+def _campaign_rows(cid: str, rows: Sequence[tuple[str, compiled.Materialized]],
+                   docs: Mapping[str, live.LiveDocument], rendered: frozenset[str],
+                   embedded_ids: Mapping[str, set[str]], out: Rebuilt, plan: dict, *,
+                   space: dict | None, space_digest: str | None, embedding: bool,
+                   dry_run: bool) -> None:
+    """A shared file's rows, which name the campaign: its document row is
+    `built` when any of the campaign's documents changed; its vector row
+    stands for every document whose own scene file says it was embedded in
+    THIS row's space."""
+    for rel, row in rows:
+        if row.kind == DOC_KIND:
+            if not docs:
+                out.outcomes.append((rel, row.kind, "skipped"))
+            elif dry_run:
+                out.outcomes.append((rel, row.kind, "planned"))
+            else:
+                changed = any(d.doc.key in rendered for d in docs.values())
+                out.outcomes.append((rel, row.kind, "built" if changed else "hit"))
+            continue
+        mine = [docs[i] for i in embedded_ids.get(row.kind, ()) if i in docs]
+        if not mine:
+            out.outcomes.append((rel, row.kind, "skipped"))
+        for doc in mine:
+            _vector(cid, rel, row.kind, doc, out, plan, space=space, space_digest=space_digest,
+                    embedding=embedding, dry_run=dry_run)
+
+
+def _embedded(cid: str, docs: Mapping[str, live.LiveDocument],
+              campaign_rows: Sequence[tuple[str, compiled.Materialized]]) -> dict[str, set[str]]:
+    """For each vector kind on a campaign row, the identities whose own scene
+    file carries that kind's row naming them: this hook reading its own
+    kinds' rows by path, for the live scene paths it already holds."""
+    kinds = {row.kind for _rel, row in campaign_rows if row.kind != DOC_KIND}
+    if not kinds or not docs:
+        return {}
+    files = {live.scene_file(cid, d): identity for identity, d in docs.items()}
+    found: dict = {}
+    with compiled.batch() as request:
+        try:
+            # One read per scene file: 03's history budget bounds a READ, so
+            # one read over a long campaign's scene files would answer them
+            # all empty. A scene file carries only its own scene's rows.
+            for path in files:
+                found.update(request.materialized([path]))
+        finally:
+            request.disabled = True                       # a read: nothing to flush
+    out: dict[str, set[str]] = {}
+    for path, rows in found.items():
+        for row in rows:
+            named = _instance(row) if row.kind in kinds else None
+            identity = named[1] if named is not None else None
+            if identity is not None and identity == files.get(path):
+                out.setdefault(row.kind, set()).add(identity)
+    return out
+
+
+def _vector(cid: str, rel: str, kind: str, doc: live.LiveDocument, out: Rebuilt, plan: dict, *,
+            space: dict | None, space_digest: str | None, embedding: bool,
+            dry_run: bool) -> None:
+    """One document under one vector row: re-embed only in the batch's
+    space, only a text the cache lacks."""
     if space is None:
         _count(out.embedding, "embedding_off")
-        out.outcomes.append((rel, row.kind, "skipped"))
+        out.outcomes.append((rel, kind, "skipped"))
         return
-    if row.kind != VECTOR_PREFIX + (space_digest or ""):
+    if kind != VECTOR_PREFIX + (space_digest or ""):
         _count(out.embedding, "stale_space")
-        out.outcomes.append((rel, row.kind, "skipped"))
+        out.outcomes.append((rel, kind, "skipped"))
         return
     if vectors.load(space["space"], [doc.doc.text]):
         if not dry_run:
@@ -162,29 +245,32 @@ def _vector(cid: str, rel: str, row: compiled.Materialized, doc: live.LiveDocume
             # the document's current inputs.
             embedded.record_embedded(cid, [doc], space=space)
         _count(out.embedding, "held")
-        out.outcomes.append((rel, row.kind, "hit"))
+        out.outcomes.append((rel, kind, "hit"))
         return
     if not embedding:
         _count(out.embedding, "deferred")
-        out.outcomes.append((rel, row.kind, "deferred"))
+        out.outcomes.append((rel, kind, "deferred"))
         return
     entries = plan.setdefault(cid, [])
     entry = next((e for e in entries if e[0].doc.key == doc.doc.key), None)
     if entry is None:
-        entries.append((doc, [(rel, row.kind)]))
+        entries.append((doc, [(rel, kind)]))
         if dry_run:
             _count(out.embedding, "would_send")
     else:
-        entry[1].append((rel, row.kind))
-    out.outcomes.append((rel, row.kind, "planned"))
+        entry[1].append((rel, kind))
+    out.outcomes.append((rel, kind, "planned"))
 
 
 def reembed(plan: Mapping[str, Sequence[tuple[live.LiveDocument, Sequence[tuple[str, str]]]]], *,
-            space: dict, halted: Callable[[], object]) -> Reembedded:
+            space: dict, halted: Callable[[], object],
+            root_moved: Callable[[], bool]) -> Reembedded:
     """Send the plan: one `vectors_for` a campaign, at most `REINDEX_LIMIT`
-    documents. A document outside this run's window stays `lazy`. A failure
-    other than `bad_response` -- the endpoint's, not one input's -- stops the
-    campaigns after it, which are named with its kind."""
+    documents. A document outside this run's window stays `lazy`; a failure
+    names only the documents its request carried. A failure other than
+    `bad_response` -- the endpoint's, not one input's -- stops the campaigns
+    after it, which are named with its kind. A reply that lands after the
+    store root moved is never saved: its rows stay `planned` (`unsynced`)."""
     out = Reembedded()
     for cid in sorted(plan):
         entries = plan[cid]
@@ -195,14 +281,17 @@ def reembed(plan: Mapping[str, Sequence[tuple[live.LiveDocument, Sequence[tuple[
                                     for _doc, keys in entries for rel, kind in keys)
             continue
         got = embedded.vectors_for(cid, [doc for doc, _keys in entries], space=space,
-                                   client=_CLIENT, limit=REINDEX_LIMIT)
+                                   client=_CLIENT, limit=REINDEX_LIMIT,
+                                   keep=lambda: not root_moved())
         if got.sent:
             _count(out.embedding, "requests")
             _count(out.embedding, "sent", got.sent)
+        if got.dropped:
+            continue                                      # the root moved: left `planned`
         for doc, keys in entries:
             if doc.doc.key in got.vectors:
                 outcome = "built"
-            elif got.error:
+            elif got.error and doc.doc.text in got.tried:
                 outcome = f"failed:{got.error}"
             else:
                 outcome = "lazy"

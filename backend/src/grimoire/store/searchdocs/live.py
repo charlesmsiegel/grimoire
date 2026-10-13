@@ -191,6 +191,22 @@ def _recorded(cid: str, sl: slices_mod.Slices, doc: scene_mod.SceneDocument) -> 
     return (doc.key, cid, sl.identity, paths_digest)
 
 
+def row_instance(cid: str, identity: str, path: Path, scene_path: Path | None) -> dict:
+    """The `materialized` instance a document's row on `path` carries.
+
+    On the scene's own file it names the scene, `{campaign, identity}`. On a
+    shared file -- a ledger, a card, a rule file, a world record -- it names
+    the campaign alone, so every scene of a campaign shares one row there:
+    03 reads a path's history only up to `MAX_HISTORY_ROWS` rows and treats a
+    longer one as unreadable, which one row per scene on `chronicle.json`
+    would reach in a long campaign, hiding the file from every hook. 05's
+    hook rebuilds all of a campaign's live documents for a campaign row, and
+    finds which of them were embedded from their scene files' own rows."""
+    if scene_path is not None and path == scene_path:
+        return {"campaign": cid, "identity": identity}
+    return {"campaign": cid}
+
+
 def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
                                        scene_mod.SceneDocument, bool]]) -> None:
     """Put each built document (`put`) and write its `materialized` rows.
@@ -207,8 +223,8 @@ def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
         if put:
             ops.append(("put", key, _payload(doc)))
             owners.append(n)
-        instance = {"campaign": cid, "identity": sl.identity}
-        ops += [("mark", path, instance) for path in sl.paths]
+        ops += [("mark", path, row_instance(cid, sl.identity, path, sl.scene_path))
+                for path in sl.paths]
         owners += [n] * len(sl.paths)
     failed: set[int] = set()
     for start in range(0, len(ops), _STAGED_ROWS):
@@ -318,6 +334,11 @@ def build(cid: str, *, exclude: frozenset[str] = frozenset(),
                                 closed_by=dict(row["closed_by"]) if row.get("closed_by") else None))
     return LiveSet(documents=tuple(out), skipped=tuple(sorted(set(skipped))),
                    degraded=inputs.degraded), frozenset(rendered)
+
+
+def scene_file(cid: str, live_doc: LiveDocument) -> Path:
+    """The scene's own file: where its identity-level rows sit."""
+    return scenes_paths._scene_path(cid, live_doc.sid)
 
 
 def identities(cid: str) -> dict[str, str]:
