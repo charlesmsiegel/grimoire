@@ -136,7 +136,7 @@ test("a renamed audience is confirmed under its current name", async () => {
   renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
   fireEvent.click(await screen.findByRole("button", { name: "Confirm it is still Mara Vance" }));
   await waitFor(() => expect(api.ledgerSaveKnowledge).toHaveBeenCalledWith(
-    "run", "k-0000000a", { audience: "characters:mara" }));
+    "run", "k-0000000a", { audience: "characters:mara", audience_name: "Mara Vance" }));
 });
 
 test("an unverifiable scene is not offered for removal", async () => {

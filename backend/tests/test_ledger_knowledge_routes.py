@@ -357,6 +357,25 @@ def test_an_unreadable_transcript_is_busy_not_a_500(client, world, monkeypatch):
     assert r.status_code == 409 and r.json()["kind"] == "busy"
 
 
+def test_an_unparseable_chronicle_is_malformed_not_a_500(client, world):
+    expect = _expect(client, world, f"r-{world['rid']}")
+    store.chronicle._chronicle_path(world["cid"]).write_text("{not json", encoding="utf-8")
+    r = _post(client, world, expect=expect)
+    assert r.status_code == 409 and r.json()["kind"] == "malformed"
+    assert client.get(f"{world['base']}/scenes/{world['sid']}").status_code == 409
+    assert store.knowledge.read(world["cid"]) == {}
+
+
+def test_an_unreadable_chronicle_is_busy_not_a_500(client, world, monkeypatch):
+    expect = _expect(client, world, f"r-{world['rid']}")
+
+    def unreadable(cid, sid):
+        raise OSError("mid-sync")
+    monkeypatch.setattr(store.chronicle, "get_record", unreadable)
+    r = _post(client, world, expect=expect)
+    assert r.status_code == 409 and r.json()["kind"] == "busy"
+
+
 def test_a_partly_cut_unaware_still_applies_but_a_grant_is_gone(client, world):
     cid, sid = world["cid"], world["sid"]
     rnd = store.responses.new_round(cid, sid, eligible=[], automatic=False, post=None,

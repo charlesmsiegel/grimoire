@@ -521,6 +521,20 @@ def test_strict_get_raises_where_the_tolerant_one_reads_none(cid):
         knowledge.require_readable(cid)
 
 
+def test_a_ledger_that_exists_but_cannot_be_opened_is_not_an_empty_one(cid):
+    """Only a missing file is an empty ledger. One that is there and will
+    not open (a directory here; a permission or sync error in life) is
+    refused, so no write publishes an empty ledger over it."""
+    knowledge._path(cid).mkdir()
+    with pytest.raises(knowledge.KnowledgeError):
+        knowledge.get_strict(cid, "k-00000000")
+    with pytest.raises(knowledge.KnowledgeError):
+        knowledge.add(cid, _entry())
+    with pytest.raises(group_refs.GroupIdentityConflict):
+        knowledge.require_readable(cid)
+    assert knowledge.read_checked(cid) == ({}, False)
+
+
 def test_an_actor_delete_refuses_before_removing_anything_when_the_file_is_unreadable(cid):
     aid, _vid = overlay.create_character(cid, "Mara")
     knowledge._path(cid).write_text("{not json", encoding="utf-8")

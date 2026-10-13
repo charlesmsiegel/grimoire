@@ -296,14 +296,14 @@ def require_readable(cid: str, *, intact: bool = False) -> None:
 def _load_strict(cid: str) -> dict:
     """The whole document for a read-modify-write, refusing one it cannot
     represent rather than publishing an empty ledger over it (the
-    `facts._read_ledger` rule). Entries it does not touch are written back
+    `facts._read_ledger` rule). Only a missing file is an empty ledger; one
+    that exists and cannot be opened is refused like one that will not parse. Entries it does not touch are written back
     verbatim, so a malformed one a person can still repair survives an
     unrelated write."""
-    p = _path(cid)
-    if not p.exists():
-        return {"version": VERSION, "entries": {}}
     try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
+        doc = json.loads(_path(cid).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"version": VERSION, "entries": {}}
     except (OSError, ValueError) as exc:
         raise KnowledgeError("knowledge.json cannot be read") from exc
     if _entries_of(doc) is None:

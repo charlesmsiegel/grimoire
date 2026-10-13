@@ -702,7 +702,13 @@ def _scene_posts(cid: str, sid: str, variants: dict | None = None) -> _ScenePost
                        409) from exc
         except OSError as exc:
             raise _busy() from exc
-    title, record = store.knowledge_scene.whole_scene(cid, sid, scene["meta"])
+    try:
+        title, record = store.knowledge_scene.whole_scene(cid, sid, scene["meta"])
+    except ValueError as exc:   # chronicle.json will not parse
+        raise _bad("malformed", "chronicle.json cannot be read; repair it and try again",
+                   409) from exc
+    except OSError as exc:
+        raise _busy() from exc
     return _ScenePosts(messages, variants, regex_view.view(messages, cid=cid, phase="prompt"),
                        store.knowledge_scene.scene_digest(messages, title, record),
                        title or sid, record if isinstance(record, dict) else {})

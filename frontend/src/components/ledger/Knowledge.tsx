@@ -225,8 +225,10 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
 
   function confirmAudience(e: KnowledgeEntry) {
     // Records the audience's current name again: the reader is saying it is
-    // still the same character or group.
-    void write(() => api.ledgerSaveKnowledge(cid, e.id, { audience: e.audience }), e.id);
+    // still the same character or group. The name they were shown rides as a
+    // precondition, so a rename since the list loaded is refused, not accepted.
+    void write(() => api.ledgerSaveKnowledge(
+      cid, e.id, { audience: e.audience, audience_name: e.audience_now ?? undefined }), e.id);
   }
 
   function restamp(e: KnowledgeEntry) {
