@@ -69,12 +69,17 @@ def score(
     docs: Sequence[scene.SceneDocument],
     *,
     weights: Mapping[str, int] | None = None,
+    others: Sequence[scene.SceneDocument] = (),
 ) -> list[model.LexicalSignal]:
+    """One signal per document of `docs`. `others` count toward the corpus
+    statistics (document frequency, average length) and are not scored: tier 3
+    scores each named source over every source's documents, so that raw scores
+    from different campaigns are one ordering rather than several."""
     if not docs:
         return []
     weights = weights or {}
     terms = tuple(dict.fromkeys(terms))
-    stats = statistics(docs)
+    stats = statistics([*docs, *others])
     frequencies = []
     for term in terms:
         words = re.findall(r"\w+", unicodedata.normalize("NFKC", term).casefold())
@@ -92,7 +97,7 @@ def score(
         for fs in frequencies
     ]
     out = []
-    for i, stat in enumerate(stats):
+    for i, stat in enumerate(stats[: len(docs)]):
         total, matched = 0.0, []
         for term, fs, idf in zip(terms, frequencies, idfs, strict=True):
             freq = fs[i]

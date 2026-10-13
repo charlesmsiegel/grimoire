@@ -4,8 +4,9 @@ import time
 
 import pytest
 
-from grimoire.store import campaigns, worlds
+from grimoire.store import campaigns, chronicle, scenes, worlds
 from grimoire.store.history import budget, coverage, model, retrieval
+from grimoire.store.scenes import identity as scene_ids
 from grimoire.store.searchdocs import live
 from tests.history_fixtures import absorbed, actor, played
 from tests.history_fixtures import cid as cid
@@ -116,3 +117,53 @@ def test_lexical_ranks_are_numbered_across_every_named_source(cid):
     ranks = {c.scene.campaign: c.ranks[(0, "lexical")] for c in evidence.candidates}
     assert ranks == {strong_src: 1, weak_src: 2}
     assert [c.scene.campaign for c in evidence.candidates][:2] == [strong_src, weak_src]
+
+
+def test_lexical_scores_share_one_corpus_across_named_sources(cid):
+    """A term rare in one small source is not thereby stronger there: every
+    source is scored over all of them, so a scene that says the query three
+    times leads one that mentions it once, whichever source is smaller."""
+    current = played(cid)
+    weak_src = campaigns.create_campaign("Realm", worlds.create_world("Realm"))
+    strong_src = campaigns.create_campaign("Saltmarch", worlds.create_world("Realm"))
+    filler = " ".join(["The ferryman waits by the quiet harbour wall."] * 6)
+    def scene(source, text):
+        # No chronicle keywords: only the summary says the terms.
+        sid = played(source, text="The room is quiet.")
+        chronicle.absorb(source, {"id": sid, "one_line": text, "summary": text,
+                                  "keywords": [], "cast": [], "location": "", "date": ""})
+        scenes.mark_absorbed(source, sid, text, text)
+    for _ in range(5):
+        scene(weak_src, filler)
+    scene(weak_src, f"{filler} The silver ledger is mentioned once.")
+    for _ in range(3):
+        scene(strong_src, "Silver ledger. The silver ledger. A silver ledger.")
+    evidence = recall(cid, current, (weak_src, strong_src))
+    lexical = sorted((c for c in evidence.candidates if (0, "lexical") in c.ranks),
+                     key=lambda c: c.ranks[(0, "lexical")])
+    assert [c.scene.campaign for c in lexical] == [strong_src] * 3 + [weak_src]
+
+
+def test_held_back_structural_matches_survive_every_named_source(cid, monkeypatch):
+    """5.4 one scope over: a plain co-presence match past the cap ranks
+    without admitting in each source, and stays on the structural list the
+    semantic pool is cut from, qualified to its campaign at tier 3."""
+    current = played(cid)
+    source = campaigns.create_campaign("Realm", worlds.create_world("Realm"))
+    old = played(source, text="The room is quiet.")
+    absorbed(source, old, "The room is quiet.")
+    original = retrieval.structural.candidates
+
+    def held(campaign, *args, **kwargs):
+        found = original(campaign, *args, **kwargs)
+        if campaign != source:
+            return found
+        ref = model.SceneRef(old, scene_ids.scene_identity(source, old))
+        return [*found, model.Candidate(ref, (model.Signals(structural=model.StructuralSignal(
+            (model.Relation("shared_cast", ("characters:mara",)),))),), {}, 1, frozenset())]
+    monkeypatch.setattr(retrieval.structural, "candidates", held)
+    prepared = retrieval._prepare_sources(
+        cid, current, model.Query(("amber seal",), tier_limit=3), 1200, (cid, source))
+    assert [(c.scene.campaign, c.scene.sid, c.tier) for c in prepared.held_back] == \
+        [(source, old, 3)]
+    assert prepared.held_back[0].scene.key.startswith(f"campaign:{source}/")

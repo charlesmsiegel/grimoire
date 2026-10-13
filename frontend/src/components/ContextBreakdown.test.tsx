@@ -165,3 +165,21 @@ test("an empty history row still says why, rerank status included", () => {
   for (const value of [/Coverage: error/, /failed:network/, /Rerank: skipped:unanswered/])
     expect(screen.getByText(value)).toBeInTheDocument();
 });
+
+test("history inspector lists what was found but not selected", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "ok", admitted: 3, agreement: 0, verdict: "sufficient" },
+      ceiling: 1200, budget_from: ["config"], unselected: 3,
+      candidates: [{ scene: "004--saltmarch", key: "sid:004--saltmarch", tier: 2,
+                     admitted_by: ["semantic"], rounds: [],
+                     ranks: [{ round: 0, signal: "semantic", rank: 7 }] }],
+    },
+  }] })} />);
+  for (const value of [/Found, not selected: 3/, /004--saltmarch; tier 2; admitted by semantic/,
+                       /semantic rank 7/])
+    expect(screen.getByText(value)).toBeInTheDocument();
+});

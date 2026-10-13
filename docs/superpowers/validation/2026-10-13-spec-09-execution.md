@@ -452,3 +452,28 @@ fails before the fix:
   into the history section, or for context-only anywhere but the recap, which
   is recency by design (spec 1 and 16) and does carry a later absorbed scene.
 - The rerank's network time is now only its `decide` await.
+
+**Codex review of `ea1995d`.** Five P2 findings and none blocking. With the
+user's ruling that the review loop ends once Codex finds nothing blocking,
+these are the last round before merge. All are fixed with a test that fails
+before the fix:
+
+- Tier 3's renumbered lexical ranks still sorted source-local BM25 scores, so
+  a term rare in one small source outranked a stronger match elsewhere.
+  `lexical.score(others=)` now counts every named source's documents into the
+  corpus statistics while each source scores only its own.
+- `_prepare_sources` dropped each source's held-back structural matches. They
+  are now qualified to their campaign at tier 3 and kept, across sources in
+  structural order, for the semantic pool (5.4).
+- The eval exempted the recap from the forbidden check. Every arm now grades
+  its whole packed prompt. Case 7 plays later filler into the recap's window,
+  because the recap is the campaign's newest one-liners whichever scene is
+  played. That is main's behaviour, which 09 does not change, so the case
+  measures the `before` rule rather than recency.
+- The inspector row carried only the selected items. It now lists the
+  strongest unselected candidates with their signals (`candidates`, capped at
+  `HISTORY_UNSELECTED_SHOWN`) and counts them all (`unselected`), and the
+  Context panel shows them.
+- Lexical terms came from the whole scan window while the semantic text was
+  clipped. Terms now come from the same `QUERY_BYTES` window, starting at its
+  first whole word, which bounds a long post's term list and scoring pass.

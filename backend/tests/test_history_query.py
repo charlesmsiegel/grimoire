@@ -123,3 +123,32 @@ def test_private_archive_scan_keeps_legacy_notes_urls_and_depth_boundary(cid):
     assert "example.invalid" not in prepared.query.texts[0]
     config.write_config(context_scan_depth="0")
     assert query.prepare(cid, sid, seed="amber seal").archive_scan_text == "amber seal"
+
+
+def test_terms_come_from_the_clipped_window_and_never_a_cut_word(cid):
+    """The lexical terms obey QUERY_BYTES as the semantic text does: a word
+    the window clipped away selects nothing, and the word the clip cut in
+    half (which could be a protected name's tail) is not a term either."""
+    # After "quillfeather": a space, m harbours, the newline and the last post
+    # -- 8m + 11 bytes, so m = 373 leaves the window starting at its "ather".
+    harbours = " ".join(["harbour"] * 373)
+    sid = played(cid, text=f"velvet crown quillfeather {harbours}")
+    scenes.append_message(cid, sid, "assistant", "amber seal")
+    q = query.build(cid, sid)
+    assert q.texts[0].startswith("ather harbour")
+    assert len(q.texts[0].encode()) == query.QUERY_BYTES
+    assert "amber" in q.terms and "harbour" in q.terms
+    assert not {"velvet", "crown", "quillfeather", "ather"} & set(q.terms)
+
+
+def test_a_clip_between_words_keeps_its_first_word(cid):
+    """Only a word the clip actually cut is dropped: one that starts the
+    window whole is a term like any other."""
+    # From "quill" on: 5 bytes, a space, 373 harbours (2983), the newline and
+    # the last post (11) -- exactly QUERY_BYTES, after a space.
+    harbours = " ".join(["harbour"] * 373)
+    sid = played(cid, text=f"velvet crown quill {harbours}")
+    scenes.append_message(cid, sid, "assistant", "amber seal")
+    q = query.build(cid, sid)
+    assert q.texts[0].startswith("quill harbour")
+    assert "quill" in q.terms and "crown" not in q.terms

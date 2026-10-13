@@ -443,3 +443,22 @@ def test_compose_refits_to_the_selection_depth_not_the_setting(cid):
     _messages, detail = assemble.compose_turn(cid, sid, history=clipped)
     got = row(detail)["history"]["items"]
     assert not got or got[0]["tokens"] <= 400 // 5
+
+
+def test_the_row_lists_what_was_found_but_not_selected(cid, monkeypatch):
+    """Every choice is visible (goal 6): admitted candidates past depth keep
+    their signals in the row, the strongest few in merge order with the rest
+    counted, and none of it reaches the prompt."""
+    monkeypatch.setattr(assemble, "HISTORY_UNSELECTED_SHOWN", 2)
+    sid = played(cid)
+    chosen = item()
+    found = evidence(chosen, *(item(sid=f"00{n}--saltmarch") for n in range(2, 6)))
+    ev = replace(found, items=(chosen,))
+    messages, detail = assemble.compose_turn(cid, sid, history=ev)
+    got = row(detail)["history"]
+    assert [i["scene"] for i in got["items"]] == ["001--saltmarch"]
+    assert got["unselected"] == 4
+    assert [c["scene"] for c in got["candidates"]] == ["002--saltmarch", "003--saltmarch"]
+    assert got["candidates"][0]["rounds"][0]["lexical"]["matched"] == ["LEXICAL_MARKER"]
+    assert "002--saltmarch" not in str(messages)
+    json.dumps(detail)

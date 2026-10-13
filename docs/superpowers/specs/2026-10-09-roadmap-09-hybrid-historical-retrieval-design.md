@@ -261,7 +261,11 @@ It produces:
 - **`terms`**: distinctive tokens and phrases for the lexical signal (section
   6.2): proper names found in the window that resolve to a known actor,
   location, item, group or thread title (weighted), quoted phrases, and the
-  remaining non-stopword tokens. **A name that resolves to an excluded or
+  remaining non-stopword tokens -- all drawn from the same clipped window as
+  `texts`, starting at its first whole word, so a long post buys neither a
+  term list nor a scoring pass the size of everything it says, and a word the
+  clip cut (perhaps a protected name's tail) is never a term. The structural
+  seeds still read the whole window. **A name that resolves to an excluded or
   gm-only ref is removed from the terms entirely**, weighted or plain, so the
   reader's exclude cannot be walked around lexically (section 5.1's rule, one
   signal over).
@@ -409,7 +413,10 @@ Python:
   the SearchDocument's digest, so a warm turn reads them rather than
   re-tokenising. Corpus statistics (document frequency, average length) are
   computed per query over the documents being scored, never stored, because
-  the live set is per turn.
+  the live set is per turn. Tier 3 computes them over every named source's
+  documents at once (each source still scores only its own, through its own
+  visibility filter), so raw scores from different campaigns are one
+  ordering.
 - `terms` carry weights: a resolved name or record title counts double a
   plain token, a quoted phrase is matched whole. The weights are constants,
   tuned later.
@@ -872,8 +879,18 @@ reach a row, a capture or JSON:
              "tokens": 212, "shed": false}],
   "coverage": {"tiers": [1, 2], "semantic": "ok", "admitted": 5,
                "agreement": 2, "verdict": "sufficient"},
-  "ceiling": 1200, "budget_from": ["config", "context_window"]}}
+  "ceiling": 1200, "budget_from": ["config", "context_window"],
+  "unselected": 3,
+  "candidates": [{"scene": "004--the-harbour", "key": "...", "tier": 2,
+                  "admitted_by": ["semantic"], "rounds": [...], "ranks": [...]}]}}
 ```
+
+`candidates` is what retrieval admitted and the section does not carry (past
+depth, or selected and then not fitted), with its signals, so the reader sees
+what was found as well as what was chosen (goal 6). It keeps the strongest
+`HISTORY_UNSELECTED_SHOWN` (20) in merge order and `unselected` counts them
+all: the admitted list can run to the widening window, and every entry rides
+each prompt capture.
 
 `test_reasons_never_reach_the_prompt` gains the history row, built from a
 **hand-built `Evidence`** in which every signal is set (the preview path skips
@@ -1187,7 +1204,11 @@ in the three money columns never added together, and the arms compare in
   backend`: the `context-only`, `lexical` and `structural+lexical` arms over a
   small recipe, plus `semantic` and `hybrid` replayed from recorded vectors
   (`evals/recordings/history/vectors-<space digest>.bin`, synthetic text
-  only). Rule cases 6 to 10 must pass in every arm.
+  only). Rule cases 6 to 10 must pass in every arm, graded over the whole
+  packed prompt (recap and archive included), never the section alone. The
+  recap is the campaign's newest one-liners whichever scene is played, which
+  09 does not change, so case 7 plays later filler into its window: the case
+  measures retrieval's `before` rule rather than the recap's recency.
 - **Long** (`--history --long`): the same cases over long recipes, opt-in,
   offline where vectors are recorded.
 - **Live** (`--history --live`): embeds with the configured Embedding role,

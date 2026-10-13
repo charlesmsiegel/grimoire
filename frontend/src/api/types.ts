@@ -1927,6 +1927,15 @@ export type HistoryEvidenceRow = {
                *  on a capture taken before the rerank existed. */
               rerank?: string };
   ceiling: number; budget_from: string[]; query_digest?: string;
+  /** Admitted but not in the section: the strongest few in merge order, and
+   *  how many there were in all. Absent on a capture taken before they were
+   *  listed. */
+  candidates?: {
+    scene: string; key: string; tier: number; admitted_by: string[];
+    rounds: HistorySignalRound[];
+    ranks: { round: number; signal: string; rank: number }[];
+  }[];
+  unselected?: number;
 };
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen

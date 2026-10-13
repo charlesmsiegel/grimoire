@@ -273,6 +273,21 @@ def subjects(cid: str, cat: Catalog, text: str, extras: tuple[str, ...] = ()) ->
     return tuple(sorted(ref for ref in found if cat.allowed(ref)))
 
 
+def _terms(cat: Catalog, clean: str) -> tuple[str, ...]:
+    weighted = list(
+        dict.fromkeys(
+            n
+            for ref, names in cat.names.items()
+            if cat.allowed(ref)
+            for n in names
+            if mentions(clean, n)
+        )
+    )
+    phrases = [t for t in search.query_terms(clean) if " " in t]
+    plain = [t for t in re.findall(r"\w+", clean) if len(t) > 1 and t not in STOPWORDS]
+    return cat.filter_terms([*weighted, *phrases, *plain])
+
+
 @dataclass(frozen=True)
 class Prepared:
     query: model.Query
@@ -303,19 +318,17 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
     archive_scan = (archive_scan + "\n" + seed).strip() if seed else archive_scan
     cat = catalog(cid, sid, len(shown))
     clean = cat.clean(scan)
-    weighted = list(
-        dict.fromkeys(
-            n
-            for ref, names in cat.names.items()
-            if cat.allowed(ref)
-            for n in names
-            if mentions(clean, n)
-        )
-    )
-    phrases = [t for t in search.query_terms(clean) if " " in t]
-    plain = [t for t in re.findall(r"\w+", clean) if len(t) > 1 and t not in STOPWORDS]
-    terms = cat.filter_terms([*weighted, *phrases, *plain])
-    clipped = scan.encode("utf-8", errors="replace")[-QUERY_BYTES:].decode("utf-8", errors="ignore")
+    raw = scan.encode("utf-8", errors="replace")
+    clipped = raw[-QUERY_BYTES:].decode("utf-8", errors="ignore")
+    # The lexical terms obey the same bound as the semantic text: the recent
+    # end is what the reply answers, and a long post must not buy a term list
+    # (and a scoring pass) the size of everything it says. A cut word is not a
+    # term -- it could be the tail of a protected name -- so a clipped window
+    # starts at its first whole word.
+    before = raw[-QUERY_BYTES - 1 : -QUERY_BYTES].decode("utf-8", errors="ignore")
+    cut = len(raw) > QUERY_BYTES and not re.match(r"\W", before)
+    window = re.sub(r"^\w*", "", clipped) if cut else clipped
+    terms = _terms(cat, cat.clean(window))
     seeds = subjects(cid, cat, clean)
     # Speaker stamps are separate from prose. Hidden/director notes confer no
     # speaker seed; an unstamped player label is not treated as an actor name.

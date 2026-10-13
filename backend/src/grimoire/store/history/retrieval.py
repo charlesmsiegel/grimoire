@@ -152,7 +152,7 @@ class _Selection:
     held_back: tuple[model.Candidate, ...] = ()
 
 
-def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=None):
+def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=None, others=()):
     validate(query)
     cfg = settings.read()
     cap = max(ceiling, 0)
@@ -182,7 +182,8 @@ def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=Non
     by_key = {c.scene.key: c for c in structural_candidates}
     ranked = [c for c in structural_candidates if c.admitted_by]
     structural_ranks = {c.scene.key: rank for rank, c in enumerate(ranked, 1)}
-    scores = lexical.score(terms, [d.doc for d in docs], weights=weights)
+    scores = lexical.score(terms, [d.doc for d in docs], weights=weights,
+                           others=[d.doc for d in others])
     lexical_ranked = sorted(
         zip(docs, scores, strict=True), key=lambda pair: pair[0].sid, reverse=True
     )
@@ -240,13 +241,12 @@ def _shared_ref(anchor, source, ref):
         return False
 
 
-def _prepare_sources(cid, sid, query, ceiling, sources):
-    # Enumerate every requested scope first: a complete anchor says nothing
-    # about another campaign. Unknown files stay unknown even when nothing was admitted.
-    anchor_cat = query_mod.catalog(cid, sid)
-    all_docs, candidates, views = [], [], {}
-    complete = True
-    base = None
+def _source_docs(cid, sid, sources):
+    """Every requested scope's eligible documents, read before any is scored:
+    tier 3's lexical corpus is all of them (6.2). A complete anchor says
+    nothing about another campaign, and an unknown file stays unknown even when
+    nothing was admitted."""
+    found, complete = {}, True
     for source in dict.fromkeys(sources):
         try:
             documents = live.scene_documents(source)
@@ -256,41 +256,71 @@ def _prepare_sources(cid, sid, query, ceiling, sources):
             complete = False
             continue
         complete = complete and not documents.skipped and not documents.degraded
-        docs = _eligible(source, sid) if source == cid else tuple(
+        found[source] = _eligible(source, sid) if source == cid else tuple(
             d for d in documents.documents if not d.closed_by)
-        source_cat = query_mod.catalog(source, sid if source == cid else "")
-        structural_cat = source_cat
-        if source != cid:
-            shared = {r for r in anchor_cat.names if source_cat.allowed(r)
-                      and anchor_cat.allowed(r) and _shared_ref(cid, source, r)}
-            structural_cat = replace(source_cat,
-                names={r: source_cat.names[r] for r in shared},
-                present=anchor_cat.present.intersection(shared),
-                location=anchor_cat.location if anchor_cat.location in shared else "")
+    return found, complete
+
+
+def _source_catalog(cid, sid, source, anchor_cat):
+    """The structural view of `source`: its own, or -- another campaign --
+    only the refs overlay ancestry proves it shares with the anchor."""
+    source_cat = query_mod.catalog(source, sid if source == cid else "")
+    if source == cid:
+        return source_cat
+    shared = {r for r in anchor_cat.names if source_cat.allowed(r)
+              and anchor_cat.allowed(r) and _shared_ref(cid, source, r)}
+    return replace(source_cat,
+        names={r: source_cat.names[r] for r in shared},
+        present=anchor_cat.present.intersection(shared),
+        location=anchor_cat.location if anchor_cat.location in shared else "")
+
+
+def _qualify(source, docs):
+    """Each document under a campaign-qualified key, and the map from its
+    source-local scene key to the qualified `SceneRef`."""
+    tagged_docs, qualified = [], {}
+    for d in docs:
+        original = d.doc.key
+        tagged = replace(d, doc=replace(d.doc, key="campaign:"+source+"/"+original,
+            meta={**d.doc.meta, "_history_campaign": source,
+                  "_history_document_key": original}))
+        tagged_docs.append(tagged)
+        qualified[model.SceneRef(tagged.sid, tagged.doc.meta.get("identity") or None).key] = \
+            _source_ref(tagged)
+    return tagged_docs, qualified
+
+
+def _prepare_sources(cid, sid, query, ceiling, sources):
+    anchor_cat = query_mod.catalog(cid, sid)
+    found, complete = _source_docs(cid, sid, sources)
+    all_docs, candidates, held_back, views = [], [], [], {}
+    base = None
+    for source, docs in found.items():
         prepared = _prepare(source, sid if source == cid else "", query, ceiling,
-                            documents=docs, structural_catalog=structural_cat)
+                            documents=docs,
+                            structural_catalog=_source_catalog(cid, sid, source, anchor_cat),
+                            others=[d for s, ds in found.items() if s != source for d in ds])
         if prepared is None:
             return None
         base = prepared
         views[source] = (prepared.cat, prepared.query)
-        qualified = {}
-        for d in docs:
-            original = d.doc.key
-            tagged = replace(d, doc=replace(d.doc, key="campaign:"+source+"/"+original,
-                meta={**d.doc.meta, "_history_campaign": source,
-                      "_history_document_key": original}))
-            all_docs.append(tagged)
-            qualified[model.SceneRef(tagged.sid, tagged.doc.meta.get("identity") or None).key] = \
-                _source_ref(tagged)
+        tagged, qualified = _qualify(source, docs)
+        all_docs.extend(tagged)
         candidates.extend(replace(c, scene=qualified[c.scene.key], tier=3)
                           for c in prepared.ordered)
+        held_back.extend(replace(c, scene=qualified[c.scene.key], tier=3)
+                         for c in prepared.held_back)
     if base is None:
         base = _prepare(cid, sid, query, ceiling, documents=())
     if base is None:
         return None
+    # Held-back matches across every source, in structural order, newest first
+    # on a tie: the structural list the semantic pool is cut from (5.4).
+    held_back.sort(key=lambda c: (c.scene.campaign, c.scene.sid), reverse=True)
+    held_back.sort(key=structural._rank)
     return replace(base, query=query, cat=anchor_cat, docs=tuple(all_docs),
                    ordered=tuple(merge_mod.order(_across_sources(candidates))),
-                   sources_complete=complete, source_views=views, held_back=())
+                   sources_complete=complete, source_views=views, held_back=tuple(held_back))
 
 
 def _across_sources(candidates):
@@ -300,8 +330,9 @@ def _across_sources(candidates):
     would read a weak match first in one campaign as the equal of a strong one
     first in another. A signal's list is rebuilt from its own raw value --
     lexical score, structural relation and seed counts -- newest first on a
-    tie, as within one campaign. (Lexical scores still carry each source's own
-    corpus statistics: an ordering of raw values, never a fused number.)"""
+    tie, as within one campaign. Every source's lexical scores were computed
+    over the one corpus of all of them (`lexical.score(others=)`), so they are
+    one ordering of raw values, never a fused number."""
     def lexical_key(c):
         return -c.rounds[0].lexical.score
 

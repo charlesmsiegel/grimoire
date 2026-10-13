@@ -1917,7 +1917,28 @@ def _history_row(section: dict) -> dict:
                 "shed": item["key"] in shed} for item in detail["items"]],
         "coverage": deepcopy(detail["coverage"]), "ceiling": detail["ceiling"],
         "budget_from": list(detail["budget_from"]), "query_digest": detail["query_digest"],
+        **_unselected(detail),
     }}
+
+
+#: How many candidates that found no place in the section the inspector lists.
+#: Display only: the admitted list can run to the widening window, and every
+#: entry rides each prompt capture, so the row keeps the strongest few in merge
+#: order and counts the rest.
+HISTORY_UNSELECTED_SHOWN = 20
+
+
+def _unselected(detail: dict) -> dict:
+    """What retrieval admitted and the section does not carry -- past depth, or
+    selected and then not fitted -- with its signals, so the reader sees what
+    was found as well as what was chosen. Absent on hand-built detail."""
+    if "candidates" not in detail:
+        return {}
+    chosen = {item["key"] for item in detail["items"]}
+    rest = [c for c in detail["candidates"] if c["key"] not in chosen]
+    return {"unselected": len(rest), "candidates": [
+        {key: deepcopy(c[key]) for key in ("scene", "key", "tier", "admitted_by", "rounds", "ranks")}
+        for c in rest[:HISTORY_UNSELECTED_SHOWN]]}
 
 
 def _notes_row(notes: list[dict], p: dict, count) -> tuple[dict, frozenset[int]]:

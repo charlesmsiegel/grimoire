@@ -57,6 +57,9 @@ class Planted:
     forbidden_marks: frozenset[str] = frozenset()
 
 
+_RECAP_DEPTH = 2
+
+
 def _scene(cid, text, summary, *, cast=()):
     sid = scenes.create_scene(cid, "Saltmarch")
     scenes.append_message(cid, sid, "user", text)
@@ -118,6 +121,12 @@ def _play(cid, root, case, *, cast, old, detail, forbidden, marks):
         mark = "Tally later."
         forbidden.add(_scene(cid, detail, f"{detail} {mark}", cast=cast))
         marks.add(mark)
+        # The recap is the campaign's newest one-liners whichever scene is
+        # being played -- today's prompt, which 09 does not change. Later
+        # filler fills its window, so every arm's whole prompt is graded for
+        # the forbidden line and the case measures retrieval's before rule.
+        for _ in range(_RECAP_DEPTH):
+            _scene(cid, "The room is quiet.", "The room is quiet.")
     if case.shape == 8:
         pins.set_rule(cid, f"characters:{cast[0][0]}", "exclude", sid=current)
         loc = entities.create_entity(root, "locations", "Saltmarch", secrecy="gm-only")
@@ -134,7 +143,7 @@ def build(case, *, long=False, seed=9):
                  for n in ("Mara", "Seraphine"))
     config.write_config(history_recall_depth="5", history_recall_budget="1200",
                         history_recall_threshold="0.6", context_budget="0",
-                        recap_depth="2", archive_depth="0", scan_depth="4")
+                        recap_depth=str(_RECAP_DEPTH), archive_depth="0", scan_depth="4")
     fact = "amberseal"
     detail = "Mara entrusted Seraphine with amberseal."
     if case.shape not in (3, 4):

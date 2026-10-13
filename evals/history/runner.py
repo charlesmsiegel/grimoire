@@ -100,8 +100,7 @@ def _packed(planted, evidence):
     rows = detail["sections"] if detail else []
     row = next((r for r in rows if r["id"] == "history_recall"), {})
     section = row.get("text", "") if not row.get("dropped") else ""
-    recap = next((r.get("text", "") for r in rows if r["id"] == "story_so_far"), "")
-    return messages, text, section, row, recap
+    return messages, text, section, row
 
 
 def _network(fn, stats):
@@ -178,7 +177,7 @@ async def _arm(case, planted, arm, *, space, live, targets, seen, run_id, stats)
                 stats["first_scene"] = (first.coverage.verdict == "exhausted"
                                         and first.coverage.tiers == (1,)
                                         and not first.items and len(seen) == requests)
-        messages, packed, section, row, stats["recap"] = await asyncio.to_thread(
+        messages, packed, section, row = await asyncio.to_thread(
             _packed, planted, evidence)
         output = ""
         if live:
@@ -207,12 +206,9 @@ def _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, ro
         items = tuple(i for i in items if section and not details.get(i.scene.key, {}).get("shed", False))
     recalls = graders.recalls(planted.gold, items)
     hard = not planted.forbidden.intersection(i.scene.sid for i in items)
-    # No forbidden scene's own summary may be recalled: in a retrieval arm,
-    # into the history section; in context-only, anywhere but the recap,
-    # which is the most recent one-liners by design (spec 1, 16) and so says
-    # nothing about eligibility.
-    recalled = section if arm != "context-only" else packed.replace(stats.get("recap", ""), "")
-    hard = hard and not any(m in recalled for m in planted.forbidden_marks)
+    # No forbidden scene's own line may reach the prompt, in any arm: the
+    # whole packed context is graded, recap and archive included (12.3).
+    hard = hard and not any(m in packed for m in planted.forbidden_marks)
     if case.shape == 8:
         hard = hard and all(not i.location for i in evidence.items)
         hard = hard and all("characters:mara" not in r.refs for c in evidence.candidates

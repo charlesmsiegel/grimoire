@@ -211,5 +211,14 @@ function HistoryEntries({ section }: { section: ContextSection }) {
         </div>)}
       </li>)}
     </ul>
+    {!!history.unselected && <>
+      <div className="field-hint">Found, not selected: {history.unselected}</div>
+      <ul className="ctx-entries">
+        {(history.candidates ?? []).map((candidate) => <li key={candidate.key}>
+          {candidate.scene}; tier {candidate.tier}; admitted by {candidate.admitted_by.join(", ") || "none"};{" "}
+          {candidate.ranks.map((rank) => `${rank.signal} rank ${rank.rank}`).join(", ") || "unranked"}
+        </li>)}
+      </ul>
+    </>}
   </>;
 }
