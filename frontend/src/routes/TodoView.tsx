@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Chore, ChoreItems, TodoPayload } from "../api/types";
+import { useRevalidated } from "../api/useRevalidated";
 import { PageShell, ColumnSection } from "../components/PageShell";
 import ReportScopeSelector from "../components/ReportScopeSelector";
 
@@ -10,11 +11,19 @@ import ReportScopeSelector from "../components/ReportScopeSelector";
  *  Two properties carry this page, and both are easy to lose:
  *
  *  **Every chore is a live count.** The label is built from a number the server
- *  computed on this request, and a chore at zero is not in the list at all.
- *  Accepting the last proposal removes the absorb chore; writing the last
- *  anchor removes the voice one. A list that can go stale teaches the reader to
- *  distrust it, and then the one entry that mattered is the one they scroll
- *  past.
+ *  computed for this request, and a chore at zero is not in the list at all.
+ *  Some of what a chore is computed from is reused between requests, under a
+ *  key covering every file it read, so a reused input is never older than
+ *  those files' stamps (`docs/store-guarantees.md` says where a stamp can miss
+ *  a rewrite). Accepting the last proposal removes the absorb chore; writing
+ *  the last anchor removes the voice one. A list that can go stale teaches the
+ *  reader to distrust it, and then the one entry that mattered is the one they
+ *  scroll past.
+ *
+ *  The one exception is on this side: a second visit to the same scope paints
+ *  the last answer this tab had while its own read is on the wire -- for one
+ *  revalidated frame, marked busy, with Ignore and Restore disabled -- and the
+ *  answer replaces it wholesale (`useRevalidated`).
  *
  *  **Ignoring is real.** An ignored chore is counted nowhere — not in the
  *  rail's badge, not in this page's own total — and it moves to its own section
@@ -123,21 +132,21 @@ function Row({ chore, onIgnore, busy, restore, cid, showScope }: {
 }
 
 export default function TodoView({ cid }: { cid: string | null }) {
-  const [data, setData] = useState<TodoPayload | null>(null);
-  const [failed, setFailed] = useState(false);
+  // Keyed on the scope: campaign A's chores are never drawn under campaign B,
+  // where an Ignore would wave off the wrong campaign's. A scope visited before
+  // paints its last answer at once, and nothing is ever blanked between two
+  // visits of the same one.
+  const { data, stale, failed: readFailed, reload } = useRevalidated<TodoPayload>(
+    JSON.stringify(["todo", cid ?? ""]), () => api.rememberedTodo(cid), () => api.getTodo(cid));
+  // An ignore that did not land. The list itself is still the last good read.
+  const [ignoreFailed, setIgnoreFailed] = useState(false);
+  const failed = readFailed || ignoreFailed;
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => {
-    let live = true;
-    setData(null);
-    setFailed(false);
-    api.getTodo(cid)
-      .then((d) => { if (live) setData(d); })
-      .catch(() => { if (live) setFailed(true); });
-    return () => { live = false; };
-  }, [cid]);
-
-  useEffect(load, [load]);
+  function retry() {
+    setIgnoreFailed(false);
+    void reload();
+  }
 
   function ignore(chore: Chore, on: boolean) { void ignoreAsync(chore, on); }
 
@@ -146,14 +155,17 @@ export default function TodoView({ cid }: { cid: string | null }) {
     try {
       await api.setChoreIgnored(chore.id, on, chore.campaign_id ??
         (chore.scope === "campaign" ? cid ?? undefined : undefined));
-      // Re-read rather than patching in place: ignoring is not the only thing
-      // that can have changed the list, and the counts are the point.
-      setData(await api.getTodo(cid));
     } catch {
-      setFailed(true);
-    } finally {
+      setIgnoreFailed(true);
       setBusy(false);
+      return;
     }
+    // Re-read rather than patching in place: ignoring is not the only thing
+    // that can have changed the list, and the counts are the point. Through
+    // `reload`, so the visit's own read -- still on the wire, perhaps, and
+    // sent before this write -- cannot land after it and paint the chore back.
+    await reload();
+    setBusy(false);
   }
 
   const chores = data?.chores ?? [];
@@ -202,7 +214,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
   );
 
   return (
-    <PageShell column={column} columnLabel="To do">
+    <PageShell column={column} columnLabel="To do" busy={stale}>
       <div className="page-wide view-anim">
         <div className="eyebrow">Everything that would make play better</div>
         <h1 className="screen-title">To do</h1>
@@ -211,11 +223,13 @@ export default function TodoView({ cid }: { cid: string | null }) {
         {failed && (
           <div className="banner error-banner">
             The list could not be read.{" "}
-            <button className="subtle" onClick={load}>Try again</button>
+            <button className="subtle" onClick={retry}>Try again</button>
           </div>
         )}
 
-        {!failed && data && (
+        {/* "Nothing outstanding" is a statement, so it waits for this visit's
+            own read; a remembered count above zero is only a count. */}
+        {!failed && data && (data.count > 0 || !stale) && (
           <p className="field-hint">
             {data.count === 0
               ? "Nothing outstanding. Anything ignored is below."
@@ -235,8 +249,8 @@ export default function TodoView({ cid }: { cid: string | null }) {
             <h2 className="chore-group">{g}</h2>
             <ul className="chore-list">
               {chores.filter((c) => c.group === g).map((c) => (
-                <Row key={`${c.campaign_id ?? "library"}:${c.id}`} chore={c} onIgnore={ignore} busy={busy} cid={cid}
-                     showScope={showScope} />
+                <Row key={`${c.campaign_id ?? "library"}:${c.id}`} chore={c} onIgnore={ignore}
+                     busy={busy || stale} cid={cid} showScope={showScope} />
               ))}
             </ul>
           </section>
@@ -251,8 +265,8 @@ export default function TodoView({ cid }: { cid: string | null }) {
             </p>
             <ul className="chore-list">
               {data.ignored.map((c) => (
-                <Row key={`${c.campaign_id ?? "library"}:${c.id}`} chore={c} onIgnore={ignore} busy={busy} restore cid={cid}
-                     showScope={showScope} />
+                <Row key={`${c.campaign_id ?? "library"}:${c.id}`} chore={c} onIgnore={ignore}
+                     busy={busy || stale} restore cid={cid} showScope={showScope} />
               ))}
             </ul>
           </section>

@@ -2,13 +2,13 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../api/client", () => ({
-  api: { getTodo: vi.fn(), setChoreIgnored: vi.fn(), getChoreItems: vi.fn(),
+  api: { getTodo: vi.fn(), rememberedTodo: vi.fn(), setChoreIgnored: vi.fn(), getChoreItems: vi.fn(),
          listCampaigns: vi.fn().mockResolvedValue([]) },
 }));
 
 import { api } from "../api/client";
 import TodoView from "./TodoView";
-import type { Chore } from "../api/types";
+import type { Chore, TodoPayload } from "../api/types";
 
 const chore = (over: Partial<Chore> = {}): Chore => ({
   id: "sheets", scope: "campaign", group: "Game mechanics", severity: "warn", n: 3,
@@ -28,6 +28,7 @@ beforeEach(() => {
   // — the implementations are re-set immediately below.
   vi.clearAllMocks();
   (api.getTodo as any).mockResolvedValue({ chores: [chore()], ignored: [], count: 1 });
+  (api.rememberedTodo as any).mockReturnValue(undefined);
   (api.setChoreIgnored as any).mockResolvedValue({ ok: true, ignored: [] });
   (api.getChoreItems as any).mockResolvedValue({
     items: [{ id: "mara", label: "Mara Vance", detail: "characters",
@@ -229,4 +230,116 @@ test("instances that cannot be read say so rather than reading as none", async (
   fireEvent.click(await screen.findByRole("button", { name: /3 cast members/i }));
   expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText(/nothing to list here/i)).not.toBeInTheDocument();
+});
+
+// ---- first paint from memory, then revalidate (roadmap 04, 6.2) ----
+
+/** A promise and the hand that settles it. */
+function held<T>() {
+  let resolve: (v: T) => void = () => {};
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+const REMEMBERED: TodoPayload = {
+  chores: [chore()], ignored: [chore({ id: "owed", what: "2 open commitments" })], count: 1,
+};
+
+test("a remembered list paints on the first render, busy, with Ignore and Restore held", async () => {
+  (api.rememberedTodo as any).mockReturnValue(REMEMBERED);
+  const answer = held<TodoPayload>();
+  (api.getTodo as any).mockReturnValue(answer.promise);
+  renderTodo();
+  // Synchronously, before any await: the frame painted from memory.
+  expect(screen.getByText("3 cast members without a sheet")).toBeInTheDocument();
+  expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByRole("button", { name: /^ignore$/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /^restore$/i })).toBeDisabled();
+  // Expanding a chore and following its fix act on nothing; both stay live.
+  expect(screen.getByRole("button", { name: /3 cast members/i })).toBeEnabled();
+  expect(screen.getByRole("link", { name: /sheet coverage/i })).toHaveAttribute("href", "/campaigns/run/sheets");
+  expect(api.getTodo).toHaveBeenCalledWith("run");
+
+  answer.resolve({ chores: [chore({ what: "4 cast members without a sheet" })], ignored: [],
+                   count: 1 });
+  expect(await screen.findByText("4 cast members without a sheet")).toBeInTheDocument();
+  expect(screen.queryByText("3 cast members without a sheet")).toBeNull();
+  expect(screen.getByRole("main")).not.toHaveAttribute("aria-busy");
+  expect(screen.getByRole("button", { name: /^ignore$/i })).toBeEnabled();
+});
+
+test("nothing outstanding is not said before a read has landed", async () => {
+  const answer = held<TodoPayload>();
+  (api.getTodo as any).mockReturnValue(answer.promise);
+  renderTodo();
+  expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
+  answer.resolve({ chores: [], ignored: [], count: 0 });
+  expect(await screen.findByText(/nothing outstanding/i)).toBeInTheDocument();
+});
+
+test("a remembered zero is not said until the visit's own read agrees", async () => {
+  (api.rememberedTodo as any).mockReturnValue({ chores: [], ignored: [], count: 0 });
+  const answer = held<TodoPayload>();
+  (api.getTodo as any).mockReturnValue(answer.promise);
+  renderTodo();
+  expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
+  answer.resolve({ chores: [chore()], ignored: [], count: 1 });
+  expect(await screen.findByText("3 cast members without a sheet")).toBeInTheDocument();
+  expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
+});
+
+test("a failed read drops the remembered list, and Try again re-reads", async () => {
+  (api.rememberedTodo as any).mockReturnValue(REMEMBERED);
+  (api.getTodo as any).mockRejectedValue(new Error("offline"));
+  renderTodo();
+  expect(await screen.findByText(/the list could not be read/i)).toBeInTheDocument();
+  expect(screen.queryByText("3 cast members without a sheet")).toBeNull();
+  expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
+
+  (api.getTodo as any).mockResolvedValue({ chores: [chore()], ignored: [], count: 1 });
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("3 cast members without a sheet")).toBeInTheDocument();
+  expect(api.getTodo).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText(/could not be read/i)).toBeNull();
+});
+
+test("an ignore re-reads through the page's own read, which paints the list after it", async () => {
+  (api.getTodo as any)
+    .mockResolvedValueOnce({ chores: [chore()], ignored: [], count: 1 })
+    .mockResolvedValue({ chores: [], ignored: [chore()], count: 0 });
+  renderTodo();
+  fireEvent.click(await screen.findByRole("button", { name: /^ignore$/i }));
+  expect(await screen.findByRole("button", { name: /^restore$/i })).toBeEnabled();
+  // One read for the visit, one after the write, and the page never went
+  // blank in between: the list stayed up while the second was asked.
+  expect(api.getTodo).toHaveBeenCalledTimes(2);
+  expect(api.getTodo).toHaveBeenLastCalledWith("run");
+});
+
+test("a second visit to the same scope is never blank", async () => {
+  const first = renderTodo();
+  await screen.findByText("3 cast members without a sheet");
+  first.unmount();
+  // What the client remembered from the first visit.
+  (api.rememberedTodo as any).mockImplementation((cid: string | null) =>
+    (cid === "run" ? { chores: [chore()], ignored: [], count: 1 } : undefined));
+  (api.getTodo as any).mockReturnValue(new Promise(() => {}));
+  renderTodo();
+  expect(screen.getByText("3 cast members without a sheet")).toBeInTheDocument();
+});
+
+test("switching campaign never shows the last one's chores under the next", async () => {
+  (api.rememberedTodo as any).mockImplementation((cid: string | null) =>
+    (cid === "run" ? { chores: [chore()], ignored: [], count: 1 } : undefined));
+  const view = renderTodo("run");
+  await screen.findByText("3 cast members without a sheet");
+  const other = held<TodoPayload>();
+  (api.getTodo as any).mockReturnValue(other.promise);
+  view.rerender(<MemoryRouter><TodoView cid="tidewrack" /></MemoryRouter>);
+  // The render that moves the key is the one that must not draw A's rows.
+  expect(screen.queryByText("3 cast members without a sheet")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^ignore$/i })).toBeNull();
+  other.resolve({ chores: [chore({ what: "1 open commitment" })], ignored: [], count: 1 });
+  expect(await screen.findByText("1 open commitment")).toBeInTheDocument();
+  expect(screen.queryByText("3 cast members without a sheet")).toBeNull();
 });

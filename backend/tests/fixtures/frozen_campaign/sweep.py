@@ -65,6 +65,7 @@ import tempfile
 from pathlib import Path
 
 from grimoire import store
+from grimoire.store import overview
 from grimoire.store.continuity import candidates, drivers, effective, graph, pending, pressure
 from tests import frozen_copy
 
@@ -151,6 +152,10 @@ def sweep(home: Path) -> dict:
                 store.greetings.read_greeting(wroot, g["id"])
 
     out["campaigns.list_campaigns"] = store.campaigns.list_campaigns()
+    # The overview's card compositions (roadmap 04) over files an older
+    # version wrote: the rows the Worlds and Campaigns shelves render.
+    out["overview.world_rows"] = overview.world_rows()
+    out["overview.campaign_cards"] = overview.campaign_cards()
     for c in out["campaigns.list_campaigns"]:
         _campaign(out, c["id"])
     return normalize(out, home)
@@ -160,6 +165,13 @@ def _campaign(out: dict, cid: str) -> None:
     croot = store.campaigns.campaign_root(cid)
     out[f"campaigns.read_campaign[{cid}]"] = store.campaigns.read_campaign(cid)
     out[f"modules.resolve[{cid}]"] = store.modules.resolve(cid)
+    # The overview projections (roadmap 04) over files an older version
+    # wrote. The scene summary folds the scene heads; its `stamps` are the
+    # well-formed `updated` values, so nothing in it reads a clock.
+    out[f"overview.scene_summary[{cid}]"] = overview.scene_summary(cid)
+    # The five continuity ledgers, fed to today's readers as bytes: the shell's
+    # badge and Todo's owed and continuity chores, in one value.
+    out[f"overview.continuity_summary[{cid}]"] = overview.continuity_summary(cid)
     # The overlay's view, not the world's: what a campaign actually reads is
     # the merge of its own files over the world's, and every listing below is
     # the campaign-side call the app makes.

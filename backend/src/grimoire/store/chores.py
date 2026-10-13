@@ -6,9 +6,14 @@ Two halves, and the second is the reason the first is worth having.
 module computes now, and *a chore at zero is not in the list*. That is the
 whole contract: a to-do list that can go stale is worse than no to-do list,
 because the reader learns to distrust it and then cannot use the one entry that
-mattered. Nothing here is stored, cached, or written down — the list is
-recomputed on every read, from the same stores the rest of the app reads.
-One exception, read-only: the continuity chores read the reconciliation cache
+mattered. No chore is stored or written down — every chore is computed for
+the request that asks, from the same stores the rest of the app reads. Some of
+its inputs are reused (the overview projections, `store/overview/`), under a
+key covering every file they read, so a reused input describes the bytes as
+their stamps last showed them. The residual is stated in
+`docs/store-guarantees.md`: a rewrite that keeps size, mtime and ctime
+(Windows, FAT) is believed until restart in process, and for the life of a row
+in a persisted `sources` row. One read-only input of note: the continuity chores read the reconciliation cache
 (`continuity_candidates.json`) through `continuity.pending`'s live filter in the
 same request — suppressed, stale, merged-away and already-closed findings never
 count.

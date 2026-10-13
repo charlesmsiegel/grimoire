@@ -14,8 +14,9 @@ Every optional field is nullable from the first commit, so a later slice
 filling one in is a value change rather than a schema change.
 
 *Nothing here reads a transcript body to find which scenes are open.*
-Open-scene detection comes off scene frontmatter (``done``), which is what
-``scenes.read.list_scenes`` already does through ``parse_frontmatter_head``.
+Open-scene detection comes off scene frontmatter (``done``), through
+``store.overview.scene_summary``, which folds the scene heads read head-only
+(``parse_frontmatter_head``) and remembers the fold in-process.
 A campaign can hold a great many scenes and this runs on every navigation, so
 the rail must never be the thing that scans all of them.
 
@@ -58,8 +59,9 @@ import json
 from fastapi import APIRouter
 
 from .. import store
-from ..store.continuity import effective as continuity_effective
+from ..store import overview
 from . import todo as todo_routes
+from .overview_log import overview_read
 
 router = APIRouter()
 
@@ -108,12 +110,16 @@ def _scene_turns(cid: str, sid: str) -> int | None:
     replies, and the rail tells those two apart the way every other count
     here does. A scene that opens cleanly and truly has none -- a fresh scene
     still waiting on its opener -- reports the real `0`.
+
+    Through `store.overview.scene_turns`, which runs that same walk over the
+    scene's bytes and remembers the count on the file's stamp and the seated
+    players' names: an unchanged open scene is not parsed again (spec 04
+    section 4.3).
     """
     try:
-        messages = store.scenes.read.read_scene(cid, sid)["messages"]
+        return overview.scene_turns(cid, sid)
     except (OSError, UnicodeDecodeError, store.CampaignNotFound, store.SceneNotFound):
         return None
-    return len(store.scenes._model_blocks(messages))
 
 
 def _images_undescribed(wid: str) -> int | None:
@@ -152,24 +158,28 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
     count so the sheet tally both of them need is swept once.
     """
     try:
-        meta = store.campaigns.read.read_campaign(cid)["meta"]
+        # The card row (remembered on campaign.md's stamp), not the whole
+        # record: the block reads its name and world and nothing else.
+        meta = overview.campaign_meta(cid)
     except store.CampaignNotFound:
         return None
 
     wid = str(meta.get("world", ""))
-    scenes = store.scenes.read.list_scenes(cid)
-    # `done` is the absorbed mark. Read with the same tolerance
-    # `list_scenes` applies to it: the file is hand-editable, and a rail that
-    # called a scene open while the absorb guard called it done would be worse
-    # than either answer alone.
+    # The overview's scene summary, shared with Todo's open-scenes chore
+    # through `ctx`: head-only reads, remembered in-process. `done` is the
+    # absorbed mark, read with the same tolerance `list_scenes` applies to it:
+    # the file is hand-editable, and a rail that called a scene open while
+    # the absorb guard called it done would be worse than either answer
+    # alone. An unreadable scene is counted, never listed as open.
+    summary = ctx.scene_summary_or_raise()
     #
     # `turns` is read off the scene's OWN transcript, not derived from
     # frontmatter -- there is no cheap field for it. `_scene_turns` bounds the
     # cost to the scenes that are actually open, which is what makes reading a
     # transcript body acceptable on a route that runs on every navigation; see
     # the module docstring.
-    open_scenes = [{"sid": s["id"], "title": s["title"], "turns": _scene_turns(cid, s["id"])}
-                   for s in scenes if not s["done"] and not s.get("closed_by")]
+    open_scenes = [{"sid": s["sid"], "title": s["title"], "turns": _scene_turns(cid, s["sid"])}
+                   for s in summary["open"]]
 
     unreviewed, pending = _pending(cid)
 
@@ -193,10 +203,10 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         # world's own pages (`/worlds/{wid}?section=images` for the row
         # below), and `world_name` alone cannot address one.
         "world": wid,
-        "world_name": store.worlds.read.world_name(wid) or wid,
-        "scenes": len(scenes),
+        "world_name": overview.world_name(wid) or wid,
+        "scenes": summary["count"],
         "open": open_scenes,
-        "ledger_open": _ledger_open(cid),
+        "ledger_open": ctx.continuity()["ledger_open"],
         "sheets": sheets,
         "unreviewed": unreviewed,
         # Which scenes are holding one, so the hub can name them and link
@@ -210,18 +220,6 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
         # no shape in which they arrive together. See `_money`.
         "money": _money(cid),
     }
-
-
-def _ledger_open(cid: str) -> int | None:
-    """Live canonical commitments -- a merged pair is one -- or `None` when
-    they cannot be counted. The cost rule: a garbled commitments.json is a
-    count nobody could take, which is neither a 500 on every navigation nor a
-    `0`. A garbled continuity.json is not a failure here: its aliases read as
-    none, so the count is the physical one."""
-    try:
-        return len(continuity_effective.commitments(cid))
-    except Exception:  # noqa: BLE001 -- the badge is never worth the rail's whole read; an uncountable ledger draws no tail
-        return None
 
 
 def _money(cid: str) -> dict:
@@ -294,7 +292,12 @@ def get_shell(campaign: str = ""):
     here as well would be one manifest in two languages with nothing holding
     them level -- a seventh section would ship a badge of six.
     """
-    campaigns = store.campaigns.read.list_campaigns()
+    with overview_read("shell", "campaign" if campaign else "library"):
+        return _shell(campaign)
+
+
+def _shell(campaign: str) -> dict:
+    campaigns = overview.campaign_rows()
     cid = campaign or _most_recent(campaigns)
     # One to-do context for the request, built for the campaign the block
     # answers about and handed to both halves: the rail's sheet row and the

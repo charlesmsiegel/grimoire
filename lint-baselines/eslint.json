@@ -406,7 +406,7 @@
     "react/no-array-index-key": 1
   },
   "frontend/src/routes/CampaignsView.tsx": {
-    "@typescript-eslint/no-floating-promises": 3,
+    "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 2,
     "jsx-a11y/no-autofocus": 1
   },
@@ -439,7 +439,7 @@
   },
   "frontend/src/routes/WorldsView.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 3,
+    "@typescript-eslint/no-floating-promises": 2,
     "@typescript-eslint/no-misused-promises": 3,
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 3,

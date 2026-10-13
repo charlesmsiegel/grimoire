@@ -40,7 +40,7 @@ const PHONE_PX = 720;
  *  Main scrolls independently of the column. Both scroll independently of the
  *  header, which never moves. */
 export function PageShell(
-  { column, footer, children, columnLabel = "Context", className = "", dismissKey }: {
+  { column, footer, children, columnLabel = "Context", className = "", dismissKey, busy }: {
     column: ReactNode;
     /** Pinned to the foot of the column, outside its scroll port. */
     footer?: ReactNode;
@@ -53,6 +53,10 @@ export function PageShell(
      *  closes the phone column, as a pathname change does; the same value on
      *  a re-render (a filter) leaves it up. */
     dismissKey?: string | null;
+    /** Main is showing an answer remembered from an earlier visit while the
+     *  page's own read is on the wire (`useRevalidated`'s `stale`). Said as
+     *  `aria-busy` and nothing else: no spinner, no greyed-out list. */
+    busy?: boolean;
   },
 ) {
   // Two library sections in a row render the same component tree, so React
@@ -109,7 +113,7 @@ export function PageShell(
         <div className="column-scroll">{column}</div>
         {footer !== undefined && <div className="column-pinned">{footer}</div>}
       </aside>
-      <main className="shell-main" ref={mainRef}>
+      <main className="shell-main" ref={mainRef} aria-busy={busy ? true : undefined}>
         {/* Phone only, and rendered rather than CSS-hidden: a control that does
             nothing at desktop width should not be in the tab order there. */}
         {phone && !focus && (

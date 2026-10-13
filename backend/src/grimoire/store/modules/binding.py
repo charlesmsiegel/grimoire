@@ -49,6 +49,21 @@ def set_campaign_module(cid: str, value: str) -> None:
     _write_key(campaigns_paths.campaign_meta_path(cid), "module", value)
 
 
+def _world_module(wid: str) -> str:
+    """The world's raw `module` key, read off `world.md`'s frontmatter alone.
+
+    Not `worlds_read.read_world`, which also takes the world's nine record
+    counts -- a directory listing per kind -- to answer a question about one
+    frontmatter key; `resolve` runs on every shell read and every `sheets`
+    chore (spec 04 section 4.5). Raises `WorldNotFound` exactly where that
+    read does: an id the resolver refuses, or no `world.md`."""
+    mp = worlds_paths.world_meta_path(wid)
+    if not mp.exists():
+        raise worlds_paths.WorldNotFound(wid)
+    wmeta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    return (wmeta.get("module") or "").strip()
+
+
 def resolve(cid: str) -> str | None:
     """The module id governing a campaign, or None (= zero mechanics).
     Campaign tri-state ("", "none", mid) over world default; a binding to a
@@ -60,10 +75,9 @@ def resolve(cid: str) -> str | None:
     mid = setting
     if not mid:
         try:
-            wmeta = worlds_read.read_world(meta.get("world", ""))["meta"]
+            mid = _world_module(meta.get("world", ""))
         except worlds_paths.WorldNotFound:
             return None
-        mid = (wmeta.get("module") or "").strip()
     if not mid:
         return None
     try:

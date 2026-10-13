@@ -15,6 +15,7 @@
  *  whole app on every buffered frame for no visible gain.
  */
 import { createContext, useContext, useMemo, useRef, type ReactNode } from "react";
+import { runEnded } from "../appEvents";
 
 /** A send whose outcome this client has not yet established.
  *
@@ -215,12 +216,16 @@ export function RunRegistryProvider({ children }: { children: ReactNode }) {
     settle(cid, sid) {
       pending.current.delete(key(cid, sid));
       persist(key(cid, sid), null);
+      // The run is over, and whatever it wrote landed after the request that
+      // started it settled: what the client remembers predates it.
+      runEnded();
     },
     recovered(cid, sid) {
       const found = pending.current.get(key(cid, sid));
       if (!found) return;
       found.recovered = true;
       persist(key(cid, sid), found);
+      runEnded();   // over too, and rolled back: a write all the same
     },
     parked(cid, sid) {
       // Read through STORAGE as well as this tab's map: another tab may have

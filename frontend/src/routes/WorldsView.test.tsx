@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorldsView from "./WorldsView";
+import type { WorldMeta } from "../api/types";
 import { INTENT_DWELL_MS, resetPrefetch } from "../api/prefetch";
 
 const navigate = vi.fn();
@@ -12,6 +13,7 @@ vi.mock("react-router-dom", async () => ({
 vi.mock("../api/client", () => ({
   api: {
     listWorlds: vi.fn(),
+    rememberedWorlds: vi.fn(),
     createWorld: vi.fn(),
     renameWorld: vi.fn(),
     deleteWorld: vi.fn(),
@@ -34,6 +36,7 @@ beforeEach(() => {
   (api.rememberedCharacters as any).mockReturnValue(undefined);
   (api.rememberedAppearances as any).mockReturnValue(undefined);
   (api.listWorlds as any).mockResolvedValue([]);
+  (api.rememberedWorlds as any).mockReturnValue(undefined);
   (api.createWorld as any).mockResolvedValue({ id: "w1" });
   (api.renameWorld as any).mockResolvedValue({ id: "w1", name: "New" });
   (api.deleteWorld as any).mockResolvedValue({ ok: true });
@@ -305,6 +308,7 @@ test("a failed refresh after a successful fork says the copy exists", async () =
   // is no better here: unlike an import, nothing navigates, so a quiet no-op
   // looks exactly like a fork that never happened.
   (api.listWorlds as any)
+    .mockResolvedValue([...ONE_WORLD, { id: "winifred", name: "Winifred", counts: {} }])
     .mockResolvedValueOnce(ONE_WORLD)
     .mockResolvedValueOnce(ONE_WORLD)
     .mockRejectedValueOnce(new Error("network"));
@@ -314,8 +318,12 @@ test("a failed refresh after a successful fork says the copy exists", async () =
   const alert = await screen.findByRole("alert");
   expect(alert).toHaveTextContent(/'Winifred' was created/i);
   expect(alert).not.toHaveTextContent(/could not be forked/i);
-  // And the button comes back, rather than being stuck disabled by the throw.
-  await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
+  // The grid that could not be confirmed is not kept: the page says it could
+  // not read the worlds, and Try again brings them back -- the copy with
+  // them, and the fork button live rather than stuck disabled by the throw.
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("Winifred")).toBeInTheDocument();
+  expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled();
   prompt.mockRestore();
 });
 
@@ -412,4 +420,117 @@ test("a world can be created with its profile, and a card shows the genre", asyn
     genre: "Gothic", tone: "Dread", themes: ["salt", "debt"], description: "A coast." }));
   // the form closes behind it, ready for the next one-line create
   await waitFor(() => expect(screen.queryByLabelText("Genre")).not.toBeInTheDocument());
+});
+
+// ---- first paint from memory, then revalidate (roadmap 04, 6.2) ----
+
+/** A promise and the hand that settles it. */
+function held<T>() {
+  let resolve: (v: T) => void = () => {};
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+test("a remembered grid paints on the first render, busy, with rename, fork and delete held", async () => {
+  (api.rememberedWorlds as any).mockReturnValue(ONE_WORLD);
+  const answer = held<WorldMeta[]>();
+  (api.listWorlds as any).mockReturnValue(answer.promise);
+  renderView();
+  // Read synchronously, before any await: this is the frame painted from
+  // memory, and an await would settle past it.
+  expect(screen.getByText("Saltmarch")).toBeInTheDocument();
+  expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByLabelText("Rename Saltmarch")).toBeDisabled();
+  expect(screen.getByLabelText("Fork Saltmarch")).toBeDisabled();
+  expect(screen.getByLabelText("Delete Saltmarch")).toBeDisabled();
+  // Export and the card itself act on nothing, and stay live.
+  expect(screen.getByLabelText("Export Saltmarch")).toHaveAttribute("href", "/api/worlds/w1/export.zip");
+  expect(screen.getByText("Saltmarch").closest("button")).toBeEnabled();
+  expect(api.listWorlds).toHaveBeenCalled();   // painting from memory never replaces asking
+
+  // The visit's own answer replaces the frame wholesale.
+  answer.resolve([{ id: "w2", name: "Realm", created: "", updated: "", counts: {} }]);
+  expect(await screen.findByText("Realm")).toBeInTheDocument();
+  expect(screen.queryByText("Saltmarch")).toBeNull();
+  expect(screen.getByRole("main")).not.toHaveAttribute("aria-busy");
+  expect(screen.getByLabelText("Rename Realm")).toBeEnabled();
+  expect(screen.getByLabelText("Fork Realm")).toBeEnabled();
+  expect(screen.getByLabelText("Delete Realm")).toBeEnabled();
+});
+
+test("no count is stated before a read has landed", async () => {
+  const answer = held<WorldMeta[]>();
+  (api.listWorlds as any).mockReturnValue(answer.promise);
+  renderView();
+  // "0 worlds" is a statement; nothing has been read to make it.
+  expect(screen.queryByText(/0 worlds/i)).toBeNull();
+  expect(screen.getByRole("main")).not.toHaveAttribute("aria-busy");   // nothing stale either
+  answer.resolve([]);
+  expect(await screen.findByText(/0 worlds/i)).toBeInTheDocument();
+});
+
+test("a remembered empty grid states nothing until its read lands", async () => {
+  (api.rememberedWorlds as any).mockReturnValue([]);
+  const answer = held<WorldMeta[]>();
+  (api.listWorlds as any).mockReturnValue(answer.promise);
+  renderView();
+  expect(screen.queryByText(/0 worlds/i)).toBeNull();
+  answer.resolve(ONE_WORLD);
+  expect(await screen.findByText(/^1 world$/i)).toBeInTheDocument();
+});
+
+test("a failed read shows its banner and no count, and Try again re-reads", async () => {
+  (api.rememberedWorlds as any).mockReturnValue(ONE_WORLD);
+  (api.listWorlds as any).mockRejectedValue(new Error("offline"));
+  renderView();
+  expect(await screen.findByText(/the worlds could not be read/i)).toBeInTheDocument();
+  // The remembered grid is dropped with the failure, and no count stands in.
+  expect(screen.queryByText("Saltmarch")).toBeNull();
+  expect(screen.queryByText(/0 worlds/i)).toBeNull();
+
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("Saltmarch")).toBeInTheDocument();
+  expect(api.listWorlds).toHaveBeenLastCalledWith(true);
+  expect(screen.queryByText(/could not be read/i)).toBeNull();
+});
+
+test("every refresh after a change is a fresh read", async () => {
+  // A non-fresh read would join one the visit sent before the change.
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderView();
+  await screen.findByText("Saltmarch");
+  expect(api.listWorlds).not.toHaveBeenCalledWith(true);
+
+  fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
+  expect(api.listWorlds).toHaveBeenLastCalledWith(true);
+
+  fireEvent.click(screen.getByLabelText("Rename Saltmarch"));
+  fireEvent.keyDown(screen.getByLabelText("Rename world"), { key: "Enter" });
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 2));
+  expect(api.listWorlds).toHaveBeenLastCalledWith(true);
+
+  fireEvent.click(screen.getByLabelText("Delete Saltmarch"));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 3));
+  expect(api.listWorlds).toHaveBeenLastCalledWith(true);
+});
+
+test("the visit's own read, landing late, cannot paint over a refresh after a change", async () => {
+  // Create is live on a stale frame (it names no existing world), so it can
+  // overtake the mount-time read: only the newest read may paint.
+  (api.rememberedWorlds as any).mockReturnValue(ONE_WORLD);
+  const mount = held<WorldMeta[]>();
+  const after = [...ONE_WORLD, { id: "w2", name: "Realm", created: "", updated: "", counts: {} }];
+  (api.listWorlds as any).mockImplementation((fresh?: boolean) =>
+    (fresh ? Promise.resolve(after) : mount.promise));
+  renderView();
+  fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  expect(await screen.findByText("Realm")).toBeInTheDocument();
+  mount.resolve(ONE_WORLD);
+  await screen.findByText("Saltmarch");
+  expect(screen.getByText("Realm")).toBeInTheDocument();
 });

@@ -1336,6 +1336,87 @@
       "owners": "pcs:winifred"
     }
   },
+  "overview.campaign_cards": [
+    {
+      "absorbed": 0,
+      "activity": "2026-01-01T09:11:00Z",
+      "blurb": "",
+      "cover": "",
+      "created": "2026-01-01T09:02:00Z",
+      "forked_from_scene": "",
+      "id": "the-drowned-ledger",
+      "last_scene": "The Long Quay",
+      "module": "d20-basic",
+      "name": "The Drowned Ledger",
+      "parent": "",
+      "scenes": 2,
+      "updated": "2026-01-01T09:09:00Z",
+      "world": "saltmarch"
+    }
+  ],
+  "overview.continuity_summary[the-drowned-ledger]": {
+    "closures": 0,
+    "closures_threads": false,
+    "ledger_open": 1,
+    "overlaps": 0,
+    "owed": 1
+  },
+  "overview.scene_summary[the-drowned-ledger]": {
+    "absorbed": 0,
+    "count": 2,
+    "open": [
+      {
+        "sid": "002--2026-01-02--the-long-quay",
+        "title": "The Long Quay"
+      },
+      {
+        "sid": "001--the-tide-comes-in",
+        "title": "The Tide Comes In"
+      }
+    ],
+    "rows": [
+      {
+        "closed_by": null,
+        "done": false,
+        "sid": "002--2026-01-02--the-long-quay",
+        "title": "The Long Quay",
+        "updated": "2026-01-01T09:11:00Z"
+      },
+      {
+        "closed_by": null,
+        "done": false,
+        "sid": "001--the-tide-comes-in",
+        "title": "The Tide Comes In",
+        "updated": "2026-01-01T09:07:00Z"
+      }
+    ],
+    "stamps": [
+      "2026-01-01T09:11:00Z",
+      "2026-01-01T09:07:00Z"
+    ],
+    "unreadable": 0
+  },
+  "overview.world_rows": [
+    {
+      "counts": {
+        "characters": 2,
+        "creatures": 0,
+        "greetings": 2,
+        "groups": 0,
+        "items": 0,
+        "locations": 1,
+        "lore": 1,
+        "pcs": 0
+      },
+      "cover": "",
+      "created": "2026-01-01T09:01:00Z",
+      "genre": "",
+      "id": "saltmarch",
+      "module": "",
+      "name": "Saltmarch",
+      "updated": "2026-01-01T09:01:00Z"
+    }
+  ],
   "playing.greeting_ideas[the-drowned-ledger]": [
     {
       "cast": [],

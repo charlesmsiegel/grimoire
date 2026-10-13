@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 
-from .. import scene_ids
+from .. import readstats, scene_ids
 from . import paths
 
 # The body is a script: every message is `**<Speaker>:** content`. Role is not
@@ -388,6 +388,7 @@ def _numbering(cid: str) -> tuple[int, int]:
 
 
 def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
+    readstats.bump("transcript.parse")
     matches = _markers(body)
     messages = []
     for i, m in enumerate(matches):

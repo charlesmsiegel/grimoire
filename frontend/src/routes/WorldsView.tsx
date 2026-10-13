@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 import { errorText } from "../api/errors";
 import { intentProps } from "../api/prefetch";
+import { useRevalidated } from "../api/useRevalidated";
 import { Field } from "../components/Field";
 import LibraryPage from "../components/LibraryPage";
 import { byName } from "../sortByName";
@@ -21,7 +22,14 @@ function footerLabel(counts: Record<string, number> | undefined): string {
 
 export default function WorldsView() {
   const navigate = useNavigate();
-  const [worlds, setWorlds] = useState<WorldMeta[]>([]);
+  // The last answer this tab had, on the first render, then this visit's own
+  // (`useRevalidated`). `undefined` until one of the two is in hand: an empty
+  // grid and "0 worlds" are statements, and only a read that landed may make
+  // them. Every refresh after a change below goes through `reload`, which is
+  // fresh and sequenced -- a mount-time read still on the wire cannot paint
+  // the list from before the change over the list after it.
+  const { data: worlds, stale, failed, reload } = useRevalidated<WorldMeta[]>(
+    "worlds", () => api.rememberedWorlds(), (fresh) => api.listWorlds(fresh));
   const [name, setName] = useState("");
   // The profile a new world can be given up front (#38). Behind a toggle, so
   // the one-line create stays one line for anybody who only wants a name.
@@ -37,10 +45,6 @@ export default function WorldsView() {
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    api.listWorlds().then(setWorlds);
-  }, []);
-
   /** The grid, A-Z. `listWorlds` answers newest-first, which is the right
    *  order for a feed and the wrong one for a shelf you come to looking for a
    *  particular world by name: recency puts it wherever it happens to be, and
@@ -48,7 +52,7 @@ export default function WorldsView() {
    *  library rather than something you play, so there is no toggle here --
    *  each card still carries its own counts, and none of them is a stamp
    *  anybody scans this page for. */
-  const shown = useMemo(() => byName(worlds), [worlds]);
+  const shown = useMemo(() => byName(worlds ?? []), [worlds]);
 
   async function create() {
     const trimmed = name.trim();
@@ -57,14 +61,14 @@ export default function WorldsView() {
     setName("");
     setProfile(EMPTY_DRAFT);
     setDetails(false);
-    setWorlds(await api.listWorlds());
+    await reload();
   }
 
   async function rename() {
     if (!renaming) return;
     await api.renameWorld(renaming.id, renaming.name);
     setRenaming(null);
-    setWorlds(await api.listWorlds());
+    await reload();
   }
 
   async function remove(w: WorldMeta) {
@@ -75,7 +79,7 @@ export default function WorldsView() {
       window.alert(err?.message ?? "Could not delete the world.");
       return;
     }
-    setWorlds(await api.listWorlds());
+    await reload();
   }
 
   /** Fork a world into a copy of its own, from the card of the world to copy.
@@ -116,20 +120,17 @@ export default function WorldsView() {
     // that one navigates to the new world, so the user sees it whatever the
     // grid does, and here a silent no-op is indistinguishable from a fork that
     // never happened.
-    try {
-      // `fresh`: a fork runs long enough that a world-list GET issued before it
-      // published can still be in flight, and joining that one would answer
-      // with a list the copy is not in -- no error, button re-enabled, and the
-      // obvious retry makes a second copy (Codex review).
-      setWorlds(await api.listWorlds(true));
-    } catch {
-      setError(`'${name}' was created, but the list could not be refreshed.`);
-    } finally {
-      // Held until the refresh settles, not released with the call: between
-      // the two the grid does not yet show the copy, and a re-enabled button
-      // over a stale grid is an invitation to fork twice.
-      setForking(null);
-    }
+    //
+    // `reload` is fresh: a fork runs long enough that a world-list GET issued
+    // before it published can still be in flight, and joining that one would
+    // answer with a list the copy is not in -- no error, button re-enabled,
+    // and the obvious retry makes a second copy (Codex review).
+    const refreshed = await reload();
+    if (!refreshed) setError(`'${name}' was created, but the list could not be refreshed.`);
+    // Held until the refresh settles, not released with the call: between the
+    // two the grid does not yet show the copy, and a re-enabled button over a
+    // stale grid is an invitation to fork twice.
+    setForking(null);
   }
 
   // An import always lands as a NEW world, so the grid is sorted by the
@@ -153,16 +154,14 @@ export default function WorldsView() {
     // A failing refresh below must not be reported as a failed import, or the
     // user retries and imports a second copy (Codex review).
     setImporting(false);
-    try {
-      setWorlds(await api.listWorlds(true));   // as in `fork`: a post-mutation read
-    } catch {
-      /* the grid is stale; navigating to the new world is what matters */
-    }
+    // As in `fork`: a post-mutation read. A failure is the grid's to report;
+    // navigating to the new world is what matters here.
+    await reload();
     navigate(sectionHref({ kind: "world", id: imported }, { kind: "section", at: "overview" }));
   }
 
   return (
-    <LibraryPage>
+    <LibraryPage busy={stale}>
       <div className="page view-anim">
         <div className="page-head">
           <h1 className="page-h1">Worlds</h1>
@@ -200,7 +199,17 @@ export default function WorldsView() {
             onChange={(e) => setProfile({ ...profile, description: e.target.value })} /></Field>
         </div>}
         {error && <div className="error" role="alert">{error}</div>}
-        <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
+        {failed && (
+          <div className="banner error-banner">
+            The worlds could not be read.{" "}
+            <button className="subtle" onClick={() => { void reload(); }}>Try again</button>
+          </div>
+        )}
+        {/* "0 worlds" is a statement, so it waits for a read that landed;
+            a count over remembered cards is only a count. */}
+        {worlds && (worlds.length > 0 || !stale) && (
+          <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
+        )}
         <div className="world-grid">
           {shown.map((w) => (
             <div className="world-card" key={w.id}>
@@ -241,16 +250,21 @@ export default function WorldsView() {
               <div className="row-actions">
                 <a aria-label={`Export ${w.name}`} title="Export as a bundle"
                    href={api.exportWorldUrl(w.id)} download>⭳</a>
-                <button aria-label={`Rename ${w.name}`} onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
+                {/* Rename, fork and delete wait out a frame painted from
+                    memory: it can show a world that is gone, or an id that
+                    names another world now. Export and the card itself are
+                    harmless on a stale frame and stay live. */}
+                <button aria-label={`Rename ${w.name}`} disabled={stale}
+                        onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
                 <button aria-label={`Fork ${w.name}`} title="Fork into a new world"
-                        disabled={forking !== null} onClick={() => { void fork(w); }}>
+                        disabled={stale || forking !== null} onClick={() => { void fork(w); }}>
                   {forking === w.id ? "…" : "⑂"}
                 </button>
                 {/* Disabled while any fork is in flight, not just this card's:
                     the copy walks the SOURCE for as long as it runs, and
                     deleting that world mid-walk fails the fork and leaves
                     neither the copy nor the original (Codex review). */}
-                <button aria-label={`Delete ${w.name}`} disabled={forking !== null}
+                <button aria-label={`Delete ${w.name}`} disabled={stale || forking !== null}
                         onClick={() => remove(w)}>✕</button>
               </div>
             </div>

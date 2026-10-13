@@ -2995,3 +2995,38 @@ test("fresh entity summaries do not join a pre-write in-flight listing", async (
   expect(fresh[0].has_image).toBe(true);
   expect(fetched).toHaveBeenCalledTimes(2);
 });
+
+test("a draft announces its run settled only once it is seen to end", async () => {
+  const { onRunSettled } = await import("./memoEpoch");
+  const heard = vi.fn();
+  const off = onRunSettled(heard);
+  try {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      draftRunResponse("landed", { result: { tagline: "x" } }));
+    await api.generateCharacterTagline("realm", "mara");
+    expect(heard).toHaveBeenCalledTimes(1);
+  } finally {
+    off();
+  }
+});
+
+test("an abandoned draft wait announces nothing: the run is still going", async () => {
+  const { onRunSettled } = await import("./memoEpoch");
+  const heard = vi.fn();
+  const off = onRunSettled(heard);
+  vi.useFakeTimers();
+  try {
+    globalThis.fetch = vi.fn().mockResolvedValue(draftRunResponse("running"));
+    const stop = new AbortController();
+    const pending = api.generateCharacterTagline("realm", "mara", stop.signal);
+    const settled = pending.catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(1000);
+    stop.abort();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await settled as { name?: string }).name).toBe("AbortError");
+    expect(heard).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+    off();
+  }
+});

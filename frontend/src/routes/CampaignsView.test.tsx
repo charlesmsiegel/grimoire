@@ -1,6 +1,7 @@
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import CampaignsView from "./CampaignsView";
+import type { CampaignMeta, WorldMeta } from "../api/types";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => {
@@ -12,6 +13,8 @@ vi.mock("../api/client", () => ({
   api: {
     listCampaigns: vi.fn(),
     listWorlds: vi.fn(),
+    rememberedCampaigns: vi.fn(),
+    rememberedWorlds: vi.fn(),
     renameCampaign: vi.fn(),
     deleteCampaign: vi.fn(),
     forkCampaign: vi.fn(),
@@ -25,6 +28,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   (api.listCampaigns as any).mockResolvedValue([]);
+  (api.rememberedCampaigns as any).mockReturnValue(undefined);
+  (api.rememberedWorlds as any).mockReturnValue(undefined);
   (api.listWorlds as any).mockResolvedValue([
     { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
   ]);
@@ -407,4 +412,135 @@ test("a fork the server refuses is reported rather than silently doing nothing",
   await screen.findByText(/could not be forked: campaign is busy/i);
   // ...and the shelf is not re-read, because nothing on it changed.
   expect(api.listCampaigns).toHaveBeenCalledTimes(1);
+});
+
+// ---- first paint from memory, then revalidate (roadmap 04, 6.2) ----
+
+/** A promise and the hands that settle it. */
+function held<T>() {
+  let resolve: (v: T) => void = () => {};
+  let reject: (e: unknown) => void = () => {};
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+const REALM = [{ id: "w1", name: "Realm", created: "", updated: "", counts: {} }];
+const SALTMARCH_RUN = [
+  { id: "c1", name: "Saltmarch", world: "w1", created: "", updated: "", scenes: 3, absorbed: 1,
+    last_scene: "Arrival" },
+];
+
+test("a remembered shelf paints on the first render, busy, with rename, fork and delete held", async () => {
+  (api.rememberedCampaigns as any).mockReturnValue(SALTMARCH_RUN);
+  (api.rememberedWorlds as any).mockReturnValue(REALM);
+  const campaigns = held<CampaignMeta[]>();
+  const worlds = held<WorldMeta[]>();
+  (api.listCampaigns as any).mockReturnValue(campaigns.promise);
+  (api.listWorlds as any).mockReturnValue(worlds.promise);
+  renderView();
+  // Synchronously, before any await: the frame painted from memory.
+  const c = within(card("Saltmarch"));
+  expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
+  expect(c.getByRole("button", { name: "Rename Saltmarch" })).toBeDisabled();
+  expect(c.getByRole("button", { name: "Fork Saltmarch" })).toBeDisabled();
+  expect(c.getByRole("button", { name: "Delete Saltmarch" })).toBeDisabled();
+  // Navigation acts on nothing and stays live.
+  expect(c.getByRole("link", { name: /continue/i })).toHaveAttribute("href", "/campaigns/c1");
+  // New campaign waits for the worlds read to land, remembered worlds or not.
+  expect(screen.getByRole("button", { name: /new campaign/i })).toBeDisabled();
+
+  campaigns.resolve([{ ...SALTMARCH_RUN[0], name: "Saltmarch Nights" }]);
+  worlds.resolve(REALM);
+  expect(await screen.findByText("Saltmarch Nights")).toBeInTheDocument();
+  expect(screen.queryByText("Saltmarch")).toBeNull();
+  expect(screen.getByRole("main")).not.toHaveAttribute("aria-busy");
+  const fresh = within(card("Saltmarch Nights"));
+  expect(fresh.getByRole("button", { name: "Rename Saltmarch Nights" })).toBeEnabled();
+  expect(fresh.getByRole("button", { name: "Fork Saltmarch Nights" })).toBeEnabled();
+  expect(fresh.getByRole("button", { name: "Delete Saltmarch Nights" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: /new campaign/i })).toBeEnabled();
+});
+
+test("no empty state is said before the reads have landed", async () => {
+  // "No worlds yet" before the worlds read used to tell a reader with ten
+  // worlds to go and create one.
+  const campaigns = held<CampaignMeta[]>();
+  const worlds = held<WorldMeta[]>();
+  (api.listCampaigns as any).mockReturnValue(campaigns.promise);
+  (api.listWorlds as any).mockReturnValue(worlds.promise);
+  renderView();
+  expect(screen.queryByText(/no worlds yet/i)).toBeNull();
+  expect(screen.queryByText(/no campaigns yet/i)).toBeNull();
+  expect(screen.queryByText(/0 campaigns/i)).toBeNull();
+  expect(screen.getByRole("button", { name: /new campaign/i })).toBeDisabled();
+
+  worlds.resolve(REALM);
+  campaigns.resolve([]);
+  expect(await screen.findByText(/no campaigns yet/i)).toBeInTheDocument();
+  expect(screen.queryByText(/no worlds yet/i)).toBeNull();
+  expect(screen.getByRole("button", { name: /new campaign/i })).toBeEnabled();
+});
+
+test("a remembered empty world list says nothing until its read lands", async () => {
+  (api.rememberedWorlds as any).mockReturnValue([]);
+  const worlds = held<WorldMeta[]>();
+  (api.listWorlds as any).mockReturnValue(worlds.promise);
+  renderView();
+  expect(screen.queryByText(/no worlds yet/i)).toBeNull();
+  worlds.resolve(REALM);
+  expect(await screen.findByText(/no campaigns yet/i)).toBeInTheDocument();
+  expect(screen.queryByText(/no worlds yet/i)).toBeNull();
+});
+
+test("a failed worlds read shows its banner, says no empty state, and keeps New campaign off", async () => {
+  (api.listWorlds as any).mockRejectedValue(new Error("offline"));
+  renderView();
+  expect(await screen.findByText(/the worlds could not be read/i)).toBeInTheDocument();
+  expect(screen.queryByText(/no worlds yet/i)).toBeNull();
+  expect(screen.queryByText(/no campaigns yet/i)).toBeNull();
+  expect(screen.getByRole("button", { name: /new campaign/i })).toBeDisabled();
+
+  (api.listWorlds as any).mockResolvedValue(REALM);
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /new campaign/i })).toBeEnabled());
+  expect(api.listWorlds).toHaveBeenLastCalledWith(true);
+  expect(screen.queryByText(/could not be read/i)).toBeNull();
+});
+
+test("a failed campaigns read drops the remembered shelf, shows its banner, and Try again re-reads", async () => {
+  (api.rememberedCampaigns as any).mockReturnValue(SALTMARCH_RUN);
+  (api.listCampaigns as any).mockRejectedValue(new Error("offline"));
+  renderView();
+  expect(await screen.findByText(/the campaigns could not be read/i)).toBeInTheDocument();
+  expect(screen.queryByText("Saltmarch")).toBeNull();
+  expect(screen.queryByText(/no campaigns yet/i)).toBeNull();
+  expect(screen.queryByText(/0 campaigns/i)).toBeNull();
+
+  (api.listCampaigns as any).mockResolvedValue(SALTMARCH_RUN);
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("Saltmarch")).toBeInTheDocument();
+  expect(api.listCampaigns).toHaveBeenLastCalledWith(true);
+});
+
+test("every refresh after a change is a fresh read", async () => {
+  (api.listCampaigns as any).mockResolvedValue(SALTMARCH_RUN);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
+  renderView();
+  await screen.findByText("Saltmarch");
+  expect(api.listCampaigns).toHaveBeenCalledTimes(1);
+  expect(api.listCampaigns).not.toHaveBeenCalledWith(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Rename Saltmarch" }));
+  fireEvent.keyDown(screen.getByLabelText("Rename campaign"), { key: "Enter" });
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalledTimes(2));
+  expect(api.listCampaigns).toHaveBeenLastCalledWith(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Fork Saltmarch" }));
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalledTimes(3));
+  expect(api.listCampaigns).toHaveBeenLastCalledWith(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete Saltmarch" }));
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalledTimes(4));
+  expect(api.listCampaigns).toHaveBeenLastCalledWith(true);
 });

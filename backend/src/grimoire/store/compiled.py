@@ -51,7 +51,17 @@ from types import ModuleType
 from typing import NoReturn
 
 from .. import compiled_build, template_paths
-from . import atomic, file_stats, locks, logs, maintenance_reports, paths, proclock, statcache
+from . import (
+    atomic,
+    file_stats,
+    locks,
+    logs,
+    maintenance_reports,
+    paths,
+    proclock,
+    readstats,
+    statcache,
+)
 
 _sqlite: ModuleType | None
 try:
@@ -214,7 +224,35 @@ class Kind:
 # the world and campaign rows are absent on purpose: they lost section 14's
 # warm-after-restart measurement, so they are not wired.
 TOKENS_RECORD_BODY = Kind('tokens:record_body', 1, (), ('text_hash', 'encoding'), False)
-KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY}
+
+# Roadmap 04's overview projections (`store/overview/`). Each is byte-fed,
+# keyed on whole files (no path-derived params: a name fallback is applied
+# outside the cache), and may use persisted sources (spec 04 section 3.2, rule
+# 5): a stale answer is a stale card line or badge, never a decision. Declared
+# here, as every persisted kind is; REGISTERED below only when it won spec
+# 03's section 14 measurement, which `scripts/bench_overview.py` takes. An
+# unregistered one is never looked up or stored: its reader takes its live
+# path at today's cost.
+#
+# The ruling (roadmap 04-S10, synthetic libraries only): a lookup costs more
+# than parsing one small `world.md` or `campaign.md`, and more than the whole
+# continuity summary at every ledger size the profiles reach -- the same
+# outcome spec 03 recorded for the shelf rows -- so those three stay declared
+# and unwired. `scene_turns` is registered: a transcript parse grows with the
+# transcript and passes a lookup's fixed cost for long scenes, so it persists
+# above an admission size (`overview.read.SCENE_TURNS_PERSIST_MIN_BYTES`), the
+# token-count kind's precedent, and a shorter scene keeps the in-process memo.
+OVERVIEW_WORLD_ROW = Kind('overview.world_row', 1, (), (), True)
+OVERVIEW_CAMPAIGN_ROW = Kind('overview.campaign_row', 1, (), (), True)
+OVERVIEW_SCENE_TURNS = Kind('overview.scene_turns', 1, (), ('players',), True)
+OVERVIEW_CONTINUITY = Kind(
+    'overview.continuity_summary', 1, (), (), True,
+    absent_ok_roles=('plot', 'commitments', 'events', 'continuity', 'candidates'))
+OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
+    OVERVIEW_WORLD_ROW, OVERVIEW_CAMPAIGN_ROW, OVERVIEW_SCENE_TURNS, OVERVIEW_CONTINUITY)}
+
+KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
+                          OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS}
 
 
 @dataclass(frozen=True)
@@ -322,6 +360,11 @@ def _lookup_result(values: dict[Key | None, Lookup]) -> BatchLookup:
     for key, lookup in values.items():
         if key is not None:  # make_key's refusal: answered as a miss, counted nowhere
             counts.setdefault(key.kind, [0, 0])[0 if lookup.hit else 1] += 1
+    for kind, (hits, misses) in counts.items():  # 04-C3a: 03-C6's counts, per request
+        if hits:
+            readstats.bump(f"compiled.hit.{kind}", hits)
+        if misses:
+            readstats.bump(f"compiled.miss.{kind}", misses)
     return BatchLookup(values, {kind: Counts(*count) for kind, count in counts.items()})
 
 
@@ -460,6 +503,25 @@ def open_library(root: Path | None = None) -> None:
             request._usable()
     except _CACHE_ERRORS:
         _warn_once('open')
+
+
+def enabled() -> bool:
+    """Whether this process may use the compiled layer at all: SQLite is
+    importable and the kill switch (`GRIMOIRE_COMPILED_CACHE=0`) is not set.
+    A True answer still lets any single request miss (busy, locked, corrupt,
+    on the loop, under a campaign lock); this only says the layer is not off.
+    Reads no file and never raises."""
+    return _sqlite is not None and os.environ.get("GRIMOIRE_COMPILED_CACHE") != "0"
+
+
+def available() -> bool:
+    """Whether a batch opened now could use the layer at all: `enabled`, not
+    on the event loop, not under a campaign lock, and BUILD known. A True
+    answer still lets one lookup miss (busy, locked, corrupt). Never raises."""
+    try:
+        return _available()
+    except _CACHE_ERRORS:
+        return False
 
 
 def _available() -> bool:
@@ -987,6 +1049,7 @@ class Batch:
             row = rows.get(info.relative)
             decoded = _decode_source(info.relative, row[:7]) if row is not None else None
             if row is not None and decoded is not None and decoded[0][1:] == info.stamp[1:]:
+                readstats.bump("compiled.sources_hit")
                 trusted[info.path] = decoded[1]
                 self._remember_metadata(self._source_known, info.relative, row)
                 self._stage_source(info.relative, info.stamp, decoded[1])
@@ -1025,6 +1088,8 @@ class Batch:
                 except OSError as error:
                     self._abort_input(error)
                 digest = hashlib.sha256(data).hexdigest()
+                readstats.bump("compiled.sources_miss")
+                readstats.bump("compiled.bytes_hashed", len(data))
                 if (info.relative is not None and self._persist_sources(kind)
                         and _eligible(info, self._source_clock)):
                     self._stage_source(info.relative, info.stamp, digest)
@@ -1078,6 +1143,7 @@ class Batch:
         members = self._validate_infos(kind, [Input(collection.role, path) for path in ordered],
                                        infos, with_bytes=with_bytes)
         # Its digest fits a composite key even when the manifest does not.
+        readstats.bump("compiled.collection_digest")
         return CollectionDigest(collection.role, _collection_hash(self.root, members), members)
 
     def validate_one(self, kind: Kind, input: Input, *,  # noqa: A002 -- Spec03 keyword contract
@@ -1097,7 +1163,16 @@ class Batch:
         return {path: trusted.get(path) for path in paths}
 
     def lookup(self, key: Key | None) -> Lookup:
-        if key is None or not self._usable(key) or not _state.lock.acquire(blocking=False):
+        answer = self._lookup(key)
+        if key is not None:  # make_key's refusal is counted nowhere, as in lookup_many
+            readstats.bump(f"compiled.{'hit' if answer.hit else 'miss'}.{key.kind}")
+        return answer
+
+    def _lookup(self, key: Key | None) -> Lookup:
+        if key is not None and not self._usable(key):
+            readstats.bump("compiled.bypass")
+            return Lookup(False)
+        if key is None or not _state.lock.acquire(blocking=False):
             return Lookup(False)
         session = None
         try:
@@ -1420,6 +1495,7 @@ class Batch:
         self._materialized.update(metadata)
         self._materialized_sizes.update(sizes)
         self._bytes += delta
+        readstats.bump(f"compiled.store.{key.kind}")
         return True
 
     def _refresh_family(self, key: Key, inputs: Sequence[ValidatedInput], instance: object) -> None:
@@ -1546,6 +1622,7 @@ class Batch:
             check = _check(key, payload)
             self._rows[key] = (key.kind, key.digest, payload, check, int(time.time()))
             self._bytes += len(payload) - old_size
+            readstats.bump(f"compiled.store.{key.kind}")
         except _CACHE_ERRORS:
             _warn_once("payload")
 

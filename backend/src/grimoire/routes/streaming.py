@@ -46,6 +46,7 @@ from .. import inference as operations
 from .. import store, wire
 from ..llm import ATTEMPTED, LLMClient
 from ..llm_errors import LLMError
+from ..store import overview
 
 _log = logging.getLogger(__name__)
 
@@ -571,7 +572,7 @@ def _tail_length(cid: str, sid: str) -> int | None:
         return None
 
 
-async def _fire_follow_up(after_turn, box: StreamOutcome) -> None:
+async def _fire_follow_up(after_turn, box: StreamOutcome, cid: str = "", sid: str = "") -> None:
     """Ask for this turn's background work, once the turn is over.
 
     The rolling summary and the scene-break check are scheduled here rather
@@ -610,13 +611,26 @@ async def _fire_follow_up(after_turn, box: StreamOutcome) -> None:
     a turn does, so nothing a subscriber is waiting for can queue behind it --
     the only thing it delays is the run's own terminal state, by the few
     milliseconds two reservations cost.
+
+    It also warms the overview's `scene_turns` for the scene the turn wrote
+    (`store.overview.warm_scene`, spec 04 section 5.2), so the shell read that
+    follows a turn hashes the transcript rather than parsing it. Same gate,
+    same conditions: after the outcome, on a worker thread, holding no lock or
+    exclusion key, and swallowing its own failures -- a warm that fails is a
+    later miss and nothing else.
     """
-    if after_turn is None or box.at is None:
+    if box.at is None:
         return
-    try:
-        await run_in_threadpool(after_turn, box.at)
-    except Exception:                                        # noqa: BLE001
-        _log.exception("could not schedule the follow-ups for a finished turn")
+    if after_turn is not None:
+        try:
+            await run_in_threadpool(after_turn, box.at)
+        except Exception:                                        # noqa: BLE001
+            _log.exception("could not schedule the follow-ups for a finished turn")
+    if cid and sid:
+        try:
+            await anyio.to_thread.run_sync(overview.warm_scene, cid, sid)
+        except Exception:                                        # noqa: BLE001
+            _log.exception("could not warm the overview for a finished turn")
 
 
 def _scene_moved(cid: str, sid: str, identity: str | None) -> bool:
@@ -922,7 +936,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], resolved,
             # so it still wants asking about (#397). After the frame, like the
             # success path below: the report of the failure is what the client
             # is waiting for.
-            await _fire_follow_up(after_turn, box)
+            await _fire_follow_up(after_turn, box, cid, sid)
             return
         except BaseException:
             # Cancellation, `GeneratorExit`, or anything else that ends this
@@ -951,7 +965,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], resolved,
             # shutdown the portal is closing, and `_start_background` releases
             # a run it could not hand over.
             with anyio.CancelScope(shield=True):
-                await _fire_follow_up(after_turn, box)
+                await _fire_follow_up(after_turn, box, cid, sid)
             raise
         try:
             # In a worker thread, not inline (#234). `finalize` is synchronous
@@ -997,7 +1011,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], resolved,
         # A subscriber that has walked away does not lose this: the producer is
         # always driven to exhaustion by `runs.start_detached`'s pump, which
         # buffers frames on the run rather than on the socket (#397).
-        await _fire_follow_up(after_turn, box)
+        await _fire_follow_up(after_turn, box, cid, sid)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

@@ -1,8 +1,15 @@
 """The list of everything the app noticed, and the ignore that silences one.
 
-Every entry is derived on the way out. There is no chore table on disk and
-nothing is cached: a chore whose count is zero does not appear, and the number
-in its label is the number this request computed. That is what makes the list
+Every entry is derived on the way out. There is no chore table on disk: a
+chore whose count is zero does not appear, and the number in its label is the
+number this request computed. Some of a chore's inputs are reused rather than
+re-derived -- the overview projections (`store/overview/`), under a key that
+covers every file they read -- and the chores whose inputs cannot all be named
+in a key stay live (spec 04 section 4.4 classifies every chore). A reused input
+describes the bytes as their stamps last showed them; the residual (a rewrite
+keeping size, mtime and ctime, possible on Windows and FAT, is believed until
+restart in process and for the life of a persisted `sources` row) is in
+`docs/store-guarantees.md`. That is what makes the list
 worth opening twice -- a to-do list that can go stale teaches the reader to
 distrust it, and then the one entry that mattered is the one they scroll past.
 One exception, read-only: the continuity chores read the reconciliation cache
@@ -34,6 +41,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 
 from .. import store
+from ..store import overview, readstats
 from ..store.continuity import candidates as continuity_candidates
 from ..store.continuity import effective as continuity_effective
 from ..store.continuity import pending as continuity_pending
@@ -42,6 +50,7 @@ from .common import (
     rates_block,
     rates_editable,
 )
+from .overview_log import overview_read
 
 router = APIRouter()
 
@@ -64,10 +73,10 @@ class _Ctx:
     derivation asks the ctx for it and the second asker gets the first one's
     answer.
 
-    Deliberately per-request and thrown away after: nothing here is a cache
-    that can outlive the read it was computed for. "Every chore is a live
-    count" is the contract, and a memo with a lifetime is how it stops being
-    one.
+    Deliberately per-request and thrown away after: nothing on the ctx
+    outlives the read it was computed for. "Every chore is a live count" is
+    the contract. What does outlive a request is below it, in the overview
+    projections, and only under a key covering every file each one reads.
     """
 
     def __init__(self, cid: str) -> None:
@@ -79,18 +88,33 @@ class _Ctx:
             self._memo[key] = compute()
         return self._memo[key]
 
-    def _scenes_or_none(self) -> list[dict] | None:
-        def read() -> list[dict] | None:
+    def _summary_or_error(self) -> dict | Exception:
+        """The overview's scene summary for the campaign (spec 04 section
+        3.4), or the `CampaignNotFound` / `OSError` it raised, remembered
+        either way so the second asker meets the same answer."""
+        def read() -> dict | Exception:
             if not self.cid:
-                return None
+                return store.CampaignNotFound(self.cid)
             try:
-                return store.scenes.read.list_scenes(self.cid)
-            except (store.CampaignNotFound, OSError):
-                return None
-        return self._once("scenes", read)
+                return overview.scene_summary(self.cid)
+            except (store.CampaignNotFound, OSError) as e:
+                return e
+        return self._once("scene_summary", read)
 
-    def scenes(self) -> list[dict]:
-        return self._scenes_or_none() or []
+    def scene_summary(self) -> dict | None:
+        """The summary, or `None` for an unknown campaign or a `scenes/`
+        that cannot be listed -- the two `list_scenes` raised, mapped here
+        exactly as `_scenes_or_none` mapped them before it."""
+        found = self._summary_or_error()
+        return None if isinstance(found, Exception) else found
+
+    def scene_summary_or_raise(self) -> dict:
+        """The summary, raising what it raised -- for the shell's block,
+        which keeps its own mapping of each failure."""
+        found = self._summary_or_error()
+        if isinstance(found, Exception):
+            raise found
+        return found
 
     def has_campaign(self) -> bool:
         """Whether there is a readable campaign to ask campaign chores about.
@@ -101,28 +125,30 @@ class _Ctx:
         of what a bad cid means -- and several of them raise on the way to
         saying nothing, which is a 500 where the shell promises a null.
 
-        Distinct from "has no scenes", which `scenes()` flattens to the same
-        empty list. That is why the memo holds `None` rather than `[]`.
+        Distinct from "has no scenes", a summary whose count is zero. One
+        undecodable scene is not a reason to drop the campaign: the summary
+        degrades that member (spec 04 section 4.4).
         """
-        return self._scenes_or_none() is not None
+        return self.scene_summary() is not None
 
     def character_gaps(self) -> tuple[list[dict], list[dict]]:
         return self._once("gaps", lambda: _character_gaps(self.cid))
 
-    def continuity(self) -> list[tuple[str, dict]]:
-        """The cached continuity findings whose verdict is ``live`` now, as
-        ``(candidate id, record)``, read once for both continuity chores.
+    def continuity(self) -> dict:
+        """The overview's continuity summary for the campaign
+        (`store.overview.continuity_summary`), read once for the shell's
+        ledger badge and the `owed` and continuity chores.
 
-        Through `pending.findings`, the GET's own live filter (§18.2), so the
-        count cannot disagree with what the Ledger lists. A cache or ledger
-        that cannot be read is no findings -- memoized as such, so the second
-        chore does not pay for the same failure again."""
-        def read() -> list[tuple[str, dict]]:
+        Its findings go through `pending.findings`, the GET's own live filter
+        (§18.2), so a count cannot disagree with what the Ledger lists. A
+        cache or ledger that cannot be read is unknown -- `None` for a count,
+        no findings for the chores (spec 04 section 3.5)."""
+        def read() -> dict:
             try:
-                found = continuity_pending.findings(self.cid)
-            except (OSError, ValueError, store.CampaignNotFound):
-                return []
-            return [(key, record) for key, record, verdict in found if verdict == "live"]
+                return overview.continuity_summary(self.cid)
+            except store.CampaignNotFound:
+                return {"ledger_open": None, "owed": None, "overlaps": 0, "closures": 0,
+                        "closures_threads": False}
         return self._once("continuity", read)
 
     def avatar_gaps(self) -> list[dict]:
@@ -249,11 +275,13 @@ def _character_gaps(cid: str) -> tuple[list[dict], list[dict]]:
 
 def _chore_unreviewed(ctx: _Ctx) -> dict | None:
     cid = ctx.cid
-    # Off the same walk the expansion uses, so the count on the row and the
-    # rows behind it cannot disagree about what is waiting.
-    waiting = _items_unreviewed(cid)
-    n = sum(int(w.get("proposals", 0)) for w in waiting)
-    sids = [w["id"] for w in waiting]
+    # Off the same sidecar walk the expansion uses, so the count on the row
+    # and the rows behind it cannot disagree about what is waiting. The walk,
+    # not the expansion itself: the chore needs no titles, and the titles are
+    # a scene listing the expansion pays only when something is waiting.
+    waiting = _review_sidecars(cid)
+    n = sum(len(edits) for _sid, edits in waiting)
+    sids = [sid for sid, _edits in waiting]
     if not n:
         return None
     return {
@@ -267,9 +295,10 @@ def _chore_unreviewed(ctx: _Ctx) -> dict | None:
 
 
 def _chore_open_scenes(ctx: _Ctx) -> dict | None:
-    cid, scenes = ctx.cid, ctx.scenes()
-    # A closed branch (a sibling was absorbed) is read-only, not unfinished.
-    n = sum(1 for s in scenes if not s["done"] and not s.get("closed_by"))
+    cid, summary = ctx.cid, ctx.scene_summary()
+    # A closed branch (a sibling was absorbed) is read-only, not unfinished;
+    # the summary's `open` already leaves it out.
+    n = len(summary["open"]) if summary else 0
     if not n:
         return None
     return {
@@ -378,10 +407,9 @@ def _owed(cid: str) -> list[dict]:
 
 def _chore_owed(ctx: _Ctx) -> dict | None:
     cid = ctx.cid
-    try:
-        n = len(_owed(cid))
-    except (OSError, ValueError):
-        return None
+    # `_owed`'s count, off the continuity summary: any failure is unknown and
+    # the chore is absent (spec 04 section 3.5).
+    n = ctx.continuity()["owed"]
     if not n:
         return None
     return {
@@ -393,13 +421,8 @@ def _chore_owed(ctx: _Ctx) -> dict | None:
     }
 
 
-def _continuity_live(ctx: _Ctx, chore_id: str) -> list[tuple[str, dict]]:
-    return [(key, record) for key, record in ctx.continuity()
-            if continuity_pending.CHORE_OF.get(record["kind"]) == chore_id]
-
-
 def _chore_continuity_overlaps(ctx: _Ctx) -> dict | None:
-    n = len(_continuity_live(ctx, "continuity-overlaps"))
+    n = ctx.continuity()["overlaps"]
     if not n:
         return None
     return {
@@ -414,13 +437,13 @@ def _chore_continuity_overlaps(ctx: _Ctx) -> dict | None:
 
 
 def _chore_continuity_closures(ctx: _Ctx) -> dict | None:
-    found = _continuity_live(ctx, "continuity-closures")
-    n = len(found)
+    summary = ctx.continuity()
+    n = summary["closures"]
     if not n:
         return None
     # The chore counts both lifecycle kinds, which the Ledger lists in two
     # groups: a campaign with resolutions only must not land on an empty one.
-    threads = any(r["kind"] == "possible_thread_closure" for _k, r in found)
+    threads = summary["closures_threads"]
     return {
         "id": "continuity-closures", "scope": "campaign", "group": "Continuity",
         "severity": "note", "n": n,
@@ -842,10 +865,29 @@ GROUP_ORDER = (
 )
 
 
+def _run(builders: tuple, ctx: _Ctx) -> list[dict]:
+    """`builders` over `ctx`, in order, keeping the chores that answered."""
+    out = []
+    for chore_id, builder in builders:
+        readstats.bump(f"todo.chore.{chore_id}")
+        chore = builder(ctx)
+        if chore:
+            out.append(chore)
+    return out
+
+
+def _campaign_scope(ctx: _Ctx) -> list[dict]:
+    """One campaign's scope (spec 04 section 4.4): `CAMPAIGN_BUILDERS` over a
+    ctx whose history-proportional reads go through the overview projections.
+    A composition, not an artifact: the ignore set is applied after it."""
+    readstats.bump("todo.scope.campaign")
+    return _run(CAMPAIGN_BUILDERS, ctx)
+
+
 def _library_chores() -> list[dict]:
     """Library chores once per global report, independent of an open campaign."""
-    ctx = _Ctx("")
-    return [c for c in (b(ctx) for _i, b in LIBRARY_BUILDERS) if c]
+    readstats.bump("todo.scope.library")
+    return _run(LIBRARY_BUILDERS, _Ctx(""))
 
 
 def badge_count(cid: str, ctx: _Ctx | None = None) -> int:
@@ -868,20 +910,36 @@ def badge_count(cid: str, ctx: _Ctx | None = None) -> int:
 ITEM_CAP = 200
 
 
-def _items_unreviewed(cid: str) -> list[dict]:
-    """One row per waiting scene, naming what it is holding."""
-    out = []
+def _review_sidecars(cid: str) -> list[tuple[str, list]]:
+    """`(sid, edits)` for every readable `<sid>.review.json`, in name order.
+
+    A glob plus one small read per sidecar, and there is normally none. A
+    sidecar that cannot be read is skipped, as the shell's `_pending` skips
+    it."""
     d = store.scenes.paths._scenes_dir(cid)   # paths-ok: the resolver itself
     if not d.exists():
         return []
-    titles = {s["id"]: s["title"] for s in store.scenes.read.list_scenes(cid)}
+    out = []
     for path in sorted(d.glob("*.review.json")):
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
             edits = rec.get("review", {}).get("edits", [])
         except (OSError, ValueError, AttributeError):
             continue
-        sid = path.name[: -len(".review.json")]
+        out.append((path.name[: -len(".review.json")], edits))
+    return out
+
+
+def _items_unreviewed(cid: str) -> list[dict]:
+    """One row per waiting scene, naming what it is holding."""
+    out = []
+    waiting = _review_sidecars(cid)
+    if not waiting:
+        return []
+    # The titles are a listing of every scene, paid only once a sidecar has
+    # been found: on demand, and live (spec 04 section 3.8).
+    titles = {s["id"]: s["title"] for s in store.scenes.read.list_scenes(cid)}
+    for sid, edits in waiting:
         # The kinds it is proposing, which is what tells the reader whether
         # this is a dossier rewrite or one fact nobody cited.
         kinds: dict[str, int] = {}
@@ -892,8 +950,9 @@ def _items_unreviewed(cid: str) -> list[dict]:
         detail = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         out.append({"id": sid, "label": titles.get(sid, sid),
                     "detail": detail or f"{len(edits)} proposals",
-                    # Carried so the chore's headline count comes off this same
-                    # walk. Harmless on the wire; the page ignores it.
+                    # The same count the chore's headline sums off
+                    # `_review_sidecars`. Harmless on the wire; the page
+                    # ignores it.
                     "proposals": len(edits),
                     "fix": f"/campaigns/{cid}/scenes/{sid}"})
     return out
@@ -1248,7 +1307,7 @@ def live(cid: str) -> dict:
         ctx = _Ctx(cid)
         if not ctx.has_campaign():
             raise HTTPException(404, f"campaign not found: {cid}")
-        every = [c for c in (b(ctx) for _i, b in CAMPAIGN_BUILDERS) if c]
+        every = _campaign_scope(ctx)
         name = store.campaigns.read_campaign(cid)["meta"].get("name") or cid
         for chore in every:
             chore["campaign_id"] = cid
@@ -1260,12 +1319,10 @@ def live(cid: str) -> dict:
             ctx = _Ctx(campaign_id)
             if not ctx.has_campaign():
                 continue
-            for _id, builder in CAMPAIGN_BUILDERS:
-                candidate = builder(ctx)
-                if candidate:
-                    candidate["campaign_id"] = campaign_id
-                    candidate["campaign_name"] = campaign.get("name") or campaign_id
-                    every.append(candidate)
+            for candidate in _campaign_scope(ctx):
+                candidate["campaign_id"] = campaign_id
+                candidate["campaign_name"] = campaign.get("name") or campaign_id
+                every.append(candidate)
     def is_ignored(chore: dict) -> bool:
         campaign_id = chore.get("campaign_id", "")
         key = f"{campaign_id}:{chore['id']}" if campaign_id else chore["id"]
@@ -1304,7 +1361,8 @@ def _groups(chores: list[dict]) -> list[str]:
 
 @router.get("/todo")
 def get_todo(campaign: str = ""):
-    return live(campaign)
+    with overview_read("todo", "campaign" if campaign else "library"):
+        return live(campaign)
 
 
 @router.get("/todo/{chore_id}/items")
@@ -1329,6 +1387,17 @@ def get_todo_items(chore_id: str, campaign: str = ""):
             "truncated": len(items) > ITEM_CAP}
 
 
+def _campaign_readable(cid: str) -> bool:
+    """`_Ctx.has_campaign`'s mapping, read live: a write never reaches an
+    overview projection (spec 04 section 3.8), so the ignore route asks the
+    store's own listing whether `cid` is a campaign it could answer about."""
+    try:
+        store.scenes.read.list_scenes(cid)
+    except (store.CampaignNotFound, OSError):
+        return False
+    return True
+
+
 @router.put("/todo/{chore_id}/ignored")
 def put_todo_ignored(chore_id: str, body: dict):
     """Wave a chore off, or take it back.
@@ -1341,7 +1410,7 @@ def put_todo_ignored(chore_id: str, body: dict):
         raise HTTPException(400, f"unknown chore: {chore_id}")
     campaign = str(body.get("campaign") or "")
     if chore_id in CAMPAIGN_IDS:
-        if not campaign or not _Ctx(campaign).has_campaign():
+        if not campaign or not _campaign_readable(campaign):
             raise HTTPException(404, f"campaign not found: {campaign}")
     elif campaign:
         raise HTTPException(400, "library chores cannot have a campaign")

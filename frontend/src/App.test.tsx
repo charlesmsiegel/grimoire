@@ -13,6 +13,8 @@ vi.mock("./api/client", () => ({
     putConfig: vi.fn().mockResolvedValue({ theme: "system" }),
     listCampaigns: vi.fn().mockResolvedValue([]),
     listWorlds: vi.fn().mockResolvedValue([]),
+    // The overview pages paint from these first; nothing is remembered here.
+    rememberedCampaigns: vi.fn(), rememberedWorlds: vi.fn(), rememberedTodo: vi.fn(),
     listModules: vi.fn().mockResolvedValue([]),
     listStyles: vi.fn().mockResolvedValue([]),
     listClimates: vi.fn().mockResolvedValue({ climates: [] }),
