@@ -122,7 +122,10 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [groups, setGroups] = useState<EntitySummary[]>([]);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
-  const [shown, setShown] = useState<KnowledgeScene | null>(null);
+  const [loaded, setLoaded] = useState<KnowledgeScene | null>(null);
+  // Only the scene the form names: while another one loads, the last one's
+  // posts must be neither on screen nor what a save is agreeing to.
+  const shown = loaded && loaded.sid === form.scene ? loaded : null;
 
   // A different record, or a new one: back to its own view and its own form.
   useEffect(() => {
@@ -141,11 +144,12 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
 
   // The posts the form can name, with the fingerprints a grant sends back.
   useEffect(() => {
-    if (mode !== "edit" || !form.scene) { setShown(null); return; }
+    setLoaded(null);
+    if (mode !== "edit" || !form.scene) return;
     let live = true;
     api.ledgerKnowledgeScene(cid, form.scene)
-      .then((s) => { if (live) setShown(s); })
-      .catch((err: unknown) => { if (live) { setShown(null); setError(errorText(err)); } });
+      .then((s) => { if (live) setLoaded(s); })
+      .catch((err: unknown) => { if (live) { setLoaded(null); setError(errorText(err)); } });
     return () => { live = false; };
   }, [cid, form.scene, mode]);
 

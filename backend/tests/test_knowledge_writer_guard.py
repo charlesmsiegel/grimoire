@@ -30,6 +30,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import pytest
+
 import grimoire
 
 PACKAGE = pathlib.Path(grimoire.__file__).parent
@@ -67,21 +69,43 @@ def _imports_knowledge_itself(node: ast.ImportFrom) -> bool:
     return mod in ("grimoire.store", "store")
 
 
+def _imports_the_facade(node: ast.ImportFrom) -> bool:
+    """`from <X> import store` where X is the grimoire package."""
+    mod = node.module or ""
+    if node.level:
+        return mod == ""
+    return mod == "grimoire"
+
+
+def _from_bindings(node: ast.ImportFrom, names: dict[str, str], modules: set[str]) -> None:
+    if _is_knowledge_module(node):
+        for a in node.names:
+            names[a.asname or a.name] = a.name
+    if _imports_knowledge_itself(node):
+        modules |= {a.asname or "knowledge" for a in node.names if a.name == "knowledge"}
+    if _imports_the_facade(node):
+        modules |= {f"{a.asname or 'store'}.knowledge" for a in node.names if a.name == "store"}
+
+
+def _import_bindings(node: ast.Import, modules: set[str]) -> None:
+    for a in node.names:
+        if a.name == STORE_KNOWLEDGE:
+            modules.add(a.asname or STORE_KNOWLEDGE)
+        elif a.name == "grimoire.store" and a.asname:
+            modules.add(f"{a.asname}.knowledge")
+
+
 def _bindings(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
     """What `store.knowledge` is called in this file: (function names, module
-    names). An aliased function or module maps back to the original."""
+    names). An aliased function, module or store facade maps back to the
+    original, so `from grimoire import store as s` makes `s.knowledge` one."""
     names: dict[str, str] = {}
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            if _is_knowledge_module(node):
-                for a in node.names:
-                    names[a.asname or a.name] = a.name
-            elif _imports_knowledge_itself(node):
-                modules |= {a.asname or "knowledge" for a in node.names if a.name == "knowledge"}
+            _from_bindings(node, names, modules)
         elif isinstance(node, ast.Import):
-            modules |= {a.asname or STORE_KNOWLEDGE for a in node.names
-                        if a.name == STORE_KNOWLEDGE}
+            _import_bindings(node, modules)
     return names, modules
 
 
@@ -168,3 +192,15 @@ def test_a_reader_is_not_an_offender():
     # An allowlisted writer calling a mutator it was not given is still caught.
     assert _planted("store/undo.py",
                     "from . import knowledge\ndef go(c, e):\n    knowledge.add(c, e)\n")
+
+
+@pytest.mark.parametrize("source", [
+    "from grimoire import store as s\ns.knowledge.add(cid, entry)\n",
+    "from .. import store as s\ns.knowledge.add(cid, entry)\n",
+    "import grimoire.store as s\ns.knowledge.add(cid, entry)\n",
+    "import grimoire.store.knowledge as k\nk.add(cid, entry)\n",
+    "from ..store import knowledge as k\nk.add(cid, entry)\n",
+    "from ..store.knowledge import add as put\nput(cid, entry)\n",
+])
+def test_an_aliased_binding_is_still_caught(source):
+    assert _offenders("store/absorb/apply.py", ast.parse(source))

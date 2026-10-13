@@ -229,3 +229,33 @@ test("choosing the whole scene shows everything it covers before it can be grant
     expect.objectContaining({ whole_scene: true, posts: null, expect_digest: "e".repeat(64),
                               expect_shown: "w".repeat(16) })));
 });
+
+test("switching scenes drops the last one's text until the new one arrives", async () => {
+  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" },
+                                             { id: "0002-mill", title: "The Mill" }]);
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.ledgerKnowledgeScene as any).mockImplementation((_cid: string, sid: string) =>
+    sid === "0001-pier"
+      ? Promise.resolve({
+          sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+          summary: "Winifred poisoned the cup.", one_line: "", keyless: 0, keyless_posts: [],
+          posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16),
+                    shown: "s".repeat(16), index: 1, speaker: "Winifred",
+                    text: "Winifred whispers the code.", hidden: false }] })
+      : new Promise(() => {}));
+  renderLedger("/campaigns/run/ledger/knowledge/new");
+  fireEvent.change(await screen.findByRole("combobox", { name: "Who" }),
+                   { target: { value: "characters:mara" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Status" }),
+                   { target: { value: "unaware" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Scene" }),
+                   { target: { value: "0001-pier" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "The whole scene" }));
+  expect(screen.getByText("Summary: Winifred poisoned the cup.")).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox", { name: "Scene" }),
+                   { target: { value: "0002-mill" } });
+  await waitFor(() => expect(screen.queryByText("Summary: Winifred poisoned the cup."))
+    .toBeNull());
+  expect(screen.queryByText(/Winifred whispers the code/)).toBeNull();
+  expect(screen.getByRole("button", { name: "Add statement" })).toBeDisabled();
+});
