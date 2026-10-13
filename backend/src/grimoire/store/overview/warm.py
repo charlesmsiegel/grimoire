@@ -94,7 +94,12 @@ def warm_scene(cid: str, sid: str) -> None:
 
     Best effort, and never raises: a failed warm is a later miss, and nothing
     else. Reads the file back, records no `sources` row, holds no lock. Not
-    read back: the turn's follow-up is not the place to pay for a check."""
+    read back: the turn's follow-up is not the place to pay for a check.
+
+    A follow-up the same turn schedules can rewrite the scene file after this
+    -- a rolling-summary fold writes its frontmatter -- and the next read then
+    misses on the new bytes: correct, only not warm. Warming every writer is
+    roadmap 05's (05-C1, 05-C3); 04 wires this one site (spec 04 section 5.2)."""
     try:
         _warm_scene(cid, sid)
     except Exception as e:  # noqa: BLE001 -- a warm is never worth the turn

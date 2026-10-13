@@ -138,16 +138,21 @@ def generate(target: Path, shape: Shape) -> dict[str, object]:
 #:   intact, with one campaign far larger than the rest for the
 #:   "one campaign changed in a large library" scenario, and enough posts per
 #:   scene that a transcript parse visibly dominates a stat and a hash.
+#: - `medium` and `large` also give the largest campaign `long_scenes` open
+#:   scenes whose transcripts pass `LONG_SCENE_BYTES`, above the admission
+#:   size `overview.read.SCENE_TURNS_PERSIST_MIN_BYTES`, so the shipped
+#:   persisted path -- warm after restart, the post-turn warm -- is exercised
+#:   and the crossover can be read off the same run.
 PROFILES: dict[str, dict[str, int]] = {
     'small': {'worlds': 2, 'characters': 3, 'entities': 3, 'greetings': 1, 'images': 1,
               'campaigns': 3, 'scenes': 4, 'big_scenes': 6, 'open_scenes': 2, 'posts': 6,
-              'reviews': 1, 'ledger_rows': 2, 'candidates': 1},
+              'reviews': 1, 'ledger_rows': 2, 'candidates': 1, 'long_scenes': 0},
     'medium': {'worlds': 3, 'characters': 12, 'entities': 20, 'greetings': 6, 'images': 4,
                'campaigns': 8, 'scenes': 40, 'big_scenes': 120, 'open_scenes': 3, 'posts': 60,
-               'reviews': 2, 'ledger_rows': 20, 'candidates': 6},
+               'reviews': 2, 'ledger_rows': 20, 'candidates': 6, 'long_scenes': 1},
     'large': {'worlds': 4, 'characters': 30, 'entities': 60, 'greetings': 12, 'images': 8,
               'campaigns': 20, 'scenes': 200, 'big_scenes': 600, 'open_scenes': 4, 'posts': 120,
-              'reviews': 3, 'ledger_rows': 60, 'candidates': 12},
+              'reviews': 3, 'ledger_rows': 60, 'candidates': 12, 'long_scenes': 2},
 }
 
 #: The prose vocabulary. Nonsense on purpose: nothing is ever read from a file,
@@ -158,6 +163,9 @@ PLACEHOLDERS = ('Seraphine', 'Mara', 'Winifred')
 #: The seeded clock starts here, a fixed second, and advances one second per
 #: stamp the store asks for.
 CLOCK_START = 1_767_225_600   # 2026-01-01T00:00:00Z
+#: A long scene's transcript is written past this many bytes: above the
+#: overview's admission size for persisting a turn count, by a margin.
+LONG_SCENE_BYTES = 512 * 1024
 #: How far before generation every mtime is put: well past PERSIST_WINDOW_NS.
 BACKDATE_S = 3600
 
@@ -256,6 +264,14 @@ def _library_campaign(c: int, wid: str, scene_count: int, knobs: dict[str, int],
             for k in range(knobs['posts'])])
         if n >= knobs['open_scenes']:
             scenes.mark_absorbed(cid, sid, prose(6), prose(20))
+    for n in range(knobs['long_scenes'] if c == 0 else 0):
+        sid = scenes.create_scene(cid, f'Realm Long Scene {n}')
+        written = 0
+        while written < LONG_SCENE_BYTES:
+            batch = [{'role': 'assistant', 'content': prose(400), 'speaker': PLACEHOLDERS[k % 3]}
+                     for k in range(20)]
+            scenes.append_messages(cid, sid, batch)
+            written = scenes.paths._scene_path(cid, sid).stat().st_size
     for n in range(knobs['ledger_rows']):
         commitments.set_movement(cid, f'oath-{n}', f'Oath {n}', 'promise', 'open',
                                  '2026-06-01' if n % 2 == 0 else '', prose(8), first)

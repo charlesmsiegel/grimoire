@@ -558,7 +558,8 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
  */
 async function awaitRunAt(base: string, started: RunHandle,
                           restill: () => Promise<RunHandle | null>,
-                          signal?: AbortSignal): Promise<RunHandle> {
+                          signal?: AbortSignal,
+                          onSettled?: () => void): Promise<RunHandle> {
   let run = started;
   let missed = 0;
   for (let asked = 0; run.state === "running"; asked++) {
@@ -582,7 +583,9 @@ async function awaitRunAt(base: string, started: RunHandle,
       // scene's -- which is decisive and sends the caller to the store, where
       // the answer actually lives), and running out of patience. Everything
       // else is asked again.
-      if (isAbortError(err) || (err instanceof ApiError && err.status === 404)) throw err;
+      if (isAbortError(err)) throw err;
+      // Gone is over: a run is reaped only once it has ended.
+      if (err instanceof ApiError && err.status === 404) { onSettled?.(); throw err; }
       if (++missed <= RUN_POLL_MISSES) continue;
       // OUT OF PATIENCE IS NOT A TERMINAL STATE EITHER. Nothing here has
       // observed the run stop; all that is known is that this one URL has not
@@ -600,6 +603,10 @@ async function awaitRunAt(base: string, started: RunHandle,
       missed = 0;
     }
   }
+  // Seen to end, landed or not: the only way here. An abort and a wait that
+  // ran out of patience leave by throwing above, with the run still going,
+  // and say nothing -- the run has not settled, only the waiting has.
+  onSettled?.();
   if (run.state === "landed") return run;
   const error = run.error ?? undefined;
   const failure = new ApiError(error?.status ?? 409,
@@ -711,18 +718,15 @@ async function draftRun<T>(scope: DraftScope,
     if (!live) throw err;
     started = live;
   }
-  let run: RunHandle;
-  try {
-    run = await awaitRunAt(draftBase(scope), started,
-                           () => findDraftRun(scope, attempt, opts?.signal)
-                             .catch(() => null),
-                           opts?.signal);
-  } finally {
-    // Landed, failed, reaped or abandoned: the run may have written after its
-    // 202 settled (a catalog refresh, a model test's verdict), and forgetting
-    // once more than needed is the safe direction.
-    noteRunSettled();
-  }
+  // Noted only once the run is SEEN to end -- landed, failed or reaped: it may
+  // have written after its 202 settled (a catalog refresh, a model test's
+  // verdict). An abandoned wait (an abort, a connection that never came back)
+  // has observed no end, and announcing one would let a page re-read before
+  // the still-running draft writes.
+  const run = await awaitRunAt(draftBase(scope), started,
+                               () => findDraftRun(scope, attempt, opts?.signal)
+                                 .catch(() => null),
+                               opts?.signal, noteRunSettled);
   // `landed` is the only way out of `awaitRunAt`, so a result is what this run
   // is. An empty object rather than a throw for a route that legitimately
   // produced nothing -- the caller's own type says which fields it expects.

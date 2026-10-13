@@ -89,9 +89,15 @@ def _no_links(library: Path) -> None:
     would carry it, letting the requests read whatever it points at."""
     for directory, dirs, files in os.walk(library, followlinks=False):
         for name in (*dirs, *files):
-            info = os.lstat(os.path.join(directory, name))
-            if os.path.islink(os.path.join(directory, name)) or getattr(info, "st_file_attributes", 0) & 0x400:
+            path = os.path.join(directory, name)
+            info = os.lstat(path)
+            if os.path.islink(path) or getattr(info, "st_file_attributes", 0) & 0x400:
                 raise ValueError("refusing a library that holds a link")
+        for name in files:
+            # A hard link is a second name for bytes that live elsewhere too:
+            # `copytree` would copy them, and a request would read them.
+            if os.lstat(os.path.join(directory, name)).st_nlink > 1:
+                raise ValueError("refusing a library that holds a hard link")
 
 
 # ---- what a request read (harness-only counts) ---------------------------------

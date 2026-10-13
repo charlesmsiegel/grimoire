@@ -192,6 +192,22 @@ def test_harness_refuses_a_library_holding_a_link(tmp_path):
         bench_overview.guard(library, inherited_home=None)
 
 
+def test_harness_refuses_a_library_holding_a_hard_link(tmp_path):
+    library = _marked(tmp_path / "library")
+    elsewhere = tmp_path / "elsewhere.md"
+    elsewhere.write_text("Saltmarch", encoding="utf-8")
+    os.link(elsewhere, library / "linked.md")
+    with pytest.raises(ValueError, match="link"):
+        bench_overview.guard(library, inherited_home=None)
+
+
+def test_the_large_profiles_hold_scenes_past_the_admission_size():
+    from grimoire.store.overview import read as overview_read
+    assert synth_library.LONG_SCENE_BYTES > overview_read.SCENE_TURNS_PERSIST_MIN_BYTES
+    assert synth_library.PROFILES["medium"]["long_scenes"] >= 1
+    assert synth_library.PROFILES["large"]["long_scenes"] >= 1
+
+
 def test_the_scenes_and_ledger_changes_are_separate_scenarios():
     assert {"relevant_change", "relevant_change_ledger"} <= set(bench_overview.SCENARIOS)
 
