@@ -119,10 +119,18 @@ def variants_by_scene(cid: str) -> dict[str, dict[str, tuple[str | None, list[st
     """`variants_by_response` for every scene, keyed by scene identity, from
     ONE read of the ledger -- for a caller that would otherwise re-parse the
     whole campaign file once per scene. Raises as `_read` does."""
-    return {token: {rid: (record.get("active_variant"),
-                          [v["id"] for v in record.get("variants", [])])
-                    for rid, record in scope.get("responses", {}).items()}
-            for token, scope in _read(cid)["scenes"].items() if isinstance(scope, dict)}
+    out: dict[str, dict[str, tuple[str | None, list[str]]]] = {}
+    for token, scope in _read(cid)["scenes"].items():
+        records = scope.get("responses", {}) if isinstance(scope, dict) else None
+        if not isinstance(records, dict) or not all(
+                isinstance(r, dict) and isinstance(r.get("variants", []), list)
+                and all(isinstance(v, dict) and "id" in v for v in r.get("variants", []))
+                for r in records.values()):
+            raise ValueError(f"invalid response ledger scope {token!r}")
+        out[token] = {rid: (record.get("active_variant"),
+                            [v["id"] for v in record.get("variants", [])])
+                      for rid, record in records.items()}
+    return out
 
 
 def transcript_hash(messages):

@@ -16,7 +16,7 @@ function statement(over: Partial<KnowledgeEntry> = {}): KnowledgeEntry {
     source: "manual", created: "2026-10-12T00:00:00Z",
     subject: { kind: "posts", scene: "a".repeat(32),
                posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16) }] },
-    scene: { sid: "0001-pier", title: "The Pier", digest: "e".repeat(64) },
+    scene: { sid: "0001-pier", title: "The Pier", digest: "e".repeat(64), shown: "w".repeat(16) },
     unverifiable: false,
     posts: [{ key: R1, part: "", index: 1, speaker: "Winifred",
               text: "Winifred whispers the code.", missing: false,
@@ -57,9 +57,11 @@ test("Edit reveals the form, and a note edit sends only the note", async () => {
   (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
   (api.ledgerKnowledgeScene as any).mockResolvedValue({
-    sid: "0001-pier", digest: "e".repeat(64), keyless: 0,
-    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), index: 1,
-              speaker: "Winifred", text: "Winifred whispers the code.", hidden: false }],
+    sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+    summary: "", one_line: "", keyless: 0, keyless_posts: [],
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
+              index: 1, speaker: "Winifred", text: "Winifred whispers the code.",
+              hidden: false }],
   });
   renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -76,9 +78,12 @@ test("+ New opens the form directly, and a grant posts what was shown", async ()
   (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
   (api.ledgerKnowledgeScene as any).mockResolvedValue({
-    sid: "0001-pier", digest: "e".repeat(64), keyless: 1,
-    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), index: 1,
-              speaker: "Winifred", text: "Winifred whispers the code.", hidden: false }],
+    sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+    summary: "", one_line: "", keyless: 1,
+    keyless_posts: [{ index: 0, speaker: "You", text: "An old line." }],
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
+              index: 1, speaker: "Winifred", text: "Winifred whispers the code.",
+              hidden: false }],
   });
   renderLedger("/campaigns/run/ledger/knowledge");
   fireEvent.click(await column().findByRole("button", { name: "+ New statement" }));
@@ -93,8 +98,8 @@ test("+ New opens the form directly, and a grant posts what was shown", async ()
   await waitFor(() => expect(api.ledgerCreateKnowledge).toHaveBeenCalledWith("run", {
     audience: "characters:mara", status: "knows", note: "", scene: "0001-pier",
     posts: [{ key: R1, part: "" }], whole_scene: false,
-    expect: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16) }],
-    expect_digest: "",
+    expect: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16) }],
+    expect_digest: "", expect_shown: "", audience_name: "Mara",
   }));
 });
 
@@ -102,14 +107,15 @@ test("a stale statement says why and confirms against the text on screen", async
   (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
     stale: true, stale_reason: "changed",
     posts: [{ key: R1, part: "", index: 1, speaker: "Winifred", text: "Winifred lies.",
-              missing: false, variant: "v2", digest: "f".repeat(16) }],
+              missing: false, variant: "v2", digest: "f".repeat(16), shown: "g".repeat(16) }],
   })], intact: true });
   renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
   expect(await screen.findByText(/The text changed since/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Confirm against current text" }));
   await waitFor(() => expect(api.ledgerSaveKnowledge).toHaveBeenCalledWith(
     "run", "k-0000000a",
-    { restamp: true, expect: [{ key: R1, part: "", variant: "v2", digest: "f".repeat(16) }] }));
+    { restamp: true, expect: [{ key: R1, part: "", variant: "v2", digest: "f".repeat(16),
+                                shown: "g".repeat(16) }] }));
 });
 
 test("a statement about a deleted scene offers Remove", async () => {
@@ -148,9 +154,11 @@ test("turning a never-heard into knows names the posts again, as shown", async (
   (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
   (api.ledgerKnowledgeScene as any).mockResolvedValue({
-    sid: "0001-pier", digest: "e".repeat(64), keyless: 0,
-    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), index: 1,
-              speaker: "Winifred", text: "Winifred whispers the code.", hidden: false }],
+    sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+    summary: "", one_line: "", keyless: 0, keyless_posts: [],
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
+              index: 1, speaker: "Winifred", text: "Winifred whispers the code.",
+              hidden: false }],
   });
   renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -162,7 +170,8 @@ test("turning a never-heard into knows names the posts again, as shown", async (
   await waitFor(() => expect(api.ledgerSaveKnowledge).toHaveBeenCalledWith(
     "run", "k-0000000a", {
       status: "knows", scene: "0001-pier", posts: [{ key: R1, part: "" }], whole_scene: false,
-      expect: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16) }], expect_digest: "",
+      expect: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16) }],
+      expect_digest: "", expect_shown: "",
     }));
 });
 
@@ -184,12 +193,39 @@ test("the form shows each post whole, since a grant covers all of it", async () 
   const long = "Winifred whispers the code. " + "She keeps talking. ".repeat(20) + "THE END.";
   (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
   (api.ledgerKnowledgeScene as any).mockResolvedValue({
-    sid: "0001-pier", digest: "e".repeat(64), keyless: 0,
-    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), index: 1,
-              speaker: "Winifred", text: long, hidden: false }],
+    sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+    summary: "", one_line: "", keyless: 0, keyless_posts: [],
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
+              index: 1, speaker: "Winifred", text: long, hidden: false }],
   });
   renderLedger("/campaigns/run/ledger/knowledge/new");
   fireEvent.change(await screen.findByRole("combobox", { name: "Scene" }),
                    { target: { value: "0001-pier" } });
   expect(await screen.findByText(/THE END\.$/)).toBeInTheDocument();
+});
+
+test("choosing the whole scene shows everything it covers before it can be granted", async () => {
+  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+    sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+    summary: "Winifred poisoned the cup.", one_line: "The cup.", keyless: 1,
+    keyless_posts: [{ index: 0, speaker: "You", text: "An old line with no id." }],
+    posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
+              index: 1, speaker: "Winifred", text: "Winifred whispers the code.", hidden: false }],
+  });
+  renderLedger("/campaigns/run/ledger/knowledge/new");
+  fireEvent.change(await screen.findByRole("combobox", { name: "Who" }),
+                   { target: { value: "characters:mara" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Scene" }),
+                   { target: { value: "0001-pier" } });
+  fireEvent.click(await screen.findByRole("checkbox", { name: "The whole scene" }));
+  const whole = screen.getByRole("group", { name: "The whole scene" });
+  expect(within(whole).getByText("Summary: Winifred poisoned the cup.")).toBeInTheDocument();
+  expect(within(whole).getByText("You: An old line with no id.")).toBeInTheDocument();
+  expect(within(whole).getByText("Winifred: Winifred whispers the code.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Add statement" }));
+  await waitFor(() => expect(api.ledgerCreateKnowledge).toHaveBeenCalledWith("run",
+    expect.objectContaining({ whole_scene: true, posts: null, expect_digest: "e".repeat(64),
+                              expect_shown: "w".repeat(16) })));
 });

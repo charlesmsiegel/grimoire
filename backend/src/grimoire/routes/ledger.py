@@ -51,6 +51,7 @@ may. `PUT .../facts/{fid}` is that edit, and it is the only caller of
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import NamedTuple
 
@@ -638,7 +639,7 @@ def _bad(kind: str, detail: str, status: int = 400) -> HTTPException:
     return HTTPException(status_code=status, detail={"kind": kind, "detail": detail})
 
 
-def _knowledge_audience(cid: str, audience: str) -> str:
+def _knowledge_audience(cid: str, audience: str, shown: str | None = None) -> str:
     """The audience's current display name, or 400 for one that is not a
     character or group of this campaign. Read through the door the matcher
     reads (`knowledge_scene.audiences_for`), so the name stored is the name a
@@ -650,6 +651,9 @@ def _knowledge_audience(cid: str, audience: str) -> str:
     name = _audience_now(store.knowledge_scene.audiences_for(cid), audience)
     if not name:
         raise _bad("bad_audience", "that character or group is not in this campaign")
+    if shown is not None and shown != name:
+        # The form named someone else: renamed, or replaced under the same id.
+        raise _bad("moved", f"that audience is now called {name}; look again", 409)
     return name
 
 
@@ -662,13 +666,16 @@ def _audience_now(who, audience: str) -> str | None:
 
 
 class _ScenePosts(NamedTuple):
-    """One read of a scene: its raw messages, response variants, display
-    text, and the digest a whole-scene statement is fingerprinted with."""
+    """One read of a scene: its raw messages, response variants, the
+    prompt-view text (what an actor's prompt would carry, so what a grant is
+    agreeing to), the digest a whole-scene statement is fingerprinted with,
+    and its title and chronicle record."""
     messages: list[dict]
     variants: dict
     shown: list[dict]
     digest: str
     title: str
+    record: dict
 
 
 def _scene_posts(cid: str, sid: str, variants: dict | None = None) -> _ScenePosts:
@@ -696,9 +703,26 @@ def _scene_posts(cid: str, sid: str, variants: dict | None = None) -> _ScenePost
         except OSError as exc:
             raise _busy() from exc
     title, record = store.knowledge_scene.whole_scene(cid, sid, scene["meta"])
-    return _ScenePosts(messages, variants, regex_view.view(messages, cid=cid, phase="display"),
+    return _ScenePosts(messages, variants, regex_view.view(messages, cid=cid, phase="prompt"),
                        store.knowledge_scene.scene_digest(messages, title, record),
-                       title or sid)
+                       title or sid, record if isinstance(record, dict) else {})
+
+
+def _visible(read: _ScenePosts) -> list[tuple[int, dict, dict]]:
+    """The posts a whole-scene grant would expose: every one in context."""
+    return [(i, m, v) for i, (m, v) in enumerate(zip(read.messages, read.shown, strict=True))
+            if not store.scenes.serialize.is_excluded(m)
+            and not store.scenes.serialize.is_director_note(m)]
+
+
+def _whole_shown(read: _ScenePosts) -> str:
+    """The digest of everything a whole-scene grant exposes, as shown: the
+    title, the chronicle summary and line, and every post in context in its
+    prompt view. A whole-scene grant carries it back as `expect_shown`."""
+    return store.knowledge.digest(json.dumps(
+        [read.title, str(read.record.get("summary") or ""), str(read.record.get("one_line") or ""),
+         [[str(m.get("speaker") or ""), str(v.get("content") or "")]
+          for _i, m, v in _visible(read)]], ensure_ascii=False))
 
 
 def _subject_form(posts: list[KnowledgePost] | None, whole_scene: bool,
@@ -726,23 +750,25 @@ def _subject_form(posts: list[KnowledgePost] | None, whole_scene: bool,
     return posts
 
 
-def _fingerprinted(messages: list[dict], variants: dict, posts: list[KnowledgePost],
-                   grant: bool, expect: list[KnowledgeFingerprint] | None,
-                   gone_is: int) -> list[dict]:
+def _fingerprinted(read: _ScenePosts, posts: list[KnowledgePost], grant: bool,
+                   expect: list[KnowledgeFingerprint] | None, gone_is: int) -> list[dict]:
     """Each named post's stored fingerprint. A grant must be about a visible
-    post that still reads as the client was shown it."""
-    shown = {(e.key, e.part): (e.variant, e.digest) for e in expect or []}
+    post that still reads as the client was shown it -- its raw text and the
+    prompt-view text the form displayed."""
+    shown = {(e.key, e.part): (e.variant, e.digest, e.shown) for e in expect or []}
     out = []
     for p in posts:
-        found = [m for m in messages if store.knowledge.post_key(m) == p.key
-                 and store.knowledge.post_part(m) == p.part]
+        found = [(m, v) for m, v in zip(read.messages, read.shown, strict=True)
+                 if store.knowledge.post_key(m) == p.key and store.knowledge.post_part(m) == p.part]
         if len(found) != 1:
             raise (_bad("gone", "that post is no longer in the scene", 409) if gone_is == 409
                    else _bad("unknown_post", "the scene holds no single post with that key"))
-        fp = store.knowledge.fingerprint(found[0], variants)
-        if grant and store.scenes.serialize.is_excluded(found[0]):
+        message, view = found[0]
+        fp = store.knowledge.fingerprint(message, read.variants)
+        if grant and store.scenes.serialize.is_excluded(message):
             raise _bad("hidden", "a hidden post reaches no one, so it cannot be known")
-        if grant and shown.get((p.key, p.part)) != (fp["variant"], fp["digest"]):
+        now = (fp["variant"], fp["digest"], store.knowledge.digest(str(view.get("content") or "")))
+        if grant and shown.get((p.key, p.part)) != now:
             raise _bad("moved", "that post changed since it was shown; look again", 409)
         out.append(fp)
     return out
@@ -751,7 +777,7 @@ def _fingerprinted(messages: list[dict], variants: dict, posts: list[KnowledgePo
 def _knowledge_subject(cid: str, sid: str, posts: list[KnowledgePost] | None,
                        whole_scene: bool, status: str,
                        expect: list[KnowledgeFingerprint] | None, expect_digest: str,
-                       *, gone_is: int = 400) -> dict:
+                       expect_shown: str = "", *, gone_is: int = 400) -> dict:
     """The subject a statement about `sid` stores, fingerprinted from the scene
     as it reads under the caller's hold. Everything is validated before the
     scene is given an identity, so a refused request writes nothing."""
@@ -759,12 +785,12 @@ def _knowledge_subject(cid: str, sid: str, posts: list[KnowledgePost] | None,
     named = _subject_form(posts, whole_scene, grant)
     read = _scene_posts(cid, sid)
     if named is None:
-        if grant and expect_digest != read.digest:
+        if grant and (expect_digest != read.digest or expect_shown != _whole_shown(read)):
             raise _bad("moved", "the scene changed since it was shown; look again", 409)
         subject: dict = {"kind": "scene", "digest": read.digest}
     else:
-        subject = {"kind": "posts", "posts": _fingerprinted(
-            read.messages, read.variants, named, grant, expect, gone_is)}
+        subject = {"kind": "posts",
+                   "posts": _fingerprinted(read, named, grant, expect, gone_is)}
     try:
         subject["scene"] = scenes_identity.ensure_identity(cid, sid)
     except scenes_identity.UnreadableError as exc:
@@ -785,30 +811,39 @@ def _knowledge_write(cid: str, kid: str, entry: dict, write) -> None:
 
 @router.get("/campaigns/{cid}/ledger/knowledge/scenes/{sid}")
 def get_knowledge_scene(cid: str, sid: str):
-    """What a statement about `sid` could name: each keyed post, as it reads
-    now (display text) with the fingerprint a grant must send back as
-    `expect`, and the whole scene's `digest`. Writes nothing."""
+    """What a statement about `sid` could name, as an actor's prompt would
+    carry it: each keyed post with the fingerprint a grant sends back as
+    `expect` (`shown` is the digest of the text listed here), every post a
+    whole-scene grant would also expose -- keyless ones included -- with the
+    title and chronicle summary and line, and the whole scene's `digest` and
+    `shown`. Writes nothing."""
     _campaign_or_404(cid)
     read = _scene_posts(cid, sid)
-    posts = []
+    posts, keyless = [], []
     for i, (m, view) in enumerate(zip(read.messages, read.shown, strict=True)):
+        if store.scenes.serialize.is_director_note(m):
+            continue
+        text, hidden = str(view.get("content") or ""), store.scenes.serialize.is_excluded(m)
         fp = store.knowledge.fingerprint(m, read.variants)
+        row = {"index": i, "speaker": str(m.get("speaker") or ""), "text": text}
         if fp["key"]:
-            posts.append({**fp, "index": i, "speaker": str(m.get("speaker") or ""),
-                          "text": str(view.get("content") or ""),
-                          "hidden": store.scenes.serialize.is_excluded(m)})
-    return {"sid": sid, "digest": read.digest,
-            "keyless": sum(1 for m in read.messages if not store.knowledge.post_key(m)),
-            "posts": posts}
+            posts.append({**fp, **row, "shown": store.knowledge.digest(text), "hidden": hidden})
+        elif not hidden:
+            keyless.append(row)
+    return {"sid": sid, "digest": read.digest, "shown": _whole_shown(read),
+            "title": read.title, "summary": str(read.record.get("summary") or ""),
+            "one_line": str(read.record.get("one_line") or ""),
+            "keyless": len(keyless), "keyless_posts": keyless, "posts": posts}
 
 
 class _SceneView(NamedTuple):
-    """One read of a scene for the list: its id, title, display messages and
-    current fingerprints."""
+    """One read of a scene for the list: its id, title, prompt-view messages,
+    current fingerprints and what a whole-scene grant would expose."""
     sid: str
     title: str
     shown: list[dict]
     facts: store.knowledge.SceneFacts
+    whole_shown: str
 
 
 def _scene_view(cid: str, identity: str, ledger) -> _SceneView | str | None:
@@ -833,7 +868,8 @@ def _scene_view(cid: str, identity: str, ledger) -> _SceneView | str | None:
     # a subject is fingerprinted with (title and chronicle included).
     posts = store.knowledge_scene.scene_facts(read.messages, read.variants).posts
     return _SceneView(sid, read.title, read.shown,
-                      store.knowledge.SceneFacts(posts=posts, digest=read.digest))
+                      store.knowledge.SceneFacts(posts=posts, digest=read.digest),
+                      _whole_shown(read))
 
 
 def _listed_posts(entry: dict, scene: _SceneView | None) -> list[dict]:
@@ -850,9 +886,10 @@ def _listed_posts(entry: dict, scene: _SceneView | None) -> list[dict]:
                     and store.knowledge.post_part(m) == p["part"]):
                 variant, digest, _hidden = scene.facts.posts.get(  # type: ignore[union-attr]
                     (p["key"], p["part"]), ("", "", False))
-                row.update(index=i, speaker=str(m.get("speaker") or ""),
-                           text=str(m.get("content") or ""), missing=False,
-                           variant=variant, digest=digest)
+                text = str(m.get("content") or "")
+                row.update(index=i, speaker=str(m.get("speaker") or ""), text=text,
+                           missing=False, variant=variant, digest=digest,
+                           shown=store.knowledge.digest(text))
                 break
         rows.append(row)
     return rows
@@ -890,7 +927,7 @@ def _stale_reason(entry: dict, held, posts: list[dict], now: str | None) -> str 
 def get_knowledge(cid: str):
     """Every statement, with what the ledger needs to show it: the scene it is
     about (null when deleted; `unverifiable` when the scan could not finish),
-    the current text of each named post (display phase), and why a grant no
+    the current text of each named post (prompt view), and why a grant no
     longer grants -- `stale` with `stale_reason` `changed`, `hidden`, `gone`
     (its scene or post was deleted), `unverifiable` (its scene could not be
     read just now) or `audience` (the audience was renamed or no longer
@@ -916,8 +953,8 @@ def get_knowledge(cid: str):
         reason = _stale_reason(entry, held, posts, now)
         out.append({
             "id": kid, **entry,
-            "scene": ({"sid": scene.sid, "title": scene.title, "digest": scene.facts.digest}
-                      if scene else None),
+            "scene": ({"sid": scene.sid, "title": scene.title, "digest": scene.facts.digest,
+                       "shown": scene.whole_shown} if scene else None),
             "unverifiable": held == "unverifiable",
             "posts": posts,
             "stale": reason is not None, "stale_reason": reason,
@@ -936,15 +973,17 @@ def post_knowledge(cid: str, body: KnowledgeSave):
     if body.source not in store.knowledge.SOURCES:
         raise _bad("bad_source", "a source is manual or accepted")
     with store.locks.campaign_lock(cid):
-        name = _knowledge_audience(cid, body.audience)
-        subject = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene, body.status,
-                                     body.expect, body.expect_digest)
-        entry = {"audience": body.audience, "audience_name": name, "status": body.status,
-                 "subject": subject, "note": body.note, "source": body.source}
         try:
+            # First: a ledger that cannot be written must refuse before the
+            # subject below gives a legacy scene its identity.
             kid = store.knowledge.mint_id(cid)
         except store.knowledge.KnowledgeError as exc:
             raise _malformed() from exc
+        name = _knowledge_audience(cid, body.audience, body.audience_name or None)
+        subject = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene, body.status,
+                                     body.expect, body.expect_digest, body.expect_shown)
+        entry = {"audience": body.audience, "audience_name": name, "status": body.status,
+                 "subject": subject, "note": body.note, "source": body.source}
         _knowledge_write(cid, kid, entry, lambda: store.knowledge.add(cid, entry, kid=kid))
     return {"id": kid}
 
@@ -960,7 +999,7 @@ def _edited(cid: str, stored: dict, body: KnowledgeEdit) -> tuple[dict, bool]:
     renew = False
     if body.audience is not None:
         entry["audience"] = body.audience
-        entry["audience_name"] = _knowledge_audience(cid, body.audience)
+        entry["audience_name"] = _knowledge_audience(cid, body.audience, body.audience_name)
         renew = body.audience != stored["audience"]
     if body.note is not None:
         entry["note"] = body.note
@@ -979,7 +1018,7 @@ def _restamped(cid: str, subject: dict, status: str, body: KnowledgeEdit) -> dic
     posts = (None if subject["kind"] == "scene" else
              [KnowledgePost(key=p["key"], part=p["part"]) for p in subject["posts"]])
     return _knowledge_subject(cid, sid, posts, posts is None, status, body.expect,
-                              body.expect_digest, gone_is=409)
+                              body.expect_digest, body.expect_shown, gone_is=409)
 
 
 @router.put("/campaigns/{cid}/ledger/knowledge/{kid}")
@@ -1004,7 +1043,8 @@ def put_knowledge(cid: str, kid: str, body: KnowledgeEdit):
         grant = entry["status"] in store.knowledge.GRANTS
         if body.scene is not None:
             entry["subject"] = _knowledge_subject(cid, body.scene, body.posts, body.whole_scene,
-                                                  entry["status"], body.expect, body.expect_digest)
+                                                  entry["status"], body.expect, body.expect_digest,
+                                                  body.expect_shown)
             renew = True
         elif grant and stored["status"] == store.knowledge.UNAWARE:
             # Neither a plain edit nor a restamp chooses text: an `unaware`

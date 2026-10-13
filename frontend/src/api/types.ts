@@ -2830,24 +2830,32 @@ export type KnowledgeEntry = {
          | { kind: "scene"; scene: string; digest: string };
   /** The scene it is about, by its current id, with its transcript digest as
    *  this read saw it; null when that scene was deleted or `unverifiable`. */
-  scene: { sid: string; title: string; digest: string } | null;
+  scene: { sid: string; title: string; digest: string; shown: string } | null;
   /** The scan for its scene could not finish (a synced folder mid-write). */
   unverifiable: boolean;
   /** Each named post as it reads now (display phase), with the fingerprint of
    *  that text -- what a re-stamp sends back as `expect`. */
   posts: { key: string; part: string; index: number | null; speaker: string; text: string;
-           missing: boolean; variant?: string; digest?: string }[];
+           missing: boolean; variant?: string; digest?: string; shown?: string }[];
   /** A grant that no longer grants, and why. */
   stale: boolean;
   stale_reason: "changed" | "hidden" | "gone" | "unverifiable" | "audience" | null;
 };
 /** What a statement about one scene could name (`.../knowledge/scenes/{sid}`). */
 export type KnowledgeScene = {
-  sid: string; digest: string; keyless: number;
-  posts: { key: string; part: string; variant: string; digest: string; index: number;
-           speaker: string; text: string; hidden: boolean }[];
+  sid: string; digest: string; shown: string;
+  /** What a whole-scene grant also exposes, besides the posts. */
+  title: string; summary: string; one_line: string;
+  keyless: number;
+  keyless_posts: { index: number; speaker: string; text: string }[];
+  /** Each keyed post in its prompt view, with its fingerprint; `shown` is the
+   *  digest of `text`, which a grant sends back. */
+  posts: { key: string; part: string; variant: string; digest: string; shown: string;
+           index: number; speaker: string; text: string; hidden: boolean }[];
 };
-export type KnowledgeFingerprint = { key: string; part: string; variant: string; digest: string };
+export type KnowledgeFingerprint = {
+  key: string; part: string; variant: string; digest: string; shown: string;
+};
 export type KnowledgeList = { entries: KnowledgeEntry[]; intact: boolean };
 /** A grant carries what the reader was shown (`expect` / `expect_digest`);
  *  the server refuses it 409 `moved` when the text changed since. */
@@ -2855,13 +2863,16 @@ export type KnowledgeSave = {
   audience: string; status: KnowledgeStatus; scene: string;
   /** null with `whole_scene`. */
   posts: KnowledgePostRef[] | null; whole_scene: boolean;
-  expect: KnowledgeFingerprint[] | null; expect_digest: string;
+  expect: KnowledgeFingerprint[] | null; expect_digest: string; expect_shown: string;
+  /** The audience's name as the form showed it: a different current name is 409. */
+  audience_name?: string;
   note?: string; source?: "manual" | "accepted";
 };
 export type KnowledgeEdit = {
   audience?: string; status?: KnowledgeStatus; note?: string;
   scene?: string; posts?: KnowledgePostRef[] | null; whole_scene?: boolean;
-  expect?: KnowledgeFingerprint[] | null; expect_digest?: string; restamp?: boolean;
+  expect?: KnowledgeFingerprint[] | null; expect_digest?: string; expect_shown?: string;
+  audience_name?: string; restamp?: boolean;
 };
 
 export type Ledger = {

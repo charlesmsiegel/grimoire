@@ -1282,19 +1282,25 @@ class KnowledgePost(BaseModel):
 
 class KnowledgeFingerprint(BaseModel):
     """What the client was shown of one post: a precondition, never what is
-    stored. A grant is refused 409 `moved` when the post no longer reads so."""
+    stored. A grant is refused 409 `moved` when the post no longer reads so --
+    its raw text (`variant`, `digest`) or the prompt-view text it displayed
+    (`shown`, the digest of what an actor's prompt would carry)."""
     key: str = ""
     part: str = ""
     variant: str = ""
     digest: str = ""
+    shown: str = ""
 
 
 class KnowledgeSave(BaseModel):
     """A knowledge statement written by hand, or accepted from a capture.
     `scene` is the sid. Exactly one of `posts` and `whole_scene`. A grant
     (`knows`/`suspects`) carries what the user was shown -- `expect` for
-    posts, `expect_digest` for the whole scene -- and the route refuses it
-    when the text moved since; the stored fingerprint is computed here."""
+    posts, `expect_digest` and `expect_shown` for the whole scene -- and the
+    route refuses it when the text moved since; the stored fingerprint is
+    computed here. `audience_name` is the name the form displayed for the
+    audience: when given, a different current name is 409 `moved`, so a
+    record renamed or replaced under the open form is never the one granted."""
     audience: str = ""
     status: str = ""
     scene: str = ""
@@ -1302,6 +1308,8 @@ class KnowledgeSave(BaseModel):
     whole_scene: bool = False
     expect: list[KnowledgeFingerprint] | None = None
     expect_digest: str = ""
+    expect_shown: str = ""
+    audience_name: str = ""
     note: str = ""
     source: str = "manual"
 
@@ -1321,6 +1329,8 @@ class KnowledgeEdit(BaseModel):
     whole_scene: bool = False
     expect: list[KnowledgeFingerprint] | None = None
     expect_digest: str = ""
+    expect_shown: str = ""
+    audience_name: str | None = None
     restamp: bool = False
 
 

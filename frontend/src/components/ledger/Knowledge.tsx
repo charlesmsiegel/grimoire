@@ -171,7 +171,15 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
 
   function expectFor(keys: string[]) {
     return (shown?.posts ?? []).filter((p) => keys.includes(slot(p.key, p.part)))
-      .map((p) => ({ key: p.key, part: p.part, variant: p.variant, digest: p.digest }));
+      .map((p) => ({ key: p.key, part: p.part, variant: p.variant, digest: p.digest,
+                     shown: p.shown }));
+  }
+
+  /** The audience's name as this form lists it, sent back as a precondition. */
+  function shownName(audience: string): string | undefined {
+    if (audience === "*") return undefined;
+    const [kind, id] = audience.split(":");
+    return (kind === "groups" ? groups : chars).find((r) => r.id === id)?.name;
   }
 
   function subject() {
@@ -182,20 +190,27 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
       scene: form.scene, posts, whole_scene: form.whole,
       expect: form.whole ? null : expectFor(form.posts),
       expect_digest: form.whole ? shown?.digest ?? "" : "",
+      expect_shown: form.whole ? shown?.shown ?? "" : "",
     };
   }
 
   function save() {
     if (!entry) {
       const body: KnowledgeSave = { audience: form.audience, status: form.status,
-                                    note: form.note, ...subject() };
+                                    note: form.note, ...subject(),
+                                    ...(shownName(form.audience)
+                                      ? { audience_name: shownName(form.audience) } : {}) };
       void write(() => api.ledgerCreateKnowledge(cid, body));
       return;
     }
     // Only what moved: a note edit must never re-fingerprint the subject, or
     // it would confirm a stale grant behind the reader's back.
     const body: KnowledgeEdit = {};
-    if (form.audience !== original.audience) body.audience = form.audience;
+    if (form.audience !== original.audience) {
+      body.audience = form.audience;
+      const name = shownName(form.audience);
+      if (name) body.audience_name = name;
+    }
     if (form.status !== original.status) body.status = form.status;
     if (form.note !== original.note) body.note = form.note;
     // A subject moves when the reader changed it -- and when an `unaware` is
@@ -217,10 +232,10 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
   function restamp(e: KnowledgeEntry) {
     // Exactly the text this view shows: the list read's own fingerprints.
     const body: KnowledgeEdit = e.subject.kind === "scene"
-      ? { restamp: true, expect_digest: e.scene?.digest ?? "" }
+      ? { restamp: true, expect_digest: e.scene?.digest ?? "", expect_shown: e.scene?.shown ?? "" }
       : { restamp: true,
           expect: e.posts.map((p) => ({ key: p.key, part: p.part, variant: p.variant ?? "",
-                                        digest: p.digest ?? "" })) };
+                                        digest: p.digest ?? "", shown: p.shown ?? "" })) };
     void write(() => api.ledgerSaveKnowledge(cid, e.id, body), e.id);
   }
 
@@ -380,6 +395,23 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
                    onChange={(e) => setForm({ ...form, whole: e.target.checked })} />
             <span>The whole scene</span>
           </label>
+          {form.whole && (
+            // Everything a whole-scene grant covers, in full, before it can be
+            // saved: the title, the chronicle's summary and line, and every
+            // post in context -- the ones with no id included.
+            <div className="knowledge-posts" role="group" aria-label="The whole scene">
+              <p className="field-hint"><strong>{shown.title}</strong></p>
+              {shown.summary && <p className="field-hint">{`Summary: ${shown.summary}`}</p>}
+              {shown.one_line && <p className="field-hint">{`Line: ${shown.one_line}`}</p>}
+              {[...shown.posts.filter((p) => !p.hidden), ...shown.keyless_posts]
+                .sort((a, b) => a.index - b.index)
+                .map((p) => (
+                  <p key={p.index} className="knowledge-post-text">
+                    {`${p.speaker || "—"}: ${p.text}`}
+                  </p>
+                ))}
+            </div>
+          )}
           {!form.whole && (
             <div className="knowledge-posts" role="group" aria-label="Posts">
               {shown.posts.map((p) => {

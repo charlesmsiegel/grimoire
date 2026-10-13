@@ -9,6 +9,7 @@ reverses it.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -45,7 +46,7 @@ def _shown(client, w, sid=None):
 
 def _expect(client, w, key):
     post = next(p for p in _shown(client, w)["posts"] if p["key"] == key)
-    return [{k: post[k] for k in ("key", "part", "variant", "digest")}]
+    return [{k: post[k] for k in ("key", "part", "variant", "digest", "shown")}]
 
 
 def _post(client, w, **body):
@@ -57,9 +58,10 @@ def _post(client, w, **body):
     return client.post(w["base"], json=payload)
 
 
-def _whole(client, w, **body):
-    return _post(client, w, posts=None, whole_scene=True,
-                 expect_digest=_shown(client, w)["digest"], **body)
+def _whole(client, w, sid=None, **body):
+    shown = _shown(client, w, sid)
+    return _post(client, w, posts=None, whole_scene=True, expect_digest=shown["digest"],
+                 expect_shown=shown["shown"], **{"scene": sid or w["sid"], **body})
 
 
 def _entries(client, w):
@@ -136,8 +138,7 @@ def test_a_legacy_scene_is_given_an_identity_and_a_refusal_writes_none(client, w
     refused = _post(client, world, scene=sid, posts=[{"key": "p-" + "0" * 32, "part": ""}])
     assert refused.status_code == 400
     assert scenes_identity.scene_identity(world["cid"], sid) is None
-    r = _post(client, world, scene=sid, posts=None, whole_scene=True,
-              expect_digest=_shown(client, world, sid)["digest"])
+    r = _whole(client, world, sid)
     assert r.status_code == 200, r.text
     token = scenes_identity.scene_identity(world["cid"], sid)
     assert token and store.knowledge.get(world["cid"], r.json()["id"])["subject"]["scene"] == token
@@ -364,7 +365,8 @@ def test_a_partly_cut_unaware_still_applies_but_a_grant_is_gone(client, world):
     store.responses.save_variant(cid, sid, later["id"], "Mara leaves.", "complete")
     keys = [f"r-{world['rid']}", f"r-{later['id']}"]
     shown = {p["key"]: p for p in _shown(client, world)["posts"]}
-    expect = [{k: shown[key][k] for k in ("key", "part", "variant", "digest")} for key in keys]
+    expect = [{k: shown[key][k] for k in ("key", "part", "variant", "digest", "shown")}
+              for key in keys]
     posts = [{"key": k, "part": ""} for k in keys]
     _post(client, world, posts=posts, expect=expect, status="unaware")
     _post(client, world, posts=posts, expect=expect, status="knows")
@@ -396,10 +398,58 @@ def test_the_list_parses_the_response_ledger_once(client, world, monkeypatch):
     for title in ("Dock", "Harbour", "Quay"):
         sid = store.scenes.create_scene(world["cid"], title)
         store.scenes.append_message(world["cid"], sid, "user", f"{title}.", post_id=_hex())
-        _post(client, world, scene=sid, posts=None, whole_scene=True,
-              expect_digest=_shown(client, world, sid)["digest"])
+        assert _whole(client, world, sid).status_code == 200
     calls = []
     real = store.responses._read
     monkeypatch.setattr(store.responses, "_read", lambda cid: calls.append(cid) or real(cid))
     assert len(_entries(client, world)) == 3
     assert len(calls) == 1
+
+
+def test_a_garbled_ledger_refuses_before_a_legacy_scene_gets_an_identity(client, world):
+    sid = store.scenes.create_scene(world["cid"], "Old")
+    pid = _hex()
+    store.scenes.append_message(world["cid"], sid, "user", "Long ago.", post_id=pid)
+    path = store.scenes.paths._scene_path(world["cid"], sid)
+    path.write_text("\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                              if not line.startswith("identity:")) + "\n", encoding="utf-8")
+    store.knowledge._path(world["cid"]).write_text("{not json", encoding="utf-8")
+    r = _post(client, world, scene=sid, posts=[{"key": f"p-{pid}", "part": ""}],
+              status="unaware")
+    assert r.status_code == 409 and r.json()["kind"] == "malformed"
+    assert scenes_identity.scene_identity(world["cid"], sid) is None
+
+
+def test_a_damaged_response_scope_marks_entries_not_the_list(client, world):
+    _post(client, world)
+    token = scenes_identity.scene_identity(world["cid"], world["sid"])
+    store.responses._path(world["cid"]).write_text(
+        json.dumps({"scenes": {token: {"responses": []}}}), encoding="utf-8")
+    [row] = _entries(client, world)
+    assert row["unverifiable"]
+
+
+def test_a_renamed_audience_under_an_open_form_is_refused(client, world):
+    r = _post(client, world, audience_name="Mara")
+    assert r.status_code == 200, r.text
+    r = _post(client, world, audience_name="Seraphine")
+    assert r.status_code == 409 and r.json()["kind"] == "moved"
+
+
+def test_a_grant_binds_to_the_prompt_text_it_showed(client, world):
+    expect = _expect(client, world, f"r-{world['rid']}")
+    expect[0]["shown"] = store.knowledge.digest("something the form never showed")
+    r = _post(client, world, expect=expect)
+    assert r.status_code == 409 and r.json()["kind"] == "moved"
+
+
+def test_the_scene_read_shows_everything_a_whole_scene_grant_exposes(client, world):
+    store.scenes.append_message(world["cid"], world["sid"], "user", "An old keyless line.")
+    store.chronicle.restore(world["cid"], world["sid"],
+                            {"id": world["sid"], "summary": "Mara learned the code.",
+                             "one_line": "The code."})
+    shown = _shown(client, world)
+    assert shown["title"] == "Pier" and shown["summary"] == "Mara learned the code."
+    assert shown["one_line"] == "The code."
+    assert [p["text"] for p in shown["keyless_posts"]] == ["An old keyless line."]
+    assert _whole(client, world).status_code == 200
