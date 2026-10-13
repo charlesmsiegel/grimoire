@@ -654,7 +654,11 @@ alone. This table is generated: after a spec's slices change, run
 | 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 | 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 | 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+
+All six 09 slices have basic code implementations. S6 corpus/long acceptance,
+the full gate and final reviews are deferred at the user's request; open
+review/final-gate boxes record that debt, and no slice is marked landed.
 
 ### 10
 

@@ -209,3 +209,52 @@ Required guard/equivalence/resolver selection passed 772 tests; history/play
 196 and docs/rerank108 also passed. Ruff1136/mypy161 remain at baseline.
 The existing history kit and replay case are activated with captured decisions,
 graded-slot-only ordering and reused frozen expansions. Full gate is pending.
+
+Ruling: Resolve the proven Windows missing-ctypes gate blocker during final
+acceptance by reusing existing unavailable-native recycling stubs, preserving
+Windows identity/refusal and never adding permanent deletion -- the required
+gate otherwise cannot pass -- cost if wrong is touching native-startup behavior
+beyond historical retrieval. Normal ctypes-present behavior stays covered by
+its owning tests. This narrow fix is assigned to the S6 implementer.
+
+The user subsequently narrowed the remaining work to a basic implementation
+of every surface and an immediate PR, explicitly instructing not to fix tests.
+Further test/ratchet work, test repairs, Windows compatibility repair, task
+review and full-gate work are deferred. The Windows repair had not begun; its
+earlier assignment is withdrawn. Already committed work and verification
+evidence remain intact. No deferred check is reported as passing.
+
+
+## S6 basic implementation and PR handoff
+
+S6 committed in `96f4e1a54`. Caller-directed non-turn tier-3 sources now carry
+qualified identities, source-aware expansion/materialization and aggregate
+coverage under shared semantic bounds. Ten synthetic recipe shapes, planted
+gold graders, five offline signal arms, opt-in live reranking/downstream
+generation, CLI dispatch and existing eval reporting are implemented.
+
+Initial combined RED recorded 13 failures and one pass; additional corpus RED
+recorded six failures. Source-scoping GREEN passed 10 tests before the latest
+user steering. Final owned Python sources passed syntax-only compilation.
+No final matrix, long report, live call or full-gate success is claimed.
+
+The latest user instruction supersedes earlier requirements to repair the
+Windows baseline or complete final verification/review before publication.
+All six code boxes are marked implemented; S6 acceptance and review/final-gate
+boxes remain open. This is a basic implementation PR with deferred validation.
+The worktree and ignored task ledgers are retained; no merge is authorized.
+
+Known S6 limits: recorded synthetic text rules rather than an exhaustive static
+vector mapping; first-scene matrix coverage pending; phase timing is a coarse
+semantic/cache-versus-remainder split; source-local lexical ranks need aggregate
+calibration assessment; hard-rule/live contradiction graders are basic. The
+final corpus/runner/CLI integration may fail and has not been rerun. The proven
+clean-main Windows missing-ctypes test failure remains unchanged.
+
+Theory: independent signals admit live historical evidence, deterministic
+merge/expansion/packing produces a bounded frozen narrator prompt, and optional
+semantic/rerank phases refine existing candidates within shared limits. The
+implementation reuses SearchDocuments, overlay ancestry, vector cache/adapters,
+relevance capture and eval reporting. Source qualification preserves campaign
+provenance; generated isolated archives keep measurement independent of the
+user's library. Default history recall remains off.
