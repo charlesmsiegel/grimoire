@@ -110,7 +110,10 @@ helper shutdown remain pending. S3's narrator reply chip sent the recalled
 section to the local cassette mock, including the synthetic agreement summary;
 an NPC reply omitted it as required. No page errors occurred. All chat, model
 catalog and key-check endpoints were redirected to the local mock before the
-test-only Primary role was configured.
+test-only Primary role was configured. The persisted narrator prompt row also
+passed assertions for both structural and lexical reasons, semantic status
+off, and 32 packed tokens within its 700-token ceiling. The helpers were
+stopped after this checkpoint; final verification will restart current code.
 
 ## S2 task checkpoint
 
@@ -137,3 +140,44 @@ blocking findings. The async worker/portal seam, once-per-round narrator gate,
 locked replay authority and frozen retry/regenerate passed 29 focused and 697
 surrounding tests. Lint/type ratchets remain unchanged. Existing dependency
 deprecations are deferred to the final review; the full gate is still pending.
+
+Ruling: Keep appended roll continuation's existing recomposition behavior,
+with no new historical retrieval — S3 explicitly excludes that caller and
+does not specify carrying history across a new compose — the cost if wrong
+is adding a frozen-history handoff so earlier evidence survives the resume.
+The final whole-branch review must judge this user expectation independently.
+
+Ruling: Prepare bounded tier-2 lookahead when pre-semantic tier-1 coverage is
+empty/thin, warming pool documents first in the single query request — cold
+semantic-only retrieval otherwise has no warming path — the cost if wrong is
+bounded speculative vector reads wasted if semantic makes tier 1 sufficient.
+Lookahead counts toward the 1000 unique-load cap; only actual widening applies
+its signals, and tier 1 still evaluates at most 64 union-pool documents.
+
+Ruling: Complete available semantic coverage requires valid computed cosines
+for every eligible document, rather than attempted cache loads — a missing or
+evicted vector has not evaluated that signal — the cost if wrong is repeated
+bounded widening while an incomplete cache warms. Tier 1 counts only its
+applied pool scores; speculative lookahead cannot suppress actual widening.
+Valid below-threshold scores count as evaluated. Load attempts enforce caps.
+
+Ruling: Add optional `keep` to `record_embedded`, disabling cancelled staged
+batches before flush and checking before each new vector save — cancellation
+during materialized-row staging otherwise publishes advisory rows — the cost
+if wrong is needing a stronger fence around in-flight atomic cache/file commits.
+Existing 08 callers retain default behavior. An atomic operation already in
+progress cannot be interrupted; the final review must judge that boundary.
+
+Ruling: Carry an optional publication predicate into compiled batch flush,
+checking again after acquiring its writer lock and before starting SQL — review
+proved that cancellation during lock wait slips past the earlier callback — the
+cost if wrong is adapting this new optional low-level cache seam. Existing
+callers retain default behavior. Cancellation is distinct from lifecycle
+invalidation and must not trigger a global cache purge after commit.
+
+S4 fix verification also exposed a Windows baseline failure when its optional
+native-clock test globally hides `ctypes`: `recycle_bin.py:183` imports it
+unguarded. The exact node reproduces on clean main `c647d06c4`, with a fresh
+synthetic TEMP home before imports, baseline sources and bytecode/cache output
+disabled. Main source stayed untouched. This is separate from the S4 fix and
+remains a required full-gate resolution before completion.
