@@ -307,3 +307,46 @@ def test_preview_archive_scan_omission_matches_actual_compose_window(cid, monkey
     with locks.campaign_lock(cid):
         _messages, detail = assemble.compose_turn(cid, current, history=ev)
     assert row(detail)["history"]["items"][0]["scene"] == usable
+
+
+@pytest.mark.parametrize("expanded_summary", ["", " \n\t"])
+def test_expanded_empty_summary_cannot_keep_header_or_evidence(cid, expanded_summary):
+    from grimoire.store.context import history as history_section
+    supplied = replace(item(summary="{{user}}"), date="", excerpts=())
+    calls = []
+    def expand(text):
+        if "{{user}}" in text:
+            calls.append(text)
+        return text.replace("{{user}}", expanded_summary)
+    text, extra = history_section.section(evidence(supplied), expand, len, {}, config.read_config())
+    assert text == ""
+    assert extra["history"]["items"] == []
+    assert extra["shed"]["units"] == []
+    assert len(calls) == 1
+
+
+def test_disappearing_summary_keeps_retained_excerpt_without_another_draw(cid):
+    from grimoire.store.context import history as history_section
+    calls = []
+    def expand(text):
+        if "{{random:x,y}}" in text:
+            calls.append(text)
+        return text.replace("{{user}}", "").replace("{{random:x,y}}", "FROZEN")
+    supplied = item(text="Mara kept {{random:x,y}}.", summary="{{user}}")
+    text, extra = history_section.section(evidence(supplied), expand, len, {}, config.read_config())
+    detail = extra["history"]["items"][0]
+    assert detail["summary"] == "none"
+    assert detail["excerpts"] == [[41]]
+    assert detail["posts"][0]["text"] in text
+    assert "FROZEN" in text
+    assert extra["shed"]["render"](frozenset({supplied.scene.key})) == text
+    assert len(calls) == 1
+
+
+def test_empty_summary_macro_does_not_render_history_header(cid):
+    current = played(cid)
+    # Unresolved user/char macros stay literal under the existing contract;
+    # an unknown macro exercises actual empty expansion through compose.
+    supplied = replace(item(summary="{{missing}}"), date="", excerpts=())
+    _messages, detail = assemble.compose_turn(cid, current, history=evidence(supplied))
+    assert all(section["id"] != "history_recall" for section in detail["sections"])

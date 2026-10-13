@@ -23,7 +23,7 @@ from ..history import retrieve as retrieval
 from . import archive, layout, story
 
 _SLOT = re.compile(r"\x00(\d+)\x00")
-_SPAN = re.compile(r"\x03([ep]\d+(?:_\d+)?)([se])\x03")
+_SPAN = re.compile(r"\x03([eps]\d+(?:_\d+)?)([se])\x03")
 
 
 def summary_omissions(cid: str, sid: str, archive_scan_text: str, full_recap: int = 0) -> dict[str, str]:
@@ -138,7 +138,11 @@ def _marked_item(item: model.EvidenceItem) -> str:
         else:
             pieces.append(excerpt.text[cursor:])
             excerpts.append(replace(excerpt, text=f"\x03e{e}s\x03" + "".join(pieces) + f"\x03e{e}e\x03"))
-    marked = replace(item, excerpts=tuple(excerpts))
+    # Admission after macro fitting uses the summary content actually sent,
+    # not a non-empty macro expression that may have expanded to nothing.
+    summary = ("\x03s0s\x03" + item.summary + "\x03s0e\x03"
+               if item.summary and not item.summary_omission else item.summary)
+    marked = replace(item, summary=summary, excerpts=tuple(excerpts))
     if excerpts:
         marked = replace(marked, excerpts=(replace(excerpts[0], text="\x01" + excerpts[0].text), *excerpts[1:]))
     return budget.render_item(marked)
@@ -187,7 +191,9 @@ def _retained(item: model.EvidenceItem, original: str, fitted: str,
             start, end = spans[f"e{e}"]
             text = original[start:min(end, cut)]
             excerpts.append(model.Excerpt(tuple(posts), text + ("\u2026" if end > cut else "")))
-    return replace(item, excerpts=tuple(excerpts), evidence_ids=()), fitted
+    start, end = spans.get("s0", (0, 0))
+    summary = item.summary if item.summary_omission else original[start:min(end, cut)].strip()
+    return replace(item, summary=summary, excerpts=tuple(excerpts), evidence_ids=()), fitted
 
 
 def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], cfg: dict) -> tuple[str, dict]:
@@ -203,7 +209,7 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
     for key in order:
         before, marker, after = blocks[key].partition("\x01")
         blocks[key], spans[key] = _unmark(before + after)
-        boundaries[key] = len(before) if marker else None
+        boundaries[key] = len(_SPAN.sub("", before)) if marker else None
     depth = settings.read(cfg)
     share = max(budget.MIN_ITEM_TOKENS, cap // (depth.depth if depth else max(len(items), 1)))
     kept: set[str] = set()
