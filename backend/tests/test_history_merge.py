@@ -58,7 +58,7 @@ def test_merge_keeps_round_ranks_and_expands_new_selection(cid):
     json.dumps(result.detail())
 
 
-def test_legacy_scenes_keep_distinct_keys_and_existing_excerpts(cid):
+def test_legacy_scenes_keep_distinct_keys_and_existing_items(cid):
     a, b = candidate("001--saltmarch"), candidate("002--saltmarch")
     item = model.EvidenceItem(a.scene, "Saltmarch", summary="Mara returns.")
 
@@ -85,3 +85,24 @@ def test_merge_none_callback_does_not_spend_selection_slot(cid):
         ),
     )
     assert result.items[0].scene == b.scene
+
+
+def test_later_summary_only_round_preserves_previously_expanded_posts(cid):
+    c = candidate("001--saltmarch")
+    post = model.EvidencePost(7, "r-reply", 1, "Mara", "The ledger is here.")
+    earlier = model.EvidenceItem(
+        c.scene,
+        "Saltmarch",
+        summary="Mara returns.",
+        excerpts=(model.Excerpt((post,), "**Mara:** The ledger is here."),),
+    )
+    later = model.EvidenceItem(c.scene, "Saltmarch", summary="Mara returns.")
+    result = merge_mod.merge(
+        evidence([c], [earlier]),
+        evidence([c], [later]),
+        ceiling=1200,
+        expand=lambda candidate: None,
+    )
+    assert result.items[0].excerpts == earlier.excerpts
+    assert result.items[0].excerpts[0].posts == (post,)
+    assert result.items[0].evidence_ids == ("sid:001--saltmarch@r-reply",)

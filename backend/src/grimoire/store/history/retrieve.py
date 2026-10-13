@@ -139,14 +139,7 @@ def retrieve_preview(
     cat = query_mod.catalog(cid, sid, posts)
     # Directly constructed queries pass the same exclusion boundary as build:
     # a planner's subject cannot reintroduce a protected record or its terms.
-    terms = tuple(
-        dict.fromkeys(
-            query_mod.normalized(t)
-            for t in query.terms
-            if query_mod.normalized(t)
-            and query_mod.normalized(cat.clean(t)) == query_mod.normalized(t)
-        )
-    )
+    terms = cat.filter_terms(query.terms)
     query = replace(
         query,
         terms=terms,

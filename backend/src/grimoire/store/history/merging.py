@@ -83,7 +83,13 @@ def merge(
     ordered = order(list(combined.values()))
     if rerank is not None:
         ordered = list(rerank(ordered))
-    held = {i.scene.key: i for i in (*a.items, *b.items)}
+    held: dict[str, model.EvidenceItem] = {}
+    for item in (*a.items, *b.items):
+        previous_item = held.get(item.scene.key)
+        # A later query can find no anchor for a previously expanded scene.
+        # Keep the earlier post/id payload; a summary cannot erase evidence.
+        if previous_item is None or not previous_item.excerpts:
+            held[item.scene.key] = item
     items = select(
         ordered, cfg.depth, lambda c: held[c.scene.key] if c.scene.key in held else expand(c)
     )

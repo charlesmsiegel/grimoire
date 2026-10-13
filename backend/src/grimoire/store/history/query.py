@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .. import actor_names, config, entities, export, membership, overlay, pins, search
@@ -110,10 +111,21 @@ class Catalog:
         }
         return {t: 2 for t in terms if normalized(t) in weighted}
 
+    def filter_terms(self, terms: Sequence[str]) -> tuple[str, ...]:
+        """Names protect their words too, including words in quoted phrases."""
+        blocked = {word for name in self.protected for word in re.findall(r"\w+", normalized(name))}
+        return tuple(
+            dict.fromkeys(
+                term
+                for raw in terms
+                if (term := normalized(raw)) and not blocked.intersection(re.findall(r"\w+", term))
+            )
+        )
+
     def clean(self, text: str) -> str:
         text = normalized(text)
-        # Long names first: the entire protected phrase, including its plain
-        # components, disappears before a shorter overlapping name is tested.
+        # Long names first: remove a whole phrase before testing overlapping
+        # aliases. filter_terms independently gates every constituent word.
         for name in sorted(self.protected, key=len, reverse=True):
             text = re.sub(r"(?<!\w)" + re.escape(name) + r"(?!\w)", " ", text)
         return text
@@ -295,7 +307,7 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
     )
     phrases = [t for t in search.query_terms(clean) if " " in t]
     plain = [t for t in re.findall(r"\w+", clean) if len(t) > 1 and t not in STOPWORDS]
-    terms = tuple(dict.fromkeys([*weighted, *phrases, *plain]))
+    terms = cat.filter_terms([*weighted, *phrases, *plain])
     clipped = scan.encode("utf-8", errors="replace")[-QUERY_BYTES:].decode("utf-8", errors="ignore")
     seeds = subjects(cid, cat, clean)
     # Speaker stamps are separate from prose. Hidden/director notes confer no

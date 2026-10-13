@@ -472,3 +472,16 @@ def test_original_scene_in_current_branch_group_is_not_history(cid):
         cid, current, model.Query(("",), terms=("silver", "ledger")), 1200
     )
     assert e.candidates == ()
+
+
+def test_supplied_terms_cannot_admit_protected_multiword_record(cid):
+    entities.create_entity(
+        campaigns.campaign_root(cid), "items", "Mara Winifred", secrecy="gm-only"
+    )
+    old = played(cid, text="Mara Winifred and Mara ribbon.")
+    absorbed(cid, old, "Mara Winifred and Mara ribbon.")
+    current = played(cid, text="Mara dust and Winifred entries.")
+    q = model.Query(
+        ("",), terms=("\uff2d\uff21\uff32\uff21", "Winifred", "Mara ribbon"), scopes=frozenset()
+    )
+    assert retrieve.retrieve_preview(cid, current, q, 1200).candidates == ()

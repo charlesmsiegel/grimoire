@@ -94,3 +94,16 @@ def test_query_terms_are_built_after_prompt_rules(cid):
     assert q.texts == ("amber seal",)
     assert "amber" in q.terms and "seal" in q.terms
     assert "silver" not in q.terms and "ledger" not in q.terms
+
+
+def test_protected_multiword_name_blocks_constituents_and_quoted_phrases(cid):
+    entities.create_entity(
+        campaigns.campaign_root(cid), "items", "Mara Winifred", secrecy="gm-only"
+    )
+    sid = played(
+        cid,
+        text='\uff2d\uff21\uff32\uff21 dust and Winifred entries beside "Mara ribbon" and amber seal.',
+    )
+    q = query.build(cid, sid)
+    assert not {"mara", "winifred", "mara ribbon"}.intersection(q.terms)
+    assert "amber" in q.terms and "seal" in q.terms
