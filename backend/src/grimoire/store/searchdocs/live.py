@@ -45,7 +45,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import compiled, paths
+from .. import compiled, paths, statcache
 from ..scenes import paths as scenes_paths
 from ..scenes import read as scenes_read
 from . import scene as scene_mod
@@ -262,13 +262,33 @@ def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,
         sid = row["id"]
         if sid in exclude or (only is not None and sid not in only):
             continue
+        sl = _sliced(cid, sid, inputs)
+        if sl is None:
+            skipped.append(sid)
+            continue
+        out.append((row, sl))
+    return out
+
+
+def _sliced(cid: str, sid: str, inputs: slices_mod.CampaignInputs,
+            *, tries: int = 2) -> slices_mod.Slices | None:
+    """The scene's slices, or None for a head that will not read or a file
+    that keeps moving. The file's signature is taken with the head and again
+    after slicing, and the two must agree: a sid is reusable, and a delete and
+    re-create between them would pair one scene's head (its identity, its
+    `done`) with what slicing read of the other -- its transcript's rolling
+    summary, or the old scene's ledger rows under the new one's name. A file
+    that moved is sliced once more; one that moves again is skipped, as a
+    head that will not read is."""
+    for _ in range(tries):
         try:
             head = slices_mod.read_head(cid, sid)
         except (OSError, scenes_paths.SceneNotFound, ValueError):
-            skipped.append(sid)
-            continue
-        out.append((row, slices_mod.scene_slices(inputs, head)))
-    return out
+            return None
+        sl = slices_mod.scene_slices(inputs, head)
+        if head.sig is not None and statcache.signature(head.path) == head.sig:
+            return sl
+    return None
 
 
 def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]

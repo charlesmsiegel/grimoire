@@ -828,6 +828,31 @@ def test_a_location_that_cannot_be_reached_is_unreadable_not_missing(cid, monkey
     assert f"locations/{eid}" in doc(cid, sid).meta["degraded"]
 
 
+def test_a_campaign_md_that_cannot_be_reached_degrades_instead_of_vanishing(cid, monkeypatch):
+    """`Path.exists` can swallow an access error: a campaign.md that cannot be
+    stat'd is a world that will not resolve, never a campaign that is gone."""
+    sid = _played(cid)
+    _actor(cid, sid, "Mara")
+    meta = str(campaigns.campaign_root(cid) / "campaign.md")
+    real_stat, real_exists = slices.os.stat, slices.Path.exists
+
+    def stat(path, *args, **kwargs):
+        if str(path) == meta:
+            raise PermissionError("denied")
+        return real_stat(path, *args, **kwargs)
+
+    def unresolved(*_a, **_k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(slices.os, "stat", stat)
+    monkeypatch.setattr(slices.Path, "exists",
+                        lambda self: False if str(self) == meta else real_exists(self))
+    monkeypatch.setattr(slices.overlay, "wroot_of", unresolved)
+    slices._POOL.clear()
+    d = doc(cid, sid)
+    assert "campaign.md" in d.meta["degraded"]
+    assert "Cast: Mara" in d.text
+
+
 def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
     p = campaigns.campaign_root(cid) / "campaign.md"
     text = p.read_text(encoding="utf-8")
@@ -845,6 +870,16 @@ def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
     ("plot.json", lambda sid: {"missing-ledger": {"title": "Ledger", "status": "open",
                                                   "beats": [{"scene": sid, "text": {}}]}}),
     ("appearances.json", lambda sid: {"characters/mara": {"role": {}, "scenes": [sid]}}),
+    ("facts.json", lambda sid: {"f1": {"text": "The seal broke.", "scene": [sid]}}),
+    ("facts.json", lambda sid: {"f1": {"text": "The seal broke.", "scene": sid,
+                                       "retired_scene": 7}}),
+    ("continuity.json", lambda sid: {"links": {"l1": {"scene": {"sid": sid},
+                                                      "created": "2026"}}}),
+    ("continuity.json", lambda sid: {"links": {"l1": {"scene": sid, "created": 2026}}}),
+    ("relationship_history.json", lambda sid: {"entries": [
+        {"scene": sid, "source": "absorb", "kind": "bond", "a": "characters/mara",
+         "b": "characters/winifred", "label": "trust", "before": "low", "after": "high",
+         "scene_gone": "false"}]}),
 ])
 def test_a_nested_part_of_the_wrong_shape_is_degraded(cid, name, body):
     sid = _played(cid)

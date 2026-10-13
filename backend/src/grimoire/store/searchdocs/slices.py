@@ -215,14 +215,17 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
         and all(isinstance(v, list) and all(isinstance(i, dict) for i in v)
                 for v in (r.get("presence") or {}).values())
         and all(_opt(r.get(k), str) for k in ("role", "version")))),
-    "facts.json": lambda d: _each(d, lambda r: _opt(r.get("text"), str)),
+    "facts.json": lambda d: _each(d, lambda r: all(
+        _opt(r.get(k), str) for k in ("text", "scene", "retired_scene"))),
     "continuity.json": lambda d: not isinstance(d, dict) or (
-        _opt(d.get("links"), dict) and _each(d.get("links") or {}, lambda _r: True)),
+        _opt(d.get("links"), dict) and _each(d.get("links") or {}, lambda r: all(
+            _opt(r.get(k), str) for k in ("scene", "created")))),
     "relationship_history.json": lambda d: not isinstance(d, dict) or (
         _opt(d.get("entries"), list)
         and all(isinstance(e, dict)
                 and all(_opt(e.get(k), str)
                         for k in ("scene", "source", "kind", "a", "b", "label", "before", "after"))
+                and _opt(e.get("scene_gone"), bool)
                 for e in d.get("entries") or ())),
 }
 
@@ -309,7 +312,10 @@ class CampaignInputs:
     def __init__(self, cid: str) -> None:
         self.cid = cid
         self.root = campaigns_paths.campaign_root(cid)
-        if not campaigns_paths.campaign_meta_path(cid).exists():
+        # `_present`, not `Path.exists`: a campaign.md that cannot be reached
+        # is a campaign whose world will not resolve (degraded below), never
+        # one that is not there.
+        if not _present(campaigns_paths.campaign_meta_path(cid)):
             raise campaigns_paths.CampaignNotFound(cid)
         self.damage = _Damage()
         # What the overlay reads to resolve a location's layer and a group's
@@ -497,6 +503,9 @@ class Head:
     sid: str
     path: Path
     meta: dict
+    #: The file's stat signature when the head was read: a scene deleted and
+    #: re-created under the same sid (a new inode) or rewritten moves it.
+    sig: tuple | None = None
 
     @property
     def absorbed(self) -> bool:
@@ -517,7 +526,7 @@ def read_head(cid: str, sid: str) -> Head:
     sig = statcache.signature(p)
     meta = statcache.memo("searchdocs.head", sig, lambda: parse_frontmatter_head(p),
                           pool=_POOL, max_entries=POOL_ENTRIES)
-    return Head(sid, p, dict(meta))
+    return Head(sid, p, dict(meta), sig)
 
 
 @dataclass(frozen=True)

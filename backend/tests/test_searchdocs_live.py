@@ -466,3 +466,51 @@ def test_the_tolerant_walk_resolves_branches_as_list_scenes_does(cid, monkeypatc
     monkeypatch.setattr(live.scenes_read, "list_scenes", unreadable)
     got = {d.sid: d.closed_by for d in live.scene_documents(cid).documents}
     assert got == expected
+
+
+def _replace_scene(cid, sid, identity):
+    """Delete and re-create `sid`'s file as another scene: a new inode, a new
+    identity, never absorbed."""
+    p = scenes.paths._scene_path(cid, sid)
+    text = re.sub(r"(?m)^identity: .*$", f"identity: {identity}", p.read_text(encoding="utf-8"))
+    text = re.sub(r"(?m)^done: .*\n", "", text)
+    p.unlink()
+    p.write_text(text, encoding="utf-8")
+
+
+def test_a_scene_replaced_while_it_is_sliced_is_sliced_again(cid, monkeypatch):
+    """The head and what slicing read must be one file's: a replacement in
+    between would file the old scene's ledgers under the new one's identity."""
+    a, _b, _c = _three(cid)
+    real = live.slices_mod.scene_slices
+    calls = []
+
+    def racing(inputs, head):
+        sl = real(inputs, head)
+        if head.sid == a and not calls:
+            calls.append(head.meta.get("identity"))
+            _replace_scene(cid, a, "feedfacefeedfacefeedfacefeedface")
+        return sl
+    monkeypatch.setattr(live.slices_mod, "scene_slices", racing)
+    got = live.scene_documents(cid)
+    doc = next(d for d in got.documents if d.sid == a)
+    assert calls and calls[0] != "feedfacefeedfacefeedfacefeedface"
+    assert doc.doc.meta["identity"] == "feedfacefeedfacefeedfacefeedface"
+    assert "Saltmarch happened." not in doc.doc.text      # the old scene's chronicle
+    assert got.skipped == ()
+
+
+def test_a_scene_that_keeps_moving_is_skipped_and_the_rest_answer(cid, monkeypatch):
+    a, b, c = _three(cid)
+    real = live.slices_mod.scene_slices
+    n = iter(range(100))
+
+    def racing(inputs, head):
+        sl = real(inputs, head)
+        if head.sid == a:
+            _replace_scene(cid, a, f"{next(n):032x}")
+        return sl
+    monkeypatch.setattr(live.slices_mod, "scene_slices", racing)
+    got = live.scene_documents(cid)
+    assert got.skipped == (a,)
+    assert [d.sid for d in got.documents] == [b, c]
