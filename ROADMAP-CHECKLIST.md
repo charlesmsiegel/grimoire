@@ -72,8 +72,8 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 05 | Direct-edit cache sync | merged in PR #512 | [x] | [~] substitute | 7 | [x] |
 | 06 | Store-editing skill | now (05 has merged, so 05-C2 is on main) | [x] | [x] [Codex](docs/superpowers/validation/2026-10-13-roadmap-06-execution.md) | 2 | [ ] |
 | 07 | Explicit group membership | merged in PR #507; S8 measured and withheld | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [x] |
-| 08 | Derived history SearchDocuments | 03 and 05 merged; all six slices implemented in PR #510 | [x] | [~] substitute | 6 | [ ] |
-| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [x] CLI Codex (2026-10-13) | 6 | [ ] |
+| 08 | Derived history SearchDocuments | merged in PR #510 | [x] | [~] substitute | 6 | [x] |
+| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [x] CLI Codex (2026-10-13) | 6 | [x] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
 | 11 | Epistemic history retrieval | S1 now; later slices wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
 | 12 | Bounded agentic investigation | 01g, 08, 09 (01i has landed; RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
@@ -81,15 +81,15 @@ last**, an ordering preference rather than a fabricated technical edge.
 
 ## Parallel lanes
 
-- **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)), 04 ([#513](https://github.com/charlesmsiegel/grimoire/pull/513)), 05 ([#512](https://github.com/charlesmsiegel/grimoire/pull/512)) and 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
-- **Specs that can run end-to-end now:** 06, whose one external hard need (05-C2) is on main, and 08, all six slices implemented in [#510](https://github.com/charlesmsiegel/grimoire/pull/510) and in its Codex review rounds.
+- **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)), 04 ([#513](https://github.com/charlesmsiegel/grimoire/pull/513)), 05 ([#512](https://github.com/charlesmsiegel/grimoire/pull/512)), 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)), 08 ([#510](https://github.com/charlesmsiegel/grimoire/pull/510)) and 09 ([#515](https://github.com/charlesmsiegel/grimoire/pull/515)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
+- **Specs that can run end-to-end now:** 06, whose one external hard need (05-C2) is on main.
 - **Parallel partial implementations:** 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
 - **Scheduled LAST:** 13 (Mechanics II). Do not dispatch it until **every other** roadmap spec, including 04, 05, 06, 08, 09, 10, 11 and 12, has landed. This is a scheduling hold only: the technical slice dependency graph and waves remain unchanged. `ready` hides 13 until then; `ready --include-deferred` displays technical readiness without the scheduling hold.
 - **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. For 05-S1 through S7 (merged in #512), plan gates, and the review and final gates the table leaves open, remain unticked. No missing gate is inferred from a merged PR.
 - **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → ~~02~~ → 11 (Decision stage). 01e feeds 09 and the deferred 13.
 - **Generate lane:** ~~01f~~ → ~~01g~~ → 12.
 - **Cache lane:** ~~03~~ → ~~04~~ → ~~05~~ → 06; ~~03~~ + ~~05~~ + ~~01h~~ → 08.
-- **Retrieval lane:** 08 + ~~01h-C4~~ + ~~01i~~ → 09 → 10 → 11 → 12.
+- **Retrieval lane:** ~~08~~ + ~~01h-C4~~ + ~~01i~~ → ~~09~~ → 10 → 11 → 12.
 
 No task goes native-first or escalates without its per-task evidence (`evals/README.md`). Spec 02's speaker-sampling switch defaults **on**; turn planning and decide-as-tool default **off**, as ratified in PR #509.
 
@@ -382,13 +382,21 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   the gate columns are ticked once a round comes back clean.
 
 ### 09: Hybrid historical retrieval
-- [ ] **09-C1** `history.retrieve(Query) -> Evidence`, RRF merge, a
+- [x] **09-C1** `history.retrieve(Query) -> Evidence`, RRF merge, a
   `perspective` seam. Evidence carries the scene identity and post indices,
   keys and texts.
-- [ ] **09-C2** Two tiers per turn, a `Coverage` verdict, fallbacks.
-- [ ] **09-C3** A `history_recall` section. NPC prompts get none of it until
+- [x] **09-C2** Two tiers per turn, a `Coverage` verdict, fallbacks.
+- [x] **09-C3** A `history_recall` section. NPC prompts get none of it until
   11. Byte-identical when off.
-- [ ] **09-C4** A long-history eval suite.
+- [x] **09-C4** A long-history eval suite.
+- **All six slices landed in one PR**
+  ([#515](https://github.com/charlesmsiegel/grimoire/pull/515); plans in
+  `docs/superpowers/plans/2026-10-13-roadmap-09-s*.md`, execution record in
+  `docs/superpowers/validation/2026-10-13-spec-09-execution.md`). The review
+  and final gates are the PR's Codex review: every finding of every round is
+  fixed or answered on its thread, and the last round raised nothing blocking.
+  `history_recall_depth` ships at `0`, so recall stays off until the long
+  suite's gate (spec 12.5) is tuned in conversation.
 
 ### 10: Retrieval query planning
 - [ ] **10-C1** `history_plan` route on Fast, taking a perspective.
@@ -443,10 +451,10 @@ sub-feature. Edges come from each spec's Depends-on table.
 - [ ] 07 ← 03-C1/C2/C3 (S)
 - [ ] 08 ← 03-C1, 03-C2, 03-C6, 03-C7 (H); 03-C3, 05-C3 (H for C2c);
   07-C2, 07-C3c, 01h-C1, 01h-C3, 03-C9 (S)
-- [ ] 09 ← 08-C1/C2/C3, 03-C6, 03-C7 (H); 01h-C4 (H for the turn path);
+- [x] 09 ← 08-C1/C2/C3, 03-C6, 03-C7 (H); 01h-C4 (H for the turn path);
   01a-C1 (H for live evals); 07-C2, 07-C3c, 01e-C1/C2, 01h-C1, 01i-C1/C2,
   02-C5b (S)
-- [ ] 10 ← 09-C1/C2/C3, 01f-C1 (H); 01a-C1 (H for live evals); 01f-C2,
+- [x] 10 ← 09-C1/C2/C3, 01f-C1 (H); 01a-C1 (H for live evals); 01f-C2,
   01d-C1/C2, 01a-C3, 02-C5b, 01b-C1 (S)
 - [ ] 11 ← 09-C1, 09-C3 (H); 02-C5a (H for the Decision stage); 07-C1 (H for
   group overrides); 07-C3c, 10-C1, 08-C3b, 01b-C1, 01d-C1/C2, 01c-C4 (S)
@@ -638,27 +646,23 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
 
 ### 09
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 09-S1 | Retrieval core, structural and lexical, no network | L | 5 | 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-
-All six 09 slices have basic code implementations. S6 corpus/long acceptance,
-the full gate and final reviews are deferred at the user's request; open
-review/final-gate boxes record that debt, and no slice is marked landed.
+| 09-S1 | Retrieval core, structural and lexical, no network | L | 5 | 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 10
 
