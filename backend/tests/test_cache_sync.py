@@ -596,3 +596,24 @@ def test_refused_and_missing_selectors_count_toward_the_bound(home, monkeypatch)
     report = cache_sync.sync_paths(names, mode="explicit")
     assert [p.reason for p in report.paths].count("too_many") == 1
     assert len(report.paths) == 3 and report.truncated and not report.ok
+
+
+def test_a_token_that_could_not_be_written_is_not_counted_and_fails_the_sync(home, monkeypatch):
+    _write(home, "campaigns/saltmarch/plot.json", "{}")
+    monkeypatch.setattr(revision, "bump", lambda cid: revision.INITIAL)
+    report = cache_sync.sync_paths(["campaigns/saltmarch/plot.json"], mode="explicit")
+    assert report.tokens_bumped == 0 and report.tokens_failed == 1 and not report.ok
+    assert report.as_dict()["tokens_failed"] == 1
+
+
+def test_unreadable_directories_count_toward_the_bound(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    names = []
+    for n in range(20):
+        (home / "worlds" / "realm" / "lore" / f"locked{n}").mkdir()
+        names.append(f"worlds/realm/lore/locked{n}")
+    real = os.scandir
+    monkeypatch.setattr(cache_sync.os, "scandir", lambda p: (_ for _ in ()).throw(PermissionError("denied"))
+                        if "locked" in os.fspath(p) else real(p))
+    report = cache_sync.sync_paths(names, mode="explicit")
+    assert len(report.paths) == 3 and [p.reason for p in report.paths].count("too_many") == 1

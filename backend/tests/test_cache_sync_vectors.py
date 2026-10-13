@@ -805,3 +805,14 @@ def test_a_reply_that_lands_after_the_root_moved_is_never_saved(home, fake, monk
     assert report.stopped == "root_moved" and not report.ok
     assert report.paths[0].status == "unsynced"
     assert not vectors.load(space, [text])            # nothing landed in the other library
+
+
+def test_a_text_two_producers_want_is_sent_once_under_a_fixed_task():
+    recall = cache_sync.VECTOR_PROJECTIONS[semantic.PROJECTION]
+    catalog = cache_sync.VECTOR_PROJECTIONS[art.PROJECTION]
+    for first, second in ((recall, catalog), (catalog, recall)):
+        plan: dict = {}
+        cache_sync._wanted(plan, "One shared text.", first)
+        cache_sync._wanted(plan, "One shared text.", second)
+        assert list(plan) == ["One shared text."]
+        assert plan["One shared text."].task == "semantic-recall"

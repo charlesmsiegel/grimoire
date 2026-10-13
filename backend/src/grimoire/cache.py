@@ -101,6 +101,7 @@ def _text(report: dict, *, quiet: bool) -> str:
     if any(embedding.get(k) for k in ("would_send", "sent", "requests", "stale_space", "embedding_off", "deferred")):
         lines.append("embedding: " + " ".join(f"{k}={v}" for k, v in embedding.items() if v))
     lines.append(f"tokens bumped: {report['tokens_bumped']}"
+                 + (f"; not bumped: {report['tokens_failed']}" if report["tokens_failed"] else "")
                  + (f"; purged: {report['purged']}" if report["purged"] is not None else ""))
     if report["truncated"]:
         lines.append("truncated: a bound was hit, so not everything was looked at")

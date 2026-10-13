@@ -218,3 +218,19 @@ Substitute reviews, recorded in the PR; `@codex review` on the PR.
   a sync whose purge was not is not `ok`, and its deleted roots are `failed`.
 - A reply that lands after the root moved is dropped before any save, since
   `vectors.save` resolves the root again; its rows stay `unsynced`.
+
+## Codex review, seventh round
+
+- Scope selectors are deduplicated and capped at `MAX_PATHS`; one `too_many`
+  refusal stands for the rest. A named directory a walk could not read counts
+  toward `MAX_PATHS` like any other selector.
+- A write token `revision.bump` could not write (it never raises, and answers
+  the initial token) is counted in the report's new `tokens_failed`, and the
+  sync is not `ok`.
+- A text two producers want is sent once, as the lazy path would, under the
+  task of the producer first in `VECTOR_PROJECTIONS`, so its attribution
+  never depends on the order the batch met its paths.
+- Not changed, answered on the PR: search history on a cache hit (the
+  reconciliation above), and a dry run's batch renewing the compiled store's
+  lease (every read of the library does; the dry run stores no artifact, row,
+  token or vector).

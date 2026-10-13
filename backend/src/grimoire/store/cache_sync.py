@@ -76,7 +76,8 @@ KIND_OUTCOMES = ("built", "hit", "planned", "lazy", "deferred", "skipped", "fail
 STOP_REASONS = ("cancelled", "root_moved", "lane_busy")
 #: The top-level fields of a report.
 BATCH_FIELDS = ("version", "root", "root_source", "mode", "dry_run", "cache", "cache_reason",
-                "paths", "listed", "hooks", "counts", "tokens_bumped", "purged", "embedding",
+                "paths", "listed", "hooks", "counts", "tokens_bumped", "tokens_failed", "purged",
+                "embedding",
                 "truncated", "stopped")
 #: The fields of a report's `embedding` block.
 EMBEDDING_FIELDS = ("would_send", "sent", "requests", "held", "stale_space", "embedding_off",
@@ -396,6 +397,21 @@ class _Wanted:
     task: str
     claims: set[str] = field(default_factory=set)
     rows: list[tuple[str, str, Path, bytes, str, object]] = field(default_factory=list)
+    #: The projection whose task this text is sent under (`_wanted`).
+    projection: str = ""
+
+
+def _wanted(plan: dict[str, _Wanted], text: str, projection: Projection) -> _Wanted:
+    """`plan`'s entry for `text`. The vector cache is shared, so a text two
+    producers want is sent once, as the lazy path would (whichever producer
+    read first paid, the other then hit); it is sent under the task of the
+    producer first in `VECTOR_PROJECTIONS`, so the attribution never depends
+    on the order the batch met its paths."""
+    wanted = plan.setdefault(text, _Wanted(projection.task, projection=projection.name))
+    order = list(VECTOR_PROJECTIONS)
+    if order.index(projection.name) < order.index(wanted.projection or projection.name):
+        wanted.task, wanted.projection = projection.task, projection.name
+    return wanted
 
 
 class _VectorsHook:
@@ -507,10 +523,10 @@ class _VectorsHook:
         if ctx.dry_run:
             # Coalesced as a real run would: a text two rows want counts once.
             if text not in plan:
-                plan[text] = _Wanted(projection.task)
+                _wanted(plan, text, projection)
                 result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
             return "planned"
-        wanted = plan.setdefault(text, _Wanted(projection.task))
+        wanted = _wanted(plan, text, projection)
         campaign = instance.get("campaign", "") if isinstance(instance, dict) else ""
         wanted.claims.add(campaign if isinstance(campaign, str) else "")
         wanted.rows.append((rel, row.kind, path, data, projection.name, instance))
@@ -830,6 +846,8 @@ class SyncReport:
     paths: list[PathReport] = field(default_factory=list)
     hooks: dict[str, dict] = field(default_factory=dict)
     tokens_bumped: int = 0
+    #: Campaigns whose write token could not be written: the app was not told.
+    tokens_failed: int = 0
     purged: bool | None = None
     embedding: dict[str, object] = field(default_factory=lambda: dict.fromkeys(EMBEDDING_FIELDS, 0))
     truncated: bool = False
@@ -849,7 +867,7 @@ class SyncReport:
         """No path failed, was refused, is missing, failed verify or was left
         unsynced, and the batch did not stop early -- "stopped looking" never
         reads as "found nothing"."""
-        return self.stopped is None and not any(
+        return self.stopped is None and not self.tokens_failed and not any(
             item.status in ("failed", "refused", "missing", "verify_failed", "unsynced")
             for item in self.paths)
 
@@ -861,7 +879,8 @@ class SyncReport:
                "mode": self.mode, "dry_run": self.dry_run, "cache": self.cache,
                "cache_reason": self.cache_reason, "paths": [p.as_dict() for p in shown],
                "listed": self.listed, "hooks": self.hooks, "counts": self.counts(),
-               "tokens_bumped": self.tokens_bumped, "purged": self.purged,
+               "tokens_bumped": self.tokens_bumped, "tokens_failed": self.tokens_failed,
+               "purged": self.purged,
                "embedding": embedding, "truncated": self.truncated, "stopped": self.stopped}
         assert tuple(out) == BATCH_FIELDS
         return out
@@ -1307,7 +1326,7 @@ class _Collector:
                 self.report.truncated = True
                 self.add(PathReport(checked.given, "refused", "too_many"))
             if walk.unread:               # part of it was never examined
-                self.add(PathReport(checked.given, "refused", "unreadable"))
+                self.accepted += self.add(PathReport(checked.given, "refused", "unreadable"))
         else:
             self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
@@ -1420,8 +1439,12 @@ def _bump(root: Path, report: SyncReport) -> None:
         if _halted(root, lambda: False) is not None:
             report.stopped = "root_moved"
             return
-        revision.bump(cid)
-        report.tokens_bumped += 1
+        # `bump` never raises; a token it could not write comes back as the
+        # initial one, and the app was then not told.
+        if revision.bump(cid) == revision.INITIAL:
+            report.tokens_failed += 1
+        else:
+            report.tokens_bumped += 1
 
 
 def _run_hooks(root: Path, mode: str, hooks: tuple[WarmHook, ...],
@@ -1593,19 +1616,24 @@ class ScopeResult:
 def _scope_dirs(root: Path, campaigns: Iterable[str], worlds: Iterable[str], all_records: bool,
                 result: ScopeResult) -> list[str]:
     dirs: list[str] = []
-    for top, ids in (("campaigns", campaigns), ("worlds", worlds)):
-        for given in ids:
-            if not paths.safe_id(given):
-                result.refused.append(PathReport(str(given), "refused", "bad_id"))
-                continue
-            rel = f"{top}/{given}"
-            refusal, info = _walk(root, [top, given])
-            if refusal is not None:
-                result.refused.append(PathReport(rel, "refused", refusal, rel=rel))
-            elif info is None or not stat.S_ISDIR(info.st_mode):
-                result.refused.append(PathReport(rel, "refused", "not_found", rel=rel))
-            else:
-                dirs.append(rel)
+    selectors = [(top, given) for top, ids in (("campaigns", campaigns), ("worlds", worlds))
+                 for given in dict.fromkeys(ids)]
+    if len(selectors) > MAX_PATHS:        # one refusal stands for the rest, never examined
+        result.refused.append(PathReport(str(selectors[MAX_PATHS][1]), "refused", "too_many"))
+        result.truncated = True
+        selectors = selectors[:MAX_PATHS]
+    for top, given in selectors:
+        if not paths.safe_id(given):
+            result.refused.append(PathReport(str(given), "refused", "bad_id"))
+            continue
+        rel = f"{top}/{given}"
+        refusal, info = _walk(root, [top, given])
+        if refusal is not None:
+            result.refused.append(PathReport(rel, "refused", refusal, rel=rel))
+        elif info is None or not stat.S_ISDIR(info.st_mode):
+            result.refused.append(PathReport(rel, "refused", "not_found", rel=rel))
+        else:
+            dirs.append(rel)
     if all_records:
         for top in sorted(SYNCABLE_ROOTS):
             refusal, info = _walk(root, [top])

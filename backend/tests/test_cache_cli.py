@@ -440,3 +440,10 @@ def test_a_purge_that_could_not_be_published_fails_the_sync(home, monkeypatch):
     report = cache_sync.run(deleted=["campaigns/winifred"])
     assert report.purged is False and not report.ok
     assert [p.status for p in report.paths] == ["failed"]
+
+
+def test_scope_selectors_are_deduplicated_and_bounded(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    scope = cache_sync.expand_scopes(home, worlds=["realm"] * 5 + [f"gone{n}" for n in range(50)])
+    assert len(scope.refused) == 2 and scope.truncated
+    assert sorted(p.reason for p in scope.refused) == ["not_found", "too_many"]
