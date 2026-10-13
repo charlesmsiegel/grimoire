@@ -580,6 +580,14 @@ def fingerprint(message: dict, variants: Mapping) -> dict:
             "digest": digest(str(message.get("content") or ""))}
 
 
+def shown_fingerprint(message: dict, view: dict, variants: Mapping) -> dict:
+    """`fingerprint`, plus `shown`: the digest of the post's prompt-view text
+    (`view`, its `regex.view` copy), which is what a grant agrees to. The one
+    spelling of what a client sends back as `expect`, for the Knowledge
+    ledger's scene read and for a capture's accept (11-S3) alike."""
+    return {**fingerprint(message, variants), "shown": digest(str(view.get("content") or ""))}
+
+
 @dataclass(frozen=True)
 class SceneFacts:
     """What a scene holds now, for checking fingerprints against it: each

@@ -770,10 +770,10 @@ def _fingerprinted(read: _ScenePosts, posts: list[KnowledgePost], grant: bool,
             raise (_bad("gone", "that post is no longer in the scene", 409) if gone_is == 409
                    else _bad("unknown_post", "the scene holds no single post with that key"))
         message, view = found[0]
-        fp = store.knowledge.fingerprint(message, read.variants)
+        fp = store.knowledge.shown_fingerprint(message, view, read.variants)
         if grant and store.scenes.serialize.is_excluded(message):
             raise _bad("hidden", "a hidden post reaches no one, so it cannot be known")
-        now = (fp["variant"], fp["digest"], store.knowledge.digest(str(view.get("content") or "")))
+        now = (fp["variant"], fp["digest"], fp.pop("shown"))
         if grant and shown.get((p.key, p.part)) != now:
             raise _bad("moved", "that post changed since it was shown; look again", 409)
         out.append(fp)
@@ -830,10 +830,10 @@ def get_knowledge_scene(cid: str, sid: str):
         if store.scenes.serialize.is_director_note(m):
             continue
         text, hidden = str(view.get("content") or ""), store.scenes.serialize.is_excluded(m)
-        fp = store.knowledge.fingerprint(m, read.variants)
+        fp = store.knowledge.shown_fingerprint(m, view, read.variants)
         row = {"index": i, "speaker": str(m.get("speaker") or ""), "text": text}
         if fp["key"]:
-            posts.append({**fp, **row, "shown": store.knowledge.digest(text), "hidden": hidden})
+            posts.append({**fp, **row, "hidden": hidden})
         elif not hidden:
             keyless.append(row)
     return {"sid": sid, "digest": read.digest, "shown": _whole_shown(read),

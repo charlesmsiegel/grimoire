@@ -1836,7 +1836,8 @@ export const SceneInspector = memo(function SceneInspector({
             instead of showing something else. */}
         {shownDiff ? <ContextDiff diff={shownDiff} recomputing={recomputing} />
          : compare && seen ? <p className="field-hint">Comparing…</p>
-         : shown && <ContextBreakdown ctx={shown} models={models} />}
+         : shown && <ContextBreakdown ctx={shown} models={models}
+                                     acceptCid={seen ? cid : undefined} />}
       </SideSection>
 
       {/* Directly under Context, and that adjacency is the point (#153): the

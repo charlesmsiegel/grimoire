@@ -1943,18 +1943,30 @@ export type HistoryEvidenceRow = {
   epistemic?: EpistemicDetail;
 };
 /** One perspective's access to retrieved history (spec 11 §3). */
+export type EpistemicAccess = "witnessed" | "known" | "suspected" | "narrator_only" | "unknown";
+export type EpistemicSlice = {
+  part: "posts" | "summary"; posts: number[]; access: EpistemicAccess; basis: string[];
+  /** Each post's fingerprint as classified (11-S3): what an accept sends as
+   *  `expect`. Empty for the summary and for a post that moved. Absent on a
+   *  capture taken before the accept existed. */
+  keys?: KnowledgeFingerprint[];
+};
+export type EpistemicItem = {
+  key: string; scene: string; admitted: boolean;
+  state: "attributed" | "withheld" | "unattributed";
+  header: { title?: string; date?: string; location?: string };
+  known_to: string[]; suspected_by: string[];
+  slices: EpistemicSlice[];
+  /** Each classified ref's own `[access, basis]`, per post index and for
+   *  the whole scene ("summary"). */
+  by_ref?: Record<string, Record<string, [EpistemicAccess, string]>>;
+};
 export type EpistemicDetail = {
   perspective: string;
   decided: number;
-  items: {
-    key: string; scene: string; admitted: boolean;
-    state: "attributed" | "withheld" | "unattributed";
-    header: { title?: string; date?: string; location?: string };
-    known_to: string[]; suspected_by: string[];
-    slices: { part: "posts" | "summary"; posts: number[];
-              access: "witnessed" | "known" | "suspected" | "narrator_only" | "unknown";
-              basis: string[] }[];
-  }[];
+  /** Who the refs are, as the prompt named them. */
+  names?: Record<string, string>;
+  items: EpistemicItem[];
 };
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen

@@ -129,6 +129,8 @@ def parts(view: epistemic.EpistemicView, names: Mapping[str, str],
         result[sid] = Part(
             sid, tuple(i for _c, i in held), notes.get(sid, {}), FRAMES[sid], frame_vars,
             {"perspective": detail["perspective"], "decided": detail["decided"],
+             # Who the rows' refs are, for the capture's accept to name.
+             "names": {r: names[r] for r in view.perspective.present if r in names},
              "items": [rows[id(c)] for c in listed]},
             other=len(out.get(second, [])) if sid == first else len(out.get(first, [])))
     return result

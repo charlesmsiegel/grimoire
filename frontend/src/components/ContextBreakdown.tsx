@@ -1,5 +1,6 @@
 import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
+import { EpistemicAccept } from "./EpistemicAccept";
 import { SamplingSummary } from "./SamplingSummary";
 import { type ContextSection, type EpistemicDetail } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
@@ -20,7 +21,12 @@ const OUTCOME_ID = "decision";
  *  same shape `GET .../context` returns, so this component cannot tell them
  *  apart, and nothing here needs to.
  */
-export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: Model[] }) {
+export function ContextBreakdown({ ctx, models, acceptCid }: {
+  ctx: SceneContext; models: Model[];
+  /** A captured turn's campaign: offers the history accept (11-S3). The live
+   *  panel passes none, so it offers nothing. */
+  acceptCid?: string;
+}) {
   const ctxLen = contextLimit(ctx, models);
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
@@ -76,7 +82,7 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
           {/* A World info row with nothing sent still lists what it held back. */}
           {s.text && <pre className="ctx-text">{s.text}</pre>}
           <LoreEntries section={s} />
-          <HistoryEntries section={s} />
+          <HistoryEntries section={s} acceptCid={acceptCid} />
         </details>
       ))}
     </>
@@ -183,9 +189,14 @@ export function contextPercent(ctx: SceneContext, models: Model[]): number {
 /** Who has which part of each item (roadmap 11): for the narrator, who on
  *  stage knows or suspects it; for an NPC, what it has and why, its withheld
  *  parts included. The basis codes are shown here and sent nowhere. */
-function EpistemicRows({ detail }: { detail: EpistemicDetail }) {
-  const reader = detail.perspective === "narrator" ? "the narrator"
-    : detail.perspective.replace(/^actor:/, "");
+function EpistemicRows({ detail, acceptCid }: { detail: EpistemicDetail; acceptCid?: string }) {
+  const actor = detail.perspective === "narrator" ? null : detail.perspective.replace(/^actor:/, "");
+  const names = detail.names ?? {};
+  const reader = actor === null ? "the narrator" : names[actor] ?? actor;
+  // Who a part can be marked for: the NPC the turn was written for, or for
+  // the narrator's turn, any character on stage.
+  const readers = (actor === null ? Object.keys(names) : [actor])
+    .filter((r) => r.startsWith("characters:"));
   return <>
     <div className="field-hint">Access, for {reader}:</div>
     <ul className="ctx-entries">
@@ -194,8 +205,12 @@ function EpistemicRows({ detail }: { detail: EpistemicDetail }) {
         {item.state}{!item.admitted && "; dropped"}
         {item.known_to.length > 0 && <div className="field-hint">Known to: {item.known_to.join(", ")}</div>}
         {item.suspected_by.length > 0 && <div className="field-hint">Suspected by: {item.suspected_by.join(", ")}</div>}
-        {item.slices.map((slice) => <div className="field-hint" key={`${slice.part}:${slice.posts.join(",")}`}>
-          {slice.part === "summary" ? "Summary" : `Posts ${slice.posts.join(", ")}`}: {slice.access} ({slice.basis.join(", ")})
+        {item.slices.map((slice) => <div key={`${slice.part}:${slice.posts.join(",")}`}>
+          <div className="field-hint">
+            {slice.part === "summary" ? "Summary" : `Posts ${slice.posts.join(", ")}`}: {slice.access} ({slice.basis.join(", ")})
+          </div>
+          {acceptCid && <EpistemicAccept cid={acceptCid} item={item} slice={slice}
+                                         readers={readers} names={names} />}
         </div>)}
       </li>)}
     </ul>
@@ -203,7 +218,7 @@ function EpistemicRows({ detail }: { detail: EpistemicDetail }) {
 }
 
 /** Historical reasons are kept beside the sent text, including scenes shed by packing. */
-function HistoryEntries({ section }: { section: ContextSection }) {
+function HistoryEntries({ section, acceptCid }: { section: ContextSection; acceptCid?: string }) {
   const history = section.history;
   if (!history) return null;
   const coverage = history.coverage;
@@ -233,7 +248,7 @@ function HistoryEntries({ section }: { section: ContextSection }) {
         </div>)}
       </li>)}
     </ul>
-    {history.epistemic && <EpistemicRows detail={history.epistemic} />}
+    {history.epistemic && <EpistemicRows detail={history.epistemic} acceptCid={acceptCid} />}
     {!!history.unselected && <>
       <div className="field-hint">Found, not selected: {history.unselected}</div>
       <ul className="ctx-entries">

@@ -122,6 +122,10 @@ class Slice:
     #: and fit (`context/history.section`); empty on an invisible slice.
     #: Never in `detail()`.
     source: tuple[model.EvidencePost, ...] = ()
+    #: Each post's fingerprint as classified (`knowledge.shown_fingerprint`),
+    #: for the capture's accept to send as `expect` (11-S3); empty for a
+    #: moved slice and for the summary.
+    keys: tuple[Mapping[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +140,13 @@ class Classified:
     known_to: tuple[str, ...]
     suspected_by: tuple[str, ...]
     admitted: bool = True
+    #: Each roster ref's own classes, for the inspector and the capture: per
+    #: re-matched post index `(access, basis)`, and the whole scene's under
+    #: "summary". Empty when no rule ran.
+    by_ref: Mapping[str, Mapping[str, tuple[str, str]]] = field(default_factory=dict)
+    #: The source scene's id when classified. An actor's `item` blanks it;
+    #: the inspector and an accept still need to name the scene.
+    sid: str = ""
 
 
 @dataclass(frozen=True)
@@ -175,11 +186,14 @@ class EpistemicView:
             "perspective": self.perspective.to_string(),
             "decided": self.decided,
             "items": [{
-                "key": c.item.scene.key, "scene": c.item.scene.sid,
+                "key": c.item.scene.key, "scene": c.sid or c.item.scene.sid,
                 "admitted": c.admitted, "state": c.state, "header": dict(c.header),
                 "known_to": list(c.known_to), "suspected_by": list(c.suspected_by),
                 "slices": [{"part": s.part, "posts": list(s.posts), "access": s.access,
-                            "basis": list(s.basis)} for s in c.slices],
+                            "basis": list(s.basis), "keys": [dict(k) for k in s.keys]}
+                           for s in c.slices],
+                "by_ref": {ref: {part: list(cls) for part, cls in parts.items()}
+                           for ref, parts in c.by_ref.items()},
             } for c in self.items],
         }
 
@@ -207,6 +221,8 @@ class _Scene:
     identity: str
     messages: list
     texts: tuple[str, ...]                 # each post's prompt view, as 08 sends it
+    views: tuple[dict, ...]                # each post's prompt-view copy, unaltered
+    variants: Mapping
     speakers: tuple[str, ...]              # each post's speaker, as 08 renders it
     authors: Mapping[str, str] | None      # response_id -> actor ref; None unreadable
     facts: knowledge.SceneFacts
@@ -307,8 +323,8 @@ def _read_scene(src: _Source, ref: model.SceneRef) -> _Scene | str:
     chron_ok = src.chron is not None
     if not chron_ok:
         facts = replace(facts, digest=_NO_DIGEST)
-    return _Scene(sid, ref.identity, messages, texts, speakers, authors, facts, title,
-                  record, chron_ok)
+    return _Scene(sid, ref.identity, messages, texts, tuple(shown), variants, speakers,
+                  authors, facts, title, record, chron_ok)
 
 
 # ---------------------------------------------------------------- re-matching
@@ -561,6 +577,17 @@ def _runs(excerpt: model.Excerpt, posts: Sequence[tuple[model.EvidencePost, int 
     return tuple(out)
 
 
+def _keyed(sc: _Scene, s: Slice) -> Slice:
+    """`s` with each post's fingerprint as classified, through the helper the
+    Knowledge ledger's own scene read uses, so an accept's `expect` is what
+    the route would compute now if nothing moved."""
+    if s.part != "posts" or "moved" in s.basis:
+        return s
+    return replace(s, keys=tuple(
+        knowledge.shown_fingerprint(sc.messages[i], sc.views[i], sc.variants)
+        for i in s.posts))
+
+
 def _summary_slice(item: model.EvidenceItem, sc: _Scene | None,
                    scene: tuple[str, str] | None) -> Slice | None:
     """The summary's slice. For an actor a grant shows only the summary the
@@ -633,14 +660,17 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
     own = per_ref.get(perspective.actor) if perspective.actor else None
     if perspective.actor is not None and own is None:
         own = _classes(env, perspective.actor, indices)
-    slices = [s for e, posts in zip(item.excerpts, excerpts, strict=True)
+    slices = [_keyed(sc, s) for e, posts in zip(item.excerpts, excerpts, strict=True)
               for s in _runs(e, posts, own)]
     summary = _summary_slice(item, sc, own.scene if own else None)
     if summary:
         slices.append(summary)
+    by_ref = {ref: {**{str(i): cls for i, cls in c.posts.items()}, "summary": c.scene}
+              for ref, c in per_ref.items()}
     if own is None:
         header = {"title": item.title, "date": item.date, "location": item.location}
-        return Classified(item, tuple(slices), header, state, known_to, suspected_by)
+        return Classified(item, tuple(slices), header, state, known_to, suspected_by,
+                          by_ref=by_ref, sid=sc.sid)
     # 09's date is the scene's first moment and its location the scene's
     # last: neither belongs to a post, so presence for part of the scene
     # vouches for neither. Like the title, they ride a whole-scene grant.
@@ -650,7 +680,7 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
         if item.title == sc.title:
             header["title"] = item.title
     return Classified(_redacted(item, header), tuple(slices), header, state, known_to,
-                      suspected_by)
+                      suspected_by, by_ref=by_ref, sid=sc.sid)
 
 
 # ---------------------------------------------------------------- entry point
