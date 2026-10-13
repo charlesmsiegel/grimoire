@@ -1,6 +1,6 @@
 # 06. Store-editing skill
 
-**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
+**Status:** Codex spec and both slice plan gates passed; implementation verification in progress.
 **Date:** 2026-10-09
 **Roadmap:** 06 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06).
 **Baseline:** `main` at `35c1fb7`.
@@ -217,17 +217,22 @@ deciding whether it applies does not have to open the file.
    - Prefer `grimoire.store` functions. For where they are, link to
      `world-card-integration`'s "Work through the store, not the filesystem"
      section rather than listing them again.
-   - From Python, wrap the work in `cache_sync.collecting()`, passing what you
-     delete as `deleted=`, so that the sync runs when the block exits. A short
-     example: Seraphine's voice anchor in world `realm` through
-     `voice_anchors.write`, inside `collecting()`, then print the report.
-   - "Campaign records are edited through the store functions, or not while
-     the app is playing that campaign." The transcript and ledger functions
-     take the cross-process campaign lock; not every campaign write does, and
-     the skill does not claim more than that. It links
-     `docs/store-guarantees.md`, section "A second process on the same
-     store", for which ones. A hand edit of a transcript that a turn is
-     rewriting at the same moment can be lost.
+   - Choose the embedding policy before `cache_sync.collecting()`: it syncs
+     on normal and exceptional exit, and defaults to allowing embedding.
+     Use `collecting(embed=False, deleted=...)` for no-spend work and for a
+     large batch that needs a preview after the edits. Deletes must be named
+     with `deleted=`; the write collector does not record them. The example
+     writes Seraphine's anchor in world `realm` through `voice_anchors.write`,
+     with `embed=False`, and prints the collected report. After a large batch,
+     run CLI `--dry-run` before any embedding-enabled sync. Preserve
+     `--no-embed` on every sync when the user has ruled out spending.
+   - Keep the target campaign quiescent throughout outside-app edits, even
+     through store functions. Wait for detached runs to finish and prevent new
+     writes throughout the batch. Closing a browser tab does not stop a run.
+     Otherwise use the app's routes: the live-run exclusion they enforce is
+     absent from low-level store functions. The campaign lock serializes file
+     writes; it does not freeze generation between them. Link the second-process
+     store guarantees and CLAUDE.md's detached-run rules for that boundary.
    - "Image descriptions and subjects are written through `image_descriptions`
      / `image_subjects`, never by editing files under `assets/image-store/`."
      The object sidecars are written under image locks, and GC reads them.
@@ -237,18 +242,23 @@ deciding whether it applies does not have to open the file.
      one-line fix in an editor. Keep the file's existing line endings.
 
 5. **Never touch** (a short list).
-   - `.cache/`: anything in it, including `.cache/compiled/` and
-     `.cache/embeddings/`. "If derived state looks wrong, the files are right":
-     never change a record to match the cache. The repair is deleting
-     `.cache/compiled/`; link the store-guarantees section on the compiled
-     cache once 03 adds it.
+   - `.cache/`: parsed and embedded state is derived, so never change a record
+     to imitate a cached answer. Never delete `.cache/compiled/` as a repair:
+     `purge` and `delete-intents/` preserve deletion propagation and crash
+     recovery. Report the cache problem and route to the compiled-cache
+     guarantees for diagnosis. This skill adds no repair procedure and
+     authorizes no edits to derived files or their deletion controls.
    - `backups/`, `logs/`, `usage/` and `llm_connections/` (which holds keys).
    - A campaign's `revision.txt` (its write token, `store/revision.py`).
      `cache sync` bumps it (05 section 10).
 
 6. **Sync once per coherent batch** (the core, about 25 lines).
-   - Collect the paths you created or changed, the ones you deleted and any
-     you renamed. With a git store, list them with
+   - Keep IDs stable for display-name changes. Moves and reclassifications go
+     through supported lifecycle operations, with affected references checked
+     before sync. `--renamed` reports an already valid path change to the cache;
+     it updates no greeting, campaign reference or authoritative ID.
+   - Collect paths created, changed, intentionally removed or renamed through
+     those supported operations. With a git store, list them with
      `git -C <store> status --porcelain=v1 -z --untracked-files=all`, which
      neither quotes special characters nor collapses an untracked directory to
      `dir/`. An unstaged rename shows as a delete plus a new file, and is
@@ -265,8 +275,8 @@ deciding whether it applies does not have to open the file.
          worlds/realm/lore/pact.md worlds/realm/characters/seraphine/voice_anchor.md \
          --deleted worlds/realm/lore/tidewatch.md \
          --renamed worlds/realm/items/lantern.md=worlds/realm/items/tide-lantern.md
-     PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync ...   # Windows (Git Bash)
-     $env:PYTHONPATH="backend/src"; backend\.venv\Scripts\python.exe -m grimoire.cache sync ...  # Windows (PowerShell)
+     PYTHONPATH=backend/src backend/.venv/Scripts/python.exe -m grimoire.cache sync worlds/realm/lore/pact.md --no-embed # Windows (Git Bash)
+     $env:PYTHONPATH="backend/src"; backend\.venv\Scripts\python.exe -m grimoire.cache sync worlds/realm/lore/pact.md --no-embed # Windows (PowerShell)
      ```
 
    - "One sync after the batch, not one per file." Scoped forms
@@ -276,23 +286,29 @@ deciding whether it applies does not have to open the file.
 
 7. **Read the result** (three short tables, about 20 lines), written from
    05-C2's exported vocabulary (`cache_sync.PATH_STATUSES`,
-   `REFUSAL_REASONS`, `KIND_OUTCOMES`, `BATCH_FIELDS`) and held to it by the
-   drift test.
-   - **Exit status.** `0` done; `1` some path is `failed`, `refused`,
-     `missing` or `verify_failed`; `2` the command was malformed; `3` the
-     store root cannot be used.
+   `REFUSAL_REASONS`, `KIND_OUTCOMES`, `BATCH_FIELDS`, `EMBEDDING_FIELDS` and
+   `STOP_REASONS`) and held to it by the drift test.
+   - **Exit status.** `0` done; `1` a path is `failed`, `refused`, `missing`,
+     `verify_failed` or `unsynced`, the batch `stopped`, or `tokens_failed` is
+     nonzero; `2` malformed command; `3` unusable root. Successful listed paths
+     alone do not prove a complete batch.
    - **Path statuses.** `refreshed` and `current`: done. `cold`: nothing was
      built from this file yet, which is fine. `deleted`: an intended removal.
      `missing`: the path does not exist and was not named in `--deleted`;
      check the path. `refused: <reason>`: outside the store, through a link,
      not a record directory, and so on; check the path. `failed:
      <ExceptionClass>`: a reader rejects the file; fix the file, not the
-     cache. `verify_failed`: a bug in a cache kind, not in your edit; report
-     it.
-   - **Batch totals.** `stale_space` and `embedding_off` count vectors with
-     nothing to embed in the current space, which is fine. `deferred` counts
-     vectors left for later (`--no-embed`). `cache: off` means the compiled
-     cache is disabled here, which is fine.
+     cache. `verify_failed`: the comparison did not agree; report it.
+     `unsynced`: work remains incomplete; inspect the reason and retry only
+     after resolving it.
+   - **Batch totals.** Top-level names come from `BATCH_FIELDS`; embedding
+     totals come from `EMBEDDING_FIELDS`. `stale_space` and `embedding_off`
+     explain vectors not refreshed in the current space; `deferred` is
+     deliberate `--no-embed` work. Embedding `failure` or `not_sent` requires
+     reporting incomplete warm-up. `stopped` names a `STOP_REASONS` member;
+     `tokens_failed` means the app was not told about every write; `truncated`
+     means a bound curtailed the scan. Report each rather than calling the
+     entire batch complete. `cache: off` is a supported configuration.
 
    The report never contains record text, so it can be pasted into the
    conversation as it is.
@@ -386,14 +402,19 @@ Checks:
      commands on an explicit allowlist (`--porcelain=v1`, `--untracked-files`,
      `-z`, `-C`). So a flag named only in prose (`--dry-run`, `--no-embed`)
      is checked, and one on a continuation line is too.
-   - Every `python -m grimoire.<module>` is an importable module.
+   - Every `python -m grimoire.<module>` is an importable module. Fenced
+     commands must also parse against the owning parser without running store
+     operations. A nonexistent verb (`grimoire.cache doctor --all`) or an
+     option on the wrong command fails. Command examples use complete arguments
+     rather than `...`; prose-only sync flags are checked separately.
    - Every backticked dotted name under the store (`voice_anchors.write`,
      `entities.delete_entity`, `cache_sync.collecting`) resolves by import
      and `getattr` from `grimoire.store`, and a call shown with a keyword
      (`collecting(deleted=...)`) names a real parameter, checked with
      `inspect.signature`.
    - Every word item 7 lists as a status, a refusal reason, an outcome or a
-     batch total is in the matching `cache_sync` tuple, and every member of
+     batch total is in the matching `cache_sync` tuple: embedding totals use
+     `EMBEDDING_FIELDS`, stop reasons use `STOP_REASONS`. Every member of
      `PATH_STATUSES` appears in item 7, so a new status cannot go
      undocumented.
    - Every `/api/...` path the file names is a route on `main.create_app()`.
@@ -518,7 +539,8 @@ is that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
   fixture that breaks it: a description differing by one character, a
   missing adapter for a `ROUTING_SKILLS` skill, an adapter body of thirteen
   lines, a broken canonical link, a link to a heading that does not exist, a
-  flag the parser does not have (in prose, and on a `\` continuation line), a
+  flag the parser does not have (in prose, and on a `\` continuation line),
+  a nonexistent subcommand, an option on the wrong command, a
   store function that does not exist, a keyword `collecting` does not take, a
   status word not in `PATH_STATUSES`, a `PATH_STATUSES` member item 7 omits,
   an `/api/` path with no route, a seventeen-word run copied from `CLAUDE.md`,
@@ -536,6 +558,14 @@ is that the canonical file lives in `.claude/skills/`, not in a new `skills/`.
   and reports counts without record text. This is checked by a person, not CI,
   and its transcript summary (counts and statuses only) goes in the PR
   description, so the gate leaves evidence.
+- **Safety application scenarios.** An agent with isolated inputs defers
+  campaign shape edits while a detached run is live, sets no-spend policy
+  before collecting on both normal and exceptional exits, preserves purge and
+  deletion controls when diagnosing cache problems, and keeps referenced IDs
+  stable during display renames. It must not call a batch complete when
+  `unsynced`, `stopped`, `tokens_failed` or embedding failures leave work.
+  Reuse existing run, rename and collecting regression tests where they
+  already pin runtime behavior; this spec adds guidance, not lifecycle APIs.
 
 ## 10. Non-goals
 
@@ -594,3 +624,14 @@ Each finding was verified against the code before it was folded in.
   now uses `image_descriptions`, the door this skill names. M5 the manual dry
   run's result goes in the PR description.
 - **Slices added (2 slices).**
+
+### Codex spec gate, 2026-10-13
+
+The installed Codex adversarial-review runtime reviewed numbered repository
+snapshots because its Windows sandbox could not launch readers. It found six
+material issues: live-run exclusion, embedding on collector exit, deletion
+controls in the compiled directory, path changes versus record identities,
+incomplete report outcomes, and command verbs. All six were verified against
+landed interfaces and corrected above. The same review thread approved the
+corrected spec with no further findings. Evidence is recorded in
+[the execution record](../validation/2026-10-13-roadmap-06-execution.md).

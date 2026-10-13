@@ -1,0 +1,10 @@
+---
+name: grimoire-store-editing
+description: Use when creating, editing, renaming, moving or deleting records in a grimoire store (the library under GRIMOIRE_HOME) by any route other than the running app -- a script calling grimoire.store, a Python session, or an editor -- including voice anchors, image descriptions, lore and entity cleanup, tags, and bulk passes after another skill. Covers finding the store, what to write through and what never to touch, and the one `cache sync` call that brings search, recall and overview pages current afterwards. Not needed for edits made in the app's own UI or API.
+---
+
+# Editing a Grimoire store outside the app
+
+Follow the canonical procedure in
+[`.claude/skills/grimoire-store-editing/SKILL.md`](../../../.claude/skills/grimoire-store-editing/SKILL.md).
+Read it in full before working on library records.
