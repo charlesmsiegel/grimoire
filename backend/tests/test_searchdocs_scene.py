@@ -677,11 +677,22 @@ def test_a_links_section_of_the_wrong_shape_is_degraded(cid):
     assert "continuity.json" in d.meta["degraded"] and d.meta["links"] == []
 
 
-def test_a_ledger_nested_past_the_parser_is_degraded_not_raised(cid):
+def test_a_ledger_nested_past_the_parser_is_degraded_not_raised(cid, monkeypatch):
+    """How deep the parser goes before `RecursionError` depends on the
+    interpreter (3.14 parses what 3.13 refuses), so the parse is made to raise
+    it for this one ledger."""
     sid = _played(cid)
-    deep = "[" * 100_000 + "]" * 100_000
+    deep = "[" * 1000 + "]" * 1000
     (campaigns.campaign_root(cid) / "facts.json").write_text('{"f1": ' + deep + "}",
                                                              encoding="utf-8")
+    real = json.loads
+
+    def loads(raw, *args, **kwargs):
+        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        if isinstance(text, str) and text.startswith('{"f1": [[['):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(raw, *args, **kwargs)
+    monkeypatch.setattr(slices.json, "loads", loads)
     d = doc(cid, sid)
     assert "facts.json" in d.meta["degraded"]
 
