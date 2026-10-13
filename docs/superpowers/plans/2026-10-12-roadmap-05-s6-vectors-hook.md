@@ -187,3 +187,22 @@ Substitute reviews, recorded in the PR; `@codex review` on the PR.
   summary as well as on the path, so a built row is counted once.
 - A dry run coalesces a text several rows want before counting it in
   `would_send`, as a real run's plan does.
+
+## Codex review, fifth round
+
+- Recall saves one vector per text but records a history row for every entry
+  that shares it, so an edit to any of them finds it was embedded. A cache
+  hit still records nothing (the reconciliation above: a row on every hit
+  would read every candidate's file on every turn).
+- A rename into a campaign's directory names that campaign in recall's
+  instance, whichever layer the file came from; `copy_materialized` coalesces
+  OLD's rows that the mapper sends to one NEW instance instead of refusing the
+  whole copy.
+- A batch past `MAX_PATHS` records one `too_many` refusal and stops reading
+  selectors, so the report stays bounded.
+- With no `.cache/compiled` nothing is hot, and neither a sync nor a scope
+  listing opens a batch, which would create the store (`compiled.published`).
+- An explicit batch waiting for the lane asks its stop signal every
+  `LANE_POLL_S`.
+- `--verify` with a scope sends the paths the listing proved `current`
+  through their hooks too.

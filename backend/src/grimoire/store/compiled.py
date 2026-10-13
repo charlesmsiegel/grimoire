@@ -507,7 +507,7 @@ def open_library(root: Path | None = None) -> None:
     _process_state()
     try:
         root = Path(root) if root is not None else paths.home()
-        if not os.path.isdir(os.path.join(root, '.cache', 'compiled')):
+        if not published(root):
             return
         with batch(root) as request:
             request._usable()
@@ -532,6 +532,14 @@ def available() -> bool:
         return _available()
     except _CACHE_ERRORS:
         return False
+
+
+def published(root: Path) -> bool:
+    """Whether `root` has a compiled store at all. A library without
+    `.cache/compiled` has no history and no artifacts, and a reader that
+    must not create one (spec 05's dry run) asks this before opening a
+    batch, which would."""
+    return os.path.isdir(os.path.join(root, '.cache', 'compiled'))
 
 
 def _available() -> bool:
@@ -1477,7 +1485,7 @@ class Batch:
         answer = self.materialized_answer([old])
         if answer is None:
             return False
-        prepared = {}
+        prepared: dict[tuple, tuple] = {}
         for item in answer.get(old, ()):
             # A mapper receives canonical text. Its canonical-string result
             # must not be encoded again; structured JSON results are also
@@ -1488,10 +1496,13 @@ class Batch:
                 _warn_once('instance')
                 return True
             row = _materialized_row(relative, item.kind, canonical, '', None)
-            if row is None or row[:3] in prepared:
+            if row is None:
                 _warn_once('instance')
                 return True
-            prepared[row[:3]] = row
+            # Two of OLD's rows the mapper sends to one NEW instance (a world
+            # record several campaigns read, moved into one campaign) are one
+            # row there: identical, so keeping the first loses nothing.
+            prepared.setdefault(row[:3], row)
         sizes = {identity: len(_canonical(list(row), MAX_KEY_BYTES * 2) or '')
                  for identity, row in prepared.items()}
         delta = sum(size - self._materialized_sizes.get(identity, 0) for identity, size in sizes.items())

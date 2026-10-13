@@ -551,3 +551,40 @@ def test_a_file_named_twice_through_its_directory_does_not_use_up_the_quota(home
     report = cache_sync.sync_paths(["worlds/realm/lore/a.md", "worlds/realm/lore"], mode="explicit")
     assert sorted(p.given for p in report.paths) == [f"worlds/realm/lore/{n}.md" for n in "abc"]
     assert not report.truncated and report.ok
+
+
+def test_selectors_past_the_limit_leave_one_bounded_refusal(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    names = [f"worlds/realm/lore/{n}.md" for n in range(50)]
+    for rel in names[:2]:
+        _write(home, rel, "x")
+    report = cache_sync.sync_paths(names, mode="explicit", deleted=[f"gone/{n}.md" for n in range(50)])
+    assert [p.reason for p in report.paths].count("too_many") == 1
+    assert len(report.paths) == 3 and report.truncated and not report.ok
+
+
+def test_a_dry_run_never_creates_the_compiled_store(home, upper):
+    _write(home, "worlds/realm/lore/pact.md", "x")
+    assert not (home / ".cache" / "compiled").exists()
+    report = cache_sync.sync_paths(["worlds/realm/lore/pact.md"], mode="explicit", dry_run=True)
+    scope = cache_sync.run(worlds=["realm"], dry_run=True)
+    assert [p.status for p in report.paths] == ["cold"] and scope.ok
+    assert not (home / ".cache" / "compiled").exists()
+
+
+def test_an_explicit_batch_waiting_for_the_lane_hears_a_cancel(home, upper):
+    _write(home, "worlds/realm/lore/pact.md", "x")
+    _read(home, upper, "worlds/realm/lore/pact.md")
+    _write(home, "worlds/realm/lore/pact.md", "edited")
+    asked, out = [], []
+    cache_sync._lane.acquire()
+    try:
+        worker = threading.Thread(target=lambda: out.append(cache_sync.sync_paths(
+            ["worlds/realm/lore/pact.md"], mode="explicit",
+            stop=lambda: asked.append(1) is None and len(asked) > 1)))
+        worker.start()
+        worker.join(10)
+        assert not worker.is_alive()
+    finally:
+        cache_sync._lane.release()
+    assert out[0].stopped == "cancelled" and not out[0].ok

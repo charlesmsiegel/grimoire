@@ -330,11 +330,17 @@ def recall_scored(candidates: list[dict], recent_text: str, *,
     query = vectors.unit(got[0])
     if query is None:
         return []
-    first: dict[str, dict] = {}
+    consumers: dict[str, list[dict]] = {}
     for i in scored_idx:
-        first.setdefault(texts[i], candidates[i])
+        consumers.setdefault(texts[i], []).append(candidates[i])
     for text, raw in zip(missing, got[1:]):
-        vectors.save(cfg["space"], text, raw, **_history(campaign, first[text], text))
+        # One vector, and a history row for every entry that shares its text,
+        # so an edit to any of them finds it was embedded (spec 05). A second
+        # entry with no history to record does not write the vector again.
+        for n, candidate in enumerate(consumers[text]):
+            history = _history(campaign, candidate, text)
+            if n == 0 or history:
+                vectors.save(cfg["space"], text, raw, **history)
         fresh = vectors.unit(raw)
         if fresh is not None:
             known[text] = fresh

@@ -421,3 +421,15 @@ def test_a_scope_past_its_file_limit_fails_the_sync(home, monkeypatch):
     report = cache_sync.run(worlds=["realm"])
     assert ("worlds/realm", "too_many") in [(p.given, p.reason) for p in report.paths]
     assert report.truncated and not report.ok
+
+
+def test_a_scoped_verify_rebuilds_paths_the_listing_proved_current(home, upper, trusted_clock, monkeypatch):
+    _write(home, "worlds/realm/lore/current.md", "current")
+    _read(home, upper, "worlds/realm/lore/current.md")
+    assert cache_sync.expand_scopes(home, worlds=["realm"]).known == {"worlds/realm/lore/current.md": "current"}
+    reads = []
+    real = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self.name) or real(self))
+    report = cache_sync.run(worlds=["realm"], verify=True)
+    assert "current.md" in reads                      # through its hook, not trusted from stamps
+    assert _by_path(report)["worlds/realm/lore/current.md"].kinds and report.ok

@@ -703,3 +703,35 @@ def test_a_dry_run_counts_a_text_two_rows_want_once(home, fake):
     dry = cache_sync.sync_paths([_rel(home, path)], mode="explicit", dry_run=True)
     real = cache_sync.sync_paths([_rel(home, path)], mode="explicit")
     assert dry.embedding["would_send"] == 1 == real.embedding["sent"]
+
+
+def test_every_entry_sharing_a_text_records_its_own_history(home, fake):
+    _configure()
+    wid, cid = _realm()
+    first, first_path = _lore(home, wid, name="Pact", body="The pact binds the coast.")
+    second, second_path = _lore(home, wid, name="Pact", body="The pact binds the coast.")
+    assert first != second
+    semantic.recall_scored([_candidate(wid, cid, first), _candidate(wid, cid, second)],
+                           "Somebody speaks of the coast.", campaign=cid)
+    assert len(fake.calls) == 1                       # one text, embedded once
+    assert len(_rows_at(home, first_path)) == 1 and len(_rows_at(home, second_path)) == 1
+
+
+def test_a_world_record_moved_into_a_campaign_is_warmed_for_that_campaign(home, fake):
+    _configure()
+    wid, cid = _realm()
+    other = campaigns.create_campaign("Winifred's Run", wid)
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    data = path.read_bytes()
+    text = semantic.record_text(eid, data)
+    vectors.load(_space(), [text], sources={text: compiled.WrittenInput("source", path, data)},
+                 projection=semantic.PROJECTION, instances={text: {"campaign": other, "entity": ["lore", eid]}})
+    assert len(_rows_at(home, path)) == 2
+    new_path = home / "campaigns" / cid / "lore" / f"{eid}.md"
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    path.rename(new_path)
+    report = cache_sync.sync_paths([], mode="explicit", renamed={_rel(home, path): _rel(home, new_path)})
+    [row] = _rows_at(home, new_path)                  # both readers' rows coalesce into one
+    assert json.loads(row.instance) == {"campaign": cid, "entity": ["lore", eid]}
+    assert report.embedding["held"] == 1 and report.ok

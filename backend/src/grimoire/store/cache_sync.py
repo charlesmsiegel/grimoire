@@ -101,6 +101,8 @@ MAX_PATHS = 4096
 #: How long a write-through batch waits for the sync lane before giving its
 #: paths back to the queue. An explicit batch waits as long as it takes.
 LANE_WAIT_S = 0.5
+#: How often an explicit batch waiting for the lane asks its stop signal.
+LANE_POLL_S = 0.5
 
 _REPARSE_POINT = 0x400
 _lane = threading.Lock()
@@ -421,8 +423,12 @@ class _VectorsHook:
                 and entity == [before.parent.name, before.stem]):
             return value
         moved = {**value, "entity": [after.parent.name, after.stem]}
-        if value.get("campaign") == _campaign_named(before) and _campaign_named(after):
-            moved["campaign"] = _campaign_named(after)
+        # A campaign-layer file is read by its own campaign alone, so a move
+        # into one (from a world, which every campaign of it reads, or from
+        # another campaign) names the destination; the copy coalesces the
+        # rows that then coincide.
+        if (destination := _campaign_named(after)) is not None:
+            moved["campaign"] = destination
         return moved
 
     def local(self, ctx: WarmContext,
@@ -1077,7 +1083,12 @@ def _classify_hot(root: Path, items: list[PathReport], hooks: tuple[WarmHook, ..
                   stop: Callable[[], bool], *, dry_run: bool) -> dict[str, tuple[compiled.Materialized, ...]]:
     """What was hot, once stated renames carried their rows over. A batch
     that purged has nothing hot: every pending path is `cold`."""
-    if report.purged:
+    if report.purged or not compiled.published(root):
+        # Purged, or never published: no history anywhere, so nothing is hot
+        # -- and a batch is never opened, which would create the store.
+        if report.stopped is None and (halt := _halted(root, stop)) is not None:
+            report.stopped = halt                 # left pending, so `unsynced`
+            return {}
         for item in items:
             if item.status == "pending":
                 item.status = "cold"
@@ -1133,6 +1144,9 @@ class _Collector:
         self.seen: set[str] = set()
         self.items: list[PathReport] = []
         self.accepted = 0
+        #: Whether the batch hit `MAX_PATHS`: one `too_many` refusal stands for
+        #: everything past it, which is never examined.
+        self.capped = False
 
     def add(self, item: PathReport) -> bool:
         """Record `item`; False when it repeats a path already in the batch."""
@@ -1147,11 +1161,14 @@ class _Collector:
         return True
 
     def full(self, given: str) -> bool:
-        """Past `MAX_PATHS`: refuse `given` as `too_many` and say so."""
+        """Past `MAX_PATHS`: refuse the first path past it as `too_many` and
+        say so; the caller then stops reading selectors, so the report stays
+        bounded however many were sent."""
         if self.accepted < MAX_PATHS:
             return False
-        self.report.truncated = True
-        self.add(PathReport(os.fspath(given), "refused", "too_many"))
+        if not self.capped:
+            self.capped = self.report.truncated = True
+            self.add(PathReport(os.fspath(given), "refused", "too_many"))
         return True
 
     def repeats(self, checked: _Checked) -> bool:
@@ -1228,10 +1245,16 @@ def _classify_arguments(root: Path, relpaths: Iterable[str], deleted: Iterable[s
                         known: Mapping[str, str], listed: Iterable[str] = ()) -> list[PathReport]:
     collector = _Collector(report, quiet)
     for old, new in renamed.items():
+        if collector.capped:
+            break
         collector.renamed(root, old, new)
     for given in deleted:
+        if collector.capped:
+            break
         collector.deleted(root, given)
     for given in relpaths:
+        if collector.capped:
+            break
         collector.argument(root, given)
     for rel in listed:
         collector.listed(root, rel)
@@ -1333,7 +1356,12 @@ def _run_hooks(root: Path, mode: str, hooks: tuple[WarmHook, ...],
     by_rel = {item.rel: item for item in report.paths if item.rel is not None and item.rel in hot}
     _mark_lazy(hooks, hot, by_rel)
     if mode == "explicit":
-        _lane.acquire()
+        # Waits for a write-through batch on the lane, asking the stop signal
+        # between short waits, so a cancel or a moved root is heard here too.
+        while not _lane.acquire(timeout=LANE_POLL_S):
+            if (halt := _halted(root, stop)) is not None:
+                report.stopped = halt
+                return
     elif not _lane.acquire(timeout=LANE_WAIT_S):
         report.stopped = "lane_busy"
         return
@@ -1528,7 +1556,7 @@ def expand_scopes(root: Path, *, campaigns: Iterable[str] = (), worlds: Iterable
     listed = _list_scopes(root, campaigns, worlds, all_records, stop, result)
     if result.stopped is not None:
         return result
-    if compiled.unavailable_reason() is not None:
+    if compiled.unavailable_reason() is not None or not compiled.published(root):
         result.known = dict.fromkeys(listed, "cold")
         return result
     with compiled.batch(root) as request:
@@ -1618,9 +1646,15 @@ def run(relpaths: Iterable[str] = (), *, campaigns: Iterable[str] = (), worlds: 
     scoped = bool(campaigns or worlds or all_records)
     scope = expand_scopes(root, campaigns=campaigns, worlds=worlds, all_records=all_records,
                           stop=stop) if scoped else ScopeResult()
-    report = sync_paths(list(relpaths), listed=scope.candidates, mode="explicit", embed=embed,
+    candidates, known = scope.candidates, scope.known
+    if verify:
+        # `current` is proved from stamps and `built_from` alone; `--verify`
+        # exists to check what a rebuild would make, so it reads those too.
+        candidates = candidates + [rel for rel, status in known.items() if status == "current"]
+        known = {rel: status for rel, status in known.items() if status != "current"}
+    report = sync_paths(list(relpaths), listed=candidates, mode="explicit", embed=embed,
                         dry_run=dry_run, verify=verify, renamed=renamed, deleted=deleted,
-                        root=root, stop=stop, known=scope.known, progress=progress)
+                        root=root, stop=stop, known=known, progress=progress)
     report.paths.extend(scope.refused)
     report.truncated = report.truncated or scope.truncated
     report.stopped = report.stopped or scope.stopped
