@@ -437,3 +437,14 @@ def test_a_transcript_nested_past_the_parser_is_unreadable_not_raised(cid, monke
         raise RecursionError("maximum recursion depth exceeded")
     monkeypatch.setattr(expand.scenes_read, "read_scene", nested)
     assert expand.expand(cid, sid, phase="prompt", terms=["item"]) is None
+
+
+def test_a_player_label_with_a_lone_surrogate_leaves_an_encodable_excerpt(cid, monkeypatch):
+    """The label renders an unstamped user post's speaker in the excerpt text
+    too, not only in its `ExcerptPost`."""
+    sid = _scene(cid, _plain(4))
+    monkeypatch.setattr(expand.appearances_cast, "player_label", lambda *_a, **_k: "Mara\ud800")
+    got = expand.expand(cid, sid, phase="prompt", terms=["item"])
+    assert got is not None and got.excerpts
+    assert any("Mara" in e.text for e in got.excerpts)
+    json.dumps(dataclasses.asdict(got), ensure_ascii=False).encode("utf-8")

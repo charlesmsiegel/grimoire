@@ -565,7 +565,9 @@ def expand(cid: str, sid: str, *, phase: str, terms: Sequence[str],
         # Every eligible post between `start` and `end` is in the window (a
         # window is contiguous over eligible posts), and `transcript_text` drops
         # the hidden posts and director notes that sit between them.
-        text = chronicle.transcript_text(shown[start:end], player_label)
+        # The label and any stamped speaker render here as well as on each
+        # post, so the text is made encodable whole, as each post is.
+        text = _encodable(chronicle.transcript_text(shown[start:end], player_label))
         hay = "\n".join(_haystack(post) for post in chosen)
         excerpts.append(Excerpt(
             start=start, end=end, text=text,

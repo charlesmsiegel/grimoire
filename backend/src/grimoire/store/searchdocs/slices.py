@@ -106,6 +106,25 @@ def _inaccessible(path: Path) -> bool:
     return False
 
 
+def _signature(*paths: Path) -> tuple | None:
+    """`statcache.signature(..., absent_ok=True)`, but only absence is the
+    cacheable "absent": a path that cannot be stat'd for any other reason (an
+    access error) is no signature at all, so it is never memoized and never
+    collides with an earlier read that found the file missing -- which would
+    hand back a healthy empty parse for a ledger that is there and unread."""
+    sig: list[tuple] = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+        except (FileNotFoundError, NotADirectoryError, ValueError):
+            sig.append((str(p), "absent"))
+            continue
+        except OSError:
+            return None
+        sig.append((str(p), st.st_mtime_ns, st.st_size, st.st_ino))
+    return tuple(sig)
+
+
 def _present(path: Path) -> bool:
     """Whether `path` is there, an access failure counting as there: a record
     that cannot be reached is unreadable, never missing (`Path.exists`
@@ -258,7 +277,7 @@ def _parse_json(name: str, path: Path, shape: type) -> tuple[object, bool]:
         if not isinstance(value, shape):
             return shape(), True
         return value, not _SHAPES.get(name, lambda _v: True)(value)
-    return statcache.memo(f"searchdocs.parse:{name}", statcache.signature(path, absent_ok=True),
+    return statcache.memo(f"searchdocs.parse:{name}", _signature(path),
                           compute, pool=_POOL, max_entries=POOL_ENTRIES)
 
 
@@ -287,7 +306,7 @@ def _records(cid: str) -> tuple[dict, dict, set[str]]:
                 bad.add(name)
             out.append(got)
         return out[0], out[1], bad
-    return statcache.memo("searchdocs.records", statcache.signature(*files, absent_ok=True),
+    return statcache.memo("searchdocs.records", _signature(*files),
                           compute, pool=_POOL, max_entries=POOL_ENTRIES)
 
 
@@ -477,7 +496,7 @@ class CampaignInputs:
                 # could not be reached: that one is the authority, unread.
                 return ("", -1)
             return (name, source) if isinstance(name, str) and name else None
-        sig = statcache.signature(*layers, absent_ok=True)
+        sig = _signature(*layers)
         got = statcache.memo("searchdocs.location", None if sig is None else (*sig, ("gone", gone)),
                              compute, pool=_POOL, max_entries=POOL_ENTRIES)
         if got is None:
@@ -688,9 +707,12 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
             continue
         if ref in by_ref:
             # The chronicle names an actor whose appearance record no longer
-            # lists this scene: still named, and read, through that record.
+            # lists this scene: still named, and read, through that record,
+            # with the role it records (a player stays one, and departed).
             token, rec = by_ref[ref]
-            out[ref] = {**_actor(inputs, token, rec, "", used, damage), "present": False}
+            raw_role = rec.get("role")
+            role = raw_role if isinstance(raw_role, str) else ""
+            out[ref] = {**_actor(inputs, token, rec, role, used, damage), "present": False}
             continue
         kind, _, aid = ref.partition(":")
         out[ref] = {"ref": damage.clean(ref, "chronicle.json"), "join": ref, "kind": kind,

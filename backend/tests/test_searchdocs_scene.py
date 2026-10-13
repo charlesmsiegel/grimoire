@@ -514,10 +514,10 @@ def test_more_than_sixty_four_groups_are_all_listed(cid):
 def test_a_gm_only_group_is_listed_and_marked(cid):
     sid = _played(cid)
     aid, _vid = _actor(cid, sid, "Mara")
-    gid = _group(cid, "The Quiet Hand", members=f"characters:{aid}", secrecy="gm-only")
+    gid = _group(cid, "Saltmarch Wardens", members=f"characters:{aid}", secrecy="gm-only")
     d = doc(cid, sid)
     assert [(g["group"], g["secrecy"]) for g in d.meta["groups"]] == [(f"groups:{gid}", "gm-only")]
-    assert "Quiet Hand" not in d.text
+    assert "Saltmarch Wardens" not in d.text
 
 
 # --- review fixes ---------------------------------------------------------------
@@ -941,6 +941,18 @@ def test_a_chronicle_cast_actor_no_longer_listed_is_named_through_its_record(cid
     assert characters.require_version(root, aid, vid) in sl.paths
 
 
+def test_a_chronicle_cast_player_no_longer_listed_keeps_its_role(cid):
+    other = _played(cid, title="Elsewhere")
+    aid, _vid = _actor(cid, other, "Seraphine", role="player")
+    sid = _played(cid)
+    chronicle.absorb(cid, {"id": sid, "one_line": "x", "summary": "y", "keywords": [],
+                           "cast": [f"characters:{aid}"], "location": "", "date": ""})
+    scenes.mark_absorbed(cid, sid, "x", "y")
+    d = doc(cid, sid)
+    assert d.meta["players"] == [f"characters:{aid}"]
+    assert d.meta["departed"] == [f"characters:{aid}"]
+
+
 def test_a_locked_card_that_cannot_be_reached_is_degraded(cid, monkeypatch):
     sid = _played(cid)
     aid, vid = _actor(cid, sid, "Mara")
@@ -1041,3 +1053,28 @@ def test_a_relationship_entry_with_a_field_of_the_wrong_shape_is_degraded(cid):
                       "b": "pcs:seraphine", "label": {}, "before": "wary", "after": "warm"}]}),
         encoding="utf-8")
     assert "relationship_history.json" in doc(cid, sid).meta["degraded"]
+
+
+def test_a_ledger_that_appears_unreachable_is_not_its_earlier_absence(cid, monkeypatch):
+    """Absent, then present but unreachable: two states, never one memo key --
+    the second is degraded, not the first's healthy empty parse."""
+    sid = _played(cid)
+    _absorb(cid, sid)
+    p = campaigns.campaign_root(cid) / "facts.json"
+    p.unlink(missing_ok=True)
+    assert "facts.json" not in doc(cid, sid).meta["degraded"]
+    p.write_text(json.dumps({"f1": {"text": "The seal broke.", "scene": sid}}), encoding="utf-8")
+    real_stat, real_read = slices.os.stat, slices.Path.read_text
+
+    def stat(path, *args, **kwargs):
+        if str(path) == str(p):
+            raise PermissionError("denied")
+        return real_stat(path, *args, **kwargs)
+
+    def read_text(self, *args, **kwargs):
+        if str(self) == str(p):
+            raise PermissionError("denied")
+        return real_read(self, *args, **kwargs)
+    monkeypatch.setattr(slices.os, "stat", stat)
+    monkeypatch.setattr(slices.Path, "read_text", read_text)
+    assert "facts.json" in doc(cid, sid).meta["degraded"]
