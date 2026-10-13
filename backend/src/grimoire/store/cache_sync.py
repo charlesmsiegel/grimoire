@@ -56,6 +56,7 @@ from ..llm_errors import LLMError
 from . import atomic, compiled, embed_space, paths, revision, semsearch, vectors, writeset
 from .context import art, layout, semantic
 from .inference import embed
+from .overview import warm as overview_warm
 
 _log = logging.getLogger(__name__)
 
@@ -728,12 +729,58 @@ def _embed_chunk_literal(task: str, group: embed.EmbedGroup, space: dict) -> emb
 
 VECTORS = _VectorsHook()
 
+
+# -- the overview hook (05-S5) -------------------------------------------------
+
+#: `overview.warm_paths`' answers, as outcomes: "warmed" is said only once a
+#: read-back found what was stored, "none" means no persisted overview kind
+#: reads the path now (a short scene, an unregistered kind, a file gone), and
+#: "failed" is a store that did not land.
+_OVERVIEW_OUTCOMES = {"warmed": "built", "none": "skipped", "failed": "failed:not_saved"}
+
+
+class _OverviewHook:
+    """04's overview composites (04-C2a), wrapped (section 6.2): `local` hands
+    the hot paths to `overview.warm_paths` in ONE call, which coalesces them
+    by instance -- edits to a campaign's five continuity ledgers warm one
+    `continuity_summary` -- and maps its per-path answer to every overview
+    kind the path holds. It has no network phase. `warm_paths` reads every
+    file back, holds no lock and never raises; it reads its own result back
+    before it says "warmed", so `--verify` has nothing more to check here."""
+
+    name = "overview"
+    on_write: Literal["quiet", "explicit"] = "quiet"
+
+    def owns(self, kind: str) -> bool:
+        return kind in compiled.OVERVIEW_CANDIDATES
+
+    def local(self, ctx: WarmContext,
+              hot: Mapping[str, tuple[compiled.Materialized, ...]]) -> LocalResult:
+        result = LocalResult()
+        if ctx.dry_run:                                   # `warm_paths` stores: plan only
+            result.outcomes = {(rel, row.kind): "planned" for rel, rows in hot.items() for row in rows}
+            return result
+        if ctx.halted():
+            return result
+        answered = overview_warm.warm_paths(sorted(hot))
+        for rel, rows in hot.items():
+            outcome = _OVERVIEW_OUTCOMES.get(answered.get(rel, "failed"), "failed:not_saved")
+            for row in rows:
+                result.outcomes[(rel, row.kind)] = outcome
+        return result
+
+    def network(self, ctx: WarmContext, plan: object) -> NetworkResult:
+        return NetworkResult()
+
+
+OVERVIEW = _OverviewHook()
+
 #: The hooks, in their fixed order: `files`, `overview` (04-C2a), `searchdocs`
 #: (08-C2c), `vectors`. A tuple naming each hook by module rather than a
 #: registry filled by import side effects, so a process that imports only this
 #: module -- the CLI -- still has every hook. An owner not yet landed is
-#: absent, never stubbed.
-HOOKS: tuple[WarmHook, ...] = (FILES, VECTORS)
+#: absent, never stubbed: `searchdocs` arrives with 08-C2c.
+HOOKS: tuple[WarmHook, ...] = (FILES, OVERVIEW, VECTORS)
 
 _ORDER = {o: i for i, o in enumerate(("failed", "built", "planned", "hit", "skipped", "deferred", "lazy"))}
 

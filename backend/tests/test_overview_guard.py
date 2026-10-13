@@ -1,7 +1,8 @@
 """Who may reach an overview projection (spec 04 section 3.8, 12.4).
 
 Only the four overview read routes -- `GET /worlds`, `GET /campaigns`,
-`GET /api/shell`, `GET /todo` -- and the post-turn warm read `store.overview`.
+`GET /api/shell`, `GET /todo` -- the post-turn warm, and spec 05's sync
+(`store.cache_sync`'s `overview` hook) read `store.overview`.
 A decision site never does: `scenes.read.closed_by` is asked on every turn's
 reservation and refuses a closed branch, and spec 03 section 5's residuals must
 never decide that for the life of a persisted row; `list_campaigns` feeds a
@@ -23,9 +24,11 @@ import pytest
 
 import grimoire
 
-#: Modules allowed to import `store.overview` at all.
+#: Modules allowed to import `store.overview` at all. `store.cache_sync` is
+#: spec 05's: its `overview` hook calls `overview.warm.warm_paths` (05-S5),
+#: which stores what a read would and decides nothing.
 _IMPORTERS = {"routes.worlds", "routes.campaigns", "routes.shell", "routes.todo",
-              "routes.streaming"}
+              "routes.streaming", "store.cache_sync"}
 
 #: Functions that must never reach an overview projection.
 _DECISION_SITES = (
