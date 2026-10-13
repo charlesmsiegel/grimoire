@@ -481,7 +481,7 @@ def delete_from(cid: str, sid: str, index: int) -> int:
 
     Everything else the frontmatter carries is deliberately untouched:
     `dismissed` is a per-scene preference, not a consequence of a post; the
-    rolling summary invalidates itself (`routes.scenes._rolling_view` refuses a
+    rolling summary invalidates itself (`rolling_intact.view` refuses a
     stored `at` past the transcript's length and re-checks the digest); and cast
     membership is `appearances`' record, not this file's — see `store/cascade.py`
     for why a join is not un-done.

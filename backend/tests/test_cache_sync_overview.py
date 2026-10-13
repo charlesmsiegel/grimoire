@@ -61,7 +61,8 @@ def _commit(cid, title):
 
 
 def test_the_hook_runs_between_files_and_vectors():
-    assert [hook.name for hook in cache_sync.HOOKS] == ["files", "overview", "vectors"]
+    names = [hook.name for hook in cache_sync.HOOKS]
+    assert names[:2] == ["files", "overview"] and names[-1] == "vectors"
     assert all(cache_sync.OVERVIEW.owns(name) for name in compiled.OVERVIEW_CANDIDATES)
     assert not cache_sync.OVERVIEW.owns("vector:lore-entry:x")
 

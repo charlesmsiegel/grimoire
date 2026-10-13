@@ -1560,6 +1560,111 @@
       "updated": "2026-01-01T09:11:00Z"
     }
   },
+  "searchdocs.scene_documents[the-drowned-ledger]": {
+    "degraded": [],
+    "documents": [
+      {
+        "closed_by": null,
+        "meta": {
+          "absorbed": false,
+          "backstop": false,
+          "branch_group": "",
+          "bytes": 81,
+          "cast": [
+            "pcs:winifred",
+            "characters:seraphine"
+          ],
+          "chronicle_date": "",
+          "commitments": [],
+          "current_status": {},
+          "degraded": [],
+          "departed": [],
+          "facts": {
+            "recorded": [],
+            "retired": []
+          },
+          "groups": [],
+          "keywords": [],
+          "kind": "scene",
+          "links": [],
+          "locations": [
+            "locations/tidewatch-keep"
+          ],
+          "moments": {
+            "first": "",
+            "last": ""
+          },
+          "pcless": false,
+          "phase": "none",
+          "players": [
+            "pcs:winifred"
+          ],
+          "relationship_pairs": [],
+          "summary_source": "none",
+          "threads": [],
+          "title": "The Tide Comes In",
+          "truncated": [],
+          "version": 1
+        },
+        "sid": "001--the-tide-comes-in",
+        "text": {
+          "__text__": [
+            "Scene: The Tide Comes In",
+            "Where: Tidewatch Keep",
+            "Cast: Winifred (player); Seraphine"
+          ]
+        }
+      },
+      {
+        "closed_by": null,
+        "meta": {
+          "absorbed": false,
+          "backstop": false,
+          "branch_group": "",
+          "bytes": 48,
+          "cast": [
+            "characters:mara"
+          ],
+          "chronicle_date": "",
+          "commitments": [],
+          "current_status": {},
+          "degraded": [],
+          "departed": [],
+          "facts": {
+            "recorded": [],
+            "retired": []
+          },
+          "groups": [],
+          "keywords": [],
+          "kind": "scene",
+          "links": [],
+          "locations": [],
+          "moments": {
+            "first": "2026-01-02",
+            "last": "2026-01-02"
+          },
+          "pcless": false,
+          "phase": "none",
+          "players": [],
+          "relationship_pairs": [],
+          "summary_source": "none",
+          "threads": [],
+          "title": "The Long Quay",
+          "truncated": [],
+          "version": 1
+        },
+        "sid": "002--2026-01-02--the-long-quay",
+        "text": {
+          "__text__": [
+            "Scene: The Long Quay",
+            "When: 2026-01-02",
+            "Cast: Mara"
+          ]
+        }
+      }
+    ],
+    "skipped": []
+  },
   "sheets.coverage[the-drowned-ledger]": {
     "characters": {
       "invalid": 0,

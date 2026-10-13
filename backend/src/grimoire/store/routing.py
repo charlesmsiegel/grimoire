@@ -311,7 +311,7 @@ NON_ROUTE_TASKS: tuple[str, ...] = ("model-test",)
 #: refuses each of them, so embed work can never fall through to Primary as an
 #: unknown task.
 EMBED_TASKS: tuple[str, ...] = ("semantic-recall", "semantic-search", "art-catalog",
-                                "continuity-similarity")
+                                "continuity-similarity", "history-index")
 
 #: task -> route key. Built here rather than written out, so the two cannot drift.
 TASK_ROUTE: dict[str, str] = {task: r.key for r in ROUTES for task in r.tasks}

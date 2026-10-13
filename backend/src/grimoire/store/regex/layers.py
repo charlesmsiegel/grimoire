@@ -36,13 +36,15 @@ hold, so a concurrent campaign write cannot land between the two.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 
-from .. import atomic, llm_connections, locks
+from .. import atomic, llm_connections, locks, statcache
 from .. import paths as store_paths
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
@@ -191,6 +193,49 @@ def read_level(level: str, key: str = "") -> dict:
     load."""
     _check_level(level)
     return copy.deepcopy(_load(level, key))
+
+
+def files(cid: str, connections: Iterable[str] = ()) -> tuple[Path, ...] | None:
+    """Every file `effective(cid=cid, connection=c)` reads, for each `c` in
+    `connections`, present or not: the campaign's own `campaign.md` (the world
+    the campaign sits on is read from there), the global, world and campaign
+    rule files, and each named connection's record (a deleted connection
+    contributes no rules even while a stale rule file remains) and rule file.
+    `None` when the campaign does not resolve. A world reference that does not
+    (a hand-edited `campaign.md`) is a layer `effective` reads as empty, so
+    the others are still listed -- `campaign.md` among them, whose repair is
+    the write that brings the world layer back."""
+    try:
+        out = [campaigns_paths.campaign_meta_path(cid), path("global"),
+               path("campaign", cid)]
+        wid = world_of(cid)
+        if wid:
+            with contextlib.suppress(worlds_paths.WorldNotFound):
+                out.append(path("world", wid))
+        for conn in sorted(set(connections)):
+            if not conn or not store_paths.safe_id(conn):
+                continue
+            out += [llm_connections.connection_path(conn), path("connection", conn)]
+    except (worlds_paths.WorldNotFound, campaigns_paths.CampaignNotFound,
+            llm_connections.ConnectionNotFound, OSError):
+        return None
+    return tuple(out)
+
+
+def signature(cid: str, connections: Iterable[str] = ()) -> tuple | None:
+    """A stat signature over `files(cid, connections)` -- for a caller that
+    memoizes a derivation of a prompt-phase view (`store/searchdocs`'s
+    intactness memo) rather than re-running the view on every read. A missing
+    file is a cacheable state (`absent_ok`), so creating one invalidates.
+    `None` when a key does not resolve: callers do not memoize.
+
+    Coarser than `_load`'s byte-hash cache, on purpose and with its residual:
+    a same-size rewrite that also restores the file's mtime and inode keeps the
+    signature, as everywhere `statcache` is used. That costs a stale memo of a
+    derived value, never a wrong rule run, since `view` itself still reads
+    bytes."""
+    read = files(cid, connections)
+    return None if read is None else statcache.signature(*read, absent_ok=True)
 
 
 # --- validation and writing ---------------------------------------------------

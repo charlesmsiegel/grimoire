@@ -67,6 +67,7 @@ from pathlib import Path
 from grimoire import store
 from grimoire.store import overview
 from grimoire.store.continuity import candidates, drivers, effective, graph, pending, pressure
+from grimoire.store.searchdocs import live as searchdocs_live
 from tests import frozen_copy
 
 HERE = Path(__file__).resolve().parent
@@ -256,6 +257,35 @@ def _campaign(out: dict, cid: str) -> None:
     out[f"scenes.list_scenes[{cid}]"] = scenes
     for s in scenes:
         _scene(out, cid, s["id"])
+    out[f"searchdocs.scene_documents[{cid}]"] = _search_documents(cid)
+
+
+def _search_documents(cid: str) -> dict:
+    """The campaign's scene SearchDocuments (roadmap 08): each one's text and
+    metadata with its sid attached. Three things are left out on purpose:
+    `meta.identity`, because identities are fresh `uuid4`s minted when the copy
+    is backfilled, so including them would move this snapshot on every
+    regeneration; `meta.slices`, whose `head` digest covers the identity; and
+    the key, which covers those digests and 03's `BUILD`, so it moves on every
+    commit.
+
+    Read with 03's compiled cache off: a cold live set stores what it built,
+    and this sweep must write nothing (`test_the_read_only_sweep_writes_nothing`).
+    The answer is the same either way, which `test_searchdocs_live.py` holds."""
+    previous = os.environ.get("GRIMOIRE_COMPILED_CACHE")
+    os.environ["GRIMOIRE_COMPILED_CACHE"] = "0"
+    try:
+        found = searchdocs_live.scene_documents(cid)
+    finally:
+        if previous is None:
+            os.environ.pop("GRIMOIRE_COMPILED_CACHE", None)
+        else:
+            os.environ["GRIMOIRE_COMPILED_CACHE"] = previous
+    return {"skipped": list(found.skipped), "degraded": list(found.degraded),
+            "documents": [{"sid": d.sid, "closed_by": d.closed_by, "text": d.doc.text,
+                           "meta": {k: v for k, v in d.doc.meta.items()
+                                    if k not in ("identity", "slices")}}
+                          for d in found.documents]}
 
 
 def _scene(out: dict, cid: str, sid: str) -> None:

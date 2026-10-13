@@ -3607,98 +3607,6 @@ def _rolling_claim(cid: str, sid: str):
         if claimed:
             with _rolling_inflight_guard:
                 _rolling_inflight.discard(key)
-def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
-    """The stored summary reconciled against the transcript as it stands now.
-
-    Three things come out of this, and keeping them apart is the point:
-
-    - `summary` is what is stored, ALWAYS, however stale. A summary whose posts
-      were rerolled still describes most of the scene, and it is the best thing
-      anyone has until the next refold; blanking it would leave the panel saying
-      "no summary yet" about a scene that has one. Review caught that: it also
-      made the panel's own staleness warning unreachable, since the warning
-      renders beside prose there was then never any of.
-    - `prior` is what a fold may build ON, which is `summary` only while the
-      prefix it covered is still the prefix on disk. Otherwise "" -- start over
-      from the whole transcript rather than carry prose about a post the player
-      deleted.
-    - `stale` is that same finding said out loud, so the panel can present the
-      summary as behind rather than as current.
-
-    An unsummarized scene is not stale: it has nothing to be stale about, and
-    saying otherwise would put a warning on every scene nobody has summarized.
-    """
-    messages = scene["messages"]
-    total = len(messages)
-    # Out of the snapshot this was handed, NOT a second read of the same file.
-    # Review caught that reading twice pairs one snapshot's transcript with
-    # another's metadata: a commit landing between the two yields `at: 11`
-    # against a 10-message transcript, and reports a summary that is exactly
-    # current as stale -- a contradiction the panel then holds until something
-    # else refreshes it.
-    stored = store.scenes.rolling_summary_fields(scene["meta"])
-    # `at > total` short-circuits rather than slicing: `messages[:at]` past the
-    # end yields the whole list and would digest-match a transcript that has
-    # since been trimmed back to exactly what it covered.
-    #
-    # BOTH digests, because a summary can go stale two ways and only one of them
-    # is visible in the transcript. The facts half is the price of putting facts
-    # in the prompt at all: a scene's first location and first date are set
-    # SILENTLY, so they can change with no message appended, and a summary built
-    # from the wrong location is as stale as one built from a deleted post.
-    #
-    # Coverage without prose is not coverage, which is why the emptiness test
-    # comes first rather than being left to `prior` alone. `rolling_at` means
-    # "how much of the transcript this summary describes", so with no summary it
-    # describes nothing however well its digests still check out -- and every
-    # store here is a hand-editable markdown tree, so a scene whose
-    # `rolling_summary:` line was blanked while `rolling_at`/`rolling_digest`
-    # survive is a file someone can actually produce. Review caught what that
-    # cost: `prior` was correctly "" and `base` was NOT, so the fold took the
-    # from-scratch branch of the prompt and was handed only `messages[base:]` --
-    # a summary of the tail, written as if it were the whole scene, then stored
-    # as covering all of it. The `upto` overtaken check below already tested
-    # `ahead["summary"]` for this reason; this puts the rule in one place.
-    has_summary = bool(stored["summary"])
-    intact = (has_summary
-              and stored["at"] <= total
-              and _rolling_digest(cid, sid, messages[:stored["at"]], total) == stored["digest"]
-              and store.rolling_summary.facts_digest(facts) == stored["facts"])
-    return {"summary": stored["summary"],
-            # Reported as 0 for the same reason, so the panel cannot say
-            # "covers 12 of 14 posts" beside "no summary yet".
-            "at": stored["at"] if has_summary else 0, "total": total,
-            "stale": has_summary and not intact,
-            "prior": stored["summary"] if intact else "",
-            "base": stored["at"] if intact else 0,
-            # Pending posts a fold would actually SEE: one over hidden posts (or
-            # director notes, which the render drops too) only would pay a
-            # provider to restate the summary.
-            "fresh": len(store.scenes.in_context(messages[stored["at"] if intact else 0:]))}
-
-
-def _rolling_digest(cid: str, sid: str, covered: list[dict], total: int) -> str:
-    """`covered_digest` over the PROMPT view of the prefix a fold covers, which
-    is what the fold was written from: a prompt rule added, edited or switched
-    off afterwards changes what the summary describes as surely as an edit
-    does. With no prompt rule the view is the raw text, so the digest is the
-    one stored before rules existed.
-
-    Depth counts over the transcript as it is now, `total` messages long --
-    the prefix seen inside it, as the prompt sees it -- at the fold, at the
-    commit's precondition and at every read alike. So an append that carries a
-    covered post across a depth-bounded rule's boundary, where the rule now
-    changes it, voids the summary: it describes text the model is no longer
-    shown. That is the trade-off, taken for correctness: with such a rule
-    rewriting covered posts, a scene refolds as each one crosses (from
-    scratch, since the prior is void too), and an append that lands while a
-    fold is at the provider can refuse its commit. A depth rule that changes
-    no covered post, and every rule without depth bounds, changes nothing
-    here, so an ordinary append still leaves the summary current."""
-    shown = store.regex.view.view(covered, cid=cid, phase="prompt", total=total)
-    return store.rolling_summary.covered_digest(shown, store.appearances.player_label(cid, sid))
-
-
 def _rolling_due(view: dict, every: int, force: bool) -> bool:
     """Whether a refresh is worth an LLM call.
 
@@ -3742,17 +3650,17 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
     -- and an ordinary turn APPENDING during the call passes, which it must, or
     every busy scene would throw away the summary it just paid for. (Unless the
     append carries a covered post across a depth-bounded prompt rule that then
-    changes it: the prefix's prompt view moved, see `_rolling_digest`.)
+    changes it: the prefix's prompt view moved, see `store.rolling_intact.prefix_digest`.)
     """
     with store.locks.campaign_lock(cid):
         scene = store.scenes.read_scene(cid, sid)
         facts = store.chronicle.scene_facts(cid, sid)
-        stored = _rolling_view(cid, sid, scene, facts)
+        stored = store.rolling_intact.view(cid, sid, scene, facts)
         # Two independent refusals, and review found the second one after the
         # first was in place, because they fail on opposite facts.
         #
         # The prefix must be intact -- the fold describes those messages.
-        intact = _rolling_digest(cid, sid, scene["messages"][:covered],
+        intact = store.rolling_intact.prefix_digest(cid, sid, scene["messages"][:covered],
                                  len(scene["messages"])) == digest
         # ...the facts must be the facts it was given, for the same reason the
         # prefix must be the prefix. Review caught that adding facts to the
@@ -3786,7 +3694,7 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
             store.revision.bump(cid)
             scene = store.scenes.read_scene(cid, sid)
             facts = store.chronicle.scene_facts(cid, sid)
-        return {"landed": landed, "view": _rolling_view(cid, sid, scene, facts)}
+        return {"landed": landed, "view": store.rolling_intact.view(cid, sid, scene, facts)}
 
 
 def _rolling_reread(cid: str, sid: str, fallback: dict) -> dict:
@@ -3803,7 +3711,7 @@ def _rolling_reread(cid: str, sid: str, fallback: dict) -> dict:
     against, and this call is fire-and-forget from the client anyway.
     """
     try:
-        return _rolling_view(cid, sid, _require_scene(cid, sid),
+        return store.rolling_intact.view(cid, sid, _require_scene(cid, sid),
                              store.chronicle.scene_facts(cid, sid))
     except HTTPException:
         return fallback
@@ -3827,7 +3735,7 @@ def get_rolling_summary(cid: str, sid: str):
     select, and a store with no key configured must still render the panel.
     """
     scene = _require_scene(cid, sid)
-    return _rolling_body(_rolling_view(cid, sid, scene,
+    return _rolling_body(store.rolling_intact.view(cid, sid, scene,
                                        store.chronicle.scene_facts(cid, sid)),
                          store.config.rolling_summary_every())
 
@@ -3927,7 +3835,7 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
         # `_rolling_commit` then refuses as superseded, after the provider has
         # been paid. Review caught it there: the refusal was in the right place
         # to protect the STORE and the wrong place to protect the bill.
-        ahead = _rolling_view(cid, sid, scene, store.chronicle.scene_facts(cid, sid))
+        ahead = store.rolling_intact.view(cid, sid, scene, store.chronicle.scene_facts(cid, sid))
         if ahead["summary"] and not ahead["stale"] and ahead["at"] >= upto:
             return {**_rolling_body(ahead, store.config.rolling_summary_every()),
                     "refreshed": False}
@@ -3938,7 +3846,7 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
     resolved = require_inference("rolling-summary", cid)
     every = store.config.rolling_summary_every()
     facts = store.chronicle.scene_facts(cid, sid)
-    view = _rolling_view(cid, sid, scene, facts)
+    view = store.rolling_intact.view(cid, sid, scene, facts)
     if not _rolling_due(view, every, force):
         return {**_rolling_body(view, every), "refreshed": False}
 
@@ -3968,7 +3876,7 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # landing while the model is answering must not be counted as covered by a
     # summary that never saw it.
     covered, base = len(messages), view["base"]
-    digest = _rolling_digest(cid, sid, messages, len(messages))
+    digest = store.rolling_intact.prefix_digest(cid, sid, messages, len(messages))
     # Depth counts over the whole snapshot, not the slice being folded.
     shown = store.regex.view.view(messages[base:], cid=cid, phase="prompt",
                                   offset=base, total=len(messages))
@@ -4052,7 +3960,7 @@ def _break_provider(cid: str):
 def _break_intact(messages: list[dict], stored: dict, player_label: str = "") -> bool:
     """Whether a stored watermark still describes the transcript on disk.
 
-    `_rolling_view`'s check, for `_rolling_view`'s reason and with its own
+    `store.rolling_intact.view`'s check, for `store.rolling_intact.view`'s reason and with its own
     tool: the transcript is not append-only, so "we have already asked about
     the first thirty posts" stops being true the moment one of those thirty is
     rerolled, edited away or trimmed. An APPEND leaves the prefix alone and
@@ -4076,7 +3984,7 @@ def _break_view(scene: dict, every: int, provider, player_label: str = "") -> di
     """The scene's break state, scored out of ONE snapshot of the scene.
 
     The transcript, the watermark and both histories all come off the `scene`
-    handed in rather than from fresh reads, for `_rolling_view`'s reason and a
+    handed in rather than from fresh reads, for `store.rolling_intact.view`'s reason and a
     sharper version of it: the histories and the transcript move TOGETHER (a
     move appends its transition line in the same mutator that extends
     `location_history`), so reading them separately can produce a location move

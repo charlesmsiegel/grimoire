@@ -260,9 +260,15 @@ OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
 # its stamp is not read again (05 section 7.3).
 SYNC_SOURCES = Kind('sync:sources', 1, (), (), True)
 
+# A scene's history SearchDocument (roadmap 08-C2a): keyed by its per-scene
+# slice digests and what would not read, never by a whole file. `version` is
+# `searchdocs.scene.SEARCH_DOCUMENT_VERSION`; bumping it moves every key.
+SEARCHDOCS_SCENE = Kind('searchdocs.scene', 1, (), ('slices', 'degraded'), False)
+
 KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
                           OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS,
-                          SYNC_SOURCES.name: SYNC_SOURCES}
+                          SYNC_SOURCES.name: SYNC_SOURCES,
+                          SEARCHDOCS_SCENE.name: SEARCHDOCS_SCENE}
 
 
 @dataclass(frozen=True)
@@ -486,6 +492,15 @@ def _fingerprint() -> None:
             _state.build = None
 
 
+def build_fingerprint() -> str | None:
+    """BUILD, for a consumer whose own content key must move with it -- a
+    derived artifact another spec keys statistics by (`store/searchdocs`'s
+    document key, which 09 keys term statistics by). None when it cannot be
+    computed. Silent, unlike a cache use: a key is not a cache use."""
+    _fingerprint()
+    return _state.build
+
+
 def _build() -> str | None:
     _fingerprint()
     if _state.build is None:
@@ -670,26 +685,51 @@ def _key_inputs(kind: Kind, inputs: Sequence[tuple[str, str]]) -> list | None:
     return ordered
 
 
+def _registered(kind: Kind, params: Mapping[str, object], width: int) -> bool:
+    return (isinstance(kind, Kind) and KINDS.get(kind.name) == kind
+            and type(kind.version) is int and kind.version >= 1
+            and set(params) == set(kind.params)
+            and set(kind.path_inputs) <= set(kind.params)
+            and width <= MAX_KEY_BYTES // 64)
+
+
+def _composite(kind: Kind, params: Mapping[str, object], files: list, groups: list,
+               build: str | None) -> str | None:
+    # A file can literally contain a collection's canonical manifest.
+    # Separate categories and boundaries rather than hashing a prefix that
+    # could itself be supplied as file bytes (Spec03 S4 Codex review).
+    payload = _canonical([kind.name, kind.version, build, dict(params),
+                          ['files', files], ['collections', groups]], MAX_KEY_BYTES)
+    return hashlib.sha256(payload.encode("ascii")).hexdigest() if payload else None
+
+
 def make_key(kind: Kind, inputs: Sequence[tuple[str, str]], *,
              params: Mapping[str, object], collections: Sequence[tuple[str, str]] = ()) -> Key | None:
     """Select registered derivations, including their input categories."""
     try:
-        if (not isinstance(kind, Kind) or KINDS.get(kind.name) != kind
-                or type(kind.version) is not int or kind.version < 1
-                or set(params) != set(kind.params)
-                or not set(kind.path_inputs) <= set(kind.params)
-                or len(inputs) + len(collections) > MAX_KEY_BYTES // 64):
+        if not _registered(kind, params, len(inputs) + len(collections)):
             return None
         files = _key_inputs(kind, inputs)
         groups = _key_inputs(kind, collections)
         if files is None or groups is None or not _available():
             return None
-        # A file can literally contain a collection's canonical manifest.
-        # Separate categories and boundaries rather than hashing a prefix that
-        # could itself be supplied as file bytes (Spec03 S4 Codex review).
-        payload = _canonical([kind.name, kind.version, _build(), dict(params),
-                              ['files', files], ['collections', groups]], MAX_KEY_BYTES)
-        return Key(kind.name, hashlib.sha256(payload.encode("ascii")).hexdigest()) if payload else None
+        digest = _composite(kind, params, files, groups, _build())
+        return Key(kind.name, digest) if digest else None
+    except _CACHE_ERRORS:
+        return None
+
+
+def content_digest(kind: Kind, *, params: Mapping[str, object]) -> str | None:
+    """The digest `make_key` names for a kind keyed by its params alone (no
+    file or collection input), computed whether or not the cache is usable:
+    for a derived artifact whose own identity IS that composite key
+    (`store/searchdocs`'s document key), so the identity and the cache row
+    agree, and the identity exists with the cache off. Silent, like
+    `build_fingerprint`. None when it cannot be computed."""
+    try:
+        if not _registered(kind, params, 0):
+            return None
+        return _composite(kind, params, [], [], build_fingerprint())
     except _CACHE_ERRORS:
         return None
 
@@ -964,6 +1004,14 @@ class Batch:
         self._marker: str | None = None
         self._generation: str | None = None
         self._fence_snapshot: tuple | None = None
+        # Whether the last `flush` committed what was staged -- or found
+        # nothing to write because every row asked for was already there. A
+        # caller that remembers having written (`store/searchdocs`'s
+        # materialized rows) reads it, so a refused or failed write is
+        # retried, not forgotten. `refused` is set when a put or a row was
+        # turned away while staging, which "nothing to write" must not hide.
+        self.committed = False
+        self.refused = False
 
     def _usable(self, key: Key | None = None, *, strict: bool = False) -> bool:
         self._maintenance()
@@ -1454,6 +1502,7 @@ class Batch:
         count = len(self._rows) + len(self._sources) + len(self._materialized) + len(self._artifact_touches)
         if (not self._usable() or (key not in self._materialized and count >= MAX_STAGED_ROWS)
                 or self._bytes - old + size > MAX_STAGED_BYTES):
+            self.refused = True
             return
         self._materialized[key] = row
         self._materialized_sizes[key] = size
@@ -1463,12 +1512,16 @@ class Batch:
                           built_from: str = '') -> None:
         try:
             relative, canonical = _relative(self.root, path), _instance(instance)
+            row = None
             if relative is not None and canonical is not None:
                 self.materialized([path])
                 row = _materialized_row(relative, kind, canonical, built_from, None)
-                if row is not None:
-                    self._stage_materialized(row)
+            if row is None:
+                self.refused = True
+            else:
+                self._stage_materialized(row)
         except _CACHE_ERRORS:
+            self.refused = True
             self._discard_staging()
             _warn_once('materialized_admission')
 
@@ -1540,6 +1593,7 @@ class Batch:
         return rows
 
     def _discard_staging(self) -> None:
+        self.refused = True     # what was staged is lost: never "nothing to write"
         self._rows.clear()
         self._sources.clear()
         self._source_sizes.clear()
@@ -1698,9 +1752,11 @@ class Batch:
 
     def put(self, key: Key | None, value: object) -> None:
         if key is None or not self._usable(key):
+            self.refused = self.refused or key is not None
             return
         payload = _canonical(value, MAX_PAYLOAD_BYTES)
         if payload is None:
+            self.refused = True
             _warn_once("payload")
             return
         old = self._rows.get(key)
@@ -1710,6 +1766,7 @@ class Batch:
         if ((key not in self._rows
              and len(self._rows) + len(self._sources) + len(self._materialized) + len(self._artifact_touches) >= MAX_STAGED_ROWS)
                 or self._bytes - old_size + len(payload) > MAX_STAGED_BYTES):
+            self.refused = True
             return
         try:
             check = _check(key, payload)
@@ -1727,7 +1784,14 @@ class Batch:
         self._source_sizes.clear()
         self._materialized_sizes.clear()
         self._bytes = 0
-        if (not rows and not sources and not metadata and not touches) or not self._usable(strict=True) or not _state.lock.acquire(timeout=WRITE_LOCK_SECONDS):
+        if not rows and not sources and not metadata and not touches:
+            # Nothing staged: committed only if nothing was turned away, i.e.
+            # every row asked for was already there and current. No fence is
+            # read for it: an unusable cache refuses at staging, which set
+            # `refused`, and an empty request must create no storage.
+            self.committed = not self.refused
+            return
+        if not self._usable(strict=True) or not _state.lock.acquire(timeout=WRITE_LOCK_SECONDS):
             return
         session = None
         try:
@@ -1774,6 +1838,9 @@ class Batch:
                     marker = _read_marker(self.root)
                     _purge_connection(session.conn, marker if marker is not None else self._generation or '')
                     return
+                # Committed only if nothing asked for was turned away while
+                # staging: a partly staged request is a partly written one.
+                self.committed = not self.refused
                 _maintain(session)
                 session.last_used = _clock()
         except _CACHE_ERRORS as error:

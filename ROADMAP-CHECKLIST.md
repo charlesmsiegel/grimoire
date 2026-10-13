@@ -68,11 +68,11 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 01i | Context window as a resolved model fact | now | [x] | [~] substitute | 4 | [x] |
 | 02 | Decision integration (what 01's slices F–H did not land) | merged in PR #509 | [x] | [~] substitute | 8 | [x] |
 | 03 | Content-addressed compiled cache | merged in PR #506 | [x] | [x] CLI Codex (2026-10-11) | 6 | [x] |
-| 04 | Instant Worlds, Campaigns, Todo and shell | 03 merged; all slices can now run to completion | [x] | [~] substitute | 10 | [ ] |
-| 05 | Direct-edit cache sync | 03 and 04 merged; all slices implemented | [x] | [~] substitute | 7 | [ ] |
-| 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | 2 | [ ] |
+| 04 | Instant Worlds, Campaigns, Todo and shell | merged in PR #513 | [x] | [~] substitute | 10 | [x] |
+| 05 | Direct-edit cache sync | merged in PR #512 | [x] | [~] substitute | 7 | [x] |
+| 06 | Store-editing skill | now (05 has merged, so 05-C2 is on main) | [x] | [~] substitute | 2 | [ ] |
 | 07 | Explicit group membership | merged in PR #507; S8 measured and withheld | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [x] |
-| 08 | Derived history SearchDocuments | 03 merged; S5 still waits for 05-S6 | [x] | [~] substitute | 6 | [ ] |
+| 08 | Derived history SearchDocuments | 03 and 05 merged; all six slices implemented in PR #510 | [x] | [~] substitute | 6 | [ ] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
 | 11 | Epistemic history retrieval | S1 now; later slices wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
@@ -81,14 +81,14 @@ last**, an ordering preference rather than a fabricated technical edge.
 
 ## Parallel lanes
 
-- **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)) and 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
-- **One spec that can run end-to-end now:** 04. All external hard needs are met by merged 03.
-- **Parallel partial implementations:** 05 (all seven slices implemented in one PR), 08 (S1 and S4 now; S5 waits for 05-S6), 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
+- **Merged on `main`:** 01, 01s, 01a-01i, 02 ([#509](https://github.com/charlesmsiegel/grimoire/pull/509)), 03 ([#506](https://github.com/charlesmsiegel/grimoire/pull/506)), 04 ([#513](https://github.com/charlesmsiegel/grimoire/pull/513)), 05 ([#512](https://github.com/charlesmsiegel/grimoire/pull/512)) and 07 ([#507](https://github.com/charlesmsiegel/grimoire/pull/507)). 07-S8 was measured and withheld, not implemented as a persistent cache tier.
+- **Specs that can run end-to-end now:** 06, whose one external hard need (05-C2) is on main, and 08, all six slices implemented in [#510](https://github.com/charlesmsiegel/grimoire/pull/510) and in its Codex review rounds.
+- **Parallel partial implementations:** 11 (S1 now; S4 after S1; S2/S3 need 09-S1/S2). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
 - **Scheduled LAST:** 13 (Mechanics II). Do not dispatch it until **every other** roadmap spec, including 04, 05, 06, 08, 09, 10, 11 and 12, has landed. This is a scheduling hold only: the technical slice dependency graph and waves remain unchanged. `ready` hides 13 until then; `ready --include-deferred` displays technical readiness without the scheduling hold.
-- **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. No missing gate is inferred from a merged PR.
+- **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. For 05-S1 through S7 (merged in #512), plan gates, and the review and final gates the table leaves open, remain unticked. No missing gate is inferred from a merged PR.
 - **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → ~~02~~ → 11 (Decision stage). 01e feeds 09 and the deferred 13.
 - **Generate lane:** ~~01f~~ → ~~01g~~ → 12.
-- **Cache lane:** ~~03~~ → 04 → 05 → 06; ~~03~~ + 05 + ~~01h~~ → 08.
+- **Cache lane:** ~~03~~ → ~~04~~ → ~~05~~ → 06; ~~03~~ + ~~05~~ + ~~01h~~ → 08.
 - **Retrieval lane:** 08 + ~~01h-C4~~ + ~~01i~~ → 09 → 10 → 11 → 12.
 
 No task goes native-first or escalates without its per-task evidence (`evals/README.md`). Spec 02's speaker-sampling switch defaults **on**; turn planning and decide-as-tool default **off**, as ratified in PR #509.
@@ -99,13 +99,12 @@ These lanes are spec-level. For work assignment, run `python3 scripts/roadmap_sl
 
 | Spec | Can start now? | Can finish without another spec? | Last external hard dependency |
 |---|---|---|---|
-| 04 | Yes | **Yes** | 03 is merged |
-| 05 | Yes | **Yes** | 04 is merged |
-| 08 | Yes | No | 05-S6 for 08-S5 |
+| 06 | Yes | **Yes** | 05 is merged |
+| 08 | Yes | **Yes** | 05 is merged |
 | 11 | Yes | No | 09-S1 and 09-S2 for 11-S2/S3 |
 | 13 | Technically yes | **Held by scheduling** | All other roadmap specs must finish first |
 
-The primary completion chain is **04 → 05 → 08 → 09 → 10/11 → 12 → 13 (last)**; 06 follows 05. Slices within adjacent specs may overlap where the checklist has no hard edge.
+The primary completion chain is **~~04~~ → ~~05~~ → 08 → 09 → 10/11 → 12 → 13 (last)**; 06 follows 05. Slices within adjacent specs may overlap where the checklist has no hard edge.
 
 ## Contracts
 
@@ -321,11 +320,11 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   extended by 04-C3b.
 
 ### 04: Instant overview pages
-- [ ] **04-C1a** Card projections. **04-C1b** Scene and continuity projections.
+- [x] **04-C1a** Card projections. **04-C1b** Scene and continuity projections.
   **04-C1c** A Todo scope assembled from projections plus three live chores.
-- [ ] **04-C2a** A post-turn warm hook. **04-C2b** First paint from client
+- [x] **04-C2a** A post-turn warm hook. **04-C2b** First paint from client
   memory, then revalidate; a consistency bound.
-- [ ] **04-C3a** Counters and a debug line. **04-C3b** Benchmark harness that
+- [x] **04-C3a** Counters and a debug line. **04-C3b** Benchmark harness that
   runs on synthetic libraries only.
 - **Implemented in one PR, a commit per slice** (plans in
   `docs/superpowers/plans/2026-10-12-roadmap-04-s*.md`). Plan gates, reviews
@@ -343,7 +342,7 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   `searchdocs` entry is 08-C2c's, and arrives with 08's slice.)
 - [x] **05-C4** `store/writeset.py`: a context-variable collector that
   `store.atomic` notes into, with a guard.
-- All seven slices are implemented in one PR, each its own commit (plans in
+- **Landed in [PR #512](https://github.com/charlesmsiegel/grimoire/pull/512).** All seven slices were implemented in one PR, each its own commit (plans in
   `docs/superpowers/plans/2026-10-12-roadmap-05-s*.md`); 05-S5 followed once
   04 merged. Their reviews were **substitute** adversarial reviews (the Codex
   CLI was not available), recorded in the PR, followed by the PR's Codex
@@ -364,12 +363,20 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
 - **Landed in [PR #507](https://github.com/charlesmsiegel/grimoire/pull/507):** S1-S7 implemented. S8's persistent inverse-index tier was **measured and withheld** under the Spec 03 cost gate; its benchmark harness and report were merged, and the in-process memo remains. This closes S8 as a documented negative result, not a shipped persistent tier. Outstanding review and final gates remain unticked.
 
 ### 08: History SearchDocuments
-- [ ] **08-C1** A bounded `SceneDocument` with no transcript text, keyed by
+- [x] **08-C1** A bounded `SceneDocument` with no transcript text, keyed by
   per-scene slices.
-- [ ] **08-C2a** Lazy build plus batch lookup. **08-C2b** Document vectors.
+- [x] **08-C2a** Lazy build plus batch lookup. **08-C2b** Document vectors.
   **08-C2c** A hot-rebuild hook for 05.
-- [ ] **08-C3a** A `history-index` embed task. **08-C3b** `expand(...)`, where
+- [x] **08-C3a** A `history-index` embed task. **08-C3b** `expand(...)`, where
   the caller names the phase.
+- **All six slices implemented in one PR, a commit per slice**
+  ([#510](https://github.com/charlesmsiegel/grimoire/pull/510); plans in
+  `docs/superpowers/plans/2026-10-1{2,3}-roadmap-08-s*.md`). 08-C1, 08-C2a and
+  08-C3b are delivered by S1-S4 and S6. 08-C2b, 08-C2c and 08-C3a are
+  delivered by S5 (`vectors_for`, the `searchdocs` hook, the `history-index`
+  task). The plan, review and final gates are owed to the PR's Codex review:
+  every round's findings so far are fixed or answered on their threads, and
+  the gate columns are ticked once a round comes back clean.
 
 ### 09: Hybrid historical retrieval
 - [ ] **09-C1** `history.retrieve(Query) -> Evidence`, RRF merge, a
@@ -581,28 +588,28 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S2 | Client first paint, then revalidate | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 04-S1 | Request counters and the debug line | S | 1 | 03-S3 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S2 | Client first paint, then revalidate | M | 1 | — | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S3 | Live-path fixes | S | 1 | 04-S1 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S4 | `scene_summary`, in-process, and its consumers | M | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S5 | `continuity_summary`, in-process, with the text seam | M | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S6 | `scene_turns`, in-process, on the shell | S | 2 | 04-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S7 | Persisted card rows, and the `module` chip | M | 3 | 03-S2, 03-S3 (S), 04-S4 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S8 | Persisted `scene_turns` and `continuity_summary` | M | 4 | 03-S2, 03-S3 (S), 04-S5, 04-S6, 04-S7 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S9 | Post-turn warm and `warm_paths` | S | 5 | 03-S4, 04-S7, 04-S8 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 04-S10 | Overview benchmark on synthetic libraries | M | 6 | 03-S2, 03-S6 (S), 04-S1, 04-S8, 04-S9 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 05
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 05-S1 | The write set | M | 1 | — | [x] | [ ] | [x] | [x] | [ ] | [ ] |
-| 05-S2 | The sync primitive and the `files` hook | L | 4 | 03-S2, 03-S4 | [x] | [ ] | [x] | [x] | [ ] | [ ] |
-| 05-S3 | The CLI, scoped modes and scripts | M | 5 | 03-S2, 03-S4, 03-S5 (S), 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 05-S4 | The write-through queue | M | 5 | 05-S1, 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 05-S5 | The `overview` hook adapter | S | 6 | 04-S9, 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 05-S6 | The `vectors` hook and the three producers | L | 5 | 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 05-S7 | The API | M | 6 | 04-S2 (S), 05-S3, 05-S6 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 05-S1 | The write set | M | 1 | — | [x] | [ ] | [x] | [x] | [ ] | [x] |
+| 05-S2 | The sync primitive and the `files` hook | L | 4 | 03-S2, 03-S4 | [x] | [ ] | [x] | [x] | [ ] | [x] |
+| 05-S3 | The CLI, scoped modes and scripts | M | 5 | 03-S2, 03-S4, 03-S5 (S), 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 05-S4 | The write-through queue | M | 5 | 05-S1, 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 05-S5 | The `overview` hook adapter | S | 6 | 04-S9, 05-S2 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 05-S6 | The `vectors` hook and the three producers | L | 5 | 01h-S2 (S), 01h-S6 (S), 03-S4, 05-S2, 05-S5 (S) | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 05-S7 | The API | M | 6 | 04-S2 (S), 05-S3, 05-S6 (S) | [x] | [ ] | [x] | [ ] | [ ] | [x] |
 
 ### 06
 
@@ -628,12 +635,12 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S1 | Extract the rolling-summary intactness test | S | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 
 ### 09
 

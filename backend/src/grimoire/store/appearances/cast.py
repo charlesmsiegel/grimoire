@@ -96,6 +96,14 @@ def _actor_name(aroot: Path, kind: str, actor_id: str, vid: str | None) -> str |
         return None
 
 
+def display_name(aroot: Path, kind: str, actor_id: str, vid: str | None) -> str | None:
+    """`_actor_name`, for a reader outside this module that resolves the root
+    itself (`store/searchdocs` memoizes the name on the card file's stat
+    signature): the name `scene_cast` shows, or None when the card will not
+    read."""
+    return _actor_name(aroot, kind, actor_id, vid)
+
+
 def player_names(cid: str, scene_id: str) -> list[str]:
     """Display names of the scene's role=player cast (PCs or characters cast as players)."""
     aroot = paths.locked_actor_root(cid)

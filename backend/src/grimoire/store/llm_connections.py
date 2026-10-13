@@ -163,6 +163,13 @@ def _sidecar_path(id: str) -> Path:
     return _dir() / f"{id}.models.json"
 
 
+def connection_path(conn_id: str) -> Path:
+    """The connection's record. Public for a caller that stats it rather than
+    reading it (`regex.layers.signature`: a deleted connection contributes no
+    rules); everything that reads it goes through `_read`."""
+    return _path(conn_id)
+
+
 def regex_path(conn_id: str) -> Path:
     """The connection's output-processing rules (`store/regex/layers.py`). Its
     own file for the same reason as the sidecar: the record's frontmatter is

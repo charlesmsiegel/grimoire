@@ -196,7 +196,7 @@ CLIENT_DOORS = frozenset({EMBED_MODULE, "grimoire.routes.config"})
 #: 2, library search 2, art 1, continuity 1. The async `embed` (01h-C4b, a
 #: native door on the app's `routes.get_embeddings` client) has no caller
 #: yet: 09 and 10 are its consumers.
-MIN_EMBED_CALLS = 6
+MIN_EMBED_CALLS = 7
 
 
 def _is_embed_module(node: ast.AST, modules: set[str]) -> bool:
