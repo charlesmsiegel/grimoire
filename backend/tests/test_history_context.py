@@ -11,7 +11,8 @@ from grimoire import prompts
 from grimoire.store import campaigns, chronicle, config, entities, locks, pins, scenes, tokens
 from grimoire.store.context import assemble, layout, macros
 from grimoire.store.context import pack as packer
-from grimoire.store.history import model, query, retrieve
+from grimoire.store.history import model, query
+from grimoire.store.history import retrieval as retrieve
 from grimoire.store.scenes import serialize
 from tests.history_fixtures import absorbed, actor, appear, played
 from tests.history_fixtures import cid as cid

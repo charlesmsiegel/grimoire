@@ -29,7 +29,7 @@ from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from ..store.inference import providers as inference_providers
 from ..store.inference import resolve as inference_resolve
-from . import decision_capture, runs, streaming, tool_decision
+from . import decision_capture, history_recall, runs, streaming, tool_decision
 from . import tracker as tracker_routes
 from .common import (
     _dump,
@@ -88,7 +88,7 @@ def _handoff_pool(cid, sid, round_record):
     return [entry for entry in round_record["eligible"] if entry["ref"] not in out]
 
 
-def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None):
+def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None, history=None):
     # The prompt must offer the same remaining slots that the engine accepts.
     # Offering the current/used actors teaches an invalid handoff; omitting the
     # narrator hides a valid slot. Explicit one-response requests have no next,
@@ -115,6 +115,7 @@ def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None):
         "describe": store.prompt_log.capturing(),
         "model": resolved.chain.primary.model,
         "images": store.post_images.images_for(resolved.chain.primary),
+        "history": history,
     }
     if appended:
         kwargs["appended"] = appended
@@ -147,6 +148,8 @@ def start(
     kind="note",
     trigger="",
     typed_note="",
+    embed_client=None,
+    history_enabled=False,
 ):
     """Open (or resume) a round and hand its frames to a detached run.
 
@@ -214,6 +217,8 @@ def start(
         after_turn=after_turn,
         appended=appended,
         continuation=continuation,
+        embed_client=embed_client,
+        history_enabled=history_enabled,
     )
     runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -508,7 +513,7 @@ def _selector_inputs(cid, sid, round_record):
 
 
 def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, plan=None,
-             response_id=""):
+             response_id="", history=None):
     """Compose (or resume) the contribution and record it.
 
     `plan` is the turn decision's record asked for THIS contribution
@@ -541,7 +546,7 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
         if pending and appended:
             plan = store.responses.get(cid, sid, pending, private=True).get("intent")
         messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended,
-                                        plan=plan)
+                                        plan=plan, history=history)
         # The round's eligible first, then the whole present cast: an explicit
         # pick a talkativeness roll filtered out is still who they are.
         speaker = next(
@@ -1468,6 +1473,7 @@ class _Progress:
         #: The decide tool's record for the contribution in flight (02-C4),
         #: stored on its variant; None when it was not offered.
         self.tool_record = None
+        self.history_by_round = {}
 
 
 async def _frames(
@@ -1484,6 +1490,8 @@ async def _frames(
     after_turn=None,
     appended=(),
     continuation=None,
+    embed_client=None,
+    history_enabled=False,
 ):
     """One run carries a player post's whole chain of rounds: the first, then
     each follow-on `_follow_on` opens while rounds remain, announced by a
@@ -1497,7 +1505,8 @@ async def _frames(
         actor, turn.round_record = await _first_actor(cid, sid, client, round_record)
         while True:
             round_frames = _round_frames(
-                cid, sid, client, resolved, run, token, turn, actor, outcome, tracked
+                cid, sid, client, resolved, run, token, turn, actor, outcome, tracked,
+                app=app, embed_client=embed_client, history_enabled=history_enabled
             )
             async with aclosing(round_frames) as frames:
                 async for frame in frames:
@@ -1557,8 +1566,36 @@ async def _frames(
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
+def _history_replays(cid, sid, round_record):
+    pending = round_record.get("pending_response")
+    return bool(pending and store.responses.get(cid, sid, pending, private=True)["status"] != "complete")
+
+
+async def _round_history(app, cid, sid, client, embed_client, resolved, turn, actor, *,
+                         enabled=True, run=None):
+    """The outside-lock hint only avoids wasted work; _prepare owns replay.
+
+    The driver keeps one immutable evidence value per round, including an empty
+    or failed result. A stale pending peek may waste a gather but cannot replace
+    the snapshot _prepare chooses under its campaign hold.
+    """
+    if not enabled or actor != "grimoire" or turn.appended or turn.continuation:
+        return None
+    if await run_in_threadpool(_history_replays, cid, sid, turn.round_record):
+        return None
+    rid = turn.round_record["id"]
+    if rid not in turn.history_by_round:
+        turn.history_by_round[rid] = await history_recall.gather(
+            app, cid, sid, seed=turn.round_record.get("note") or "", resolved=resolved,
+            llm_client=client, embed_client=embed_client,
+        )
+    if run is not None and run.cancel_requested:
+        raise anyio.get_cancelled_exc_class()()
+    return turn.history_by_round[rid]
+
+
 async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
-                        tracked):
+                        tracked, *, app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
     write lands on `turn`, which is what `_frames` rescues from on failure."""
     turn.ending = None
@@ -1603,9 +1640,12 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             # (before the scope was installed) must not go on to compose and
             # send a paid generation.
             raise anyio.get_cancelled_exc_class()()
+        history = await _round_history(
+            app, cid, sid, client, embed_client, resolved, turn, actor,
+            enabled=history_enabled, run=run)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
-            plan=plan, response_id=response_id)
+            plan=plan, response_id=response_id, history=history)
         record = turn.record
         turn.appended = ()
         turn.watcher = watcher = store.response_protocol.ResponseWatcher(
@@ -1917,7 +1957,7 @@ def resume_roll(
     )
 
 
-def retry(cid, sid, request, client, resolved, run, after_turn=None):
+def retry(cid, sid, request, client, resolved, run, after_turn=None, *, embed_client=None):
     round_record = store.responses.unfinished(cid, sid)
     if round_record is None:
         raise HTTPException(
@@ -1947,6 +1987,8 @@ def retry(cid, sid, request, client, resolved, run, after_turn=None):
         round_record=round_record,
         after_turn=after_turn,
         continuation=round_record.get("continuation"),
+        embed_client=embed_client,
+        history_enabled=True,
     )
 
 

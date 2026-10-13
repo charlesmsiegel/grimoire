@@ -18,8 +18,7 @@ from dataclasses import replace
 
 from ... import prompts
 from .. import config
-from ..history import budget, model, query, settings
-from ..history import retrieve as retrieval
+from ..history import budget, model, query, retrieval, settings
 from . import archive, layout, story
 
 _SLOT = re.compile(r"\x00(\d+)\x00")

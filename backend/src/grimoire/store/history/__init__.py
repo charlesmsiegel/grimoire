@@ -9,7 +9,8 @@ read races can degrade one signal; retrieval neither locks nor writes campaigns.
 """
 
 from . import merging as merge_module
-from . import retrieve as retrieve_module
+from . import retrieval as retrieve_module
 
 merge = merge_module.merge
 retrieve_preview = retrieve_module.retrieve_preview
+retrieve = retrieve_module.retrieve

@@ -15,7 +15,8 @@ from grimoire.store import (
     relationship_history,
     scenes,
 )
-from grimoire.store.history import budget, coverage, expand, lexical, model, retrieve, settings
+from grimoire.store.history import budget, coverage, expand, lexical, model, settings
+from grimoire.store.history import retrieval as retrieve
 from grimoire.store.searchdocs import live, scene
 from tests.history_fixtures import absorbed, actor, appear, location, played
 from tests.history_fixtures import cid as cid

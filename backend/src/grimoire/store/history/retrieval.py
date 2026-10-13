@@ -1,4 +1,4 @@
-"""The synchronous, network-free retrieval core (09-S1).
+"""Network-free file stages and the async history entry (09-S1/S3).
 
 08 alone reads the current SearchDocuments. Eligibility is evaluated once before
 any scoring; admitted lexical candidates are never truncated to a future
@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import partial
+
+import anyio
 
 from .. import chronicle, entities, overlay, tokens
 from ..scenes import read as scenes_read
@@ -213,3 +217,36 @@ def retrieve_preview(
         ).encode()
     ).hexdigest()
     return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest)
+
+
+async def retrieve(
+    cid: str,
+    sid: str,
+    query: model.Query,
+    *,
+    ceiling: int,
+    embed_client,
+    deadline: float,
+    rerank=None,
+    origin: str = "turn",
+    summary_omissions: Mapping[str, str] | None = None,
+) -> model.Evidence:
+    """Complete file stages outside campaign holds (09-S3).
+
+    The monotonic deadline reserves the later semantic/rerank phase. File reads
+    cannot be interrupted midway and their evidence survives an elapsed deadline;
+    S4/S5 must check the remaining time before starting any network work. Clients
+    are supplied by the app, never constructed here. Preview and turns share the
+    same eligibility, selection, expansion and omission-before-depth rules.
+    """
+    validate(query)
+    if query.tier_limit == 3:
+        if origin == "turn":
+            raise ValueError("tier 3 history is never available on a turn")
+        raise NotImplementedError("explicit source history belongs to 09-S6")
+    evidence = await anyio.to_thread.run_sync(partial(
+        retrieve_preview, cid, sid, query, ceiling,
+        summary_omissions=summary_omissions,
+    ))
+    semantic = "skipped:deadline" if time.monotonic() >= deadline else "off"
+    return replace(evidence, coverage=replace(evidence.coverage, semantic=semantic))
