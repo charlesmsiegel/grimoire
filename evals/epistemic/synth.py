@@ -10,9 +10,11 @@ hand over. Placeholder names only.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from grimoire.store import chronicle, knowledge, knowledge_scene, overlay, responses, scenes
+from grimoire.store.appearances import paths as appearances_paths
 from grimoire.store.appearances import transitions
 from grimoire.store.context import epistemic
 from grimoire.store.history import model
@@ -111,6 +113,14 @@ def grant(st: Stage, audience: str, name: str, status: str = "knows", *,
     if created:
         entry["created"] = created
     return knowledge.add(st.cid, entry)
+
+
+def forget_intervals(cid: str, aid: str, sid: str) -> None:
+    """`aid`'s presence intervals for `sid` removed, as a store written before
+    intervals were recorded holds it (R5): the scene list still names it."""
+    record = appearances_paths.record(cid)
+    record.get(f"characters/{aid}", {}).get("presence", {}).pop(sid, None)
+    appearances_paths._path(cid).write_text(json.dumps(record), encoding="utf-8")
 
 
 def key(st: Stage, i: int) -> str:

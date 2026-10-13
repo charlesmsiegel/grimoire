@@ -620,6 +620,19 @@ What it cannot show: whether a real library retrieves well. A synthetic
 corpus is evidence for a choice of model or options; the recall thresholds
 stay "tune against the inspector".
 
+## The epistemic leakage suite (roadmap 11)
+
+`evals/epistemic/` is spec 11 §8.1's offline arm: each case in `cases.py`
+plays its source scenes into a fresh store through `synth.py`'s recipes
+(the classifier tests use the same ones), builds the view each checked reader
+would get, composes that reader's prompt, and grades it with `graders.py`:
+every forbidden needle absent from every message, every allowed needle
+present, and a placed needle in its own history section and no other. It is
+deterministic, needs no model, and runs inside `pytest backend`
+(`test_epistemic_evals.py`). Cases 7 and 15 need the Decision stage (11-S6)
+and are not here; case 3 is visible offline by design, and only a live reply
+could show the perception contract holding (11-S5).
+
 ## How a case works
 
 ```
