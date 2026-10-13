@@ -74,6 +74,9 @@ CAPS = {
     "fact": 144, "relationship": 112, "ref": 160,
 }
 
+#: What `scene.py` renders after a player's name; its bytes count in the cap.
+PLAYER_SUFFIX = " (player)"
+
 _TOKEN = re.compile(r"\A[0-9a-f]{32}\Z")
 #: RecursionError: valid JSON nested past the parser's depth (as `continuity`).
 _JSON_ERRORS = (OSError, ValueError, UnicodeDecodeError, RecursionError)
@@ -246,6 +249,8 @@ class CampaignInputs:
         if bad:
             self.damage.add("relationship_history.json")
         entries = rels.get("entries") if isinstance(rels, dict) else None
+        if entries is not None and not isinstance(entries, list):
+            self.damage.add("relationship_history.json")   # a section of the wrong shape
         self.relationships: list[dict] = [e for e in entries if isinstance(e, dict)] \
             if isinstance(entries, list) else []
         self.chronicle: dict = loaded["chronicle"]  # type: ignore[assignment]
@@ -302,6 +307,19 @@ class CampaignInputs:
             # changes this name, so it stays an input.
             return Name(aid, card, unreadable=True)
         return Name(got, card)
+
+    def actor_files(self, kind: str, aid: str, version: object) -> tuple[Path, ...]:
+        """Both layers' meta and locked-version files for an actor, present
+        or not: what a name read consults, so a write that creates or restores
+        the card finds the documents that named the actor by its id meanwhile
+        (as `location_files`)."""
+        if kind not in ("characters", "pcs") or not paths.safe_id(aid) \
+                or not isinstance(version, str) or not paths.safe_id(version):
+            return ()
+        module = characters if kind == "characters" else pcs
+        card = characters._card_path if kind == "characters" else pcs._version_path
+        return tuple(p for root in (self._view.croot, self._view.wroot)
+                     for p in (module._meta_path(root, aid), card(root, aid, version)))
 
     def location_files(self, lid: str) -> tuple[Path, ...]:
         """Both layers' files for a location, present or not: what a name read
@@ -415,8 +433,11 @@ def _records_here(records: dict, sid: str, damage: _Damage, source: str
         if not beats:
             continue
         clean = damage.text(ref, CAPS["ref"], source)
-        rows.append({"ref": clean, "title": damage.text(rec.get("title"), CAPS["record"], source),
-                     "beats": beats})
+        title = damage.text(rec.get("title"), CAPS["record"], source)
+        # The slice holds the item as it renders, capped whole: a beat past
+        # what the cap shows cannot move the digest.
+        rows.append({"ref": clean,
+                     "item": clip(f"{title or clean}: {' / '.join(beats)}", CAPS["record"])})
         status[clean] = damage.text(rec.get("status"), CAPS["ref"], source)
     return rows, status
 
@@ -440,10 +461,13 @@ def _relationships(entries: list[dict], sid: str, damage: _Damage) -> list[dict]
                     del kept[i]
                     break
     src = "relationship_history.json"
-    return [{"label": damage.text(k.get("label"), CAPS["relationship"], src),
-             "kind": damage.text(k.get("kind"), CAPS["ref"], src),
-             "before": damage.text(k.get("before"), CAPS["relationship"], src),
-             "after": damage.text(k.get("after"), CAPS["relationship"], src),
+
+    def item(k: dict) -> str:
+        """The row as it renders, capped whole (as `_records_here`'s item)."""
+        label, before, after = (damage.text(k.get(f), CAPS["relationship"], src)
+                                for f in ("label", "before", "after"))
+        return clip(f"{label}: {before} -> {after}", CAPS["relationship"])
+    return [{"item": item(k),
              "pair": sorted(damage.text(x, CAPS["ref"], src) for x in k["_pair"])}
             for k in kept]
 
@@ -519,14 +543,18 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
         name = inputs.actor_name(kind, aid, rec.get("version"))
         if name.source is not None:
             used.append(name.source)
+        used += inputs.actor_files(kind, aid, rec.get("version"))
         if name.unreadable:
             damage.add(token)
         join = canon.actor_ref(token)     # full and raw: the membership join needs it
         ref = damage.clean(join, token)
+        role = rec.get("role") if isinstance(rec.get("role"), str) else ""
+        # A player's name renders with its suffix inside the item cap, so the
+        # slice keeps only what can show.
+        cap = CAPS["name"] - (len(PLAYER_SUFFIX.encode()) if role == "player" else 0)
         out[ref] = {"ref": ref, "join": join, "kind": kind, "id": aid,
-                    "name": damage.text(name.text, CAPS["name"], token),
-                    "role": rec.get("role") if isinstance(rec.get("role"), str) else "",
-                    "present": listed}
+                    "name": damage.text(name.text, cap, token),
+                    "role": role, "present": listed}
     for ref in (chron or {}).get("cast", ()):
         if ref in out:
             continue

@@ -117,8 +117,7 @@ def _walk(cid: str) -> tuple[list[dict], list[str]]:
 
 
 def _cache_key(sl: slices_mod.Slices) -> compiled.Key | None:
-    return compiled.make_key(compiled.SEARCHDOCS_SCENE, [],
-                             params={"slices": dict(sl.digests), "degraded": list(sl.degraded)})
+    return compiled.make_key(compiled.SEARCHDOCS_SCENE, [], params=scene_mod.key_params(sl))
 
 
 def _decoded(value: object, key: str) -> scene_mod.SceneDocument | None:

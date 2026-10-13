@@ -72,7 +72,7 @@ MAX_TEXT_BYTES = (sum(cap for *_, cap in LINES)
                   + sum(len(("Running summary:" if label == "Summary:" else label).encode()) + 1
                         for label, *_ in LINES)
                   + len(LINES) - 1)
-_PLAYER = " (player)"
+_PLAYER = slices_mod.PLAYER_SUFFIX
 
 
 @dataclass(frozen=True)
@@ -147,7 +147,7 @@ def _summary(values: dict) -> tuple[str, str, str]:
 
 
 def _records(rows: list[dict]) -> list[str]:
-    return [f"{r['title'] or r['ref']}: {' / '.join(r['beats'])}" for r in rows]
+    return [r["item"] for r in rows]
 
 
 def _text(values: dict) -> tuple[str, str]:
@@ -165,8 +165,7 @@ def _text(values: dict) -> tuple[str, str]:
         "Commitments:": _records(values["commitments"]),
         "Facts established:": [f["text"] for f in values["facts"]["recorded"]],
         "Facts retired:": [f["text"] for f in values["facts"]["retired"]],
-        "Relationships:": [f"{r['label']}: {r['before']} -> {r['after']}"
-                           for r in values["relationships"]],
+        "Relationships:": [r["item"] for r in values["relationships"]],
     }
     lines = []
     for name, count, item_cap, line_cap in LINES:
@@ -215,7 +214,8 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
         "moments": {"first": head["moments"][0] if head["moments"] else "",
                     "last": head["moments"][-1] if head["moments"] else ""},
         "chronicle_date": chron.get("date", ""),
-        "locations": bounded("locations", (f"locations/{x}" for x in head["locations"])),
+        "locations": bounded("locations", (slices_mod.clip(f"locations/{x}", ref)
+                                           for x in head["locations"])),
         # Actor refs are capped here, in the metadata, and never in the slice:
         # the slice's full ref is what 07's membership index joins on.
         "cast": bounded("cast", (slices_mod.clip(a["ref"], ref) for a in cast)),
@@ -240,8 +240,11 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
         "groups": [{**g, "group": slices_mod.clip(g["group"], ref),
                     "present": [slices_mod.clip(p, ref) for p in g["present"]]}
                    for g in values["groups"]],
+        # Folding can lengthen a keyword ("İ" is two bytes, folded three):
+        # capped again after it.
         "keywords": bounded("keywords", _dedupe_folded(
-            [k.casefold() for k in chron.get("keywords", [])])),
+            [slices_mod.clip(k.casefold(), slices_mod.CAPS["keyword"])
+             for k in chron.get("keywords", [])])),
         # A damaged ref can be the degraded name itself: capped like any ref.
         "degraded": bounded("degraded", (slices_mod.clip(n, ref) for n in degraded)),
         "bytes": len(text.encode("utf-8")),
@@ -253,15 +256,24 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
     return meta
 
 
+def key_params(sl: slices_mod.Slices) -> dict:
+    """03's params for this document: every slice digest, plus what would not
+    read (a lone surrogate replaced reads like the character that replaced
+    it; the degraded flag keeps the two apart)."""
+    return {"slices": dict(sl.digests), "degraded": list(sl.degraded)}
+
+
 def key_of(sl: slices_mod.Slices) -> str:
-    """The document key: the kind, the version, `BUILD` and every slice
-    digest, plus what would not read (a lone surrogate replaced reads like the
-    character that replaced it; the degraded flag keeps the two apart). A
-    process that cannot compute `BUILD` keys with "" -- consistently, within
-    itself."""
+    """The document key: 03-C1's composite digest over the kind, the version,
+    `BUILD` and `key_params` -- the same digest the cache row is stored under,
+    computed with the cache off too. A process that cannot compute `BUILD`
+    keys without it, consistently within itself; should 03 refuse the params
+    (it cannot for these few digests), the same fields are hashed here."""
+    got = compiled.content_digest(compiled.SEARCHDOCS_SCENE, params=key_params(sl))
+    if got:
+        return got
     blob = json.dumps([KIND, SEARCH_DOCUMENT_VERSION, compiled.build_fingerprint() or "",
-                       sl.digests, list(sl.degraded)],
-                      sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+                       key_params(sl)], sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("ascii")).hexdigest()
 
 

@@ -362,3 +362,19 @@ def test_the_recorded_memo_holds_a_fixed_size_key_per_document(cid):
     for key in live._RECORDED:
         assert not any(isinstance(part, (tuple, list)) for part in key)
         assert all(isinstance(part, str) for part in key)
+
+
+def test_the_document_key_is_the_cache_rows_composite_key(cid, monkeypatch):
+    """`SceneDocument.key` is 03's composite digest -- the key the cache row
+    is stored under -- and the same digest with the cache off."""
+    sid, *_ = _three(cid)
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    key = live._cache_key(sl)
+    assert key is not None
+    on = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
+    assert on.doc.key == key.digest
+    monkeypatch.setenv("GRIMOIRE_COMPILED_CACHE", "0")
+    _restart()
+    off = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
+    assert off.doc.key == key.digest

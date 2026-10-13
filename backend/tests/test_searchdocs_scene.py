@@ -710,3 +710,60 @@ def test_a_long_damaged_ref_is_capped_in_degraded(cid):
     d = doc(cid, sid)
     assert d.meta["degraded"]
     assert all(len(n.encode("utf-8")) <= slices.CAPS["ref"] for n in d.meta["degraded"])
+
+
+def test_a_missing_locked_card_records_where_it_would_be(cid):
+    """A deleted card names its actor by id, like a missing location, and its
+    files stay inputs: restoring the card is a write sync must find."""
+    sid = _played(cid)
+    p = campaigns.campaign_root(cid) / "appearances.json"
+    p.write_text('{"characters/ghost": {"version": "default", "role": "npc", "scenes": ["'
+                 + sid + '"]}}', encoding="utf-8")
+    inputs = slices.CampaignInputs.load(cid)
+    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    root = campaigns.campaign_root(cid)
+    assert root / "characters" / "ghost" / "default.json" in sl.paths
+    assert root / "characters" / "ghost" / "character.md" in sl.paths
+    assert "Cast: ghost" in scene.render(sl).text
+
+
+def test_a_relationship_entries_section_of_the_wrong_shape_is_degraded(cid):
+    sid = _played(cid)
+    (campaigns.campaign_root(cid) / "relationship_history.json").write_text(
+        '{"entries": {}}', encoding="utf-8")
+    assert "relationship_history.json" in doc(cid, sid).meta["degraded"]
+
+
+def test_a_folded_keyword_is_capped_again(cid):
+    sid = _played(cid)
+    _absorb(cid, sid, keywords=("İ" * 16,))      # 32 bytes, 48 once folded
+    d = doc(cid, sid)
+    assert d.meta["keywords"]
+    assert all(len(k.encode("utf-8")) <= slices.CAPS["keyword"] for k in d.meta["keywords"])
+
+
+def test_a_location_ref_is_capped_with_its_prefix(cid):
+    sid = _played(cid)
+    sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
+    head = {**sl.values["head"], "locations": ["x" * 158]}
+    d = scene.render(dataclasses.replace(sl, values={**sl.values, "head": head}))
+    assert all(len(r.encode("utf-8")) <= slices.CAPS["ref"] for r in d.meta["locations"])
+
+
+def test_a_beat_past_what_the_item_shows_does_not_move_the_key(cid):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    title = "The missing ledger of the harbour " * 6           # fills the item alone
+    plot.set_movement(cid, "missing-ledger", title, "open", "Mara hides it.", sid)
+    before = doc(cid, sid)
+    plot.set_movement(cid, "missing-ledger", title, "open", "Seraphine finds it.", sid)
+    after = doc(cid, sid)
+    assert (after.text, after.key) == (before.text, before.key)
+
+
+def test_a_player_name_keeps_only_what_renders_beside_its_suffix(cid):
+    sid = _played(cid)
+    _actor(cid, sid, "Winifred " + "a" * 60, role="player")
+    sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
+    player = next(a for a in sl.values["cast"] if a["role"] == "player")
+    assert len(player["name"].encode()) <= slices.CAPS["name"] - len(slices.PLAYER_SUFFIX)

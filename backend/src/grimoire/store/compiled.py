@@ -685,26 +685,51 @@ def _key_inputs(kind: Kind, inputs: Sequence[tuple[str, str]]) -> list | None:
     return ordered
 
 
+def _registered(kind: Kind, params: Mapping[str, object], width: int) -> bool:
+    return (isinstance(kind, Kind) and KINDS.get(kind.name) == kind
+            and type(kind.version) is int and kind.version >= 1
+            and set(params) == set(kind.params)
+            and set(kind.path_inputs) <= set(kind.params)
+            and width <= MAX_KEY_BYTES // 64)
+
+
+def _composite(kind: Kind, params: Mapping[str, object], files: list, groups: list,
+               build: str | None) -> str | None:
+    # A file can literally contain a collection's canonical manifest.
+    # Separate categories and boundaries rather than hashing a prefix that
+    # could itself be supplied as file bytes (Spec03 S4 Codex review).
+    payload = _canonical([kind.name, kind.version, build, dict(params),
+                          ['files', files], ['collections', groups]], MAX_KEY_BYTES)
+    return hashlib.sha256(payload.encode("ascii")).hexdigest() if payload else None
+
+
 def make_key(kind: Kind, inputs: Sequence[tuple[str, str]], *,
              params: Mapping[str, object], collections: Sequence[tuple[str, str]] = ()) -> Key | None:
     """Select registered derivations, including their input categories."""
     try:
-        if (not isinstance(kind, Kind) or KINDS.get(kind.name) != kind
-                or type(kind.version) is not int or kind.version < 1
-                or set(params) != set(kind.params)
-                or not set(kind.path_inputs) <= set(kind.params)
-                or len(inputs) + len(collections) > MAX_KEY_BYTES // 64):
+        if not _registered(kind, params, len(inputs) + len(collections)):
             return None
         files = _key_inputs(kind, inputs)
         groups = _key_inputs(kind, collections)
         if files is None or groups is None or not _available():
             return None
-        # A file can literally contain a collection's canonical manifest.
-        # Separate categories and boundaries rather than hashing a prefix that
-        # could itself be supplied as file bytes (Spec03 S4 Codex review).
-        payload = _canonical([kind.name, kind.version, _build(), dict(params),
-                              ['files', files], ['collections', groups]], MAX_KEY_BYTES)
-        return Key(kind.name, hashlib.sha256(payload.encode("ascii")).hexdigest()) if payload else None
+        digest = _composite(kind, params, files, groups, _build())
+        return Key(kind.name, digest) if digest else None
+    except _CACHE_ERRORS:
+        return None
+
+
+def content_digest(kind: Kind, *, params: Mapping[str, object]) -> str | None:
+    """The digest `make_key` names for a kind keyed by its params alone (no
+    file or collection input), computed whether or not the cache is usable:
+    for a derived artifact whose own identity IS that composite key
+    (`store/searchdocs`'s document key), so the identity and the cache row
+    agree, and the identity exists with the cache off. Silent, like
+    `build_fingerprint`. None when it cannot be computed."""
+    try:
+        if not _registered(kind, params, 0):
+            return None
+        return _composite(kind, params, [], [], build_fingerprint())
     except _CACHE_ERRORS:
         return None
 
