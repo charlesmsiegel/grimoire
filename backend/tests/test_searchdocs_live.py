@@ -378,3 +378,38 @@ def test_the_document_key_is_the_cache_rows_composite_key(cid, monkeypatch):
     _restart()
     off = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
     assert off.doc.key == key.digest
+
+
+def test_an_empty_listing_from_a_swallowed_directory_error_still_raises(cid, monkeypatch):
+    """`list_scenes`' glob can answer [] for a directory it could not read;
+    the error-reporting listing is asked anyway."""
+    _three(cid)
+
+    def denied(*_a, **_k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(live.scenes_read, "list_scenes", lambda _cid: [])
+    monkeypatch.setattr(live.os, "scandir", denied)
+    with pytest.raises(OSError):
+        live.scene_documents(cid)
+
+
+def test_a_listing_that_disagrees_with_list_scenes_is_walked(cid, monkeypatch):
+    _three(cid)
+    monkeypatch.setattr(live.scenes_read, "list_scenes", lambda _cid: [])
+    assert len(live.scene_documents(cid).documents) == 3
+
+
+def test_a_document_whose_first_store_failed_is_put_again(cid, monkeypatch):
+    """A memo hit was never confirmed in the cache: the retry puts the
+    document as well as its rows."""
+    sid, *_ = _three(cid)
+    real = compiled.Batch.flush
+    monkeypatch.setattr(compiled.Batch, "flush", lambda self: None)   # commits nothing
+    live.scene_documents(cid)
+    monkeypatch.setattr(compiled.Batch, "flush", real)
+    live.scene_documents(cid)
+    sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
+    key = live._cache_key(sl)
+    with compiled.batch() as request:
+        found = request.lookup_many([key]).values
+    assert found[key].hit

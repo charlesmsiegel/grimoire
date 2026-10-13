@@ -10,6 +10,7 @@ everything else; and damage degrades rather than raises. Placeholder names only.
 
 import dataclasses
 import json
+import re
 
 import pytest
 
@@ -778,3 +779,59 @@ def test_a_player_name_keeps_only_what_renders_beside_its_suffix(cid):
     sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
     player = next(a for a in sl.values["cast"] if a["role"] == "player")
     assert len(player["name"].encode()) <= slices.CAPS["name"] - len(slices.PLAYER_SUFFIX)
+
+
+def test_long_fact_ids_that_clip_alike_keep_their_own_order(cid):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    long1, long2 = "f" + "x" * 200 + "1", "f" + "x" * 200 + "2"
+    texts = {"a1": "Fact A1.", "a2": "Fact A2.", "a3": "Fact A3.",
+             long1: "Fact L1.", long2: "Fact L2."}
+    records = {i: {"text": t, "scene": sid} for i, t in texts.items()}
+    p = campaigns.campaign_root(cid) / "facts.json"
+    p.write_text(json.dumps(records), encoding="utf-8")
+    before = doc(cid, sid)
+    p.write_text(json.dumps(dict(reversed(list(records.items())))), encoding="utf-8")
+    after = doc(cid, sid)
+    assert (after.text, after.key) == (before.text, before.key)
+    assert "Fact L1." in after.text and "Fact L2." not in after.text
+
+
+def test_an_appearance_record_section_of_the_wrong_shape_is_degraded(cid):
+    sid = _played(cid)
+    (campaigns.campaign_root(cid) / "appearances.json").write_text(
+        '{"characters/mara": {"version": "default", "role": "npc", "scenes": "' + sid + '"}}',
+        encoding="utf-8")
+    assert "appearances.json" in doc(cid, sid).meta["degraded"]
+
+
+def test_a_location_that_cannot_be_reached_is_unreadable_not_missing(cid, monkeypatch):
+    """`Path.exists` can swallow an access error; the record is degraded, not
+    taken for absent."""
+    sid = _played(cid)
+    eid = _location(cid, sid, "Saltmarch harbour")
+    target = f"{eid}.md"
+    real_stat, real_exists = slices.os.stat, slices.Path.exists
+
+    def stat(path, *args, **kwargs):
+        if str(path).endswith(target):
+            raise PermissionError("denied")
+        return real_stat(path, *args, **kwargs)
+
+    def read_entity(*_a, **_k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(slices.os, "stat", stat)
+    monkeypatch.setattr(slices.Path, "exists",
+                        lambda self: False if str(self).endswith(target) else real_exists(self))
+    monkeypatch.setattr(slices.overlay, "read_entity", read_entity)
+    slices._POOL.clear()
+    assert f"locations/{eid}" in doc(cid, sid).meta["degraded"]
+
+
+def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
+    p = campaigns.campaign_root(cid) / "campaign.md"
+    text = p.read_text(encoding="utf-8")
+    p.write_text(re.sub(r"(?m)^world:.*$", "world: ../elsewhere", text), encoding="utf-8")
+    got = regex.layers.files(cid)
+    assert got is not None
+    assert regex.layers.path("global") in got and regex.layers.path("campaign", cid) in got

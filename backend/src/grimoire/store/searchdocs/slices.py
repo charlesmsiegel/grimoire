@@ -29,8 +29,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -83,6 +83,19 @@ _JSON_ERRORS = (OSError, ValueError, UnicodeDecodeError, RecursionError)
 
 #: Degraded inputs already logged, by kind, so each says so once per process.
 _logged: set[str] = set()
+
+
+def _present(path: Path) -> bool:
+    """Whether `path` is there, an access failure counting as there: a record
+    that cannot be reached is unreadable, never missing (`Path.exists`
+    suppresses that failure on some versions)."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
 
 
 # --- text normalization ---------------------------------------------------------
@@ -346,7 +359,7 @@ class CampaignInputs:
             try:
                 meta = overlay.read_entity(self.cid, "locations", lid, v=self._view)["meta"]
             except Exception:  # noqa: BLE001 -- a missing or unreadable record is its id
-                return None if gone or not any(p.exists() for p in layers) else ("", -1)
+                return None if gone or not any(_present(p) for p in layers) else ("", -1)
             name = meta.get("name") if isinstance(meta, dict) else None
             source = 0 if layers[0].exists() else 1
             return (name, source) if isinstance(name, str) and name else None
@@ -473,9 +486,15 @@ def _relationships(entries: list[dict], sid: str, damage: _Damage) -> list[dict]
 
 
 def _facts(ledger: dict, sid: str, damage: _Damage) -> dict:
+    """Ordered `(natural_key(id), id)` on the ledger's own ids, before any is
+    clipped: two long ids that clip alike must not fall back on the file's
+    key order."""
     recorded, retired = [], []
-    for fid, rec in ledger.items():
-        if not isinstance(fid, str) or not isinstance(rec, dict):
+    ids = sorted((f for f in ledger if isinstance(f, str)),
+                 key=lambda f: (paths.natural_key(f), f))
+    for fid in ids:
+        rec = ledger[fid]
+        if not isinstance(rec, dict):
             continue
         text = damage.text(rec.get("text"), CAPS["fact"], "facts.json")
         if not text:
@@ -485,8 +504,7 @@ def _facts(ledger: dict, sid: str, damage: _Damage) -> dict:
             recorded.append({"id": clean_id, "text": text})
         if rec.get("retired_scene") == sid:
             retired.append({"id": clean_id, "text": text})
-    order: Callable[[dict], tuple] = lambda f: (paths.natural_key(f["id"]), f["id"])
-    return {"recorded": sorted(recorded, key=order), "retired": sorted(retired, key=order)}
+    return {"recorded": recorded, "retired": retired}
 
 
 def _chronicle(inputs: CampaignInputs, head: Head, damage: _Damage) -> dict | None:
@@ -534,6 +552,9 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
         if not isinstance(token, str) or not isinstance(rec, dict):
             continue
         raw_scenes, raw_presence = rec.get("scenes"), rec.get("presence")
+        if (raw_scenes is not None and not isinstance(raw_scenes, list)) \
+                or (raw_presence is not None and not isinstance(raw_presence, dict)):
+            damage.add("appearances.json")     # a record's section of the wrong shape
         scenes = raw_scenes if isinstance(raw_scenes, list) else []
         presence = raw_presence if isinstance(raw_presence, dict) else {}
         listed = head.sid in scenes

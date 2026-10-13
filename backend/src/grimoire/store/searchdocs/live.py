@@ -2,10 +2,12 @@
 batch lookup (roadmap 08-C2a, spec section 6).
 
 1. The live set is read from the filesystem on every call: `list_scenes`, which
-   also derives `closed_by`. One unreadable head makes that raise, so an
-   `OSError` from it falls back to this module's own walk -- the same glob and
-   `safe_id` filter, each head read guarded on its own (an unreadable one is
-   `skipped`), and `closed_by` derived by the same rule.
+   also derives `closed_by`, checked against an `os.scandir` listing that
+   raises for a directory it cannot read (a `glob` may answer empty). One
+   unreadable head makes `list_scenes` raise; that, or a disagreement with the
+   listing, falls back to this module's own walk over the listing -- each head
+   read guarded on its own (an unreadable one is `skipped`), and `closed_by`
+   derived by the same rule.
 2. `CampaignInputs.load`: the memoized ledger parses.
 3. Each live scene's head, slices, digests and key.
 4. The process's own bounded memo, keyed by the document key; then ONE batch
@@ -80,29 +82,37 @@ class LiveSet:
     degraded: tuple[str, ...]             # campaign inputs that would not read
 
 
-def _walk(cid: str) -> tuple[list[dict], list[str]]:
-    """`list_scenes` rows (id, closed_by), tolerant of an unreadable HEAD.
-
-    A scenes directory that cannot be listed is not tolerated: `glob` and
-    `exists` would read it as empty, and "this campaign has no history" is a
-    wrong answer where "could not look" is the true one. So the listing goes
-    through `os.scandir`, which raises; only a directory that is not there
-    reads as no scenes."""
+def _listing(cid: str) -> list[str]:
+    """The scene ids on disk, through `os.scandir`, which raises: a scenes
+    directory that cannot be listed is not tolerated. `glob` and `exists`
+    can read it as empty, and "this campaign has no history" is a wrong
+    answer where "could not look" is the true one. Only a directory that is
+    not there reads as no scenes."""
     try:
-        return scenes_read.list_scenes(cid), []
+        with os.scandir(scenes_paths._scenes_dir(cid)) as listing:
+            return sorted(e.name[:-3] for e in listing
+                          if e.name.endswith(".md") and paths.safe_id(e.name[:-3]))
+    except FileNotFoundError:
+        return []
+
+
+def _walk(cid: str) -> tuple[list[dict], list[str]]:
+    """`list_scenes` rows (id, closed_by), tolerant of an unreadable HEAD, and
+    checked against the error-reporting `_listing`: when `list_scenes` raises,
+    or answers other scenes than the listing holds (its `glob` can swallow a
+    directory error), this module's own walk over the listing answers
+    instead."""
+    try:
+        rows = scenes_read.list_scenes(cid)
     except (OSError, ValueError):     # UnicodeDecodeError is a ValueError
-        pass
+        rows = None
+    names = _listing(cid)
+    if rows is not None and sorted(r["id"] for r in rows) == names:
+        return rows, []
     rows, skipped = [], []
     d = scenes_paths._scenes_dir(cid)
-    try:
-        with os.scandir(d) as listing:
-            names = sorted(e.name for e in listing if e.name.endswith(".md"))
-    except FileNotFoundError:
-        names = []
-    for name in names:
-        p = d / name
-        if not paths.safe_id(p.stem):
-            continue
+    for stem in names:
+        p = d / f"{stem}.md"
         try:
             head = slices_mod.read_head(cid, p.stem)
         except (OSError, scenes_paths.SceneNotFound, ValueError):
@@ -241,7 +251,9 @@ def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
             if key is not None:
                 built.append((key, sl, doc, True))
         elif key is not None and _recorded(cid, sl, doc) not in _RECORDED:
-            built.append((key, sl, doc, False))
+            # A memo hit was never confirmed in the cache (its first store may
+            # have failed), so it is put again with its rows; a cache hit is.
+            built.append((key, sl, doc, doc_key in held))
         if doc_key not in held:
             _remember(doc)
         docs.append(doc)

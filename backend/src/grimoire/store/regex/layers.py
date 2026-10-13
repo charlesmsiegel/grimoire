@@ -36,6 +36,7 @@ hold, so a concurrent campaign write cannot land between the two.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
@@ -200,13 +201,17 @@ def files(cid: str, connections: Iterable[str] = ()) -> tuple[Path, ...] | None:
     the campaign sits on is read from there), the global, world and campaign
     rule files, and each named connection's record (a deleted connection
     contributes no rules even while a stale rule file remains) and rule file.
-    `None` when a key does not resolve."""
+    `None` when the campaign does not resolve. A world reference that does not
+    (a hand-edited `campaign.md`) is a layer `effective` reads as empty, so
+    the others are still listed -- `campaign.md` among them, whose repair is
+    the write that brings the world layer back."""
     try:
         out = [campaigns_paths.campaign_meta_path(cid), path("global"),
                path("campaign", cid)]
         wid = world_of(cid)
         if wid:
-            out.append(path("world", wid))
+            with contextlib.suppress(worlds_paths.WorldNotFound):
+                out.append(path("world", wid))
         for conn in sorted(set(connections)):
             if not conn or not store_paths.safe_id(conn):
                 continue
