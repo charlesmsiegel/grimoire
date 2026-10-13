@@ -18,8 +18,6 @@ import time
 from dataclasses import replace
 from functools import partial
 
-from starlette.concurrency import run_in_threadpool
-
 from .. import inference as operations
 from .. import store
 from ..llm_errors import LLMError
@@ -27,6 +25,7 @@ from ..store import history_rerank as kit
 from ..store.context import history as history_section
 from ..store.context import layout
 from ..store.history import budget, model, query, settings
+from ..store.history import threads as history_threads
 from . import common, decision_capture, streaming
 
 HISTORY_PHASE_SECONDS = 4
@@ -103,10 +102,10 @@ async def _rerank(cid, sid, q, candidates, items, *, client, deadline, run_id=""
     if time.monotonic() >= deadline:
         return candidates, "skipped:deadline"
     try:
-        chosen = await run_in_threadpool(_kit_candidates, candidates, items)
+        chosen = await history_threads.run(_kit_candidates, candidates, items)
         if not chosen:
             return candidates, "skipped:empty"
-        resolved, _why, kind = await run_in_threadpool(
+        resolved, _why, kind = await history_threads.run(
             common._soft_resolved,
             lambda: common.require_inference("history-rerank", cid, operation="decide"))
         if resolved is None:
@@ -116,7 +115,7 @@ async def _rerank(cid, sid, q, candidates, items, *, client, deadline, run_id=""
             return candidates, "skipped:deadline"
         around = common.plan_deadline(left)
         ranked = ranked and len(chosen) > 1
-        items_to_ask = await run_in_threadpool(
+        items_to_ask = await history_threads.run(
             lambda: (kit.build_items_ranked("\n".join(q.texts), chosen),) if ranked
             else kit.build_items("\n".join(q.texts), chosen))
         async with decision_capture.capturing(cid, sid, "history-rerank") as scope:
@@ -147,8 +146,12 @@ async def _rerank(cid, sid, q, candidates, items, *, client, deadline, run_id=""
                                   else -kit.LEVELS.index(signals[c.scene.key].level)))
         for slot, candidate in zip(slots, graded, strict=True):
             ordered[slot] = candidate
+        if slots:
+            return tuple(ordered), "ok"
+        # Nothing graded -- every answer abstained, was refused or unread, or
+        # every call failed: RRF order stands, and the row says why.
         failures = [call.error_kind for call in decision.calls if call.error_kind]
-        return tuple(ordered), ("ok" if slots or not failures else "skipped:" + failures[-1])
+        return tuple(ordered), "skipped:" + (failures[-1] if failures else "unanswered")
     except LLMError as exc:
         return candidates, "skipped:" + exc.kind
     except Exception:  # noqa: BLE001 -- an optional opinion never costs admitted file evidence
@@ -160,7 +163,7 @@ async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, dea
     """Gather completed evidence before a turn's locked snapshot decision."""
     deadline = time.monotonic() + HISTORY_PHASE_SECONDS if deadline is None else deadline
     try:
-        prepared = await run_in_threadpool(_prepare, cid, sid, seed, resolved)
+        prepared = await history_threads.run(_prepare, cid, sid, seed, resolved)
         if prepared is None:
             return model.Evidence()
         q, cap, omissions, rerank_on = prepared

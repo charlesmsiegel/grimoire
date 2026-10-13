@@ -190,6 +190,8 @@ function HistoryEntries({ section }: { section: ContextSection }) {
     <div className="field-hint">Coverage: {coverage.verdict}; tiers {coverage.tiers.join(", ")};
       admitted {coverage.admitted}; agreement {coverage.agreement}</div>
     <div className="field-hint">Semantic: {coverage.semantic}</div>
+    {coverage.rerank && coverage.rerank !== "off" && (
+      <div className="field-hint">Rerank: {coverage.rerank}</div>)}
     <ul className="ctx-entries">
       {history.items.map((item) => <li key={item.key} className={item.shed ? "shed" : undefined}>
         <span className="chip on">{item.title}</span> {item.scene}; tier {item.tier};

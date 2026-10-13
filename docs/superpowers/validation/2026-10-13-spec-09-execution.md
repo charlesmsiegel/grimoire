@@ -376,3 +376,32 @@ carried "Earlier in the campaign" with the earlier scene's header, summary
 and excerpt lines and no signal or rank text, the prompt-log capture carried
 the history row, and the live inspector sent no request; off, the prompt was
 unchanged. It also caught a missing space in the Settings copy, fixed.
+
+**Codex review of `6f94111`.** Eight P2 findings, each verified against the
+code and fixed with a test that fails before the fix:
+
+- Two legacy scenes can project to one SearchDocument key (it hashes the
+  title, which defaults to the sid, and a null identity), and semantic ranks
+  were keyed by that digest, so one scene took the other's rank and coverage
+  never reached `exhausted`. Ranks and completeness are now per scene key; the
+  vector stays shared by text.
+- `merge` called a round's semantic incomplete unless it was off or preview;
+  a round that reached `exhausted` with semantic `ok` evaluated everything and
+  now counts as complete.
+- A rerank that graded nothing (every answer declined) said `ok`; it says
+  `skipped:unanswered`, and the inspector now shows the rerank status.
+- Vectors saved before a cancellation stayed published (10.4). A stop now
+  withdraws what the call saved, except vectors of a campaign whose rows may
+  already have been recorded (a row naming a missing vector would cost 05 a
+  re-embed).
+- The shared-pool starvation the earlier review raised: the history phase's
+  thread hops now run under their own per-loop limiter
+  (`store/history/threads.py`), so a `def` route blocked in `gather_sync`
+  holds a shared token the phase never needs. The embed-space guard accepts a
+  `limiter=` on the worker that resolves the space. The optional rerank's
+  capture still uses the shared pool, a residue only with rerank on.
+- With recall on and nothing selected (empty, exhausted, an error), the
+  inspector row and capture now carry the coverage as a text-less row, as a
+  held-back-only World info row does; off is unchanged.
+- A roll continuation in the same round is composed with that round's
+  evidence (still never a retrieval), superseding the S3 ruling above.

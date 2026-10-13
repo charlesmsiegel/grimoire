@@ -21,7 +21,7 @@ from ...llm_errors import LLMError
 from .. import embed_space, vectors
 from ..inference import embed
 from ..searchdocs import embedded
-from . import model
+from . import model, threads
 
 POOL_MAX = 64
 WIDEN_LIMIT = 1000
@@ -67,32 +67,54 @@ def _evaluate(docs, queries, held, space_id, stopped):
     return out
 
 
-def _publish(docs, score_docs, missing, returned, queries, held, space, campaign, stopped):
-    warmed = 0
-    for text, raw in zip(missing, returned, strict=True):
-        if stopped.is_set():
-            return {}, warmed
-        unit = vectors.unit(raw)
-        if unit is None or any(len(unit) != len(q) for q in queries):
+def _by_campaign(docs, missing, held, campaign):
+    """The documents this call warmed, by the campaign that records them,
+    each under its own (unqualified) document key."""
+    groups: dict[str, list] = {}
+    for doc in docs:
+        if doc.doc.text not in missing or doc.doc.text not in held:
             continue
-        if stopped.is_set():
-            return {}, warmed
-        vectors.save(space["space"], text, raw)
-        held[text] = unit
-        warmed += 1
-    warmed_docs = [d for d in docs if d.doc.text in missing and d.doc.text in held]
-    groups = {}
-    for doc in warmed_docs:
         source = doc.doc.meta.get("_history_campaign", campaign)
         original = doc.doc.meta.get("_history_document_key")
         unqualified = replace(doc, doc=replace(doc.doc, key=original)) if original else doc
         groups.setdefault(source, []).append(unqualified)
-    for source, source_docs in groups.items():
+    return groups
+
+
+def _withdraw(space, saved, keep=frozenset()):
+    """Remove the vectors this call saved, except `keep`; nothing to score."""
+    for text in saved:
+        if text not in keep:
+            vectors.forget(space["space"], text)
+    return {}, 0
+
+
+def _publish(docs, score_docs, missing, returned, queries, held, space, campaign, stopped):
+    """Save the warmed vectors, record them for 05, then score -- unless the
+    retrieval was cancelled (10.4: vectors a cancelled retrieval received are
+    not kept). A stop seen part way removes what this call saved, except the
+    vectors of a campaign whose rows may already have been recorded: those
+    rows name them, and a row whose vector is gone would cost 05 a re-embed."""
+    saved: list[str] = []
+    for text, raw in zip(missing, returned, strict=True):
+        unit = vectors.unit(raw)
+        if unit is None or any(len(unit) != len(q) for q in queries):
+            continue
+        if stopped.is_set():
+            return _withdraw(space, saved)
+        vectors.save(space["space"], text, raw)
+        saved.append(text)
+        held[text] = unit
+    recorded: set[str] = set()
+    for source, source_docs in _by_campaign(docs, missing, held, campaign).items():
         if stopped.is_set():
             break
+        recorded.update(d.doc.text for d in source_docs)
         embedded.record_embedded(source, source_docs, space=space,
                                  keep=lambda: not stopped.is_set())
-    return _evaluate(score_docs, queries, held, space["space"], stopped), warmed
+    if stopped.is_set():
+        return _withdraw(space, saved, frozenset(recorded))
+    return _evaluate(score_docs, queries, held, space["space"], stopped), len(saved)
 
 
 def _load(docs, pool, space, texts):
@@ -154,7 +176,7 @@ async def score(texts, docs, *, space, embed_client, deadline, campaign, scene,
     if embed_space.outage(space["space"]):
         return SemanticResult(status="backoff")
     score_docs = docs if pool is None else pool
-    held, wanted, missing, uncached = await anyio.to_thread.run_sync(partial(
+    held, wanted, missing, uncached = await threads.run(partial(
         _load, docs, score_docs, space, texts))
     cached = len(held)
     if time.monotonic() >= deadline:
@@ -187,7 +209,7 @@ async def score(texts, docs, *, space, embed_client, deadline, campaign, scene,
     stopped = threading.Event()
     try:
         await anyio.lowlevel.checkpoint()
-        signals, warmed = await anyio.to_thread.run_sync(partial(
+        signals, warmed = await threads.run(partial(
             _publish, docs, score_docs, missing, returned, directions, held, space, campaign, stopped),
             abandon_on_cancel=True)
     except BaseException:
@@ -203,10 +225,10 @@ async def widen(result: SemanticResult, docs, *, space, deadline) -> SemanticRes
         return result
     wanted = list(dict.fromkeys(d.doc.text for d in docs if d.doc.text not in result.loaded))
     held = dict(result.held)
-    held.update(await anyio.to_thread.run_sync(partial(vectors.load, space["space"], wanted)))
+    held.update(await threads.run(partial(vectors.load, space["space"], wanted)))
     stopped = threading.Event()
     try:
-        signals = await anyio.to_thread.run_sync(partial(
+        signals = await threads.run(partial(
             _evaluate, docs, result.queries, held, space["space"], stopped),
             abandon_on_cancel=True)
     except BaseException:

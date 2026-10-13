@@ -5,6 +5,7 @@ import contextlib
 import json
 import threading
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -537,3 +538,70 @@ def test_a_stalled_endpoint_costs_one_phase_per_turn_and_keeps_file_evidence(cid
     second = turn(0.3)
     assert second.coverage.semantic == "failed:timeout" and len(client.calls) == 2
     assert [i.scene.sid for i in second.items] == [old]
+
+
+def test_two_legacy_scenes_sharing_a_document_key_keep_their_own_ranks(cid, space, monkeypatch):
+    """Document keys are content digests, so two legacy scenes (no identity)
+    can project to one key. Their vector is shared; their semantic ranks,
+    admission and completeness are each scene's own."""
+    shared = scene.SceneDocument("same-key", "Mara keeps the amber seal.", {})
+    docs = tuple(live.LiveDocument(sid, None, shared) for sid in ("001--saltmarch", "002--saltmarch"))
+    monkeypatch.setattr(retrieval, "_eligible", lambda *args: docs)
+    monkeypatch.setattr(retrieval.structural, "candidates", lambda *args, **kwargs: [])
+    current = played(cid, text="amber seal")
+    evidence = asyncio.run(retrieval.retrieve(
+        cid, current, model.Query(("amber seal",)), ceiling=1200,
+        embed_client=FakeAsyncEmbeddings(), deadline=time.monotonic()+1))
+    semantic_ranks = {c.scene.key: c.ranks.get((0, "semantic")) for c in evidence.candidates}
+    assert semantic_ranks == {"sid:002--saltmarch": 2, "sid:001--saltmarch": 1} or \
+        semantic_ranks == {"sid:002--saltmarch": 1, "sid:001--saltmarch": 2}
+    assert evidence.coverage.verdict == "exhausted" and evidence.coverage.tiers == (1,)
+
+
+def _two_docs():
+    return tuple(live.LiveDocument(f"00{i}--saltmarch", None,
+                                   scene.SceneDocument(f"k{i}", f"Mara ledger {i}", {"identity": f"i{i}"}))
+                 for i in (1, 2))
+
+
+def test_a_stop_between_saves_withdraws_what_this_call_saved(cid, space, monkeypatch):
+    """10.4: vectors a cancelled retrieval received are not kept. A stop seen
+    after the first save removes it; nothing was recorded, so nothing names it."""
+    docs = _two_docs()
+    texts = [d.doc.text for d in docs]
+    stopped = threading.Event()
+    real_save = vectors.save
+
+    def save(space_id, text, raw):
+        real_save(space_id, text, raw)
+        stopped.set()  # the cancel lands while the first vector is written
+
+    monkeypatch.setattr(vectors, "save", save)
+    got = semantic._publish(docs, docs, texts, [[1.0, 0.0], [0.0, 1.0]], ([1.0, 0.0],), {},
+                            space, cid, stopped)
+    assert got == ({}, 0)
+    assert vectors.load(space["space"], texts) == {}
+
+
+def test_a_stop_during_recording_keeps_only_the_recorded_campaigns_vectors(cid, space, monkeypatch):
+    """A campaign whose rows may already be committed keeps its vectors (a
+    row naming a missing vector costs 05 a re-embed); one never recorded loses
+    them."""
+    first, second = _two_docs()
+    other = live.LiveDocument(second.sid, None, replace(
+        second.doc, meta={**second.doc.meta, "_history_campaign": "elsewhere",
+                          "_history_document_key": second.doc.key}))
+    docs = (first, other)
+    texts = [d.doc.text for d in docs]
+    stopped = threading.Event()
+    recorded = []
+
+    def record(source, source_docs, *, space, keep):
+        recorded.append(source)
+        stopped.set()  # the cancel lands while the first campaign records
+
+    monkeypatch.setattr(embedded, "record_embedded", record)
+    got = semantic._publish(docs, docs, texts, [[1.0, 0.0], [0.0, 1.0]], ([1.0, 0.0],), {},
+                            space, cid, stopped)
+    assert got == ({}, 0) and recorded == [cid]
+    assert set(vectors.load(space["space"], texts)) == {first.doc.text}

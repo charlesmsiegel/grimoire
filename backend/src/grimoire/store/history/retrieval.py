@@ -21,7 +21,18 @@ from .. import chronicle, embed_space, entities, history_rerank, overlay, tokens
 from ..campaigns import paths as campaign_paths
 from ..scenes import read as scenes_read
 from ..searchdocs import live
-from . import budget, coverage, expand, lexical, model, refs, semantic, settings, structural
+from . import (
+    budget,
+    coverage,
+    expand,
+    lexical,
+    model,
+    refs,
+    semantic,
+    settings,
+    structural,
+    threads,
+)
 from . import merging as merge_mod
 from . import query as query_mod
 
@@ -344,6 +355,12 @@ def retrieve_preview(cid: str, sid: str, query: model.Query, ceiling: int, *,
     return _finish(cid, prepared, prepared.ordered, cv, summary_omissions)
 
 
+def _semantic_complete(prepared, result) -> bool:
+    """Every eligible scene's document has a valid cosine -- counted per
+    scene, since scenes sharing a document key share its one vector."""
+    return all(d.doc.key in result.signals for d in prepared.docs)
+
+
 def _semantic_candidates(prepared, result, pool):
     candidates = {c.scene.key: c for c in prepared.ordered}
     admitted = sorted((d for d in prepared.docs
@@ -351,23 +368,25 @@ def _semantic_candidates(prepared, result, pool):
                        and result.signals[d.doc.key].cosine >= prepared.cfg.threshold),
                       key=lambda d: d.sid, reverse=True)
     admitted.sort(key=lambda d: result.signals[d.doc.key].cosine, reverse=True)
-    ranks = {d.doc.key: rank for rank, d in enumerate(admitted, 1)}
+    # A vector is shared by document text, but a rank belongs to a scene: two
+    # legacy scenes can project to one document key, and each keeps its rank.
+    ranks = {_source_ref(d).key: rank for rank, d in enumerate(admitted, 1)}
     for doc in prepared.docs:
         signal = result.signals.get(doc.doc.key)
         if signal is None:
             continue
         ref = _source_ref(doc)
         previous = candidates.get(ref.key)
-        if previous is None and doc.doc.key not in ranks:
+        if previous is None and ref.key not in ranks:
             continue
         previous = previous or model.Candidate(ref, (model.Signals(),), {},
                                                3 if ref.campaign else 1 if doc.doc.key in pool else 2, frozenset())
         candidates[ref.key] = replace(
             previous, rounds=(replace(previous.rounds[0], semantic=signal),),
-            ranks={**previous.ranks, **({(0, "semantic"): ranks[doc.doc.key]}
-                                       if doc.doc.key in ranks else {})},
+            ranks={**previous.ranks, **({(0, "semantic"): ranks[ref.key]}
+                                       if ref.key in ranks else {})},
             admitted_by=previous.admitted_by | (frozenset({"semantic"})
-                                                if doc.doc.key in ranks else frozenset()))
+                                                if ref.key in ranks else frozenset()))
     return merge_mod.order(list(candidates.values()))
 
 
@@ -441,17 +460,19 @@ async def retrieve(
     _validate_scope(query, origin, source_campaigns)
     prepare = (partial(_prepare_sources, cid, sid, query, ceiling, source_campaigns)
                if query.tier_limit == 3 else partial(_prepare, cid, sid, query, ceiling))
-    prepared = await anyio.to_thread.run_sync(prepare)
+    prepared = await threads.run(prepare)
     if prepared is None:
         return model.Evidence(ceiling=max(ceiling, 0))
-    space = await anyio.to_thread.run_sync(embed_space.endpoint)
+    # The space is resolved in a worker, on history's own threads (`threads`):
+    # spelled out so the embed-space guard can read it back to the role.
+    space = await anyio.to_thread.run_sync(embed_space.endpoint, limiter=threads.limiter())
     if not prepared.docs:
         # A first scene has no history to score: exhausted spends nothing,
         # not even the query embedding.
         cv = coverage.verdict((), prepared.depth, 0, sources_complete=prepared.sources_complete)
         cv = replace(cv, semantic="skipped:exhausted" if space is not None else "off",
                      tiers=(3,) if source_campaigns else (1,))
-        return await anyio.to_thread.run_sync(partial(
+        return await threads.run(partial(
             _finish, cid, prepared, prepared.ordered, cv, summary_omissions))
     pool, lookahead = _tier_one(prepared, query, space, embed_client, deadline)
     pool_keys = frozenset(d.doc.key for d in pool)
@@ -468,7 +489,7 @@ async def retrieve(
     ordered = _semantic_candidates(prepared, result, pool_keys)
     cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
                           semantic_complete=result.status != "ok"
-                          or len(result.signals) >= len(prepared.docs),
+                          or _semantic_complete(prepared, result),
                           sources_complete=prepared.sources_complete)
     tiers: tuple[int, ...] = (3,) if source_campaigns else (1,)
     if query.tier_limit >= 2 and result.status == "ok" and cv.verdict in {"empty", "thin"}:
@@ -484,14 +505,14 @@ async def retrieve(
                 result = replace(result, status="failed:error")
             ordered = _semantic_candidates(prepared, result, pool_keys)
             cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
-                                  semantic_complete=len(result.signals) >= len(prepared.docs),
+                                  semantic_complete=_semantic_complete(prepared, result),
                                   sources_complete=prepared.sources_complete)
     cv = replace(cv, semantic=result.status, tiers=tiers)
     held = None
     if rerank is not None:
-        held = await anyio.to_thread.run_sync(partial(
+        held = await threads.run(partial(
             _expanded, cid, prepared, ordered[:history_rerank.MAX_RANKED], summary_omissions))
         ordered, status = await rerank(prepared.query, tuple(ordered), held)
         cv = replace(cv, rerank=status)
-    return await anyio.to_thread.run_sync(partial(
+    return await threads.run(partial(
         _finish, cid, prepared, ordered, cv, summary_omissions, held))

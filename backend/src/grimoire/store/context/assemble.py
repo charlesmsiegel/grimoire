@@ -534,9 +534,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "mechanics_checks": mech["mechanics_checks"],
     }
 
-    data["history_evidence"] = (list(recalled_history.items) if recalled_history is not None
-                                and not actor_scoped and history_settings.read(cfg) is not None
-                                and _section_on("history_recall") else [])
+    history_on = (recalled_history is not None and not actor_scoped
+                  and history_settings.read(cfg) is not None and _section_on("history_recall"))
+    data["history_evidence"] = (list(recalled_history.items)
+                                if history_on and recalled_history is not None else [])
 
     if actor_scoped:
         # These fields have no actor attribution. In particular a recap or a
@@ -606,7 +607,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "notes": notes, "opener_notes": opener_notes,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "lore": lore,
-            "recalled_history": (recalled_history if data["history_evidence"] else None),
+            # On, evidence reaches the section even with nothing selected, so
+            # its row can say why (empty, exhausted, failed); off, none does.
+            "recalled_history": recalled_history if history_on else None,
             "history_omissions": (history_section.summary_omissions(cid, sid, recent_text, full_recap)
                                   if data["history_evidence"] else {}),
             "prompt_field_statuses": {"world_default_prompt": standing["world"]["status"],
@@ -1183,10 +1186,12 @@ def _recall_run(runs: dict[_RunKey, str], suffixes: set[str], key: _RunKey, expa
 def _held_back_only(section: Section, pinned, extra: dict) -> dict | None:
     """A text-less World info row for an empty section that still held entries
     back -- the turn where cooldown suppresses the only relevant entry is the
-    turn the reader most needs to see why. It puts nothing in the prompt
+    turn the reader most needs to see why -- and the same for Recalled history
+    when recall is on and nothing was selected, so the row still says whether
+    nothing existed or retrieval failed. It puts nothing in the prompt
     (`_compose_system` joins only what has some) and, like any section that
     rendered empty, breaks no heading run."""
-    if not (extra.get("lore") or {}).get("held_back"):
+    if not (extra.get("lore") or {}).get("held_back") and "history" not in extra:
         return None
     return {"id": section.id, "label": section.label, "text": "", "tier": section.tier,
             "pinned": section.id in pinned, "heading": section.heading, "heading_text": "",
@@ -1522,8 +1527,9 @@ def _profile_sections(base: list[dict], guidance: str) -> list[dict]:
         if section["id"] == "model_guidance":
             section["text"] = guidance
         if not section["text"]:
-            # A held-back-only World info row: nothing to frame, opens no run.
-            if (section.get("lore") or {}).get("held_back"):
+            # A held-back-only World info row, or an empty Recalled history
+            # row that says why: nothing to frame, opens no run.
+            if (section.get("lore") or {}).get("held_back") or "history" in section:
                 sections.append(section)
             continue
         heading = section["heading"]

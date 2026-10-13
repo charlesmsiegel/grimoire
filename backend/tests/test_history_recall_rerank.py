@@ -186,6 +186,18 @@ def test_native_declines_keep_slots_without_consulting_distribution(cid, reason)
     assert "distribution" not in json.dumps(ev.detail())
 
 
+def test_a_rerank_that_graded_nothing_says_so(cid):
+    """Every answer declined and no call failed: RRF order stands, and the
+    row says the rerank went unanswered rather than `ok`."""
+    sid, order = setup_history(cid)
+    facts.set_overrides("openrouter", store.config.DEFAULT_MODEL, {"generate": "no"})
+    results = [decisions.ItemResult({kit.RELEVANCE_ID: decisions.Answer(None, "abstained")})
+               for _ in range(3)]
+    ev = gather(cid, sid, FakeLLM([[""]], decisions=results))
+    assert [c.scene.sid for c in ev.candidates] == [order[0], order[1], order[2]]
+    assert ev.detail()["coverage"]["rerank"] == "skipped:unanswered"
+
+
 def test_failed_provider_is_captured_without_its_prose_and_keeps_evidence(cid):
     sid, order = setup_history(cid)
     fake = FakeLLM([[""]], error=LLMError("network", "PRIVATE_PROVIDER_ECHO"))

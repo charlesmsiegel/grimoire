@@ -1922,7 +1922,10 @@ export type HistoryEvidenceRow = {
     posts?: { index: number; key: string; part: number | null; speaker: string; text: string }[]; summary: string; tokens: number; shed: boolean;
   }[];
   coverage: { tiers: number[]; semantic: string; admitted: number; agreement: number;
-              verdict: string; eligible?: number };
+              verdict: string; eligible?: number;
+              /** "off", "ok", or "skipped:<why>" -- why RRF order stood. Absent
+               *  on a capture taken before the rerank existed. */
+              rerank?: string };
   ceiling: number; budget_from: string[]; query_digest?: string;
 };
 export type ContextSection = {

@@ -106,3 +106,24 @@ def test_later_summary_only_round_preserves_previously_expanded_posts(cid):
     assert result.items[0].excerpts == earlier.excerpts
     assert result.items[0].excerpts[0].posts == (post,)
     assert result.items[0].evidence_ids == ("sid:001--saltmarch@r-reply",)
+
+
+def test_merging_two_exhausted_semantic_rounds_stays_exhausted(cid):
+    """A round that evaluated every eligible document with semantic `ok`
+    reached `exhausted`; merging two such rounds must not regress to `thin`
+    and send a planner widening over a live set already scored."""
+    from dataclasses import replace
+    config.write_config(history_recall_depth="3")
+    both = [candidate("001--saltmarch", ("lexical", "semantic")),
+            candidate("002--saltmarch", ("lexical", "semantic"))]
+
+    def done(cands):
+        cv = replace(coverage.verdict(cands, 3, 2), semantic="ok")
+        return model.Evidence((), tuple(cands), cv, 1200, "digest")
+
+    assert done(both).coverage.verdict == "exhausted"
+    merged = merge_mod.merge(done(both), done(both), ceiling=1200, expand=lambda c: None)
+    assert merged.coverage.verdict == "exhausted"
+    short = replace(done(both), coverage=replace(done(both).coverage, verdict="thin"))
+    assert merge_mod.merge(done(both), short, ceiling=1200,
+                           expand=lambda c: None).coverage.verdict != "exhausted"

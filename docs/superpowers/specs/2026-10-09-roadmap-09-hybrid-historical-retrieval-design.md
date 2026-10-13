@@ -955,7 +955,9 @@ compose with the section. The driver calls `gather` only when **all** hold:
 - the contribution's actor is `grimoire` (an NPC's prompt blanks the
   section, 9.1);
 - `turn.appended` is empty (a roll continuation composes mid-turn and is not
-  a caller, open question 5);
+  a caller, open question 5; it is composed with the round's evidence when
+  this round already gathered it, so a reply's second half sees what its
+  first half did, and with none on a resume in a later request);
 - the round has no pending response whose snapshot `_prepare` will replay
   (`character_turns.py:479`-`497`). The driver reads that once, outside the
   lock; a stale answer only wastes a retrieval, since `_prepare` decides under

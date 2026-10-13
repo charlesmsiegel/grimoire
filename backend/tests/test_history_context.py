@@ -358,8 +358,10 @@ def test_empty_summary_macro_does_not_render_history_header(cid):
     # Unresolved user/char macros stay literal under the existing contract;
     # an unknown macro exercises actual empty expansion through compose.
     supplied = replace(item(summary="{{missing}}"), date="", excerpts=())
-    _messages, detail = assemble.compose_turn(cid, current, history=evidence(supplied))
-    assert all(section["id"] != "history_recall" for section in detail["sections"])
+    messages, detail = assemble.compose_turn(cid, current, history=evidence(supplied))
+    got = row(detail)  # text-less: it only says why nothing was carried
+    assert got["text"] == "" and got["history"]["items"] == []
+    assert "**Saltmarch**" not in str(messages)
 
 
 def test_world_info_and_history_are_the_only_shedding_sections():
@@ -409,3 +411,19 @@ def test_a_macro_spanning_two_posts_drops_that_item_not_the_turn(cid, opening, c
     # A draw that keeps the option carrying every marker leaves an intact item;
     # any other draw drops it. Neither raises.
     assert assemble.context_breakdown(cid, sid)
+
+
+def test_an_empty_retrieval_still_explains_itself_in_the_row(cid):
+    """On, with nothing selected (an error here), the prompt carries nothing
+    while the inspector row still says why; off, there is no row at all."""
+    sid = played(cid)
+    failed = model.Evidence(coverage=model.Coverage("error", semantic="failed:network"))
+    messages, detail = assemble.compose_turn(cid, sid, history=failed)
+    got = row(detail)
+    assert got["text"] == ""
+    assert got["history"]["coverage"]["verdict"] == "error"
+    assert got["history"]["coverage"]["semantic"] == "failed:network"
+    config.write_config(history_recall_depth="0")
+    off_messages, off_detail = assemble.compose_turn(cid, sid, history=failed)
+    assert messages == off_messages
+    assert all(s["id"] != "history_recall" for s in off_detail["sections"])

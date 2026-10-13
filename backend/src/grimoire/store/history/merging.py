@@ -48,6 +48,15 @@ def select(
     return out
 
 
+def _semantic_complete(cv: model.Coverage) -> bool:
+    """Whether a round left no eligible document unscored by an available
+    semantic signal: it had none (off, preview, failed, backing off) -- so
+    complete admission is enough -- or it already reached `exhausted`, which
+    with semantic `ok` means every eligible document was evaluated. An `ok`
+    round short of that is not known complete, and merging never claims it."""
+    return cv.semantic != "ok" or cv.verdict == "exhausted"
+
+
 def merge(
     a: model.Evidence,
     b: model.Evidence,
@@ -99,8 +108,7 @@ def merge(
         ordered,
         cfg.depth,
         max(a.coverage.eligible, b.coverage.eligible),
-        semantic_complete=a.coverage.semantic in {"off", "skipped:preview"}
-        and b.coverage.semantic in {"off", "skipped:preview"},
+        semantic_complete=_semantic_complete(a.coverage) and _semantic_complete(b.coverage),
     )
     cv = replace(
         cv,

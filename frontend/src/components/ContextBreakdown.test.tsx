@@ -150,3 +150,18 @@ test("history inspector shows raw signals, rounds, excerpts, coverage and shed s
     /lexical.*rank 3/, /4.2.*silver key/, /cosine 0.61/, /high.*native/, /41.*43/,
     /omitted:archive/, /shed: budget/]) expect(screen.getByText(value)).toBeInTheDocument();
 });
+
+test("an empty history row still says why, rerank status included", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "failed:network", admitted: 0, agreement: 0,
+                  verdict: "error", rerank: "skipped:unanswered" },
+      ceiling: 1200, budget_from: ["config"],
+    },
+  }] })} />);
+  for (const value of [/Coverage: error/, /failed:network/, /Rerank: skipped:unanswered/])
+    expect(screen.getByText(value)).toBeInTheDocument();
+});

@@ -1591,8 +1591,13 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
     or failed result. A stale pending peek may waste a gather but cannot replace
     the snapshot _prepare chooses under its campaign hold.
     """
-    if not enabled or actor != "grimoire" or turn.appended or turn.continuation:
+    if not enabled or actor != "grimoire":
         return None
+    if turn.appended or turn.continuation:
+        # A roll continuation never retrieves, but the second half of a reply
+        # is composed with the same evidence its first half was, when this
+        # round already gathered it (a resume in a later request has none).
+        return turn.history_by_round.get(turn.round_record["id"])
     # Off reads nothing past the config: no replay peek, no transcript.
     if not await run_in_threadpool(history_recall.enabled):
         return None

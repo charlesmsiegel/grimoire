@@ -565,10 +565,12 @@ class Provenance:
     def _call(self, call: ast.Call, ctx: _Ctx) -> bool:
         mod, _fn, bound = ctx
         # 09-S4 resolves the synchronous endpoint in a worker before its async
-        # embed. Accept only anyio's imported, argument-free worker callback;
-        # follow the callback's actual returns, never the worker as a source.
+        # embed. Accept only anyio's imported, argument-free worker callback --
+        # a `limiter=` choosing which threads run it changes nothing it
+        # returns -- and follow the callback's actual returns, never the worker
+        # as a source.
         if (_dotted(call.func) == "anyio.to_thread.run_sync" and len(call.args) == 1
-                and not call.keywords and any(
+                and all(k.arg == "limiter" for k in call.keywords) and any(
                     isinstance(n, ast.Import) and any(a.name == "anyio" and a.asname is None
                                                      for a in n.names)
                     for n in self.trees[mod][0].body)
@@ -980,8 +982,11 @@ def test_the_provenance_guard_flags_planted_cases(src):
 
 @pytest.mark.parametrize("callback, accepted", [
     ("embed_space.endpoint", True),
+    ("embed_space.endpoint, limiter=pool", True),
     ("made", False),
+    ("made, limiter=pool", False),
     ("embed_space.endpoint, unknown", False),
+    ("embed_space.endpoint, abandon_on_cancel=True", False),
 ])
 def test_awaited_worker_endpoint_provenance(callback, accepted):
     src = (_PRELUDE + "import anyio\n"

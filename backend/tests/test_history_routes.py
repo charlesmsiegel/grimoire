@@ -240,10 +240,15 @@ def test_round_evidence_cached_by_round_and_skips_other_contributions(cid, monke
         turn.round_record = {"id": "round-2", "note": ""}
         second = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
         assert second is not first
+        # A roll continuation retrieves nothing, but its second half is
+        # composed with the evidence the round already gathered...
         turn.appended = (("Roll", "system", "result"),)
-        assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is None
+        assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is second
         turn.appended = ()
         turn.continuation = "roll"
+        assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is second
+        # ...and a resume in a later request, which gathered nothing, has none.
+        turn.round_record = {"id": "round-3", "note": ""}
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is None
     asyncio.run(run())
     assert calls == ["silver ledger", ""]
@@ -388,3 +393,25 @@ def test_an_off_round_reads_nothing_past_the_config(cid, monkeypatch):
     got = asyncio.run(character_turns._round_history(None, cid, "001--saltmarch", None, None,
                                                      None, turn, "grimoire"))
     assert got is None
+
+
+def test_the_phase_never_waits_on_the_shared_worker_pool(cid):
+    """A `def` turn route blocks in `gather_sync` holding a shared-pool token
+    while the phase runs; were the phase's stages to need that pool too,
+    enough concurrent turns would starve it for good. With every shared token
+    held, the phase still completes on its own threads."""
+    import anyio
+    old = played(cid)
+    absorbed(cid, old)
+    sid = played(cid, text="silver ledger")
+
+    async def run():
+        pool = anyio.to_thread.current_default_thread_limiter()
+        pool.total_tokens = 1
+        async with pool:  # the only shared token, held as a blocked route holds one
+            with anyio.fail_after(10):
+                return await history_recall.gather(None, cid, sid, seed="", resolved=None,
+                                                   llm_client=None, embed_client=None)
+
+    ev = anyio.run(run)
+    assert [i.scene.sid for i in ev.items] == [old]
