@@ -367,7 +367,10 @@ def test_a_late_rate_limit_keeps_the_earlier_chunks(home, fake, monkeypatch):
     fake.error, fake.fail_after = embeddings.EmbeddingsError("rate_limit", "slow down"), len(fake.calls) + 2
     rows_before = len([r for r in usage.calls(days=1) if r["task"] == "semantic-recall"])
     report = cache_sync.sync_paths(paths, mode="explicit")
-    assert report.embedding["sent"] == 2 and report.embedding["failure"] == "rate_limit"
+    # The failed third chunk went out too: `sent` and `requests` count every
+    # request that filed a ledger row, not only those that answered.
+    assert report.embedding["sent"] == 3 and report.embedding["requests"] == 3
+    assert report.embedding["failure"] == "rate_limit"
     held = vectors.load(_space(), texts)
     assert len(held) == 2
     rows_after = [r for r in usage.calls(days=1) if r["task"] == "semantic-recall"]
@@ -634,3 +637,41 @@ def test_a_dry_run_leaves_parked_history_parked(home, fake, monkeypatch):
     assert flushed == []
     cache_sync.sync_paths([], mode="explicit")
     assert flushed == [1]
+
+
+def test_a_dry_run_with_no_embed_previews_the_deferral(home, fake):
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited, embeddings off.")
+    dry = cache_sync.sync_paths([_rel(home, path)], mode="explicit", dry_run=True, embed=False)
+    assert dry.embedding["would_send"] == 0 and dry.embedding["deferred"] == 1
+    assert list(dry.paths[0].kinds.values()) == ["deferred"]
+
+
+def test_a_rename_between_kinds_and_campaigns_moves_the_recall_instance(home):
+    kind = f"vector:{semantic.PROJECTION}:abc"
+    row = json.dumps({"campaign": "saltmarch", "entity": ["lore", "pact"]})
+    moved = cache_sync.VECTORS.remap(kind, row, "worlds/realm/lore/pact.md", "worlds/realm/items/pact.md")
+    assert moved == {"campaign": "saltmarch", "entity": ["items", "pact"]}
+    moved = cache_sync.VECTORS.remap(kind, row, "campaigns/saltmarch/lore/pact.md",
+                                     "campaigns/winifred/lore/oath.md")
+    assert moved == {"campaign": "winifred", "entity": ["lore", "oath"]}
+    other = json.dumps({"campaign": "saltmarch", "entity": ["lore", "elsewhere"]})
+    assert cache_sync.VECTORS.remap(kind, other, "worlds/realm/lore/pact.md",
+                                    "worlds/realm/items/pact.md") == json.loads(other)
+
+
+def test_a_cross_kind_rename_is_warmed_from_its_new_file(home, fake):
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    new_path = worlds.world_root(wid) / "items" / f"{eid}.md"
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    path.rename(new_path)
+    report = cache_sync.sync_paths([], mode="explicit", renamed={_rel(home, path): _rel(home, new_path)})
+    assert report.embedding["held"] == 1 and report.ok
+    [row] = _rows_at(home, new_path)
+    assert json.loads(row.instance)["entity"] == ["items", eid]

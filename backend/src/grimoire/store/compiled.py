@@ -1465,12 +1465,20 @@ class Batch:
             _warn_once('materialized_admission')
 
     def copy_materialized(self, old: Path, new: Path, *,
-                          instance_map: Callable[[str, str], object] | None = None) -> None:
+                          instance_map: Callable[[str, str], object] | None = None) -> bool:
+        """Stage OLD's rows for NEW. Reads OLD's history strictly: False when
+        it went unanswered (a busy exclusion, a read error), so spec 05's sync
+        never reports a renamed path cold because nobody could ask; True
+        otherwise, including when there was nothing to copy or the copy was
+        refused as oversize (an optional cold warm-up)."""
         relative = _relative(self.root, new)
         if relative is None:
-            return
+            return True
+        answer = self.materialized_answer([old])
+        if answer is None:
+            return False
         prepared = {}
-        for item in self.materialized([old])[old]:
+        for item in answer.get(old, ()):
             # A mapper receives canonical text. Its canonical-string result
             # must not be encoded again; structured JSON results are also
             # canonicalized for the plan's object-valued hook interface.
@@ -1478,11 +1486,11 @@ class Batch:
             canonical = mapped if isinstance(mapped, str) else _instance(mapped)
             if canonical is None or not _canonical_instance(canonical):
                 _warn_once('instance')
-                return
+                return True
             row = _materialized_row(relative, item.kind, canonical, '', None)
             if row is None or row[:3] in prepared:
                 _warn_once('instance')
-                return
+                return True
             prepared[row[:3]] = row
         sizes = {identity: len(_canonical(list(row), MAX_KEY_BYTES * 2) or '')
                  for identity, row in prepared.items()}
@@ -1490,12 +1498,13 @@ class Batch:
         count = (len(self._rows) + len(self._sources) + len(self._artifact_touches)
                  + len(self._materialized.keys() | prepared.keys()))
         if not self._usable() or count > MAX_STAGED_ROWS or self._bytes + delta > MAX_STAGED_BYTES:
-            return
+            return True
         # Admit the complete selector set, rather than silently collapse or
         # truncate units. Oversize history remains an optional cold warm-up.
         self._materialized.update(prepared)
         self._materialized_sizes.update(sizes)
         self._bytes += delta
+        return True
 
     def _family_rows(self, key: Key, inputs: Sequence[ValidatedInput], instance: object) -> dict | None:
         canonical = _instance(instance)

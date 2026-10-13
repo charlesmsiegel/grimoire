@@ -526,3 +526,19 @@ def test_a_directory_cut_short_by_the_quota_is_refused_not_quietly_partial(home,
     report = cache_sync.sync_paths(["worlds/realm/lore"], mode="explicit")
     assert [(p.given, p.reason) for p in report.paths][-1] == ("worlds/realm/lore", "too_many")
     assert report.truncated and not report.ok
+
+
+def test_a_directory_that_cannot_be_fully_read_is_refused_unreadable(home, monkeypatch):
+    _write(home, "worlds/realm/lore/a.md", "x")
+    _write(home, "worlds/realm/lore/locked/b.md", "x")
+    real = os.scandir
+
+    def scandir(path):
+        if os.fspath(path).endswith("locked"):
+            raise PermissionError("denied")
+        return real(path)
+
+    monkeypatch.setattr(cache_sync.os, "scandir", scandir)
+    report = cache_sync.sync_paths(["worlds/realm/lore"], mode="explicit")
+    assert ("worlds/realm/lore", "unreadable") in [(p.given, p.reason) for p in report.paths]
+    assert not report.ok

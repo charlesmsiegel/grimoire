@@ -48,7 +48,7 @@ import stat
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
 from .. import embeddings
@@ -66,7 +66,7 @@ PATH_STATUSES = ("refreshed", "current", "cold", "deleted", "missing",
                  "refused", "failed", "verify_failed", "unsynced")
 #: Why a path was refused.
 REFUSAL_REASONS = ("outside_store", "link", "not_syncable", "temp_file", "not_a_file",
-                   "not_found", "not_deleted", "bad_id", "too_many")
+                   "not_found", "not_deleted", "bad_id", "too_many", "unreadable")
 #: What happened to one kind on one path. `failed` is written
 #: `failed:<ExceptionClass>`, the class name and never its message. `planned`
 #: is a dry run's "would be built".
@@ -321,6 +321,12 @@ class Projection:
     enabled: Callable[[], bool] = lambda: True
 
 
+def _campaign_named(rel: PurePosixPath) -> str | None:
+    """The campaign a campaign-layer path sits in, by its path alone."""
+    parts = rel.parts
+    return parts[1] if len(parts) >= 3 and parts[0] == "campaigns" else None
+
+
 def _recall_on() -> bool:
     return semantic.settings() is not None
 
@@ -401,15 +407,23 @@ class _VectorsHook:
         return _vector_kind(kind) is not None
 
     def remap(self, kind: str, instance: str, old: str, new: str) -> object:
-        """A stated rename: recall's instance names its entity by id, which is
-        the file's stem; a unit position is independent of the path."""
+        """A stated rename: recall's instance names its entity as
+        `[kind, id]`, which are the file's directory and stem
+        (`<root>/<kind>/<id>.md`), and a campaign-layer file's campaign is in
+        its path, so all three follow the move; a unit position is
+        independent of the path."""
         value = json.loads(instance) if instance else None
         if not isinstance(value, dict):
             return instance
         entity = value.get("entity")
-        if isinstance(entity, list) and len(entity) == 2 and entity[1] == Path(old).stem:
-            return {**value, "entity": [entity[0], Path(new).stem]}
-        return value
+        before, after = PurePosixPath(old), PurePosixPath(new)
+        if not (isinstance(entity, list) and len(entity) == 2
+                and entity == [before.parent.name, before.stem]):
+            return value
+        moved = {**value, "entity": [after.parent.name, after.stem]}
+        if value.get("campaign") == _campaign_named(before) and _campaign_named(after):
+            moved["campaign"] = _campaign_named(after)
+        return moved
 
     def local(self, ctx: WarmContext,
               hot: Mapping[str, tuple[compiled.Materialized, ...]]) -> LocalResult:
@@ -472,12 +486,12 @@ class _VectorsHook:
         # could, and a held text costs nothing.
         if not self._within_limit(projection, text, plan, spent):
             return "lazy"
+        if not ctx.embedding:                             # a dry run previews this too
+            result.embedding["deferred"] = result.embedding.get("deferred", 0) + 1
+            return "deferred"
         if ctx.dry_run:
             result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
             return "planned"
-        if not ctx.embedding:
-            result.embedding["deferred"] = result.embedding.get("deferred", 0) + 1
-            return "deferred"
         wanted = plan.setdefault(text, _Wanted(projection.task))
         campaign = instance.get("campaign", "") if isinstance(instance, dict) else ""
         wanted.claims.add(campaign if isinstance(campaign, str) else "")
@@ -551,9 +565,9 @@ class _VectorsHook:
                         continue
                     chunk = self._arrived(space["space"], chunk, plan, result)
                     if chunk:
-                        got = _embed_chunk(task, embed.EmbedGroup(group.campaign, texts=tuple(chunk)),
-                                           space)
-                        failure = self._landed(space["space"], chunk, got, plan, result)
+                        got, went = _embed_chunk(task, embed.EmbedGroup(group.campaign, texts=tuple(chunk)),
+                                                 space)
+                        failure = self._landed(space["space"], chunk, got, went, plan, result)
         result.failure = failure
         if ctx.verify:
             self._verify(space["space"], plan, result)
@@ -590,21 +604,24 @@ class _VectorsHook:
             self._settle(result, plan, [text], "hit")
         return [text for text in chunk if text not in arrived]
 
-    def _landed(self, space_id: str, chunk: list[str], got: embed.GroupResult,
+    def _landed(self, space_id: str, chunk: list[str], got: embed.GroupResult, went: bool,
                 plan: dict[str, _Wanted], result: NetworkResult) -> str:
         """Save a chunk's vectors as they land. Returns the failure that stops
-        the run, or ""."""
+        the run, or "". `went` says whether a request went out, which is what
+        `requests` and `sent` count -- a failed one included, since it filed a
+        ledger row and may have cost money."""
+        if went:
+            result.embedding["requests"] = result.embedding.get("requests", 0) + 1
+            result.embedding["sent"] = result.embedding.get("sent", 0) + len(chunk)
+        else:
+            result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
         if got.vectors is None or len(got.vectors) != len(chunk):
             kind = got.error or "bad_response"
             self._settle(result, plan, chunk, f"failed:{kind}")
-            if kind == embed.GROUP_NOT_SENT:
-                result.embedding["not_sent"] = result.embedding.get("not_sent", 0) + len(chunk)
             # A failure of the input (`bad_response`) costs this chunk; any
             # other -- auth, a missing key, a rate limit, the network, the
             # deadline -- is the endpoint's, and stops the rest.
             return "" if kind == "bad_response" else kind
-        result.embedding["requests"] = result.embedding.get("requests", 0) + 1
-        result.embedding["sent"] = result.embedding.get("sent", 0) + len(chunk)
         for text, raw in zip(chunk, got.vectors, strict=True):
             self._save(space_id, text, raw, plan[text])
         # `vectors.save` drops a write it cannot make (a full or read-only
@@ -637,19 +654,24 @@ class _VectorsHook:
                     if key in result.outcomes else outcome
 
 
-def _embed_chunk(task: str, group: embed.EmbedGroup, space: dict) -> embed.GroupResult:
+def _embed_chunk(task: str, group: embed.EmbedGroup, space: dict) -> tuple[embed.GroupResult, bool]:
     """One chunk through the grouped door (01h-C5): one ledger row, charged
     to the group's campaign, never a request spanning campaigns, documents
     only, on the client's own per-request timeout. The task is spelled as a
-    literal per producer, so the operation guard can read it. A failure the
-    door did not turn into a result (an error raised before it sent) is the
-    chunk's failure, by kind."""
+    literal per producer, so the operation guard can read it.
+
+    Also answers whether a request went out: the door says `not_sent` for a
+    group it never sent, and every other result it returns, failed or not,
+    is a call that sent and filed its row. A failure the door did not turn
+    into a result (an error raised before it sent) is the chunk's failure,
+    by kind, and sent nothing."""
     try:
-        return _embed_chunk_literal(task, group, space)
+        got = _embed_chunk_literal(task, group, space)
     except LLMError as exc:
-        return embed.GroupResult(None, exc.kind)
+        return embed.GroupResult(None, exc.kind), False
     except OSError:
-        return embed.GroupResult(None, "network")
+        return embed.GroupResult(None, "network"), False
+    return got, got.error != embed.GROUP_NOT_SENT
 
 
 def _embed_chunk_literal(task: str, group: embed.EmbedGroup, space: dict) -> embed.GroupResult:
@@ -851,37 +873,52 @@ def _check(root: Path, given: str) -> _Checked:
     return _Checked(text, rel, reason="not_a_file")
 
 
+@dataclass
+class _Walk:
+    """A directory's files, and whether the walk saw all of them: `cut` when
+    it stopped looking (the limit, or a stop), `unread` when a directory or
+    entry under it could not be read, so part of the tree went unexamined."""
+
+    files: list[str] = field(default_factory=list)
+    cut: bool = False
+    unread: bool = False
+
+
 def _expand(root: Path, rel: str, limit: int,
-            stop: Callable[[], bool] = lambda: False) -> tuple[list[str], bool]:
+            stop: Callable[[], bool] = lambda: False) -> _Walk:
     """The files under a directory, as store-relative paths: temps, links and
     anything `_check` refuses are skipped. Bounded by `limit`, and asks `stop`
-    before each directory it lists; the flag says whether the walk stopped
-    looking."""
-    found: list[str] = []
+    before each directory it lists."""
+    walk = _Walk()
     pending = [root.joinpath(*rel.split("/"))]
-    while pending:
+    while pending and not walk.cut:
         if stop():
-            return sorted(found), True
+            walk.cut = True
+            break
         directory = pending.pop()
         try:
             with os.scandir(directory) as listing:
                 entries = sorted(listing, key=lambda e: e.name)
         except OSError:
+            walk.unread = True
             continue
         for entry in entries:
             try:
                 info = entry.stat(follow_symlinks=False)
             except OSError:
+                walk.unread = True
                 continue
             if _linked(info) or atomic.is_write_temp(Path(entry.name)):
                 continue
             if stat.S_ISDIR(info.st_mode):
                 pending.append(Path(entry.path))
             elif stat.S_ISREG(info.st_mode):
-                if len(found) >= limit:
-                    return sorted(found), True
-                found.append(Path(os.path.relpath(entry.path, root)).as_posix())
-    return sorted(found), False
+                if len(walk.files) >= limit:
+                    walk.cut = True
+                    break
+                walk.files.append(Path(os.path.relpath(entry.path, root)).as_posix())
+    walk.files.sort()
+    return walk
 
 
 def _campaign_of(root: Path, rel: str) -> str | None:
@@ -993,22 +1030,36 @@ def sync_paths(relpaths: Iterable[str], *,
     # was hot -- and only a moved root, never a cancel, skips it.
     if not dry_run and mode == "explicit":
         _bump(root, report)
-    copied = _copy_renames(root, items, hooks, dry_run=dry_run) if report.cache == "on" else {}
-    hot = _find_hot(root, items, report, stop, copied) if report.stopped is None else {}
+        # Section 7.6's purge erases the whole cache, so it runs before any
+        # rebuild: rebuilding first would report paths refreshed whose rows
+        # the purge then erased. After it nothing is hot.
+        _purge_roots(root, report, stop)
+    hot = _classify_hot(root, items, hooks, report, stop, dry_run=dry_run)
     _progress(progress, "classified", report)
 
     if report.cache == "on" and hot and report.stopped is None:
         _run_hooks(root, mode, hooks, hot, report, embed=embed, dry_run=dry_run,
                    verify=verify, stop=stop)
     _progress(progress, "rebuilt", report)
-    if not dry_run and mode == "explicit":
-        _purge_roots(root, report, stop)
     for item in report.paths:
         if item.status == "pending":      # the batch stopped before reaching it
             item.status = "unsynced"
     _log.info("cache sync: mode=%s dry_run=%s %s", mode, dry_run,
               " ".join(f"{k}={v}" for k, v in report.counts().items() if v))
     return report
+
+
+def _classify_hot(root: Path, items: list[PathReport], hooks: tuple[WarmHook, ...], report: SyncReport,
+                  stop: Callable[[], bool], *, dry_run: bool) -> dict[str, tuple[compiled.Materialized, ...]]:
+    """What was hot, once stated renames carried their rows over. A batch
+    that purged has nothing hot: every pending path is `cold`."""
+    if report.purged:
+        for item in items:
+            if item.status == "pending":
+                item.status = "cold"
+        return {}
+    copied = _copy_renames(root, items, hooks, dry_run=dry_run) if report.cache == "on" else {}
+    return _find_hot(root, items, report, stop, copied) if report.stopped is None else {}
 
 
 def _progress(progress: Callable[[dict], None] | None, phase: str, report: SyncReport) -> None:
@@ -1136,12 +1187,14 @@ class _Collector:
         elif checked.kind == "absent":
             self.add(PathReport(checked.given, "missing", rel=checked.rel))
         elif checked.kind == "dir" and checked.rel is not None:
-            files, cut = _expand(root, checked.rel, MAX_PATHS - self.accepted)
-            for rel in files:
+            walk = _expand(root, checked.rel, MAX_PATHS - self.accepted)
+            for rel in walk.files:
                 self.accepted += self.add(PathReport(rel, "pending", rel=rel))
-            if cut:                       # the files past the quota were never looked at
+            if walk.cut:                  # the files past the quota were never looked at
                 self.report.truncated = True
                 self.add(PathReport(checked.given, "refused", "too_many"))
+            if walk.unread:               # part of it was never examined
+                self.add(PathReport(checked.given, "refused", "unreadable"))
         else:
             self.accepted += self.add(PathReport(checked.given, "pending", rel=checked.rel))
 
@@ -1189,18 +1242,26 @@ def _copy_renames(root: Path, items: list[PathReport], hooks: tuple[WarmHook, ..
         remap = _remapper(hooks, item.renamed_from, item.rel)
         try:
             if dry_run:
-                rows = []
-                for row in _rows(root, item.renamed_from) or ():
-                    mapped = remap(row.kind, row.instance)
-                    text = mapped if isinstance(mapped, str) else _canonical(mapped)
-                    rows.append(compiled.Materialized(new, row.kind, text, "", row.last_used))
-                copied[item.rel] = tuple(rows)
+                found = _rows(root, item.renamed_from)
+                answered = found is not None
+                copied[item.rel] = tuple(
+                    compiled.Materialized(new, row.kind, _remapped(remap, row), "", row.last_used)
+                    for row in found or ())
             else:
                 with compiled.batch(root) as request:
-                    request.copy_materialized(old, new, instance_map=remap)
+                    answered = request.copy_materialized(old, new, instance_map=remap)
         except Exception as exc:                          # noqa: BLE001 -- a lost copy is a cold path
             _warn_once(f"rename:{type(exc).__name__}")
+            continue
+        if not answered:                                  # OLD's history went unanswered: never cold
+            _warn_once("history_unreadable")
+            item.status = "unsynced"
     return copied
+
+
+def _remapped(remap: Callable[[str, str], object], row: compiled.Materialized) -> str:
+    mapped = remap(row.kind, row.instance)
+    return mapped if isinstance(mapped, str) else _canonical(mapped)
 
 
 _ROOT_SCOPES = ("worlds", "campaigns")
@@ -1466,9 +1527,11 @@ def _list_scopes(root: Path, campaigns: Iterable[str], worlds: Iterable[str], al
 
     listed: list[str] = []
     for rel in _scope_dirs(root, campaigns, worlds, all_records, result):
-        files, cut = _expand(root, rel, MAX_SCOPE_FILES - len(listed), halted)
-        listed.extend(f for f in files if f.split("/", 1)[0] in SYNCABLE_ROOTS)
-        result.truncated = result.truncated or cut
+        walk = _expand(root, rel, MAX_SCOPE_FILES - len(listed), halted)
+        listed.extend(f for f in walk.files if f.split("/", 1)[0] in SYNCABLE_ROOTS)
+        result.truncated = result.truncated or walk.cut
+        if walk.unread:
+            result.refused.append(PathReport(rel, "refused", "unreadable", rel=rel))
         if halt:
             result.stopped = halt[0]
             break

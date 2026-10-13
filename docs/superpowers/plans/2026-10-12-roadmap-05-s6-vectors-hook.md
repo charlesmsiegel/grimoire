@@ -155,3 +155,22 @@ Substitute reviews, recorded in the PR; `@codex review` on the PR.
   together is past the history budget
   (`Batch.materialized_answer(..., split=True)` answers
   `compiled.HISTORY_OVER_BUDGET`), so a budget never makes a chunk `cold`.
+
+## Codex review, third round
+
+- A stated rename reads OLD's history strictly (`copy_materialized` returns
+  False when it went unanswered), and the NEW side is then `unsynced`, never
+  `cold`.
+- A dry run with embeddings off previews them `deferred`, as the real run
+  would leave them, rather than `would_send`.
+- `requests` and `sent` count every request that went out and filed a ledger
+  row, a failed one included; only the door's `not_sent`, or an error raised
+  before the door sent, counts as `not_sent`.
+- A rename remaps recall's whole entity, `[kind, id]` from the new path's
+  directory and stem, and a campaign-layer file's campaign when it moves
+  between campaigns.
+- A directory a walk could not fully read (a `scandir` or `stat` failure) is
+  refused `unreadable` by name, in an explicit batch and in a scope listing.
+- Section 7.6's root purge runs before any rebuild in its batch; after it every
+  pending path is `cold`, so no path is reported refreshed whose rows the purge
+  then erased.

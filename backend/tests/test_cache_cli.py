@@ -373,3 +373,31 @@ def test_a_chunk_past_the_history_budget_is_asked_path_by_path_never_called_cold
     scope = cache_sync.expand_scopes(home, worlds=["realm"])
     assert sorted(scope.candidates) == [f"worlds/realm/lore/{n}.md" for n in range(3)]
     assert scope.known == {}
+
+
+def test_a_rename_whose_old_history_went_unanswered_is_unsynced_never_cold(home, upper, monkeypatch):
+    _write(home, "worlds/realm/lore/old.md", "x")
+    _read(home, upper, "worlds/realm/lore/old.md")
+    (home / "worlds/realm/lore/old.md").rename(home / "worlds/realm/lore/new.md")
+    real, calls = compiled.Batch._materialized_rows, []
+
+    def busy_once(self, paths, **kw):
+        calls.append(1)
+        return None if len(calls) == 1 else real(self, paths, **kw)
+
+    monkeypatch.setattr(compiled.Batch, "_materialized_rows", busy_once)
+    report = cache_sync.sync_paths([], mode="explicit",
+                                   renamed={"worlds/realm/lore/old.md": "worlds/realm/lore/new.md"})
+    assert _by_path(report)["worlds/realm/lore/new.md"].status == "unsynced" and not report.ok
+
+
+def test_a_root_purge_runs_before_any_rebuild_and_leaves_nothing_hot(home, upper, monkeypatch):
+    _write(home, "worlds/realm/lore/pact.md", "x")
+    _read(home, upper, "worlds/realm/lore/pact.md")
+    _write(home, "worlds/realm/lore/pact.md", "edited")
+    order = []
+    monkeypatch.setattr(compiled, "purge_for_delete", lambda root: order.append("purge"))
+    monkeypatch.setattr(cache_sync, "_run_hooks", lambda *a, **k: order.append("rebuild"))
+    report = cache_sync.run(["worlds/realm/lore/pact.md"], deleted=["campaigns/winifred"])
+    assert order == ["purge"] and report.purged is True
+    assert _by_path(report)["worlds/realm/lore/pact.md"].status == "cold"
