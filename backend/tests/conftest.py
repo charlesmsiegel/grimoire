@@ -50,6 +50,10 @@ route_memo.install()
 # `tests.inference_fixtures.legacy_store()` before anything reads the store.
 # Set at import, not in a fixture, so a subprocess a test spawns inherits it.
 os.environ["GRIMOIRE_INFERENCE_AUTOMIGRATE"] = "0"
+# No write-through warm-up in the suite either (spec 05 section 5.4): the
+# collector still runs, but no queue is installed, so no test sees a
+# background rebuild it did not ask for. A test about the queue unsets it.
+os.environ["GRIMOIRE_CACHE_WARM"] = "0"
 # Every suite plays at format 2 on what a fresh install that has been through
 # the layout switch holds: a store a test creates from nothing is born an
 # upgraded default library (`store.config.birth_fields`) -- the format marker
@@ -81,6 +85,16 @@ def _default_home_never_the_real_one(tmp_path_factory):
         mp.setattr(paths, "pointer_path", lambda: pointer)
         mp.setattr(proclock, "lock_dir", lambda: machine_locks)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _no_parked_vector_history():
+    """Vector history parked under a lock (`store.vectors._DEFERRED`) is
+    process state; one test's leftovers must not be another's rows."""
+    from grimoire.store import vectors
+    vectors._DEFERRED.clear()
+    yield
+    vectors._DEFERRED.clear()
 
 
 @pytest.fixture(autouse=True)

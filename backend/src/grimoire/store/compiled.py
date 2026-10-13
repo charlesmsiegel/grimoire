@@ -47,7 +47,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import NoReturn
 
 from .. import compiled_build, template_paths
@@ -126,6 +126,9 @@ MAX_STAGED_BYTES = 4 << 20
 MAX_HISTORY_ROWS = 128
 MAX_HISTORY_BYTES = 4 << 20
 WRITE_LOCK_SECONDS = 0.010
+# How long a strict history read (`Batch.materialized_answer`) waits for the
+# process exclusion before saying it could not answer.
+STRICT_LOCK_SECONDS = 2.0
 IDLE_SECONDS = 30.0
 SIZE_CAP_BYTES = 64 << 20
 LOW_WATER_BYTES = 48 << 20
@@ -251,8 +254,15 @@ OVERVIEW_CONTINUITY = Kind(
 OVERVIEW_CANDIDATES: dict[str, Kind] = {k.name: k for k in (
     OVERVIEW_WORLD_ROW, OVERVIEW_CAMPAIGN_ROW, OVERVIEW_SCENE_TURNS, OVERVIEW_CONTINUITY)}
 
+# Spec 05's scoped sync asks `known_hashes` which listed files a `sources` row
+# vouches for, and that policy is per kind. This kind is never keyed and holds
+# no artifact: it names the trust policy alone, so a file proved current by
+# its stamp is not read again (05 section 7.3).
+SYNC_SOURCES = Kind('sync:sources', 1, (), (), True)
+
 KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
-                          OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS}
+                          OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS,
+                          SYNC_SOURCES.name: SYNC_SOURCES}
 
 
 @dataclass(frozen=True)
@@ -497,7 +507,7 @@ def open_library(root: Path | None = None) -> None:
     _process_state()
     try:
         root = Path(root) if root is not None else paths.home()
-        if not os.path.isdir(os.path.join(root, '.cache', 'compiled')):
+        if not published(root):
             return
         with batch(root) as request:
             request._usable()
@@ -524,6 +534,14 @@ def available() -> bool:
         return False
 
 
+def published(root: Path) -> bool:
+    """Whether `root` has a compiled store at all. A library without
+    `.cache/compiled` has no history and no artifacts, and a reader that
+    must not create one (spec 05's dry run) asks this before opening a
+    batch, which would."""
+    return os.path.isdir(os.path.join(root, '.cache', 'compiled'))
+
+
 def _available() -> bool:
     _process_state()
     if _on_loop() or locks.campaign_locks_held() or os.environ.get("GRIMOIRE_COMPILED_CACHE") == "0":
@@ -532,6 +550,29 @@ def _available() -> bool:
         _warn_once("sqlite_unavailable")
         return False
     return _build() is not None
+
+
+def unavailable_reason() -> str | None:
+    """Why the cache is off for this caller, or None when it is on.
+
+    For a report that must say so (spec 05 section 9, `cache: off` with this
+    module's reason) rather than a reader, which simply misses. The same tests
+    as `_available`, in the same order, each named. Never raises."""
+    try:
+        _process_state()
+        if os.environ.get("GRIMOIRE_COMPILED_CACHE") == "0":
+            return "disabled"
+        if _sqlite is None:
+            return "sqlite_unavailable"
+        if _on_loop():
+            return "event_loop"
+        if locks.campaign_locks_held():
+            return "campaign_lock_held"
+        if _build() is None:
+            return "build_unavailable"
+    except _CACHE_ERRORS:
+        return "unavailable"
+    return None
 
 
 def _scalar(value: object, limit: int) -> bool:
@@ -870,6 +911,15 @@ def _eligible(info: _SourceInfo, clock: FilesystemClock | None) -> bool:
 
 def _history_size(row: tuple) -> int:
     return sum(len(item.encode('utf-8')) if isinstance(item, str) else 8 for item in row)
+
+
+# `_materialized_rows`' answer for a family past the history budget: an
+# answer (empty), not a failure to ask.
+_OVER_BUDGET: list[tuple] = []
+
+#: `Batch.materialized_answer(..., split=True)`'s answer for a read past the
+#: history budget, compared by identity.
+HISTORY_OVER_BUDGET: Mapping[Path, tuple] = MappingProxyType({})
 
 
 def _history_transfer(cursor: Iterator[tuple]) -> list[tuple] | None:
@@ -1304,43 +1354,74 @@ class Batch:
         finally:
             _state.lock.release()
 
-    def _materialized_rows(self, paths: Sequence[str]) -> list[tuple] | None:
-        if not paths or not self._usable() or not _state.lock.acquire(blocking=False):
+    def _materialized_rows(self, paths: Sequence[str], *, strict: bool = False) -> list[tuple] | None:
+        # Strict callers (spec 05's sync) must tell "no rows" from "could not
+        # ask": they wait briefly for the process exclusion, and every
+        # non-answer is None rather than an empty, cold-looking list.
+        miss: list[tuple] | None = None if strict else []
+        if not paths:
             return []
+        if not self._usable() or not (_state.lock.acquire(timeout=STRICT_LOCK_SECONDS) if strict
+                                      else _state.lock.acquire(blocking=False)):
+            return miss
         session = None
         try:
             if not self._usable():
-                return []
+                return miss
             with _database(self.root, expected_generation=self._generation) as session:
                 if session is None or not self._session_current(session):
-                    return []
+                    return miss
                 supplied: list[object] = [MAX_KEY_BYTES, MAX_KEY_BYTES, MAX_KEY_BYTES, *paths]
                 supplied.extend([None] * (SOURCE_CHUNK - len(paths)))
                 rows = _history_transfer(session.conn.execute(_MATERIALIZED_SQL, supplied))
                 session.last_used = _clock()
-                return rows
+                return rows if rows is not None else _OVER_BUDGET
         except _CACHE_ERRORS as error:
             if session is not None:
                 _recover(self.root, session.path, error)
             _warn_once('materialized')
-            return []
+            return miss
         finally:
             _state.lock.release()
 
     def materialized(self, paths: Sequence[Path]) -> dict[Path, tuple[Materialized, ...]]:
         """Advisory work history for explicit paths, including vanished ones."""
+        found = self._read_history(paths, strict=False)
+        return dict(found) if found is not None else dict.fromkeys(paths, ())
+
+    def materialized_answer(self, paths: Sequence[Path], *,
+                            split: bool = False) -> Mapping[Path, tuple[Materialized, ...]] | None:
+        """`materialized`, or None when the history could not be read at all
+        (a busy exclusion after a short wait, an unusable batch or a read
+        error). Spec 05's sync must not report a hot path `cold` because the
+        question went unanswered.
+
+        A read past the history budget answers every path empty, as
+        `materialized` does -- unless `split`, when it answers
+        `HISTORY_OVER_BUDGET` instead, so a caller that batched many paths
+        into one read can ask again path by path rather than see them all
+        cold."""
+        return self._read_history(paths, strict=True, split=split)
+
+    def _read_history(self, paths: Sequence[Path], *, strict: bool,
+                      split: bool = False) -> Mapping[Path, tuple[Materialized, ...]] | None:
         requested: dict[Path, tuple[Materialized, ...]] = dict.fromkeys(paths, ())
+        unanswered = None if strict else requested
         relatives = {path: relative for path in requested if (relative := _relative(self.root, path)) is not None}
         supplied = list(dict.fromkeys(relatives.values()))
         decoded: dict[str, list[Materialized]] = {}
         count, size = 0, 0
         for offset in range(0, len(supplied), SOURCE_CHUNK):
-            rows = self._materialized_rows(supplied[offset:offset + SOURCE_CHUNK])
+            rows = self._materialized_rows(supplied[offset:offset + SOURCE_CHUNK], strict=strict)
             if rows is None:
-                return requested
+                return unanswered
             count += len(rows)
             size += sum(_history_size(row) for row in rows)
-            if count > MAX_HISTORY_ROWS or size > MAX_HISTORY_BYTES:
+            # Past the budget the history is answered as empty in both forms:
+            # oversize history stays an optional cold warm-up (S4 contract).
+            if rows is _OVER_BUDGET or count > MAX_HISTORY_ROWS or size > MAX_HISTORY_BYTES:
+                if split:
+                    return HISTORY_OVER_BUDGET
                 _warn_once('materialized_budget')
                 return requested
             for row in rows:
@@ -1349,7 +1430,7 @@ class Batch:
                     decoded.setdefault(row[0], []).append(value)
                     self._remember_metadata(self._history_known, row[:3], row)
         if not self._usable():
-            return requested
+            return unanswered
         return {path: tuple(sorted(decoded.get(relatives.get(path, ''), ()),
                                    key=lambda item: (item.kind, item.instance))) for path in requested}
 
@@ -1392,12 +1473,20 @@ class Batch:
             _warn_once('materialized_admission')
 
     def copy_materialized(self, old: Path, new: Path, *,
-                          instance_map: Callable[[str, str], object] | None = None) -> None:
+                          instance_map: Callable[[str, str], object] | None = None) -> bool:
+        """Stage OLD's rows for NEW. Reads OLD's history strictly: False when
+        it went unanswered (a busy exclusion, a read error), so spec 05's sync
+        never reports a renamed path cold because nobody could ask; True
+        otherwise, including when there was nothing to copy or the copy was
+        refused as oversize (an optional cold warm-up)."""
         relative = _relative(self.root, new)
         if relative is None:
-            return
-        prepared = {}
-        for item in self.materialized([old])[old]:
+            return True
+        answer = self.materialized_answer([old])
+        if answer is None:
+            return False
+        prepared: dict[tuple, tuple] = {}
+        for item in answer.get(old, ()):
             # A mapper receives canonical text. Its canonical-string result
             # must not be encoded again; structured JSON results are also
             # canonicalized for the plan's object-valued hook interface.
@@ -1405,24 +1494,28 @@ class Batch:
             canonical = mapped if isinstance(mapped, str) else _instance(mapped)
             if canonical is None or not _canonical_instance(canonical):
                 _warn_once('instance')
-                return
+                return True
             row = _materialized_row(relative, item.kind, canonical, '', None)
-            if row is None or row[:3] in prepared:
+            if row is None:
                 _warn_once('instance')
-                return
-            prepared[row[:3]] = row
+                return True
+            # Two of OLD's rows the mapper sends to one NEW instance (a world
+            # record several campaigns read, moved into one campaign) are one
+            # row there: identical, so keeping the first loses nothing.
+            prepared.setdefault(row[:3], row)
         sizes = {identity: len(_canonical(list(row), MAX_KEY_BYTES * 2) or '')
                  for identity, row in prepared.items()}
         delta = sum(size - self._materialized_sizes.get(identity, 0) for identity, size in sizes.items())
         count = (len(self._rows) + len(self._sources) + len(self._artifact_touches)
                  + len(self._materialized.keys() | prepared.keys()))
         if not self._usable() or count > MAX_STAGED_ROWS or self._bytes + delta > MAX_STAGED_BYTES:
-            return
+            return True
         # Admit the complete selector set, rather than silently collapse or
         # truncate units. Oversize history remains an optional cold warm-up.
         self._materialized.update(prepared)
         self._materialized_sizes.update(sizes)
         self._bytes += delta
+        return True
 
     def _family_rows(self, key: Key, inputs: Sequence[ValidatedInput], instance: object) -> dict | None:
         canonical = _instance(instance)
@@ -2412,14 +2505,19 @@ def _purge_local_files(root: Path, token: str, current: _Session | None = None) 
     return done
 
 
-def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> None:
-    """Publish durable erasure work, then attempt owned in-place purges."""
+def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> bool:
+    """Publish durable erasure work, then attempt owned in-place purges.
+    True once the marker is published -- every device purges at its next open
+    from then on -- and False when it could not be, so a caller that reports
+    the purge (spec 05's sync) never claims one that was not requested."""
     _process_state()
+    published_marker = False
     try:
         root = Path(root)
         token = _publish_marker(root)
         if token is None:
-            return
+            return False
+        published_marker = True
         if _state.lock.acquire(blocking=False):
             try:
                 _purge_local_files(root, token)
@@ -2438,6 +2536,7 @@ def purge_for_delete(root: Path, *, intent: DeleteIntent | None = None) -> None:
                 with contextlib.suppress(*_CACHE_ERRORS):
                     _state.finished_intents.append(intent)
             _release_finished_intents()
+    return published_marker
 
 
 def _recover_pending(root: Path, current: _Session | None = None) -> bool:

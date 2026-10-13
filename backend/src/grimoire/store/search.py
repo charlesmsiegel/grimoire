@@ -66,7 +66,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from . import chronicle, entities, facts, plot, relationships, statcache
-from .frontmatter import parse_frontmatter
+from .frontmatter import parse_frontmatter, text_of
 from .paths import home, natural_key, safe_id
 
 WORLD = "world"
@@ -243,6 +243,17 @@ def _markdown_doc(path: Path) -> tuple[str, str, str]:
     return _markdown_text(_read_text(path), path.stem)
 
 
+def markdown_document(data: bytes, stem: str) -> tuple[str, str, str]:
+    """`_markdown_doc` for bytes already in hand: what a single-file document
+    whose file holds `data` is searched as. A row's `source` is the one file
+    such a document is computed from (spec 05's vector rows read it back)."""
+    try:
+        text = text_of(data)
+    except UnicodeDecodeError:
+        text = ""
+    return _markdown_text(text, stem)
+
+
 def _markdown_text(text: str, stem: str) -> tuple[str, str, str]:
     meta, body = parse_frontmatter(text)
     name = str(meta.get("name") or meta.get("title") or stem)
@@ -322,7 +333,9 @@ def _s(value, fallback: str = "") -> str:
 # ---- the corpus walk ----
 
 def _row(kind: str, rid: str, sub: str, name: str, text: str, prose: str) -> dict:
-    """One searchable document.
+    """One searchable document. A document computed from one markdown file
+    also carries that file as `source` (`_record_docs`); a composite one
+    (a character card with its sidecars, a PC, a fact) does not.
 
     `text` is what a term has to appear in; `prose` is what a snippet is cut
     from when the term appears there. They differ only where a record carries
@@ -344,7 +357,7 @@ def _record_docs(root: Path, meta_file: str, self_kind: str, rid: str) -> Iterat
     """
     doc = _doc(_markdown_doc, root / meta_file)
     if doc is not None:
-        yield _row(self_kind, rid, "", doc[0], doc[1], doc[2])
+        yield {**_row(self_kind, rid, "", doc[0], doc[1], doc[2]), "source": root / meta_file}
 
     # Flat `<root>/<kind>/<id>.md` records. `scenes` rides along because it has
     # exactly that shape; a world simply has no such directory.
@@ -357,7 +370,7 @@ def _record_docs(root: Path, meta_file: str, self_kind: str, rid: str) -> Iterat
                 continue
             doc = _doc(_markdown_doc, path)
             if doc is not None:
-                yield _row(kind, path.stem, "", doc[0], doc[1], doc[2])
+                yield {**_row(kind, path.stem, "", doc[0], doc[1], doc[2]), "source": path}
 
     yield from _actor_docs(root)
     yield from _pc_docs(root)

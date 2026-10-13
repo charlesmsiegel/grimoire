@@ -189,6 +189,12 @@ class MaintenanceHeldError(Exception):
     """
 
 
+class SyncRunningError(Exception):
+    """Raised when the store root is asked to move while a cache-sync batch is
+    running in this process (spec 05 section 4.2). Transient: the batch ends
+    and the same move succeeds, so it reaches the client as `busy`."""
+
+
 class MaintenanceRunningError(Exception):
     """Raised when a tree operation asks to hold the store while a `maintenance`
     run is live. Carries the run's id so the refusal can name it."""
@@ -417,6 +423,12 @@ class RunRegistry:
         # are holding the store against maintenance. A count for the same reason
         # `_store_moves` is one: they overlap. See `exclude_maintenance`.
         self._maintenance_holds = 0
+        # How many cache-sync batches are running (spec 05 section 4.2): a
+        # write-through warm-up or an API sync, pinned to the root it started
+        # on. A count, for `_store_moves`' reason. Held only for the length of
+        # a batch, never while the write-through queue merely holds paths, so
+        # an idle queue never refuses a data-dir move. See `sync_hold`.
+        self._sync_holds = 0
         self._by_key: dict[str, str] = {}
         # Records a trigger asked a campaign's reconcile to look at while one
         # was already live, keyed by subject. Here, on the per-app registry and
@@ -500,6 +512,7 @@ class RunRegistry:
                           also_precancelled: Subject | None = None,
                           review_generation: str | None = None,
                           single_live: bool = False,
+                          refuse_live: bool = False,
                           ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
@@ -518,6 +531,13 @@ class RunRegistry:
         It is a scan under this lock rather than an exclusion key because the
         loser is not refused -- it is handed the running sweep, under its own
         attempt id (`_adopt`).
+
+        ``refuse_live`` is the opposite answer to the same question: a live run
+        of this class and kind on the subject refuses a new one with
+        `RunInFlightError` naming it, and nothing is adopted -- for a run whose
+        requests carry options adoption would lose (a cache sync's dry run or
+        `embed: false`, spec 05 section 7.8). A repeat of the live run's own
+        attempt id is still handed that run back.
         """
         # BEFORE the lock. The loop-backed factory blocks on a portal round
         # trip, and loop-side code (the reaper) takes this same lock -- so
@@ -540,6 +560,8 @@ class RunRegistry:
 
             if single_live and (live := self._live_single(subject, cls, kind)) is not None:
                 return self._adopt(live, subject, attempt_id), False
+            if refuse_live and (live := self._live_kind(subject, cls, kind)) is not None:
+                raise RunInFlightError(live.id)
 
             key = self._refuse_if_excluded(subject, cls)
 
@@ -632,6 +654,16 @@ class RunRegistry:
             # that FAILED has to be allowed to actually retry. Adopting
             # there would make one crashed adjudication permanent.
             return existing
+        return None
+
+    def _live_kind(self, subject: Subject, cls: RunClass, kind: str) -> Run | None:
+        """Any running run of this class and kind on the subject, a stopping
+        one included -- it is still running until its thread returns. Called
+        under ``self._lock``."""
+        for rid in self._by_subject.get(subject, []):
+            run = self._runs.get(rid)
+            if run is not None and run.state == "running" and run.cls == cls and run.kind == kind:
+                return run
         return None
 
     def _live_single(self, subject: Subject, cls: RunClass, kind: str) -> Run | None:
@@ -847,12 +879,41 @@ class RunRegistry:
             for run in self._runs.values():
                 if run.state == "running":
                     raise RunInFlightError(run.id)
+            if self._sync_holds:
+                raise SyncRunningError()
             self._store_moves += 1
         try:
             yield
         finally:
             with self._lock:
                 self._store_moves -= 1
+
+    @contextlib.contextmanager
+    def sync_hold(self):
+        """Hold the store root still for one cache-sync batch.
+
+        `hold_still`'s other direction, in one acquisition for its reason:
+        yields False, holding nothing, while a move is in progress, and while
+        the batch holds this a move is refused (`SyncRunningError`). A flag
+        rather than an exception so the queue (`cache_warm`, which the run
+        machinery imports) need not import this module. Only for the length of
+        a batch: the write-through queue holding paths between batches is not
+        a reason to refuse a move, since those paths are safe to drop and the
+        move clears them."""
+        with self._lock:
+            if self._store_moves:
+                held = False
+            else:
+                held = True
+                self._sync_holds += 1
+        if not held:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            with self._lock:
+                self._sync_holds -= 1
 
     @contextlib.contextmanager
     def exclude_maintenance(self):
@@ -1885,6 +1946,10 @@ def store_held_still(app):
             "kind": "runs_in_flight", "run_id": exc.run_id,
             "detail": "a run is still in progress; wait for it or stop it before "
                       "moving the storage location"}) from exc
+    except SyncRunningError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "a cache warm-up is running; try again in a moment"}) from exc
 
 
 def require_campaign_free(app, cid: str) -> None:
@@ -2376,6 +2441,36 @@ def start_maintenance(app, run: Run, work_sync: Callable[[Run], dict]) -> None:
     """
     runner.start_thread(app, run, work_sync)
     run.started = True
+
+
+#: The kind of the one `background` run on the global subject that syncs the
+#: compiled cache (spec 05 section 7.8).
+CACHE_SYNC_KIND = "cache-sync"
+
+
+def reserve_cache_sync(app, attempt_id: str | None) -> tuple[Run, bool]:
+    """Reserve the global `cache-sync` run, or answer 409.
+
+    One at a time and never merged: while one is live a new request is
+    refused with `sync_in_flight` naming it, whatever its options, so the
+    caller can poll and retry; a repeat of the live run's own attempt id is
+    handed that run back. Attempt ids are only unique within a subject, and
+    the global subject also holds drafts, so the id is scoped to this kind:
+    a repeat of a model refresh's id never hands a sync caller that refresh.
+    A `def` caller only, like every reservation."""
+    try:
+        return app.state.runs.start_or_existing(
+            GLOBAL_SUBJECT, "background", CACHE_SYNC_KIND,
+            f"{CACHE_SYNC_KIND}:{attempt_id or uuid.uuid4().hex}",
+            None, _subject_labels(GLOBAL_SUBJECT), refuse_live=True)
+    except RunInFlightError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "sync_in_flight", "run_id": exc.run_id,
+            "detail": "a cache sync is already running; poll it, then try again"}) from exc
+    except StoreMovingError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "the storage location is being changed; try again"}) from exc
 
 
 def forget_subject(app, subject: Subject) -> int:
