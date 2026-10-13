@@ -73,7 +73,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 06 | Store-editing skill | now (05 has merged, so 05-C2 is on main) | [x] | [x] [Codex](docs/superpowers/validation/2026-10-13-roadmap-06-execution.md) | 2 | [ ] |
 | 07 | Explicit group membership | merged in PR #507; S8 measured and withheld | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [x] |
 | 08 | Derived history SearchDocuments | 03 and 05 merged; all six slices implemented in PR #510 | [x] | [~] substitute | 6 | [ ] |
-| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
+| 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [x] CLI Codex (2026-10-13) | 6 | [ ] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
 | 11 | Epistemic history retrieval | S1 now; later slices wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
 | 12 | Bounded agentic investigation | 01g, 08, 09 (01i has landed; RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
@@ -649,12 +649,12 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 09-S1 | Retrieval core, structural and lexical, no network | L | 5 | 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 09-S1 | Retrieval core, structural and lexical, no network | L | 5 | 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S6 | The long-history eval suite | M | 9 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S4, 09-S5 (S) | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
 
 ### 10
 

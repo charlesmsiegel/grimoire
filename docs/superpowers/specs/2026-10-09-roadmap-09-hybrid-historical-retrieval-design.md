@@ -1,6 +1,6 @@
 # 09. Hybrid historical retrieval
 
-**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
+**Status:** Spec gate passed — Codex adversarial review and scoped corrections, 2026-10-13.
 **Date:** 2026-10-09
 **Roadmap:** 09 in `ROADMAP-CHECKLIST.md`. Lane: retrieval.
 **Baseline:** `main` at `35c1fb7`.
@@ -371,8 +371,10 @@ companions who travel together share every scene, so co-presence alone is a
 recency list in disguise; above the cap it ranks but does not admit (section
 7.1). Every other relation admits on its own.
 
-**Pool.** Tier 1's pool is the top `POOL_MAX` structural candidates plus every
-lexical hit (section 6.2). `POOL_MAX` (64) bounds the semantic work of tier 1
+**Pool.** Tier 1 keeps structural and lexical evidence independently. Its
+semantic pool is the top `POOL_MAX` candidates after unioning the structural
+and admitted lexical lists in admitted-only RRF order; a lexical hit outside
+that pool remains lexical evidence. `POOL_MAX` (64) bounds tier 1 semantic work
 to one `vectors.load` of 64 records: 64 file opens, and by
 `store/vectors.py`'s own measurement (about 97 ms per 500 vectors of
 dimension 1536, load plus score) roughly 12 ms on a desktop. Both constants
@@ -775,11 +777,12 @@ excerpts from their far edge to fit, and stops at the ceiling. It counts with
 memoised counter (`_token_memo`) does not exist yet when retrieval runs. "Never
 exceeds its ceiling" is measured on **the rendered section text**: `fit`
 renders the template's heading, separators and item blocks for the kept items
-and counts that string, so the heading and joins are charged. Macro expansion
-in `_render_sections` can still change the length of transcript text that
-happens to contain a macro token; that is the same latitude the conversation
-history has (`assemble.py:575`), and the packer, which measures the expanded
-text, remains the final bound (review M1).
+and counts that string, so the heading and joins are charged. Context composition
+expands the history heading and item blocks once, then fits those frozen strings
+to the section's own ceiling again before packing. This second fit is independent
+of `context_budget`, including its default of zero: the packer bounds the whole
+prompt only and cannot enforce this section's ceiling. Shedding reuses the same
+frozen strings, so neither fitting nor shedding re-draws a macro.
 
 The section carries a `shed` hook (`pack.py:228`-`234`) so the packer can give
 it up one scene at a time instead of whole:
@@ -821,10 +824,16 @@ The section must never carry text the prompt already carries:
 - **History window**: excerpts never come from the scene being played
   (eligibility rule 1).
 
-`compose` passes the archive and recap scene ids it already computed
-(`story._recap_ids`, `archive._archive_entries`) to the section's render,
-which applies the omission. Retrieval does not need them: omission changes
-what renders, never what was selected.
+Before selection, the turn helper and live preview derive `summary_omissions`
+from the enabled archive and any full recap, using the same un-clipped scan
+window those producers use. They pass this plain mapping (`sid -> "archive"`
+or `"recap"`) to retrieval outside every campaign lock. A candidate with no
+excerpt whose summary is omitted is skipped before depth is spent; selection
+continues to the next candidate. `EvidenceItem` retains its original summary
+plus the omission reason for rendering/inspection. Compose may reapply its
+already computed archive/recap ids, but never retrieves or expands a new
+candidate to refill a slot. A caller supplying hand-built evidence supplies
+its complete selected items; composition only fits or sheds them.
 
 ### 9.5 Inspector visibility
 
@@ -874,9 +883,10 @@ its breakdown (`routes/common.py:406`, `_record_prompt`).
 async def retrieve(cid: str, sid: str, query: Query, *, ceiling: int,
                    embed_client: embeddings.AsyncEmbeddingsClient,
                    deadline: float, rerank: Reranker | None = None,
-                   origin: str = "turn") -> Evidence
+                   origin: str = "turn", summary_omissions=None) -> Evidence
 
-def retrieve_preview(cid: str, sid: str, query: Query, ceiling: int) -> Evidence  # sync, no network
+def retrieve_preview(cid: str, sid: str, query: Query, ceiling: int,
+                     *, summary_omissions=None) -> Evidence  # sync, no network
 ```
 
 File and CPU stages run in `anyio.to_thread.run_sync`; the query embedding
@@ -996,7 +1006,7 @@ already returned are not saved.
 
 | Tier | Candidate set | When |
 |---|---|---|
-| 1 | Structural pool (`POOL_MAX`) plus lexical hits over the whole live set; semantic scores the pool only | Always, first |
+| 1 | Structural and lexical over the whole live set; semantic scores at most `POOL_MAX` from their admitted-only RRF union | Always, first |
 | 2 | Every live SearchDocument in the campaign, semantic bounded by `WIDEN_LIMIT` | When tier 1's coverage verdict is not `sufficient` |
 | 3 | Other campaigns' history (every campaign of the world, or the library) | **Never on a turn.** Only for `origin` other than `"turn"` with `Query.tier_limit == 3`: 12's `search_history` tool, and a future search surface. `retrieve` refuses tier 3 for `origin="turn"` with `ValueError` |
 
@@ -1010,10 +1020,12 @@ Tier 2 widens only the semantic signal, the one that costs per document.
 free. `eligible` is the number of scenes that passed section 5.3, so coverage
 can tell "retrieval missed" from "nothing else exists" (review S5):
 
-- `exhausted`: every eligible scene is already admitted, or there is no
-  eligible scene at all (a campaign's first scene). Nothing more can be found,
-  so nothing should be spent looking: tier 2 does not run and 10 treats it as
-  `sufficient`.
+- `exhausted`: there is no eligible scene (a campaign's first scene), or every
+  eligible scene is admitted and every available signal has evaluated the live
+  set. With semantic unavailable, complete admission is enough. With semantic
+  available, unscored documents can still improve selection, so complete
+  admission alone is not exhausted. Tier 2 does not run for exhausted coverage
+  and 10 treats it as `sufficient`.
 - `empty`: no candidate admitted, and eligible scenes exist.
 - `sufficient`: at least `min(depth, eligible)` candidates admitted **and** at
   least `MIN_AGREEMENT` (1) of them admitted by two or more signals.
@@ -1030,6 +1042,11 @@ did not already score, so it is skipped and coverage records why.
 
 `Coverage(verdict, tiers, semantic, admitted, agreement, eligible)` is what 10
 consumes. 10's planner is gated on `thin` or `empty` only (10 section 3).
+The verdict function also takes `semantic_complete=True` as a keyword: preview
+and no-embedding retrieval use the default, while an available semantic stage
+passes whether every eligible document has been evaluated. A shared group that
+admits the whole campaign therefore cannot suppress widening to older unscored
+documents when tier 1 has no signal agreement.
 
 ### 11.3 Fallbacks
 
@@ -1149,6 +1166,10 @@ a reader turns it on.
 - **Needs (other specs):** 08-C1 (H: bounded `SceneDocument` with metadata, keyed by per-scene slices); 08-C2a (H: `scene_documents` live set with one batch lookup); 08-C3b (H: `expand(..., phase="prompt")` with `r-`/`p-` post keys and `part`); 03-C6 (H: batch lookup over a live key set, index ranking only within it, for the per-document term-statistics kind); 03-C7 (H: text-keyed artifacts, never `BUILD`); 07-C2 (S: `groups_for` — until it lands, the `group` relation is absent); 07-C3c (S: `scene_groups`/`co_affiliates`/`prompt_visible` projections — until then, the group relation reads `scene_actors` with 07-C2 only, or is absent)
 - **Needs (slices):** 03-S1 (H), 03-S3 (H), 07-S2 (S), 07-S7 (S), 08-S2 (H), 08-S3 (H), 08-S4 (H)
 - **Scope:** The `store/history/` package (`model`, `settings`, `query`, `refs`, `structural`, `lexical`, `merge`, `coverage`, `expand`, `budget`) and the synchronous `retrieve_preview`. The four config keys join `config._CONFIG_KEYS`, default off. No caller in `routes/` or `context/` yet, no embed task, no network. `test_regex_prompt_guard.py` scans `store/history/` and pins `expand.excerpts`.
+- **Renderer prerequisite:** The authoritative section/item templates and the
+  shared `budget.render` / `render_item` helpers land in S1, so its ceiling
+  test counts real template output. S2 owns section registration, macro
+  freezing, the packer tier and UI integration, rather than a second renderer.
 - **Acceptance:** section 15's store tests for `query.build`, structural, eligibility, lexical, merge (keyed by `SceneRef.key`, legacy identity case), coverage (`exhausted` for a first and a young campaign), expansion and budget (absolute cap); the live-set liveness test.
 - **Size:** L
 
@@ -1230,7 +1251,7 @@ retrieval, and `key`, section 7.2), header fields, an optional summary, its
 excerpts with **every included post's transcript index, post key and text**
 (`EvidencePost`, section 8: 08-C3b's `r-`/`p-` key and `part`), its
 **evidence ids**, and its token cost; `candidates` are every admitted candidate in merged order (bounded
-by `POOL_MAX + WIDEN_LIMIT`), so a caller can see what was found and not
+by the live set, independently of semantic loading limits), so a caller can see what was found and not
 selected. `Evidence.detail()` is the JSON-safe projection of section 9.5.
 
 **Evidence ids** are the one spelling every consumer uses to name a unit of
@@ -1253,9 +1274,12 @@ S6) merges two evidences **by `SceneRef.key`**:
   only what its signal admitted (7.1);
 - the top `history_recall_depth` are selected; an item already expanded in a
   round keeps its excerpts, and a newly selected candidate that no round
-  expanded is expanded through `expand` (the caller's bound
-  `expand.excerpts`, run in a worker), so the merge pays at most `depth` new
-  transcript reads;
+  expanded is expanded through `expand`, a caller-bound
+  `Candidate -> EvidenceItem | None` adapter. The adapter supplies the
+  header/summary from current metadata and uses `expand.excerpts` for posts,
+  and is run in a worker; merge pays at most `depth` new transcript reads.
+  A callback returning only excerpts cannot reconstruct an unselected scene's
+  header. No hidden scene-metadata table is required;
 - the optional rerank runs once on the merged top (7.3), and the result is
   re-fitted to `ceiling`.
 
@@ -1410,6 +1434,13 @@ Settings:
   mismatch and out-of-range scores evict; a `rate_limit` sets the shared
   memo, and both history and lore recall then send nothing; a success clears
   it.
+- Semantic bounds: more than `POOL_MAX + WIDEN_LIMIT` documents containing the same
+  weighted cast name still cause at most `POOL_MAX` tier-1 vector loads and at
+  most `WIDEN_LIMIT` unique document loads overall. Lexical evidence is retained
+  outside those limits. Shared-group admission of every scene does not prevent
+  tier 2 from finding older semantic evidence beyond `POOL_MAX`.
+  All admitted lexical candidates remain in `Evidence.candidates` and are
+  available to later `history.merge` rounds; only semantic work is capped.
 - Merge: RRF over admitted-only lists; no number on `Evidence` other than
   per-signal raw values; `merge(a, b)` keeps both rounds' signals under
   `(round, signal)` ranks, dedupes by `SceneRef.key`, and expands a newly
@@ -1421,6 +1452,10 @@ Settings:
 - Expansion: the adapter passes `phase="prompt"` and the bounds of section 8;
   no anchor gives header and summary only; an archive scene with no anchor is
   skipped at selection.
+- With depth 1, an archive-carried summary-only first candidate is skipped
+  outside locks and the next usable candidate fills the slot. Compose performs
+  no retrieval or expansion, including on the locked group path. The omission
+  mapping uses the full archive scan even when query embedding text is clipped.
 - Budget: `prompt_ceiling(resolved).tokens` share; `tokens is None` uses the
   absolute cap; `context_budget` share only when set; the rendered section,
   heading included, never exceeds the ceiling.
@@ -1436,6 +1471,9 @@ Settings:
 - The section renders, packs, sheds lowest-ordered first under a budget,
   re-renders without re-drawing a macro, and drops whole when its last unit
   sheds; with Recalled lore also present, history sheds before lore drops.
+- Repeated expanding `{{user}}` macros are expanded once and the expanded
+  section is fitted to its own ceiling with `context_budget` both zero and
+  positive. A `{{random}}` value never changes when fitting or shedding.
 - No repeated summary for an archive scene (archive on) or a full-recap scene;
   the summary renders when the archive section is off.
 - A gm-only or excluded location is not named in a header.
@@ -1538,6 +1576,18 @@ Settings:
     so.
 
 ## 18. Review record
+
+Codex spec review, 2026-10-13, against public `main` at `c647d06c4` (the
+worktree's starting commit). Three findings are resolved above: cap the
+structural/lexical union before semantic loading (5.4, 11.1); distinguish
+complete admission from complete semantic evaluation (11.2); re-fit frozen,
+macro-expanded history independently of the whole-prompt budget (9.3).
+Their counterexamples are required acceptance tests in section 15.
+The scoped re-review approved the final correction: admitted lexical candidates
+are retained independently of semantic limits. Review threads:
+`01a13448-4d28-7003-81a2-22f096a29398`,
+`01a13453-a60e-79d1-80fc-76b9ec6572ce`, and
+`01a134b3-b063-7ee2-892a-6e6614bb625d`.
 
 Substitute adversarial review of 2026-10-09, folded in. Codex gate pending.
 
