@@ -127,7 +127,7 @@ def record_embedded(cid: str, docs: Sequence, *, space: dict,
         for start in range(0, len(rows), compiled.MAX_STAGED_ROWS):
             if not keep():
                 return
-            with compiled.batch() as request:
+            with compiled.batch(keep=keep) as request:
                 for path, instance in rows[start:start + compiled.MAX_STAGED_ROWS]:
                     if not keep():
                         request.disabled = True

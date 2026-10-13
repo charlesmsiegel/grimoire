@@ -1781,7 +1781,14 @@ class Batch:
         except _CACHE_ERRORS:
             _warn_once("payload")
 
-    def flush(self) -> None:
+    def flush(self, *, keep: Callable[[], bool] | None = None) -> None:
+        """Publish staged work only while the caller's optional predicate holds.
+
+        Cancellation is separate from lifecycle invalidation: refuse before a
+        transaction, or roll back before commit, without feeding it into the
+        post-commit lifecycle purge. Recheck after the writer exclusion wait
+        (09-S4 I1); a commit already executing remains an atomic operation.
+        """
         rows, self._rows = self._rows, {}
         sources, self._sources = self._sources, {}
         metadata, self._materialized = self._materialized, {}
@@ -1794,16 +1801,17 @@ class Batch:
             # every row asked for was already there and current. No fence is
             # read for it: an unusable cache refuses at staging, which set
             # `refused`, and an empty request must create no storage.
-            self.committed = not self.refused
+            self.committed = not self.refused and (keep is None or keep())
             return
         if not self._usable(strict=True) or not _state.lock.acquire(timeout=WRITE_LOCK_SECONDS):
             return
         session = None
         try:
-            if not self._usable(strict=True):
+            if (keep is not None and not keep()) or not self._usable(strict=True):
                 return
             with _database(self.root, expected_generation=self._generation) as session:
-                if session is None or not self._session_current(session, strict=True):
+                if (session is None or not self._session_current(session, strict=True)
+                        or (keep is not None and not keep())):
                     return
                 session.conn.execute("BEGIN IMMEDIATE")
                 if not self._session_current(session, strict=True):
@@ -1832,7 +1840,8 @@ class Batch:
                     'VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path,kind,instance) DO UPDATE SET '
                     'built_from=excluded.built_from,last_used=excluded.last_used,"check"=excluded."check",'
                     'artifact_kind=excluded.artifact_kind,artifact_key=excluded.artifact_key', metadata.values())
-                if not self._session_current(session, strict=True):
+                if (not self._session_current(session, strict=True)
+                        or (keep is not None and not keep())):
                     session.conn.rollback()
                     return
                 session.conn.commit()
@@ -1857,7 +1866,8 @@ class Batch:
 
 
 @contextlib.contextmanager
-def batch(root: Path | None = None) -> Iterator[Batch]:
+def batch(root: Path | None = None, *,
+          keep: Callable[[], bool] | None = None) -> Iterator[Batch]:
     _process_state()
     # Resolve the authoritative root inside the lifecycle identity, not before
     # it. A slow pointer read crossing a switch cannot adopt the new epoch for
@@ -1871,7 +1881,10 @@ def batch(root: Path | None = None) -> Iterator[Batch]:
         request._discard_staging()
         raise
     else:
-        request.flush()
+        if keep is None:
+            request.flush()
+        else:
+            request.flush(keep=keep)
 
 
 def _warn_once(failure_kind: str) -> None:

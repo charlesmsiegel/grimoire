@@ -1,6 +1,7 @@
 """Bounded semantic recall uses one space and never publishes cancelled work."""
 
 import asyncio
+import contextlib
 import json
 import threading
 import time
@@ -358,5 +359,81 @@ def test_cancel_during_materialized_staging_discards_pending_rows(cid, space, ca
     paths = live.input_paths(cid, docs[0])
     with compiled.batch(tmp_path) as request:
         rows = request.materialized(paths)
+        request.disabled = True
+    assert not any(row.kind == kind for found in rows.values() for row in found)
+
+
+class _ObservedWriterLock:
+    """Expose the real publication wait without holding it across staging."""
+
+    def __init__(self, lock, waiting, timeout):
+        self.lock, self.waiting, self.timeout = lock, waiting, timeout
+
+    def acquire(self, *args, **kwargs):
+        if kwargs.get("timeout") == self.timeout:
+            self.waiting.set()
+        return self.lock.acquire(*args, **kwargs)
+
+    def release(self):
+        self.lock.release()
+
+    def locked(self):
+        return self.lock.locked()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+
+def test_cancel_while_history_flush_waits_for_writer_discards_rows(cid, space, cache, tmp_path, monkeypatch):
+    docs = documents(cid)
+    ready, begin, waiting, finished = (threading.Event() for _ in range(4))
+    original_lock = compiled._state.lock
+    monkeypatch.setattr(compiled, "WRITE_LOCK_SECONDS", 2)
+    monkeypatch.setattr(compiled._state, "lock", _ObservedWriterLock(
+        original_lock, waiting, compiled.WRITE_LOCK_SECONDS))
+    kind = embedded.vector_kind(space)
+    flush = compiled.Batch.flush
+    def paused_flush(self, *args, **kwargs):
+        if not any(row[1] == kind for row in self._materialized.values()):
+            return flush(self, *args, **kwargs)
+        ready.set()
+        assert begin.wait(2)
+        try:
+            return flush(self, *args, **kwargs)
+        finally:
+            finished.set()
+    monkeypatch.setattr(compiled.Batch, "flush", paused_flush)
+    async def run():
+        task = asyncio.create_task(semantic.score(
+            ("silver ledger",), docs, space=space, embed_client=FakeAsyncEmbeddings(),
+            deadline=time.monotonic()+4, campaign=cid, scene="999--saltmarch"))
+        held = False
+        try:
+            assert await asyncio.to_thread(ready.wait, 2)
+            held = original_lock.acquire(blocking=False)
+            assert held
+            begin.set()
+            assert await asyncio.to_thread(waiting.wait, 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if held:
+                original_lock.release()
+            begin.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    try:
+        asyncio.run(run())
+    finally:
+        begin.set()
+        assert finished.wait(2)
+    with compiled.batch(tmp_path) as request:
+        rows = request.materialized(live.input_paths(cid, docs[0]))
         request.disabled = True
     assert not any(row.kind == kind for found in rows.values() for row in found)

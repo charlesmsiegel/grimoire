@@ -49,6 +49,53 @@ def _put(cache, root, key):
     return cache._state.session
 
 
+@pytest.mark.parametrize("guarded", [False, True])
+def test_noncancelled_publication_predicate_preserves_default(cache, key, tmp_path, guarded):
+    options = {"keep": lambda: True} if guarded else {}
+    path = tmp_path / "Realm.md"
+    with cache.batch(tmp_path, **options) as request:
+        request.put(key, "Realm")
+        request.mark_materialized(path, "search")
+    assert request.committed
+    with cache.batch(tmp_path) as reader:
+        assert reader.lookup(key).value == "Realm"
+        assert len(reader.materialized([path])[path]) == 1
+
+
+@pytest.mark.parametrize("when", ["staged", "precommit", "postcommit"])
+def test_cancelled_publication_does_not_purge_unrelated_cache(cache, key, tmp_path, monkeypatch, when):
+    session = _put(cache, tmp_path, key)
+    other = cache.make_key(cache.KINDS["search"], [("document", "b" * 64)], params={})
+    cancelled = threading.Event()
+    if when in {"precommit", "postcommit"}:
+        current = cache.Batch._session_current
+        checks = []
+        def observe_cancellation(self, got, **kwargs):
+            # Materialized staging also probes the session; count only flush,
+            # which has taken/cleared this request's nonempty staged payload.
+            if self._bytes:
+                return current(self, got, **kwargs)
+            checks.append(got.conn.in_transaction)
+            # The third check precedes commit, the fourth observes its result.
+            if len(checks) == (3 if when == "precommit" else 4):
+                cancelled.set()
+            return current(self, got, **kwargs)
+        monkeypatch.setattr(cache.Batch, "_session_current", observe_cancellation)
+    path = tmp_path / "Saltmarch.md"
+    with cache.batch(tmp_path, keep=lambda: not cancelled.is_set()) as request:
+        request.put(other, "Saltmarch")
+        request.mark_materialized(path, "search")
+        if when == "staged":
+            cancelled.set()
+    assert request.committed is (when == "postcommit")
+    assert not session.conn.in_transaction
+    assert cache._state.session is session
+    with cache.batch(tmp_path) as reader:
+        assert reader.lookup(key).value == "Realm"
+        assert reader.lookup(other).hit is (when == "postcommit")
+        assert bool(reader.materialized([path])[path]) is (when == "postcommit")
+
+
 def test_two_workers_share_one_connection_without_locking_caller_compute(cache, key, tmp_path):
     session = _put(cache, tmp_path, key)
     compute = threading.Barrier(2)
