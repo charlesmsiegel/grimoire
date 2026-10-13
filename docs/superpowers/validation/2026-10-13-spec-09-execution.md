@@ -192,3 +192,20 @@ staging, precommit and postcommit. Scoped re-review approved with no new
 breakage. Final lint/type ratchets remain 1136/161. Earlier amended runs passed
 90, 77 and 43 tests; broader run failures and corrected harness behavior are
 recorded accurately in the task report. Full make check remains pending.
+
+## User workflow steering
+
+The user explicitly waived final review passes and authorized opening a pull
+request after all six slices are implemented. Final whole-branch/native code
+and diff-versus-spec review passes are skipped by that instruction, rather
+than claimed as passed. Existing narrow task reviews and required make check
+remain in the workflow. The PR destination is the verified public repository
+charlesmsiegel/grimoire; no existing PR for this branch was found.
+
+## S5 task checkpoint
+
+S5 implemented in c8517df54. Independent task review approved with no findings.
+Required guard/equivalence/resolver selection passed 772 tests; history/play
+196 and docs/rerank108 also passed. Ruff1136/mypy161 remain at baseline.
+The existing history kit and replay case are activated with captured decisions,
+graded-slot-only ordering and reused frozen expansions. Full gate is pending.
