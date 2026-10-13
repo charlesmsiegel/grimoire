@@ -181,3 +181,14 @@ unguarded. The exact node reproduces on clean main `c647d06c4`, with a fresh
 synthetic TEMP home before imports, baseline sources and bytecode/cache output
 disabled. Main source stayed untouched. This is separate from the S4 fix and
 remains a required full-gate resolution before completion.
+
+## S4 task checkpoint
+
+S4 implemented in b3b05c7b4, with writer-lock cancellation correction in
+71b55d485. Independent review reproduced a pre-transaction publication gap;
+the deterministic regression failed before the fix. Six amended checks pass
+for lock wait, default/guarded success and unrelated-row preservation during
+staging, precommit and postcommit. Scoped re-review approved with no new
+breakage. Final lint/type ratchets remain 1136/161. Earlier amended runs passed
+90, 77 and 43 tests; broader run failures and corrected harness behavior are
+recorded accurately in the task report. Full make check remains pending.
