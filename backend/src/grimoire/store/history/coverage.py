@@ -13,10 +13,13 @@ def verdict(
     eligible: int,
     *,
     semantic_complete: bool = True,
+    sources_complete: bool = True,
 ) -> model.Coverage:
     admitted = sum(bool(c.admitted_by) for c in candidates)
     agreement = sum(len(c.admitted_by) >= 2 for c in candidates)
-    if not eligible or (admitted >= eligible and semantic_complete):
+    if not sources_complete:
+        result = "thin" if admitted else "empty"
+    elif not eligible or (admitted >= eligible and semantic_complete):
         result = "exhausted"
     elif not admitted:
         result = "empty"

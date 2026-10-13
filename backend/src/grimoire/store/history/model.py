@@ -25,10 +25,12 @@ class Query:
 class SceneRef:
     sid: str
     identity: str | None
+    campaign: str = ""
 
     @property
     def key(self) -> str:
-        return self.identity or "sid:" + self.sid
+        base = self.identity or "sid:" + self.sid
+        return "campaign:" + self.campaign + "/" + base if self.campaign else base
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,7 @@ class Evidence:
                 {
                     "scene": item.scene.sid,
                     "identity": item.scene.identity,
+                    "campaign": item.scene.campaign,
                     "key": item.scene.key,
                     "title": item.title,
                     "date": item.date,

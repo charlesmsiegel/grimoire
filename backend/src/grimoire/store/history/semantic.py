@@ -81,8 +81,17 @@ def _publish(docs, score_docs, missing, returned, queries, held, space, campaign
         held[text] = unit
         warmed += 1
     warmed_docs = [d for d in docs if d.doc.text in missing and d.doc.text in held]
-    if not stopped.is_set():
-        embedded.record_embedded(campaign, warmed_docs, space=space,
+    groups = {}
+    for doc in warmed_docs:
+        source = doc.doc.meta.get("_history_campaign", campaign)
+        original = doc.doc.meta.get("_history_document_key")
+        if original:
+            doc = replace(doc, doc=replace(doc.doc, key=original))
+        groups.setdefault(source, []).append(doc)
+    for source, source_docs in groups.items():
+        if stopped.is_set():
+            break
+        embedded.record_embedded(source, source_docs, space=space,
                                  keep=lambda: not stopped.is_set())
     return _evaluate(score_docs, queries, held, space["space"], stopped), warmed
 

@@ -10,7 +10,7 @@ def excerpts(
     cid: str, scene: model.SceneRef, query: model.Query, max_bytes: int
 ) -> tuple[model.Excerpt, ...]:
     found = searchdocs_expand.expand(
-        cid,
+        scene.campaign or cid,
         scene.sid,
         phase="prompt",
         terms=query.terms,
