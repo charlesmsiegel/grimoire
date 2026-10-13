@@ -881,8 +881,8 @@ export default function ConfigView() {
             </p>
             <h3>Historical recall</h3>
             <p className="config-copy">
-              Recall bounded summaries and excerpts from earlier scenes. Set recalled scenes to
-              <code>0</code> to turn it off. Embeddings are optional: structural relationships
+              Recall bounded summaries and excerpts from earlier scenes. Set recalled scenes
+              to <code>0</code> to turn it off. Embeddings are optional: structural relationships
               and keyword matches also find scenes. With an Embedding role configured, semantic
               recall sends recent scene text to its provider and may cost money. An endpoint
               that reports no price (a local or OpenAI-compatible server) makes the Costs
