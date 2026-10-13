@@ -2,9 +2,9 @@
 
 How much a recalled scene bears on the current turn, asked after retrieval
 has found it. This module is the KIT: the item builders and the mappings.
-The `history_check` route, the `history-rerank` task's policy row (off), the
-registered eval case and the capture land with 09's call site, which names
-its own ceiling (`RERANK_CEILING`).
+09-S5 registers the `history_check` route, the `history-rerank` task's policy
+row, the eval case and the captured call site in `routes/history_recall.py`,
+which names its own ceiling (`RERANK_CEILING`). The switch defaults off.
 
 Two forms. `build_items` scores each candidate alone on `LEVELS`;
 `build_items_ranked` (01e's `Rank`) asks one item ordering up to
@@ -41,9 +41,9 @@ MAX_RANKED = decisions.MAX_ITEMS_PER_CALL
 #: The task 09's call site names, on the `history_check` route it lands.
 TASK = "history-rerank"
 
-#: The route entry 09 adds to `routing.ROUTES` with its call site (§9.3), to
-#: which 10 later adds `history-sufficiency`. Not registered here. Its policy
-#: row, when 09 lands it, is the default: no escalation, no sampling.
+#: The route entry registered by 09-S5 in `routing.ROUTES`, to which 10
+#: later adds `history-sufficiency`. This pure kit describes the contract;
+#: routing owns registration and the default policy: no escalation or sampling.
 ROUTE = routing.Route(
     "history_check", "History checks",
     "Whether a recalled scene bears on the current turn, after retrieval has found it.",

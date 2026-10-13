@@ -159,6 +159,7 @@ class TaskPolicy(NamedTuple):
 #: in `evals/README.md`, "Decision distributions", and the entry's comment
 #: names that section, the kind and the run's date.
 TASK_POLICY: dict[str, TaskPolicy] = {
+    "history-rerank": TaskPolicy(),
     # Roadmap 02-C2a: the pick's caller may draw WHO speaks from a reported
     # distribution (only when the campaign samples, `play_decisions`).
     # Escalation stays off until C2a's play gate measures it, and would be on
@@ -220,6 +221,10 @@ ROUTES: tuple[Route, ...] = (
           "written. Off unless Play decisions are switched on.",
           ("turn-intent", "turn-plan", "turn-tool-decision"), True, operation="decide",
           default_role="decision",
+          legacy=NO_LEGACY),
+    Route("history_check", "History checks",
+          "Whether a recalled scene bears on the current turn, after retrieval has found it.",
+          ("history-rerank",), True, operation="decide", default_role="decision",
           legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),

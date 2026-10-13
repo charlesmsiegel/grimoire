@@ -1153,10 +1153,13 @@ would answer neither question.
   once, before any text the watcher would show (`stream_tools(visibility=)`),
   and its record rides the variant as `tool`. Routes born at format 2 carry
   `routing.NO_LEGACY` and their tasks sit in `NO_LEGACY_TASKS`, which the
-  frozen inference baselines leave out. `store/epistemic_access.py` and
-  `store/history_rerank.py` are decide KITS for 11 and 09: their routes,
-  policy rows and registered eval cases land with those call sites
-  (`evals/cases.KIT_CASES` holds the cases until then).
+  frozen inference baselines leave out. `store/history_rerank.py` is the
+  relevance kit used by 09-S5's captured `routes/history_recall.py` caller
+  on the `history_check` route, with no sampling or escalation and its
+  registered replay case. The rerank switch defaults off, and an ungraded
+  candidate keeps its RRF slot. `store/epistemic_access.py` remains a decide
+  kit for 11: its route, policy row and registered eval case land with that
+  call site (`evals/cases.KIT_CASES` holds its case until then).
 - **Adding an embedding call site?** The doors are in one module,
   `store/inference/embed.py`: `embed_sync(<task>, texts,
   space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread

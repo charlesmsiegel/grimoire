@@ -16,7 +16,7 @@ from functools import partial
 
 import anyio
 
-from .. import chronicle, embed_space, entities, overlay, tokens
+from .. import chronicle, embed_space, entities, history_rerank, overlay, tokens
 from ..scenes import read as scenes_read
 from ..searchdocs import live
 from . import budget, coverage, expand, lexical, model, refs, semantic, settings, structural
@@ -192,7 +192,7 @@ def _prepare(cid, sid, query, ceiling):
     return _Selection(query, cfg, cap, depth, cat, docs, tuple(merge_mod.order(candidates)))
 
 
-def _finish(cid, prepared, ordered, cv, summary_omissions):
+def _expander(cid, prepared, summary_omissions):
     query, cap, depth, cat, docs = (prepared.query, prepared.cap, prepared.depth,
                                    prepared.cat, prepared.docs)
     try:
@@ -202,21 +202,37 @@ def _finish(cid, prepared, ordered, cv, summary_omissions):
         chron = {}
     by_sid = {d.sid: d for d in docs}
     omissions = summary_omissions or {}
-    selected = merge_mod.select(
-        ordered,
-        depth,
-        lambda c: _item(
-            cid,
-            c,
-            by_sid[c.scene.sid],
-            query,
-            chron,
-            cat,
+    def item(c):
+        return _item(
+            cid, c, by_sid[c.scene.sid], query, chron, cat,
             max(budget.MIN_ITEM_TOKENS, cap // depth) * 4,
             omissions.get(c.scene.sid, ""),
-        ),
+        )
+    return item
+
+
+def _expanded(cid, prepared, ordered, summary_omissions):
+    item = _expander(cid, prepared, summary_omissions)
+    return {c.scene.key: item(c) for c in ordered}
+
+
+def _finish(cid, prepared, ordered, cv, summary_omissions, held=None):
+    # Rerank grades the actual prompt view, so its already-expanded units must
+    # survive the call unchanged. Only a later refill pays for new expansion.
+    held = {} if held is None else dict(held)
+    expand_item = _expander(cid, prepared, summary_omissions)
+
+    def item(c):
+        if c.scene.key not in held:
+            held[c.scene.key] = expand_item(c)
+        return held[c.scene.key]
+    selected = merge_mod.select(
+        ordered,
+        prepared.depth,
+        item,
     )
-    fitted = budget.fit(selected, cap, tokens.count_tokens)
+    fitted = budget.fit(selected, prepared.cap, tokens.count_tokens)
+    query = prepared.query
     digest = hashlib.sha256(
         json.dumps(
             [query.texts, query.terms, query.subjects, sorted(query.scopes), query.perspective],
@@ -224,7 +240,7 @@ def _finish(cid, prepared, ordered, cv, summary_omissions):
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest)
+    return model.Evidence(tuple(fitted), tuple(ordered), cv, prepared.cap, digest)
 
 
 def retrieve_preview(cid: str, sid: str, query: model.Query, ceiling: int, *,
@@ -233,6 +249,7 @@ def retrieve_preview(cid: str, sid: str, query: model.Query, ceiling: int, *,
     if prepared is None:
         return model.Evidence(ceiling=max(ceiling, 0))
     cv = coverage.verdict(prepared.ordered, prepared.depth, len(prepared.docs))
+    cv = replace(cv, rerank="skipped:preview" if prepared.cfg.rerank else "off")
     return _finish(cid, prepared, prepared.ordered, cv, summary_omissions)
 
 
@@ -330,5 +347,11 @@ async def retrieve(
             cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
                                   semantic_complete=len(result.signals) >= len(prepared.docs))
     cv = replace(cv, semantic=result.status, tiers=tiers)
+    held = None
+    if rerank is not None:
+        held = await anyio.to_thread.run_sync(partial(
+            _expanded, cid, prepared, ordered[:history_rerank.MAX_RANKED], summary_omissions))
+        ordered, status = await rerank(prepared.query, tuple(ordered), held)
+        cv = replace(cv, rerank=status)
     return await anyio.to_thread.run_sync(partial(
-        _finish, cid, prepared, ordered, cv, summary_omissions))
+        _finish, cid, prepared, ordered, cv, summary_omissions, held))

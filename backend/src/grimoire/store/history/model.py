@@ -127,6 +127,7 @@ class Coverage:
     admitted: int = 0
     agreement: int = 0
     eligible: int = 0
+    rerank: str = "off"
 
 
 def _signals(signals: Signals) -> dict:
@@ -220,6 +221,7 @@ class Evidence:
                 "admitted": cv.admitted,
                 "agreement": cv.agreement,
                 "eligible": cv.eligible,
+                "rerank": cv.rerank,
             },
             "ceiling": self.ceiling,
             "query_digest": self.query_digest,

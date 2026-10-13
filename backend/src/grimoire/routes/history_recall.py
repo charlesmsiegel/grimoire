@@ -21,14 +21,19 @@ from functools import partial
 
 from starlette.concurrency import run_in_threadpool
 
+from .. import inference as operations
 from .. import store
+from ..llm_errors import LLMError
+from ..store import history_rerank as kit
 from ..store.context import history as history_section
 from ..store.context import layout
 from ..store.history import budget, model, query, settings
-from . import streaming
+from . import common, decision_capture, streaming
 
 HISTORY_PHASE_SECONDS = 4
 HISTORY_PHASE_PLANNED_SECONDS = 12
+RERANK_TOP = 8
+RERANK_CEILING = 4
 _log = logging.getLogger("grimoire")
 _QUERY_POST = object()
 
@@ -41,7 +46,8 @@ def _error(cid, sid):
 
 def _prepare(cid, sid, seed, resolved):
     cfg = store.config.read_config()
-    if settings.read(cfg) is None or "history_recall" not in layout.enabled_ids(("history_recall",)):
+    history_settings = settings.read(cfg)
+    if history_settings is None or "history_recall" not in layout.enabled_ids(("history_recall",)):
         return None
     cap = budget.ceiling(cfg, resolved)
     if not cap:
@@ -53,7 +59,86 @@ def _prepare(cid, sid, seed, resolved):
     # Cost follows the same player/director-note boundary as generation. The
     # query's scan boundary may end in an assistant reply on a legacy retry.
     answering = streaming._answering_post(store.scenes.read_scene(cid, sid)["messages"])
-    return replace(prepared.query, turn_index=answering), cap, omissions
+    return replace(prepared.query, turn_index=answering), cap, omissions, history_settings.rerank
+
+
+def _kit_candidates(candidates, items):
+    chosen = []
+    for candidate in candidates[:RERANK_TOP]:
+        item = items.get(candidate.scene.key)
+        if item is None:
+            continue
+        # Reuse the authoritative header template, retaining only the first
+        # prompt excerpt, or the summary fallback. Omitted summaries never
+        # become a second way to leak archive prose into a decide prompt.
+        payload = replace(item, excerpts=item.excerpts[:1],
+                          summary="" if item.excerpts else item.summary)
+        chosen.append(kit.Candidate(candidate.scene.key, budget.render_item(payload), item.date))
+    return chosen
+
+
+async def _rerank(cid, sid, q, candidates, items, *, client, deadline, run_id="", ranked=False):
+    """09-S5: an opinion can move answered slots, never remove evidence.
+
+    Ungraded slots keep their RRF positions. The kit and decide chain own
+    unread replies, refusals and fallbacks; this adapter keeps only their
+    ordinal answer and backend, never a distribution or a fused confidence.
+    Rank extends the same slot rule with ascending positions and pointwise
+    predicates, so an unplaced native candidate is simply ungraded.
+    """
+    if time.monotonic() >= deadline:
+        return candidates, "skipped:deadline"
+    try:
+        chosen = await run_in_threadpool(_kit_candidates, candidates, items)
+        if not chosen:
+            return candidates, "skipped:empty"
+        resolved, _why, kind = await run_in_threadpool(
+            common._soft_resolved,
+            lambda: common.require_inference("history-rerank", cid, operation="decide"))
+        if resolved is None:
+            return candidates, "skipped:" + (kind or "unresolvable")
+        left = min(RERANK_CEILING, deadline - time.monotonic())
+        if left <= 0:
+            return candidates, "skipped:deadline"
+        around = common.plan_deadline(left)
+        ranked = ranked and len(chosen) > 1
+        items_to_ask = await run_in_threadpool(
+            lambda: (kit.build_items_ranked("\n".join(q.texts), chosen),) if ranked
+            else kit.build_items("\n".join(q.texts), chosen))
+        async with decision_capture.capturing(cid, sid, "history-rerank") as scope:
+            decision = await operations.decide(
+                "history-rerank", items_to_ask, client=client, resolved=resolved,
+                campaign=cid, scene=sid, post=q.turn_index, run_id=run_id,
+                capture=scope.hook(), around=around)
+            grades = kit.grades_of(chosen, decision.items) if not ranked else {}
+            positions = kit.positions_of(chosen, decision.items[0]) if ranked else {}
+            signals = {}
+            for i, candidate in enumerate(chosen):
+                result = decision.items[0 if ranked else i]
+                grade = grades[candidate.ref].level if not ranked else None
+                signals[candidate.ref] = model.RerankSignal(
+                    level=kit.LEVELS[grade] if grade is not None else None,
+                    position=positions.get(candidate.ref), backend=result.backend)
+            scope.note("", "post", q.turn_index)
+            scope.note("", "rerank", {key: {"level": s.level, "position": s.position,
+                                           "backend": s.backend} for key, s in signals.items()})
+        ordered = [replace(c, rounds=(*c.rounds[:-1], replace(c.rounds[-1],
+                           rerank=signals[c.scene.key]))) if c.scene.key in signals else c
+                   for c in candidates]
+        slots = [i for i, c in enumerate(ordered) if c.scene.key in signals
+                 and (signals[c.scene.key].level is not None
+                      or signals[c.scene.key].position is not None)]
+        graded = [ordered[i] for i in slots]
+        graded.sort(key=lambda c: (signals[c.scene.key].position if ranked
+                                  else -kit.LEVELS.index(signals[c.scene.key].level)))
+        for slot, candidate in zip(slots, graded, strict=True):
+            ordered[slot] = candidate
+        failures = [call.error_kind for call in decision.calls if call.error_kind]
+        return tuple(ordered), ("ok" if slots or not failures else "skipped:" + failures[-1])
+    except LLMError as exc:
+        return candidates, "skipped:" + exc.kind
+    except Exception:  # noqa: BLE001 -- an optional opinion never costs admitted file evidence
+        return candidates, "skipped:error"
 
 
 async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, deadline=None,
@@ -64,12 +149,14 @@ async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, dea
         prepared = await run_in_threadpool(_prepare, cid, sid, seed, resolved)
         if prepared is None:
             return model.Evidence()
-        q, cap, omissions = prepared
+        q, cap, omissions, rerank_on = prepared
         if post is not _QUERY_POST:
             q = replace(q, turn_index=post)
         return await store.history.retrieve(
             cid, sid, q, ceiling=cap, embed_client=embed_client, deadline=deadline,
             summary_omissions=omissions, run_id=run_id,
+            rerank=partial(_rerank, cid, sid, client=llm_client, deadline=deadline,
+                           run_id=run_id) if rerank_on else None,
         )
     except PortalCancelledError:
         raise
