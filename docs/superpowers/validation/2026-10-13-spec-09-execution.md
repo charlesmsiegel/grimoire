@@ -78,3 +78,43 @@ preventing exhaustion. S6 must test first-scene and fully admitted anchors,
 aggregate counts and unreadable-source non-exhaustion. Scoped re-review
 `01a1350f-5c6b-7dc3-ac00-b4b69a46c0d7` approved with no material findings,
 using the supplied public amendment packet because shell setup failed.
+
+Ruling: Preserve the existing archive producer and add a separate private
+`Prepared.archive_scan_text` carrying its exact un-clipped activation window —
+the query scan intentionally filters director notes/images and can use a
+different last-post window — the cost if wrong is adapting this private
+preparation handoff. Query/Evidence schemas remain compatible; the archive
+scan is used only for omission, never embedding. Ordinary already-appended
+posts need no extra seed; director notes use compose's existing `wi_seed`.
+
+## Isolated browser verification
+
+The in-app Browser runtime could not start because its Windows setup helper
+was missing. The fallback uses cached Playwright 1.61.1 and installed Edge,
+with a fresh headless profile. The backend runs on 8199 with `GRIMOIRE_HOME`
+set before imports to ignored worktree scratch; the frontend runs on 5199.
+The first worlds response was asserted empty before API-seeding only Realm,
+Saltmarch and Mara. Model replies are routed to the shared cassette mock.
+
+S2 settings check: defaults 0/1200/0.35/off, three numeric fields saved and
+retained after reload, rerank saved on and retained after reload then restored
+off, no page errors. Screenshot was visually inspected in ignored scratch.
+Two test-locator mistakes were corrected using observed UI semantics: the
+accessible button name is Save despite uppercase CSS, and the Context pane
+can be reopened through `?section=context`. No product change was needed.
+Live inspector check also passed: real shared-cast evidence, structural reason
+and rank, exhausted coverage, skipped:preview status and700-token ceiling are
+visible, with no page errors. The synthetic older/current scenes each have
+Mara and Seraphine, meeting the two-actor shared-cast rule. Turn checks and
+helper shutdown remain pending.
+
+## S2 task checkpoint
+
+S2 implemented in `a80e6f77a`, with macro-empty evidence correction in
+`2a624c406`. Independent review found a bare-header/false-evidence-id defect
+when expanded summary text disappeared. Frozen summary spans now enforce
+content admission;41 focused tests pass. Scoped re-review approved with no
+new blocking findings. Final UI85/typecheck, lint/type/eslint ratchets and533
+template checks passed; broader backend runs are recorded in the task report.
+Old lore/frozen campaign files remain unchanged. Empty-enabled preview
+diagnostics and existing test warnings are deferred for whole-branch triage.

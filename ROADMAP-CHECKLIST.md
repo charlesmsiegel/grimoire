@@ -650,7 +650,7 @@ alone. This table is generated: after a spec's slices change, run
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | 09-S1 | Retrieval core, structural and lexical, no network | L | 5 | 03-S1, 03-S3, 07-S2 (S), 07-S7 (S), 08-S2, 08-S3, 08-S4 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
-| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
+| 09-S2 | The history section and its packer tier | M | 6 | 01i-S1 (S), 09-S1 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
 | 09-S3 | The turn phase, structural and lexical | M | 7 | 01i-S1 (S), 09-S2 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
 | 09-S4 | The semantic signal and tier 2 | M | 8 | 01h-S1, 01h-S2 (S), 01h-S5, 08-S3, 09-S3 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
 | 09-S5 | The rerank | M | 8 | 01d-S1 (S), 01e-S1 (S), 01e-S5 (S), 02-S7, 09-S3 | [x] | [x] | [ ] | [ ] | [ ] | [ ] |
