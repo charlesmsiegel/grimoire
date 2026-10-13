@@ -316,7 +316,7 @@ def test_s1_presence_never_shows_a_summary_or_title(pier):
     [c] = view.items
     summary = next(s for s in c.slices if s.part == "summary")
     assert summary.access == "unknown" and summary.basis == ("summary_needs_grant",)
-    assert "title" not in c.header and c.header["date"] == "Day 3"
+    assert c.header == {}
     assert c.item.summary == "" and c.item.excerpts == () and c.item.title == ""
 
 
@@ -428,8 +428,10 @@ def test_a_cut_between_retrieval_and_classification_makes_nothing_newly_witnesse
     secret = st.index_of("A secret")
     responses.delete(cid, st.sid, first)   # renumbers posts and remaps presence
     classes = _post_classes(_view(st, win, [item]))
-    assert classes[secret][0] != "witnessed"
-    assert all(a != "witnessed" or i != secret for i, (a, _b) in classes.items())
+    # The secret's old index now names the weather post Winifred did see; the
+    # evidence no longer matches it, so nothing there is newly witnessed.
+    assert classes[secret] == ("unknown", ("moved",))
+    assert "witnessed" not in {a for a, _b in classes.values()}
 
 
 def test_a_hidden_post_and_a_clipped_post(pier):
@@ -652,3 +654,193 @@ def test_the_detail_carries_no_text(pier):
     assert {s["access"] for i in detail["items"] for s in i["slices"]} <= set(epistemic.ACCESS)
     assert {b for i in detail["items"] for s in i["slices"] for b in s["basis"]} \
         <= epistemic.BASES
+
+
+# ------------------------------------------------------------------ review round
+
+
+def test_leaving_ends_presence(pier):
+    """An actor who left is not witness to what came after (the interval's end)."""
+    st, win = pier["st"], pier["win"]
+    _leave(st, pier["waid"])
+    after = st.say("Once Winifred is gone, Seraphine burns the ledger.")
+    classes = _post_classes(_view(st, win, [st.item()]))
+    assert classes[st.index_of("silver ledger")][0] == "witnessed"
+    assert classes[after] == ("unknown", ("not_recorded_present",))
+
+
+def _swap_post(item: model.EvidenceItem, index: int, **changes) -> model.EvidenceItem:
+    e = item.excerpts[0]
+    posts = tuple(model.EvidencePost(**{**p.__dict__, **changes}) if p.index == index else p
+                  for p in e.posts)
+    return model.EvidenceItem(item.scene, item.title, excerpts=(model.Excerpt(posts, e.text),))
+
+
+def test_a_post_whose_key_or_speaker_moved_is_dropped(pier):
+    st, mara = pier["st"], pier["mara"]
+    secret = st.index_of("silver ledger")
+    item = st.item()
+    for changes in ({"key": "r-" + _hex()}, {"key": ""}, {"speaker": "Winifred"}):
+        assert _post_classes(_view(st, mara, [_swap_post(item, secret, **changes)]))[secret] \
+            == ("unknown", ("moved",))
+
+
+def test_a_director_note_is_never_evidence(pier):
+    st, mara = pier["st"], pier["mara"]
+    note = scenes.append_message(st.cid, st.sid, "assistant", "Make Mara nervous.",
+                                 speaker=scenes.serialize.DIRECTOR_SPEAKER)
+    item = st.item()
+    forged = model.EvidencePost(note, "", None, "Grimoire", "Make Mara nervous.")
+    e = item.excerpts[0]
+    planted = model.EvidenceItem(item.scene, item.title, excerpts=(
+        model.Excerpt((*e.posts, forged), e.text),))
+    for actor in (mara, None):
+        assert _post_classes(_view(st, actor, [planted], (mara,)))[note] == \
+            ("unknown", ("moved",))
+
+
+def test_a_whole_scene_unaware_for_an_unresolvable_group_withholds_everything(pier):
+    st, mara = pier["st"], pier["mara"]
+    _absorb(st, "Mara gave away the silver ledger.")
+    _grant(st, "groups:watch", "The Watch", "unaware")
+    view = _view(st, mara, [st.item(summary="Mara gave away the silver ledger.")])
+    assert view.visible() == ()
+    assert {s.basis for s in view.items[0].slices} == {("override_group",)}
+    # An entry on a post beats a whole-scene one.
+    _grant(st, mara, "Mara", "knows", keys=(_key(st, 0),))
+    assert _post_classes(_view(st, mara, [st.item()]))[0] == ("known", ("override",))
+
+
+def test_an_unresolvable_group_post_unaware_withholds_the_summary(pier):
+    st, mara = pier["st"], pier["mara"]
+    _absorb(st, "Mara gave away the silver ledger.")
+    _grant(st, mara, "Mara", "knows")
+    _grant(st, "groups:watch", "The Watch", "unaware", keys=(_key(st, 0),))
+    [c] = _view(st, mara, [st.item(summary="Mara gave away the silver ledger.")]).items
+    assert next(s for s in c.slices if s.part == "summary").basis == ("summary_needs_grant",)
+    assert "title" not in c.header
+
+
+def test_a_resolvable_group_grant_reaches_its_members(pier, cid):
+    st, win = pier["st"], pier["win"]
+    stranger, _a, _v = _npc(cid, "Ilse")
+    gid = overlay.create_entity(cid, "groups", "The Saltmarch Watch",
+                                fields={"leader": "", "members": win})
+    _grant(st, f"groups:{gid}", "The Saltmarch Watch", "knows", keys=(_key(st, 0),))
+    assert _post_classes(_view(st, win, [st.item()]))[0] == ("known", ("override_group",))
+    assert _post_classes(_view(st, stranger, [st.item()]))[0] == ("unknown", ("no_record",))
+
+
+def test_r2_prime_needs_a_stamped_user_post(cid):
+    st = Stage(cid)
+    pc, paid, pvid = _npc(cid, "Seraphine")
+    _enter(st, paid, pvid, role="player")
+    record = appearances_paths.record(cid)
+    record[f"characters/{paid}"]["presence"] = {}
+    appearances_paths._path(cid).write_text(json.dumps(record), encoding="utf-8")
+    # An unstamped line is shown under the player label, but proves nothing:
+    # with two players seated it could be either.
+    st.say("An unstamped line from the table.")
+    scenes.append_message(cid, st.sid, "assistant", "The narrator describes the dusk.")
+    p = epistemic.Perspective.of(cid, st.sid, None, (pc,), identity=st.identity)
+    [c] = epistemic.classify(p, [st.item()]).items
+    assert c.state == "unattributed" and c.known_to == ()
+    st.say("I hold my ground.", speaker="Seraphine")
+    [c] = epistemic.classify(p, [st.item()]).items
+    assert c.known_to == (pc,)
+
+
+def test_known_to_and_suspected_by_are_exclusive(pier):
+    st, mara = pier["st"], pier["mara"]
+    _grant(st, mara, "Mara", "suspects", keys=(_key(st, 0),))
+    [c] = _view(st, None, [st.item()], (mara,)).items
+    assert c.known_to == (mara,) and c.suspected_by == ()
+
+
+def test_the_identity_is_checked_again_after_the_read(pier, monkeypatch):
+    st, mara = pier["st"], pier["mara"]
+    item = st.item()
+    real = scenes_identity.scene_identity
+    calls = []
+
+    def flips(c, sid):
+        calls.append(sid)
+        return real(c, sid) if len(calls) == 1 else "f" * 32
+    monkeypatch.setattr(scenes_identity, "scene_identity", flips)
+    assert _view(st, mara, [item]).visible() == ()           # unreadable for actors
+    calls.clear()
+    monkeypatch.setattr(scenes_identity, "find_by_identity", lambda _c, _i: None)
+    view = _view(st, None, [item], (mara,))
+    assert view.items[0].admitted is False and view.visible() == ()   # gone for everyone
+
+
+def test_with_presence_unreadable_authorship_is_off_too(pier, monkeypatch):
+    st, mara = pier["st"], pier["mara"]
+    item = st.item()
+
+    class Unreadable:
+        @staticmethod
+        def record(_cid):
+            raise ValueError("appearances.json will not parse")
+    monkeypatch.setattr(epistemic, "appearances_paths", Unreadable)
+    assert _post_classes(_view(st, mara, [item]))[st.index_of("silver ledger")] == \
+        ("unknown", ("no_record",))
+
+
+def test_a_whole_scene_grant_carries_the_header(pier):
+    st, mara = pier["st"], pier["mara"]
+    _absorb(st, "Mara gave away the silver ledger.")
+    _grant(st, mara, "Mara", "knows")
+    item = model.EvidenceItem(model.SceneRef(st.sid, st.identity), "The Pier",
+                              date="Day 3", location="The pier",
+                              summary="Mara gave away the silver ledger.")
+    [c] = _view(st, mara, [item]).visible()
+    assert c.header == {"title": "The Pier", "date": "Day 3", "location": "The pier"}
+    assert c.item.scene.sid == "" and c.item.title == "The Pier"
+
+
+def test_a_partial_attendee_gets_no_date_or_location(pier):
+    """09's location is the scene's last: a place Winifred may never have been."""
+    st, win = pier["st"], pier["win"]
+    [c] = _view(st, win, [st.item()]).visible()
+    assert c.header == {} and c.item.location == "" and c.item.date == ""
+
+
+def test_the_narrator_reads_a_legacy_scene_unannotated(cid):
+    st = Stage(cid)
+    mara, aid, vid = _npc(cid, "Mara")
+    _enter(st, aid, vid)
+    st.say("Something happened before intervals were recorded.")
+    record = appearances_paths.record(cid)
+    record[f"characters/{aid}"]["presence"] = {}
+    appearances_paths._path(cid).write_text(json.dumps(record), encoding="utf-8")
+    [c] = _view(st, None, [st.item()], (mara,)).items
+    assert c.state == "unattributed" and c.known_to == ()
+
+
+def test_presence_follows_a_renamed_scene(pier, cid):
+    st, win = pier["st"], pier["win"]
+    item = st.item()
+    st.sid = scenes.rename_scene(cid, st.sid, "The Old Pier")
+    classes = _post_classes(_view(st, win, [item]))
+    assert classes[st.index_of("silver ledger")] == ("witnessed", ("presence_interval",))
+
+
+def test_an_unexpected_failure_narrows_and_never_raises(pier, monkeypatch):
+    st, mara = pier["st"], pier["mara"]
+    item = st.item()
+
+    def boom(*_a, **_k):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "campaign.md")
+    monkeypatch.setattr(epistemic.regex_view, "view", boom)
+    assert _view(st, mara, [item]).visible() == ()
+    [c] = _view(st, None, [item], (mara,)).visible()
+    assert c.slices[0].text == item.excerpts[0].text
+    monkeypatch.undo()
+    monkeypatch.setattr(epistemic, "_classify_item", boom)
+    assert _view(st, mara, [item]).visible() == ()
+
+
+def test_a_perspective_refuses_an_actor_that_is_not_an_npc(cid):
+    with pytest.raises(ValueError):
+        epistemic.Perspective.of(cid, "s", "pcs:seraphine", ())

@@ -9,9 +9,11 @@ absorb writes it from the narrator's chair, so only a whole-scene grant whose
 fingerprint still holds can vouch for it.
 
 Pure and read-only. `classify` takes one best-effort hold
-(`locks.best_effort_campaign_lock`, `assemble._assemble`'s policy), reads each
-store file once, calls no model and writes nothing, so it is declared in no
-lock list. Every post 09 handed over is re-matched against this read before a
+(`locks.best_effort_campaign_lock`, `assemble._assemble`'s policy), reads the
+presence, override and chronicle files once and each source scene once, calls
+no model and writes nothing, so it is declared in no lock list. (The cast's
+names and each scene's player label re-read `appearances.json` through their
+own helpers; they feed R2' and re-matching, and a stale read only narrows.) Every post 09 handed over is re-matched against this read before a
 rule sees it, because a cut between retrieval and classification renumbers
 posts; whatever no longer matches is dropped for everyone (`moved`).
 
@@ -98,8 +100,10 @@ class Perspective:
            identity: str | None = None) -> Perspective:
         """`actor_ref` as compose spells it: None and ``"grimoire"`` are the
         narrator, exactly `assemble`'s ``actor_scoped`` test."""
-        actor = None if actor_ref in (None, "grimoire") else actor_ref
-        return Perspective(cid, sid, identity, actor, tuple(present))
+        if actor_ref in (None, "grimoire"):
+            return Perspective(cid, sid, identity, None, tuple(present))
+        return Perspective.of_string(_ACTOR_PREFIX + str(actor_ref), cid=cid, sid=sid,
+                                     identity=identity, present=tuple(present))
 
 
 @dataclass(frozen=True)
@@ -242,11 +246,22 @@ def _current_sid(cid: str, ref: model.SceneRef) -> str | None:
     return scenes_identity.find_by_identity(cid, ref.identity or "")
 
 
+def _guarded(fn, *args, **kwargs):
+    """`fn`'s answer, or None when it raises: one unreadable file narrows its
+    own rule and never takes the scene with it."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception:  # noqa: BLE001 -- the caller reads None as unreadable, which narrows
+        return None
+
+
 def _read_scene(src: _Source, ref: model.SceneRef) -> _Scene | str:
     """One read of a source scene, with its prompt view computed over the
     whole transcript as 08 computes it (depth-ranged rules see the right
     depth). The identity is checked again after every read, so a scene
-    deleted and re-created under the sid in between is not mistaken for it."""
+    deleted and re-created under the sid in between is not mistaken for it.
+    Anything unexpected is the unreadable-scene row: dropped for actors,
+    09's rendering for the narrator. Nothing here may fail the turn."""
     if not ref.identity:
         return _UNVERIFIABLE
     try:
@@ -254,35 +269,28 @@ def _read_scene(src: _Source, ref: model.SceneRef) -> _Scene | str:
         if sid is None:
             return _GONE
         scene = scenes_read.read_scene(src.cid, sid)
+        messages = scene["messages"]
+        authors = _guarded(responses.actor_refs, src.cid, sid)
+        variants = _guarded(responses.variants_by_response, src.cid, sid,
+                            token=ref.identity) or {}
+        if scenes_identity.scene_identity(src.cid, sid) != ref.identity:
+            gone = scenes_identity.find_by_identity(src.cid, ref.identity) is None
+            return _GONE if gone else _UNREADABLE
+        label = _guarded(appearances_cast.player_label, src.cid, sid) or ""
+        shown = regex_view.view(messages, cid=src.cid, phase="prompt")
+        texts = tuple(searchdocs_expand._encodable(export.drop_images(
+            m["content"] if isinstance(m.get("content"), str) else "")) for m in shown)
+        speakers = tuple(searchdocs_expand._encodable(searchdocs_expand._speaker(m, label))
+                         for m in messages)
+        title = str(scene["meta"].get("title") or "")
+        record = (src.chron or {}).get(sid)
+        record = record if isinstance(record, dict) else None
+        facts = knowledge_scene.scene_facts(messages, variants, title=title, record=record)
     except scenes_paths.SceneNotFound:
         return _GONE
     except Exception:  # noqa: BLE001 -- an unreadable scene drops its item for actors
         return _UNREADABLE
-    messages = scene["messages"]
-    try:
-        authors = responses.actor_refs(src.cid, sid)
-    except Exception:  # noqa: BLE001 -- no R2 for this scene; narrows
-        authors = None
-    try:
-        variants = responses.variants_by_response(src.cid, sid, token=ref.identity)
-    except Exception:  # noqa: BLE001 -- grants on replies fail closed without variants
-        variants = {}
-    if scenes_identity.scene_identity(src.cid, sid) != ref.identity:
-        return _UNREADABLE
-    try:
-        label = appearances_cast.player_label(src.cid, sid)
-    except Exception:  # noqa: BLE001 -- an unstamped player post then fails re-matching
-        label = ""
-    shown = regex_view.view(messages, cid=src.cid, phase="prompt")
-    texts = tuple(searchdocs_expand._encodable(export.drop_images(
-        m["content"] if isinstance(m.get("content"), str) else "")) for m in shown)
-    speakers = tuple(searchdocs_expand._encodable(searchdocs_expand._speaker(m, label))
-                     for m in messages)
-    title = str(scene["meta"].get("title") or "")
     chron_ok = src.chron is not None
-    record = (src.chron or {}).get(sid)
-    record = record if isinstance(record, dict) else None
-    facts = knowledge_scene.scene_facts(messages, variants, title=title, record=record)
     if not chron_ok:
         facts = replace(facts, digest=_NO_DIGEST)
     return _Scene(sid, ref.identity, messages, texts, speakers, authors, facts, title,
@@ -378,9 +386,10 @@ class _Env:
 
 def _r1(env: _Env, ref: str, m: dict, author: str | None) -> tuple[str, str] | None:
     """R1, an override, and the unresolvable-group withholding beside it.
-    The withholding loses only to what 7.2 ranks above a group entry: an
-    entry on the post naming the actor beats a group's; any entry on the post
-    beats a whole-scene one."""
+    The withholding is stricter than 7.2: it loses only to an entry on the
+    post naming the actor, or (for a whole-scene withholding) to any entry on
+    the post. Recency is not consulted -- a group nobody can expand cannot be
+    ranked by date against one that can, so the withholding stands."""
     key, part = knowledge.post_key(m), knowledge.post_part(m)
     match = knowledge.decide(env.src.entries or {}, actor=ref, scene=env.sc.identity,
                              post=(key, part), author=author, facts=env.sc.facts,
@@ -568,9 +577,11 @@ def _aggregate(per_ref: Mapping[str, _Classes], present: Sequence[str]) -> tuple
 
 
 def _redacted(item: model.EvidenceItem, header: Mapping[str, str]) -> model.EvidenceItem:
-    return replace(item, title=header.get("title", ""), date=header.get("date", ""),
-                   location=header.get("location", ""), summary="", excerpts=(),
-                   summary_omission="", evidence_ids=item.evidence_ids)
+    """What an actor may hold of the item itself. The sid is blanked too: it
+    is the scene's slugged title. The identity stays, as the scene's key."""
+    return replace(item, scene=replace(item.scene, sid=""), title=header.get("title", ""),
+                   date=header.get("date", ""), location=header.get("location", ""),
+                   summary="", excerpts=(), summary_omission="", evidence_ids=())
 
 
 def _unclassified(item: model.EvidenceItem, perspective: Perspective,
@@ -609,11 +620,14 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
     if own is None:
         header = {"title": item.title, "date": item.date, "location": item.location}
         return Classified(item, tuple(slices), header, state, known_to, suspected_by)
+    # 09's date is the scene's first moment and its location the scene's
+    # last: neither belongs to a post, so presence for part of the scene
+    # vouches for neither. Like the title, they ride a whole-scene grant.
     header = {}
-    if any(s.part == "posts" and s.access in VISIBLE for s in slices):
+    if own.scene[0] in VISIBLE:
         header = {"date": item.date, "location": item.location}
-    if own.scene[0] in VISIBLE and item.title == sc.title:
-        header["title"] = item.title
+        if item.title == sc.title:
+            header["title"] = item.title
     return Classified(_redacted(item, header), tuple(slices), header, state, known_to,
                       suspected_by)
 
@@ -653,5 +667,9 @@ def classify(perspective: Perspective, items: Sequence[model.EvidenceItem], *,
             continue
         ov = (_overrides(src.entries, src.audiences, sc.identity)
               if src.entries is not None and src.audiences is not None else None)
-        out.append(_classify_item(item, perspective, roster, _Env(src, sc, ov)))
+        try:
+            out.append(_classify_item(item, perspective, roster, _Env(src, sc, ov)))
+        except Exception:  # noqa: BLE001 -- an item that cannot be classified narrows to nothing
+            log.warning("Could not classify history item %s", item.scene.key)
+            out.append(_unclassified(item, perspective, admitted=True))
     return EpistemicView(perspective, tuple(out))

@@ -244,3 +244,17 @@ differ from §§1–6 above.
 The slice renderer is 09's own `budget._excerpt` (ruff does not select the
 private-access rule), so the byte-equality is by construction rather than by
 test; the test stays as a tripwire.
+
+### Code review (substitute for the Codex review and final gates)
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | `classify` could raise: the regex view and `scene_facts` were unguarded (a bad byte in `campaign.md` reached `layers.effective`) | **Fixed.** Every read after the scene read sits in one guarded block (the unreadable-scene row), and each item is classified under its own guard that falls back to `_unclassified` (nothing for actors, 09's rendering for the narrator). Tested with the view raising and with `_classify_item` raising |
+| 2 | Mutation testing: eleven guards survived their removal | **Fixed with tests:** leaving ends presence; a moved key or speaker; a director note; a whole-scene `unaware` for an unresolvable group; an unresolvable group's post `unaware` withholding the summary; a resolvable group grant through real membership; R2' needing a stamped user post; `known_to`/`suspected_by` exclusive; the identity re-check; R2 off with presence unreadable (on Mara, who authored); the header. The cut test now asserts the moved post precisely; the rename test classifies Winifred, so presence must follow the rename |
+| 3 | §4.3's title paragraph contradicted the code | **Amended**: the title rides the whole-scene grant itself |
+| 4 | The redacted item kept the sid (the slugged title) and every evidence id | **Fixed**: the redacted `SceneRef` has no sid (the identity remains its key) and no evidence ids |
+| 5 | The group-withholding wording overclaimed 7.2 | **Fixed**: stated as stricter than 7.2, recency not consulted |
+| 6 | A scene deleted between the read and the re-check reached the narrator | **Fixed**: a failed re-check re-resolves the identity, and nothing found is `_GONE` |
+| 7 | Date and location rode any visible post | **Changed, with the 11-S3 plan review's finding 3**: 09's date is the scene's first moment and its location the scene's last, so a partial attendee is not told either. Both ride the whole-scene grant, like the title. Amended in §4.3 |
+| 8 | The docstring's "each file once" was untrue | **Fixed**: it says which helpers re-read `appearances.json`, and that a stale read only narrows |
+| 9 | Narrator-annotation edge cases; `Perspective.of` accepted anything | `Perspective.of` now refuses a non-`characters:` actor. The annotation cases are as specified (an unresolvable group's withholding is `unknown`, so the item reads `unattributed`; the narrator still sees everything) |

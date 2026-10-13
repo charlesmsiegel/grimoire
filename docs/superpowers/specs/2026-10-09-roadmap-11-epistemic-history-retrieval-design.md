@@ -444,8 +444,9 @@ Why each rule is shaped the way it is:
   is re-checked after every read.
 - The overrides row reads `knowledge.read_checked`; unreadable audiences are
   the same row. A group `unaware` naming a group that cannot be resolved
-  withholds what it covers from every actor, unless 7.2 ranks a matching
-  entry above it.
+  withholds what it covers from every actor. It is stricter than 7.2: only
+  an entry on the post naming the actor (or, against a whole-scene
+  withholding, any entry on the post) beats it; recency is not consulted.
 - When the best-effort hold is not acquired, the interval rules R3 and R4 are
   off: an unlocked read can pair a remapped presence record with the old
   transcript. An unreadable chronicle holds no whole-scene grant. A malformed
@@ -484,6 +485,15 @@ excerpts), so a renderer cannot reach past the slices.
 An actor-rendered item header therefore shows the date and location of an
 item with at least one visible post, and the title only when the summary is
 visible.
+
+**Amended by 11-S2 (review):** the title rides the whole-scene grant itself,
+not the summary's visibility: an item with a grant and no summary text still
+names its scene, and the scene digest the grant holds over covers the title.
+The date and location ride the same grant. 09 takes the date from the scene's
+first moment and the location from the scene's last, so neither belongs to a
+post, and presence for part of the scene vouches for neither (an actor who
+left before the scene moved to another place would otherwise be told where it
+went). An actor's header is therefore empty without a whole-scene grant.
 
 ### 4.4 The narrator
 
