@@ -57,6 +57,7 @@ from . import atomic, compiled, embed_space, paths, revision, semsearch, vectors
 from .context import art, layout, semantic
 from .inference import embed
 from .overview import warm as overview_warm
+from .searchdocs import hook as searchdocs_hook
 
 _log = logging.getLogger(__name__)
 
@@ -791,12 +792,66 @@ class _OverviewHook:
 
 OVERVIEW = _OverviewHook()
 
+
+# -- the searchdocs hook (08-C2c) ----------------------------------------------
+
+
+def _fold(outcomes: Iterable[tuple[str, str, str]]) -> dict[tuple[str, str], str]:
+    """Per-row outcomes, one per `(path, kind)`: the worst of a path's rows."""
+    folded: dict[tuple[str, str], str] = {}
+    for rel, kind, outcome in outcomes:
+        key = (rel, kind)
+        folded[key] = _worse(folded.get(key), outcome) if key in folded else outcome
+    return folded
+
+
+class _SearchDocsHook:
+    """08's scene SearchDocuments (08-C2c), wrapped: `searchdocs.hook` does
+    the work, since it may not import this module. `explicit`: an app write
+    re-renders lazily on the next read at the cost of a slice and a digest,
+    so only an explicit sync -- an edit made outside the app -- rebuilds
+    eagerly. `local` rebuilds the documents the hot rows name and plans the
+    re-embedding of those embedded in the batch's space whose text moved;
+    `network` sends it, `REINDEX_LIMIT` a campaign."""
+
+    name = "searchdocs"
+    on_write: Literal["quiet", "explicit"] = "explicit"
+
+    def owns(self, kind: str) -> bool:
+        return searchdocs_hook.owns(kind)
+
+    def local(self, ctx: WarmContext,
+              hot: Mapping[str, tuple[compiled.Materialized, ...]]) -> LocalResult:
+        got = searchdocs_hook.rebuild(hot, space=ctx.space, space_digest=ctx.space_digest,
+                                      embedding=ctx.embedding, dry_run=ctx.dry_run,
+                                      halted=ctx.halted)
+        return LocalResult(outcomes=_fold(got.outcomes), plan=got.plan, embedding=got.embedding)
+
+    def network(self, ctx: WarmContext, plan: object) -> NetworkResult:
+        result = NetworkResult()
+        assert isinstance(plan, dict) and ctx.space is not None
+        planned = [(rel, kind) for entries in plan.values() for _doc, keys in entries
+                   for rel, kind in keys]
+        if _VectorsHook._role_moved(ctx):
+            # As the `vectors` hook: never send into a space the role has
+            # moved to since the batch read it.
+            result.outcomes = dict.fromkeys(planned, "skipped")
+            result.embedding["stale_space"] = sum(len(entries) for entries in plan.values())
+            return result
+        got = searchdocs_hook.reembed(plan, space=ctx.space, halted=ctx.halted)
+        result.outcomes = _fold(got.outcomes)
+        result.embedding = got.embedding
+        result.failure = got.failure
+        return result
+
+
+SEARCHDOCS = _SearchDocsHook()
+
 #: The hooks, in their fixed order: `files`, `overview` (04-C2a), `searchdocs`
 #: (08-C2c), `vectors`. A tuple naming each hook by module rather than a
 #: registry filled by import side effects, so a process that imports only this
-#: module -- the CLI -- still has every hook. An owner not yet landed is
-#: absent, never stubbed: `searchdocs` arrives with 08-C2c.
-HOOKS: tuple[WarmHook, ...] = (FILES, OVERVIEW, VECTORS)
+#: module -- the CLI -- still has every hook.
+HOOKS: tuple[WarmHook, ...] = (FILES, OVERVIEW, SEARCHDOCS, VECTORS)
 
 _ORDER = {o: i for i, o in enumerate(("failed", "built", "planned", "hit", "skipped", "deferred", "lazy"))}
 

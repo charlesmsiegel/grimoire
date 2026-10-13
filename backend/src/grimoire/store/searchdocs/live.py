@@ -252,7 +252,7 @@ def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,
 
 
 def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
-               ) -> tuple[list[scene_mod.SceneDocument], list[tuple]]:
+               ) -> tuple[list[scene_mod.SceneDocument], list[tuple], set[str]]:
     """Each scene's document from the memo, else the cache (one batch lookup
     of what the memo lacked), else rendered; and what to store: each rendered
     document with a cache key, and each hit whose `materialized` rows this
@@ -268,6 +268,7 @@ def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
         with compiled.batch() as request:
             found = request.lookup_many(asked).values
     docs, built = [], []
+    rendered: set[str] = set()
     for (_row, sl), key, doc_key in zip(wanted, keys, doc_keys, strict=True):
         doc = held.get(doc_key)
         if doc is None and key is not None:
@@ -275,6 +276,7 @@ def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
             doc = _decoded(hit.value, doc_key) if hit is not None and hit.hit else None
         if doc is None:
             doc = scene_mod.render(sl)
+            rendered.add(doc.key)
             if key is not None:
                 built.append((key, sl, doc, True))
         elif key is not None and _recorded(cid, sl, doc) not in _RECORDED:
@@ -284,7 +286,7 @@ def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
         if doc_key not in held:
             _remember(doc)
         docs.append(doc)
-    return docs, built
+    return docs, built, rendered
 
 
 def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
@@ -293,11 +295,21 @@ def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
     sids (09 excludes the scene being played); `only` restricts (05's hook).
     Never raises for damage to a scene or a ledger; raises `CampaignNotFound`,
     and `OSError` when the scenes directory itself cannot be listed."""
+    return build(cid, exclude=exclude, only=only)[0]
+
+
+def build(cid: str, *, exclude: frozenset[str] = frozenset(),
+          only: frozenset[str] | None = None,
+          store: bool = True) -> tuple[LiveSet, frozenset[str]]:
+    """`scene_documents`, and the keys of the documents rendered by this
+    call (neither memo nor cache held them) -- what 05's hook reports as
+    `built` rather than `hit`. `store=False` stores nothing in 03's cache
+    and writes no row (a dry run)."""
     rows, skipped = _walk(cid)
     inputs = slices_mod.CampaignInputs.load(cid)
     wanted = _wanted(cid, rows, inputs, exclude, only, skipped)
-    docs, built = _documents(cid, wanted)
-    if built:
+    docs, built, rendered = _documents(cid, wanted)
+    if built and store:
         _store(cid, built)
     out = []
     for (row, sl), doc in zip(wanted, docs, strict=True):
@@ -305,4 +317,20 @@ def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
         out.append(LiveDocument(sid=row["id"], doc=doc,
                                 closed_by=dict(row["closed_by"]) if row.get("closed_by") else None))
     return LiveSet(documents=tuple(out), skipped=tuple(sorted(set(skipped))),
-                   degraded=inputs.degraded)
+                   degraded=inputs.degraded), frozenset(rendered)
+
+
+def identities(cid: str) -> dict[str, str]:
+    """Each live scene's identity, to its current sid: how 05's hook turns
+    the `instance` on a `materialized` row back into a scene. A scene whose
+    head will not read, or that carries no identity, is absent -- as is a
+    deleted one, so a row it left names nobody. Raises as `_listing` does."""
+    out: dict[str, str] = {}
+    for sid in _listing(cid):
+        try:
+            head = slices_mod.read_head(cid, sid)
+        except (OSError, scenes_paths.SceneNotFound, ValueError):
+            continue
+        if head.identity:
+            out.setdefault(head.identity, sid)
+    return out

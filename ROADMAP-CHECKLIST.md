@@ -72,7 +72,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 05 | Direct-edit cache sync | 03 and 04 merged; all slices implemented | [x] | [~] substitute | 7 | [ ] |
 | 06 | Store-editing skill | 05-C2 | [x] | [~] substitute | 2 | [ ] |
 | 07 | Explicit group membership | merged in PR #507; S8 measured and withheld | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [x] |
-| 08 | Derived history SearchDocuments | 03 merged; S5 still waits for 05-S6 | [x] | [~] substitute | 6 | [ ] |
+| 08 | Derived history SearchDocuments | 03 and 05 merged | [x] | [~] substitute | 6 | [ ] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
 | 10 | Retrieval query planning | 09 (01f has landed) | [x] | [~] substitute | 3 | [ ] |
 | 11 | Epistemic history retrieval | S1 now; later slices wait for 09-S1/S2 | [x] | [~] substitute | 6 | [ ] |
@@ -101,7 +101,7 @@ These lanes are spec-level. For work assignment, run `python3 scripts/roadmap_sl
 |---|---|---|---|
 | 04 | Yes | **Yes** | 03 is merged |
 | 05 | Yes | **Yes** | 04 is merged |
-| 08 | Yes | No | 05-S6 for 08-S5 |
+| 08 | Yes | **Yes** | 05 is merged |
 | 11 | Yes | No | 09-S1 and 09-S2 for 11-S2/S3 |
 | 13 | Technically yes | **Held by scheduling** | All other roadmap specs must finish first |
 
@@ -370,11 +370,11 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   **08-C2c** A hot-rebuild hook for 05.
 - [ ] **08-C3a** A `history-index` embed task. **08-C3b** `expand(...)`, where
   the caller names the phase.
-- **In progress (S1, S2, S3, S4, S6 coded on `claude/intelligent-mccarthy-igivlo`):**
-  08-C1, 08-C2a and 08-C3b are delivered in full, and 08-C2b's no-network half
-  (`vector_kind`, `record_embedded`). 08-C2b's `vectors_for`, 08-C2c and 08-C3a
-  are 08-S5's and wait for 05-S6 (the `WarmHook` protocol). The plan, review
-  and final gates are owed to the Codex review on the PR.
+- **In progress (all six slices coded on `claude/intelligent-mccarthy-igivlo`):**
+  08-C1, 08-C2a and 08-C3b are delivered by S1-S4 and S6. 08-C2b, 08-C2c and
+  08-C3a are delivered by S5 (`vectors_for`, the `searchdocs` hook, the
+  `history-index` task), now that 05-S6's `WarmHook` protocol is on main. The
+  plan, review and final gates are owed to the Codex review on the PR.
 
 ### 09: Hybrid historical retrieval
 - [ ] **09-C1** `history.retrieve(Query) -> Evidence`, RRF merge, a
@@ -637,7 +637,7 @@ alone. This table is generated: after a spec's slices change, run
 | 08-S2 | The scene SearchDocument, in process | L | 3 | 03-S2, 03-S6 (S), 08-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 | 08-S3 | The live set, the compiled cache, and recording embedded vectors | M | 4 | 03-S1, 03-S2, 03-S3, 03-S4, 03-S5 (S), 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 | 08-S4 | Transcript expansion and its guard rule | M | 1 | — | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
-| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 08-S5 | The `searchdocs` hook, `vectors_for`, and the `history-index` task | M | 6 | 01h-S2 (S), 03-S4, 05-S6, 08-S3 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 | 08-S6 | Group metadata from 07 | S | 4 | 07-S2, 07-S7, 08-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 
 ### 09

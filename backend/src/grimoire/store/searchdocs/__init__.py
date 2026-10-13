@@ -17,5 +17,8 @@ pulls in the others.
 - ``slices`` -- the campaign's memoized inputs and one scene's slices.
 - ``scene`` -- rendering, bounds, metadata and the key (08-C1).
 - ``live`` -- the live document set, batch lookup and lazy build (08-C2a).
-- ``embedded`` -- the vector kind and `record_embedded` (08-C2b, no network).
+- ``embedded`` -- the vector kind, `record_embedded` and `vectors_for`, the
+  `history-index` call site (08-C2b, 08-C3a).
+- ``hook`` -- the `searchdocs` hot rebuild 05's sync runs (08-C2c), wrapped by
+  `cache_sync._SearchDocsHook`.
 """

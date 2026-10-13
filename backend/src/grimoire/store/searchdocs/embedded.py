@@ -16,18 +16,73 @@ re-embeds only documents with such a row, so whoever embeds a document --
 names that scene's identity, so a scene that inherits the sid is never
 re-embedded because of it.
 
-`vectors_for` and the `history-index` task land with 08-S5, behind 05's sync.
+`vectors_for` embeds documents out of a turn under the `history-index` task
+(08-C3a). Its one caller is 05's sync, through the `searchdocs` hook
+(`hook.reembed`); a turn's warm run is 09's, under its own task.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
-from .. import compiled, vectors
+from ... import embeddings
+from ...llm_errors import LLMError
+from .. import compiled, embed_space, vectors
+from ..inference import embed
 from . import live
 from . import scene as scene_mod
 
 PROJECTION = scene_mod.KIND
+TASK = "history-index"
+
+
+@dataclass(frozen=True)
+class DocVectors:
+    vectors: dict[str, list[float]]   # document key -> unit vector, for every one held
+    embedded: int                     # vectors saved by this call
+    sent: int                         # texts the request carried (0: nothing sent)
+    error: str | None                 # the embed failure's kind, if one
+
+
+def vectors_for(cid: str, docs: Sequence, *, space: dict,
+                client: embeddings.EmbeddingsClient, limit: int) -> DocVectors:
+    """Vectors for `docs` (`live.LiveDocument`s) under `space["space"]` and
+    each document's exact text -- the key 09's turn warm reads and writes --
+    embedding at most `limit` of the texts the cache lacks, in one call.
+
+    The misses are cut on `embed_space.warm_window`, a rotating proper subset,
+    so a document the provider refuses never holds the head of every run.
+    One `history-index` ledger row, campaign-attributed, no scene: a warm-up
+    is not part of playing one. `space` is the caller's, never re-resolved
+    here. Never raises: a failure returns what is held, with its kind."""
+    texts = list(dict.fromkeys(d.doc.text for d in docs))
+    held = vectors.load(space["space"], texts)
+    misses = [t for t in texts if t not in held]
+    window = embed_space.warm_window(misses, cid, limit) if limit > 0 else []
+    embedded, error = 0, None
+    if window:
+        try:
+            got = embed.embed_sync("history-index", window, space=space, client=client,
+                                   campaign=cid, cached=len(held), uncached=len(misses),
+                                   queries=0)
+        except LLMError as exc:
+            error = exc.kind
+        except OSError:
+            error = "network"
+        else:
+            if len(got) == len(window):
+                for text, vector in zip(window, got, strict=True):
+                    vectors.save(space["space"], text, vector)
+            else:
+                error = "bad_response"
+    held = vectors.load(space["space"], texts)
+    # Saved means it reads back: `vectors.save` drops a vector with no
+    # direction, or a write the cache cannot make, rather than raise.
+    embedded = sum(1 for text in window if text in held) if error is None else 0
+    record_embedded(cid, docs, space=space)
+    return DocVectors(vectors={d.doc.key: held[d.doc.text] for d in docs if d.doc.text in held},
+                      embedded=embedded, sent=len(window), error=error)
 
 
 def vector_kind(space: dict) -> str:
