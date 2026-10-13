@@ -281,8 +281,9 @@ on `compose_turn` without `history=`.
 `test_serving_compression.py`'s two bundle tests fail on clean `main` too,
 with the dependency set CI now installs: Starlette 1.8's `FileResponse` watches
 for a disconnect while it streams, and the test's ASGI harness sent one
-straight after the request. The harness now hangs up after the last body
-frame, as a client does. This is test-only and was not caused by this branch.
+straight after the request. This branch fixed the harness too, but #514
+landed the same repair on `main` first, so the rebase onto it keeps `main`'s
+version and this branch no longer touches the file.
 
 **Audit against the spec, and what changed.** A read-only spec-versus-code
 audit found these, now fixed:
@@ -329,10 +330,11 @@ Kept as they are, with reasons:
 - `shared_cast` counts present actors; a non-present speaker or addressee
   already admits through `actor`, which admits on its own.
 - A phase-deadline timeout sets the shared memo, as section 10.2's
-  acceptance asks ("the next turn hits the outage memo").
+  acceptance asks ("the next turn hits the outage memo"). (Later reversed by
+  the user's ruling below.)
 - The Windows missing-`ctypes` failure (`test_compiled.py`, through
-  `recycle_bin.py`) is on clean `main` and is not this branch's; it is left
-  to its own change.
+  `recycle_bin.py`) was on `main` and not this branch's; #514 fixed it on
+  `main`, and this branch is rebased onto that.
 
 **Adversarial review of the whole diff.** An independent review probed the
 turn paths, locks, prompt leaks, freezing, budget, semantic publication and
