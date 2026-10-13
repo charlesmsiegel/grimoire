@@ -1,0 +1,10 @@
+{#- One bounded history unit. Original summary survives omission on the item.
+    Vars: item (EvidenceItem), with safe title/date/location and prompt excerpts. -#}
+{%- set parts = ["**" ~ item.title ~ "**" ~ ((" — " ~ item.date) if item.date else "") ~ ((" — " ~ item.location) if item.location else "")] -%}
+{%- if item.summary and not item.summary_omission -%}
+{%- set _ = parts.append(item.summary) -%}
+{%- endif -%}
+{%- for excerpt in item.excerpts -%}
+{%- if excerpt.text -%}{%- set _ = parts.append(excerpt.text) -%}{%- endif -%}
+{%- endfor -%}
+{{ parts | join("\n\n") }}

@@ -970,3 +970,14 @@ have been composed with the rider on, and a switch flipped between composing a
 prompt and reading the reply would otherwise leave a fence in the stored text.
 Stripping a leading fence nothing asked for is harmless. The surrounding "What
 this actor can perceive" and continuity-notes guidance stays either way.
+
+### History rendering shared with retrieval (roadmap 09-S1)
+
+`scene/sections/history_item.j2` takes `item` (an EvidenceItem): safe title,
+date and location, the original summary with its `summary_omission` reason,
+and prompt-view excerpts. It prints the summary only when no omission applies.
+`scene/sections/history_recall.j2` takes either `history_evidence` (items) or
+`history_blocks` (already-rendered strings); it owns the heading and joins.
+`store/history/budget.py` uses these exact templates to count the complete
+section. S2 registers the section in the context catalog and freezes macro
+expansions from the same blocks and frame before fitting and shedding.

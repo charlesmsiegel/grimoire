@@ -265,10 +265,15 @@ SYNC_SOURCES = Kind('sync:sources', 1, (), (), True)
 # `searchdocs.scene.SEARCH_DOCUMENT_VERSION`; bumping it moves every key.
 SEARCHDOCS_SCENE = Kind('searchdocs.scene', 1, (), ('slices', 'degraded'), False)
 
+# Roadmap 09: statistics of exactly the live SearchDocument key the caller
+# supplied. No corpus frequency persists: the live set belongs to this query.
+HISTORY_TERMS = Kind('history.terms', 1, (), ('document_key',), False)
+
 KINDS: dict[str, Kind] = {TOKENS_RECORD_BODY.name: TOKENS_RECORD_BODY,
                           OVERVIEW_SCENE_TURNS.name: OVERVIEW_SCENE_TURNS,
                           SYNC_SOURCES.name: SYNC_SOURCES,
-                          SEARCHDOCS_SCENE.name: SEARCHDOCS_SCENE}
+                          SEARCHDOCS_SCENE.name: SEARCHDOCS_SCENE,
+                          HISTORY_TERMS.name: HISTORY_TERMS}
 
 
 @dataclass(frozen=True)
