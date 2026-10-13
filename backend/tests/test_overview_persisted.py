@@ -113,6 +113,10 @@ def test_warm_after_restart_parses_no_unchanged_transcript_or_ledger(client):
         client.get("/api/shell", params={"campaign": lib["a"]})
     assert counters.get("transcript.parse") == 0
     assert counters.get("compiled.hit.overview.scene_turns") >= 1
+    # Again: the shell may have memoised campaign a's summary in process (once
+    # its ledgers are older than statcache's racy window, as on a slow runner),
+    # and Todo would then never reach the compiled layer for it.
+    restart()
     with readstats.collect() as counters:
         client.get("/api/todo")
     assert counters.get("overview.computed.continuity_summary") == 0

@@ -42,13 +42,13 @@ def test_nested_collectors_count_apart_and_merge_upward():
 
 def test_threads_count_into_the_context_they_were_handed():
     with readstats.collect() as counters:
-        ctx = contextvars.copy_context()
-
         def work():
             for _ in range(1000):
                 readstats.bump("t")
 
-        threads = [threading.Thread(target=ctx.run, args=(work,)) for _ in range(4)]
+        # One copy per thread: a Context can be entered by one thread at a time.
+        threads = [threading.Thread(target=contextvars.copy_context().run, args=(work,))
+                   for _ in range(4)]
         for t in threads:
             t.start()
         for t in threads:
