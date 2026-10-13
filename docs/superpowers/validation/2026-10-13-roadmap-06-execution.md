@@ -137,20 +137,20 @@ All 44 guard tests pass with clean Ruff output. The lint/template/frontend
 stages passed, including 5,175 frontend tests; both dependency-set backend
 runs remain in progress.
 
-## Whole-gate result and unchanged-main reproduction
+## Initial whole-gate result and unchanged-main reproduction
 
 `make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe`
 ran from this worktree. Ruff (1,136 existing findings), mypy (161 existing
 findings), template verification (527 checks), ESLint, frontend type checking
 and all 5,175 frontend tests passed. The backend coverage run reached 93.68%,
 above the 93% floor: 21,070 passed, 42 skipped, 7 failed and 11 setup errors.
-The command exited nonzero; the whole gate is not green.
+The initial command exited nonzero; that run was not green.
 
 Every failed case was rerun on unchanged main at `c647d06c4`, using that
 checkout's source and the same interpreter, without changing its HEAD or
 tracked files. All seven failures reproduced; the common benchmark setup
-error also reproduced. The product sources, synthetic generator and affected
-tests have no diff on this branch. The failures are therefore an observed
+error also reproduced. At that point, the product sources, synthetic generator
+and affected tests had no diff on this branch. The failures are therefore an observed
 baseline, not inferred from their filenames:
 
 - The missing-`ctypes` import case reaches the Windows recycle driver.
@@ -164,8 +164,9 @@ The selected main reproduction reported 7 failures and 1 setup error. Its log
 is retained outside the checkout; full-gate logs are in the ignored execution
 workspace. Main remained clean. No baseline was weakened, test skipped, frozen
 home regenerated or product behavior changed to make this feature appear green.
-The separate Android-dependency run is recorded below. Verification remains limited by this baseline even though the scoped
-checks, actual application and implementation/spec review gates passed.
+The separate initial Android-dependency run is recorded below. Verification
+was limited by this baseline even though scoped checks, actual application
+and implementation/spec review gates passed.
 
 `make check-pydantic1` also exited nonzero: 21,066 passed, 48 skipped, the
 same 7 failed cases and the same 11 benchmark setup errors. It used its
@@ -175,6 +176,72 @@ whole gate pass; the Windows failures occur with both dependency sets.
 Final scoped run on the completed skill/routing tree: 169 passed, 7 platform
 skips across skill, docs, interpreter and cache-CLI checks. Both skill manifests
 validate. No lint baseline changed. Both slices' Code, Review and Final spec
-stages are complete; Landed stays clear. Integration awaits a green full gate
-or an explicit decision about the reproduced baseline. The requested branch
-and native worktree are preserved, with no push, PR or merge.
+stages were complete at the initial handoff; Landed stayed clear. The branch
+and native worktree were preserved without publication. The user then
+authorized the repairs below, followed by a push and PR once implemented.
+
+
+## Authorized Windows gate repair
+
+After the baseline reproduction, the user requested fixing the errors and
+confirmed proceeding. This authorizes the bounded runtime/test repair below;
+the initial spec-06 non-goal remains the boundary of the skill feature itself.
+The earlier failures above describe the pre-repair tree.
+
+The native recycle driver is optional infrastructure. The store facade must
+remain importable without it, and an unavailable driver must refuse a send
+before its callback or sender runs. One complete unavailable namespace is
+published first; the live namespace replaces it only after all native imports,
+DLLs, declarations and helpers initialize. The native ABI and successful-send
+logic are retained. Missing ctypes, DLLs and exports are exercised in isolated
+subprocesses, including unchanged bytes and absent callback/sender calls.
+
+Synthetic timestamps belong to an exclusively owned, disposable generated
+tree. The generator now validates the entire tree before any timestamp writes:
+links, reparse points and hard-linked regular files are rejected, and traversal
+errors propagate. It then applies exact nanosecond timestamps deepest first using the supported
+API. This preflight does not claim protection
+against concurrent path replacement; exclusive ownership is required.
+
+Fault injection now selects each intended POSIX or Windows image-move branch
+explicitly. Windows rename permission and cross-device failures also preserve
+the original blob and sidecar and stop the run. FIFO refusal still uses a real
+FIFO where available; the unavailable-API case supplies only its classification
+metadata and retains the existing literal refusal assertions. No failure was
+hidden through a new skip, altered baseline or deletion fallback.
+
+The new regressions were observed failing before the production fixes:
+10 failed, 1 passed and 1 existing benchmark setup error. Afterward the original
+failures and new cases passed together (18 passed), and all six affected
+modules passed (626 passed, 4 existing platform skips). Ruff and mypy ratchets
+remained at 1,136 and 161. No frozen home or snapshot was regenerated.
+
+Built-in Codex diff review thread `01a1356e-da5f-7323-be36-dbc75b0f39b8`, turn
+`01a1356e-db29-7c21-82b8-54c62b7ab2ed`, found two test portability defects:
+a cwd-based subprocess source path and an indirect metadata mock. Both were
+reproduced before correction. The source path now derives from the test file,
+and the child asserts it imported this worktree. The existing compiled-cache
+subprocess had the same defect and was corrected too: 4 failures became
+4 passes when run from `backend/`. The reparse mock now patches `Path.lstat`
+directly: a failing emulation of the older pathlib implementation became a
+pass. A fresh reviewer rechecked these fixes and found no remaining blocker.
+
+Built-in Codex recheck turn `01a13579-f217-7623-b2e0-e3521c281b4b`
+confirmed both portability corrections with no further finding. The final
+adversarial diff-and-repair-requirements review, turn
+`01a1357b-9815-7841-88bf-bc9283137e25`, approved with no findings. Both
+reviews explicitly required the complete gate result before claiming
+verification complete. The fresh primary backend run passed: 21,104 passed,
+42 skipped, zero failures, and 93.71% coverage above the 93% floor. It took
+1,308.74 seconds with eight workers. Template checks and all 5,175 frontend
+tests passed too. The Android/Pydantic-1 dependency run also passed:
+21,098 passed, 48 skipped, zero failures, in 1,158.94 seconds. The complete
+`make check` command exited 0 with the explicit shared `PY` and `WORKERS=8`.
+Both runs used this worktree's source; no failure was suppressed or baseline
+inflated. The final test-only review corrections were additionally verified
+from `backend/` and under the older-pathlib emulation described above.
+
+Completion metadata now marks 06-C1 delivered and both slices implemented,
+reviewed and verified. Landed remains clear until merge. The user authorized
+pushing this branch and opening a PR, then stopping; the worktree is preserved
+for later review.

@@ -48,9 +48,11 @@
 
 Focused checks: the same S1 trio plus existing collecting/CLI regressions. The final evidence is `make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe` from this worktree; on macOS/Linux select the primary checkout's `backend/.venv/bin/python`.
 
-The user requested implementation in this worktree. Leave the completed branch reviewable there; do not merge, push, publish or open a PR unless requested.
+The user requested implementation in this worktree, then authorized pushing the completed branch and opening a PR. Preserve the worktree for review; do not merge unless requested.
 
-Full-gate outcome: nonzero in both dependency sets, with 7 failures and 11
-setup errors reproduced on unchanged main. The run step is complete; a green
-whole gate remains blocked. See the execution record for the scope ruling and
-actual outputs. Scoped verification passed 169 tests with 7 platform skips.
+The initial full gate exposed 7 failures and 11 setup errors in both dependency
+sets, reproduced on unchanged main. The user authorized repairing them. The
+fresh full gate now passes: 21,104 primary backend tests, 21,098 Android
+dependency tests and 5,175 frontend tests, with 93.71% backend coverage. See
+the execution record for the original reproduction, repairs and reviews.
+Scoped skill verification passed 169 tests with 7 platform skips.

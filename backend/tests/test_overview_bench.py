@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -236,3 +238,91 @@ def test_the_generator_marks_and_backdates(library):
     import time
     newest = max(p.stat().st_mtime_ns for p in library.rglob("*"))
     assert newest < time.time_ns() - 60 * 1_000_000_000
+
+
+@pytest.mark.parametrize("nofollow", [False, True])
+def test_backdate_uses_supported_timestamps_deepest_first(tmp_path, monkeypatch, nofollow):
+    root = tmp_path / "library"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    record = nested / "realm.md"
+    record.write_text("Realm", encoding="utf-8")
+    real_utime = os.utime
+    calls = []
+
+    def utime(path, *, ns, follow_symlinks=True):
+        if not nofollow and not follow_symlinks:
+            raise NotImplementedError("no-follow timestamps unavailable")
+        calls.append(Path(path))
+        # Emulate both capabilities while still checking real timestamp effects.
+        real_utime(path, ns=ns)
+
+    monkeypatch.setattr(os, "utime", utime)
+    monkeypatch.setattr(os, "supports_follow_symlinks", {utime} if nofollow else set())
+    when = 1_767_225_600_000_000_000
+    synth_library._backdate(root, when)
+    assert calls == [record, nested, root]
+    assert [path.stat().st_mtime_ns for path in calls] == [when, when, when]
+
+
+@pytest.mark.parametrize("kind", ["root", "file", "directory", "hard", "reparse"])
+def test_backdate_refuses_links_before_traversal_or_timestamp_writes(tmp_path, monkeypatch, kind):
+    root = tmp_path / "library"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    source = outside / "realm.md"
+    source.write_text("Realm", encoding="utf-8")
+    if kind == "root":
+        root.symlink_to(outside, target_is_directory=True)
+    else:
+        root.mkdir()
+        (root / "plain.md").write_text("Mara", encoding="utf-8")
+        link = root / "linked"
+        if kind == "file":
+            link.symlink_to(source)
+        elif kind == "directory":
+            link.symlink_to(outside, target_is_directory=True)
+        elif kind == "hard":
+            os.link(source, link)
+        else:
+            link.mkdir()
+            (link / "realm.md").write_text("Realm", encoding="utf-8")
+            real_lstat, real_scandir = Path.lstat, os.scandir
+
+            def lstat(path, *args, **kwargs):
+                if Path(path) == link:
+                    return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400, st_nlink=1)
+                return real_lstat(path, *args, **kwargs)
+
+            def scandir(path):
+                assert Path(path) != link, "traversed a reparse point"
+                return real_scandir(path)
+
+            monkeypatch.setattr(Path, "lstat", lstat)
+            monkeypatch.setattr(os, "scandir", scandir)
+
+    writes = []
+    monkeypatch.setattr(os, "utime", lambda *args, **kwargs: writes.append(args[0]))
+    with pytest.raises(ValueError, match="link"):
+        synth_library._backdate(root, 1_767_225_600_000_000_000)
+    assert writes == []
+
+
+def test_backdate_propagates_a_walk_error_before_writing(tmp_path, monkeypatch):
+    root = tmp_path / "library"
+    root.mkdir()
+    blocked = root / "nested"
+    blocked.mkdir()
+    real_scandir = os.scandir
+
+    def scandir(path):
+        if Path(path) == blocked:
+            raise PermissionError("unreadable synthetic directory")
+        return real_scandir(path)
+
+    writes = []
+    monkeypatch.setattr(os, "scandir", scandir)
+    monkeypatch.setattr(os, "utime", lambda *args, **kwargs: writes.append(args[0]))
+    with pytest.raises(PermissionError, match="synthetic"):
+        synth_library._backdate(root, 1_767_225_600_000_000_000)
+    assert writes == []

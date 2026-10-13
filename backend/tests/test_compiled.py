@@ -880,7 +880,7 @@ def test_large_json_strings_do_not_count_quoted_brackets_as_nesting(cache, root,
 
 
 def test_missing_ctypes_keeps_store_importable_and_cache_clock_optional():
-    env = {**os.environ, 'PYTHONPATH': str(Path('backend/src').resolve()), 'GRIMOIRE_COMPILED_CACHE': '0'}
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'), 'GRIMOIRE_COMPILED_CACHE': '0'}
     script = "import sys; sys.modules['ctypes']=None; from grimoire.store import compiled; print('Realm')"
     result = subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, text=True,
                             timeout=30, check=False)

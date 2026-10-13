@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import threading
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -191,7 +194,8 @@ def test_a_failing_hook_is_a_status_and_the_next_hook_runs(home):
 # -- validation (section 8) ---------------------------------------------------
 
 
-def test_every_refusal_carries_its_reason(home, tmp_path, monkeypatch):
+@pytest.mark.parametrize("fifo_api", ["native", "unavailable"])
+def test_every_refusal_carries_its_reason(home, tmp_path, monkeypatch, fifo_api):
     outside = tmp_path / "elsewhere.md"
     outside.write_text("x")
     _write(home, "worlds/realm/lore/pact.md", "x")
@@ -201,7 +205,23 @@ def test_every_refusal_carries_its_reason(home, tmp_path, monkeypatch):
     _write(home, "llm_connections/openrouter.json", "x")
     _write(home, "config.md", "x")
     _write(home, "worlds/realm/lore/.pact.md.abcd1234.tmp", "x")
-    os.mkfifo(home / "worlds" / "realm" / "pipe")
+    if fifo_api == "unavailable":
+        monkeypatch.delattr(os, "mkfifo", raising=False)
+    pipe = home / "worlds" / "realm" / "pipe"
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(pipe)
+    else:
+        _write(home, "worlds/realm/pipe", "x")
+        real_lstat = os.lstat
+
+        def special_file(path, *args, **kwargs):
+            if Path(path) == pipe:
+                return SimpleNamespace(st_mode=stat.S_IFIFO, st_file_attributes=0)
+            return real_lstat(path, *args, **kwargs)
+
+        # Keep genuine FIFO coverage where it exists. Else classification
+        # consumes the same metadata without an unavailable creation API.
+        monkeypatch.setattr(os, "lstat", special_file)
     report = cache_sync.sync_paths([
         str(outside), "../elsewhere.md", "worlds/../../elsewhere.md", "worlds/linked/lore/pact.md",
         ".cache/x.md", "logs/2026-10.jsonl", "llm_connections/openrouter.json", "config.md",
