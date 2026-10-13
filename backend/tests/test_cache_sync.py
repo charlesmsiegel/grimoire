@@ -542,3 +542,12 @@ def test_a_directory_that_cannot_be_fully_read_is_refused_unreadable(home, monke
     report = cache_sync.sync_paths(["worlds/realm/lore"], mode="explicit")
     assert ("worlds/realm/lore", "unreadable") in [(p.given, p.reason) for p in report.paths]
     assert not report.ok
+
+
+def test_a_file_named_twice_through_its_directory_does_not_use_up_the_quota(home, monkeypatch):
+    monkeypatch.setattr(cache_sync, "MAX_PATHS", 3)
+    for name in "abc":
+        _write(home, f"worlds/realm/lore/{name}.md", "x")
+    report = cache_sync.sync_paths(["worlds/realm/lore/a.md", "worlds/realm/lore"], mode="explicit")
+    assert sorted(p.given for p in report.paths) == [f"worlds/realm/lore/{n}.md" for n in "abc"]
+    assert not report.truncated and report.ok

@@ -46,7 +46,7 @@ import logging
 import os
 import stat
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
@@ -486,11 +486,22 @@ class _VectorsHook:
         # could, and a held text costs nothing.
         if not self._within_limit(projection, text, plan, spent):
             return "lazy"
+        return self._plan(ctx, rel, path, row, projection, text, instance, data, plan, result)
+
+    @staticmethod
+    def _plan(ctx: WarmContext, rel: str, path: Path, row: compiled.Materialized,
+              projection: Projection, text: str, instance: object, data: bytes,
+              plan: dict[str, _Wanted], result: LocalResult) -> str:
+        """A text the cache lacks, within the limit: deferred with embeddings
+        off, counted once in a dry run, otherwise planned with its claim."""
         if not ctx.embedding:                             # a dry run previews this too
             result.embedding["deferred"] = result.embedding.get("deferred", 0) + 1
             return "deferred"
         if ctx.dry_run:
-            result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
+            # Coalesced as a real run would: a text two rows want counts once.
+            if text not in plan:
+                plan[text] = _Wanted(projection.task)
+                result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
             return "planned"
         wanted = plan.setdefault(text, _Wanted(projection.task))
         campaign = instance.get("campaign", "") if isinstance(instance, dict) else ""
@@ -885,9 +896,10 @@ class _Walk:
 
 
 def _expand(root: Path, rel: str, limit: int,
-            stop: Callable[[], bool] = lambda: False) -> _Walk:
+            stop: Callable[[], bool] = lambda: False, skip: Container[str] = ()) -> _Walk:
     """The files under a directory, as store-relative paths: temps, links and
-    anything `_check` refuses are skipped. Bounded by `limit`, and asks `stop`
+    anything `_check` refuses are skipped. Bounded by `limit`, counting only
+    files not in `skip` (paths the batch already holds), and asks `stop`
     before each directory it lists."""
     walk = _Walk()
     pending = [root.joinpath(*rel.split("/"))]
@@ -903,22 +915,34 @@ def _expand(root: Path, rel: str, limit: int,
             walk.unread = True
             continue
         for entry in entries:
-            try:
-                info = entry.stat(follow_symlinks=False)
-            except OSError:
-                walk.unread = True
-                continue
-            if _linked(info) or atomic.is_write_temp(Path(entry.name)):
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                pending.append(Path(entry.path))
-            elif stat.S_ISREG(info.st_mode):
-                if len(walk.files) >= limit:
-                    walk.cut = True
-                    break
-                walk.files.append(Path(os.path.relpath(entry.path, root)).as_posix())
+            _visit(root, entry, walk, pending, limit, skip)
+            if walk.cut:
+                break
     walk.files.sort()
     return walk
+
+
+def _visit(root: Path, entry: os.DirEntry, walk: _Walk, pending: list[Path], limit: int,
+           skip: Container[str]) -> None:
+    """One directory entry of `_expand`'s walk: a directory to list next, a
+    file to take while the limit allows, or something skipped."""
+    try:
+        info = entry.stat(follow_symlinks=False)
+    except OSError:
+        walk.unread = True
+        return
+    if _linked(info) or atomic.is_write_temp(Path(entry.name)):
+        return
+    if stat.S_ISDIR(info.st_mode):
+        pending.append(Path(entry.path))
+    elif stat.S_ISREG(info.st_mode):
+        found = Path(os.path.relpath(entry.path, root)).as_posix()
+        if found in skip:
+            return
+        if len(walk.files) >= limit:
+            walk.cut = True
+            return
+        walk.files.append(found)
 
 
 def _campaign_of(root: Path, rel: str) -> str | None:
@@ -1187,7 +1211,7 @@ class _Collector:
         elif checked.kind == "absent":
             self.add(PathReport(checked.given, "missing", rel=checked.rel))
         elif checked.kind == "dir" and checked.rel is not None:
-            walk = _expand(root, checked.rel, MAX_PATHS - self.accepted)
+            walk = _expand(root, checked.rel, MAX_PATHS - self.accepted, skip=self.seen)
             for rel in walk.files:
                 self.accepted += self.add(PathReport(rel, "pending", rel=rel))
             if walk.cut:                  # the files past the quota were never looked at
@@ -1421,8 +1445,13 @@ def _merge(by_rel: Mapping[str, PathReport], outcomes: Mapping[tuple[str, str], 
         item = by_rel.get(rel)
         if item is None:
             continue
-        item.kinds[kind] = (outcome if final or kind not in item.kinds
-                            else _worse(item.kinds.get(kind), outcome))
+        previous = item.kinds.get(kind)
+        if final and previous is not None:            # a replacement, never a second count
+            old = previous.split(":", 1)[0]
+            summary[old] = summary.get(old, 0) - 1
+            if summary[old] <= 0:
+                del summary[old]
+        item.kinds[kind] = (outcome if final or previous is None else _worse(previous, outcome))
         kinds.add(kind)
         word = outcome.split(":", 1)[0]
         summary[word] = summary.get(word, 0) + 1
@@ -1526,7 +1555,7 @@ def _list_scopes(root: Path, campaigns: Iterable[str], worlds: Iterable[str], al
         return bool(halt)
 
     listed: list[str] = []
-    for rel in _scope_dirs(root, campaigns, worlds, all_records, result):
+    for rel in _disjoint(_scope_dirs(root, campaigns, worlds, all_records, result)):
         walk = _expand(root, rel, MAX_SCOPE_FILES - len(listed), halted)
         listed.extend(f for f in walk.files if f.split("/", 1)[0] in SYNCABLE_ROOTS)
         result.truncated = result.truncated or walk.cut
@@ -1535,7 +1564,21 @@ def _list_scopes(root: Path, campaigns: Iterable[str], worlds: Iterable[str], al
         if halt:
             result.stopped = halt[0]
             break
-    return list(dict.fromkeys(listed))
+        if walk.cut:                      # past `MAX_SCOPE_FILES`: the rest was never listed
+            result.refused.append(PathReport(rel, "refused", "too_many", rel=rel))
+            break
+    return listed
+
+
+def _disjoint(dirs: Iterable[str]) -> list[str]:
+    """Scope directories with repeats and nested ones dropped (`--world realm
+    --all` lists `worlds` once), so no walk lists a file another already
+    listed and no file is charged to the scope limit twice."""
+    kept: list[str] = []
+    for rel in sorted(set(dirs), key=lambda d: (d.count("/"), d)):
+        if not any(rel == top or rel.startswith(top + "/") for top in kept):
+            kept.append(rel)
+    return kept
 
 
 def _classify_chunk(request: compiled.Batch, root: Path, chunk: list[str], result: ScopeResult) -> None:

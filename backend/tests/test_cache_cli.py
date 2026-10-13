@@ -401,3 +401,23 @@ def test_a_root_purge_runs_before_any_rebuild_and_leaves_nothing_hot(home, upper
     report = cache_sync.run(["worlds/realm/lore/pact.md"], deleted=["campaigns/winifred"])
     assert order == ["purge"] and report.purged is True
     assert _by_path(report)["worlds/realm/lore/pact.md"].status == "cold"
+
+
+def test_overlapping_scopes_are_listed_once_and_charged_once(home, monkeypatch):
+    for name in "ab":
+        _write(home, f"worlds/realm/lore/{name}.md", "x")
+    _write(home, "campaigns/saltmarch/plot.json", "{}")
+    monkeypatch.setattr(cache_sync, "MAX_SCOPE_FILES", 3)
+    scope = cache_sync.expand_scopes(home, worlds=["realm", "realm"], all_records=True)
+    assert not scope.truncated and not scope.refused
+    assert sorted(scope.known) == ["campaigns/saltmarch/plot.json",
+                                   "worlds/realm/lore/a.md", "worlds/realm/lore/b.md"]
+
+
+def test_a_scope_past_its_file_limit_fails_the_sync(home, monkeypatch):
+    for name in "abc":
+        _write(home, f"worlds/realm/lore/{name}.md", "x")
+    monkeypatch.setattr(cache_sync, "MAX_SCOPE_FILES", 2)
+    report = cache_sync.run(worlds=["realm"])
+    assert ("worlds/realm", "too_many") in [(p.given, p.reason) for p in report.paths]
+    assert report.truncated and not report.ok

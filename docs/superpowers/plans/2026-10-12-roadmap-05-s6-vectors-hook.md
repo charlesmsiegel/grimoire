@@ -174,3 +174,16 @@ Substitute reviews, recorded in the PR; `@codex review` on the PR.
 - Section 7.6's root purge runs before any rebuild in its batch; after it every
   pending path is `cold`, so no path is reported refreshed whose rows the purge
   then erased.
+
+## Codex review, fourth round
+
+- Scope directories are made disjoint before listing (a repeated id, or a
+  world under `--all`, is walked once), so no file is charged to
+  `MAX_SCOPE_FILES` twice; a scope past that limit is refused `too_many` and
+  the sync is not `ok`.
+- A directory argument's walk skips files the batch already holds before
+  counting them against `MAX_PATHS`.
+- A network phase's final outcome replaces the local `planned` in the hook's
+  summary as well as on the path, so a built row is counted once.
+- A dry run coalesces a text several rows want before counting it in
+  `would_send`, as a real run's plan does.

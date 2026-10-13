@@ -675,3 +675,31 @@ def test_a_cross_kind_rename_is_warmed_from_its_new_file(home, fake):
     assert report.embedding["held"] == 1 and report.ok
     [row] = _rows_at(home, new_path)
     assert json.loads(row.instance)["entity"] == ["items", eid]
+
+
+def test_a_built_row_is_summarised_once_and_never_as_planned(home, fake):
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited for the summary.")
+    report = cache_sync.sync_paths([_rel(home, path)], mode="explicit")
+    summary = report.hooks["vectors"]
+    assert summary.get("built") == 1 and "planned" not in summary
+
+
+def test_a_dry_run_counts_a_text_two_rows_want_once(home, fake):
+    _configure()
+    wid, cid = _realm()
+    other = campaigns.create_campaign("Winifred's Run", wid)
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    data = path.read_bytes()
+    text = semantic.record_text(eid, data)        # a hit records no row: give the other reader one
+    vectors.load(_space(), [text], sources={text: compiled.WrittenInput("source", path, data)},
+                 projection=semantic.PROJECTION, instances={text: {"campaign": other, "entity": ["lore", eid]}})
+    assert len(_rows_at(home, path)) == 2
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="One edit, two readers.")
+    dry = cache_sync.sync_paths([_rel(home, path)], mode="explicit", dry_run=True)
+    real = cache_sync.sync_paths([_rel(home, path)], mode="explicit")
+    assert dry.embedding["would_send"] == 1 == real.embedding["sent"]
