@@ -551,8 +551,10 @@ there is no number in the output a caller could mistake for a probability.
 class SceneRef:
     sid: str                   # at retrieval
     identity: str | None       # scenes.identity.scene_identity; None for a legacy scene
+    campaign: str = ""         # explicit tier-3 source; ordinary turn refs leave it empty
     @property
-    def key(self) -> str:      # identity if any, else "sid:" + sid
+    def key(self) -> str:      # base = identity if any, else "sid:" + sid
+                              # campaign set: "campaign:" + campaign + "/" + base
         ...
 
 @dataclass(frozen=True)
@@ -567,7 +569,7 @@ class Candidate:
     scene: SceneRef
     rounds: tuple[Signals, ...]           # one per retrieval round (10 adds rounds)
     ranks: Mapping[tuple[int, str], int]  # (round, signal) -> rank
-    tier: int                             # 1 or 2: where it was first found
+    tier: int                             # 1, 2 or explicit non-turn 3: first found
     admitted_by: frozenset[str]
 ```
 
@@ -582,6 +584,13 @@ section whole. The `"sid:" + sid` fallback is stable for one retrieval and for
 rename of an earlier scene during the phase is a race 09 accepts (the worst
 case is one scene appearing twice in the inspector). `retrieve` never calls
 `ensure_identity`: minting one is a write under the campaign lock.
+
+An explicit non-turn tier-3 retrieval qualifies every source's refs with its
+campaign, including the anchor campaign when it is requested. This avoids
+collapsing equal legacy sids or copied identities from campaign forks. The
+`campaign` field defaults to empty, so turn keys and 10's merge contract retain
+their existing spelling. Expansion, headers and visibility checks use the
+qualified ref's source campaign; a sid alone must never select a source.
 
 ### 7.3 Optional rerank (02-C5b, 01e)
 
@@ -1008,11 +1017,40 @@ already returned are not saved.
 |---|---|---|
 | 1 | Structural and lexical over the whole live set; semantic scores at most `POOL_MAX` from their admitted-only RRF union | Always, first |
 | 2 | Every live SearchDocument in the campaign, semantic bounded by `WIDEN_LIMIT` | When tier 1's coverage verdict is not `sufficient` |
-| 3 | Other campaigns' history (every campaign of the world, or the library) | **Never on a turn.** Only for `origin` other than `"turn"` with `Query.tier_limit == 3`: 12's `search_history` tool, and a future search surface. `retrieve` refuses tier 3 for `origin="turn"` with `ValueError` |
+| 3 | History in the explicitly named `source_campaigns` | **Never on a turn.** Only for `origin` other than `"turn"` with `Query.tier_limit == 3`: 12's `search_history` tool, and a future search surface. `retrieve` refuses tier 3 for `origin="turn"` with `ValueError` |
 
 Lexical scoring over the whole live set is part of tier 1 because it is the
 cheap signal: per-document statistics are cached and the scan is arithmetic.
 Tier 2 widens only the semantic signal, the one that costs per document.
+
+**Caller-directed tier-3 scope (2026-10-13 clarification).** `retrieve` takes an
+optional `source_campaigns: tuple[str, ...] = ()` keyword. Tier 3 requires a
+nonempty explicit tuple; omitting it is a programming error. The caller expands
+its world/library scope to campaign ids before calling; retrieval never discovers
+or silently broadens that scope. Missing/unreadable named sources degrade
+independently. No source keyword is valid for a turn or a lower tier. Every
+tier-3 result is source-qualified as section 7.2 specifies.
+
+Within the anchor campaign, the played scene's ordering/branch exclusions still
+apply. Other named campaigns have no comparable played sid: their live,
+non-closed scenes are searchable. Structural references are campaign scoped:
+cross-source admission must use a proven shared identity/overlay origin;
+matching actor/group slugs in unrelated worlds is not a structural join. Lexical
+and semantic signals work over each explicitly named source's visible catalog.
+The semantic loading/scoring cap and one embed call apply to the entire
+retrieval, rather than resetting per source. Ordinary turns retain tiers 1/2
+and their existing keys, eligibility and bounds.
+
+For tier 3, enumerate the whole explicit source scope before the first coverage
+decision. `eligible` is the sum of the qualified eligible scenes in all named
+sources, rather than the anchor's count. A first-scene or fully admitted anchor
+cannot terminate retrieval while another named source has eligible history.
+Coverage's pure verdict accepts `sources_complete=True` as a keyword: exhausted
+is possible only when every requested source was enumerated successfully (a
+definitively missing source counts as empty) and the ordinary complete-admission
+and available-semantic conditions hold over the aggregate. An unreadable source
+is unknown, not empty; `sources_complete=False` yields `empty` with no admitted
+candidates or `thin` with some. Ordinary single-campaign calls use the default.
 
 ### 11.2 The coverage verdict
 
@@ -1020,8 +1058,9 @@ Tier 2 widens only the semantic signal, the one that costs per document.
 free. `eligible` is the number of scenes that passed section 5.3, so coverage
 can tell "retrieval missed" from "nothing else exists" (review S5):
 
-- `exhausted`: there is no eligible scene (a campaign's first scene), or every
-  eligible scene is admitted and every available signal has evaluated the live
+- `exhausted`: every requested source is known, and either there is no eligible
+  scene (a campaign's first scene in ordinary retrieval) or every eligible
+  scene is admitted and every available signal has evaluated the live
   set. With semantic unavailable, complete admission is enough. With semantic
   available, unscored documents can still improve selection, so complete
   admission alone is not exhausted. Tier 2 does not run for exhausted coverage
@@ -1227,7 +1266,7 @@ a reader turns it on.
 
 ### 09-C1: retrieval over a query, returning bounded evidence with signals
 
-**Inputs.** `retrieve(cid, sid, query, *, ceiling, embed_client, deadline, rerank=None, origin="turn")` (async; `retrieve_preview` is its
+**Inputs.** `retrieve(cid, sid, query, *, ceiling, embed_client, deadline, rerank=None, origin="turn", source_campaigns=())` (async; `retrieve_preview` is its
 synchronous, network-free core), where `Query` is:
 
 ```python
@@ -1288,8 +1327,9 @@ a planned turn pays for one rerank, not one per round. The selection never
 exceeds `history_recall_depth` and the ceiling never grows, whatever a round
 asked for.
 
-**Guarantees.** No candidate orders at or after the played scene, is in its
-branch group, or is a closed sibling. Every lookup is over keys computed this
+**Guarantees.** In the anchor campaign no candidate orders at or after the
+played scene or is in its branch group. No candidate is a closed sibling.
+Explicit non-turn sources follow section 11.1. Every lookup is over keys computed this
 call. Signals are never combined into one stored or returned number. Every
 merge, dedupe and shed compares `SceneRef.key`, never a nullable identity. The
 output text has passed the regex prompt view. The call writes nothing to a
@@ -1303,8 +1343,8 @@ rerank's decide rows carry it now.
 
 **Failure.** Never raises for a provider, cache or ledger problem: degraded
 signals are absent and `coverage` says why. Raises `ValueError` only for a
-programming error: tier 3 from a turn, an unknown perspective, a scope outside
-`RELATIONS`.
+programming error: tier 3 from a turn, missing or misplaced source campaigns,
+an unknown perspective, a scope outside `RELATIONS`.
 
 ### 09-C2: tiered widening and fallbacks
 

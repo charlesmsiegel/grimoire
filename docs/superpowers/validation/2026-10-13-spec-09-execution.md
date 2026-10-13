@@ -58,3 +58,23 @@ is adapting the callback when spec 10 integrates, with no change to the
 low-level excerpt contract or public candidate schema.
 
 Plan gate approved: Codex thread 01a134d3-3cc9-7082-84f9-d64733ec7f58. All six plans pass, with the revised S1 renderer, full-item expansion callback and out-of-lock omission handoff as prerequisites. Code/review/final/landed boxes remain unticked until their corresponding evidence exists.
+
+Ruling: Pass the live context route's existing resolution through an optional
+`resolved=None` breakdown parameter — 01i is landed, so preview must include
+the known prompt-window cap without resolving twice — the cost if wrong is
+adapting this optional display API; None retains absolute/context shares.
+
+Ruling: Require explicit `source_campaigns` for non-turn tier 3 and qualify
+`SceneRef` keys using an optional source campaign — the original contract had
+no source-selection input and could collapse legacy sids or copied fork
+identities — the cost if wrong is adapting Spec 12's future wrapper to this
+keyword/key spelling. Query and ordinary turn refs remain compatible. The
+amended spec/S6 plan gate passed before this seam is implemented.
+
+The amendment review `01a13507-8e6f-7673-a9c0-2fd3a04601fd` found that
+anchor-only exhaustion could suppress requested sources. Eligibility now
+aggregates the explicit source scope before coverage, with unknown sources
+preventing exhaustion. S6 must test first-scene and fully admitted anchors,
+aggregate counts and unreadable-source non-exhaustion. Scoped re-review
+`01a1350f-5c6b-7dc3-ac00-b4b69a46c0d7` approved with no material findings,
+using the supplied public amendment packet because shell setup failed.
