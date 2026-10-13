@@ -168,6 +168,10 @@ class Evidence:
     coverage: Coverage = field(default_factory=lambda: Coverage("exhausted"))
     ceiling: int = 0
     query_digest: str = ""
+    #: The selection's own depth -- `Query.max_scenes` when it set one below
+    #: the setting -- so composition re-fits each item to the share retrieval
+    #: fitted it to. 0 for hand-built evidence: the setting's depth stands.
+    depth: int = 0
 
     def detail(self) -> dict:
         """JSON-safe inspector data; no callable or fused ordering number."""

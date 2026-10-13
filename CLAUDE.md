@@ -1219,7 +1219,8 @@ would answer neither question.
     door and a private `asyncio.run` loop are never refused; an `async def`
     caller reaches a compose or an embed through `run_in_threadpool`, as the
     greeting opener does. When the caller's own budget cuts a request that did go out
-    (`budgeted=True`: absorb's identity check and the continuity sweep), the
+    (`budgeted=True`: absorb's identity check, the continuity sweep and
+    history recall's turn-phase deadline), the
     row is `aborted` and nothing reaches the error store: that is the
     caller's clock, not the provider failing. A deadline that only bounds the
     provider (recall's, search's) cutting it is an error like any other.

@@ -98,3 +98,21 @@ def test_source_contract_refuses_invalid_combinations(cid, tier, origin, sources
 def test_default_scene_key_spelling_is_preserved():
     assert model.SceneRef("001--saltmarch", None).key == "sid:001--saltmarch"
     assert model.SceneRef("001--saltmarch", "identity").key == "identity"
+
+
+def test_lexical_ranks_are_numbered_across_every_named_source(cid):
+    """Each source was ranked alone, so both held a lexical rank 1 and the
+    tie went to scene-id order. Renumbered over the aggregate by raw score,
+    the stronger match leads whichever source it came from."""
+    current = played(cid)
+    weak_src = campaigns.create_campaign("Realm", worlds.create_world("Realm"))
+    strong_src = campaigns.create_campaign("Saltmarch", worlds.create_world("Realm"))
+    filler = " ".join(["The ferryman waits by the quiet harbour wall."] * 20)
+    weak = played(weak_src, text=f"{filler} The silver ledger is mentioned once.")
+    absorbed(weak_src, weak, "The ferryman waits.")
+    strong = played(strong_src, text="Silver ledger. The silver ledger. A silver ledger.")
+    absorbed(strong_src, strong, "The silver ledger, the silver ledger.")
+    evidence = recall(cid, current, (weak_src, strong_src))
+    ranks = {c.scene.campaign: c.ranks[(0, "lexical")] for c in evidence.candidates}
+    assert ranks == {strong_src: 1, weak_src: 2}
+    assert [c.scene.campaign for c in evidence.candidates][:2] == [strong_src, weak_src]

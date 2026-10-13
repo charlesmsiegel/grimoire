@@ -428,3 +428,27 @@ code and fixed with a test that fails before the fix:
 - Answered: per-response regenerate replays its whole frozen snapshot (a
   legacy response with none is refused), history included, by the S2 ruling
   above; a fresh compose is the legacy regenerate path, which gathers.
+
+**Codex review of `7e60100`.** Five P2 findings, all fixed with a test that
+fails before the fix:
+
+- Tier 3 ranked each named source alone, so every source had a rank 1 and a
+  weak match first in one campaign tied a strong one first in another. Each
+  signal's ranks are now renumbered over the aggregate by its own raw value
+  (closing the "cross-source rank calibration" limit noted for S6; lexical
+  scores still carry each source's own corpus statistics).
+- The phase deadline is the turn's own budget, so both `history-recall`
+  embed attempts pass `budgeted=True`: a request it cuts files `aborted`, not
+  an error (the follow-up to the user's outage-memo ruling; CLAUDE.md's
+  budgeted list names it).
+- Compose re-fitted every item to `ceiling // setting depth` even when the
+  query selected fewer (`max_scenes`). `Evidence.depth` now carries the
+  selection's depth, and compose uses it (0, for hand-built evidence, keeps
+  the setting's).
+- The context-only eval arm credited gold, and passed the forbidden check,
+  from the shared fact token alone. Each gold and forbidden scene now carries
+  its own marker in its summary; context-only credits a gold scene only on its
+  own marker, and every arm fails if a forbidden scene's marker is recalled --
+  into the history section, or for context-only anywhere but the recap, which
+  is recency by design (spec 1 and 16) and does carry a later absorbed scene.
+- The rerank's network time is now only its `decide` await.

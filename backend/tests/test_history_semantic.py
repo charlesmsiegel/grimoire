@@ -640,3 +640,16 @@ def test_a_held_back_structural_match_is_in_the_semantic_pool(cid, space, monkey
     assert found[old.sid].admitted_by == frozenset({"semantic"})
     assert found[old.sid].rounds[0].structural == held.rounds[0].structural
     assert evidence.coverage.tiers == (1,)
+
+
+def test_the_phase_deadline_cut_files_aborted_not_an_error(cid, space):
+    """The phase deadline is the turn's own budget: a request it cuts (the
+    door reporting `embeddings.DEADLINE`) files its row `aborted` and puts
+    nothing in the error store, as absorb's budget does."""
+    from grimoire.store import logs
+    docs = documents(cid)
+    ours = LLMError("network", "deadline spent", code=embeddings.DEADLINE)
+    assert score(cid, space, FakeAsyncEmbeddings(error=ours), docs).status == "failed:network"
+    rows = list(usage.calls(days=1))
+    assert len(rows) == 1 and rows[0]["status"] == "aborted" and not rows[0].get("error")
+    assert logs.read(level="error")["rows"] == []

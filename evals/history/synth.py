@@ -32,6 +32,10 @@ class Gold:
     identity: str | None
     start: int
     end: int
+    #: This scene's own marker, in its summary only: the planted fact is shared
+    #: by gold and forbidden scenes, so only the marker says which scene a
+    #: recap or archive line in the packed prompt came from.
+    mark: str = ""
 
     @property
     def key(self):
@@ -49,6 +53,8 @@ class Planted:
     eligible: int
     # Shape 9's second half: a campaign whose played scene is its first.
     first: tuple[str, str] | None = None
+    #: The markers of every forbidden scene (see `Gold.mark`).
+    forbidden_marks: frozenset[str] = frozenset()
 
 
 def _scene(cid, text, summary, *, cast=()):
@@ -62,7 +68,7 @@ def _scene(cid, text, summary, *, cast=()):
     return sid
 
 
-def _plant_gold(cid, sid, shape, *, long, detail, summary):
+def _plant_gold(cid, sid, shape, *, long, detail, summary, mark):
     """Shape the gold scene in place and return where its evidence sits."""
     start = 0
     if shape == 5:
@@ -76,7 +82,7 @@ def _plant_gold(cid, sid, shape, *, long, detail, summary):
         path = scene_paths._scene_path(cid, sid)
         path.write_text(re.sub(r"(?m)^identity:.*\n", "", path.read_text(encoding="utf-8")),
                         encoding="utf-8")
-    return Gold(sid, identity.scene_identity(cid, sid), start, start)
+    return Gold(sid, identity.scene_identity(cid, sid), start, start, mark)
 
 
 def _plant_ledgers(cid, old, detail, cast):
@@ -102,14 +108,16 @@ def _scene_count(shape, long):
     return (1100 if shape in (1, 3) else 80) if long else 16
 
 
-def _play(cid, root, case, *, cast, old, detail, forbidden):
+def _play(cid, root, case, *, cast, old, detail, forbidden, marks):
     """Create the scene being played, then what must stay out of its recall."""
     current = scenes.create_scene(cid, "Saltmarch")
     scenes.append_message(cid, current, "user", case.query)
     for aid, vid in cast:
         transitions.appear(cid, current, "characters", aid, vid, "npc", narrate=False)
     if case.shape == 7:
-        forbidden.add(_scene(cid, detail, detail, cast=cast))
+        mark = "Tally later."
+        forbidden.add(_scene(cid, detail, f"{detail} {mark}", cast=cast))
+        marks.add(mark)
     if case.shape == 8:
         pins.set_rule(cid, f"characters:{cast[0][0]}", "exclude", sid=current)
         loc = entities.create_entity(root, "locations", "Saltmarch", secrecy="gm-only")
@@ -131,7 +139,7 @@ def build(case, *, long=False, seed=9):
     detail = "Mara entrusted Seraphine with amberseal."
     if case.shape not in (3, 4):
         detail += " The silver ledger identifies amberseal."
-    gold, forbidden = [], set()
+    gold, forbidden, forbidden_marks = [], set(), set()
     count = _scene_count(case.shape, long)
     # Group affiliation admits all case3 scenes; its old gold lies outside
     # the 64-slot pool but inside the total 1000-document widening window.
@@ -144,14 +152,16 @@ def build(case, *, long=False, seed=9):
         is_gold = n == target or case.shape == 10
         shared = is_gold or case.shape == 3
         text = detail if is_gold else rng.choice(("The room is quiet.", "The ferryman waits."))
-        summary = text
+        # Neither a query term nor a semantic rule: the marker moves no signal.
+        mark = f"Tally {n}." if is_gold else ""
+        summary = f"{text} {mark}" if mark else text
         if case.shape == 2 and n >= count-6:
             text = summary = "The harbour keeper copies a silver ledger."
             shared = False
         sid = _scene(cid, text, summary, cast=cast if shared else ())
         if is_gold:
             gold.append(_plant_gold(cid, sid, case.shape, long=long, detail=detail,
-                                    summary=summary))
+                                    summary=summary, mark=mark))
     assert gold
     # Scene creation may widen ordinal ids at 1000; planted identities follow
     # the store's rename contract without asking retrieval to define gold.
@@ -163,8 +173,10 @@ def build(case, *, long=False, seed=9):
     if case.shape == 6:
         _close_branch(cid, old)
         forbidden.add(old)
+        forbidden_marks.update(g.mark for g in gold)
         gold = []
-    current = _play(cid, root, case, cast=cast, old=old, detail=detail, forbidden=forbidden)
+    current = _play(cid, root, case, cast=cast, old=old, detail=detail, forbidden=forbidden,
+                    marks=forbidden_marks)
     first = None
     if case.shape == 9:
         first_cid = campaigns.create_campaign("Saltmarch", wid)
@@ -172,4 +184,4 @@ def build(case, *, long=False, seed=9):
         scenes.append_message(first_cid, first_sid, "user", case.query)
         first = (first_cid, first_sid)
     return Planted(cid, current, tuple(gold), frozenset(forbidden), fact, case.shape,
-                   count + int(case.shape == 6), first)
+                   count + int(case.shape == 6), first, frozenset(forbidden_marks))

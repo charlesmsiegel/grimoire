@@ -100,7 +100,8 @@ def _packed(planted, evidence):
     rows = detail["sections"] if detail else []
     row = next((r for r in rows if r["id"] == "history_recall"), {})
     section = row.get("text", "") if not row.get("dropped") else ""
-    return messages, text, section, row
+    recap = next((r.get("text", "") for r in rows if r["id"] == "story_so_far"), "")
+    return messages, text, section, row, recap
 
 
 def _network(fn, stats):
@@ -141,8 +142,12 @@ def _reranker(stack, arm, planted, *, targets, client, deadline, run_id, stats):
     original = common.require_inference
     stack.enter_context(patch.object(common, "require_inference", side_effect=lambda task, *a, **kw:
         targets["history-rerank"] if task == "history-rerank" else original(task, *a, **kw)))
-    return _network(partial(history_recall._rerank, planted.cid, planted.sid,
-                            client=client, deadline=deadline, run_id=run_id), stats)
+    # Only the decide await is the provider's: candidate formatting, the
+    # resolution's config reads and the capture are retrieval's own work.
+    stack.enter_context(patch.object(history_recall.operations, "decide",
+                                     _network(history_recall.operations.decide, stats)))
+    return partial(history_recall._rerank, planted.cid, planted.sid,
+                   client=client, deadline=deadline, run_id=run_id)
 
 
 async def _arm(case, planted, arm, *, space, live, targets, seen, run_id, stats):
@@ -173,7 +178,8 @@ async def _arm(case, planted, arm, *, space, live, targets, seen, run_id, stats)
                 stats["first_scene"] = (first.coverage.verdict == "exhausted"
                                         and first.coverage.tiers == (1,)
                                         and not first.items and len(seen) == requests)
-        messages, packed, section, row = await asyncio.to_thread(_packed, planted, evidence)
+        messages, packed, section, row, stats["recap"] = await asyncio.to_thread(
+            _packed, planted, evidence)
         output = ""
         if live:
             with usage.meter("chat", campaign=planted.cid, scene=planted.sid, run_id=run_id) as meter:
@@ -191,13 +197,22 @@ def _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, ro
     # credited only if its planted fact text is in that prompt.
     items = evidence.items
     if arm == "context-only":
+        # Credit a gold scene only when its own summary marker reached the
+        # prompt (the recap or archive line); the planted fact is shared with
+        # the forbidden scenes, so it cannot say which scene supplied it.
         items = tuple(model.EvidenceItem(model.SceneRef(g.sid, g.identity), "Saltmarch")
-                      for g in planted.gold if planted.fact in packed)
+                      for g in planted.gold if g.mark and g.mark in packed)
     else:
         details = {r["key"]: r for r in row.get("history", {}).get("items", [])}
         items = tuple(i for i in items if section and not details.get(i.scene.key, {}).get("shed", False))
     recalls = graders.recalls(planted.gold, items)
     hard = not planted.forbidden.intersection(i.scene.sid for i in items)
+    # No forbidden scene's own summary may be recalled: in a retrieval arm,
+    # into the history section; in context-only, anywhere but the recap,
+    # which is the most recent one-liners by design (spec 1, 16) and so says
+    # nothing about eligibility.
+    recalled = section if arm != "context-only" else packed.replace(stats.get("recap", ""), "")
+    hard = hard and not any(m in recalled for m in planted.forbidden_marks)
     if case.shape == 8:
         hard = hard and all(not i.location for i in evidence.items)
         hard = hard and all("characters:mara" not in r.refs for c in evidence.candidates

@@ -224,8 +224,11 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
         before, marker, after = blocks[key].partition("\x01")
         blocks[key], spans[key] = _unmark(before + after)
         boundaries[key] = len(_SPAN.sub("", before)) if marker else None
-    depth = settings.read(cfg)
-    share = max(budget.MIN_ITEM_TOKENS, cap // (depth.depth if depth else max(len(items), 1)))
+    # The share retrieval fitted each item to: the selection's own depth when
+    # the evidence says it, else the setting's.
+    configured = settings.read(cfg)
+    depth = evidence.depth or (configured.depth if configured else len(items))
+    share = max(budget.MIN_ITEM_TOKENS, cap // max(depth, 1))
     kept: set[str] = set()
     fitted = []
     for item in items:

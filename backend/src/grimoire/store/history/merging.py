@@ -116,4 +116,4 @@ def merge(
         semantic=a.coverage.semantic if a.coverage.semantic == b.coverage.semantic else "mixed",
     )
     digest = hashlib.sha256((a.query_digest + "\0" + b.query_digest).encode()).hexdigest()
-    return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest)
+    return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest, cfg.depth)

@@ -289,8 +289,33 @@ def _prepare_sources(cid, sid, query, ceiling, sources):
     if base is None:
         return None
     return replace(base, query=query, cat=anchor_cat, docs=tuple(all_docs),
-                   ordered=tuple(merge_mod.order(candidates)), sources_complete=complete,
-                   source_views=views, held_back=())
+                   ordered=tuple(merge_mod.order(_across_sources(candidates))),
+                   sources_complete=complete, source_views=views, held_back=())
+
+
+def _across_sources(candidates):
+    """Renumber each signal's ranks over every named source at once.
+
+    Each source was ranked on its own, so every source has a rank 1 and RRF
+    would read a weak match first in one campaign as the equal of a strong one
+    first in another. A signal's list is rebuilt from its own raw value --
+    lexical score, structural relation and seed counts -- newest first on a
+    tie, as within one campaign. (Lexical scores still carry each source's own
+    corpus statistics: an ordering of raw values, never a fused number.)"""
+    def lexical_key(c):
+        return -c.rounds[0].lexical.score
+
+    lists = {"lexical": lexical_key, "structural": structural._rank}
+    out = list(candidates)
+    for signal, key in lists.items():
+        ranked = [c for c in out if signal in c.admitted_by
+                  and getattr(c.rounds[0], signal) is not None]
+        ranked.sort(key=lambda c: (c.scene.campaign, c.scene.sid), reverse=True)
+        ranked.sort(key=key)
+        rank = {c.scene.key: n for n, c in enumerate(ranked, 1)}
+        out = [replace(c, ranks={**c.ranks, (0, signal): rank[c.scene.key]})
+               if c.scene.key in rank else c for c in out]
+    return out
 
 
 def _expander(cid, prepared, summary_omissions):
@@ -348,7 +373,8 @@ def _finish(cid, prepared, ordered, cv, summary_omissions, held=None):
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    return model.Evidence(tuple(fitted), tuple(ordered), cv, prepared.cap, digest)
+    return model.Evidence(tuple(fitted), tuple(ordered), cv, prepared.cap, digest,
+                          prepared.depth)
 
 
 def retrieve_preview(cid: str, sid: str, query: model.Query, ceiling: int, *,

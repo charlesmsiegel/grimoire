@@ -138,10 +138,13 @@ async def _request(texts, missing, *, space, embed_client, deadline, campaign, s
     attempt = [*texts, *missing]
     returned = []
     try:
+        # The deadline is the turn's own phase budget, not a bound on the
+        # provider: a request it cuts files `aborted`, never an error (as it
+        # never trips the outage memo).
         got = await embed.embed(
             "history-recall", attempt, queries=len(texts), space=space,
-            client=embed_client, deadline=deadline, campaign=campaign, scene=scene,
-            post=post, run_id=run_id, cached=cached, uncached=uncached)
+            client=embed_client, deadline=deadline, budgeted=True, campaign=campaign,
+            scene=scene, post=post, run_id=run_id, cached=cached, uncached=uncached)
         if len(got) != len(attempt):
             raise LLMError("bad_response", "wrong vector count")
         returned = got[len(texts):]
@@ -150,8 +153,8 @@ async def _request(texts, missing, *, space, embed_client, deadline, campaign, s
             raise
         got = await embed.embed(
             "history-recall", list(texts), queries=len(texts), space=space,
-            client=embed_client, deadline=deadline, campaign=campaign, scene=scene,
-            post=post, run_id=run_id)
+            client=embed_client, deadline=deadline, budgeted=True, campaign=campaign,
+            scene=scene, post=post, run_id=run_id)
         if len(got) != len(texts):
             raise LLMError("bad_response", "wrong query count") from exc
         missing = []

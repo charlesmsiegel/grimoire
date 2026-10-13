@@ -427,3 +427,19 @@ def test_an_empty_retrieval_still_explains_itself_in_the_row(cid):
     off_messages, off_detail = assemble.compose_turn(cid, sid, history=failed)
     assert messages == off_messages
     assert all(s["id"] != "history_recall" for s in off_detail["sections"])
+
+
+def test_compose_refits_to_the_selection_depth_not_the_setting(cid):
+    """A query with `max_scenes` below the setting fits its items to
+    `ceiling // max_scenes`; compose must re-fit them to that same share, not
+    to `ceiling // setting`, or an already-selected excerpt is cut short."""
+    config.write_config(history_recall_depth="5", history_recall_budget="400")
+    sid = played(cid)
+    long = " ".join(["The silver ledger was hidden beneath the boathouse floor."] * 12)
+    one = replace(evidence(item(text=long), ceiling=400), depth=1)
+    _messages, detail = assemble.compose_turn(cid, sid, history=one)
+    assert row(detail)["history"]["items"][0]["tokens"] > 400 // 5
+    clipped = replace(one, depth=0)  # the setting's share: a fifth of the ceiling
+    _messages, detail = assemble.compose_turn(cid, sid, history=clipped)
+    got = row(detail)["history"]["items"]
+    assert not got or got[0]["tokens"] <= 400 // 5

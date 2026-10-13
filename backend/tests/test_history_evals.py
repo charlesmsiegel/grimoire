@@ -57,3 +57,26 @@ def test_grading_uses_planted_ranges_and_packed_text():
     assert graders.excerpt_recall([gold], [item], "shed") == 0
     assert graders.consistent("The token is amberseal.", "amberseal")
     assert not graders.consistent("The token is not amberseal.", "amberseal")
+
+
+def test_context_only_rules_read_scene_markers_not_the_shared_fact():
+    """The planted fact is shared by gold and forbidden scenes, so the
+    context-only arm is graded by each scene's own marker: a forbidden
+    scene's line recalled outside the recap fails the rule, and a gold scene
+    is credited only when its own line is there."""
+    from evals.history import cases, runner, synth
+    from grimoire.store.history import model
+    case = cases.CASES[6]
+    gold = synth.Gold("001--saltmarch", "g", 0, 0, "Tally 0.")
+    planted = synth.Planted("realm", "009--saltmarch", (gold,), frozenset({"005--saltmarch"}),
+                            "amberseal", case.shape, 3, None, frozenset({"Tally later."}))
+    stats = {"network_ms": 0.0, "semantic_evaluated": 0, "retrieval_ms": 0.0}
+
+    def grade(packed, recap=""):
+        return runner._metrics(case, planted, "context-only", model.Evidence(ceiling=1200),
+                               packed, "", {}, {**stats, "recap": recap}, 1.0, [])
+
+    leaked = grade("Earlier scenes: amberseal. Tally later.")
+    assert not leaked["hard_rules"] and leaked["recall1"] == 0
+    assert grade("Story so far: Tally later.", recap="Story so far: Tally later.")["hard_rules"]
+    assert grade("Earlier scenes: amberseal. Tally 0.")["recall1"] == 1
