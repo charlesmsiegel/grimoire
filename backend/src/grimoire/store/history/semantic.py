@@ -166,10 +166,17 @@ async def score(texts, docs, *, space, embed_client, deadline, campaign, scene,
                 campaign=campaign, scene=scene, post=post, run_id=run_id,
                 cached=cached, uncached=uncached)
     except (LLMError, OSError, TimeoutError) as exc:
-        if getattr(exc, "code", None) == embeddings.NOT_SENT:
+        code = getattr(exc, "code", None)
+        if code == embeddings.NOT_SENT:
             return SemanticResult(status="skipped:deadline", cached=cached)
         kind = exc.kind if isinstance(exc, LLMError) else "timeout" if isinstance(exc, TimeoutError) else "network"
-        if kind in embed_space.OUTAGE_KINDS:
+        # The memo is for an endpoint that is down. The turn's own phase
+        # deadline cutting a slow but answering endpoint says nothing of the
+        # kind, and must not switch lore recall (with its own, longer budget)
+        # off for a minute: only a failure the provider or transport reported
+        # trips it.
+        ours = isinstance(exc, TimeoutError) or code == embeddings.DEADLINE
+        if kind in embed_space.OUTAGE_KINDS and not ours:
             embed_space.note_outage(space["space"])
         return SemanticResult(status="failed:"+kind, cached=cached)
     embed_space.clear_outage(space["space"])

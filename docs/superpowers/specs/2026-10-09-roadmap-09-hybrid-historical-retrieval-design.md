@@ -503,7 +503,12 @@ the space id, held in `embed_space` (`embed_space.outage(space_id)`,
 in this spec, rather than in a follow-up (review S4): otherwise a slow endpoint
 costs one recall deadline in compose on every turn of an outage on top of the
 history phase. The memo is process memory, never stored, cleared by a
-successful request, and with nothing failing it changes no prompt.
+successful request, and with nothing failing it changes no prompt. **It is
+tripped only by a failure the provider or transport reported, never by the
+turn's own phase deadline** (2026-10-13 ruling): a 4 s phase cutting a slow
+but answering endpoint is this turn's clock, not an outage, and must not switch
+lore recall (with its own, longer budget) off for a minute. A cut by that
+deadline costs the turn its semantic signal and nothing more.
 
 ### 6.4 Query safety restated
 
@@ -991,7 +996,9 @@ one (review S4):
 - **Worst case before the first frame** on `post_chat`: the file stages plus
   the phase deadline (4 s, or 12 s with planning), plus lore recall's own
   embed in compose, which the shared outage memo (6.3) caps at one deadline
-  per `OUTAGE_BACKOFF` during an outage.
+  per `OUTAGE_BACKOFF` during an outage the provider reports. An endpoint
+  that is only slow costs each turn up to the phase deadline and is asked
+  again next turn.
 
 ### 10.3 Freezing and replay
 
@@ -1355,8 +1362,9 @@ an unknown perspective, a scope outside `RELATIONS`.
 error`, with `eligible` counted), and the tier rule and fallback table of
 sections 11.1 and 11.3. **Guarantees**: tier 3 is unreachable from a turn;
 `exhausted` spends nothing further; with no embeddings, retrieval still returns
-structural and lexical evidence; an outage costs at most one embed deadline per
-`OUTAGE_BACKOFF`, shared with lore recall; the phase never exceeds its
+structural and lexical evidence; a reported outage costs at most one embed
+deadline per `OUTAGE_BACKOFF`, shared with lore recall, and the phase's own
+deadline never trips that memo; the phase never exceeds its
 turn-phase deadline once its file stages are done (10.2); `Coverage` is
 deterministic for the same files, query and semantic status.
 
@@ -1537,7 +1545,9 @@ Settings:
   the guard fails a retrieval placed inside the lock.
 - The live inspector sends no embed and no decide request.
 - The phase respects its deadline: a stalled embed endpoint costs at most the
-  phase seconds before compose, and the next turn hits the outage memo.
+  phase seconds before compose and keeps the file evidence; that cut does not
+  trip the outage memo, while a provider-reported failure does, and the next
+  turn then backs off.
 - Rerank: an abstention or an ungraded item keeps RRF order; an unresolvable
   route skips with a reason; a timeout honours `min(RERANK_CEILING,
   remaining)`; a `Rank` on a native-only model carries `pointwise`.

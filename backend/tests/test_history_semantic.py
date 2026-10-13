@@ -103,7 +103,10 @@ def test_cached_wrong_width_and_range_are_evicted(cid, space, monkeypatch):
     assert vectors.load(space["space"], [text]) == {}
 
 
-def test_stalled_call_bounds_deadline_and_sets_backoff(cid, space):
+def test_stalled_call_bounds_deadline_without_tripping_the_memo(cid, space):
+    """The phase deadline cutting a slow endpoint is the turn's own clock,
+    not an outage: it costs this turn's semantic signal and nothing more, so
+    lore recall (with its own, longer budget) is not switched off."""
     docs = documents(cid)
     client = FakeAsyncEmbeddings(delay=10)
     async def run():
@@ -113,6 +116,18 @@ def test_stalled_call_bounds_deadline_and_sets_backoff(cid, space):
     start = time.monotonic()
     assert asyncio.run(run()).status == "failed:timeout"
     assert time.monotonic()-start < 0.8
+    assert not embed_space.outage(space["space"])
+
+
+def test_the_door_spending_our_deadline_does_not_trip_the_memo(cid, space):
+    """The same, when the client itself stops at the deadline it was handed
+    (`embeddings.DEADLINE`); a provider-reported timeout still trips it."""
+    docs = documents(cid)
+    ours = LLMError("network", "deadline spent", code=embeddings.DEADLINE)
+    assert score(cid, space, FakeAsyncEmbeddings(error=ours), docs).status == "failed:network"
+    assert not embed_space.outage(space["space"])
+    theirs = LLMError("timeout", "provider timed out")
+    assert score(cid, space, FakeAsyncEmbeddings(error=theirs), docs).status == "failed:timeout"
     assert embed_space.outage(space["space"])
 
 
@@ -499,10 +514,10 @@ def test_no_embedding_role_is_structural_and_lexical_tier_one(cid, monkeypatch):
     assert client.calls == []
 
 
-def test_a_stalled_endpoint_costs_one_phase_then_the_next_turn_backs_off(cid, space):
+def test_a_stalled_endpoint_costs_one_phase_per_turn_and_keeps_file_evidence(cid, space):
     """10.2 through the turn-path wrapper: a stalled embed costs at most the
-    phase deadline, the file evidence survives it, and the next turn hits the
-    shared memo without sending."""
+    phase deadline, the file evidence survives it, and -- the cut being the
+    turn's own clock -- the next turn asks again rather than backing off."""
     from grimoire.routes import history_recall
     old = played(cid, text="Mara studies the silver ledger.")
     absorbed(cid, old)
@@ -519,6 +534,6 @@ def test_a_stalled_endpoint_costs_one_phase_then_the_next_turn_backs_off(cid, sp
     assert time.monotonic() - start < 2
     assert first.coverage.semantic == "failed:timeout"
     assert [i.scene.sid for i in first.items] == [old]
-    second = turn(4)
-    assert second.coverage.semantic == "backoff" and len(client.calls) == 1
+    second = turn(0.3)
+    assert second.coverage.semantic == "failed:timeout" and len(client.calls) == 2
     assert [i.scene.sid for i in second.items] == [old]

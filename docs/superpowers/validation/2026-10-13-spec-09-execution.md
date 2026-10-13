@@ -351,12 +351,14 @@ tiers, and found them sound apart from these:
   `gather` needs threadpool tokens itself, so about forty concurrent turns
   could starve the pool. A single-user app does not reach that; a bounded
   wait is the fix if it ever does.
-- Open for the user: the phase deadline (4 s, which includes the file
+- Ruled by the user: the phase deadline (4 s, which includes the file
   stages and a warm of up to 63 documents) cutting a slow but healthy
-  endpoint sets the shared outage memo, so lore recall backs off for 60 s,
-  and the cut files an error row rather than `aborted`. Section 10.2 and its
-  acceptance test ask for the memo on a stalled endpoint; telling "stalled"
-  from "slow" is a design call recorded on the PR rather than made here.
+  endpoint used to set the shared outage memo, switching lore recall off for
+  60 s. The memo stays, but only a failure the provider or transport
+  reported trips it -- never the phase's own deadline (an `anyio`
+  `TimeoutError` or the door's `embeddings.DEADLINE`). Spec 6.3, 10.2, 09-C2
+  and section 15 say so. The cut still files an error row rather than
+  `aborted`; `budgeted=True` would change that, and was not asked for.
 
 **Acceptance runs.** The offline matrix (`--history`, inside `pytest
 backend`) and the opt-in long matrix (`--history --long`, archives past the
