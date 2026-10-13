@@ -222,6 +222,15 @@ def _each(ledger: object, record: Callable[[dict], bool]) -> bool:
         if isinstance(ledger, dict) else True
 
 
+def _actor_token(token: object) -> bool:
+    """An appearance record's key: `characters/<id>` or `pcs/<id>`, the id a
+    safe one. Any other key is skipped where it is read, and degraded."""
+    if not isinstance(token, str):
+        return False
+    kind, aid = appearances_paths._split(token)
+    return kind in appearances_paths.ACTOR_KINDS and paths.safe_id(aid)
+
+
 #: Each ledger's nested shape, checked once per parse: a record or a section
 #: of the wrong shape is skipped where it is read (the rest still renders),
 #: and its ledger is named in `degraded` -- never silently read as empty.
@@ -229,16 +238,21 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
     "chronicle.json": lambda d: _each(d, lambda r: (
         _strings(r.get("keywords")) and _strings(r.get("cast"))
         and all(_opt(r.get(k), str) for k in ("one_line", "summary", "date", "location")))),
-    "appearances.json": lambda d: _each(d, lambda r: (
-        _strings(r.get("scenes")) and _opt(r.get("presence"), dict)
-        and all(isinstance(v, list) and all(isinstance(i, dict) for i in v)
-                for v in (r.get("presence") or {}).values())
-        and all(_opt(r.get(k), str) for k in ("role", "version")))),
+    "appearances.json": lambda d: (not isinstance(d, dict) or all(map(_actor_token, d))) and (
+        _each(d, lambda r: (
+            _strings(r.get("scenes")) and _opt(r.get("presence"), dict)
+            and all(isinstance(v, list) and all(isinstance(i, dict) for i in v)
+                    for v in (r.get("presence") or {}).values())
+            and all(_opt(r.get(k), str) for k in ("role", "version"))))),
     "facts.json": lambda d: _each(d, lambda r: all(
         _opt(r.get(k), str) for k in ("text", "scene", "retired_scene"))),
     "continuity.json": lambda d: not isinstance(d, dict) or (
         _opt(d.get("links"), dict) and _each(d.get("links") or {}, lambda r: all(
-            _opt(r.get(k), str) for k in ("scene", "created")))),
+            _opt(r.get(k), str) for k in ("scene", "created")))
+        # The alias section is what `effective.records` merges threads and
+        # commitments through; one it reads as empty drops every merge.
+        and _opt(d.get("aliases"), dict)
+        and _each(d.get("aliases") or {}, lambda r: _opt(r.get("to"), str))),
     "relationship_history.json": lambda d: not isinstance(d, dict) or (
         _opt(d.get("entries"), list)
         and all(isinstance(e, dict)
@@ -446,7 +460,7 @@ class CampaignInputs:
         if self._by_ref is None:
             self._by_ref = {canon.actor_ref(token): (token, rec)
                             for token, rec in self.appearances.items()
-                            if isinstance(token, str) and isinstance(rec, dict)}
+                            if _actor_token(token) and isinstance(rec, dict)}
         return self._by_ref
 
     def actor_files(self, kind: str, aid: str, version: object) -> tuple[Path, ...]:
@@ -686,7 +700,7 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
     Players first, then the rest, each by `(kind, id)`."""
     out: dict[str, dict] = {}
     for token, rec in inputs.appearances.items():
-        if not isinstance(token, str) or not isinstance(rec, dict):
+        if not _actor_token(token) or not isinstance(rec, dict):
             continue
         raw_scenes, raw_presence = rec.get("scenes"), rec.get("presence")
         scenes = raw_scenes if isinstance(raw_scenes, list) else []

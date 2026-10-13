@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 
 import pytest
 
@@ -406,3 +407,49 @@ def test_an_identity_less_scene_is_rebuilt_and_re_embedded_by_its_sid(home, fake
     report = cache_sync.sync_paths([chron], mode="explicit")
     assert _kinds(report, chron)["searchdocs.scene"] == "built"
     assert _sent(fake) == [_docs(cid)[sid].doc.text]
+
+
+def test_a_root_moved_mid_rebuild_never_writes_into_the_new_library(home, fake, monkeypatch,
+                                                                     tmp_path_factory):
+    """The rebuild reads and stores against the batch's root; the move is
+    still seen, and stops the sync."""
+    cid, sids, chron = _three(home, fake)
+    _summarize(cid, sids[0], "Mara counts the tide tax twice.")
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    for part in ("worlds", "campaigns"):          # a synced copy: the same campaign there
+        shutil.copytree(home / part, elsewhere / part)
+    before = {p for p in elsewhere.rglob("*") if p.is_file()}
+    real = searchdocs_hook.live.build
+
+    def moving(*args, **kwargs):
+        monkeypatch.setenv("GRIMOIRE_HOME", str(elsewhere))
+        return real(*args, **kwargs)
+    monkeypatch.setattr(searchdocs_hook.live, "build", moving)
+    report = cache_sync.sync_paths([chron], mode="explicit", root=home)
+    written = {p for p in elsewhere.rglob("*") if p.is_file()} - before
+    assert {p.relative_to(elsewhere).parts[0] for p in written} <= {"logs"}
+    assert _kinds(report, chron)["searchdocs.scene"] == "built"
+    assert report.stopped == "root_moved"
+    assert fake.calls == []
+
+
+def test_an_identity_less_scene_renamed_outside_the_app_keeps_its_rows(home, fake):
+    """A stated rename copies the scene file's own row to the new path under
+    the new sid, so the hook still finds the scene there."""
+    _configure()
+    _wid, cid = _campaign()
+    sid = _absorbed(cid, "Saltmarch", "Mara counts the tide tax.")
+    scene_file = scenes.paths._scene_path(cid, sid)
+    text = scene_file.read_text(encoding="utf-8")
+    scene_file.write_text(re.sub(r"(?m)^identity:.*\n", "", text), encoding="utf-8")
+    _embed(cid, _docs(cid)[sid])
+    new_sid = "002--the-harbour"
+    new_file = scene_file.with_name(f"{new_sid}.md")
+    scene_file.rename(new_file)
+    old_rel, new_rel = _rel(home, scene_file), _rel(home, new_file)
+    report = cache_sync.sync_paths([], mode="explicit", renamed={old_rel: new_rel})
+    with compiled.batch(home) as request:
+        rows = request.materialized([new_file])[new_file]
+        request.disabled = True
+    assert {json.loads(r.instance).get("sid") for r in rows} == {new_sid}
+    assert _kinds(report, new_rel)["searchdocs.scene"] in {"built", "hit"}

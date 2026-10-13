@@ -119,38 +119,34 @@ def _listing(cid: str) -> list[str]:
         return []
 
 
-def _walk(cid: str) -> tuple[list[dict], list[str]]:
-    """`list_scenes` rows (id, closed_by), tolerant of an unreadable HEAD, and
-    checked against the error-reporting `_listing`: when `list_scenes` raises,
-    or answers other scenes than the listing holds (its `glob` can swallow a
-    directory error), this module's own walk over the listing answers
-    instead."""
-    try:
-        rows = scenes_read.list_scenes(cid)
-    except (OSError, ValueError):     # UnicodeDecodeError is a ValueError
-        rows = None
-    names = _listing(cid)
-    if rows is not None and sorted(r["id"] for r in rows) == names:
-        return rows, []
-    rows, skipped = [], []
-    d = scenes_paths._scenes_dir(cid)
-    for stem in names:
-        p = d / f"{stem}.md"
+def _walk(cid: str) -> tuple[list[dict], list[str], dict[str, slices_mod.Head]]:
+    """The rows `list_scenes` would build (id, title, done, the branch keys,
+    then `closed_by` through its own `resolve_groups`), built from each
+    scene's head over the error-reporting `_listing`, and the heads
+    themselves: a scene is sliced from the head its row was built from, so
+    its `closed_by` and its document are one snapshot (`build` checks that
+    snapshot still stands after slicing). A head that will not read is
+    skipped; the rest still answer."""
+    rows: list[dict] = []
+    skipped: list[str] = []
+    heads: dict[str, slices_mod.Head] = {}
+    for stem in _listing(cid):
         try:
-            head = slices_mod.read_head(cid, p.stem)
+            head = slices_mod.read_head(cid, stem)
         except (OSError, scenes_paths.SceneNotFound, ValueError):
-            skipped.append(p.stem)
+            skipped.append(stem)
             continue
+        heads[stem] = head
         # The row `list_scenes` would have built (`scenes.read._scene_row`):
         # the raw frontmatter values, so damage elsewhere in the campaign
         # cannot change how this scene's branch group resolves.
         meta = head.meta
-        rows.append({"id": p.stem, "title": meta.get("title", p.stem),
+        rows.append({"id": stem, "title": meta.get("title", stem),
                      "done": str(meta.get("done", "")).lower() == "true",
                      **{k: str(meta[k]) for k in ("branch_group", "branch_of") if meta.get(k)},
                      "_identity": str(meta.get("identity", "") or "")})
     scenes_read.resolve_groups(rows)
-    return rows, skipped
+    return rows, skipped, heads
 
 
 def _cache_key(sl: slices_mod.Slices) -> compiled.Key | None:
@@ -252,43 +248,27 @@ def _flush(ops: list[tuple]) -> bool:
     return request.committed
 
 
-def _wanted(cid: str, rows: list[dict], inputs: slices_mod.CampaignInputs,
-            exclude: frozenset[str], only: frozenset[str] | None,
-            skipped: list[str]) -> list[tuple[dict, slices_mod.Slices]]:
-    """Each live scene asked for, in play order, with its slices; a head that
-    will not read is added to `skipped`."""
-    out = []
+def _wanted(rows: list[dict], heads: dict[str, slices_mod.Head],
+            inputs: slices_mod.CampaignInputs, exclude: frozenset[str],
+            only: frozenset[str] | None) -> tuple[list[tuple[dict, slices_mod.Slices]], list[str]]:
+    """Each live scene asked for, in play order, with its slices -- sliced
+    from the head its row was built from -- and the sids whose file moved
+    between that head's read and the end of slicing: a delete and re-create
+    under a reusable sid, or any rewrite, would pair one snapshot's row and
+    head with what slicing read of another (the replacement's transcript, the
+    old scene's ledger rows, a `closed_by` that no longer holds)."""
+    out, moved = [], []
     for row in sorted(rows, key=lambda r: r["id"]):
         sid = row["id"]
         if sid in exclude or (only is not None and sid not in only):
             continue
-        sl = _sliced(cid, sid, inputs)
-        if sl is None:
-            skipped.append(sid)
+        head = heads[sid]
+        sl = slices_mod.scene_slices(inputs, head)
+        if head.sig is None or statcache.signature(head.path) != head.sig:
+            moved.append(sid)
             continue
         out.append((row, sl))
-    return out
-
-
-def _sliced(cid: str, sid: str, inputs: slices_mod.CampaignInputs,
-            *, tries: int = 2) -> slices_mod.Slices | None:
-    """The scene's slices, or None for a head that will not read or a file
-    that keeps moving. The file's signature is taken with the head and again
-    after slicing, and the two must agree: a sid is reusable, and a delete and
-    re-create between them would pair one scene's head (its identity, its
-    `done`) with what slicing read of the other -- its transcript's rolling
-    summary, or the old scene's ledger rows under the new one's name. A file
-    that moved is sliced once more; one that moves again is skipped, as a
-    head that will not read is."""
-    for _ in range(tries):
-        try:
-            head = slices_mod.read_head(cid, sid)
-        except (OSError, scenes_paths.SceneNotFound, ValueError):
-            return None
-        sl = slices_mod.scene_slices(inputs, head)
-        if head.sig is not None and statcache.signature(head.path) == head.sig:
-            return sl
-    return None
+    return out, moved
 
 
 def _documents(cid: str, wanted: list[tuple[dict, slices_mod.Slices]]
@@ -345,9 +325,17 @@ def build(cid: str, *, exclude: frozenset[str] = frozenset(),
     call (neither memo nor cache held them) -- what 05's hook reports as
     `built` rather than `hit`. `store=False` stores nothing in 03's cache
     and writes no row (a dry run)."""
-    rows, skipped = _walk(cid)
     inputs = slices_mod.CampaignInputs.load(cid)
-    wanted = _wanted(cid, rows, inputs, exclude, only, skipped)
+    # A file that moved is walked and sliced once more, whole, so the rows'
+    # branch groups are resolved again too; one that moves again is skipped,
+    # as a head that will not read is.
+    for attempt in range(2):
+        rows, skipped, heads = _walk(cid)
+        wanted, moved = _wanted(rows, heads, inputs, exclude, only)
+        if not moved:
+            break
+        if attempt:
+            skipped += moved
     docs, built, rendered = _documents(cid, wanted)
     if built and store:
         _store(cid, built)

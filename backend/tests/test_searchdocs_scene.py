@@ -876,6 +876,10 @@ def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
     ("continuity.json", lambda sid: {"links": {"l1": {"scene": {"sid": sid},
                                                       "created": "2026"}}}),
     ("continuity.json", lambda sid: {"links": {"l1": {"scene": sid, "created": 2026}}}),
+    ("appearances.json", lambda sid: {"bogus": {"role": "player", "scenes": [sid]}}),
+    ("appearances.json", lambda sid: {"foo/bar": {"role": "npc", "scenes": [sid]}}),
+    ("continuity.json", lambda sid: {"aliases": []}),
+    ("continuity.json", lambda sid: {"aliases": {"threads:a": {"to": ["threads:b"]}}}),
     ("relationship_history.json", lambda sid: {"entries": [
         {"scene": sid, "source": "absorb", "kind": "bond", "a": "characters/mara",
          "b": "characters/winifred", "label": "trust", "before": "low", "after": "high",
@@ -1078,3 +1082,13 @@ def test_a_ledger_that_appears_unreachable_is_not_its_earlier_absence(cid, monke
     monkeypatch.setattr(slices.os, "stat", stat)
     monkeypatch.setattr(slices.Path, "read_text", read_text)
     assert "facts.json" in doc(cid, sid).meta["degraded"]
+
+
+def test_an_appearance_key_outside_the_actor_grammar_is_skipped(cid):
+    sid = _played(cid)
+    p = campaigns.campaign_root(cid) / "appearances.json"
+    p.write_text(json.dumps({"bogus": {"role": "player", "scenes": [sid]},
+                             "foo/bar": {"role": "npc", "scenes": [sid]}}), encoding="utf-8")
+    d = doc(cid, sid)
+    assert d.meta["cast"] == [] and d.meta["players"] == []
+    assert "appearances.json" in d.meta["degraded"]

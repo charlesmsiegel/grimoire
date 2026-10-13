@@ -514,3 +514,29 @@ def test_a_scene_that_keeps_moving_is_skipped_and_the_rest_answer(cid, monkeypat
     got = live.scene_documents(cid)
     assert got.skipped == (a,)
     assert [d.sid for d in got.documents] == [b, c]
+
+
+def test_a_branch_absorbed_while_it_is_sliced_is_not_left_closed(cid, monkeypatch):
+    """`closed_by` comes from the same head snapshot the document is sliced
+    from: a branch absorbed between the listing and the slice is not
+    returned closed by its sibling."""
+    source = scenes.create_scene(cid, "Saltmarch")
+    branch = scenes.create_scene(cid, "Saltmarch, again")
+    for sid, edit in ((source, lambda t: re.sub(r"(?m)^identity:.*$", "identity: shared", t)),
+                      (branch, lambda t: t.replace("\n---", "\nbranch_group: shared\n---", 1))):
+        p = scenes.paths._scene_path(cid, sid)
+        p.write_text(edit(p.read_text(encoding="utf-8")), encoding="utf-8")
+    scenes.mark_absorbed(cid, source, "x", "y")
+    assert {d.sid: d.closed_by for d in live.scene_documents(cid).documents}[branch]
+    real = live.slices_mod.scene_slices
+    done = []
+
+    def racing(inputs, head):
+        sl = real(inputs, head)
+        if head.sid == branch and not done:
+            done.append(True)
+            scenes.mark_absorbed(cid, branch, "x", "y")
+        return sl
+    monkeypatch.setattr(live.slices_mod, "scene_slices", racing)
+    got = {d.sid: d.closed_by for d in live.scene_documents(cid).documents}
+    assert done and got[branch] is None
