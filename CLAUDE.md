@@ -734,6 +734,17 @@ would answer neither question.
   else, absorb and continuity included -- and a grant is only stored about
   text the client was shown (`expect`, 409 `moved`). Scene reads for it live
   in `store/knowledge_scene.py`, because `overlay` imports `knowledge`.
+- **History reaches a prompt only through the view built for that prompt's
+  reader** (roadmap 11-S3). Each compose step retrieves for its own
+  perspective (`routes/history_recall.gather_view`: the narrator, or one NPC
+  whose query is built from what it observed and its own seeds, never
+  reranked), `store/context/epistemic.classify` says which parts that reader
+  has, and compose renders only what the view allows: the narrator's
+  `history_recall` and `history_narrator_only`, an NPC's `history_known` and
+  `history_suspected` from `visible()` alone. Compose refuses a view built for
+  another scene or speaker, and with no view renders no history. A failure
+  narrows: the narrator keeps 09's items unannotated, an NPC gets nothing. The
+  basis codes are inspector data and never reach a message.
 - **Hand edits to the ledger go through `routes/ledger.py`**, which takes the
   campaign lock the absorb save already holds across its whole sequence and
   wraps every write in `store.undo.journalled` so it lands in the journal as

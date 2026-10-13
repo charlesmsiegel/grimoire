@@ -889,8 +889,12 @@ export default function ConfigView() {
               totals read incomplete until you set per-token rates for its model.
             </p>
             <p className="config-copy">
-              Reranking adds a decision call and may cost money. The live inspector previews
-              structural and keyword recall without embedding or reranking calls.
+              Each speaker recalls for itself: the narrator, and every character who speaks
+              in a round, runs its own retrieval, so with an Embedding role a round where
+              two characters speak embeds three queries. A character sees only what it was
+              present for or you marked it as knowing. Reranking adds a decision call for the
+              narrator and may cost money. The live inspector previews the narrator's structural and
+              keyword recall without embedding or reranking calls.
             </p>
             <div className="config-fields">
               <NumField id="cfg-history-depth" label="Historical scene depth" placeholder="0"

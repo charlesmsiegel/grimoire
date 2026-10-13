@@ -223,27 +223,31 @@ def test_legacy_compose_doors_gather_without_lock(client, monkeypatch, door):
     assert fake.calls == 1
 
 
-def test_round_evidence_cached_by_round_and_skips_other_contributions(cid, monkeypatch):
+def test_round_views_cached_per_round_and_speaker(cid, monkeypatch):
+    # 11-S3: each step gathers for its own perspective, once per (round,
+    # speaker). A director note seeds only the narrator's query.
     sid = played(cid)
     app = object()
     turn = character_turns._Progress({"id": "round-1", "note": "silver ledger"}, (), None)
     calls = []
     async def gather(*a, **k):
-        calls.append(k["seed"])
+        calls.append((k["seed"], k["actor_ref"]))
         return SimpleNamespace(round=len(calls))
     monkeypatch.setattr(history_recall, "gather_view", gather)
     async def run():
         npc = await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara")
         first = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
         again = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
-        assert npc is None and first is again
+        npc_again = await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara")
+        assert npc is not first and first is again and npc is npc_again
         turn.round_record = {"id": "round-2", "note": ""}
         second = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
         assert second is not first
         # A roll continuation retrieves nothing, but its second half is
-        # composed with the evidence the round already gathered...
+        # composed with the view the round already gathered for that speaker...
         turn.appended = (("Roll", "system", "result"),)
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is second
+        assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara") is None
         turn.appended = ()
         turn.continuation = "roll"
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is second
@@ -251,7 +255,7 @@ def test_round_evidence_cached_by_round_and_skips_other_contributions(cid, monke
         turn.round_record = {"id": "round-3", "note": ""}
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is None
     asyncio.run(run())
-    assert calls == ["silver ledger", ""]
+    assert calls == [("", "characters:mara"), ("silver ledger", None), ("", None)]
 
 
 @pytest.mark.parametrize("stale_peek", [False, True])
@@ -354,16 +358,28 @@ def test_async_file_stages_run_in_worker(cid, monkeypatch):
     assert threads and all(t != caller for t in threads)
 
 
-def test_npc_contribution_never_gathers(client, monkeypatch):
+def test_an_npc_contribution_gathers_its_own_view(client, monkeypatch):
+    # 11-C2: an NPC step retrieves for its own perspective, and its prompt
+    # holds only what that view allows -- here nothing, for Mara was in none
+    # of the earlier scenes.
     campaign, sid = route_seed(client)
     aid, _vid = actor(campaign, sid, "Mara")
     fake = FakeLLM([['Mara answers.\n```handoff\n{"next":null}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    monkeypatch.setattr(history_recall, "gather_view", lambda *a, **k: pytest.fail("NPC retrieved"))
+    seen = []
+    real = history_recall.gather_view
+    async def gather(*a, **k):
+        seen.append(k["actor_ref"])
+        view = await real(*a, **k)
+        assert view.perspective.actor == "characters:"+aid
+        return view
+    monkeypatch.setattr(history_recall, "gather_view", gather)
     reply = client.post(f"/api/campaigns/{campaign}/scenes/{sid}/chat",
                         json={"content": "silver ledger", "speaker_ref": "characters:"+aid})
     assert reply.status_code == 200 and '"error"' not in reply.text, reply.text
+    assert seen == ["characters:"+aid]
     assert "# Earlier in the campaign" not in str(fake.messages)
+    assert "Mara gives Seraphine" not in str(fake.messages)
 
 
 def test_explicit_replay_never_gathers(client, monkeypatch):

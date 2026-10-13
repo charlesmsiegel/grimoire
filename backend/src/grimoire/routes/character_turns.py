@@ -1586,41 +1586,49 @@ def _round_post(cid, sid):
 
 async def _round_history(app, cid, sid, client, embed_client, resolved, turn, actor, *,
                          enabled=True, run=None):
-    """The outside-lock hint only avoids wasted work; _prepare owns replay.
+    """One step's history view, for that step's own perspective (11-S3).
 
-    The driver keeps one immutable view per round, including an empty or
-    failed result. A stale pending peek may waste a gather but cannot replace
-    the snapshot _prepare chooses under its campaign hold.
+    The narrator and each NPC gather separately: an NPC's query is built from
+    what it observed and its view holds only what it may see, so one step's
+    retrieval is never another's. The driver keeps one immutable view per
+    (round, speaker), including an empty or failed one. The outside-lock hint
+    only avoids wasted work; _prepare owns replay, and a stale pending peek may
+    waste a gather but cannot replace the snapshot _prepare chooses under its
+    campaign hold.
     """
-    if not enabled or actor != "grimoire":
+    if not enabled:
         return None
+    key = (turn.round_record["id"], actor)
     if turn.appended or turn.continuation:
         # A roll continuation never retrieves, but the second half of a reply
-        # is composed with the same evidence its first half was, when this
-        # round already gathered it (a resume in a later request has none).
-        return turn.history_by_round.get(turn.round_record["id"])
+        # is composed with the same view its first half was, when this round
+        # already gathered it (a resume in a later request has none).
+        return turn.history_by_round.get(key)
     # Off reads nothing past the config: no replay peek, no transcript.
     if not await run_in_threadpool(history_recall.enabled):
         return None
     if await run_in_threadpool(_history_replays, cid, sid, turn.round_record):
         return None
-    rid = turn.round_record["id"]
-    if rid not in turn.history_by_round:
+    if key not in turn.history_by_round:
+        narrator = actor == "grimoire"
         post = turn.round_record.get("post")
         if post is None and turn.round_record.get("typed_note"):
             # A stored director note has an index even though the round's post
             # field records player-role posts only. An untyped continue stays
             # unattributed, rather than charging some earlier visible post.
             post = await run_in_threadpool(_round_post, cid, sid)
-        turn.history_by_round[rid] = await history_recall.gather_view(
-            app, cid, sid, seed=turn.round_record.get("note") or "", resolved=resolved,
-            llm_client=client, embed_client=embed_client,
+        turn.history_by_round[key] = await history_recall.gather_view(
+            app, cid, sid,
+            # A director note steers the narrator; no character heard it.
+            seed=(turn.round_record.get("note") or "") if narrator else "",
+            resolved=resolved, llm_client=client, embed_client=embed_client,
             post=post, run_id=run.id if run is not None else "",
+            actor_ref=None if narrator else actor,
             identity=run.scene_identity if run is not None else None,
         )
     if run is not None and run.cancel_requested:
         raise anyio.get_cancelled_exc_class()()
-    return turn.history_by_round[rid]
+    return turn.history_by_round[key]
 
 
 async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
