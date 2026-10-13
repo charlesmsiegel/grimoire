@@ -199,3 +199,10 @@ gate). Every finding is taken; where these differ from §§1–3, these win.
 | 15 | The frontend tier union and budget bar lack the new tier | **Fixed** in Phase B: `api/types.ts` and `ContextBudgetBar.BUCKET_OF` |
 | 16 | Narrator-only summaries can repeat the archive | **Fixed.** Omissions are computed whenever the narrator view has items, for both narrator sections |
 | 17 | Spec drift and test gaps | **Taken.** Amendments: classify after every retrieval round (vacuous until 10); the per-section render-failure policy for the new sections; rerank skipped for actors. The offline suite asserts narrator-side placement too (cases 6, 10, 11). Tests: `Known to:` never in an actor prompt; the actor query unaffected by narrator-only material. CLAUDE.md gains a rule (there is no old line to rewrite). Open question 7 (per-round embed count) stays open: 09's history row already reports its own retrieval, and per-step cost is stated on the setting |
+
+## 5. Found while implementing
+
+| Phase | Finding | Disposition |
+|---|---|---|
+| A | Finding 4's test also asked that "changing a withheld summary leaves the actor's candidates unchanged". Lexical and semantic scoring read 08's search documents, and a document carries its scene's summary, so an actor's query (words it heard) can match a summary's words and admit or order a scene. Keeping it out would need a second document set and a second vector cache per actor. | **Accepted as a residual, recorded in the spec.** A summary can steer which scenes an actor's retrieval looks at, never what reaches its prompt: classification still gates every slice, and a summary reaches an actor only on a whole-scene grant (S1). The rerank (which reads rendered summaries as text to grade) is skipped for actors, and the test pins that instead. Two other actors' relationship history is tested as specified |
+| A | `observed_indices` needs each post's role, for the legacy rule (no recorded presence reads from the last player post), so it takes the transcript rather than a count | **Taken.** `appearances.paths.observed_indices(cid, sid, ref, history)` |

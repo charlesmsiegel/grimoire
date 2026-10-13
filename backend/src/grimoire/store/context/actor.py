@@ -23,17 +23,7 @@ def public_roster(cast: list[dict]) -> list[dict]:
 
 
 def observed_history(cid: str, sid: str, actor_ref: str, history: list[dict]) -> list[dict]:
-    record = paths.record(cid).get(actor_ref.replace(":", "/", 1), {})
-    intervals = record.get("presence", {}).get(sid)
-    if not isinstance(intervals, list):
-        start = next((i for i in range(len(history) - 1, -1, -1)
-                      if history[i].get("role") == "user"), len(history))
-        return history[start:]
-    valid = [r for r in intervals if isinstance(r, dict)
-             and type(r.get("start")) is int and r["start"] >= 0
-             and (r.get("end") is None or type(r.get("end")) is int)]
-    return [m for i, m in enumerate(history) if any(
-        r["start"] <= i and (r.get("end") is None or i < r["end"]) for r in valid)]
+    return [history[i] for i in paths.observed_indices(cid, sid, actor_ref, history)]
 
 
 # Owners that are not actors: a place, a thing, a body of people, a beast.

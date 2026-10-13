@@ -10,10 +10,21 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from .. import actor_names, config, entities, export, membership, overlay, pins, search
+from .. import (
+    actor_names,
+    config,
+    entities,
+    export,
+    membership,
+    overlay,
+    pins,
+    relationships,
+    search,
+)
 from ..appearances import cast as appearances_cast
+from ..appearances import paths as appearances_paths
 from ..continuity import effective, involvement
 from ..regex import view as regex_view
 from ..scenes import read as scenes_read
@@ -97,6 +108,9 @@ class Catalog:
     location: str
     groups: membership.Index
     threads: dict[str, dict] = field(default_factory=dict)
+    #: The ``characters:`` ref of an actor perspective (11-C2), "" for the
+    #: narrator. An actor's catalog names no thread or commitment.
+    actor: str = ""
 
     def allowed(self, ref: str) -> bool:
         return refs.norm(ref) in self.names and refs.norm(ref) not in self.excluded
@@ -245,7 +259,61 @@ def catalog(cid: str, sid: str, posts: int = 0) -> Catalog:
     )
 
 
+def scoped(cat: Catalog, perspective: str) -> Catalog:
+    """`cat` as `perspective` may search with it. The narrator's is whole. An
+    actor's drops every thread and commitment (their names and records are
+    the ledger's, written from the narrator's chair), so none can be a term,
+    a weight or a seed, and it carries the actor, which is what makes
+    `subjects` return an actor query's own seeds and `structural` read only
+    the actor's own relationship history."""
+    actor = model.actor_of(perspective)
+    if actor is None:
+        return cat
+    ledger = ("thread:", "commitment:")
+    return replace(cat, names={r: n for r, n in cat.names.items() if not r.startswith(ledger)},
+                   threads={}, actor=actor)
+
+
+def _relationship_targets(cid: str, actor: str) -> set[str]:
+    """Who `actor` itself has a feeling about, or a bond with: its own
+    relationship rows, never another pair's (`actor.own_relationships`)."""
+    try:
+        data = relationships.read(cid)
+    except Exception:  # noqa: BLE001 -- a garbled relationship file costs these seeds only
+        return set()
+    found = set()
+    for key in data.get("feelings", {}):
+        source, _, target = str(key).partition("->")
+        if source == actor and target:
+            found.add(target)
+    for key in data.get("bonds", {}):
+        pair = str(key).split("|")
+        if len(pair) == 2 and actor in pair:
+            found.update(r for r in pair if r != actor)
+    return found
+
+
+def _actor_subjects(cid: str, cat: Catalog, text: str) -> tuple[str, ...]:
+    """An actor query's seeds (11-S3): who is on stage, where it stands, whom
+    it has a relationship with, and what it heard named. No group, thread or
+    involvement join: those are inferences over records the actor never saw."""
+    found = set(cat.present)
+    if cat.location:
+        found.add(cat.location)
+    found.update(refs.norm(r) for r in _relationship_targets(cid, cat.actor))
+    found.update(
+        ref
+        for ref, names in cat.names.items()
+        if cat.allowed(ref) and any(mentions(text, n) for n in names)
+    )
+    return tuple(sorted(ref for ref in found if cat.allowed(ref)))
+
+
 def subjects(cid: str, cat: Catalog, text: str, extras: tuple[str, ...] = ()) -> tuple[str, ...]:
+    if cat.actor:
+        # An actor's seeds were built once, from its own window, by `prepare`:
+        # re-deriving them here would re-add the narrator's joins.
+        return tuple(sorted({refs.norm(r) for r in extras} & {r for r in cat.names if cat.allowed(r)}))
     found = set(cat.present)
     if cat.location:
         found.add(cat.location)
@@ -301,22 +369,33 @@ class Prepared:
 
 
 def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None) -> Prepared:
-    if actor_ref not in (None, "grimoire", "narrator"):
-        raise ValueError("history queries support the narrator perspective only")
+    """The query a turn retrieves with. `actor_ref` None, ``"grimoire"`` or
+    ``"narrator"`` is the narrator's; a ``characters:`` ref is that NPC's
+    (11-S3), built only from posts it was present for (its observed window, by
+    the same intervals as its prompt) and from its own seeds."""
+    perspective = (model.NARRATOR if actor_ref in (None, "grimoire", model.NARRATOR)
+                   else model.ACTOR_PREFIX + str(actor_ref))
+    actor = model.actor_of(perspective)
     scene = scenes_read.read_scene(cid, sid)
     shown = regex_view.view(scene["messages"], cid=cid, phase="prompt")
+    window = shown
+    if actor is not None:
+        # Windowed over every post before anything is filtered: an interval
+        # counts hidden posts and director notes too.
+        window = [shown[i]
+                  for i in appearances_paths.observed_indices(cid, sid, actor, shown)]
     visible = [
         m
-        for m in shown
+        for m in window
         if not scenes_serialize.is_excluded(m) and not scenes_serialize.is_director_note(m)
     ]
     depth = config.scan_depth()
     scan = "\n".join(export.drop_images(m["content"]) for m in visible[-depth:]) if depth else ""
     scan = (scan + "\n" + seed).strip() if seed else scan
-    archive_visible = scenes_serialize.without_excluded(shown)
+    archive_visible = scenes_serialize.without_excluded(window)
     archive_scan = "\n".join(m["content"] for m in archive_visible[-depth:]) if depth else ""
     archive_scan = (archive_scan + "\n" + seed).strip() if seed else archive_scan
-    cat = catalog(cid, sid, len(shown))
+    cat = scoped(catalog(cid, sid, len(shown)), perspective)
     clean = cat.clean(scan)
     raw = scan.encode("utf-8", errors="replace")
     clipped = raw[-QUERY_BYTES:].decode("utf-8", errors="ignore")
@@ -327,16 +406,22 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
     # starts at its first whole word.
     before = raw[-QUERY_BYTES - 1 : -QUERY_BYTES].decode("utf-8", errors="ignore")
     cut = len(raw) > QUERY_BYTES and not re.match(r"\W", before)
-    window = re.sub(r"^\w*", "", clipped) if cut else clipped
-    terms = _terms(cat, cat.clean(window))
-    seeds = subjects(cid, cat, clean)
+    tail = re.sub(r"^\w*", "", clipped) if cut else clipped
+    terms = _terms(cat, cat.clean(tail))
     # Speaker stamps are separate from prose. Hidden/director notes confer no
     # speaker seed; an unstamped player label is not treated as an actor name.
-    if visible:
-        speaker = str(visible[-1].get("speaker") or "")
-        seeds = subjects(cid, cat, clean + "\n" + speaker, seeds)
+    speaker = str(visible[-1].get("speaker") or "") if visible else ""
+    if actor is not None:
+        seeds = _actor_subjects(cid, cat, clean + "\n" + speaker)
+        scopes = model.RELATIONS - {"thread"}
+    else:
+        seeds = subjects(cid, cat, clean)
+        if visible:
+            seeds = subjects(cid, cat, clean + "\n" + speaker, seeds)
+        scopes = model.RELATIONS
     q = model.Query(
-        (clipped,), terms=terms, subjects=seeds, turn_index=len(shown) - 1 if shown else None
+        (clipped,), terms=terms, subjects=seeds, scopes=scopes, perspective=perspective,
+        turn_index=len(shown) - 1 if shown else None,
     )
     return Prepared(q, scan, archive_scan, cat.weights(terms), cat)
 

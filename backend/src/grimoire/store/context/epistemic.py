@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
-from .. import chronicle, export, knowledge, knowledge_scene, locks, responses
+from .. import chronicle, export, knowledge, knowledge_scene, locks, pins, responses
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..history import budget as history_budget
@@ -139,6 +139,10 @@ class EpistemicView:
     #: The Decision stage's (11-S6); 0 and () until it lands.
     decided: int = 0
     pending: tuple[tuple[str, str, tuple[int, ...]], ...] = ()
+    #: The retrieval the items came from: its ceiling and depth size the
+    #: sections, its coverage is the inspector's row. Its items are the
+    #: narrator's; an actor's sections read `visible()`, never these.
+    evidence: model.Evidence = field(default_factory=model.Evidence)
 
     def visible(self) -> tuple[Classified, ...]:
         """For an actor, the items with a visible slice, holding only those
@@ -635,6 +639,26 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
 # ---------------------------------------------------------------- entry point
 
 
+def present_roster(cid: str, sid: str) -> tuple[str, ...]:
+    """Who is on stage for a compose of `sid` now, as `_assemble` reads it:
+    the scene's cast (PCs included) minus the pins' excluded refs."""
+    posts = len(scenes_read.read_scene(cid, sid)["messages"])
+    excluded = pins.active(cid, sid, posts)["excluded"]
+    return tuple(ref for a in appearances_cast.scene_cast(cid, sid)
+                 if (ref := f"{a['kind']}:{a['id']}") not in excluded)
+
+
+def narrator_view(cid: str, sid: str, evidence: model.Evidence, present: Sequence[str] = (), *,
+                  identity: str | None = None) -> EpistemicView:
+    """`evidence` as the narrator has it, unclassified: 09's rendering, every
+    item `unattributed`. For hand-built evidence (a preview, an eval, a
+    template check) and the turn path's pass-through when classification
+    fails -- which costs the narrator its annotations and nothing else."""
+    perspective = Perspective(cid, sid, identity, None, tuple(present))
+    return EpistemicView(perspective, tuple(_unclassified(item, perspective, admitted=True)
+                                            for item in evidence.items), evidence=evidence)
+
+
 def _local(item: model.EvidenceItem, cid: str) -> bool:
     """Whether the item is from the played campaign. Another campaign's ref
     proves nothing about the same-named actor here, so 09's tier-3 sources
@@ -673,3 +697,8 @@ def classify(perspective: Perspective, items: Sequence[model.EvidenceItem], *,
             log.warning("Could not classify history item %s", item.scene.key)
             out.append(_unclassified(item, perspective, admitted=True))
     return EpistemicView(perspective, tuple(out))
+
+
+def classify_evidence(perspective: Perspective, evidence: model.Evidence) -> EpistemicView:
+    """`classify` over a retrieval, the view carrying it (11-S3's turn path)."""
+    return replace(classify(perspective, evidence.items), evidence=evidence)

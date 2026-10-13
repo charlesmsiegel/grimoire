@@ -22,10 +22,11 @@ from .. import inference as operations
 from .. import store
 from ..llm_errors import LLMError
 from ..store import history_rerank as kit
+from ..store.context import epistemic, layout
 from ..store.context import history as history_section
-from ..store.context import layout
 from ..store.history import budget, model, query, settings
 from ..store.history import threads as history_threads
+from ..store.scenes import identity as scenes_identity
 from . import common, decision_capture, streaming
 
 HISTORY_PHASE_SECONDS = 4
@@ -51,13 +52,18 @@ def _on(cfg):
     return history_settings
 
 
+def _actor(actor_ref):
+    """The NPC a step is written for, None for the narrator."""
+    return None if actor_ref in (None, "grimoire") else actor_ref
+
+
 def enabled() -> bool:
     """Whether a turn would gather at all -- for a caller with reads of its
     own to skip (the round driver's replay peek), in a worker."""
     return _on(store.config.read_config()) is not None
 
 
-def _prepare(cid, sid, seed, resolved):
+def _prepare(cid, sid, seed, resolved, actor_ref=None):
     cfg = store.config.read_config()
     history_settings = _on(cfg)
     if history_settings is None:
@@ -65,10 +71,12 @@ def _prepare(cid, sid, seed, resolved):
     cap = budget.ceiling(cfg, resolved)
     if not cap:
         return None
-    prepared = query.prepare(cid, sid, seed=seed)
+    prepared = query.prepare(cid, sid, seed=seed, actor_ref=actor_ref)
     # The private legacy archive window includes director notes/image URLs;
     # the query's cleaned scan cannot stand in for it or be sent as its proxy.
-    omissions = history_section.summary_omissions(cid, sid, prepared.archive_scan_text)
+    # The archive and recap are the narrator's: an actor omits nothing (11-S3).
+    omissions = ({} if _actor(actor_ref) else
+                 history_section.summary_omissions(cid, sid, prepared.archive_scan_text))
     # Cost follows the same player/director-note boundary as generation. The
     # query's scan boundary may end in an assistant reply on a legacy retry.
     answering = streaming._answering_post(store.scenes.read_scene(cid, sid)["messages"])
@@ -158,14 +166,14 @@ async def _rerank(cid, sid, q, candidates, items, *, client, deadline, run_id=""
         return candidates, "skipped:error"
 
 
-async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, deadline=None,
-                 post=_QUERY_POST, run_id=""):
-    """Gather completed evidence before a turn's locked snapshot decision."""
+async def _gather(cid, sid, *, seed, resolved, llm_client, embed_client, deadline, post,
+                  run_id, actor_ref):
+    """The evidence, or None when recall is off for this turn."""
     deadline = time.monotonic() + HISTORY_PHASE_SECONDS if deadline is None else deadline
     try:
-        prepared = await history_threads.run(_prepare, cid, sid, seed, resolved)
+        prepared = await history_threads.run(_prepare, cid, sid, seed, resolved, actor_ref)
         if prepared is None:
-            return model.Evidence()
+            return None
         q, cap, omissions, rerank_on = prepared
         if post is not _QUERY_POST:
             q = replace(q, turn_index=post)
@@ -173,27 +181,95 @@ async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, dea
             cid, sid, q, ceiling=cap, embed_client=embed_client, deadline=deadline,
             summary_omissions=omissions, run_id=run_id,
             rerank=partial(_rerank, cid, sid, client=llm_client, deadline=deadline,
-                           run_id=run_id) if rerank_on else None,
+                           run_id=run_id) if rerank_on and not _actor(actor_ref) else None,
         )
     except Exception:  # noqa: BLE001 -- optional history cannot strand an appended player post
         return _error(cid, sid)
 
 
-def gather_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client, deadline=None,
-                post=_QUERY_POST, run_id=""):
-    """Bridge a def route; ownership is checked in its worker before the portal."""
+async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, deadline=None,
+                 post=_QUERY_POST, run_id="", actor_ref=None):
+    """Gather completed evidence before a turn's locked snapshot decision.
+
+    `actor_ref` names the step's perspective (11-S3): an NPC's query is its
+    own, and is never reranked -- a rerank grades rendered items, summaries
+    included, which is the narrator's material steering an actor's pick."""
+    evidence = await _gather(cid, sid, seed=seed, resolved=resolved, llm_client=llm_client,
+                             embed_client=embed_client, deadline=deadline, post=post,
+                             run_id=run_id, actor_ref=actor_ref)
+    return model.Evidence() if evidence is None else evidence
+
+
+def _view(cid, sid, evidence, actor_ref, identity):
+    """Classify one step's evidence (11-C2), in a worker. The narrator's
+    roster is everyone on stage. A retrieval that failed, or a classification
+    that did, leaves the narrator 09's unannotated items and an actor no
+    history at all: failure narrows, never widens."""
+    actor = _actor(actor_ref)
+    try:
+        if identity is None:
+            identity = scenes_identity.scene_identity(cid, sid)
+        if evidence.coverage.verdict == "error":
+            if actor is not None:
+                return None
+            return epistemic.narrator_view(cid, sid, evidence, identity=identity)
+        present = epistemic.present_roster(cid, sid)
+        perspective = epistemic.Perspective.of(cid, sid, actor, present, identity=identity)
+        return epistemic.classify_evidence(perspective, evidence)
+    except Exception:  # noqa: BLE001 -- classification failing narrows, never widens
+        _log.warning("History classification failed for campaign %s scene %s", cid, sid)
+        if actor is not None:
+            return None
+        return epistemic.narrator_view(cid, sid, evidence, identity=identity)
+
+
+async def gather_view(app, cid, sid, *, seed, resolved, llm_client, embed_client,
+                      deadline=None, post=_QUERY_POST, run_id="", actor_ref=None,
+                      identity=None):
+    """One step's history as its perspective may have it (11-S3): `gather`
+    for that perspective, then `classify`, both off the loop. None when recall
+    is off, and for an actor whose retrieval or classification failed.
+    `identity` is the run's scene identity, so a view never disagrees with the
+    compose it is handed to."""
+    evidence = await _gather(cid, sid, seed=seed, resolved=resolved, llm_client=llm_client,
+                             embed_client=embed_client, deadline=deadline, post=post,
+                             run_id=run_id, actor_ref=actor_ref)
+    if evidence is None:
+        return None
+    return await history_threads.run(_view, cid, sid, evidence, actor_ref, identity)
+
+
+def _bridge(app, cid, sid, coroutine, failed, **kwargs):
+    """Run a gather from a def route; ownership is checked in its worker
+    before the portal, whose own thread cannot observe it."""
     if store.locks.holds_campaign(cid):
         # Nothing was retrieved, which is not "nothing else exists": a planner
         # reading `error` never plans on it, and never mistakes it for exhausted.
-        return model.Evidence(coverage=model.Coverage("error", semantic="skipped:locked"))
+        return failed(model.Evidence(coverage=model.Coverage("error", semantic="skipped:locked")))
     try:
-        return app.state.run_portal.call(partial(
-            gather, app, cid, sid, seed=seed, resolved=resolved,
-            llm_client=llm_client, embed_client=embed_client, deadline=deadline,
-            post=post, run_id=run_id,
-        ))
+        return app.state.run_portal.call(partial(coroutine, app, cid, sid, **kwargs))
     except Exception:  # noqa: BLE001 -- shutdown can close (or cancel) the portal after the player's append
         # A worker thread is never itself cancelled: a portal future cancelled
         # at shutdown is the closing portal of spec 10.1, not this request's
         # cancellation, so it degrades like any other portal failure.
-        return _error(cid, sid)
+        return failed(_error(cid, sid))
+
+
+def gather_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client, deadline=None,
+                post=_QUERY_POST, run_id="", actor_ref=None):
+    """`gather` from a def route."""
+    return _bridge(app, cid, sid, gather, lambda evidence: evidence, seed=seed,
+                   resolved=resolved, llm_client=llm_client, embed_client=embed_client,
+                   deadline=deadline, post=post, run_id=run_id, actor_ref=actor_ref)
+
+
+def gather_view_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client,
+                     deadline=None, post=_QUERY_POST, run_id="", actor_ref=None,
+                     identity=None):
+    """`gather_view` from a def route. A gather that could not run is the
+    narrator's error row and an actor's nothing, as `_view` decides."""
+    return _bridge(app, cid, sid, gather_view,
+                   lambda evidence: _view(cid, sid, evidence, actor_ref, identity),
+                   seed=seed, resolved=resolved, llm_client=llm_client,
+                   embed_client=embed_client, deadline=deadline, post=post, run_id=run_id,
+                   actor_ref=actor_ref, identity=identity)

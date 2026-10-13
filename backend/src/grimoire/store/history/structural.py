@@ -37,9 +37,13 @@ def _touched(cid: str) -> dict[str, dict[str, set[str]]]:
     return touched
 
 
-def _relationships(cid: str, present: frozenset[str]) -> dict[str, set[str]]:
+def _relationships(cid: str, present: frozenset[str], actor: str = "") -> dict[str, set[str]]:
+    """Scenes where a present pair's relationship changed. An actor reads
+    only pairs it is in: two others' history is not its to rank by."""
     changed: dict[str, set[str]] = {}
     for a, b in combinations(sorted(present), 2):
+        if actor and actor not in (a, b):
+            continue
         try:
             rows = relationship_history.for_pair(
                 cid, a.replace(":", "/", 1), b.replace(":", "/", 1)
@@ -123,12 +127,13 @@ def candidates(
     *,
     catalog: query_mod.Catalog | None = None,
 ) -> list[model.Candidate]:
-    cat = catalog if catalog is not None else query_mod.catalog(cid, sid)
+    cat = query_mod.scoped(catalog if catalog is not None else query_mod.catalog(cid, sid),
+                           query.perspective)
     seeds = frozenset(
         query_mod.subjects(cid, cat, cat.clean("\n".join(query.texts)), query.subjects)
     )
     actors = involvement.scene_actors(cid)
-    chron, touched, changed = _chronicle(cid), _touched(cid), _relationships(cid, cat.present)
+    chron, touched, changed = _chronicle(cid), _touched(cid), _relationships(cid, cat.present, cat.actor)
     relations = {
         doc.sid: tuple(
             r

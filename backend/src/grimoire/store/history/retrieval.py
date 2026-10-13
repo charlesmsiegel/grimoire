@@ -40,8 +40,7 @@ log = logging.getLogger(__name__)
 
 
 def validate(query: model.Query) -> None:
-    if query.perspective != "narrator":
-        raise ValueError("history supports the narrator perspective only")
+    model.actor_of(query.perspective)
     if not query.scopes <= model.RELATIONS:
         raise ValueError("unknown history relation scope")
     if query.tier_limit not in (1, 2, 3):
@@ -166,7 +165,7 @@ def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=Non
         posts = len(scene["messages"])
     except Exception:  # noqa: BLE001 -- passed queries may inspect another eligible boundary
         posts = 0
-    cat = query_mod.catalog(cid, sid, posts)
+    cat = query_mod.scoped(query_mod.catalog(cid, sid, posts), query.perspective)
     # Directly constructed queries pass the same exclusion boundary as build:
     # a planner's subject cannot reintroduce a protected record or its terms.
     terms = cat.filter_terms(query.terms)
@@ -461,6 +460,8 @@ def _validate_scope(query: model.Query, origin: str, source_campaigns: tuple[str
     names sources -- explicitly."""
     validate(query)
     if query.tier_limit == 3:
+        if query.perspective != model.NARRATOR:
+            raise ValueError("tier 3 history is the narrator's alone")
         if origin == "turn":
             raise ValueError("tier 3 history is never available on a turn")
         if not source_campaigns:
