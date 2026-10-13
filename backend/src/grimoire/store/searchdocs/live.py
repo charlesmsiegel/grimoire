@@ -191,7 +191,7 @@ def _recorded(cid: str, sl: slices_mod.Slices, doc: scene_mod.SceneDocument) -> 
     return (doc.key, cid, sl.identity, paths_digest)
 
 
-def row_instance(cid: str, identity: str, path: Path, scene_path: Path | None) -> dict:
+def row_instance(cid: str, identity: str, sid: str, path: Path, scene_path: Path | None) -> dict:
     """The `materialized` instance a document's row on `path` carries.
 
     On the scene's own file it names the scene, `{campaign, identity}`. On a
@@ -201,9 +201,13 @@ def row_instance(cid: str, identity: str, path: Path, scene_path: Path | None) -
     longer one as unreadable, which one row per scene on `chronicle.json`
     would reach in a long campaign, hiding the file from every hook. 05's
     hook rebuilds all of a campaign's live documents for a campaign row, and
-    finds which of them were embedded from their scene files' own rows."""
+    finds which of them were embedded from their scene files' own rows.
+
+    A scene from before the identity backfill has none: its own row names
+    it by `sid`, which the hook honours only while that sid is still an
+    identity-less live scene -- a recycled sid has an identity of its own."""
     if scene_path is not None and path == scene_path:
-        return {"campaign": cid, "identity": identity}
+        return {"campaign": cid, "identity": identity} if identity else {"campaign": cid, "sid": sid}
     return {"campaign": cid}
 
 
@@ -223,7 +227,7 @@ def _store(cid: str, built: list[tuple[compiled.Key, slices_mod.Slices,
         if put:
             ops.append(("put", key, _payload(doc)))
             owners.append(n)
-        ops += [("mark", path, row_instance(cid, sl.identity, path, sl.scene_path))
+        ops += [("mark", path, row_instance(cid, sl.identity, sl.sid, path, sl.scene_path))
                 for path in sl.paths]
         owners += [n] * len(sl.paths)
     failed: set[int] = set()

@@ -74,7 +74,7 @@ def _instance(cid, identity):
 def _row(cid, doc, path):
     """The instance `doc`'s row on `path` carries: its scene on the scene's
     own file, the campaign alone on a shared one (`live.row_instance`)."""
-    return json.dumps(live.row_instance(cid, doc.doc.meta["identity"], path,
+    return json.dumps(live.row_instance(cid, doc.doc.meta["identity"], doc.sid, path,
                                         live.scene_file(cid, doc)),
                       separators=(",", ":"), sort_keys=True)
 

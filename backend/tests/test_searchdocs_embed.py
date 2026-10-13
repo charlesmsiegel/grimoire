@@ -11,6 +11,7 @@ Placeholder names only.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -381,3 +382,27 @@ def test_a_reply_after_the_root_moved_is_never_saved(home, fake):
     assert got.outcomes == []                          # ...and its rows stay `planned`
     assert not vectors.load(space["space"], [doc.doc.text])
 
+
+
+def test_an_identity_less_scene_is_rebuilt_and_re_embedded_by_its_sid(home, fake):
+    """A scene from before the identity backfill: its own rows name it by sid,
+    and a sync of its scene file or a shared ledger still reaches it."""
+    _configure()
+    _wid, cid = _campaign()
+    sid = _absorbed(cid, "Saltmarch", "Mara counts the tide tax.")
+    scene_file = scenes.paths._scene_path(cid, sid)
+    text = scene_file.read_text(encoding="utf-8")
+    scene_file.write_text(re.sub(r"(?m)^identity:.*\n", "", text), encoding="utf-8")
+    doc = _docs(cid)[sid]
+    assert doc.doc.meta["identity"] == ""
+    _embed(cid, doc)
+    with compiled.batch(home) as request:
+        rows = request.materialized([scene_file])[scene_file]
+        request.disabled = True
+    assert {json.loads(r.instance)["sid"] for r in rows} == {sid}
+    fake.calls.clear()
+    _summarize(cid, sid, "Mara counts the tide tax twice.")
+    chron = _rel(home, campaigns.campaign_root(cid) / "chronicle.json")
+    report = cache_sync.sync_paths([chron], mode="explicit")
+    assert _kinds(report, chron)["searchdocs.scene"] == "built"
+    assert _sent(fake) == [_docs(cid)[sid].doc.text]

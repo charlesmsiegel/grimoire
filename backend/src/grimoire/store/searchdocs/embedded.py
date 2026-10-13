@@ -116,7 +116,7 @@ def record_embedded(cid: str, docs: Sequence, *, space: dict) -> None:
         held = vectors.load(sid_space, list(dict.fromkeys(d.doc.text for d in docs)))
         kind = vector_kind(space)
         rows = list(dict.fromkeys(
-            (path, json.dumps(live.row_instance(cid, d.doc.meta.get("identity", ""), path,
+            (path, json.dumps(live.row_instance(cid, d.doc.meta.get("identity", ""), d.sid, path,
                                                 live.scene_file(cid, d)), sort_keys=True))
             for d in docs if d.doc.text in held for path in live.input_paths(cid, d)))
         # 03 stages a bounded number of rows per request; past it a row is

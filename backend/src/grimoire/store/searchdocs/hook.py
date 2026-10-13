@@ -79,20 +79,34 @@ class Reembedded:
 
 
 def _instance(row: compiled.Materialized) -> tuple[str, str | None] | None:
-    """`(campaign, identity)` for a scene's own row, `(campaign, None)` for
-    a campaign row on a shared file; None for a row that names nothing."""
+    """`(campaign, scene key)` for a scene's own row, `(campaign, None)` for
+    a campaign row on a shared file; None for a row that names nothing. The
+    key is `id:<identity>`, or `sid:<sid>` for a scene from before the
+    identity backfill (`live.row_instance`)."""
     try:
         value = json.loads(row.instance) if row.instance else None
     except ValueError:
         return None
     if not isinstance(value, dict):
         return None
-    cid, identity = value.get("campaign"), value.get("identity")
+    cid, identity, sid = value.get("campaign"), value.get("identity"), value.get("sid")
     if not (isinstance(cid, str) and cid):
         return None
-    if identity is None:
+    if isinstance(identity, str) and identity:
+        return cid, f"id:{identity}"
+    if isinstance(sid, str) and sid:
+        return cid, f"sid:{sid}"
+    if identity is None and sid is None:
         return cid, None
-    return (cid, identity) if isinstance(identity, str) and identity else None
+    return None
+
+
+def _key(doc: live.LiveDocument) -> str:
+    """The scene key a live document answers to: an identity-less scene only
+    under its sid, so a recycled sid with an identity of its own answers to
+    nothing a deleted scene left."""
+    identity = doc.doc.meta.get("identity", "")
+    return f"id:{identity}" if identity else f"sid:{doc.sid}"
 
 
 def _count(counts: dict[str, int], name: str, n: int = 1) -> None:
@@ -101,7 +115,7 @@ def _count(counts: dict[str, int], name: str, n: int = 1) -> None:
 
 @dataclass
 class _Wanted:
-    """One campaign's hot rows: those naming a scene, by identity, and those
+    """One campaign's hot rows: those naming a scene, by scene key, and those
     naming the whole campaign (a shared file's)."""
 
     scenes: dict[str, list[tuple[str, compiled.Materialized]]] = field(default_factory=dict)
@@ -121,12 +135,12 @@ def rebuild(hot: Mapping[str, Sequence[compiled.Materialized]], *, space: dict |
             if named is None:
                 out.outcomes.append((rel, row.kind, "skipped"))
                 continue
-            cid, identity = named
+            cid, key = named
             entry = wanted.setdefault(cid, _Wanted())
-            if identity is None:
+            if key is None:
                 entry.campaign.append((rel, row))
             else:
-                entry.scenes.setdefault(identity, []).append((rel, row))
+                entry.scenes.setdefault(key, []).append((rel, row))
     plan: dict[str, list[tuple[live.LiveDocument, list[tuple[str, str]]]]] = {}
     for cid in sorted(wanted):
         if halted():
@@ -143,18 +157,21 @@ def _campaign(cid: str, wanted: _Wanted, out: Rebuilt, plan: dict, *, space: dic
     try:
         sids = live.identities(cid)
         # A campaign row is every live scene of the campaign; a scene row is
-        # that scene, while it is still live under that identity.
-        only = frozenset(sids.values()) if wanted.campaign else \
-            frozenset(sids[i] for i in wanted.scenes if i in sids)
-        live_set, rendered = live.build(cid, only=only, store=not dry_run) if only \
-            else (None, frozenset())
-        docs = {d.doc.meta.get("identity", ""): d for d in live_set.documents} if live_set else {}
+        # that scene, while it is still live under that key.
+        if wanted.campaign:
+            only = None
+        else:
+            only = frozenset(sids[k[3:]] if k.startswith("id:") else k[4:]
+                             for k in wanted.scenes if not k.startswith("id:") or k[3:] in sids)
+        live_set, rendered = live.build(cid, only=only, store=not dry_run) \
+            if only is None or only else (None, frozenset())
+        docs = {_key(d): d for d in live_set.documents} if live_set else {}
         embedded_ids = _embedded(cid, docs, wanted.campaign)
     except Exception as exc:  # noqa: BLE001 -- one campaign's failure is its rows' status
         out.outcomes.extend((rel, row.kind, f"failed:{type(exc).__name__}") for rel, row in rows_here)
         return
-    for identity, rows in wanted.scenes.items():
-        doc = docs.get(identity)
+    for key, rows in wanted.scenes.items():
+        doc = docs.get(key)
         for rel, row in rows:
             if doc is None:
                 # A deleted scene, a recycled sid's old identity, or a head
@@ -205,7 +222,7 @@ def _embedded(cid: str, docs: Mapping[str, live.LiveDocument],
     kinds = {row.kind for _rel, row in campaign_rows if row.kind != DOC_KIND}
     if not kinds or not docs:
         return {}
-    files = {live.scene_file(cid, d): identity for identity, d in docs.items()}
+    files = {live.scene_file(cid, d): key for key, d in docs.items()}
     found: dict = {}
     with compiled.batch() as request:
         try:
@@ -220,9 +237,9 @@ def _embedded(cid: str, docs: Mapping[str, live.LiveDocument],
     for path, rows in found.items():
         for row in rows:
             named = _instance(row) if row.kind in kinds else None
-            identity = named[1] if named is not None else None
-            if identity is not None and identity == files.get(path):
-                out.setdefault(row.kind, set()).add(identity)
+            key = named[1] if named is not None else None
+            if key is not None and key == files.get(path):
+                out.setdefault(row.kind, set()).add(key)
     return out
 
 
