@@ -5394,7 +5394,8 @@ def get_scene_context(cid: str, sid: str):
     # facade dropping it in silence (sampler presets spec). A frozen snapshot
     # carries the same block for the attempt it captured.
     breakdown = store.context.context_breakdown(
-        cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)))
+        cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)),
+        resolved=resolved)
     return {"model": model, **breakdown,
             "model_window": model_window(_primary(resolved.chain)),
             "token_count": store.tokens.counting(model, _target_kind(resolved.chain),
@@ -5521,7 +5522,7 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # routing-ok: the live side of a prompt diff is a display; it must never refuse
         chat = inference.resolve("chat", cid)
         model = _target_model(chat.chain)
-        live = store.context.context_breakdown(cid, sid, model=model,
+        live = store.context.context_breakdown(cid, sid, model=model, resolved=chat,
                                                images=store.post_images.images_for(
                                                    _primary(chat.chain)))
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,

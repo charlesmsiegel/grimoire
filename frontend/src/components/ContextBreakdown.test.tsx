@@ -128,3 +128,25 @@ test("the smaller of budget and window still bounds the bar", () => {
     token_count: NATIVE, budget_tokens: 8000, model_window: { value: 500, source: "user" } })} />);
   expect(screen.getByText("100 / 500 tok")).toBeInTheDocument();
 });
+
+
+test("history inspector shows raw signals, rounds, excerpts, coverage and shed status", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "Mara kept the ledger.", tokens: 90,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [{ scene: "001--saltmarch", identity: null, key: "sid:001--saltmarch", title: "Saltmarch",
+        tier: 1, admitted_by: ["structural", "lexical"],
+        rounds: [{ structural: [{ relation: "relationship", refs: ["characters:mara"] }],
+          lexical: { score: 4.2, matched: ["silver key"] }, semantic: { cosine: 0.61, query: 0 },
+          rerank: { level: "high", position: 1, backend: "native" } }],
+        ranks: [{ round: 0, signal: "lexical", rank: 3 }], excerpts: [[41, 43]],
+        summary: "omitted:archive", tokens: 90, shed: true }],
+      coverage: { tiers: [1], semantic: "skipped:preview", admitted: 5, agreement: 2, verdict: "sufficient" },
+      ceiling: 1200, budget_from: ["config"],
+    },
+  }] })} />);
+  for (const value of [/Ceiling: 1,200/, /sufficient/, /skipped:preview/, /relationship.*characters:mara/,
+    /lexical.*rank 3/, /4.2.*silver key/, /cosine 0.61/, /high.*native/, /41.*43/,
+    /omitted:archive/, /shed: budget/]) expect(screen.getByText(value)).toBeInTheDocument();
+});

@@ -277,6 +277,10 @@ def subjects(cid: str, cat: Catalog, text: str, extras: tuple[str, ...] = ()) ->
 class Prepared:
     query: model.Query
     scan_text: str
+    # Private archive activation input, not an embedding query. Legacy compose
+    # counts stored director notes in its window and leaves image URLs intact;
+    # omission must reproduce that exact producer without weakening Query.
+    archive_scan_text: str
     weights: dict[str, int]
     catalog: Catalog
 
@@ -294,6 +298,9 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
     depth = config.scan_depth()
     scan = "\n".join(export.drop_images(m["content"]) for m in visible[-depth:]) if depth else ""
     scan = (scan + "\n" + seed).strip() if seed else scan
+    archive_visible = scenes_serialize.without_excluded(shown)
+    archive_scan = "\n".join(m["content"] for m in archive_visible[-depth:]) if depth else ""
+    archive_scan = (archive_scan + "\n" + seed).strip() if seed else archive_scan
     cat = catalog(cid, sid, len(shown))
     clean = cat.clean(scan)
     weighted = list(
@@ -318,7 +325,7 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
     q = model.Query(
         (clipped,), terms=terms, subjects=seeds, turn_index=len(shown) - 1 if shown else None
     )
-    return Prepared(q, scan, cat.weights(terms), cat)
+    return Prepared(q, scan, archive_scan, cat.weights(terms), cat)
 
 
 def build(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None) -> model.Query:

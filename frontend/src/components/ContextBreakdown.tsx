@@ -76,6 +76,7 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
           {/* A World info row with nothing sent still lists what it held back. */}
           {s.text && <pre className="ctx-text">{s.text}</pre>}
           <LoreEntries section={s} />
+          <HistoryEntries section={s} />
         </details>
       ))}
     </>
@@ -176,4 +177,37 @@ function contextLimit(ctx: SceneContext, models: Model[]): number {
 export function contextPercent(ctx: SceneContext, models: Model[]): number {
   const ctxLen = contextLimit(ctx, models);
   return ctxLen > 0 ? Math.round((ctx.total_tokens / ctxLen) * 100) : 0;
+}
+
+
+/** Historical reasons are kept beside the sent text, including scenes shed by packing. */
+function HistoryEntries({ section }: { section: ContextSection }) {
+  const history = section.history;
+  if (!history) return null;
+  const coverage = history.coverage;
+  return <>
+    <div className="ctx-caption">Ceiling: {history.ceiling.toLocaleString()} tokens ({history.budget_from.join(", ")})</div>
+    <div className="field-hint">Coverage: {coverage.verdict}; tiers {coverage.tiers.join(", ")};
+      admitted {coverage.admitted}; agreement {coverage.agreement}</div>
+    <div className="field-hint">Semantic: {coverage.semantic}</div>
+    <ul className="ctx-entries">
+      {history.items.map((item) => <li key={item.key} className={item.shed ? "shed" : undefined}>
+        <span className="chip on">{item.title}</span> {item.scene}; tier {item.tier};
+        admitted by {item.admitted_by.join(", ") || "none"}; {item.tokens} tokens
+        {item.shed && <span className="ctx-shed"> shed: budget</span>}
+        <div className="field-hint">Summary: {item.summary}; excerpts: {item.excerpts.map((indices) => indices.join(", ")).join("; ") || "none"}</div>
+        {item.ranks.map((rank) => <div className="field-hint" key={`${rank.round}:${rank.signal}`}>
+          Round {rank.round + 1}: {rank.signal} rank {rank.rank}
+        </div>)}
+        {Object.entries(item.rounds).map(([roundId, round]) => <div key={roundId}>
+          {round.structural?.map((reason) => <div className="field-hint" key={`${reason.relation}:${reason.refs.join(",")}`}>
+            Round {Number(roundId) + 1}: {reason.relation}: {reason.refs.join(", ")}
+          </div>)}
+          {round.lexical && <div className="field-hint">Round {Number(roundId) + 1}: lexical score {round.lexical.score}; {round.lexical.matched.join(", ")}</div>}
+          {round.semantic && <div className="field-hint">Round {Number(roundId) + 1}: cosine {round.semantic.cosine}; query {round.semantic.query + 1}</div>}
+          {round.rerank && <div className="field-hint">Round {Number(roundId) + 1}: rerank {round.rerank.level ?? "ungraded"}; position {round.rerank.position ?? "none"}; {round.rerank.backend}</div>}
+        </div>)}
+      </li>)}
+    </ul>
+  </>;
 }

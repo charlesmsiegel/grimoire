@@ -107,3 +107,19 @@ def test_protected_multiword_name_blocks_constituents_and_quoted_phrases(cid):
     q = query.build(cid, sid)
     assert not {"mara", "winifred", "mara ribbon"}.intersection(q.terms)
     assert "amber" in q.terms and "seal" in q.terms
+
+
+def test_private_archive_scan_keeps_legacy_notes_urls_and_depth_boundary(cid):
+    config.write_config(context_scan_depth="1")
+    sid = played(cid, text="Mara asks about a silver ledger.")
+    scenes.append_message(cid, sid, "assistant", "Winifred is hidden.")
+    scenes.set_excluded(cid, sid, 1, True)
+    note = "Continue ![portrait](https://example.invalid/velvet/crown)"
+    scenes.append_message(cid, sid, "assistant", note, speaker=serialize.DIRECTOR_SPEAKER)
+    prepared = query.prepare(cid, sid, seed="amber seal")
+    assert prepared.archive_scan_text == note + "\namber seal"
+    assert prepared.scan_text == "Mara asks about a silver ledger.\namber seal"
+    assert "velvet" not in prepared.query.terms
+    assert "example.invalid" not in prepared.query.texts[0]
+    config.write_config(context_scan_depth="0")
+    assert query.prepare(cid, sid, seed="amber seal").archive_scan_text == "amber seal"

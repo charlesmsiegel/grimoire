@@ -34,6 +34,7 @@ env = Environment(loader=FileSystemLoader(str(REPO / "templates")),
 # environment registers: a template and `inference.generate`'s in-prompt check
 # must agree on it, so this harness does not restate it.
 from grimoire import schemas  # noqa: E402
+from grimoire.store.history import model as history_model  # noqa: E402
 
 env.filters["schema_json"] = schemas.render
 
@@ -1932,7 +1933,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
                 if config.speaker_turn_taking() else None),
             "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
-            "archive_entries": archive_entries,
+            "archive_entries": archive_entries, "history_evidence": [],
             "plot_lines": effective.render_threads(cid, with_id=False),
             "commitment_lines": effective.render_commitments(cid, with_id=False), "today": today,
             "weather": weather_now,
@@ -2004,6 +2005,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     names += [
               "scene/sections/story_so_far/" + ("full" if data["story_full"] else "compact") + ".j2",
               "scene/sections/archive.j2",
+              "scene/sections/history_recall.j2",
               "scene/sections/plot_threads.j2",
               "scene/sections/commitments.j2",
               "scene/sections/today.j2",
@@ -2122,6 +2124,17 @@ data = gather(sid, pcless=False)
 # window — so say so here rather than let the check quietly go vacuous.
 assert data["archive_entries"], "fixture no longer exercises the archive section"
 check_messages("chat", context.build_messages(cid, sid), rendered_messages(sid, data))
+# Non-empty frozen history follows the same section catalog and template input
+# contract. It is deliberately handed in: ordinary turns do not retrieve yet.
+history_item = history_model.EvidenceItem(
+    history_model.SceneRef("001--saltmarch", None), "Saltmarch", date="2026-10-13",
+    summary="Mara kept the silver ledger.")
+config.write_config(history_recall_depth="1")
+check_messages("chat frozen history",
+               context.compose_turn(cid, sid, history=history_model.Evidence(
+                   (history_item,), ceiling=1200))[0],
+               rendered_messages(sid, {**data, "history_evidence": [history_item]}))
+config.write_config(history_recall_depth="0")
 profile_data = {**data, "model_guidance": render("scene/model_guidance/glm-5.3.j2", **data)}
 for model_id in ("glm-5.3", "z-ai/glm-5.3"):
     check_messages("chat model profile " + model_id,

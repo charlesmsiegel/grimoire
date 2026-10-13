@@ -30,6 +30,7 @@ const BUCKET_OF: Record<string, string> = {
   history: "conversation",
   archive: "recalled",
   recalled: "recalled",
+  "history-recall": "recalled",
 };
 
 /** One prompt, drawn against the ceiling it was packed to.

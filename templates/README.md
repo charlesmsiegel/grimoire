@@ -981,3 +981,10 @@ and prompt-view excerpts. It prints the summary only when no omission applies.
 `store/history/budget.py` uses these exact templates to count the complete
 section. S2 registers the section in the context catalog and freezes macro
 expansions from the same blocks and frame before fitting and shedding.
+
+Historical recall uses `scene/sections/history_recall.j2` with `history_evidence`
+(EvidenceItems) or frozen `history_blocks` (strings). `history_item.j2` receives
+one `item`: its safe title/date/location, optional summary and prompt-view
+excerpts. Signals and ranks belong only to the inspector. `store/history/budget`
+uses these same templates to charge the complete section; `store/context/history`
+freezes macro-expanded frame runs and item blocks before fitting or shedding.

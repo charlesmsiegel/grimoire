@@ -644,6 +644,10 @@ export type Config = {
   offscene_known_limit: string;
   /** Entries a similarity pass may add on top of the keyword ones; "0" = recall
    *  off. It turns off recall only, never the other embedders. */
+  history_recall_depth: string;
+  history_recall_budget: string;
+  history_recall_threshold: string;
+  history_recall_rerank: string;
   semantic_recall_depth: string;
   /** Cosine floor a recalled entry must clear. */
   semantic_recall_threshold: string;
@@ -713,6 +717,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "scene_break_every" |
   "offscene_known_limit" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
+  "history_recall_depth" | "history_recall_budget" | "history_recall_threshold" | "history_recall_rerank" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level" |
@@ -1900,13 +1905,33 @@ export type LoreEntryRow = {
 export type HeldEntryRow = {
   ref: string; name: string; reason: { type: "cooldown"; remaining: number };
 };
+/** Frozen retrieval reasons; these fields are display metadata, never prompt prose. */
+export type HistorySignalRound = {
+  structural: { relation: string; refs: string[] }[] | null;
+  lexical: { score: number; matched: string[] } | null;
+  semantic: { cosine: number; query: number } | null;
+  rerank: { level: string | null; position: number | null; backend: string } | null;
+};
+export type HistoryEvidenceRow = {
+  items: {
+    scene: string; identity: string | null; key: string; title: string;
+    date?: string; location?: string; tier: number; admitted_by: string[];
+    rounds: HistorySignalRound[];
+    ranks: { round: number; signal: string; rank: number }[];
+    excerpts: number[][]; evidence_ids?: string[];
+    posts?: { index: number; key: string; part: number | null; speaker: string; text: string }[]; summary: string; tokens: number; shed: boolean;
+  }[];
+  coverage: { tiers: number[]; semantic: string; admitted: number; agreement: number;
+              verdict: string; eligible?: number };
+  ceiling: number; budget_from: string[]; query_digest?: string;
+};
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
    *  before ids existed does not carry one — those predate editable labels
    *  too, so their labels are still unique and are a safe fallback key. */
   id?: string;
   label: string; text: string; tokens: number;
-  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history";
+  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history-recall" | "history";
   dropped: boolean; trimmed: number;
   /** The section carries content the reader pinned, so the packer left it alone
    *  whatever its tier (#129). Optional: snapshots frozen before pins existed
@@ -1920,6 +1945,7 @@ export type ContextSection = {
   names?: Record<string, string>;
   /** World info only: entries held back (cooldown). */
   held_back?: HeldEntryRow[];
+  history?: HistoryEvidenceRow;
 };
 /** One row of the prompt layout editor. `label` is what the INSPECTOR calls the
  *  section — never what the model reads, which each template emits itself.
