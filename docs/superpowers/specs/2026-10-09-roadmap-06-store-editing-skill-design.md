@@ -1,6 +1,6 @@
 # 06. Store-editing skill
 
-**Status:** Codex spec and both slice plan gates passed; implementation verification in progress.
+**Status:** Both slices implemented and Codex-reviewed; full gate blocked by reproduced Windows baseline failures. See the execution record below.
 **Date:** 2026-10-09
 **Roadmap:** 06 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06).
 **Baseline:** `main` at `35c1fb7`.

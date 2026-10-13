@@ -245,3 +245,5 @@ used** — this needs zero changes to Part A, only different orchestration:
   the transcript itself has gone stale.
 - Verify every "done" claim against **real** `git log --oneline` / `git status --short` in
   `~/.grimoire` — never report success from a cached/remembered result alone.
+
+Once the content pass has written its records, follow [store-editing sync](../grimoire-store-editing/SKILL.md#sync-a-coherent-batch).

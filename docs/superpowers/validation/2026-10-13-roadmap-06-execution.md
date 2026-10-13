@@ -136,3 +136,45 @@ acceptance fixture, confirmed it correct, and reported no remaining findings.
 All 44 guard tests pass with clean Ruff output. The lint/template/frontend
 stages passed, including 5,175 frontend tests; both dependency-set backend
 runs remain in progress.
+
+## Whole-gate result and unchanged-main reproduction
+
+`make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe`
+ran from this worktree. Ruff (1,136 existing findings), mypy (161 existing
+findings), template verification (527 checks), ESLint, frontend type checking
+and all 5,175 frontend tests passed. The backend coverage run reached 93.68%,
+above the 93% floor: 21,070 passed, 42 skipped, 7 failed and 11 setup errors.
+The command exited nonzero; the whole gate is not green.
+
+Every failed case was rerun on unchanged main at `c647d06c4`, using that
+checkout's source and the same interpreter, without changing its HEAD or
+tracked files. All seven failures reproduced; the common benchmark setup
+error also reproduced. The product sources, synthetic generator and affected
+tests have no diff on this branch. The failures are therefore an observed
+baseline, not inferred from their filenames:
+
+- The missing-`ctypes` import case reaches the Windows recycle driver.
+- The refusal fixture calls `os.mkfifo`, absent on Windows.
+- Five image-GC fault-injection cases do not intercept the Windows file calls.
+- The synthetic benchmark calls `os.utime(..., follow_symlinks=False)`, which
+  raises `NotImplementedError` on this platform; its one module fixture
+  accounts for the eleven setup errors.
+
+The selected main reproduction reported 7 failures and 1 setup error. Its log
+is retained outside the checkout; full-gate logs are in the ignored execution
+workspace. Main remained clean. No baseline was weakened, test skipped, frozen
+home regenerated or product behavior changed to make this feature appear green.
+The separate Android-dependency run is recorded below. Verification remains limited by this baseline even though the scoped
+checks, actual application and implementation/spec review gates passed.
+
+`make check-pydantic1` also exited nonzero: 21,066 passed, 48 skipped, the
+same 7 failed cases and the same 11 benchmark setup errors. It used its
+throwaway environment under this worktree. This comparison does not make the
+whole gate pass; the Windows failures occur with both dependency sets.
+
+Final scoped run on the completed skill/routing tree: 169 passed, 7 platform
+skips across skill, docs, interpreter and cache-CLI checks. Both skill manifests
+validate. No lint baseline changed. Both slices' Code, Review and Final spec
+stages are complete; Landed stays clear. Integration awaits a green full gate
+or an explicit decision about the reproduced baseline. The requested branch
+and native worktree are preserved, with no push, PR or merge.

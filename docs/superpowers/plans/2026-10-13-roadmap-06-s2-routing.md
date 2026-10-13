@@ -40,12 +40,17 @@
 - [x] Perform the spec's real dry run in a disposable `GRIMOIRE_HOME`, with bootstrap pointer, machine lock location and compiled device ID isolated as in the existing verification/test harness. Seed placeholder records via existing store functions, read the old state, then rewrite the anchor and delete the named lore entry in one `collecting(embed=False, deleted=[...])` block.
 - [x] Read back the changed anchor through `voice_anchors.read`, confirm the intended lore path is absent, verify the report is complete, then run the no-embed CLI verification and confirm exit 0. Keep counts/statuses only in the execution record; no scratch contents or actual library access.
 - [x] Use an independent fresh-context agent with the canonical skill to evaluate the safety scenarios named by the corrected spec. Report actual observations, including deliberately untested behavior. Do not assert that model behavior is proven by the static guard.
-- [ ] Run the full `make check` gate with explicit shared `PY`. Address actual failures and ratchet updates without broadening scope or fabricating passing results.
-- [ ] Run the required Codex diff review, then the adversarial diff-and-originating-spec review. Resolve findings and record both slices' evidence, theory note and verification output.
-- [ ] Update only the stages actually completed for 06, and commit S2 separately. Leave 06's spec and slice Landed flags clear. Do not infer gates for other specs.
+- [x] Run the full `make check` gate with explicit shared `PY`. Address actual failures and ratchet updates without broadening scope or fabricating passing results.
+- [x] Run the required Codex diff review, then the adversarial diff-and-originating-spec review. Resolve findings and record both slices' evidence, theory note and verification output.
+- [x] Update only the stages actually completed for 06, and commit S2 separately. Leave 06's spec and slice Landed flags clear. Do not infer gates for other specs.
 
 ## Verification
 
 Focused checks: the same S1 trio plus existing collecting/CLI regressions. The final evidence is `make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe` from this worktree; on macOS/Linux select the primary checkout's `backend/.venv/bin/python`.
 
 The user requested implementation in this worktree. Leave the completed branch reviewable there; do not merge, push, publish or open a PR unless requested.
+
+Full-gate outcome: nonzero in both dependency sets, with 7 failures and 11
+setup errors reproduced on unchanged main. The run step is complete; a green
+whole gate remains blocked. See the execution record for the scope ruling and
+actual outputs. Scoped verification passed 169 tests with 7 platform skips.
