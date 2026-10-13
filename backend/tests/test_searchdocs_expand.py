@@ -7,6 +7,9 @@ budget holds whatever the transcript's length, with no cut splitting a word.
 Placeholder names only.
 """
 
+import dataclasses
+import json
+
 import pytest
 
 from grimoire.store import campaigns, regex, scenes, worlds
@@ -380,3 +383,35 @@ def test_a_scene_replaced_during_the_read_is_refused_without_an_identity(cid, mo
     monkeypatch.setattr(expand.scenes_read, "read_scene", read_scene)
     monkeypatch.setattr(expand.scenes_identity, "scene_identity", scene_identity)
     assert expand.expand(cid, sid, phase="prompt", terms=["post"]) is None
+
+
+def test_a_rule_that_writes_a_lone_surrogate_leaves_an_encodable_excerpt(cid):
+    messages = _plain(4)
+    messages[1] = _reply("Mara counts the tide tax.", 1)
+    sid = _scene(cid, messages)
+    regex.layers.write_campaign(cid, {"rules": [
+        {"name": "Mark", "pattern": "counts", "replacement": "countsSURROGATE",
+         "applies": ["prompt"]}]})
+    # Only a hand edit puts a lone surrogate there: the app's write refuses one.
+    p = regex.layers.path("campaign", cid)
+    p.write_text(p.read_text(encoding="utf-8").replace("SURROGATE", "\\ud800"),
+                 encoding="utf-8")
+    got = expand.expand(cid, sid, phase="prompt", terms=["tide tax"])
+    assert got is not None and got.excerpts
+    json.dumps(dataclasses.asdict(got), ensure_ascii=False).encode("utf-8")
+
+
+def test_an_identity_less_scene_rewritten_during_the_read_is_refused(cid, monkeypatch):
+    """A scene from before the identity backfill has no identity to compare;
+    its file's stat stands in."""
+    sid = _scene(cid, _plain(4))
+    path = scenes.paths._scene_path(cid, sid)
+    real_read = expand.scenes_read.read_scene
+
+    def read_scene(*args, **kwargs):
+        got = real_read(*args, **kwargs)
+        path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        return got
+    monkeypatch.setattr(expand.scenes_identity, "scene_identity", lambda *_a, **_k: None)
+    monkeypatch.setattr(expand.scenes_read, "read_scene", read_scene)
+    assert expand.expand(cid, sid, phase="prompt", terms=["item"]) is None

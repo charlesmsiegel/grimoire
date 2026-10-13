@@ -74,7 +74,8 @@ class LiveDocument:
     doc: scene_mod.SceneDocument     # key, text, meta
 
 
-#: Each live document's input files, by (campaign, identity, document key).
+#: Each live document's input files, by (campaign, sid, identity, document
+#: key) -- the sid too, since two identity-less scenes can share a key.
 #: Kept here rather than on `LiveDocument`, which leaves the package and so
 #: carries nothing that is not JSON-safe; `input_paths` is how `embedded`
 #: reads them. Bounded like the memo.
@@ -86,7 +87,7 @@ def input_paths(cid: str, live_doc: LiveDocument) -> tuple[Path, ...]:
     of the call that returned it, else sliced again -- and only if that still
     gives the same document key; () when it does not or will not read."""
     identity = live_doc.doc.meta.get("identity", "")
-    got = _INPUTS.get((cid, identity, live_doc.doc.key))
+    got = _INPUTS.get((cid, live_doc.sid, identity, live_doc.doc.key))
     if got is not None:
         return got
     try:
@@ -296,7 +297,7 @@ def scene_documents(cid: str, *, exclude: frozenset[str] = frozenset(),
         _store(cid, built)
     out = []
     for (row, sl), doc in zip(wanted, docs, strict=True):
-        _fifo(_INPUTS, (cid, sl.identity, doc.key), sl.paths)
+        _fifo(_INPUTS, (cid, row["id"], sl.identity, doc.key), sl.paths)
         out.append(LiveDocument(sid=row["id"], doc=doc,
                                 closed_by=dict(row["closed_by"]) if row.get("closed_by") else None))
     return LiveSet(documents=tuple(out), skipped=tuple(sorted(set(skipped))),

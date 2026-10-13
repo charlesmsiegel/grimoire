@@ -429,3 +429,12 @@ def test_what_leaves_the_package_is_json_safe(cid):
     assert paths
     live._INPUTS.clear()
     assert live.input_paths(cid, doc) == paths
+
+
+def test_input_paths_are_kept_per_scene_not_only_per_key(cid):
+    """Two identity-less scenes can share a document key; each keeps its own
+    input files."""
+    a, b, _ = _three(cid)
+    docs = {d.sid: d for d in live.scene_documents(cid).documents}
+    impostor = live.LiveDocument(sid=a, closed_by=None, doc=docs[b].doc)
+    assert live.input_paths(cid, impostor) != live.input_paths(cid, docs[b])

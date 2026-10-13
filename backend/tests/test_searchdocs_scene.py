@@ -842,6 +842,8 @@ def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
     ("appearances.json", lambda sid: {"characters/mara": [sid]}),
     ("plot.json", lambda sid: {"missing-ledger": {"title": "Ledger", "status": "open",
                                                   "beats": "Mara hides it."}}),
+    ("plot.json", lambda sid: {"missing-ledger": {"title": "Ledger", "status": "open",
+                                                  "beats": [{"scene": sid, "text": {}}]}}),
 ])
 def test_a_nested_part_of_the_wrong_shape_is_degraded(cid, name, body):
     sid = _played(cid)
@@ -877,3 +879,46 @@ def test_entries_past_the_metadata_cap_move_nothing_but_the_cut_does(cid):
     assert keys[65].meta["truncated"] == ["facts.recorded"]
     assert keys[64].key != keys[65].key           # the cut itself shows
     assert keys[65].key == keys[66].key           # what lies past it does not
+
+
+def test_more_keywords_past_the_cap_or_a_case_duplicate_do_not_move_the_key(cid):
+    sid = _played(cid)
+    base = tuple(f"keyword {i}" for i in range(65))
+    _absorb(cid, sid, keywords=base)
+    before = doc(cid, sid)
+    assert "keywords" in before.meta["truncated"]
+    _absorb(cid, sid, keywords=(*base, "keyword 65", "KEYWORD 1"))
+    after = doc(cid, sid)
+    assert (after.text, after.meta, after.key) == (before.text, before.meta, before.key)
+
+
+def test_a_chronicle_cast_actor_no_longer_listed_is_named_through_its_record(cid):
+    other = _played(cid, title="Elsewhere")
+    aid, vid = _actor(cid, other, "Winifred")
+    sid = _played(cid)
+    chronicle.absorb(cid, {"id": sid, "one_line": "x", "summary": "y", "keywords": [],
+                           "cast": [f"characters:{aid}"], "location": "", "date": ""})
+    scenes.mark_absorbed(cid, sid, "x", "y")
+    sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
+    assert "Cast: Winifred" in scene.render(sl).text
+    root = campaigns.campaign_root(cid)
+    assert characters.require_version(root, aid, vid) in sl.paths
+
+
+def test_a_locked_card_that_cannot_be_reached_is_degraded(cid, monkeypatch):
+    sid = _played(cid)
+    aid, vid = _actor(cid, sid, "Mara")
+    target = f"{vid}.json"
+    real_stat = slices.os.stat
+
+    def stat(path, *args, **kwargs):
+        if str(path).endswith(target):
+            raise PermissionError("denied")
+        return real_stat(path, *args, **kwargs)
+
+    def require_version(*_a, **_k):
+        raise characters.VersionNotFound(vid)
+    monkeypatch.setattr(slices.os, "stat", stat)
+    monkeypatch.setattr(slices.characters, "require_version", require_version)
+    slices._POOL.clear()
+    assert any(aid in n for n in doc(cid, sid).meta["degraded"])

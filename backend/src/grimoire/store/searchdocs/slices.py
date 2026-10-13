@@ -94,14 +94,26 @@ _JSON_ERRORS = (OSError, ValueError, UnicodeDecodeError, RecursionError)
 _logged: set[str] = set()
 
 
+def _inaccessible(path: Path) -> bool:
+    """Whether `path` is there but cannot be reached (an access error, not
+    absence)."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False     # ValueError: a name no filesystem can hold (a lone surrogate)
+    except OSError:
+        return True
+    return False
+
+
 def _present(path: Path) -> bool:
     """Whether `path` is there, an access failure counting as there: a record
     that cannot be reached is unreadable, never missing (`Path.exists`
     suppresses that failure on some versions)."""
     try:
         os.stat(path)
-    except (FileNotFoundError, NotADirectoryError):
-        return False
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False     # ValueError: a name no filesystem can hold (a lone surrogate)
     except OSError:
         return True
     return True
@@ -212,7 +224,9 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
 def _record_shape(ledger: object) -> bool:
     """A thread or commitment ledger: records, each with a list of beats."""
     return _each(ledger, lambda r: _opt(r.get("beats"), list)
-                 and all(isinstance(b, dict) for b in r.get("beats") or ()))
+                 and all(isinstance(b, dict) and _opt(b.get("text"), str)
+                         and _opt(b.get("scene"), str) for b in r.get("beats") or ())
+                 and all(_opt(r.get(k), str) for k in ("title", "status")))
 
 
 def _parse_json(name: str, path: Path, shape: type) -> tuple[object, bool]:
@@ -329,6 +343,7 @@ class CampaignInputs:
         for name in sorted(bad_records):
             self.damage.add(name)
         self._view = overlay.view(cid)
+        self._by_ref: dict[str, tuple[str, dict]] | None = None
         self.groups_index, self.group_paths = self._groups(cid)
 
     def _groups(self, cid: str) -> tuple[membership.Index | None, dict[str, Path]]:
@@ -352,13 +367,20 @@ class CampaignInputs:
         if kind not in ("characters", "pcs") or not paths.safe_id(aid) \
                 or not isinstance(version, str) or not paths.safe_id(version):
             return Name(aid, None)
+        files = self.actor_files(kind, aid, version)
         try:
             root = overlay.actor_root(self.cid, kind, aid, v=self._view)
             module = characters if kind == "characters" else pcs
             card = module.require_version(root, aid, version)
         except (characters.CharacterNotFound, characters.VersionNotFound,
                 pcs.PCNotFound, pcs.PCVersionNotFound, OSError):
-            return Name(aid, None)
+            # Not found -- or not reachable: `exists` can swallow an access
+            # error, and a card that is there is unreadable, never absent.
+            return Name(aid, None, unreadable=any(_inaccessible(p) for p in files))
+        if root != self._view.croot and any(_inaccessible(p) for p in files[:2]):
+            # Resolved to the world only because the campaign's own copy
+            # could not be reached: that copy is the authority, unread.
+            return Name(aid, None, unreadable=True)
 
         def compute() -> str | None:
             try:
@@ -373,14 +395,24 @@ class CampaignInputs:
             return Name(aid, card, unreadable=True)
         return Name(got, card)
 
+    def appearance_refs(self) -> dict[str, tuple[str, dict]]:
+        """Each appearance record by its actor's canonical ref (the form a
+        chronicle cast names), built once per load."""
+        if self._by_ref is None:
+            self._by_ref = {canon.actor_ref(token): (token, rec)
+                            for token, rec in self.appearances.items()
+                            if isinstance(token, str) and isinstance(rec, dict)}
+        return self._by_ref
+
     def actor_files(self, kind: str, aid: str, version: object) -> tuple[Path, ...]:
         """Both layers' meta and locked-version files for an actor, present
         or not: what a name read consults, so a write that creates or restores
         the card finds the documents that named the actor by its id meanwhile
         (as `location_files`)."""
         if kind not in ("characters", "pcs") or not paths.safe_id(aid) \
-                or not isinstance(version, str) or not paths.safe_id(version):
-            return ()
+                or not isinstance(version, str) or not paths.safe_id(version) \
+                or not _encodable(aid + version):
+            return ()     # no file can be at a name that will not encode
         module = characters if kind == "characters" else pcs
         card = characters._card_path if kind == "characters" else pcs._version_path
         return tuple(p for root in (self._view.croot, self._view.wroot)
@@ -609,30 +641,44 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
         listed = head.sid in scenes
         if not listed and not presence.get(head.sid):
             continue
-        kind, aid = appearances_paths._split(token)
-        name = inputs.actor_name(kind, aid, rec.get("version"))
-        if name.source is not None:
-            used.append(name.source)
-        used += inputs.actor_files(kind, aid, rec.get("version"))
-        if name.unreadable:
-            damage.add(token)
-        join = canon.actor_ref(token)     # full and raw: the membership join needs it
-        ref = damage.clean(join, token)
-        role = rec.get("role") if isinstance(rec.get("role"), str) else ""
-        # A player's name renders with its suffix inside the item cap, so the
-        # slice keeps only what can show.
-        cap = CAPS["name"] - (len(PLAYER_SUFFIX.encode()) if role == "player" else 0)
-        out[ref] = {"ref": ref, "join": join, "kind": kind, "id": aid,
-                    "name": damage.text(name.text, cap, token),
-                    "role": role, "present": listed}
+        raw_role = rec.get("role")
+        role = raw_role if isinstance(raw_role, str) else ""
+        entry = _actor(inputs, token, rec, role, used, damage)
+        out[entry["ref"]] = {**entry, "present": listed}
+    by_ref = inputs.appearance_refs() if chron and chron.get("cast") else {}
     for ref in (chron or {}).get("cast", ()):
         if ref in out:
+            continue
+        if ref in by_ref:
+            # The chronicle names an actor whose appearance record no longer
+            # lists this scene: still named, and read, through that record.
+            token, rec = by_ref[ref]
+            out[ref] = {**_actor(inputs, token, rec, "", used, damage), "present": False}
             continue
         kind, _, aid = ref.partition(":")
         out[ref] = {"ref": damage.clean(ref, "chronicle.json"), "join": ref, "kind": kind,
                     "id": aid, "name": damage.text(aid, CAPS["name"], "chronicle.json"),
                     "role": "", "present": False}
     return sorted(out.values(), key=lambda a: (a["role"] != "player", a["kind"], a["id"]))
+
+
+def _actor(inputs: CampaignInputs, token: str, rec: dict, role: str,
+           used: list[Path], damage: _Damage) -> dict:
+    """One cast entry from its appearance record: the name at the locked
+    version, and the files that name was (or would be) read from."""
+    kind, aid = appearances_paths._split(token)
+    name = inputs.actor_name(kind, aid, rec.get("version"))
+    if name.source is not None:
+        used.append(name.source)
+    used += inputs.actor_files(kind, aid, rec.get("version"))
+    if name.unreadable:
+        damage.add(token)
+    join = canon.actor_ref(token)     # full and raw: the membership join needs it
+    # A player's name renders with its suffix inside the item cap, so the
+    # slice keeps only what can show.
+    cap = CAPS["name"] - (len(PLAYER_SUFFIX.encode()) if role == "player" else 0)
+    return {"ref": damage.clean(join, token), "join": join, "kind": kind, "id": aid,
+            "name": damage.text(name.text, cap, token), "role": role}
 
 
 def _groups(inputs: CampaignInputs, cast: list[dict], used: list[Path]) -> list[dict]:
@@ -677,8 +723,8 @@ def _visible(values: dict) -> dict:
     """`values` cut to what the document can show (`ITEMS`, `META_REFS`), so
     each slice's digest moves only when the text or the metadata could. A
     thread's status is kept for the refs the metadata keeps. The cast, the
-    places and the keywords are kept whole: a scene's own short lists, and
-    the groups are derived over the full cast by design."""
+    places are kept whole: a scene's own short lists, and the groups are
+    derived over the full cast by design."""
     head = values["head"]
     moments = head["moments"]
     threads = _shown(values["threads"], ITEMS["threads"], "item", {"ref": "", "item": ""})
@@ -687,9 +733,22 @@ def _visible(values: dict) -> dict:
     kept = {r["ref"] for r in threads + commits}
     facts = values["facts"]
     rels = values["relationships"]
+    chron = values["chronicle"]
+    if chron:
+        # Deduplicated by case fold as both readers do, and capped like a ref
+        # list; the cut is a flag, since a marker would read as a keyword.
+        seen: set[str] = set()
+        keywords = []
+        for k in chron["keywords"]:
+            if k.casefold() not in seen:
+                seen.add(k.casefold())
+                keywords.append(k)
+        chron = {**chron, "keywords": keywords[:META_REFS],
+                 "keywords_cut": len(keywords) > META_REFS}
     pairs = sorted({tuple(r["pair"]) for r in rels if len(r["pair"]) == 2})
     return {
         **values,
+        "chronicle": chron,
         "head": {**head, "moments": moments if len(moments) <= 2 else [moments[0], moments[-1]],
                  "locations": _capped(head["locations"], "")},
         "threads": threads,

@@ -32,6 +32,7 @@ cannot tie to a view.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -424,6 +425,13 @@ def _current_sid(cid: str, sid: str, identity: str | None) -> str | None:
     return scenes_identity.find_by_identity(cid, identity)
 
 
+def _file_stamp(cid: str, sid: str) -> tuple[int, int, int]:
+    """The scene file's (inode, size, mtime): what a delete and re-create, or
+    any rewrite, moves. Raises `OSError` for a file that is gone."""
+    st = os.stat(scenes_paths._scene_path(cid, sid))
+    return st.st_ino, st.st_size, st.st_mtime_ns
+
+
 def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str] | None:
     """(current sid, scene, player label, identity after the read), or None for
     a scene that is gone, no longer carries `identity`, or will not read. The
@@ -435,9 +443,14 @@ def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str
         if current is None:
             return None
         before = scenes_identity.scene_identity(cid, current)
+        # A scene from before the identity backfill has none to compare: its
+        # file's own stat stands in, so a replacement still shows.
+        file_before = _file_stamp(cid, current) if before is None else None
         scene = scenes_read.read_scene(cid, current)
         player_label = appearances_cast.player_label(cid, current)
         after = scenes_identity.scene_identity(cid, current)
+        if before is None and (after is not None or _file_stamp(cid, current) != file_before):
+            return None
     except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound, OSError,
             ValueError, TypeError, AttributeError, KeyError):
         # A file that will not decode (UnicodeDecodeError) or parse
@@ -447,6 +460,15 @@ def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str
     if after != before or (identity is not None and after != identity):
         return None
     return current, scene, player_label, after or ""
+
+
+def _encodable(text: str) -> str:
+    """`text` with any lone surrogate replaced, deterministically."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace").decode("utf-8")
+    return text
 
 
 def _eligible(shown: list[dict], phase: str, player_label: str) -> list[dict]:
@@ -461,8 +483,11 @@ def _eligible(shown: list[dict], phase: str, player_label: str) -> list[dict]:
         content = raw if isinstance(raw, str) else ""
         if phase == "prompt":
             content = export.drop_images(content)
+        # A rule's replacement can carry a lone surrogate (a hand-edited
+        # escape); what leaves the package is always encodable.
+        content = _encodable(content)
         posts.append({"index": i, "role": str(m.get("role") or ""),
-                      "speaker": _speaker(m, player_label), "content": content})
+                      "speaker": _encodable(_speaker(m, player_label)), "content": content})
     return posts
 
 

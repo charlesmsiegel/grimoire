@@ -191,9 +191,9 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
     head, chron = values["head"], values["chronicle"] or {}
     truncated: list[str] = []
 
-    def bounded(name: str, refs) -> list:
+    def bounded(name: str, refs, cut_upstream: bool = False) -> list:
         kept, cut = _capped(refs)
-        if cut:
+        if cut or cut_upstream:
             truncated.append(name)
         return kept
 
@@ -243,7 +243,7 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
         # capped again after it.
         "keywords": bounded("keywords", _dedupe_folded(
             [slices_mod.clip(k.casefold(), slices_mod.CAPS["keyword"])
-             for k in chron.get("keywords", [])])),
+             for k in chron.get("keywords", [])]), bool(chron.get("keywords_cut"))),
         # A damaged ref can be the degraded name itself: capped like any ref.
         "degraded": bounded("degraded", (slices_mod.clip(n, ref) for n in degraded)),
         "bytes": len(text.encode("utf-8")),
