@@ -453,7 +453,7 @@ def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str
         if before is None and (after is not None or _file_stamp(cid, current) != file_before):
             return None
     except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound, OSError,
-            ValueError, TypeError, AttributeError, KeyError):
+            ValueError, TypeError, AttributeError, KeyError, RecursionError):
         # A file that will not decode (UnicodeDecodeError) or parse
         # (JSONDecodeError) is a ValueError; a ledger of the wrong shape fails
         # one attribute or key away. Each is "could not read", which is None.

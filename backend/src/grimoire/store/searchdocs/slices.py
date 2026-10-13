@@ -212,6 +212,8 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
         and all(_opt(r.get(k), str) for k in ("one_line", "summary", "date", "location")))),
     "appearances.json": lambda d: _each(d, lambda r: (
         _strings(r.get("scenes")) and _opt(r.get("presence"), dict)
+        and all(isinstance(v, list) and all(isinstance(i, dict) for i in v)
+                for v in (r.get("presence") or {}).values())
         and all(_opt(r.get(k), str) for k in ("role", "version")))),
     "facts.json": lambda d: _each(d, lambda r: _opt(r.get("text"), str)),
     "continuity.json": lambda d: not isinstance(d, dict) or (
@@ -344,6 +346,14 @@ class CampaignInputs:
         for name in sorted(bad_records):
             self.damage.add(name)
         self._view = overlay.view(cid)
+        # The world layer is resolved from campaign.md; one that will not
+        # resolve (an unreadable or hand-edited campaign.md) leaves only the
+        # campaign's own layer, and campaign.md is named in `degraded`.
+        self._roots: tuple[Path, ...] = (self._view.croot,)
+        try:
+            self._roots += (self._view.wroot,)
+        except Exception:  # noqa: BLE001 -- the campaign's records still read
+            self.damage.add("campaign.md")
         self._by_ref: dict[str, tuple[str, dict]] | None = None
         self.groups_index, self.group_paths = self._groups(cid)
 
@@ -380,8 +390,7 @@ class CampaignInputs:
             root = overlay.actor_root(self.cid, kind, aid, v=self._view)
             module = characters if kind == "characters" else pcs
             card = module.require_version(root, aid, version)
-        except (characters.CharacterNotFound, characters.VersionNotFound,
-                pcs.PCNotFound, pcs.PCVersionNotFound, OSError):
+        except Exception:  # noqa: BLE001 -- not found, unreachable, or no world layer
             # Not found -- or not reachable: `exists` can swallow an access
             # error, and a card that is there is unreadable, never absent.
             return Name(aid, None, unreadable=any(_inaccessible(p) for p in files))
@@ -423,7 +432,7 @@ class CampaignInputs:
             return ()     # no file can be at a name that will not encode
         module = characters if kind == "characters" else pcs
         card = characters._card_path if kind == "characters" else pcs._version_path
-        return tuple(p for root in (self._view.croot, self._view.wroot)
+        return tuple(p for root in self._roots
                      for p in (module._meta_path(root, aid), card(root, aid, version)))
 
     def location_files(self, lid: str) -> tuple[Path, ...]:
@@ -432,8 +441,7 @@ class CampaignInputs:
         documents that named it."""
         if not paths.safe_id(lid):
             return ()
-        return (self._view.croot / "locations" / f"{lid}.md",
-                self._view.wroot / "locations" / f"{lid}.md")
+        return tuple(root / "locations" / f"{lid}.md" for root in self._roots)
 
     def location_name(self, lid: str) -> Name:
         """The location's name through the overlay, memoized on both layers'
@@ -442,8 +450,7 @@ class CampaignInputs:
         if not paths.safe_id(lid):
             return Name(lid, None)
         gone = f"locations/{lid}" in self._view.gone
-        layers = (self._view.croot / "locations" / f"{lid}.md",
-                  self._view.wroot / "locations" / f"{lid}.md")
+        layers = self.location_files(lid)
 
         def compute() -> tuple[str, int] | None:
             """(name, layer), (``""``, -1) for a record that is there and will
@@ -454,6 +461,8 @@ class CampaignInputs:
                 return None if gone or not any(_present(p) for p in layers) else ("", -1)
             name = meta.get("name") if isinstance(meta, dict) else None
             source = 0 if layers[0].exists() else 1
+            if source >= len(layers):
+                return None
             if source == 1 and _inaccessible(layers[0]):
                 # The world's copy answered only because the campaign's own
                 # could not be reached: that one is the authority, unread.
@@ -651,7 +660,10 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
         scenes = raw_scenes if isinstance(raw_scenes, list) else []
         presence = raw_presence if isinstance(raw_presence, dict) else {}
         listed = head.sid in scenes
-        if not listed and not presence.get(head.sid):
+        intervals = presence.get(head.sid)
+        # Only a list of intervals is presence; anything else is damage the
+        # ledger's shape check has already named, never "present".
+        if not listed and not (isinstance(intervals, list) and intervals):
             continue
         raw_role = rec.get("role")
         role = raw_role if isinstance(raw_role, str) else ""

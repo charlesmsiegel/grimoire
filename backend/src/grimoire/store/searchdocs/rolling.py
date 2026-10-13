@@ -83,7 +83,7 @@ def intact_rolling(cid: str, head) -> Running:
         return Running(statcache.memo("searchdocs.rolling.intact", sig, compute, pool=_POOL,
                                       max_entries=POOL_ENTRIES), files)
     except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound,
-            OSError, ValueError, KeyError, TypeError, AttributeError):
+            OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
         # A ledger the test reads (appearances.json) of the wrong shape fails
         # one attribute away: the summary cannot be vouched for, so it is not
         # carried.

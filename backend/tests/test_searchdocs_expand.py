@@ -428,3 +428,12 @@ def test_a_hand_edited_post_id_with_a_lone_surrogate_leaves_an_encodable_key(cid
     got = expand.expand(cid, sid, phase="prompt", terms=["tide tax"])
     assert got is not None and got.excerpts
     json.dumps(dataclasses.asdict(got), ensure_ascii=False).encode("utf-8")
+
+
+def test_a_transcript_nested_past_the_parser_is_unreadable_not_raised(cid, monkeypatch):
+    sid = _scene(cid, _plain(4))
+
+    def nested(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+    monkeypatch.setattr(expand.scenes_read, "read_scene", nested)
+    assert expand.expand(cid, sid, phase="prompt", terms=["item"]) is None

@@ -958,3 +958,41 @@ def test_group_files_stay_inputs_when_the_snapshot_fails(cid, monkeypatch):
     sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
     assert "groups" in sl.degraded
     assert campaigns.campaign_root(cid) / "groups" / f"{gid}.md" in sl.paths
+
+
+def test_a_transcript_nested_past_the_parser_drops_only_the_running_summary(cid, monkeypatch):
+    sid = _folded_with_word(cid)
+
+    def nested(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+    monkeypatch.setattr(rolling.scenes_read, "read_scene", nested)
+    rolling._POOL.clear()
+    d = doc(cid, sid)
+    assert d.meta["summary_source"] == "none" and WORD not in d.text
+
+
+def test_a_presence_entry_that_is_not_intervals_is_degraded_not_present(cid):
+    sid = _played(cid)
+    other = _played(cid, title="Elsewhere")
+    p = campaigns.campaign_root(cid) / "appearances.json"
+    p.write_text(json.dumps({"characters/mara": {"version": "default", "role": "npc",
+                                                 "scenes": [other],
+                                                 "presence": {sid: "yes"}}}),
+                 encoding="utf-8")
+    d = doc(cid, sid)
+    assert "appearances.json" in d.meta["degraded"]
+    assert d.meta["cast"] == []
+
+
+def test_a_world_that_will_not_resolve_degrades_instead_of_raising(cid, monkeypatch):
+    sid = _played(cid)
+    _actor(cid, sid, "Mara")
+    _location(cid, sid, "Saltmarch harbour")
+
+    def unresolved(*_a, **_k):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "campaign.md will not decode")
+    monkeypatch.setattr(slices.overlay, "wroot_of", unresolved)
+    slices._POOL.clear()
+    d = doc(cid, sid)
+    assert "campaign.md" in d.meta["degraded"]
+    assert "Cast: Mara" in d.text and "Where: Saltmarch harbour" in d.text
