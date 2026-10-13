@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { issuedEpoch, memoEpoch } from "./memoEpoch";
+import { issuedEpoch, memoEpoch, onRunSettled } from "./memoEpoch";
 
 /** Paint a page's list from memory, then from the server: first paint, then
  *  revalidate.
@@ -116,6 +116,12 @@ export function useRevalidated<T>(key: string,
     setHeld((h) => (h.failed ? { ...h, failed: false } : h));
     return issue(keyRef.current, true);
   }, [issue]);
+
+  // A detached run this client saw end wrote after whatever is on screen was
+  // read: ask again, so the page does not go on showing what came before it
+  // (spec 04 section 6.5). A write this tab sends is the page's own to
+  // follow with `reload()`.
+  useEffect(() => onRunSettled(() => { void reload(); }), [reload]);
 
   return { data: shown.data, stale: shown.stale, failed: shown.failed, reload };
 }

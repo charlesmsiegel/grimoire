@@ -42,37 +42,59 @@ def _usable(kind: compiled.Kind) -> bool:
     return persist.registered(kind) and compiled.available()
 
 
+#: What a warm stored, as the read that should now hit it would ask:
+#: `(kind, inputs, params)`. None when there was nothing to warm.
+_Stored = tuple[compiled.Kind, list[compiled.Input], dict] | None
+
+
 def _store(kind: compiled.Kind, inputs: list[compiled.WrittenInput], value: object,
-           params: dict) -> None:
+           params: dict) -> _Stored:
     with compiled.batch() as request:
         request.store_written(kind, inputs, value, params=params)
+    return kind, [compiled.Input(item.role, item.path) for item in inputs], params
 
 
-def _warm_scene(cid: str, sid: str) -> bool:
+def _landed(stored: tuple[compiled.Kind, list[compiled.Input], dict]) -> bool:
+    """Whether what a warm stored is there for the next read: the same
+    derivation that read would make, answered without computing. A store the
+    compiled layer declined (busy, over a staging bound, a flush that did not
+    land) is a later miss, and reads here as not landed. Stores nothing."""
+    kind, inputs, params = stored
+    computed: list[bool] = []
+
+    def compute(_view, _params):
+        computed.append(True)
+        return compiled.Uncached(None)
+    with compiled.batch() as request:
+        request.derive(kind, inputs, params=params, compute=compute)
+    return not computed
+
+
+def _warm_scene(cid: str, sid: str) -> _Stored:
     kind = compiled.OVERVIEW_SCENE_TURNS
     if not _usable(kind):
-        return False
+        return None
     p = scenes_paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
-        return False
+        return None
+    if p.stat().st_size < overview_read.SCENE_TURNS_PERSIST_MIN_BYTES:
+        return None   # a short scene is never persisted: nothing to warm
     # The names the shell will ask with. A cast change before that read
     # misses on `players` and computes: correct, only not warm.
-    if p.stat().st_size < overview_read.SCENE_TURNS_PERSIST_MIN_BYTES:
-        return False   # a short scene is never persisted: nothing to warm
     players = tuple(sorted(cast.player_names(cid, sid)))
     data = p.read_bytes()
     if len(data) < overview_read.SCENE_TURNS_PERSIST_MIN_BYTES:
-        return False
-    _store(kind, [compiled.WrittenInput("scene", p, data)],
-           kinds.scene_turns(data, players), {"players": list(players)})
-    return True
+        return None
+    return _store(kind, [compiled.WrittenInput("scene", p, data)],
+                  kinds.scene_turns(data, players), {"players": list(players)})
 
 
 def warm_scene(cid: str, sid: str) -> None:
     """Store `scene_turns` for the scene file as it now is.
 
     Best effort, and never raises: a failed warm is a later miss, and nothing
-    else. Reads the file back, records no `sources` row, holds no lock."""
+    else. Reads the file back, records no `sources` row, holds no lock. Not
+    read back: the turn's follow-up is not the place to pay for a check."""
     try:
         _warm_scene(cid, sid)
     except Exception as e:  # noqa: BLE001 -- a warm is never worth the turn
@@ -80,29 +102,29 @@ def warm_scene(cid: str, sid: str) -> None:
                     error=type(e).__name__)
 
 
-def _warm_meta(kind: compiled.Kind, mp: Path, parse) -> bool:
-    if not _usable(kind):
-        return False
+def _warm_meta(kind: compiled.Kind, mp: Path, parse) -> _Stored:
+    if not _usable(kind) or not mp.exists():
+        return None
     data = mp.read_bytes()
-    _store(kind, [compiled.WrittenInput("meta", mp, data)], parse(ledger_texts.decode(data)), {})
-    return True
+    return _store(kind, [compiled.WrittenInput("meta", mp, data)], parse(ledger_texts.decode(data)), {})
 
 
-def _warm_continuity(cid: str) -> bool:
+def _warm_continuity(cid: str) -> _Stored:
     """Through `derive`, which reads the five files back exactly as a read
     would and stores on its miss. Not `store_written`: an absent ledger is
     keyed as the explicit absent sentinel (03-C1 as amended), and a written
     input is bytes, so it could not key a campaign missing any of the five
     the way the next read will."""
     kind = compiled.OVERVIEW_CONTINUITY
-    if not _usable(kind):
-        return False
+    if not _usable(kind) or not campaigns_paths.campaign_exists(cid):
+        return None
     paths = kinds.continuity_paths(cid)
+    inputs = [compiled.Input(name, path) for name, path in paths.items()]
     with compiled.batch() as request:
-        request.derive(kind, [compiled.Input(name, path) for name, path in paths.items()], params={},
+        request.derive(kind, inputs, params={},
                        compute=lambda view, _params: kinds.continuity(
                            cid, {item.role: item.data for item in view.files}))
-    return True
+    return kind, inputs, {}
 
 
 def _instance(path: str) -> tuple[str, tuple[str, ...]] | None:
@@ -122,7 +144,7 @@ def _instance(path: str) -> tuple[str, tuple[str, ...]] | None:
     return None
 
 
-def _warm(kind: str, instance: tuple[str, ...]) -> bool:
+def _stored(kind: str, instance: tuple[str, ...]) -> _Stored:
     if kind == "world_row":
         return _warm_meta(compiled.OVERVIEW_WORLD_ROW, worlds_paths.world_meta_path(instance[0]),
                           kinds.world_row)
@@ -134,12 +156,25 @@ def _warm(kind: str, instance: tuple[str, ...]) -> bool:
     return _warm_scene(*instance)
 
 
+def _warm(kind: str, instance: tuple[str, ...]) -> str:
+    """One instance's outcome: "none" when nothing persisted reads it now
+    (an unregistered kind, the layer off, a short scene, a file or campaign
+    that is gone), "warmed" only once a read-back finds what was stored, and
+    "failed" when the store did not land -- 05 maps this outcome onto its
+    sync result, and a "warmed" that left nothing would never be retried."""
+    stored = _stored(kind, instance)
+    if stored is None:
+        return "none"
+    return "warmed" if _landed(stored) else "failed"
+
+
 def warm_paths(paths: Iterable[str]) -> dict[str, str]:
     """Rebuild and store the overview artifacts derived from `paths` (store-
     relative, `/`-separated). Returns one outcome per path: "warmed", "none"
     (no persisted overview kind reads it -- entity, character, greeting, image
-    and PC paths among them, since a world's counts are live listings) or
-    "failed". Instances are coalesced: five continuity paths for one campaign
+    and PC paths among them, since a world's counts are live listings, and an
+    instance no persisted kind holds now) or "failed" (the store did not land:
+    it is read back before "warmed" is said). Instances are coalesced: five continuity paths for one campaign
     warm one `continuity_summary`. Never raises; holds no lock."""
     by_instance: dict[tuple[str, tuple[str, ...]], list[str]] = {}
     out: dict[str, str] = {}
@@ -154,7 +189,7 @@ def warm_paths(paths: Iterable[str]) -> dict[str, str]:
             by_instance.setdefault(found, []).append(path)
     for (kind, instance), members in by_instance.items():
         try:
-            outcome = "warmed" if _warm(kind, instance) else "none"
+            outcome = _warm(kind, instance)
         except Exception:  # noqa: BLE001 -- a failed warm is a later miss, and nothing else
             outcome = "failed"
         for path in members:

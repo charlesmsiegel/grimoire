@@ -47,7 +47,8 @@ from pathlib import Path
 
 ENDPOINTS = ("worlds", "campaigns", "todo", "todo_campaign", "shell_campaign")
 SCENARIOS = ("cold", "warm_same_process", "warm_after_restart", "relevant_change",
-             "unrelated_change", "one_campaign_in_large", "visit_after_turn", "cache_off")
+             "relevant_change_ledger", "unrelated_change", "one_campaign_in_large",
+             "visit_after_turn", "cache_off")
 
 
 # ---- the privacy guard -------------------------------------------------------
@@ -78,7 +79,19 @@ def guard(library: Path, *, inherited_home: str | None) -> Path:
         root = real.resolve()
         if resolved == root or _inside(resolved, root) or _inside(root, resolved):
             raise ValueError("refusing a library that is, holds or sits inside a real store")
+    _no_links(resolved)
     return resolved
+
+
+def _no_links(library: Path) -> None:
+    """Refuse a library holding any link or reparse point. The generator never
+    makes one, so one inside a marked directory was put there -- and a copy
+    would carry it, letting the requests read whatever it points at."""
+    for directory, dirs, files in os.walk(library, followlinks=False):
+        for name in (*dirs, *files):
+            info = os.lstat(os.path.join(directory, name))
+            if os.path.islink(os.path.join(directory, name)) or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise ValueError("refusing a library that holds a link")
 
 
 # ---- what a request read (harness-only counts) ---------------------------------
@@ -339,18 +352,20 @@ def _scenario(bench: Bench, name: str, endpoint: str) -> dict:
             bench.cold()
         return bench.get(endpoint)
     bench.cold()
-    bench.settle()
+    bench.settle()              # past both trust windows, so the first read remembers
     bench.warm()
     if name == "warm_same_process":
-        bench.settle()
-        bench.warm()
-        return bench.get(endpoint)
+        return bench.get(endpoint)              # the second request
     if name == "warm_after_restart":
-        bench.settle()
-        bench.warm()            # sources recorded once the window has passed
-        bench.restart()
+        bench.restart()         # `sources` and artifacts kept, memory cleared
         return bench.get(endpoint)
-    if name in ("relevant_change", "one_campaign_in_large"):
+    if name == "relevant_change":               # a post appended to one scene
+        bench.append_post()
+        return bench.get(endpoint)
+    if name == "relevant_change_ledger":        # separately: that campaign's ledger
+        bench.edit_commitments()
+        return bench.get(endpoint)
+    if name == "one_campaign_in_large":
         bench.append_post()
         bench.edit_commitments()
         return bench.get(endpoint)

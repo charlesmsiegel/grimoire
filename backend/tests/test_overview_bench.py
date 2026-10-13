@@ -182,6 +182,20 @@ def test_harness_refuses_real_stores_and_paths_inside_them(tmp_path, monkeypatch
         bench_overview.guard(library, inherited_home=inherited)
 
 
+def test_harness_refuses_a_library_holding_a_link(tmp_path):
+    library = _marked(tmp_path / "library")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (library / "campaigns").mkdir()
+    (library / "campaigns" / "linked").symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(ValueError, match="link"):
+        bench_overview.guard(library, inherited_home=None)
+
+
+def test_the_scenes_and_ledger_changes_are_separate_scenarios():
+    assert {"relevant_change", "relevant_change_ledger"} <= set(bench_overview.SCENARIOS)
+
+
 def test_harness_output_carries_no_name_id_or_path(library, monkeypatch, tmp_path):
     monkeypatch.delenv("GRIMOIRE_HOME", raising=False)
     result = bench_overview.measure(library, repeat=1, scenarios=("cold", "relevant_change"),

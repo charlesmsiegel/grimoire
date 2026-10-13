@@ -517,3 +517,13 @@ test("a failed overview read drops what was remembered under it", async () => {
   await expect(api.getTodo("run")).rejects.toThrow("boom");
   expect(api.rememberedTodo("run")).toBeUndefined();
 });
+
+test("noteRunSettled tells the pages on screen, not only the next visit", async () => {
+  const { onRunSettled } = await import("./memoEpoch");
+  const heard = vi.fn();
+  const off = onRunSettled(heard);
+  noteRunSettled();
+  off();
+  noteRunSettled();
+  expect(heard).toHaveBeenCalledTimes(1);
+});

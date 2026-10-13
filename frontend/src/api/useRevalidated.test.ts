@@ -208,3 +208,25 @@ test("a page that really joins a read sent before a store change re-reads it fre
   expect(frames.some((f) => f.data !== undefined && f.data[0].name === "Realm")).toBe(false);
   await before;
 });
+
+test("a run this client sees end makes a mounted page ask again", async () => {
+  const { announceRunSettled } = await import("./memoEpoch");
+  let n = 0;
+  const read = vi.fn(() => Promise.resolve(n++ === 0 ? BEFORE : AFTER));
+  const { result } = track(() => "worlds", () => undefined, read);
+  await waitFor(() => expect(result.current.data).toEqual(BEFORE));
+  await act(async () => { announceRunSettled(); });
+  await waitFor(() => expect(result.current.data).toEqual(AFTER));
+  expect(read).toHaveBeenLastCalledWith("worlds", true);
+});
+
+test("an unmounted page no longer listens for a run's end", async () => {
+  const { announceRunSettled } = await import("./memoEpoch");
+  const read = vi.fn(() => Promise.resolve(BEFORE));
+  const { result, unmount } = track(() => "worlds", () => undefined, read);
+  await waitFor(() => expect(result.current.data).toEqual(BEFORE));
+  unmount();
+  const calls = read.mock.calls.length;
+  act(() => { announceRunSettled(); });
+  expect(read.mock.calls.length).toBe(calls);
+});

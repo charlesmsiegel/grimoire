@@ -280,3 +280,24 @@ def test_a_same_size_head_rewrite_with_mtime_restored_is_seen(client, world, mon
     os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
     assert p.stat().st_mtime_ns == st.st_mtime_ns and p.stat().st_size == st.st_size
     assert overview.scene_summary(cid)["rows"][0]["title"] == "Saltmarch Gale"
+
+
+def test_a_head_rewritten_before_the_first_fold_is_not_believed(client, world, monkeypatch):
+    """`list_scenes` filled the head memo; the head is then rewritten in place
+    with its mtime restored; the FIRST overview fold in the process must not
+    take the memo's stale row and pin it under the file's new ctime."""
+    import os
+    clock_forward(monkeypatch)
+    cid = _campaign(client, world, "A Long Run")
+    sid = _scene(cid, "Saltmarch Gate")
+    p = _path(cid, sid)
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns - 10_000_000_000))
+    assert store.scenes.list_scenes(cid)[0]["title"] == "Saltmarch Gate"   # head memo filled
+    st = p.stat()
+    with open(p, "r+b") as f:
+        data = f.read().replace(b"title: Saltmarch Gate", b"title: Saltmarch Gale")
+        f.seek(0)
+        f.write(data)
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert overview.scene_summary(cid)["rows"][0]["title"] == "Saltmarch Gale"

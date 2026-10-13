@@ -58,11 +58,16 @@ _MEMBER_STAMPS: dict = {}
 
 
 def _fresh_head(path: Path, stamp: statcache.Stamp) -> None:
+    """Drop the head memo's entry for `path` when it cannot be trusted with
+    the fold's ctime-carrying stamp: the member was folded under another
+    stamp with the same mtime, size and inode (rewritten in place, mtime
+    restored), or it was never folded at all in this process -- `list_scenes`
+    may have filled `_SCENE_POOL` from bytes since rewritten that way, and
+    nothing here could tell. The second case costs one head read per scene
+    the first time a process folds it, which a restart costs anyway."""
     previous = _MEMBER_STAMPS.get(os.fspath(path))
-    if previous is not None and previous != stamp and (
-            (previous[1], previous[3], previous[4]) == (stamp[1], stamp[3], stamp[4])):
-        # Same mtime, size and inode, different ctime: the head memo would
-        # answer from the old bytes, so drop its entry before reading.
+    if previous != stamp and (previous is None or (
+            (previous[1], previous[3], previous[4]) == (stamp[1], stamp[3], stamp[4]))):
         sig = ((os.fspath(path), stamp[1], stamp[3], stamp[4]),)
         scenes_read._SCENE_POOL.pop(("scene_head", sig), None)
     statcache._put(_MEMBER_STAMPS, os.fspath(path), stamp, POOL_ENTRIES)
@@ -179,9 +184,12 @@ def continuity_summary(cid: str) -> dict:
     whose mtime its creation moves (spec 04 section 3.6).
 
     A file that cannot be read (anything but absence) answers through the
-    live path for this request and nothing is remembered. Raises only
-    `campaign_root`'s `CampaignNotFound` for an id that cannot name a
-    campaign; every other failure is already part of the value."""
+    live path for this request and nothing is remembered. Raises
+    `CampaignNotFound` for an id that names no campaign (all five files would
+    otherwise read as absent, which is a real projection for a campaign with
+    no ledgers); every other failure is already part of the value."""
+    if not campaigns_paths.campaign_exists(cid):
+        raise campaigns_paths.CampaignNotFound(cid)
     root = campaigns_paths.campaign_root(cid)
     value = statcache.memo_stamped(("overview.continuity_summary", os.fspath(root)),
                                    lambda: _continuity(cid, root),

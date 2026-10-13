@@ -181,3 +181,19 @@ def test_warm_paths_reports_failed_and_none_without_raising(client, monkeypatch)
     monkeypatch.setattr(warm, "_warm", real)
     monkeypatch.setenv("GRIMOIRE_COMPILED_CACHE", "0")
     assert warm.warm_paths([f"campaigns/{cid}/campaign.md"]) == {f"campaigns/{cid}/campaign.md": "none"}
+
+
+def test_warm_paths_says_failed_when_the_store_did_not_land(client, monkeypatch):
+    cid, _sid = _scene(client)
+    # The compiled layer declines every write (busy, over a bound): nothing
+    # lands, and "warmed" would leave 05 never retrying it.
+    monkeypatch.setattr(compiled.Batch, "flush", lambda self: self._discard_staging())
+    out = warm.warm_paths([f"campaigns/{cid}/campaign.md", f"campaigns/{cid}/plot.json"])
+    assert out == {f"campaigns/{cid}/campaign.md": "failed", f"campaigns/{cid}/plot.json": "failed"}
+
+
+def test_warm_paths_has_nothing_to_warm_for_a_gone_campaign(client):
+    out = warm.warm_paths(["campaigns/no-such-campaign/commitments.json",
+                           "campaigns/no-such-campaign/campaign.md",
+                           "worlds/no-such-world/world.md"])
+    assert set(out.values()) == {"none"}

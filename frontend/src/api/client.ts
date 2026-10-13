@@ -4,7 +4,7 @@ import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
   type TaglineBatchEvent } from "./stream";
 import { artChanged, campaignsChanged, configChanged, noticesChanged,
   onRunEnded, shellChanged, storeMovedElsewhere } from "../appEvents";
-import { bumpMemoEpoch, issuedEpoch, memoEpoch, noteIssued } from "./memoEpoch";
+import { announceRunSettled, bumpMemoEpoch, issuedEpoch, memoEpoch, noteIssued } from "./memoEpoch";
 // The two a page asks before it paints an answer (`useRevalidated`, which
 // imports them from the leaf so a mock of this module cannot take them away).
 export { issuedEpoch, memoEpoch } from "./memoEpoch";
@@ -343,6 +343,9 @@ function forgetAndRetire(): void {
  *  under suites that mock this module wholesale). */
 export function noteRunSettled(): void {
   forgetAndRetire();
+  // And a page already painted from before the run asks again: forgetting
+  // only covers the next visit.
+  announceRunSettled();
 }
 onRunEnded(noteRunSettled);
 

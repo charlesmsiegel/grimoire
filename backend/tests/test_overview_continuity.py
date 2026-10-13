@@ -203,3 +203,8 @@ def test_a_failed_read_takes_the_live_path_and_remembers_nothing(cid, monkeypatc
     with readstats.collect() as counters:
         overview.continuity_summary(cid)
     assert counters.get("overview.computed.continuity_summary") == 1
+
+
+def test_a_missing_campaign_raises_rather_than_reading_as_empty(client):
+    with pytest.raises(store.CampaignNotFound):
+        overview.continuity_summary("no-such-campaign")

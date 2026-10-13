@@ -27,6 +27,25 @@ export function bumpMemoEpoch(): void {
   epoch += 1;
 }
 
+/** Who is told when this client sees a detached run end. A run writes after
+ *  the request that started it settled, so a page already on screen may be
+ *  holding an answer from before what the run wrote: `useRevalidated`
+ *  listens here and asks again (spec 04 section 6.5). Here rather than in
+ *  `./client` for the epoch's reason: a page under a wholesale mock of the
+ *  client still hears it. */
+const runSettledListeners = new Set<() => void>();
+
+export function onRunSettled(listener: () => void): () => void {
+  runSettledListeners.add(listener);
+  return () => { runSettledListeners.delete(listener); };
+}
+
+/** Tell every listener a run this client observed has ended. `client.ts`'s
+ *  `noteRunSettled` is the one caller, after it has forgotten and retired. */
+export function announceRunSettled(): void {
+  for (const listener of [...runSettledListeners]) listener();
+}
+
 export function noteIssued(read: Promise<unknown>, at: number = epoch): void {
   issuedIn.set(read, at);
 }
