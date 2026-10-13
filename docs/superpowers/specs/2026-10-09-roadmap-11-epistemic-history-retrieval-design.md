@@ -306,7 +306,10 @@ Each slice carries `basis: tuple[str, ...]` from a closed set:
 `override`, `override_group`, `override_all`, `authored`, `pc_speaker`,
 `presence_interval`, `not_recorded_present`, `scene_cast`, `no_record`,
 `summary_needs_grant`, `decision`, `decision_abstained`, `decision_failed`,
-`decision_skipped`, `unverifiable`, `moved`.
+`decision_skipped`, `unverifiable`, `moved`. **Amended by 11-S2:** plus
+`unkeyed` (a keyless post withheld because its scene has a post-listed
+override) and `narrator` (the narrator's own slices, which carry access
+`known`).
 
 **The basis never reaches a scene prompt.** It feeds the inspector rows and
 the prompt-log capture only, as activation reasons do (CLAUDE.md, "Reasons
@@ -426,6 +429,32 @@ Why each rule is shaped the way it is:
   history it would make a legacy NPC omniscient about every scene they ever
   stood in, arrivals and departures included. Open question 1.
 
+**Amended by 11-S2, against the landed 09 and 08 code** (plan
+`2026-10-13-roadmap-11-s2-deterministic-classifier.md` §1 and §7):
+
+- `EvidencePost.part` is an `int | None` that is `None` for every real
+  continuation (a roll-proposal id does not cast), so R1's `(key, part)` comes
+  from the re-matched message, never from the evidence.
+- No raw digest rides an `EvidencePost`, and its text may be clipped by 08 and
+  trimmed by 09. Re-matching therefore requires the same key, the same
+  rendered speaker, the message still in context, and the evidence text (its
+  ellipses removed) inside the post's prompt view recomputed from this read.
+- A renamed scene is followed through its identity to its current sid; an
+  identity that resolves to nothing drops the item for everyone; the identity
+  is re-checked after every read.
+- The overrides row reads `knowledge.read_checked`; unreadable audiences are
+  the same row. A group `unaware` naming a group that cannot be resolved
+  withholds what it covers from every actor, unless 7.2 ranks a matching
+  entry above it.
+- When the best-effort hold is not acquired, the interval rules R3 and R4 are
+  off: an unlocked read can pair a remapped presence record with the old
+  transcript. An unreadable chronicle holds no whole-scene grant. A malformed
+  interval list proves nothing.
+- R2' needs a user post with a stored speaker stamp, matched against every
+  present name.
+- Evidence from another campaign (09's tier 3, never on a turn) is not
+  classified: `unknown`, `unverifiable` for actors.
+
 ### 4.3 The summary rule
 
 **S1. Presence never makes a summary, or the item's title, visible to an
@@ -442,6 +471,15 @@ nothing a whole-scene attendee could perceive says so. The offline needle
 grader would not catch it either, since a summary paraphrases. So presence,
 which is the only evidence the classifier has, is not allowed to vouch for
 it.
+
+**Amended by 11-S2:** a whole-scene grant shows the summary and title only
+when no post-listed `unaware` in that scene reaches the actor (an unresolvable
+group and `*` reach everyone): the summary may paraphrase the very post
+withheld. And it shows only the summary the chronicle holds at classification
+(a rolling summary, or one changed since retrieval, is text no grant covered),
+and the title only when 09's equals the scene's current title. For an actor,
+`Classified.item` is a redacted copy (permitted header fields, no summary, no
+excerpts), so a renderer cannot reach past the slices.
 
 An actor-rendered item header therefore shows the date and location of an
 item with at least one visible post, and the title only when the summary is
@@ -1373,7 +1411,11 @@ stays off behind its switch until its gates pass.
 - **Regex prompt guard**: the heuristic rule needs a scene read and a
   template render in one body, which `epistemic.py`'s renderer does not have,
   and the Decision item builder is 02-C5a's `store/epistemic_access.py`,
-  outside the scanned directories. So both are **pinned by name**:
+  outside the scanned directories. So both are **pinned by name**
+  (**amended by 11-S2:** the pinned function is `epistemic._read_scene`, which
+  reads the scene and recomputes its prompt view; the slice renderer is 09's
+  `budget._excerpt` over 09's texts and never views, so it cannot satisfy the
+  pin):
   `epistemic`'s slice renderer, and `epistemic_access.build_items`, with the
   guard's `_sources` extended to `store/epistemic_access.py` if 02-C5a has not
   already done so.

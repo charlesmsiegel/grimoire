@@ -72,6 +72,8 @@ PINNED = {
     "routes/character_turns.py": ("_selector_inputs", "_turn_inputs"),
     "routes/tracker.py": ("_locate", "_context_posts"),
     "routes/passage_characters.py": ("draft_character",),
+    # 11-S2: re-matches 09's evidence against the prompt view it recomputes.
+    "store/context/epistemic.py": ("_read_scene",),
 }
 
 # Readers whose transcript view belongs to 08, rather than to their own body.

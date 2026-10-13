@@ -41,6 +41,7 @@ from . import (  # noqa: F401
                authors_note,
                cast,
                compare,
+               epistemic,
                layout,
                macros,
                mechanics,

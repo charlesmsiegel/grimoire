@@ -220,4 +220,27 @@ presence through `appearances.transitions.appear`/`leave`, replies with
 
 ## 7. Review dispositions
 
-(Filled in after the plan gate.)
+Plan gate: an independent adversarial reviewer (substitute for the Codex CLI
+gate). Every finding is taken; the implementation follows these, where they
+differ from §§1–6 above.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | A group `unaware` whose group cannot be resolved (audiences unreadable, or the group absent from `membership.campaign_index`) stops matching, so its post shows | **Fixed.** Unreadable audiences are the unreadable-overrides row (actors get nothing). A group `unaware` naming an unresolvable group withholds what it covers from every actor (`unknown`, `override_group`), unless a more specific entry beats it by 7.2 (a post-level actor entry; any post entry over a whole-scene one) |
+| 2a | A whole-scene grant shows the summary and title past a post-level `unaware` on the very post they paraphrase | **Fixed (amendment to S1).** The summary and title need the whole-scene grant **and** no post-listed `unaware` in that scene reaching the actor (an unresolvable group reaches everyone, `*` reaches everyone) |
+| 2b/c | A rolling summary, or a summary or title changed since retrieval, can ride a grant that never covered it | **Fixed.** A grant shows `item.summary` only when it equals the chronicle record's `summary` from this read, and the title only when `item.title` equals the scene's current title |
+| 3 | An unlocked read (best-effort hold not acquired) can pair a remapped `appearances.json` with the old transcript | **Fixed.** With `held` False the interval rules R3/R4 are off (posts fall to R5/R6); a row in the failure table, and a test writing only the remapped record |
+| 4 | An unreadable chronicle lets a pre-absorb whole-scene grant hold | **Fixed.** A `chronicle_ok` flag: when false the scene digest is a sentinel no grant can equal, so whole-scene grants fail and whole-scene `unaware` and post grants still apply |
+| 5 | Patching `campaign_lock` to raise breaks `best_effort_campaign_lock` itself | **Fixed.** The purity test spies on `best_effort_campaign_lock` and asserts `campaign_lock` is never entered, and the store's files are byte-identical after |
+| 6 | `Classified.item` hands a renderer the unredacted item | **Fixed.** For an actor perspective `item` is replaced by a redacted copy: header fields per §3 step 7, no summary, no excerpts. Slices carry the visible text |
+| 7 | No identity re-check after the scene read; `variants_by_response` re-resolves fail-soft | **Fixed.** The identity is re-checked after the scene, authorship and variant reads, and a mismatch is the unreadable-scene row; `variants_by_response` is called with `token=identity` |
+| 8 | Malformed presence data crashes or misreads | **Fixed.** A record that is not a dict is the unreadable row; a per-actor interval list is validated as `observed_history` does (int `start >= 0`, `end` int or None); a malformed one is `unknown`, `no_record` |
+| 9 | R2' is underspecified | **Fixed.** R2' needs `role == "user"` and a non-empty stored speaker, matched with `serialize.match_name` against every present name, resolving to that PC's name |
+| 10 | Keyless re-matching is loose | **Fixed.** Re-matching also requires the evidence speaker to equal the speaker 08 renders for the message now (`searchdocs.expand._speaker`, with the scene's `player_label`) |
+| 11 | The regex pin moved from "the slice renderer" to the scene reader | **Taken, amended in §10.** The renderer reads only 09's texts and cannot satisfy `_reaches_view`; the pinned function is the one that reads the scene and views it |
+| 12 | Smaller points | **Taken.** Summary slice only when `item.summary and not item.summary_omission`; cross-campaign items take no reads and no lock; `context/__init__` listing is optional (done for discoverability); `author=None` for the summary and title; the digest's title is the scene's meta title |
+| — | Test gaps | **Taken.** Added: audiences failure and unresolvable group; `*` `unaware` skipping the author; a post `unaware` on the actor's own reply; a keyless post settled by a whole-scene entry; whole-scene `knows` plus post `unaware` (summary and title withheld); a rolling summary under a grant; the lock-skew row; the chronicle digest row; appended text still matching and replaced text `moved`; a post trimmed by 09's `_trim`; a legacy scene with no PC post; malformed intervals |
+
+The slice renderer is 09's own `budget._excerpt` (ruff does not select the
+private-access rule), so the byte-equality is by construction rather than by
+test; the test stays as a tripwire.
