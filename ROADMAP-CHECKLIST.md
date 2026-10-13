@@ -70,7 +70,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 03 | Content-addressed compiled cache | merged in PR #506 | [x] | [x] CLI Codex (2026-10-11) | 6 | [x] |
 | 04 | Instant Worlds, Campaigns, Todo and shell | merged in PR #513 | [x] | [~] substitute | 10 | [x] |
 | 05 | Direct-edit cache sync | merged in PR #512 | [x] | [~] substitute | 7 | [x] |
-| 06 | Store-editing skill | now (05 has merged, so 05-C2 is on main) | [x] | [~] substitute | 2 | [ ] |
+| 06 | Store-editing skill | now (05 has merged, so 05-C2 is on main) | [x] | [x] [Codex](docs/superpowers/validation/2026-10-13-roadmap-06-execution.md) | 2 | [ ] |
 | 07 | Explicit group membership | merged in PR #507; S8 measured and withheld | [x] | [x] [Codex](docs/superpowers/validation/2026-10-11-spec-07-review.md) | 8 | [x] |
 | 08 | Derived history SearchDocuments | 03 and 05 merged; all six slices implemented in PR #510 | [x] | [~] substitute | 6 | [ ] |
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [~] substitute | 6 | [ ] |
@@ -349,8 +349,11 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   review rounds, each finding fixed or answered on its thread.
 
 ### 06: Store-editing skill
-- [ ] **06-C1** A canonical skill in `.claude/skills/grimoire-store-editing/`,
+- [x] **06-C1** A canonical skill in `.claude/skills/grimoire-store-editing/`,
   an `.agents/` adapter, and `test_skills_guard.py`.
+- Both slices implemented with all required Codex gates approved; the full
+  gate passed after the authorized Windows repairs. [Execution record](docs/superpowers/validation/2026-10-13-roadmap-06-execution.md).
+  Landed stays clear until merge.
 
 ### 07: Explicit group membership
 - [x] **07-C1** `members` on the group record, with overlay and sync
@@ -615,8 +618,8 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 06-S1 | The skill, its adapter and the drift test | M | 6 | 04-S2 (S), 05-S3, 05-S7 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 06-S2 | Routing to the skill | S | 7 | 06-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 06-S1 | The skill, its adapter and the drift test | M | 6 | 04-S2 (S), 05-S3, 05-S7 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| 06-S2 | Routing to the skill | S | 7 | 06-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
 
 ### 07
 

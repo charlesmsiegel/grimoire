@@ -176,110 +176,106 @@ def _platform() -> str:
 # --- Windows -----------------------------------------------------------------
 #
 # The real implementations are only defined (and only importable) on Windows;
-# every other platform gets the same names answering None, so the module
+# every other platform keeps the unavailable driver below, so the module
 # imports and type-checks everywhere and the logic below runs against fakes.
 
-if sys.platform == "win32":
-    import ctypes
-    import re
-    import winreg
-    from ctypes import wintypes
+def _unavailable(*args: object) -> None:
+    return None
 
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-    _GUID = re.compile(r"\{[0-9A-Fa-f-]+\}")
-    _ulonglong_p = ctypes.POINTER(ctypes.c_ulonglong)
 
-    def _declare(function: Any, argtypes: list[Any], restype: Any) -> None:
-        function.argtypes = argtypes
-        function.restype = restype
-
-    _declare(_kernel32.GetVolumePathNameW,
-             [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_int)
-    _declare(_kernel32.GetDriveTypeW, [ctypes.c_wchar_p], ctypes.c_uint)
-    _declare(_kernel32.GetVolumeNameForVolumeMountPointW,
-             [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_int)
-    _declare(_kernel32.GetDiskFreeSpaceExW,
-             [ctypes.c_wchar_p, _ulonglong_p, _ulonglong_p, _ulonglong_p], ctypes.c_int)
-    # SHQueryRecycleBinW's second argument is a struct pointer, declared once
-    # the struct exists (below); the HRESULT comes back as a signed int.
-
-    class _SHQUERYRBINFO(ctypes.Structure):
-        # shellapi.h applies 1-byte packing (pshpack1.h) only when _WIN64 is
-        # not defined: on 32-bit Windows the int64s follow the DWORD with no
-        # padding (cbSize 20), on x64 they are naturally aligned (cbSize 24,
-        # at offsets 8 and 16). cbSize is taken from sizeof, so it follows.
-        if ctypes.sizeof(ctypes.c_void_p) == 4:
-            _pack_ = 1
-        _fields_ = [("cbSize", wintypes.DWORD),
-                    ("i64Size", ctypes.c_int64),
-                    ("i64NumItems", ctypes.c_int64)]
-
-    _declare(_shell32.SHQueryRecycleBinW,
-             [ctypes.c_wchar_p, ctypes.POINTER(_SHQUERYRBINFO)], ctypes.c_long)
-
-    def _volume_of(path: Path) -> str | None:
-        buf = ctypes.create_unicode_buffer(32768)
-        if not _kernel32.GetVolumePathNameW(str(path), buf, len(buf)):
-            return None
-        return buf.value or None
-
-    def _drive_type(volume: str) -> int:
-        return int(_kernel32.GetDriveTypeW(volume))
-
-    def _query_bin(volume: str) -> tuple[int, int] | None:
-        info = _SHQUERYRBINFO()
-        info.cbSize = ctypes.sizeof(info)
-        if _shell32.SHQueryRecycleBinW(volume, ctypes.byref(info)) != 0:
-            return None
-        return int(info.i64Size), int(info.i64NumItems)
-
-    def _volume_guid(volume: str) -> str | None:
-        buf = ctypes.create_unicode_buffer(64)
-        if not _kernel32.GetVolumeNameForVolumeMountPointW(volume, buf, len(buf)):
-            return None
-        found = _GUID.search(buf.value)
-        return found.group(0) if found else None
-
-    def _volume_bytes(volume: str) -> int | None:
-        total = ctypes.c_ulonglong(0)
-        if not _kernel32.GetDiskFreeSpaceExW(volume, None, ctypes.byref(total), None):
-            return None
-        return int(total.value)
-
-    def _reg_dword(hive: str, path: str, name: str) -> RegValue:
-        root = {"HKCU": winreg.HKEY_CURRENT_USER, "HKLM": winreg.HKEY_LOCAL_MACHINE}[hive]
-
-        def read() -> tuple[object, int]:
-            with winreg.OpenKey(root, path) as key:
-                value, kind = winreg.QueryValueEx(key, name)
-            return value, kind
-
-        return _reg_value(read)
-else:
-    def _volume_of(path: Path) -> str | None:
-        return None
-
-    def _drive_type(volume: str) -> int:
-        return 0
-
-    def _query_bin(volume: str) -> tuple[int, int] | None:
-        return None
-
-    def _volume_guid(volume: str) -> str | None:
-        return None
-
-    def _volume_bytes(volume: str) -> int | None:
-        return None
-
-    def _reg_dword(hive: str, path: str, name: str) -> RegValue:
-        return None
-
-#: The seam tests replace wholesale. Looked up at call time, never bound.
+#: Publish one complete driver at a time. A missing ctypes module, DLL or
+#: export costs bin availability; it must not break the authoritative store
+#: facade, nor leave only some of the checks active before a send.
 _win: Any = SimpleNamespace(
-    volume_of=_volume_of, drive_type=_drive_type, query_bin=_query_bin,
-    volume_guid=_volume_guid, volume_bytes=_volume_bytes, reg_dword=_reg_dword,
+    volume_of=_unavailable, drive_type=lambda volume: 0, query_bin=_unavailable,
+    volume_guid=_unavailable, volume_bytes=_unavailable, reg_dword=_unavailable,
 )
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+        import re
+        import winreg
+        from ctypes import wintypes
+
+        _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        _GUID = re.compile(r"\{[0-9A-Fa-f-]+\}")
+        _ulonglong_p = ctypes.POINTER(ctypes.c_ulonglong)
+
+        def _declare(function: Any, argtypes: list[Any], restype: Any) -> None:
+            function.argtypes = argtypes
+            function.restype = restype
+
+        _declare(_kernel32.GetVolumePathNameW,
+                 [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_int)
+        _declare(_kernel32.GetDriveTypeW, [ctypes.c_wchar_p], ctypes.c_uint)
+        _declare(_kernel32.GetVolumeNameForVolumeMountPointW,
+                 [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32], ctypes.c_int)
+        _declare(_kernel32.GetDiskFreeSpaceExW,
+                 [ctypes.c_wchar_p, _ulonglong_p, _ulonglong_p, _ulonglong_p], ctypes.c_int)
+        # SHQueryRecycleBinW's second argument is a struct pointer, declared once
+        # the struct exists (below); the HRESULT comes back as a signed int.
+
+        class _SHQUERYRBINFO(ctypes.Structure):
+            # shellapi.h applies 1-byte packing (pshpack1.h) only when _WIN64 is
+            # not defined: on 32-bit Windows the int64s follow the DWORD with no
+            # padding (cbSize 20), on x64 they are naturally aligned (cbSize 24,
+            # at offsets 8 and 16). cbSize is taken from sizeof, so it follows.
+            if ctypes.sizeof(ctypes.c_void_p) == 4:
+                _pack_ = 1
+            _fields_ = [("cbSize", wintypes.DWORD),
+                        ("i64Size", ctypes.c_int64),
+                        ("i64NumItems", ctypes.c_int64)]
+
+        _declare(_shell32.SHQueryRecycleBinW,
+                 [ctypes.c_wchar_p, ctypes.POINTER(_SHQUERYRBINFO)], ctypes.c_long)
+
+        def _volume_of(path: Path) -> str | None:
+            buf = ctypes.create_unicode_buffer(32768)
+            if not _kernel32.GetVolumePathNameW(str(path), buf, len(buf)):
+                return None
+            return buf.value or None
+
+        def _drive_type(volume: str) -> int:
+            return int(_kernel32.GetDriveTypeW(volume))
+
+        def _query_bin(volume: str) -> tuple[int, int] | None:
+            info = _SHQUERYRBINFO()
+            info.cbSize = ctypes.sizeof(info)
+            if _shell32.SHQueryRecycleBinW(volume, ctypes.byref(info)) != 0:
+                return None
+            return int(info.i64Size), int(info.i64NumItems)
+
+        def _volume_guid(volume: str) -> str | None:
+            buf = ctypes.create_unicode_buffer(64)
+            if not _kernel32.GetVolumeNameForVolumeMountPointW(volume, buf, len(buf)):
+                return None
+            found = _GUID.search(buf.value)
+            return found.group(0) if found else None
+
+        def _volume_bytes(volume: str) -> int | None:
+            total = ctypes.c_ulonglong(0)
+            if not _kernel32.GetDiskFreeSpaceExW(volume, None, ctypes.byref(total), None):
+                return None
+            return int(total.value)
+
+        def _reg_dword(hive: str, path: str, name: str) -> RegValue:
+            root = {"HKCU": winreg.HKEY_CURRENT_USER, "HKLM": winreg.HKEY_LOCAL_MACHINE}[hive]
+
+            def read() -> tuple[object, int]:
+                with winreg.OpenKey(root, path) as key:
+                    value, kind = winreg.QueryValueEx(key, name)
+                return value, kind
+
+            return _reg_value(read)
+        _win = SimpleNamespace(
+            volume_of=_volume_of, drive_type=_drive_type, query_bin=_query_bin,
+            volume_guid=_volume_guid, volume_bytes=_volume_bytes, reg_dword=_reg_dword,
+        )
+    except (ImportError, OSError, AttributeError):
+        pass  # The complete unavailable driver remains: no bin, no send.
+
 
 
 def _outbox_ancestor(root: Path) -> Path:

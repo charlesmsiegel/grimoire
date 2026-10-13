@@ -10,6 +10,8 @@ The autouse `fake_bin` fixture in conftest replaces `check`, `_platform` and
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -734,3 +736,64 @@ def test_a_cancelled_windows_batch_still_runs_the_backstop(windows, monkeypatch,
                                     cancel=lambda: len(log) >= 1)
     assert result.sent == [paths[0]] and result.cancelled
     assert result.unverified == [paths[0]]
+
+
+@pytest.mark.parametrize("failure", [
+    "ctypes",
+    pytest.param("dll", marks=pytest.mark.skipif(sys.platform != "win32", reason="native Windows DLL")),
+    pytest.param("export", marks=pytest.mark.skipif(sys.platform != "win32", reason="native Windows export")),
+])
+def test_unavailable_native_bin_keeps_the_facade_usable_and_refuses_sends(tmp_path, failure):
+    script = r"""
+import sys
+from pathlib import Path
+failure, root = sys.argv[1], Path(sys.argv[2])
+if failure == 'ctypes':
+    sys.modules['ctypes'] = None
+else:
+    import ctypes
+    real_dll = ctypes.WinDLL
+    class MissingExport:
+        def __init__(self, dll):
+            self.dll = dll
+        def __getattr__(self, name):
+            if name == 'SHQueryRecycleBinW':
+                raise AttributeError(name)
+            return getattr(self.dll, name)
+    def dll(name, *args, **kwargs):
+        if name == 'shell32':
+            if failure == 'dll':
+                raise OSError('native bin unavailable')
+            return MissingExport(real_dll(name, *args, **kwargs))
+        return real_dll(name, *args, **kwargs)
+    ctypes.WinDLL = dll
+from grimoire.store import compiled, paths, proclock, recycle_bin
+assert Path(recycle_bin.__file__).resolve().is_relative_to(Path(sys.argv[3]))
+paths.pointer_path = lambda: root / 'bootstrap.json'
+paths.DEFAULT_HOME = root
+proclock.lock_dir = lambda: root / 'locks'
+root.mkdir(parents=True, exist_ok=True)
+if failure == 'ctypes' and sys.platform == 'win32':
+    assert not compiled._clock_supported(root)
+    assert compiled.filesystem_clock(root) is None
+file = root / 'realm.bin'
+file.write_bytes(b'Realm')
+sent, before = [], []
+recycle_bin._platform = lambda: 'windows'
+recycle_bin._send2trash = lambda path: sent.append(path)
+assert not recycle_bin.check(root).ok
+result = recycle_bin.send_batch(root, [file], lambda path: before.append(path))
+assert result.sent == [] and result.refused == file
+assert result.code == 'volume_has_no_bin'
+assert sent == [] and before == []
+assert file.read_bytes() == b'Realm'
+print('Realm')
+"""
+    root = tmp_path / "home"
+    source = Path(__file__).resolve().parents[1] / "src"
+    env = {**os.environ, "PYTHONPATH": str(source),
+           "GRIMOIRE_HOME": str(root), "GRIMOIRE_COMPILED_CACHE": "1"}
+    result = subprocess.run([sys.executable, "-c", script, failure, str(root), str(source)], env=env,
+                            capture_output=True, text=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "Realm"

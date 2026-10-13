@@ -254,3 +254,5 @@ reconciliations and corrections are the substance — not the file counts.
 - `references/house-formats.md` — the entry shapes this store uses, with invented examples
 - `scripts/inspect_cards.py` — dump cards to readable text, diff their lorebook against lore
 - `.claude/skills/populate-world-content/` — the bulk import this skill is the follow-up to
+
+After writing the records, finish with [store-editing sync](../grimoire-store-editing/SKILL.md#sync-a-coherent-batch).

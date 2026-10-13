@@ -367,7 +367,8 @@ DOCS = pytest.mark.parametrize("doc", [
     # The fourth was Windows-only throughout, and stayed that way for as long
     # as it was not in this list: the rule reaches exactly the files named here.
     REPO / "evals" / "README.md",
-], ids=["claude-md", "readme", "frozen-campaign-readme", "evals-readme"])
+    REPO / ".claude" / "skills" / "grimoire-store-editing" / "SKILL.md",
+], ids=["claude-md", "readme", "frozen-campaign-readme", "evals-readme", "store-editing-skill"])
 UNIX_PY = re.compile(r"\.venv/bin/python")
 WINDOWS_PY = re.compile(r"\.venv[/\\]Scripts[/\\]python")
 NEARBY = 4      # lines either side: the same command, bullet, or code block

@@ -338,3 +338,5 @@ a bundle (`store/world_bundle.py`).
   step 4.
 - `store/greetings.py` (`availability`, `recommendations`): the opening rules in
   step 5.
+
+The apply script already syncs its writes; a new cold World has no hot work to rebuild. For edits outside that script, finish with [store-editing sync](../grimoire-store-editing/SKILL.md#sync-a-coherent-batch).

@@ -91,3 +91,5 @@ campaign log, populating world content in bulk, folding a freshly imported
 batch of cards into a World by hand. If one covers what you are doing, use
 it; it knows the ports, the mocks and the isolation rules that keep a
 verification run away from the user's real library.
+
+For outside-app library maintenance, use [grimoire-store-editing](.claude/skills/grimoire-store-editing/SKILL.md); [`.agents/skills/`](.agents/skills/) contains discovery pointers to canonical procedures.

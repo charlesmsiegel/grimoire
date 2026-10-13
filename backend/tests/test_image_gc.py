@@ -1357,6 +1357,7 @@ def test_a_file_arriving_at_the_chosen_name_is_never_overwritten(root, monkeypat
     picture = _blob(orphan).read_bytes()
     report = _ready(root)
     name = f"grimoire - {orphan.blob_sha256[:8]}.png"
+    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
     calls = _emulate_windows_rename(monkeypatch) if platform == "windows" else None
     planted = _arriving(monkeypatch)
     done = _collect(root, report["token"])
@@ -1381,6 +1382,7 @@ def test_a_name_that_never_comes_free_stops_the_run_with_the_blob_in_place(
     orphan = _obj(1)
     picture = _blob(orphan).read_bytes()
     report = _ready(root)
+    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
     if platform == "windows":
         _emulate_windows_rename(monkeypatch)
     planted = _arriving(monkeypatch, every=True)
@@ -1397,6 +1399,8 @@ def test_a_name_that_never_comes_free_stops_the_run_with_the_blob_in_place(
                                    OSError(95, "Operation not supported"),
                                    OSError(18, "Invalid cross-device link")])
 def test_no_hard_links_stops_the_run_and_never_replaces(root, monkeypatch, fake_bin, error):
+    # Exercise the hard-link implementation even on a Windows test host.
+    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
     orphan = _obj(1)
     picture = _blob(orphan).read_bytes()
     report = _ready(root)
@@ -1424,6 +1428,8 @@ def test_a_blob_that_will_not_unlink_after_the_link_keeps_both_copies(root, monk
                                                                       fake_bin):
     """Between the link and the unlink the picture has two names: a failure (or
     a crash) there loses neither, and the run stops."""
+    # Exercise the hard-link implementation even on a Windows test host.
+    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
     orphan = _obj(1)
     blob = _blob(orphan)
     picture = blob.read_bytes()
@@ -1445,6 +1451,8 @@ def test_a_blob_that_will_not_unlink_after_the_link_keeps_both_copies(root, monk
 
 
 def test_a_blob_gone_before_the_link_is_released(root, monkeypatch, fake_bin):
+    # Exercise the hard-link implementation even on a Windows test host.
+    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
     orphan = _obj(1)
     report = _ready(root)
     real_link = os.link
@@ -1459,6 +1467,29 @@ def test_a_blob_gone_before_the_link_is_released(root, monkeypatch, fake_bin):
     assert done["released"] == [{"id": orphan.id, "blob": f"{orphan.blob_sha256}.png",
                                  "reason": "blob-missing"}]
     assert image_gc._outbox_files(root) == [] and fake_bin.paths == []
+
+
+@pytest.mark.parametrize("error", [PermissionError(13, "Permission denied"),
+                                   OSError(18, "Invalid cross-device move")])
+def test_a_windows_rename_failure_keeps_the_blob_and_stops(root, monkeypatch, fake_bin, error):
+    orphan = _obj(1)
+    blob = _blob(orphan)
+    picture = blob.read_bytes()
+    report = _ready(root)
+    _emulate_windows_rename(monkeypatch)
+    real_rename = os.rename
+
+    def rename(src, dst, *args, **kwargs):
+        if Path(src) == blob:
+            raise error
+        return real_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename", rename)
+    with pytest.raises(type(error)):
+        _collect(root, report["token"], run_id="6" * 32)
+    assert blob.read_bytes() == picture and _sidecar(orphan).is_file()
+    assert fake_bin.paths == [] and image_gc._outbox_files(root) == []
+    assert maintenance_reports.read(root, "6" * 32)["state"] == "failed"
 
 
 # ---- a cancel reaches the bin calls ---------------------------------------------

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -215,13 +216,38 @@ def _patched_clock(clock: _Clock):
     return patched()
 
 
+def _backdate_entries(target: Path) -> list[Path]:
+    """Preflight the whole generated tree before any timestamp changes.
+
+    Reject directory links before a walk can enter them, and regular-file
+    hard links before changing metadata shared with another tree. The caller
+    owns this disposable build exclusively; this is not a race-proof setter.
+    """
+    def checked(entry: Path) -> Path:
+        info = entry.lstat()
+        if (stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
+                or (stat.S_ISREG(info.st_mode) and info.st_nlink > 1)):
+            raise ValueError('synthetic backdating refuses links')
+        return entry
+
+    def unreadable(error: OSError) -> None:
+        raise error
+
+    entries = [checked(target)]
+    for directory, dirs, files in os.walk(target, followlinks=False, onerror=unreadable):
+        entries.extend(checked(Path(directory) / name) for name in (*dirs, *files))
+    return sorted(entries, key=lambda entry: len(entry.parts), reverse=True)
+
+
 def _backdate(target: Path, when_ns: int) -> None:
-    """Every file's and directory's mtime to `when_ns`, deepest first, so a
-    child's backdating does not move its parent again."""
-    import os as _os
-    entries = sorted(target.rglob('*'), key=lambda p: len(p.parts), reverse=True)
-    for entry in [*entries, target]:
-        _os.utime(entry, ns=(when_ns, when_ns), follow_symlinks=False)
+    """Backdate owned files and directories deepest first. Windows cannot
+    set timestamps without following a leaf link, so preflight all entries
+    and use the supported default there; retain no-follow where available.
+    """
+    entries = _backdate_entries(target)
+    follow_links = os.utime not in os.supports_follow_symlinks
+    for entry in entries:
+        os.utime(entry, ns=(when_ns, when_ns), follow_symlinks=follow_links)
 
 
 def _library_world(w: int, knobs: dict[str, int], prose) -> str:

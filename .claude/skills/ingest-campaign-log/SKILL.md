@@ -201,3 +201,5 @@ call while reading — this skill does not delegate that to another LLM call.
   scene it built; on top of an existing one it duplicates the scene, its timeline events and
   every beat. To close an `incomplete` key without redoing it, use `resolve` (above), not
   deletion. The manifest lives at `<campaign_root>/ingest_manifest.json`.
+
+The ingest script already performs write collection and sync. Send additional outside-script edits to [store-editing sync](../grimoire-store-editing/SKILL.md#sync-a-coherent-batch); do not repeat a completed ingestion to refresh caches.
