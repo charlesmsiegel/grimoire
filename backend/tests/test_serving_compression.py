@@ -21,6 +21,7 @@ path, and it stays green beside these.
 """
 
 import asyncio
+import contextlib
 
 import pytest
 from starlette.datastructures import Headers
@@ -45,20 +46,35 @@ def _asgi(app, path, *, client, headers=(), method="GET"):
     }
     sent: list[dict] = []
     requested = False
+    finished: asyncio.Event | None = None
 
     async def receive():
         nonlocal requested
         if not requested:
             requested = True
             return {"type": "http.request", "body": b"", "more_body": False}
-        # Nothing here streams, so nothing should wait for a disconnect; if
-        # something does, it gets one rather than hanging the suite.
+        # A real client disconnects once it has the whole response, not the
+        # moment it has asked: Starlette's FileResponse listens for a
+        # disconnect while it streams (ASGI < 2.4) and cancels the transfer on
+        # one. The timeout keeps a response that never ends from hanging the
+        # suite.
+        assert finished is not None
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(finished.wait(), timeout=5)
         return {"type": "http.disconnect"}
 
     async def send(message):
         sent.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            assert finished is not None
+            finished.set()
 
-    asyncio.run(app(scope, receive, send))
+    async def run():
+        nonlocal finished
+        finished = asyncio.Event()
+        await app(scope, receive, send)
+
+    asyncio.run(run())
     start = next(m for m in sent if m["type"] == "http.response.start")
     body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
     return start["status"], Headers(raw=start["headers"]), body
