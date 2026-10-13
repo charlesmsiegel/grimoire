@@ -103,18 +103,37 @@ Two test-locator mistakes were corrected using observed UI semantics: the
 accessible button name is Save despite uppercase CSS, and the Context pane
 can be reopened through `?section=context`. No product change was needed.
 Live inspector check also passed: real shared-cast evidence, structural reason
-and rank, exhausted coverage, skipped:preview status and700-token ceiling are
+and rank, exhausted coverage, skipped:preview status and 700-token ceiling are
 visible, with no page errors. The synthetic older/current scenes each have
 Mara and Seraphine, meeting the two-actor shared-cast rule. Turn checks and
-helper shutdown remain pending.
+helper shutdown remain pending. S3's narrator reply chip sent the recalled
+section to the local cassette mock, including the synthetic agreement summary;
+an NPC reply omitted it as required. No page errors occurred. All chat, model
+catalog and key-check endpoints were redirected to the local mock before the
+test-only Primary role was configured.
 
 ## S2 task checkpoint
 
 S2 implemented in `a80e6f77a`, with macro-empty evidence correction in
 `2a624c406`. Independent review found a bare-header/false-evidence-id defect
 when expanded summary text disappeared. Frozen summary spans now enforce
-content admission;41 focused tests pass. Scoped re-review approved with no
-new blocking findings. Final UI85/typecheck, lint/type/eslint ratchets and533
+content admission; 41 focused tests pass. Scoped re-review approved with no
+new blocking findings. Final UI 85/typecheck, lint/type/eslint ratchets and 533
 template checks passed; broader backend runs are recorded in the task report.
 Old lore/frozen campaign files remain unchanged. Empty-enabled preview
 diagnostics and existing test warnings are deferred for whole-branch triage.
+
+Ruling: Preserve per-response regenerate's frozen snapshot and reuse its
+captured history; fresh legacy regenerate gathers outside locks before compose —
+current snapshot authority governs outdated spec route references — the cost
+if wrong is needing an explicit recompose operation to refresh history during
+rerolls. The existing generation request still runs; its history phase is
+skipped.
+
+## S3 task checkpoint
+
+S3 implemented in `e92780979`. Independent task review approved without
+blocking findings. The async worker/portal seam, once-per-round narrator gate,
+locked replay authority and frozen retry/regenerate passed 29 focused and 697
+surrounding tests. Lint/type ratchets remain unchanged. Existing dependency
+deprecations are deferred to the final review; the full gate is still pending.
