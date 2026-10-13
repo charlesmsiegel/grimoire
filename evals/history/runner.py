@@ -103,46 +103,70 @@ def _packed(planted, evidence):
     return messages, text, section, row
 
 
+def _network(fn, stats):
+    """`fn` with its awaited time charged to the provider's column. Network is
+    the provider's own time -- the embed request (a retry included) and the
+    rerank's decide calls; vector loads, cache writes and cosines are
+    retrieval's file and CPU work, and stay out of it (12.3)."""
+    async def timed(*args, **kwargs):
+        started = time.monotonic()
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            stats["network_ms"] += (time.monotonic()-started)*1000
+    return timed
+
+
+def _counting(fn, stats):
+    async def counted(*args, **kwargs):
+        result = await fn(*args, **kwargs)
+        stats["semantic_evaluated"] = len(result.evaluated)
+        return result
+    return counted
+
+
+def _instrument(stack, arm, space, stats):
+    stack.enter_context(patch.object(embed_space, "endpoint", return_value=space))
+    stack.enter_context(patch.object(semantic, "score", _counting(semantic.score, stats)))
+    stack.enter_context(patch.object(semantic, "widen", _counting(semantic.widen, stats)))
+    stack.enter_context(patch.object(semantic.embed, "embed", _network(semantic.embed.embed, stats)))
+    if arm == "semantic":
+        stack.enter_context(patch.object(retrieval.lexical, "score", side_effect=lambda terms, docs, **kw:
+            [model.LexicalSignal(0, ()) for _ in docs]))
+
+
+def _reranker(stack, arm, planted, *, targets, client, deadline, run_id, stats):
+    if arm != "hybrid+rerank":
+        return None
+    original = common.require_inference
+    stack.enter_context(patch.object(common, "require_inference", side_effect=lambda task, *a, **kw:
+        targets["history-rerank"] if task == "history-rerank" else original(task, *a, **kw)))
+    return _network(partial(history_recall._rerank, planted.cid, planted.sid,
+                            client=client, deadline=deadline, run_id=run_id), stats)
+
+
 async def _arm(case, planted, arm, *, space, live, targets, seen, run_id, stats):
     client = embeddings.AsyncEmbeddingsClient() if live else replay_client(seen)
     llm_client = LLMClient() if live else None
-    score = semantic.score
-    widen = semantic.widen
-    async def measured_score(*args, **kwargs):
-        started = time.monotonic()
-        result = await score(*args, **kwargs)
-        stats["network_ms"] += (time.monotonic()-started)*1000
-        stats["semantic_evaluated"] = len(result.evaluated)
-        return result
-    async def measured_widen(*args, **kwargs):
-        result = await widen(*args, **kwargs)
-        stats["semantic_evaluated"] = len(result.evaluated)
-        return result
     deadline = time.monotonic()+4
     q = model.Query((case.query,), terms=case.terms,
                     scopes=frozenset() if arm in {"lexical", "semantic"} else model.RELATIONS)
     try:
         with contextlib.ExitStack() as stack:
-            stack.enter_context(patch.object(embed_space, "endpoint", return_value=space))
-            stack.enter_context(patch.object(semantic, "score", measured_score))
-            stack.enter_context(patch.object(semantic, "widen", measured_widen))
-            if arm == "semantic":
-                stack.enter_context(patch.object(retrieval.lexical, "score", side_effect=lambda terms, docs, **kw:
-                    [model.LexicalSignal(0, ()) for _ in docs]))
-            callback = None
-            if arm == "hybrid+rerank":
-                original = common.require_inference
-                stack.enter_context(patch.object(common, "require_inference", side_effect=lambda task, *a, **kw:
-                    targets["history-rerank"] if task == "history-rerank" else original(task, *a, **kw)))
-                callback = partial(history_recall._rerank, planted.cid, planted.sid,
-                                   client=llm_client, deadline=deadline, run_id=run_id)
+            _instrument(stack, arm, space, stats)
+            callback = _reranker(stack, arm, planted, targets=targets, client=llm_client,
+                                 deadline=deadline, run_id=run_id, stats=stats)
             def recall(cid, sid):
                 return retrieval.retrieve(
                     cid, sid, q, ceiling=1200,
                     embed_client=client if arm in {"semantic", "hybrid", "hybrid+rerank"} else None,
                     deadline=deadline, rerank=callback, run_id=run_id)
+            # Retrieval's own wall time, apart from packing and any downstream
+            # generation the live arm runs afterwards.
+            started = time.monotonic()
             evidence = model.Evidence(ceiling=1200) if arm == "context-only" else await recall(
                 planted.cid, planted.sid)
+            stats["retrieval_ms"] = (time.monotonic()-started)*1000
             if planted.first is not None and arm != "context-only":
                 requests = len(seen)
                 first = await recall(*planted.first)
@@ -192,7 +216,8 @@ def _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, ro
             "excerpt_recall": graders.excerpt_recall(planted.gold, items, packed),
             "hard_rules": hard, "added_tokens": added, "ceiling": evidence.ceiling,
             "prompt_tokens": tokens.count_tokens(packed), "wall_ms": wall,
-            "network_ms": stats["network_ms"], "file_ms": max(0, wall-stats["network_ms"]),
+            "retrieval_ms": stats.get("retrieval_ms", 0.0), "network_ms": stats["network_ms"],
+            "file_ms": max(0.0, stats.get("retrieval_ms", 0.0)-stats["network_ms"]),
             "semantic_evaluated": stats["semantic_evaluated"],
             "embed_rows": dict(Counter(r["task"] for r in rows if r.get("operation") == "embed")),
             "decide_calls": sum(r.get("operation") == "decide" for r in rows),
@@ -253,7 +278,8 @@ def aggregate(records):
         rows = [r for r in records if r["arm"] == arm]
         out[arm] = {k: sum(r[k] for r in rows)/len(rows)
                     for k in ("recall1", "recall3", "recall5", "excerpt_recall", "added_tokens",
-                              "prompt_tokens", "wall_ms", "file_ms", "network_ms")}
+                              "prompt_tokens", "wall_ms", "retrieval_ms", "file_ms",
+                              "network_ms")}
         out[arm]["hard_rules"] = all(r["hard_rules"] and not r["error"] for r in rows)
     return out
 
@@ -268,10 +294,12 @@ def gate(records):
 
 def summary(records):
     lines = ["history retrieval (SYNTHETIC vectors offline; no live quality claim):",
-             "arm | recall@1 | recall@3 | recall@5 | excerpt | packed added tokens | file/network/wall ms"]
+             ("arm | recall@1 | recall@3 | recall@5 | excerpt | packed added tokens | "
+              "retrieval file/network/total ms | case wall ms")]
     for arm, row in aggregate(records).items():
         lines.append(f"{arm} | {row['recall1']:.3f} | {row['recall3']:.3f} | {row['recall5']:.3f} | "
                      f"{row['excerpt_recall']:.3f} | {row['added_tokens']:.1f} | "
-                     f"{row['file_ms']:.1f}/{row['network_ms']:.1f}/{row['wall_ms']:.1f}")
+                     f"{row['file_ms']:.1f}/{row['network_ms']:.1f}/{row['retrieval_ms']:.1f} | "
+                     f"{row['wall_ms']:.1f}")
     lines.append(f"ordering/eligibility/ceiling gate: {'PASS' if gate(records) else 'FAIL'}")
     return "\n".join(lines)

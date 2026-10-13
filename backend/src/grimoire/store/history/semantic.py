@@ -81,39 +81,38 @@ def _by_campaign(docs, missing, held, campaign):
     return groups
 
 
-def _withdraw(space, saved, keep=frozenset()):
-    """Remove the vectors this call saved, except `keep`; nothing to score."""
-    for text in saved:
-        if text not in keep:
-            vectors.forget(space["space"], text)
-    return {}, 0
-
-
 def _publish(docs, score_docs, missing, returned, queries, held, space, campaign, stopped):
-    """Save the warmed vectors, record them for 05, then score -- unless the
-    retrieval was cancelled (10.4: vectors a cancelled retrieval received are
-    not kept). A stop seen part way removes what this call saved, except the
-    vectors of a campaign whose rows may already have been recorded: those
-    rows name them, and a row whose vector is gone would cost 05 a re-embed."""
-    saved: list[str] = []
+    """Save the warmed vectors campaign by campaign, each just before its rows
+    are recorded for 05, then score -- unless the retrieval was cancelled
+    (10.4: vectors a cancelled retrieval received are not kept).
+
+    Nothing is saved until it is about to be recorded, so a stop seen first
+    writes nothing and nothing is ever withdrawn: a vector key is shared by
+    text, and deleting one could take another retrieval's concurrent save with
+    it. Only a stop landing inside a campaign's save can leave a vector of that
+    campaign unrecorded -- a harmless cache entry, never a row naming a vector
+    that is gone."""
+    raws = {}
     for text, raw in zip(missing, returned, strict=True):
         unit = vectors.unit(raw)
         if unit is None or any(len(unit) != len(q) for q in queries):
             continue
-        if stopped.is_set():
-            return _withdraw(space, saved)
-        vectors.save(space["space"], text, raw)
-        saved.append(text)
+        raws[text] = raw
         held[text] = unit
-    recorded: set[str] = set()
+    saved: set[str] = set()
     for source, source_docs in _by_campaign(docs, missing, held, campaign).items():
+        for text in dict.fromkeys(d.doc.text for d in source_docs):
+            if stopped.is_set():
+                return {}, 0
+            if text not in saved:
+                vectors.save(space["space"], text, raws[text])
+                saved.add(text)
         if stopped.is_set():
-            break
-        recorded.update(d.doc.text for d in source_docs)
+            return {}, 0
         embedded.record_embedded(source, source_docs, space=space,
                                  keep=lambda: not stopped.is_set())
     if stopped.is_set():
-        return _withdraw(space, saved, frozenset(recorded))
+        return {}, 0
     return _evaluate(score_docs, queries, held, space["space"], stopped), len(saved)
 
 

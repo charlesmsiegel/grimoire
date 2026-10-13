@@ -407,3 +407,24 @@ code and fixed with a test that fails before the fix:
   held-back-only World info row does; off is unchanged.
 - A roll continuation in the same round is composed with that round's
   evidence (still never a retrieval), superseding the S3 ruling above.
+
+**Codex review of `902ae20`.** Five P2 findings:
+
+- Fixed: withdrawing a cancelled retrieval's vectors by text could delete
+  another retrieval's concurrent save of the same text. Publication now saves
+  each campaign's vectors only just before recording them, so a stop seen
+  first writes nothing and nothing is ever withdrawn.
+- Fixed: plain co-presence past `STRUCTURAL_PLAIN_CAP` ranks without
+  admitting, but section 5.4 cuts the semantic pool from the structural list,
+  so those scenes are now in the pool (after the admitted union) and keep
+  their relations if semantic admits them.
+- Fixed: the eval's `network_ms` timed all of `semantic.score` and its
+  `file_ms` absorbed packing, rerank and live generation. Network is now the
+  embed door and the rerank's decide calls, `retrieval_ms` is retrieval's own
+  wall, and `file_ms` is their difference (12.3).
+- Answered: the production rerank keeps the kit's Score form. Section 7.3
+  makes Score the default and requires `pointwise` only of a Rank form, which
+  stays implemented and tested for a later, measured switch.
+- Answered: per-response regenerate replays its whole frozen snapshot (a
+  legacy response with none is refused), history included, by the S2 ruling
+  above; a fresh compose is the legacy regenerate path, which gathers.

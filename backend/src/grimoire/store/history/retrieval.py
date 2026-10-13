@@ -145,6 +145,11 @@ class _Selection:
     ordered: tuple[model.Candidate, ...]
     sources_complete: bool = True
     source_views: Mapping[str, tuple[query_mod.Catalog, model.Query]] | None = None
+    #: Structural matches that rank but do not admit (plain co-presence past
+    #: STRUCTURAL_PLAIN_CAP), in structural order. Never evidence on their own,
+    #: but part of the structural list the semantic pool is cut from (5.4), so
+    #: semantic can admit one.
+    held_back: tuple[model.Candidate, ...] = ()
 
 
 def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=None):
@@ -207,7 +212,8 @@ def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=Non
         if doc.sid in lexical_ranks:
             ranks[(0, "lexical")] = lexical_ranks[doc.sid]
         candidates.append(model.Candidate(scene_ref, (signals,), ranks, 1, admits))
-    return _Selection(query, cfg, cap, depth, cat, docs, tuple(merge_mod.order(candidates)))
+    return _Selection(query, cfg, cap, depth, cat, docs, tuple(merge_mod.order(candidates)),
+                      held_back=tuple(c for c in structural_candidates if not c.admitted_by))
 
 
 def _source_ref(doc):
@@ -284,7 +290,7 @@ def _prepare_sources(cid, sid, query, ceiling, sources):
         return None
     return replace(base, query=query, cat=anchor_cat, docs=tuple(all_docs),
                    ordered=tuple(merge_mod.order(candidates)), sources_complete=complete,
-                   source_views=views)
+                   source_views=views, held_back=())
 
 
 def _expander(cid, prepared, summary_omissions):
@@ -362,7 +368,10 @@ def _semantic_complete(prepared, result) -> bool:
 
 
 def _semantic_candidates(prepared, result, pool):
-    candidates = {c.scene.key: c for c in prepared.ordered}
+    # A held-back structural match keeps its relations if semantic admits it;
+    # `order` drops it again if nothing does.
+    candidates = {c.scene.key: c for c in prepared.held_back}
+    candidates.update({c.scene.key: c for c in prepared.ordered})
     admitted = sorted((d for d in prepared.docs
                        if d.doc.key in result.signals
                        and result.signals[d.doc.key].cosine >= prepared.cfg.threshold),
@@ -417,7 +426,10 @@ def _tier_one(prepared, query, space, embed_client, deadline):
                       key=lambda k: by_key[k].sid, reverse=True)
         pool = tuple(by_key[k] for k in (*admitted, *rest))
     else:
-        pool = tuple(by_key[c.scene.key] for c in prepared.ordered[:semantic.POOL_MAX])
+        # The admitted union in RRF order, then the structural matches that
+        # rank without admitting: the structural list is the whole list (5.4).
+        keys = dict.fromkeys(c.scene.key for c in (*prepared.ordered, *prepared.held_back))
+        pool = tuple(by_key[k] for k in list(keys)[:semantic.POOL_MAX] if k in by_key)
     pool_keys = frozenset(d.doc.key for d in pool)
     before = coverage.verdict(prepared.ordered, prepared.depth, len(prepared.docs),
                               semantic_complete=False, sources_complete=prepared.sources_complete)

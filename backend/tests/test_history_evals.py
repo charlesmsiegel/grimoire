@@ -33,6 +33,12 @@ def test_real_corpus_gold_and_all_offline_arms(monkeypatch, tmp_path):
     assert len(records) == 50
     assert all(r["hard_rules"] for r in records)
     assert all(r["added_tokens"] <= r["ceiling"] for r in records)
+    # 12.3: retrieval's own time, split into provider time and the rest; the
+    # case's wall (packing, any downstream generation) is reported apart.
+    assert all(r["network_ms"] <= r["retrieval_ms"] <= r["wall_ms"] for r in records)
+    assert all(r["network_ms"] == 0 for r in records
+               if r["arm"] in {"context-only", "lexical", "structural+lexical"})
+    assert any(r["network_ms"] > 0 for r in records if r["arm"] == "hybrid")
     assert runner.gate(records)
     assert any(r["arm"] == "context-only" and r["recall3"] > 0 for r in records)
     assert any(r["arm"] == "hybrid" and r["semantic_evaluated"] > 0 for r in records)

@@ -564,29 +564,23 @@ def _two_docs():
                  for i in (1, 2))
 
 
-def test_a_stop_between_saves_withdraws_what_this_call_saved(cid, space, monkeypatch):
-    """10.4: vectors a cancelled retrieval received are not kept. A stop seen
-    after the first save removes it; nothing was recorded, so nothing names it."""
+def test_a_stop_before_publication_saves_nothing(cid, space):
+    """10.4: a retrieval cancelled before its vectors are published writes
+    none -- and so never has anything to withdraw."""
     docs = _two_docs()
     texts = [d.doc.text for d in docs]
     stopped = threading.Event()
-    real_save = vectors.save
-
-    def save(space_id, text, raw):
-        real_save(space_id, text, raw)
-        stopped.set()  # the cancel lands while the first vector is written
-
-    monkeypatch.setattr(vectors, "save", save)
+    stopped.set()
     got = semantic._publish(docs, docs, texts, [[1.0, 0.0], [0.0, 1.0]], ([1.0, 0.0],), {},
                             space, cid, stopped)
     assert got == ({}, 0)
     assert vectors.load(space["space"], texts) == {}
 
 
-def test_a_stop_during_recording_keeps_only_the_recorded_campaigns_vectors(cid, space, monkeypatch):
-    """A campaign whose rows may already be committed keeps its vectors (a
-    row naming a missing vector costs 05 a re-embed); one never recorded loses
-    them."""
+def test_a_stop_inside_one_campaign_never_saves_the_next(cid, space, monkeypatch):
+    """Each campaign's vectors are saved just before its rows are recorded: a
+    stop landing while the first campaign records leaves the second unsaved,
+    and no row anywhere names a vector that is missing."""
     first, second = _two_docs()
     other = live.LiveDocument(second.sid, None, replace(
         second.doc, meta={**second.doc.meta, "_history_campaign": "elsewhere",
@@ -605,3 +599,44 @@ def test_a_stop_during_recording_keeps_only_the_recorded_campaigns_vectors(cid, 
                             space, cid, stopped)
     assert got == ({}, 0) and recorded == [cid]
     assert set(vectors.load(space["space"], texts)) == {first.doc.text}
+
+
+def test_a_cancelled_retrieval_never_deletes_a_concurrent_save(cid, space):
+    """Vector keys are shared by text: another retrieval that saved the same
+    text keeps it when this one is cancelled, because a cancelled publication
+    deletes nothing."""
+    docs = _two_docs()
+    texts = [d.doc.text for d in docs]
+    vectors.save(space["space"], texts[0], [1.0, 0.0])  # the other retrieval's save
+    stopped = threading.Event()
+    stopped.set()
+    semantic._publish(docs, docs, texts, [[1.0, 0.0], [0.0, 1.0]], ([1.0, 0.0],), {},
+                      space, cid, stopped)
+    assert set(vectors.load(space["space"], texts)) == {texts[0]}
+
+
+def test_a_held_back_structural_match_is_in_the_semantic_pool(cid, space, monkeypatch):
+    """5.4: the pool is cut from the structural list and the admitted lexical
+    list. Plain co-presence past STRUCTURAL_PLAIN_CAP ranks without admitting,
+    but it is still on the structural list, so semantic may admit it -- here
+    at tier 1, with nothing else to widen into."""
+    docs = tuple(live.LiveDocument(f"{i:04d}--saltmarch", None,
+                                   scene.SceneDocument(f"k{i}", f"Saltmarch scene {i}", {"identity": f"i{i}"}))
+                 for i in range(semantic.POOL_MAX + 40))
+    old = docs[5]
+    held = model.Candidate(
+        model.SceneRef(old.sid, "i5"),
+        (model.Signals(structural=model.StructuralSignal(
+            (model.Relation("shared_cast", ("characters:mara", "pcs:seraphine")),))),),
+        {}, 1, frozenset())
+    monkeypatch.setattr(retrieval, "_eligible", lambda *args: docs)
+    monkeypatch.setattr(retrieval.structural, "candidates", lambda *args, **kwargs: [held])
+    current = played(cid, text="amber seal")
+    evidence = asyncio.run(retrieval.retrieve(
+        cid, current, model.Query(("amber seal",), tier_limit=1), ceiling=1200,
+        embed_client=FakeAsyncEmbeddings(), deadline=time.monotonic()+2))
+    found = {c.scene.sid: c for c in evidence.candidates}
+    assert old.sid in found
+    assert found[old.sid].admitted_by == frozenset({"semantic"})
+    assert found[old.sid].rounds[0].structural == held.rounds[0].structural
+    assert evidence.coverage.tiers == (1,)
