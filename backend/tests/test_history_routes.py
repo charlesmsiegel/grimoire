@@ -17,7 +17,8 @@ from grimoire.store.context import layout
 from grimoire.store.history import model, query, retrieval
 from tests.history_fixtures import absorbed, actor, played
 from tests.history_fixtures import cid as cid
-from tests.llm_fakes import FakeLLM
+from tests.inference_fixtures import embedding
+from tests.llm_fakes import FakeAsyncEmbeddings, FakeLLM
 
 
 def test_async_retrieval_and_route_bridge_exist():
@@ -126,6 +127,37 @@ def route_seed(client):
     sid = store.scenes.create_scene(campaign, "Saltmarch")
     store.config.write_config(history_recall_depth="1", recap_depth="0", prompt_log_depth="50")
     return campaign, sid
+
+
+@pytest.mark.parametrize("door", ["chat", "director", "retry", "regenerate", "group", "group_director", "continue", "legacy_continue"])
+def test_designated_routes_inject_native_client_and_attribute_embed(client, monkeypatch, door):
+    campaign, sid = route_seed(client)
+    group = door in {"group", "group_director", "continue"}
+    monkeypatch.setattr(character_turns, "enabled", lambda: group)
+    conn = store.llm_connections.create_connection(
+        "openai_compatible", "Vectors", base_url="https://vectors.example/v1",
+        api_key="sk-fake", model="", post_process="none")
+    embedding(conn, "embed-1")
+    native = FakeAsyncEmbeddings()
+    fake = FakeLLM([['Mara answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    client.app.dependency_overrides[routes.get_embeddings] = lambda: native
+    if door in {"retry", "regenerate", "continue", "legacy_continue"}:
+        store.scenes.append_message(campaign, sid, "user", "silver ledger")
+    if door == "regenerate":
+        store.scenes.append_message(campaign, sid, "assistant", "Mara waits.")
+    body = {"content": "" if door in {"continue", "legacy_continue"} else "silver ledger",
+            "director": door in {"director", "group_director"}}
+    if group:
+        body["speaker_ref"] = "grimoire"
+    url = "chat" if door in {"group", "group_director", "continue", "legacy_continue", "director"} else door
+    reply = client.post(f"/api/campaigns/{campaign}/scenes/{sid}/{url}", json=body)
+    assert reply.status_code == 200 and '"error"' not in reply.text, reply.text
+    assert len(native.calls) == 1 and native.queries == [1]
+    rows = [r for r in store.usage.calls(days=1) if r["task"] == "history-recall"]
+    assert len(rows) == 1
+    assert rows[0]["campaign"] == campaign and rows[0]["scene"] == sid and rows[0]["run_id"]
+    assert rows[0].get("post") == (None if door in {"continue", "legacy_continue"} else 0)
 
 
 @pytest.mark.parametrize("director", [False, True])
@@ -287,11 +319,11 @@ def test_async_file_stages_run_in_worker(cid, monkeypatch):
     sid = played(cid)
     caller = threading.get_ident()
     threads = []
-    real = retrieval.retrieve_preview
+    real = retrieval._prepare
     def files(*a, **k):
         threads.append(threading.get_ident())
         return real(*a, **k)
-    monkeypatch.setattr(retrieval, "retrieve_preview", files)
+    monkeypatch.setattr(retrieval, "_prepare", files)
     asyncio.run(store.history.retrieve(cid, sid, query.build(cid, sid), ceiling=1200,
                                       embed_client=None, deadline=time.monotonic()+4))
     assert threads and all(t != caller for t in threads)

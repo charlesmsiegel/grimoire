@@ -20,6 +20,8 @@ between the two callers and belong with them.
 
 from __future__ import annotations
 
+import threading
+import time
 import zlib
 
 from .. import wire
@@ -32,6 +34,36 @@ from .inference import resolved as inference_resolved
 #: the store may be hand-edited or half-synced.
 _OFF_ERRORS = (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
                KeyError, TypeError, ValueError)
+
+# History and lore share the provider's outage, rather than spending their
+# independent deadlines on the same unavailable endpoint on every turn (09-S4).
+# This is advisory process memory: no campaign or configuration write.
+OUTAGE_BACKOFF = 60
+OUTAGE_KINDS = frozenset({"auth", "network", "rate_limit", "timeout"})
+_OUTAGES: dict[str, float] = {}
+_OUTAGE_LOCK = threading.Lock()
+
+
+def outage(space_id: str) -> bool:
+    """Whether this space's shared backoff has time left."""
+    with _OUTAGE_LOCK:
+        until = _OUTAGES.get(space_id, 0)
+        if until > time.monotonic():
+            return True
+        _OUTAGES.pop(space_id, None)
+        return False
+
+
+def note_outage(space_id: str) -> None:
+    """Suppress the next history and lore requests for this space."""
+    with _OUTAGE_LOCK:
+        _OUTAGES[space_id] = time.monotonic() + OUTAGE_BACKOFF
+
+
+def clear_outage(space_id: str) -> None:
+    """An endpoint that answered successfully is available again."""
+    with _OUTAGE_LOCK:
+        _OUTAGES.pop(space_id, None)
 
 
 def resolution(cfg: dict | None = None) -> inference_resolved.ResolvedInference | None:

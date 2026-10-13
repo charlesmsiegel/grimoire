@@ -965,6 +965,28 @@ class FakeEmbeddings:
         return [self.vector_for(t) for t in texts]
 
 
+class FakeAsyncEmbeddings(FakeEmbeddings):
+    """The native async door, with scripted failures and a cancellable stall.
+
+    Inherits the shared recording/usage/vector rules rather than inventing a
+    second fake in each recall suite. ``errors`` is indexed by call order.
+    """
+
+    def __init__(self, *args, delay=0.0, errors=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.delay = delay
+        self.errors = errors
+
+    async def embed(self, *args, **kwargs):
+        result = super().embed(*args, **kwargs)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        index = len(self.calls) - 1
+        if index < len(self.errors) and self.errors[index] is not None:
+            raise self.errors[index]
+        return result
+
+
 @dataclass(frozen=True)
 class ToolTurn:
     """One scripted model turn of a tool loop (`FakeToolTurns`): its text,

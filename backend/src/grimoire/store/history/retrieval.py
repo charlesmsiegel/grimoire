@@ -1,7 +1,7 @@
-"""Network-free file stages and the async history entry (09-S1/S3).
+"""Shared file stages and bounded async semantic history (09-S1/S3/S4).
 
 08 alone reads the current SearchDocuments. Eligibility is evaluated once before
-any scoring; admitted lexical candidates are never truncated to a future
+any scoring; admitted lexical candidates are never truncated to the bounded
 semantic pool. Only selected usable scenes pay for prompt transcript expansion.
 """
 
@@ -11,15 +11,15 @@ import hashlib
 import json
 import time
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 
 import anyio
 
-from .. import chronicle, entities, overlay, tokens
+from .. import chronicle, embed_space, entities, overlay, tokens
 from ..scenes import read as scenes_read
 from ..searchdocs import live
-from . import budget, coverage, expand, lexical, model, refs, settings, structural
+from . import budget, coverage, expand, lexical, model, refs, semantic, settings, structural
 from . import merging as merge_mod
 from . import query as query_mod
 
@@ -119,22 +119,26 @@ def _item(
     )
 
 
-def retrieve_preview(
-    cid: str,
-    sid: str,
-    query: model.Query,
-    ceiling: int,
-    *,
-    summary_omissions: Mapping[str, str] | None = None,
-) -> model.Evidence:
+@dataclass(frozen=True)
+class _Selection:
+    query: model.Query
+    cfg: settings.Settings
+    cap: int
+    depth: int
+    cat: query_mod.Catalog
+    docs: tuple[live.LiveDocument, ...]
+    ordered: tuple[model.Candidate, ...]
+
+
+def _prepare(cid, sid, query, ceiling):
     validate(query)
     cfg = settings.read()
     cap = max(ceiling, 0)
     if cfg is None:
-        return model.Evidence(ceiling=cap)
+        return None
     depth = min(cfg.depth, query.max_scenes) if query.max_scenes is not None else cfg.depth
     if not depth or not cap:
-        return model.Evidence(ceiling=cap)
+        return None
     try:
         scene = scenes_read.read_scene(cid, sid)
         posts = len(scene["messages"])
@@ -185,7 +189,12 @@ def retrieve_preview(
         if doc.sid in lexical_ranks:
             ranks[(0, "lexical")] = lexical_ranks[doc.sid]
         candidates.append(model.Candidate(scene_ref, (signals,), ranks, 1, admits))
-    ordered = merge_mod.order(candidates)
+    return _Selection(query, cfg, cap, depth, cat, docs, tuple(merge_mod.order(candidates)))
+
+
+def _finish(cid, prepared, ordered, cv, summary_omissions):
+    query, cap, depth, cat, docs = (prepared.query, prepared.cap, prepared.depth,
+                                   prepared.cat, prepared.docs)
     try:
         chron = chronicle.read_chronicle(cid)
         chron = chron if isinstance(chron, dict) else {}
@@ -208,7 +217,6 @@ def retrieve_preview(
         ),
     )
     fitted = budget.fit(selected, cap, tokens.count_tokens)
-    cv = coverage.verdict(ordered, depth, len(docs))
     digest = hashlib.sha256(
         json.dumps(
             [query.texts, query.terms, query.subjects, sorted(query.scopes), query.perspective],
@@ -217,6 +225,42 @@ def retrieve_preview(
         ).encode()
     ).hexdigest()
     return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest)
+
+
+def retrieve_preview(cid: str, sid: str, query: model.Query, ceiling: int, *,
+                     summary_omissions: Mapping[str, str] | None = None) -> model.Evidence:
+    prepared = _prepare(cid, sid, query, ceiling)
+    if prepared is None:
+        return model.Evidence(ceiling=max(ceiling, 0))
+    cv = coverage.verdict(prepared.ordered, prepared.depth, len(prepared.docs))
+    return _finish(cid, prepared, prepared.ordered, cv, summary_omissions)
+
+
+def _semantic_candidates(prepared, result, pool):
+    candidates = {c.scene.key: c for c in prepared.ordered}
+    admitted = sorted((d for d in prepared.docs
+                       if d.doc.key in result.signals
+                       and result.signals[d.doc.key].cosine >= prepared.cfg.threshold),
+                      key=lambda d: d.sid, reverse=True)
+    admitted.sort(key=lambda d: result.signals[d.doc.key].cosine, reverse=True)
+    ranks = {d.doc.key: rank for rank, d in enumerate(admitted, 1)}
+    for doc in prepared.docs:
+        signal = result.signals.get(doc.doc.key)
+        if signal is None:
+            continue
+        ref = model.SceneRef(doc.sid, doc.doc.meta.get("identity") or None)
+        previous = candidates.get(ref.key)
+        if previous is None and doc.doc.key not in ranks:
+            continue
+        previous = previous or model.Candidate(ref, (model.Signals(),), {},
+                                               1 if doc.doc.key in pool else 2, frozenset())
+        candidates[ref.key] = replace(
+            previous, rounds=(replace(previous.rounds[0], semantic=signal),),
+            ranks={**previous.ranks, **({(0, "semantic"): ranks[doc.doc.key]}
+                                       if doc.doc.key in ranks else {})},
+            admitted_by=previous.admitted_by | (frozenset({"semantic"})
+                                                if doc.doc.key in ranks else frozenset()))
+    return merge_mod.order(list(candidates.values()))
 
 
 async def retrieve(
@@ -230,12 +274,13 @@ async def retrieve(
     rerank=None,
     origin: str = "turn",
     summary_omissions: Mapping[str, str] | None = None,
+    run_id: str = "",
 ) -> model.Evidence:
-    """Complete file stages outside campaign holds (09-S3).
+    """Gather independent signals outside campaign holds (09-S3/S4).
 
     The monotonic deadline reserves the later semantic/rerank phase. File reads
     cannot be interrupted midway and their evidence survives an elapsed deadline;
-    S4/S5 must check the remaining time before starting any network work. Clients
+    Semantic and S5 stages check remaining time before network work. Clients
     are supplied by the app, never constructed here. Preview and turns share the
     same eligibility, selection, expansion and omission-before-depth rules.
     """
@@ -244,9 +289,46 @@ async def retrieve(
         if origin == "turn":
             raise ValueError("tier 3 history is never available on a turn")
         raise NotImplementedError("explicit source history belongs to 09-S6")
-    evidence = await anyio.to_thread.run_sync(partial(
-        retrieve_preview, cid, sid, query, ceiling,
-        summary_omissions=summary_omissions,
-    ))
-    semantic = "skipped:deadline" if time.monotonic() >= deadline else "off"
-    return replace(evidence, coverage=replace(evidence.coverage, semantic=semantic))
+    prepared = await anyio.to_thread.run_sync(partial(_prepare, cid, sid, query, ceiling))
+    if prepared is None:
+        return model.Evidence(ceiling=max(ceiling, 0))
+    space = await anyio.to_thread.run_sync(embed_space.endpoint)
+    by_key = {model.SceneRef(d.sid, d.doc.meta.get("identity") or None).key: d
+              for d in prepared.docs}
+    # The admitted union is retained whole. Only the semantic evaluation pool
+    # is cut, after RRF union, so weighted-name matches cannot open every vector.
+    pool = tuple(by_key[c.scene.key] for c in prepared.ordered[:semantic.POOL_MAX])
+    pool_keys = frozenset(d.doc.key for d in pool)
+    before = coverage.verdict(prepared.ordered, prepared.depth, len(prepared.docs),
+                              semantic_complete=False)
+    lookahead = ()
+    if (query.tier_limit >= 2 and before.verdict in {"empty", "thin"}
+            and space is not None and embed_client is not None
+            and not embed_space.outage(space["space"]) and time.monotonic() < deadline):
+        lookahead = tuple(sorted((d for d in prepared.docs if d.doc.key not in pool_keys),
+                                 key=lambda d: d.sid, reverse=True)
+                          [:semantic.WIDEN_LIMIT-len(pool)])
+    # Prepare widening's warm before the one request, but evaluate its signals
+    # only if tier 1 remains thin/empty. A sufficient lexical/structural union
+    # never pays for speculative vector reads. Total live documents stays 1000.
+    result = await semantic.score(prepared.query.texts, (*pool, *lookahead), pool=pool, space=space,
+                                  embed_client=embed_client, deadline=deadline,
+                                  campaign=cid, scene=sid, post=query.turn_index, run_id=run_id)
+    ordered = _semantic_candidates(prepared, result, pool_keys)
+    cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
+                          semantic_complete=result.status != "ok"
+                          or len(result.signals) >= len(prepared.docs))
+    tiers: tuple[int, ...] = (1,)
+    if query.tier_limit >= 2 and result.status == "ok" and cv.verdict in {"empty", "thin"}:
+        remaining = sorted((d for d in prepared.docs if d.doc.key not in result.evaluated),
+                           key=lambda d: d.sid, reverse=True)
+        remaining = remaining[:max(0, semantic.WIDEN_LIMIT-len(result.evaluated))]
+        if remaining and time.monotonic() < deadline:
+            tiers = (1, 2)
+            result = await semantic.widen(result, remaining, space=space, deadline=deadline)
+            ordered = _semantic_candidates(prepared, result, pool_keys)
+            cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
+                                  semantic_complete=len(result.signals) >= len(prepared.docs))
+    cv = replace(cv, semantic=result.status, tiers=tiers)
+    return await anyio.to_thread.run_sync(partial(
+        _finish, cid, prepared, ordered, cv, summary_omissions))

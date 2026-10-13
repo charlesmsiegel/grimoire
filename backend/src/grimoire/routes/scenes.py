@@ -55,6 +55,7 @@ from .common import (
     _write_response,
     computes_only,
     draft_completion,
+    get_embeddings,
     get_llm,
     model_window,
     override_inference,
@@ -831,6 +832,7 @@ def _disown_dead_pending(cid: str, sid: str) -> None:
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
               client: LLMClient = Depends(get_llm),
+              embed_client=Depends(get_embeddings),
               x_grimoire_attempt: str | None = Header(default=None)):
     # BEFORE the preflight checks, and that order is the whole point of an
     # attempt id. This is a REPLAY: the work already ran and its outcome is
@@ -883,7 +885,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
         return _chat_run(cid, sid, turn, request, client, resolved, run,
-                         embed_client=getattr(request.app.state, "embeddings", None))
+                         embed_client=embed_client)
 
 
 def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
@@ -981,6 +983,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
         posted_at, content, speaker, post_id, tracked = None, "", None, None, None
+        note_at = None
         if note_text:
             # In the same locked, fenced hold the player's post is written in,
             # and for its reasons. Macros are expanded at persist time exactly
@@ -1002,7 +1005,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # note rather than a resurrection.
             content = store.context.expand_macros(
                 note_text, store.context.scene_substitutions(cid, sid), cid, sid)
-            store.scenes.append_message(
+            note_at = store.scenes.append_message(
                 cid, sid, "assistant", content,
                 speaker=store.scenes.DIRECTOR_SPEAKER)
         if not ephemeral:
@@ -1074,7 +1077,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         note = content or prompts.render("scene/director_note.j2")
         evidence = history_recall.gather_sync(
             request.app, cid, sid, seed=note, resolved=resolved,
-            llm_client=client, embed_client=embed_client)
+            llm_client=client, embed_client=embed_client, run_id=run.id, post=note_at)
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
             describe=store.prompt_log.capturing(), model=primary.model,
@@ -1105,7 +1108,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     evidence = history_recall.gather_sync(
         request.app, cid, sid, seed="", resolved=resolved,
-        llm_client=client, embed_client=embed_client)
+        llm_client=client, embed_client=embed_client, run_id=run.id, post=posted_at)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn),
         describe=store.prompt_log.capturing(), model=primary.model,
@@ -1190,6 +1193,7 @@ def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
 def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = None,
                client: LLMClient = Depends(get_llm),
+               embed_client=Depends(get_embeddings),
                x_grimoire_attempt: str | None = Header(default=None)):
     replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
     if replay is not None:
@@ -1208,7 +1212,7 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
         return _retry_run(cid, sid, body, request, client, resolved, run,
-                          embed_client=getattr(request.app.state, "embeddings", None))
+                          embed_client=embed_client)
 
 
 def _retry_run(cid: str, sid: str, body, request: Request,
@@ -1231,7 +1235,7 @@ def _retry_run(cid: str, sid: str, body, request: Request,
     primary = resolved.chain.primary
     evidence = history_recall.gather_sync(
         request.app, cid, sid, seed="", resolved=resolved,
-        llm_client=client, embed_client=embed_client)
+        llm_client=client, embed_client=embed_client, run_id=run.id)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body),
         describe=store.prompt_log.capturing(), model=primary.model,
@@ -1303,6 +1307,7 @@ def _put_back(cid: str, sid: str, showing: str | None) -> bool:
 def post_regenerate(cid: str, sid: str, request: Request,
                     body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm),
+                    embed_client=Depends(get_embeddings),
                     x_grimoire_attempt: str | None = Header(default=None)):
     """Redo the most recent post: park the trailing assistant reply as an
     alternate, stream a fresh one."""
@@ -1341,7 +1346,7 @@ def post_regenerate(cid: str, sid: str, request: Request,
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
         return _regenerate_run(cid, sid, body, request, client, resolved, run, routed=routed,
-                               embed_client=getattr(request.app.state, "embeddings", None))
+                               embed_client=embed_client)
 
 
 def _regenerate_run(cid: str, sid: str, body, request: Request,
@@ -1505,7 +1510,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
         evidence = history_recall.gather_sync(
             request.app, cid, sid, seed="", resolved=resolved,
-            llm_client=client, embed_client=embed_client)
+            llm_client=client, embed_client=embed_client, run_id=run.id)
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),

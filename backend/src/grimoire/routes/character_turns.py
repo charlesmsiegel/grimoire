@@ -1585,9 +1585,17 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
         return None
     rid = turn.round_record["id"]
     if rid not in turn.history_by_round:
+        post = turn.round_record.get("post")
+        if post is None and turn.round_record.get("typed_note"):
+            # A stored director note has an index even though the round's post
+            # field records player-role posts only. An untyped continue stays
+            # unattributed, rather than charging some earlier visible post.
+            messages = await run_in_threadpool(store.scenes.read_scene, cid, sid)
+            post = streaming._answering_post(messages["messages"])
         turn.history_by_round[rid] = await history_recall.gather(
             app, cid, sid, seed=turn.round_record.get("note") or "", resolved=resolved,
             llm_client=client, embed_client=embed_client,
+            post=post, run_id=run.id if run is not None else "",
         )
     if run is not None and run.cancel_requested:
         raise anyio.get_cancelled_exc_class()()
