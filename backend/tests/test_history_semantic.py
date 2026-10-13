@@ -140,9 +140,25 @@ def test_retrieve_adds_semantic_only_scene(cid, space):
     evidence = asyncio.run(retrieval.retrieve(
         cid, current, model.Query(("amber seal",)), ceiling=1200,
         embed_client=FakeAsyncEmbeddings(), deadline=time.monotonic()+1))
-    assert evidence.coverage.semantic == "ok" and evidence.coverage.tiers == (1, 2)
+    # A live set within POOL_MAX is tier 1's pool whole, so the semantic-only
+    # scene is found without widening (and a young campaign never widens).
+    assert evidence.coverage.semantic == "ok" and evidence.coverage.tiers == (1,)
     assert evidence.candidates[0].scene.sid == docs[0].sid
     assert evidence.candidates[0].admitted_by == frozenset({"semantic"})
+    assert evidence.candidates[0].tier == 1
+
+
+def test_a_first_scene_sends_no_embedding(cid, space):
+    """`exhausted` spends nothing further (09-C2): a campaign's first scene has
+    no history, so not even the query is embedded."""
+    current = played(cid, text="amber seal")
+    client = FakeAsyncEmbeddings()
+    evidence = asyncio.run(retrieval.retrieve(
+        cid, current, model.Query(("amber seal",)), ceiling=1200,
+        embed_client=client, deadline=time.monotonic()+1))
+    assert evidence.coverage.verdict == "exhausted" and evidence.coverage.tiers == (1,)
+    assert evidence.coverage.semantic == "skipped:exhausted"
+    assert client.calls == [] and not list(usage.calls(days=1))
 
 
 @pytest.mark.parametrize("tier, expected", [(1, 64), (2, 1000)])
@@ -437,3 +453,72 @@ def test_cancel_while_history_flush_waits_for_writer_discards_rows(cid, space, c
         rows = request.materialized(live.input_paths(cid, docs[0]))
         request.disabled = True
     assert not any(row.kind == kind for found in rows.values() for row in found)
+
+
+def test_a_success_clears_an_outage_another_caller_noted(cid, space, monkeypatch):
+    """The memo is cleared by a request that answered, not only by time: a
+    concurrent caller may note an outage while this one's request is in
+    flight, and the endpoint that then answered is available again (6.3).
+    Both history and lore recall clear it."""
+    docs = documents(cid)
+    real_async, real_sync = semantic.embed.embed, lore.embed.embed_sync
+
+    async def racing(*args, **kwargs):
+        embed_space.note_outage(space["space"])
+        return await real_async(*args, **kwargs)
+
+    monkeypatch.setattr(semantic.embed, "embed", racing)
+    assert score(cid, space, FakeAsyncEmbeddings(), docs).status == "ok"
+    assert not embed_space.outage(space["space"])
+    monkeypatch.setattr(semantic.embed, "embed", real_async)
+
+    def racing_sync(*args, **kwargs):
+        embed_space.note_outage(space["space"])
+        return real_sync(*args, **kwargs)
+
+    monkeypatch.setattr(lore.embed, "embed_sync", racing_sync)
+    monkeypatch.setattr(lore, "_CLIENT", FakeEmbeddings())
+    assert lore._embed(space, "silver ledger", [], campaign=cid, scene="") is not None
+    assert not embed_space.outage(space["space"])
+
+
+def test_no_embedding_role_is_structural_and_lexical_tier_one(cid, monkeypatch):
+    """Acceptance 2 and 11.3: with no Embedding role retrieval still answers
+    from structure and words, says `off`, and never widens."""
+    monkeypatch.setattr(embed_space, "_OUTAGES", {}, raising=False)
+    old = played(cid, text="Mara studies the silver ledger.")
+    absorbed(cid, old)
+    sid = played(cid, text="Where is the silver ledger?")
+    assert embed_space.endpoint() is None
+    client = FakeAsyncEmbeddings()
+    ev = asyncio.run(retrieval.retrieve(
+        cid, sid, model.Query(("Where is the silver ledger?",), terms=("silver", "ledger")),
+        ceiling=1200, embed_client=client, deadline=time.monotonic() + 4))
+    assert [i.scene.sid for i in ev.items] == [old]
+    assert ev.coverage.semantic == "off" and ev.coverage.tiers == (1,)
+    assert client.calls == []
+
+
+def test_a_stalled_endpoint_costs_one_phase_then_the_next_turn_backs_off(cid, space):
+    """10.2 through the turn-path wrapper: a stalled embed costs at most the
+    phase deadline, the file evidence survives it, and the next turn hits the
+    shared memo without sending."""
+    from grimoire.routes import history_recall
+    old = played(cid, text="Mara studies the silver ledger.")
+    absorbed(cid, old)
+    sid = played(cid, text="Where is the silver ledger?")
+    client = FakeAsyncEmbeddings(delay=10)
+
+    def turn(seconds):
+        return asyncio.run(history_recall.gather(
+            None, cid, sid, seed="", resolved=None, llm_client=None, embed_client=client,
+            deadline=time.monotonic() + seconds))
+
+    start = time.monotonic()
+    first = turn(0.3)
+    assert time.monotonic() - start < 2
+    assert first.coverage.semantic == "failed:timeout"
+    assert [i.scene.sid for i in first.items] == [old]
+    second = turn(4)
+    assert second.coverage.semantic == "backoff" and len(client.calls) == 1
+    assert [i.scene.sid for i in second.items] == [old]

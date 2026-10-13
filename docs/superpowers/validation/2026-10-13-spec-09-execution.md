@@ -258,3 +258,78 @@ implementation reuses SearchDocuments, overlay ancestry, vector cache/adapters,
 relevance capture and eval reporting. Source qualification preserves campaign
 provenance; generated isolated archives keep measurement independent of the
 user's library. Default history recall remains off.
+
+## Takeover: CI, acceptance and review (2026-10-13, PR #515)
+
+The PR was taken over to finish implementation, testing and review. CI on the
+opened head was red on ruff (10 pairs over baseline), pytest (10 failures on
+py3.11/3.14) and the pydantic-1.10 job (the same failures).
+
+**Fixes to make the gate pass.** The ten ruff pairs (two redefined loop
+names in the source-qualification paths, the eval package's imports, a
+`build` too complex to read, a blind catch now carrying its reason). The eval
+generator called `scenes.set_branch_keys`, which lives on `scenes.write`, so
+the offline suite inside `pytest backend` crashed before grading; with it
+fixed, the semantic-only arm failed rule case 9 (below). The routing,
+settings and operation-guard pins learned the `history_check` route and the
+history runner's live generation. The rerank pair is now rendered by
+`test_llm_fakes.py` and answered by a `campaign_flow` cassette entry, as
+section 14 requires, with a test that its body parses to a grade. The eval
+README's history commands give both platforms' interpreters. One test spied
+on `compose_turn` without `history=`.
+
+`test_serving_compression.py`'s two bundle tests fail on clean `main` too,
+with the dependency set CI now installs: Starlette 1.8's `FileResponse` watches
+for a disconnect while it streams, and the test's ASGI harness sent one
+straight after the request. The harness now hangs up after the last body
+frame, as a client does. This is test-only and was not caused by this branch.
+
+**Audit against the spec, and what changed.** A read-only spec-versus-code
+audit found these, now fixed:
+
+- A first scene embedded the query on every turn: `exhausted` now spends
+  nothing (`semantic: skipped:exhausted`), tested.
+- Ruling: a live set within `POOL_MAX` is tier 1's pool whole — the bound
+  already pays for it, and a young campaign otherwise widened to a tier 2
+  scoring the same documents, failing rule case 9 in the semantic-only arm.
+  Spec 5.4 records the clarification. The cost if wrong is tier 1 scoring a
+  few unadmitted documents in campaigns under 64 scenes.
+- Case 9 now also plays a first scene (exhausted, tier 1, no request), and
+  case 8 checks the excluded name is not a matched lexical term.
+- A non-provider exception from the semantic stage (a cache write, a refused
+  argument) discarded the structural and lexical evidence through `gather`'s
+  catch; it now degrades to `failed:error` and keeps them (11.3).
+- `gather_sync` re-raised a portal future cancelled at shutdown, which could
+  strand the appended post (10.1, M7); it now degrades to `error`. A
+  `skipped:locked` bridge said `exhausted`, which a planner would read as
+  "nothing else exists"; it says `error`.
+- With no Embedding role, an elapsed deadline reported `skipped:deadline`
+  rather than `off`.
+- `budget.fit` divided the ceiling by the setting's depth, not the
+  selection's (`Query.max_scenes`).
+- The inspector preview and the group round's outside-lock peek now fail
+  soft.
+- Settings copy says an unpriced endpoint makes Costs read incomplete (14);
+  the template README lost a duplicated paragraph; `Decision.calls` no longer
+  claims nothing in production reads it.
+- New tests: a success clears an outage another caller noted (history and
+  lore); no Embedding role is structural plus lexical at tier 1; a stalled
+  endpoint through `gather` costs one phase and the next turn backs off; the
+  off path reads no SearchDocument, resolves no space and builds no client;
+  World info and history are the only sections with a `shed` hook.
+
+Kept as they are, with reasons:
+
+- The tier-2 lookahead loads (the S3 ruling above) stay: they count toward
+  `WIDEN_LIMIT` and warm a cold campaign; tier 1 still scores at most
+  `POOL_MAX`.
+- `merge(..., rerank=)` stays a synchronous seam. 10 reranks its final merge
+  once, and will adapt the async route callable when 10-S1 lands, rather
+  than this slice making `merge` async ahead of its only caller.
+- `shared_cast` counts present actors; a non-present speaker or addressee
+  already admits through `actor`, which admits on its own.
+- A phase-deadline timeout sets the shared memo, as section 10.2's
+  acceptance asks ("the next turn hits the outage memo").
+- The Windows missing-`ctypes` failure (`test_compiled.py`, through
+  `recycle_bin.py`) is on clean `main` and is not this branch's; it is left
+  to its own change.

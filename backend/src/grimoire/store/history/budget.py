@@ -95,13 +95,18 @@ def _trim(
 
 
 def fit(
-    items: Sequence[model.EvidenceItem], ceiling: int, count: Callable[[str], int]
+    items: Sequence[model.EvidenceItem], ceiling: int, count: Callable[[str], int],
+    *, depth: int | None = None,
 ) -> list[model.EvidenceItem]:
+    """Each item gets `ceiling // depth` (at least `MIN_ITEM_TOKENS`), where
+    depth is the selection's own -- a `Query.max_scenes` below the setting
+    included. A caller that names none gets the setting's."""
     if ceiling < MIN_ITEM_TOKENS:
         return []
-    cfg = settings.read()
-    depth = cfg.depth if cfg is not None else max(len(items), 1)
-    share = max(MIN_ITEM_TOKENS, ceiling // depth)
+    if depth is None:
+        cfg = settings.read()
+        depth = cfg.depth if cfg is not None else len(items)
+    share = max(MIN_ITEM_TOKENS, ceiling // max(depth, 1))
     kept: list[model.EvidenceItem] = []
     for item in items:
         fitted = _trim(item, share, count)

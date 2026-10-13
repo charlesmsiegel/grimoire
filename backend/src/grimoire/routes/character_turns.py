@@ -1568,7 +1568,19 @@ async def _frames(
 
 def _history_replays(cid, sid, round_record):
     pending = round_record.get("pending_response")
-    return bool(pending and store.responses.get(cid, sid, pending, private=True)["status"] != "complete")
+    if not pending:
+        return False
+    try:
+        return store.responses.get(cid, sid, pending, private=True)["status"] != "complete"
+    except Exception:  # noqa: BLE001 -- only a hint: _prepare decides under the lock, and fails there if it must
+        return False
+
+
+def _round_post(cid, sid):
+    try:
+        return streaming._answering_post(store.scenes.read_scene(cid, sid)["messages"])
+    except Exception:  # noqa: BLE001 -- an unattributable post costs the rerank's `post`, never the round
+        return None
 
 
 async def _round_history(app, cid, sid, client, embed_client, resolved, turn, actor, *,
@@ -1590,8 +1602,7 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
             # A stored director note has an index even though the round's post
             # field records player-role posts only. An untyped continue stays
             # unattributed, rather than charging some earlier visible post.
-            messages = await run_in_threadpool(store.scenes.read_scene, cid, sid)
-            post = streaming._answering_post(messages["messages"])
+            post = await run_in_threadpool(_round_post, cid, sid)
         turn.history_by_round[rid] = await history_recall.gather(
             app, cid, sid, seed=turn.round_record.get("note") or "", resolved=resolved,
             llm_client=client, embed_client=embed_client,

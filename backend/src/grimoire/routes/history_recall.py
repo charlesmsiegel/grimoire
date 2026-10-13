@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import CancelledError as PortalCancelledError
 from dataclasses import replace
 from functools import partial
 
@@ -158,8 +157,6 @@ async def gather(app, cid, sid, *, seed, resolved, llm_client, embed_client, dea
             rerank=partial(_rerank, cid, sid, client=llm_client, deadline=deadline,
                            run_id=run_id) if rerank_on else None,
         )
-    except PortalCancelledError:
-        raise
     except Exception:  # noqa: BLE001 -- optional history cannot strand an appended player post
         return _error(cid, sid)
 
@@ -168,14 +165,17 @@ def gather_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client, dead
                 post=_QUERY_POST, run_id=""):
     """Bridge a def route; ownership is checked in its worker before the portal."""
     if store.locks.holds_campaign(cid):
-        return model.Evidence(coverage=model.Coverage("exhausted", semantic="skipped:locked"))
+        # Nothing was retrieved, which is not "nothing else exists": a planner
+        # reading `error` never plans on it, and never mistakes it for exhausted.
+        return model.Evidence(coverage=model.Coverage("error", semantic="skipped:locked"))
     try:
         return app.state.run_portal.call(partial(
             gather, app, cid, sid, seed=seed, resolved=resolved,
             llm_client=llm_client, embed_client=embed_client, deadline=deadline,
             post=post, run_id=run_id,
         ))
-    except PortalCancelledError:
-        raise
-    except Exception:  # noqa: BLE001 -- shutdown can close the portal after the player's append
+    except Exception:  # noqa: BLE001 -- shutdown can close (or cancel) the portal after the player's append
+        # A worker thread is never itself cancelled: a portal future cancelled
+        # at shutdown is the closing portal of spec 10.1, not this request's
+        # cancellation, so it degrades like any other portal failure.
         return _error(cid, sid)

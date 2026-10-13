@@ -140,6 +140,15 @@ def test_off_is_identical_and_never_prepares_or_retrieves(cid, monkeypatch, off)
         layout.write_layout([{"id": "history_recall", "enabled": False}])
     monkeypatch.setattr(query, "prepare", lambda *a, **k: pytest.fail("query prepared while off"))
     monkeypatch.setattr(retrieve, "retrieve_preview", lambda *a, **k: pytest.fail("retrieved while off"))
+    # Off reads no SearchDocument (so no compiled-cache lookup) and resolves no
+    # embedding space, let alone builds a client for one.
+    from grimoire import embeddings
+    from grimoire.store import embed_space
+    from grimoire.store.searchdocs import live
+    monkeypatch.setattr(live, "scene_documents", lambda *a, **k: pytest.fail("cache read while off"))
+    monkeypatch.setattr(embed_space, "endpoint", lambda *a, **k: pytest.fail("space resolved while off"))
+    monkeypatch.setattr(embeddings, "AsyncEmbeddingsClient",
+                        lambda *a, **k: pytest.fail("embed client built while off"))
     assert assemble.compose_turn(cid, sid, history=evidence(item())) == baseline
     assert assemble.context_breakdown(cid, sid) == baseline[1]
 
@@ -351,3 +360,26 @@ def test_empty_summary_macro_does_not_render_history_header(cid):
     supplied = replace(item(summary="{{missing}}"), date="", excerpts=())
     _messages, detail = assemble.compose_turn(cid, current, history=evidence(supplied))
     assert all(section["id"] != "history_recall" for section in detail["sections"])
+
+
+def test_world_info_and_history_are_the_only_shedding_sections():
+    """9.3: the packer's shed loop is generic, so a third section growing a
+    `shed` hook would change what gives way first without anyone deciding it.
+    World info and Recalled history are the two that may (their order under
+    pressure is pinned by `test_frozen_draws_and_legacy_units_shed_separately`
+    and the lore-shedding suite)."""
+    import ast
+    root = Path(assemble.__file__).parent
+    found = set()
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Dict) and any(
+                        isinstance(k, ast.Constant) and k.value == "shed"
+                        and isinstance(v, ast.Dict) for k, v in zip(node.keys, node.values, strict=True)):
+                    found.add((path.stem, fn.name))
+    assert found == {("assemble", "_world_info_section"), ("history", "section")}, found
+    assert packer.DROP_ORDER[0] == packer.HISTORY_RECALL

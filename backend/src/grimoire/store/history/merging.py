@@ -94,7 +94,7 @@ def merge(
         ordered, cfg.depth, lambda c: held[c.scene.key] if c.scene.key in held else expand(c)
     )
     cap = min(max(ceiling, 0), a.ceiling, b.ceiling)
-    fitted = budget.fit(items, cap, tokens.count_tokens)
+    fitted = budget.fit(items, cap, tokens.count_tokens, depth=cfg.depth)
     cv = coverage.verdict(
         ordered,
         cfg.depth,

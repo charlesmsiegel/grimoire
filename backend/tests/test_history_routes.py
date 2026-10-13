@@ -71,6 +71,7 @@ def test_bridge_checks_calling_worker_lock_before_portal(cid):
         ev = history_recall.gather_sync(app, cid, "001--saltmarch", seed="", resolved=None,
                                         llm_client=None, embed_client=None)
     assert ev.coverage.semantic == "skipped:locked" and not ev.items
+    assert ev.coverage.verdict == "error"
 
 
 def test_bridge_closed_portal_degrades_to_error(cid):
@@ -107,12 +108,18 @@ def test_async_retrieval_refuses_invalid_turn_query(cid, kwargs):
                                            embed_client=None, deadline=time.monotonic()+4))
 
 
-def test_expired_file_phase_keeps_evidence_without_network(cid):
+def test_expired_file_phase_keeps_evidence_without_network(cid, monkeypatch):
     old = played(cid)
     absorbed(cid, old)
     sid = played(cid)
     ev = asyncio.run(store.history.retrieve(cid, sid, query.build(cid, sid), ceiling=1200,
                                             embed_client=None, deadline=time.monotonic()-1))
+    # No Embedding role: there was no semantic stage to skip.
+    assert ev.items and ev.coverage.semantic == "off"
+    monkeypatch.setattr(store.embed_space, "endpoint", lambda: {"space": "history-test"})
+    unsendable = SimpleNamespace(embed=lambda *a, **k: pytest.fail("sent past the deadline"))
+    ev = asyncio.run(store.history.retrieve(cid, sid, query.build(cid, sid), ceiling=1200,
+                                            embed_client=unsendable, deadline=time.monotonic()-1))
     assert ev.items and ev.coverage.semantic == "skipped:deadline"
 
 
@@ -275,14 +282,25 @@ def test_pending_retry_and_regenerate_replay_without_retrieval(client, monkeypat
     assert gathers == ([True] if stale_peek else [])
 
 
-@pytest.mark.parametrize("cancellation", [asyncio.CancelledError, PortalCancelledError])
-def test_bridge_propagates_cancellation(cid, cancellation):
+def test_bridge_propagates_cancellation(cid):
     def cancelled(*a, **k):
-        raise cancellation
+        raise asyncio.CancelledError
     app = SimpleNamespace(state=SimpleNamespace(run_portal=SimpleNamespace(call=cancelled)))
-    with pytest.raises(cancellation):
+    with pytest.raises(asyncio.CancelledError):
         history_recall.gather_sync(app, cid, "001--saltmarch", seed="", resolved=None,
                                    llm_client=None, embed_client=None)
+
+
+def test_bridge_degrades_a_portal_cancelled_at_shutdown(cid):
+    """Spec 10.1 (M7): a portal closing at shutdown cancels its pending
+    futures; the player's post is already appended, so that is an error
+    verdict, never an exception into the route."""
+    def cancelled(*a, **k):
+        raise PortalCancelledError
+    app = SimpleNamespace(state=SimpleNamespace(run_portal=SimpleNamespace(call=cancelled)))
+    ev = history_recall.gather_sync(app, cid, "001--saltmarch", seed="", resolved=None,
+                                    llm_client=None, embed_client=None)
+    assert ev.coverage.verdict == "error" and not ev.items
 
 
 def test_portal_failure_after_player_append_does_not_strand_turn(client, monkeypatch):

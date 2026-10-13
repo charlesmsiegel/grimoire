@@ -374,7 +374,10 @@ recency list in disguise; above the cap it ranks but does not admit (section
 **Pool.** Tier 1 keeps structural and lexical evidence independently. Its
 semantic pool is the top `POOL_MAX` candidates after unioning the structural
 and admitted lexical lists in admitted-only RRF order; a lexical hit outside
-that pool remains lexical evidence. `POOL_MAX` (64) bounds tier 1 semantic work
+that pool remains lexical evidence. A live set that already fits within
+`POOL_MAX` is the pool whole (admitted union first, then newest): tier 1 can
+afford every document, so a young campaign never widens to a tier 2 that would
+score the same documents (2026-10-13 clarification). `POOL_MAX` (64) bounds tier 1 semantic work
 to one `vectors.load` of 64 records: 64 file opens, and by
 `store/vectors.py`'s own measurement (about 97 ms per 500 vectors of
 dimension 1536, load plus score) roughly 12 ms on a desktop. Both constants

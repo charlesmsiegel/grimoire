@@ -4,10 +4,10 @@ import time
 
 import pytest
 
-from grimoire.store import campaigns, scenes, worlds
+from grimoire.store import campaigns, worlds
 from grimoire.store.history import budget, coverage, model, retrieval
 from grimoire.store.searchdocs import live
-from tests.history_fixtures import absorbed, actor, appear, played
+from tests.history_fixtures import absorbed, actor, played
 from tests.history_fixtures import cid as cid
 
 

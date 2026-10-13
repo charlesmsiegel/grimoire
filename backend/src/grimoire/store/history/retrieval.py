@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -23,6 +24,8 @@ from ..searchdocs import live
 from . import budget, coverage, expand, lexical, model, refs, semantic, settings, structural
 from . import merging as merge_mod
 from . import query as query_mod
+
+log = logging.getLogger(__name__)
 
 
 def validate(query: model.Query) -> None:
@@ -256,11 +259,12 @@ def _prepare_sources(cid, sid, query, ceiling, sources):
         qualified = {}
         for d in docs:
             original = d.doc.key
-            d = replace(d, doc=replace(d.doc, key="campaign:"+source+"/"+original,
+            tagged = replace(d, doc=replace(d.doc, key="campaign:"+source+"/"+original,
                 meta={**d.doc.meta, "_history_campaign": source,
                       "_history_document_key": original}))
-            all_docs.append(d)
-            qualified[model.SceneRef(d.sid, d.doc.meta.get("identity") or None).key] = _source_ref(d)
+            all_docs.append(tagged)
+            qualified[model.SceneRef(tagged.sid, tagged.doc.meta.get("identity") or None).key] = \
+                _source_ref(tagged)
         candidates.extend(replace(c, scene=qualified[c.scene.key], tier=3)
                           for c in prepared.ordered)
     if base is None:
@@ -318,7 +322,7 @@ def _finish(cid, prepared, ordered, cv, summary_omissions, held=None):
         prepared.depth,
         item,
     )
-    fitted = budget.fit(selected, prepared.cap, tokens.count_tokens)
+    fitted = budget.fit(selected, prepared.cap, tokens.count_tokens, depth=prepared.depth)
     query = prepared.query
     digest = hashlib.sha256(
         json.dumps(
@@ -367,6 +371,51 @@ def _semantic_candidates(prepared, result, pool):
     return merge_mod.order(list(candidates.values()))
 
 
+def _validate_scope(query: model.Query, origin: str, source_campaigns: tuple[str, ...]) -> None:
+    """09-C1's programming errors: tier 3 is never a turn's, and only tier 3
+    names sources -- explicitly."""
+    validate(query)
+    if query.tier_limit == 3:
+        if origin == "turn":
+            raise ValueError("tier 3 history is never available on a turn")
+        if not source_campaigns:
+            raise ValueError("tier 3 history requires explicit source_campaigns")
+    elif source_campaigns:
+        raise ValueError("source_campaigns requires non-turn tier 3 history")
+
+
+def _tier_one(prepared, query, space, embed_client, deadline):
+    """Tier 1's semantic pool, and the bounded tier-2 lookahead its one
+    request may warm. The admitted union is retained whole; only the pool is
+    cut, after RRF union, so weighted-name matches cannot open every vector.
+    A live set that fits the pool bound is the pool: tier 1 can already afford
+    every document, so there is nothing for tier 2 to widen into."""
+    by_key = {_source_ref(d).key: d for d in prepared.docs}
+    if len(prepared.docs) <= semantic.POOL_MAX:
+        admitted = [c.scene.key for c in prepared.ordered]
+        seen = set(admitted)
+        rest = sorted((k for k in by_key if k not in seen),
+                      key=lambda k: by_key[k].sid, reverse=True)
+        pool = tuple(by_key[k] for k in (*admitted, *rest))
+    else:
+        pool = tuple(by_key[c.scene.key] for c in prepared.ordered[:semantic.POOL_MAX])
+    pool_keys = frozenset(d.doc.key for d in pool)
+    before = coverage.verdict(prepared.ordered, prepared.depth, len(prepared.docs),
+                              semantic_complete=False, sources_complete=prepared.sources_complete)
+    lookahead: tuple[live.LiveDocument, ...] = ()
+    if (query.tier_limit >= 2 and before.verdict in {"empty", "thin"}
+            and space is not None and embed_client is not None
+            and not embed_space.outage(space["space"]) and time.monotonic() < deadline):
+        # Prepare widening's warm before the one request, but evaluate its
+        # signals only if tier 1 remains thin/empty. A sufficient
+        # lexical/structural union never pays for speculative vector reads.
+        # Total live documents stays WIDEN_LIMIT.
+        lookahead = tuple(sorted((d for d in prepared.docs if d.doc.key not in pool_keys),
+                                 key=lambda d: d.sid, reverse=True)
+                          [:semantic.WIDEN_LIMIT-len(pool)])
+    return pool, lookahead
+
+
 async def retrieve(
     cid: str,
     sid: str,
@@ -389,41 +438,33 @@ async def retrieve(
     are supplied by the app, never constructed here. Preview and turns share the
     same eligibility, selection, expansion and omission-before-depth rules.
     """
-    validate(query)
-    if query.tier_limit == 3:
-        if origin == "turn":
-            raise ValueError("tier 3 history is never available on a turn")
-        if not source_campaigns:
-            raise ValueError("tier 3 history requires explicit source_campaigns")
-    elif source_campaigns:
-        raise ValueError("source_campaigns requires non-turn tier 3 history")
+    _validate_scope(query, origin, source_campaigns)
     prepare = (partial(_prepare_sources, cid, sid, query, ceiling, source_campaigns)
                if query.tier_limit == 3 else partial(_prepare, cid, sid, query, ceiling))
     prepared = await anyio.to_thread.run_sync(prepare)
     if prepared is None:
         return model.Evidence(ceiling=max(ceiling, 0))
     space = await anyio.to_thread.run_sync(embed_space.endpoint)
-    by_key = {_source_ref(d).key: d
-              for d in prepared.docs}
-    # The admitted union is retained whole. Only the semantic evaluation pool
-    # is cut, after RRF union, so weighted-name matches cannot open every vector.
-    pool = tuple(by_key[c.scene.key] for c in prepared.ordered[:semantic.POOL_MAX])
+    if not prepared.docs:
+        # A first scene has no history to score: exhausted spends nothing,
+        # not even the query embedding.
+        cv = coverage.verdict((), prepared.depth, 0, sources_complete=prepared.sources_complete)
+        cv = replace(cv, semantic="skipped:exhausted" if space is not None else "off",
+                     tiers=(3,) if source_campaigns else (1,))
+        return await anyio.to_thread.run_sync(partial(
+            _finish, cid, prepared, prepared.ordered, cv, summary_omissions))
+    pool, lookahead = _tier_one(prepared, query, space, embed_client, deadline)
     pool_keys = frozenset(d.doc.key for d in pool)
-    before = coverage.verdict(prepared.ordered, prepared.depth, len(prepared.docs),
-                              semantic_complete=False, sources_complete=prepared.sources_complete)
-    lookahead = ()
-    if (query.tier_limit >= 2 and before.verdict in {"empty", "thin"}
-            and space is not None and embed_client is not None
-            and not embed_space.outage(space["space"]) and time.monotonic() < deadline):
-        lookahead = tuple(sorted((d for d in prepared.docs if d.doc.key not in pool_keys),
-                                 key=lambda d: d.sid, reverse=True)
-                          [:semantic.WIDEN_LIMIT-len(pool)])
-    # Prepare widening's warm before the one request, but evaluate its signals
-    # only if tier 1 remains thin/empty. A sufficient lexical/structural union
-    # never pays for speculative vector reads. Total live documents stays 1000.
-    result = await semantic.score(prepared.query.texts, (*pool, *lookahead), pool=pool, space=space,
-                                  embed_client=embed_client, deadline=deadline,
-                                  campaign=cid, scene=sid, post=query.turn_index, run_id=run_id)
+    try:
+        result = await semantic.score(prepared.query.texts, (*pool, *lookahead), pool=pool,
+                                      space=space, embed_client=embed_client, deadline=deadline,
+                                      campaign=cid, scene=sid, post=query.turn_index,
+                                      run_id=run_id)
+    except Exception:  # noqa: BLE001 -- an embed failure costs semantic only (11.3), never file evidence
+        # A provider failure is filed by its meter and never arrives here; this
+        # is the rest (a cache write, a refused argument). Ids only: no text.
+        log.warning("History semantic stage failed for campaign %s scene %s", cid, sid)
+        result = semantic.SemanticResult(status="failed:error")
     ordered = _semantic_candidates(prepared, result, pool_keys)
     cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
                           semantic_complete=result.status != "ok"
@@ -436,7 +477,11 @@ async def retrieve(
         remaining = remaining[:max(0, semantic.WIDEN_LIMIT-len(result.evaluated))]
         if remaining and time.monotonic() < deadline:
             tiers = (3,) if source_campaigns else (1, 2)
-            result = await semantic.widen(result, remaining, space=space, deadline=deadline)
+            try:
+                result = await semantic.widen(result, remaining, space=space, deadline=deadline)
+            except Exception:  # noqa: BLE001 -- tier 1's scores stand; widening is optional
+                log.warning("History widening failed for campaign %s scene %s", cid, sid)
+                result = replace(result, status="failed:error")
             ordered = _semantic_candidates(prepared, result, pool_keys)
             cv = coverage.verdict(ordered, prepared.depth, len(prepared.docs),
                                   semantic_complete=len(result.signals) >= len(prepared.docs),

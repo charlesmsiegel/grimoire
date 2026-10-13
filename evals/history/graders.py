@@ -19,5 +19,5 @@ def excerpt_recall(gold, items, packed):
 
 
 def consistent(output, fact):
-    return bool(re.search(r"(?<!\w)"+re.escape(fact)+r"(?!\w)", output, re.I)) and not bool(
-        re.search(r"\b(?:not|never|isn't|wasn't)\s+"+re.escape(fact)+r"\b", output, re.I))
+    return bool(re.search(r"(?<!\w)"+re.escape(fact)+r"(?!\w)", output, re.IGNORECASE)) and not bool(
+        re.search(r"\b(?:not|never|isn't|wasn't)\s+"+re.escape(fact)+r"\b", output, re.IGNORECASE))

@@ -10,32 +10,32 @@ isolation; every corpus, cache and ledger write stays in a temporary home.
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
 import contextlib
-from dataclasses import replace
-from functools import partial
 import json
 import os
-from pathlib import Path
 import tempfile
 import time
-from unittest.mock import patch
 import uuid
+from collections import Counter
+from functools import partial
+from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
+from evals import costs
+from evals import runner as reports
+from evals.cases import Case as ReportCase
+from evals.graders import Check
 from grimoire import embeddings, inference, wire
 from grimoire.llm import LLMClient
 from grimoire.routes import common, history_recall
-from grimoire.store import embed_space, paths, tokens, usage, vectors
+from grimoire.store import embed_space, tokens, usage, vectors
 from grimoire.store.context import assemble
-from grimoire.store.history import budget, model, retrieval, semantic
+from grimoire.store.history import model, retrieval, semantic
 from grimoire.store.inference import resolve
 from grimoire.store.searchdocs import live as live_docs
 
-from evals import costs, runner as reports
-from evals.cases import Case as ReportCase
-from evals.graders import Check
 from . import cases, graders, synth
 
 RECORDING = Path(__file__).resolve().parents[1]/"recordings"/"history"/"vectors-synthetic-history-1.json"
@@ -136,10 +136,19 @@ async def _arm(case, planted, arm, *, space, live, targets, seen, run_id, stats)
                     targets["history-rerank"] if task == "history-rerank" else original(task, *a, **kw)))
                 callback = partial(history_recall._rerank, planted.cid, planted.sid,
                                    client=llm_client, deadline=deadline, run_id=run_id)
-            evidence = model.Evidence(ceiling=1200) if arm == "context-only" else await retrieval.retrieve(
-                planted.cid, planted.sid, q, ceiling=1200,
-                embed_client=client if arm in {"semantic", "hybrid", "hybrid+rerank"} else None,
-                deadline=deadline, rerank=callback, run_id=run_id)
+            def recall(cid, sid):
+                return retrieval.retrieve(
+                    cid, sid, q, ceiling=1200,
+                    embed_client=client if arm in {"semantic", "hybrid", "hybrid+rerank"} else None,
+                    deadline=deadline, rerank=callback, run_id=run_id)
+            evidence = model.Evidence(ceiling=1200) if arm == "context-only" else await recall(
+                planted.cid, planted.sid)
+            if planted.first is not None and arm != "context-only":
+                requests = len(seen)
+                first = await recall(*planted.first)
+                stats["first_scene"] = (first.coverage.verdict == "exhausted"
+                                        and first.coverage.tiers == (1,)
+                                        and not first.items and len(seen) == requests)
         messages, packed, section, row = await asyncio.to_thread(_packed, planted, evidence)
         output = ""
         if live:
@@ -169,8 +178,12 @@ def _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, ro
         hard = hard and all(not i.location for i in evidence.items)
         hard = hard and all("characters:mara" not in r.refs for c in evidence.candidates
                             for s in c.rounds if s.structural for r in s.structural.relations)
+        # The excluded name is not a lexical term either, weighted or plain (4).
+        hard = hard and all("mara" not in s.lexical.matched for c in evidence.candidates
+                            for s in c.rounds if s.lexical)
     if case.shape == 9 and arm != "context-only":
         hard = hard and evidence.coverage.verdict == "exhausted" and evidence.coverage.tiers == (1,)
+        hard = hard and stats.get("first_scene", False)
     if case.shape == 10 and arm != "context-only":
         hard = hard and len({c.scene.key for c in evidence.candidates}) == 2
     added = tokens.count_tokens(section) if section else 0
@@ -210,7 +223,7 @@ def run_all(*, long=False, live=False, targets=None, space=None, rates=None, run
                     evidence, packed, section, row, output = asyncio.run(_arm(
                         case, planted, arm, space=space, live=live, targets=targets,
                         seen=seen, run_id=run_id, stats=stats))
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed; the matrix still reports
                     error = type(exc).__name__
                     evidence, packed, section, row, output = model.Evidence(ceiling=1200), "", "", {}, ""
                 wall = (time.monotonic()-started)*1000

@@ -44,10 +44,10 @@ sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
 from evals import cases as case_mod  # noqa: E402
 from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
-from evals.history import runner as history_runner  # noqa: E402
 from evals.embed import corpus as embed_corpus  # noqa: E402
 from evals.embed import harness as embed_harness  # noqa: E402
 from evals.embed import metrics as embed_metrics  # noqa: E402
+from evals.history import runner as history_runner  # noqa: E402
 from grimoire import wire  # noqa: E402
 from grimoire.llm_errors import LLMError  # noqa: E402
 from grimoire.store import paths, usage  # noqa: E402

@@ -1076,8 +1076,9 @@ would answer neither question.
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
   runs, so the Models page's decide note is the server's sentence and the
-  frontend keeps no capability rule of its own. The five decide routes (`speaker`,
-  `scene_break`, `voice_drift`, `continuity` and `turn_plan`) use the Decision role, which
+  frontend keeps no capability rule of its own. The six decide routes (`speaker`,
+  `scene_break`, `voice_drift`, `continuity`, `turn_plan` and `history_check`) use the
+  Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which
   a Fast override used to reach: a campaign that wants that sets its own

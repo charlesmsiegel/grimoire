@@ -884,7 +884,9 @@ export default function ConfigView() {
               Recall bounded summaries and excerpts from earlier scenes. Set recalled scenes to
               <code>0</code> to turn it off. Embeddings are optional: structural relationships
               and keyword matches also find scenes. With an Embedding role configured, semantic
-              recall sends recent scene text to its provider and may cost money.
+              recall sends recent scene text to its provider and may cost money. An endpoint
+              that reports no price (a local or OpenAI-compatible server) makes the Costs
+              totals read incomplete until you set per-token rates for its model.
             </p>
             <p className="config-copy">
               Reranking adds a decision call and may cost money. The live inspector previews

@@ -85,9 +85,8 @@ def _publish(docs, score_docs, missing, returned, queries, held, space, campaign
     for doc in warmed_docs:
         source = doc.doc.meta.get("_history_campaign", campaign)
         original = doc.doc.meta.get("_history_document_key")
-        if original:
-            doc = replace(doc, doc=replace(doc.doc, key=original))
-        groups.setdefault(source, []).append(doc)
+        unqualified = replace(doc, doc=replace(doc.doc, key=original)) if original else doc
+        groups.setdefault(source, []).append(unqualified)
     for source, source_docs in groups.items():
         if stopped.is_set():
             break
@@ -146,10 +145,12 @@ async def score(texts, docs, *, space, embed_client, deadline, campaign, scene,
     deadline. A phase timeout cancels its call; external cancellation propagates.
     Counts and attribution are filed solely by the production embed meter.
     """
-    if time.monotonic() >= deadline:
-        return SemanticResult(status="skipped:deadline")
+    # Off is said before any deadline: with no Embedding role there was never
+    # a semantic stage for the clock to skip (fallback table, 11.3).
     if space is None or embed_client is None or not texts or not any(texts):
         return SemanticResult()
+    if time.monotonic() >= deadline:
+        return SemanticResult(status="skipped:deadline")
     if embed_space.outage(space["space"]):
         return SemanticResult(status="backoff")
     score_docs = docs if pool is None else pool

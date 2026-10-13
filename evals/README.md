@@ -809,14 +809,18 @@ character names must never enter this repo, not even as examples.
 
 Historical retrieval has its own isolated matrix:
 
-```powershell
-$env:PYTHONPATH="backend/src;."
+Set `PYTHONPATH=backend/src:.` on macOS/Linux, or `$env:PYTHONPATH="backend/src;."`
+in PowerShell on Windows, then run the pair for your platform:
+
+```sh
+backend/.venv/bin/python evals/run.py --history
 backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history
+backend/.venv/bin/python evals/run.py --history --long --out evals/out/history-long.json
 backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history --long --out evals/out/history-long.json
+backend/.venv/bin/python evals/run.py --history --live --out evals/out/history-live.json
 backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history --live --out evals/out/history-live.json
 ```
 
-On macOS/Linux use `backend/.venv/bin/python` and `PYTHONPATH=backend/src:.`.
 In a worktree use the main checkout's interpreter while keeping this checkout's
 `backend/src` first on `PYTHONPATH`.
 

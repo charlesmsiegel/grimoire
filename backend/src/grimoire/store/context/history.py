@@ -13,6 +13,7 @@ composition can only refit supplied choices, never retrieve a replacement.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 
@@ -21,6 +22,7 @@ from .. import config
 from ..history import budget, model, query, retrieval, settings
 from . import archive, layout, story
 
+log = logging.getLogger(__name__)
 _SLOT = re.compile(r"\x00(\d+)\x00")
 _SPAN = re.compile(r"\x03([eps]\d+(?:_\d+)?)([se])\x03")
 
@@ -41,10 +43,14 @@ def preview(cid: str, sid: str, resolved=None) -> model.Evidence | None:
     cfg = config.read_config()
     if settings.read(cfg) is None or "history_recall" not in layout.enabled_ids(("history_recall",)):
         return None
-    prepared = query.prepare(cid, sid)
-    omissions = summary_omissions(cid, sid, prepared.archive_scan_text)
-    return retrieval.retrieve_preview(cid, sid, prepared.query, budget.ceiling(cfg, resolved),
-                                      summary_omissions=omissions)
+    try:
+        prepared = query.prepare(cid, sid)
+        omissions = summary_omissions(cid, sid, prepared.archive_scan_text)
+        return retrieval.retrieve_preview(cid, sid, prepared.query, budget.ceiling(cfg, resolved),
+                                          summary_omissions=omissions)
+    except Exception:  # noqa: BLE001 -- a garbled history file costs the row, never the inspector
+        log.warning("History preview failed for campaign %s scene %s", cid, sid)
+        return model.Evidence(coverage=model.Coverage("error", semantic="skipped:preview"))
 
 
 def _frame(blocks: dict[str, str], order: list[str], expand):
