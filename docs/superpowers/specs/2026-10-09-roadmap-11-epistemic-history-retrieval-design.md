@@ -884,6 +884,12 @@ by".
   transcript hash. A swipe, a message edit, a retcon or a hidden-post toggle
   makes it stop matching, which fails closed. An `unaware` entry keeps
   matching through such changes, since withholding is the safe direction.
+  **Ratified in the 11-S4 review:** the stored fingerprint stays on the raw
+  text, never on its prompt-phase regex view. A rule's `min_depth` /
+  `max_depth` makes a post's prompt view change as later posts land, so a
+  view digest would turn every grant stale during ordinary play. The view is
+  checked only at save (`expect[].shown`, `expect_shown`); a prompt rule
+  edited after a grant changes what that grant exposes without re-asking.
   The ledger lists a stale entry as "the text changed since; confirm again",
   with a one-click re-stamp that shows the current text.
 - `source` is `manual` (typed by the user) or `accepted` (a captured
@@ -1022,6 +1028,14 @@ form.
 - **Undo after a prune (11-S1):** `forget_audience` also retires every
   journalled Undo that would restore an entry about the deleted audience,
   so a same-named actor that later takes the id is not granted it.
+- **Accepted residual (11-S4 review): a group's stale member ref.** An actor
+  delete does not remove the deleted `characters:<id>` from a campaign-owned
+  group's `leader` or `members` (spec 07's membership, not this ledger). A
+  later actor created under the same id is therefore affiliated with that
+  group through `membership.affiliated` and matches the group's grants "as
+  of now" (7.3). The repo owner chose not to fix this here; a fix belongs in
+  07's actor-delete path, scrubbing or fencing the ref the way the journal's
+  membership offers are fenced.
 - **Campaign fork**: the file is campaign-local and travels with the fork
   copy, which keeps scene identities (`store/fork.py`).
 - **The frozen campaign** has no `knowledge.json`. An absent file is no
