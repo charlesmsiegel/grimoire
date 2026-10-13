@@ -415,3 +415,16 @@ def test_an_identity_less_scene_rewritten_during_the_read_is_refused(cid, monkey
     monkeypatch.setattr(expand.scenes_identity, "scene_identity", lambda *_a, **_k: None)
     monkeypatch.setattr(expand.scenes_read, "read_scene", read_scene)
     assert expand.expand(cid, sid, phase="prompt", terms=["item"]) is None
+
+
+def test_a_hand_edited_post_id_with_a_lone_surrogate_leaves_an_encodable_key(cid):
+    messages = _plain(4)
+    messages[1] = _reply("Mara counts the tide tax.", 1)
+    sid = _scene(cid, messages)
+    path = scenes.paths._scene_path(cid, sid)
+    text = path.read_text(encoding="utf-8")
+    assert "resp01" in text
+    path.write_text(text.replace("resp01", "resp\\ud800"), encoding="utf-8")
+    got = expand.expand(cid, sid, phase="prompt", terms=["tide tax"])
+    assert got is not None and got.excerpts
+    json.dumps(dataclasses.asdict(got), ensure_ascii=False).encode("utf-8")

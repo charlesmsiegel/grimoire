@@ -141,10 +141,14 @@ def _walk(cid: str) -> tuple[list[dict], list[str]]:
         except (OSError, scenes_paths.SceneNotFound, ValueError):
             skipped.append(p.stem)
             continue
-        rows.append({"id": p.stem, "title": head.meta.get("title", p.stem),
-                     "done": head.absorbed,
-                     **{k: str(head.meta[k]) for k in ("branch_group",) if head.meta.get(k)},
-                     "_identity": head.identity})
+        # The row `list_scenes` would have built (`scenes.read._scene_row`):
+        # the raw frontmatter values, so damage elsewhere in the campaign
+        # cannot change how this scene's branch group resolves.
+        meta = head.meta
+        rows.append({"id": p.stem, "title": meta.get("title", p.stem),
+                     "done": str(meta.get("done", "")).lower() == "true",
+                     **{k: str(meta[k]) for k in ("branch_group", "branch_of") if meta.get(k)},
+                     "_identity": str(meta.get("identity", "") or "")})
     scenes_read.resolve_groups(rows)
     return rows, skipped
 

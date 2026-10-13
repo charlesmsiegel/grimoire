@@ -844,6 +844,7 @@ def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
                                                   "beats": "Mara hides it."}}),
     ("plot.json", lambda sid: {"missing-ledger": {"title": "Ledger", "status": "open",
                                                   "beats": [{"scene": sid, "text": {}}]}}),
+    ("appearances.json", lambda sid: {"characters/mara": {"role": {}, "scenes": [sid]}}),
 ])
 def test_a_nested_part_of_the_wrong_shape_is_degraded(cid, name, body):
     sid = _played(cid)
@@ -922,3 +923,38 @@ def test_a_locked_card_that_cannot_be_reached_is_degraded(cid, monkeypatch):
     monkeypatch.setattr(slices.characters, "require_version", require_version)
     slices._POOL.clear()
     assert any(aid in n for n in doc(cid, sid).meta["degraded"])
+
+
+def test_a_campaign_location_that_cannot_be_reached_is_not_replaced_by_the_worlds(cid,
+                                                                                monkeypatch):
+    sid = _played(cid)
+    eid = _location(cid, sid, "Saltmarch harbour")
+    own = campaigns.campaign_root(cid) / "locations" / f"{eid}.md"
+    real_stat, real_exists = slices.os.stat, slices.Path.exists
+
+    def stat(path, *args, **kwargs):
+        if str(path) == str(own):
+            raise PermissionError("denied")
+        return real_stat(path, *args, **kwargs)
+    monkeypatch.setattr(slices.os, "stat", stat)
+    monkeypatch.setattr(slices.Path, "exists",
+                        lambda self: False if str(self) == str(own) else real_exists(self))
+    monkeypatch.setattr(slices.overlay, "read_entity",
+                        lambda *_a, **_k: {"meta": {"name": "The world's harbour"}})
+    slices._POOL.clear()
+    d = doc(cid, sid)
+    assert f"locations/{eid}" in d.meta["degraded"]
+    assert "The world's harbour" not in d.text
+
+
+def test_group_files_stay_inputs_when_the_snapshot_fails(cid, monkeypatch):
+    sid = _played(cid)
+    gid = _group(cid, "Salt Circle")
+
+    def broken(*_a, **_k):
+        raise ValueError("a group file will not parse")
+    monkeypatch.setattr(slices.membership, "campaign_snapshot", broken)
+    slices._POOL.clear()
+    sl = slices.scene_slices(slices.CampaignInputs.load(cid), slices.read_head(cid, sid))
+    assert "groups" in sl.degraded
+    assert campaigns.campaign_root(cid) / "groups" / f"{gid}.md" in sl.paths

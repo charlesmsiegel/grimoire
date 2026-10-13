@@ -211,7 +211,8 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
         _strings(r.get("keywords")) and _strings(r.get("cast"))
         and all(_opt(r.get(k), str) for k in ("one_line", "summary", "date", "location")))),
     "appearances.json": lambda d: _each(d, lambda r: (
-        _opt(r.get("scenes"), list) and _opt(r.get("presence"), dict))),
+        _strings(r.get("scenes")) and _opt(r.get("presence"), dict)
+        and all(_opt(r.get(k), str) for k in ("role", "version")))),
     "facts.json": lambda d: _each(d, lambda r: _opt(r.get("text"), str)),
     "continuity.json": lambda d: not isinstance(d, dict) or (
         _opt(d.get("links"), dict) and _each(d.get("links") or {}, lambda _r: True)),
@@ -352,11 +353,18 @@ class CampaignInputs:
         all, and `groups` is named in `degraded`."""
         try:
             capture = overlay.group_capture(cid)
-            snapshot = membership.campaign_snapshot(cid, capture=capture)
         except Exception:  # noqa: BLE001 -- groups are metadata; the document still renders
             self.damage.add("groups")
             return None, {}
-        return snapshot.index, {f"groups:{src.id}": src.path for src in capture.sources}
+        sources = {f"groups:{src.id}": src.path for src in capture.sources}
+        try:
+            snapshot = membership.campaign_snapshot(cid, capture=capture)
+        except Exception:  # noqa: BLE001 -- as above
+            # The capture listed the files even though one would not parse:
+            # they stay inputs, so repairing that file finds the documents.
+            self.damage.add("groups")
+            return None, sources
+        return snapshot.index, sources
 
     # --- names --------------------------------------------------------------
 
@@ -446,6 +454,10 @@ class CampaignInputs:
                 return None if gone or not any(_present(p) for p in layers) else ("", -1)
             name = meta.get("name") if isinstance(meta, dict) else None
             source = 0 if layers[0].exists() else 1
+            if source == 1 and _inaccessible(layers[0]):
+                # The world's copy answered only because the campaign's own
+                # could not be reached: that one is the authority, unread.
+                return ("", -1)
             return (name, source) if isinstance(name, str) and name else None
         sig = statcache.signature(*layers, absent_ok=True)
         got = statcache.memo("searchdocs.location", None if sig is None else (*sig, ("gone", gone)),
@@ -689,12 +701,13 @@ def _groups(inputs: CampaignInputs, cast: list[dict], used: list[Path]) -> list[
     rendered, so a membership edit moves the key and `meta` and embeds
     nothing. A renderer that puts a group name into a prompt applies
     `membership.prompt_visible` and `SCENE_GROUP_LIMIT` itself."""
-    if inputs.groups_index is None:
-        return []
     # Every group file the snapshot read is an input, not only the groups
     # that list a cast member today: an edit that adds one to a group is a
-    # write to a file this document never named otherwise.
+    # write to a file this document never named otherwise. So is every file a
+    # snapshot that failed had captured.
     used += inputs.group_paths.values()
+    if inputs.groups_index is None:
+        return []
     if not cast:
         return []
     rows = membership.scene_groups(inputs.groups_index, [a["join"] for a in cast],

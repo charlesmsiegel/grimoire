@@ -242,10 +242,11 @@ def _cut(text: str, budget: int, *, keep: str, terms: Sequence[str] = ()) -> tup
 # --- the transcript as eligible posts -------------------------------------------
 
 def _key(m: dict) -> str:
+    """The post's stable key; a hand-edited id's lone surrogate replaced."""
     if m.get("response_id"):
-        return f"r-{m['response_id']}"
+        return _encodable(f"r-{m['response_id']}")
     if m.get("post_id"):
-        return f"p-{m['post_id']}"
+        return _encodable(f"p-{m['post_id']}")
     return ""
 
 

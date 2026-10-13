@@ -12,6 +12,7 @@ bounded; a campaign delete purges the documents. Placeholder names only.
 import dataclasses
 import importlib
 import json
+import re
 import shutil
 
 import pytest
@@ -438,3 +439,24 @@ def test_input_paths_are_kept_per_scene_not_only_per_key(cid):
     docs = {d.sid: d for d in live.scene_documents(cid).documents}
     impostor = live.LiveDocument(sid=a, closed_by=None, doc=docs[b].doc)
     assert live.input_paths(cid, impostor) != live.input_paths(cid, docs[b])
+
+
+def test_the_tolerant_walk_resolves_branches_as_list_scenes_does(cid, monkeypatch):
+    """A hand-edited identity that is not a token still groups a branch: the
+    fallback walk builds its rows from the raw frontmatter, as `list_scenes`
+    does, so damage elsewhere cannot reopen a closed branch."""
+    source = scenes.create_scene(cid, "Saltmarch")
+    branch = scenes.create_scene(cid, "Saltmarch, again")
+    for sid, edit in ((source, lambda t: re.sub(r"(?m)^identity:.*$", "identity: hand-edited", t)),
+                      (branch, lambda t: t.replace("\n---", "\nbranch_group: hand-edited\n---", 1))):
+        p = scenes.paths._scene_path(cid, sid)
+        p.write_text(edit(p.read_text(encoding="utf-8")), encoding="utf-8")
+    scenes.mark_absorbed(cid, source, "x", "y")
+    expected = {r["id"]: r.get("closed_by") for r in scenes.list_scenes(cid)}
+    assert expected[branch]
+
+    def unreadable(_cid):
+        raise OSError("one head will not read")
+    monkeypatch.setattr(live.scenes_read, "list_scenes", unreadable)
+    got = {d.sid: d.closed_by for d in live.scene_documents(cid).documents}
+    assert got == expected
