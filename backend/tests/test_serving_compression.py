@@ -75,6 +75,9 @@ def _asgi(app, path, *, client, headers=(), method="GET"):
         await app(scope, receive, send)
 
     asyncio.run(run())
+    # The timeout only keeps a stalled response from hanging; one that never
+    # sent its final body is truncated, and that is a failure.
+    assert finished is not None and finished.is_set(), "the response never finished"
     start = next(m for m in sent if m["type"] == "http.response.start")
     body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
     return start["status"], Headers(raw=start["headers"]), body
