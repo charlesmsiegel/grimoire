@@ -129,6 +129,9 @@ class _Damage:
         return value.encode("utf-8", "replace").decode("utf-8")
 
     def add(self, name: str) -> None:
+        # The name is often the damaged value itself: escaped, so neither the
+        # log line nor `meta.degraded` carries a string that cannot be encoded.
+        name = name.encode("utf-8", "backslashreplace").decode("utf-8")
         self.names.add(name)
         if name not in _logged:
             _logged.add(name)

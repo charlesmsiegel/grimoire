@@ -653,7 +653,7 @@ def test_an_unreadable_card_stays_an_input(cid):
     assert card in sl.paths and f"characters/{aid}" in sl.degraded
 
 
-def test_a_lone_surrogate_in_an_actor_ref_degrades_instead_of_raising(cid):
+def test_a_lone_surrogate_in_an_actor_ref_degrades_instead_of_raising(cid, caplog):
     sid = _played(cid)
     p = campaigns.campaign_root(cid) / "appearances.json"
     p.write_text('{"characters/x\\ud800": {"version": "default", "role": "npc", "scenes": ["'
@@ -661,3 +661,9 @@ def test_a_lone_surrogate_in_an_actor_ref_degrades_instead_of_raising(cid):
     d = doc(cid, sid)
     assert d.meta["degraded"] and len(d.meta["cast"]) == 1
     d.text.encode("utf-8")
+    # Nothing the document reports, nor the warning it logs, carries the
+    # surrogate: a log record that cannot be encoded crashes a test runner's
+    # report and a JSON log line alike.
+    json.dumps(d.meta, ensure_ascii=False).encode("utf-8")
+    for record in caplog.records:
+        record.getMessage().encode("utf-8")
