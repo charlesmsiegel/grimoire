@@ -835,3 +835,45 @@ def test_rule_files_stay_inputs_when_the_world_reference_is_bad(cid):
     got = regex.layers.files(cid)
     assert got is not None
     assert regex.layers.path("global") in got and regex.layers.path("campaign", cid) in got
+
+
+@pytest.mark.parametrize(("name", "body"), [
+    ("chronicle.json", lambda sid: {sid: {"summary": "Mara.", "keywords": {}}}),
+    ("appearances.json", lambda sid: {"characters/mara": [sid]}),
+    ("plot.json", lambda sid: {"missing-ledger": {"title": "Ledger", "status": "open",
+                                                  "beats": "Mara hides it."}}),
+])
+def test_a_nested_part_of_the_wrong_shape_is_degraded(cid, name, body):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    (campaigns.campaign_root(cid) / name).write_text(json.dumps(body(sid)), encoding="utf-8")
+    assert name in doc(cid, sid).meta["degraded"]
+
+
+def _many_facts(cid, sid, n, *, last="Fact the last."):
+    records = {f"f{i:03d}": {"text": f"Fact {i}.", "scene": sid} for i in range(n - 1)}
+    records[f"f{n - 1:03d}"] = {"text": last, "scene": sid}
+    (campaigns.campaign_root(cid) / "facts.json").write_text(json.dumps(records),
+                                                             encoding="utf-8")
+
+
+def test_a_fact_past_what_the_line_shows_does_not_move_the_key(cid):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    _many_facts(cid, sid, 6)
+    before = doc(cid, sid)
+    _many_facts(cid, sid, 6, last="Fact the last, reworded.")
+    after = doc(cid, sid)
+    assert (after.text, after.meta, after.key) == (before.text, before.meta, before.key)
+
+
+def test_entries_past_the_metadata_cap_move_nothing_but_the_cut_does(cid):
+    sid = _played(cid)
+    _absorb(cid, sid)
+    keys = {}
+    for n in (64, 65, 66):
+        _many_facts(cid, sid, n)
+        keys[n] = doc(cid, sid)
+    assert keys[65].meta["truncated"] == ["facts.recorded"]
+    assert keys[64].key != keys[65].key           # the cut itself shows
+    assert keys[65].key == keys[66].key           # what lies past it does not

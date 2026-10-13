@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from .. import compiled, vectors
+from . import live
 from . import scene as scene_mod
 
 PROJECTION = scene_mod.KIND
@@ -47,7 +48,7 @@ def record_embedded(cid: str, docs: Sequence, *, space: dict) -> None:
         held = vectors.load(sid_space, list(dict.fromkeys(d.doc.text for d in docs)))
         kind = vector_kind(space)
         rows = [(path, {"campaign": cid, "identity": d.doc.meta.get("identity", "")})
-                for d in docs if d.doc.text in held for path in d.paths]
+                for d in docs if d.doc.text in held for path in live.input_paths(cid, d)]
         # 03 stages a bounded number of rows per request; past it a row is
         # dropped silently, so the rows go in batches that fit.
         for start in range(0, len(rows), compiled.MAX_STAGED_ROWS):

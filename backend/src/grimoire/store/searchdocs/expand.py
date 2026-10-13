@@ -426,11 +426,15 @@ def _current_sid(cid: str, sid: str, identity: str | None) -> str | None:
 
 def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str] | None:
     """(current sid, scene, player label, identity after the read), or None for
-    a scene that is gone, no longer carries `identity`, or will not read."""
+    a scene that is gone, no longer carries `identity`, or will not read. The
+    identity is taken before the read too, and the two must agree whether or
+    not the caller named one: a sid is reusable, and a delete and re-create
+    between them would stamp one scene's transcript with another's identity."""
     try:
         current = _current_sid(cid, sid, identity)
         if current is None:
             return None
+        before = scenes_identity.scene_identity(cid, current)
         scene = scenes_read.read_scene(cid, current)
         player_label = appearances_cast.player_label(cid, current)
         after = scenes_identity.scene_identity(cid, current)
@@ -440,7 +444,7 @@ def _read(cid: str, sid: str, identity: str | None) -> tuple[str, dict, str, str
         # (JSONDecodeError) is a ValueError; a ledger of the wrong shape fails
         # one attribute or key away. Each is "could not read", which is None.
         return None
-    if identity is not None and after != identity:
+    if after != before or (identity is not None and after != identity):
         return None
     return current, scene, player_label, after or ""
 

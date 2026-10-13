@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,6 +77,14 @@ CAPS = {
 
 #: What `scene.py` renders after a player's name; its bytes count in the cap.
 PLAYER_SUFFIX = " (player)"
+
+#: How many entries of a list `scene.py` shows: in the text (the line's item
+#: count) and in the metadata (`META_REFS`, past which a list is marked
+#: `truncated`). A slice keeps exactly that much, so an entry no part of the
+#: document can show does not move its digest. `scene.LINES` reads these.
+ITEMS = {"threads": 5, "commitments": 3, "facts.recorded": 4, "facts.retired": 2,
+         "relationships": 3}
+META_REFS = 64
 
 _TOKEN = re.compile(r"\A[0-9a-f]{32}\Z")
 #: RecursionError: valid JSON nested past the parser's depth (as `continuity`).
@@ -169,9 +178,48 @@ def digest(value: object) -> str:
 parse_count: dict[str, int] = {}
 
 
+def _opt(value: object, kind: type) -> bool:
+    return value is None or isinstance(value, kind)
+
+
+def _strings(value: object) -> bool:
+    return value is None or (isinstance(value, list) and all(isinstance(x, str) for x in value))
+
+
+def _each(ledger: object, record: Callable[[dict], bool]) -> bool:
+    return all(isinstance(r, dict) and record(r) for r in ledger.values()) \
+        if isinstance(ledger, dict) else True
+
+
+#: Each ledger's nested shape, checked once per parse: a record or a section
+#: of the wrong shape is skipped where it is read (the rest still renders),
+#: and its ledger is named in `degraded` -- never silently read as empty.
+_SHAPES: dict[str, Callable[[object], bool]] = {
+    "chronicle.json": lambda d: _each(d, lambda r: (
+        _strings(r.get("keywords")) and _strings(r.get("cast"))
+        and all(_opt(r.get(k), str) for k in ("one_line", "summary", "date", "location")))),
+    "appearances.json": lambda d: _each(d, lambda r: (
+        _opt(r.get("scenes"), list) and _opt(r.get("presence"), dict))),
+    "facts.json": lambda d: _each(d, lambda r: _opt(r.get("text"), str)),
+    "continuity.json": lambda d: not isinstance(d, dict) or (
+        _opt(d.get("links"), dict) and _each(d.get("links") or {}, lambda _r: True)),
+    "relationship_history.json": lambda d: not isinstance(d, dict) or (
+        _opt(d.get("entries"), list)
+        and all(isinstance(e, dict) for e in d.get("entries") or ())),
+}
+
+
+def _record_shape(ledger: object) -> bool:
+    """A thread or commitment ledger: records, each with a list of beats."""
+    return _each(ledger, lambda r: _opt(r.get("beats"), list)
+                 and all(isinstance(b, dict) for b in r.get("beats") or ()))
+
+
 def _parse_json(name: str, path: Path, shape: type) -> tuple[object, bool]:
     """(value, degraded). Absent is the empty value and not degraded; a parse
-    failure or the wrong top-level shape is the empty value and degraded."""
+    failure or the wrong top-level shape is the empty value and degraded; a
+    nested part of the wrong shape (`_SHAPES`) keeps the value and is
+    degraded."""
     def compute() -> tuple[object, bool]:
         parse_count[name] = parse_count.get(name, 0) + 1
         try:
@@ -184,7 +232,9 @@ def _parse_json(name: str, path: Path, shape: type) -> tuple[object, bool]:
             value = json.loads(raw)
         except _JSON_ERRORS:
             return shape(), True
-        return (value, False) if isinstance(value, shape) else (shape(), True)
+        if not isinstance(value, shape):
+            return shape(), True
+        return value, not _SHAPES.get(name, lambda _v: True)(value)
     return statcache.memo(f"searchdocs.parse:{name}", statcache.signature(path, absent_ok=True),
                           compute, pool=_POOL, max_entries=POOL_ENTRIES)
 
@@ -198,14 +248,20 @@ def _records(cid: str) -> tuple[dict, dict, set[str]]:
         parse_count["records"] = parse_count.get("records", 0) + 1
         out: list[dict] = []
         bad: set[str] = set()
-        for kind, name in (("thread", "plot.json"), ("commitment", "commitments.json")):
+        for kind, name, ledger in (("thread", "plot.json", plot),
+                                   ("commitment", "commitments.json", commitments)):
             try:
                 got = effective.records(cid, kind)
+                # The effective view normalizes a malformed record away; the
+                # file as written is what says whether one was.
+                malformed = not _record_shape(ledger.read(cid))
             except Exception:  # noqa: BLE001 -- one garbled ledger empties its slice only
-                got = None
+                got, malformed = None, True
             if not isinstance(got, dict):
                 bad.add(name)
                 got = {}
+            elif malformed:
+                bad.add(name)
             out.append(got)
         return out[0], out[1], bad
     return statcache.memo("searchdocs.records", statcache.signature(*files, absent_ok=True),
@@ -262,16 +318,12 @@ class CampaignInputs:
         if bad:
             self.damage.add("relationship_history.json")
         entries = rels.get("entries") if isinstance(rels, dict) else None
-        if entries is not None and not isinstance(entries, list):
-            self.damage.add("relationship_history.json")   # a section of the wrong shape
         self.relationships: list[dict] = [e for e in entries if isinstance(e, dict)] \
             if isinstance(entries, list) else []
         self.chronicle: dict = loaded["chronicle"]  # type: ignore[assignment]
         self.appearances: dict = loaded["appearances"]  # type: ignore[assignment]
         self.facts: dict = loaded["facts"]  # type: ignore[assignment]
         links = loaded["continuity"].get("links")  # type: ignore[attr-defined]
-        if links is not None and not isinstance(links, dict):
-            self.damage.add("continuity.json")    # a section of the wrong shape
         self.links: dict = links if isinstance(links, dict) else {}
         self.threads, self.commitments, bad_records = _records(cid)
         for name in sorted(bad_records):
@@ -552,9 +604,6 @@ def _cast(inputs: CampaignInputs, head: Head, chron: dict | None,
         if not isinstance(token, str) or not isinstance(rec, dict):
             continue
         raw_scenes, raw_presence = rec.get("scenes"), rec.get("presence")
-        if (raw_scenes is not None and not isinstance(raw_scenes, list)) \
-                or (raw_presence is not None and not isinstance(raw_presence, dict)):
-            damage.add("appearances.json")     # a record's section of the wrong shape
         scenes = raw_scenes if isinstance(raw_scenes, list) else []
         presence = raw_presence if isinstance(raw_presence, dict) else {}
         listed = head.sid in scenes
@@ -607,6 +656,52 @@ def _groups(inputs: CampaignInputs, cast: list[dict], used: list[Path]) -> list[
     return [{"group": row.group, "name": clip(" ".join(row.name.split()), CAPS["ref"]),
              "secrecy": row.secrecy, "present": list(row.present),
              "leader_present": bool(row.leader_present)} for row in rows]
+
+
+def _capped(rows: list, marker: object) -> list:
+    """The first `META_REFS` entries, and `marker` after them when there were
+    more: the metadata keeps as many and says it was cut, and no entry past
+    them can move the digest."""
+    return [*rows[:META_REFS], marker] if len(rows) > META_REFS else list(rows)
+
+
+def _shown(rows: list[dict], visible: int, field: str, marker: dict) -> list[dict]:
+    """`_capped`, with `field` (the rendered text) blanked past the `visible`
+    entries the line shows: their refs reach the metadata, their text does
+    not reach the document."""
+    return _capped([r if i < visible else {**r, field: ""} for i, r in enumerate(rows)],
+                   marker)
+
+
+def _visible(values: dict) -> dict:
+    """`values` cut to what the document can show (`ITEMS`, `META_REFS`), so
+    each slice's digest moves only when the text or the metadata could. A
+    thread's status is kept for the refs the metadata keeps. The cast, the
+    places and the keywords are kept whole: a scene's own short lists, and
+    the groups are derived over the full cast by design."""
+    head = values["head"]
+    moments = head["moments"]
+    threads = _shown(values["threads"], ITEMS["threads"], "item", {"ref": "", "item": ""})
+    commits = _shown(values["commitments"], ITEMS["commitments"], "item",
+                     {"ref": "", "item": ""})
+    kept = {r["ref"] for r in threads + commits}
+    facts = values["facts"]
+    rels = values["relationships"]
+    pairs = sorted({tuple(r["pair"]) for r in rels if len(r["pair"]) == 2})
+    return {
+        **values,
+        "head": {**head, "moments": moments if len(moments) <= 2 else [moments[0], moments[-1]],
+                 "locations": _capped(head["locations"], "")},
+        "threads": threads,
+        "commitments": commits,
+        "status": {r: st for r, st in values["status"].items() if r in kept},
+        "facts": {name: _shown(facts[name], ITEMS[f"facts.{name}"], "text",
+                               {"id": "", "text": ""})
+                  for name in ("recorded", "retired")},
+        "relationships": [{"item": r["item"]} for r in rels[:ITEMS["relationships"]]],
+        "relationship_pairs": _capped([list(p) for p in pairs], ["", ""]),
+        "links": _capped(values["links"], ""),
+    }
 
 
 def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
@@ -671,7 +766,8 @@ def scene_slices(inputs: CampaignInputs, head: Head) -> Slices:
         "links": [damage.text(x, CAPS["ref"], "continuity.json") for x in links],
         "groups": _groups(inputs, cast, used),
     }
-    mine = tuple(sorted(damage.names | set(inputs.degraded)))
+    values = _visible(values)
+    mine = tuple(_capped(sorted(damage.names | set(inputs.degraded)), ""))
     return Slices(sid=sid, identity=head.identity, values=values,
                   digests={name: digest(value) for name, value in values.items()},
                   paths=tuple(dict.fromkeys(used)), degraded=mine)

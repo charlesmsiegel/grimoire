@@ -9,6 +9,7 @@ the cache changes no answer; warm memos parse no ledger; the cache-off memo is
 bounded; a campaign delete purges the documents. Placeholder names only.
 """
 
+import dataclasses
 import importlib
 import json
 import shutil
@@ -37,6 +38,7 @@ def _trust_fresh_files(monkeypatch):
     monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
     live._MEMO.clear()
     live._RECORDED.clear()
+    live._INPUTS.clear()
 
 
 @pytest.fixture
@@ -74,7 +76,7 @@ def _answer(ls):
 
 def _restart():
     compiled.close()
-    for pool in (slices._POOL, rolling._POOL, live._MEMO, live._RECORDED):
+    for pool in (slices._POOL, rolling._POOL, live._MEMO, live._RECORDED, live._INPUTS):
         pool.clear()
 
 
@@ -145,11 +147,11 @@ def test_stored_documents_leave_store_relative_materialized_rows(cid):
     ls = live.scene_documents(cid)
     doc = next(d for d in ls.documents if d.sid == sid)
     scene_path = scenes.paths._scene_path(cid, sid)
-    assert scene_path in doc.paths
-    assert campaigns.campaign_root(cid) / "chronicle.json" in doc.paths
+    assert scene_path in live.input_paths(cid, doc)
+    assert campaigns.campaign_root(cid) / "chronicle.json" in live.input_paths(cid, doc)
     with compiled.batch() as request:
-        rows = request.materialized(list(doc.paths))
-    for path in doc.paths:
+        rows = request.materialized(list(live.input_paths(cid, doc)))
+    for path in live.input_paths(cid, doc):
         kinds = [(m.kind, m.instance) for m in rows[path]]
         assert (scene.KIND, _instance(cid, doc.doc.meta["identity"])) in kinds, path
     assert all(str(m.path).startswith(str(paths.home())) for r in rows.values() for m in r)
@@ -195,14 +197,15 @@ def test_record_embedded_writes_rows_on_every_input_path(cid):
     kind = embedded.vector_kind(space)
     assert kind == f"vector:searchdocs.scene:{compiled.space_digest(space['space'])}"
     with compiled.batch() as request:
-        rows = request.materialized(list(docs[sid].paths) + list(docs[other].paths))
+        rows = request.materialized([*live.input_paths(cid, docs[sid]),
+                                     *live.input_paths(cid, docs[other])])
     instance = _instance(cid, docs[sid].doc.meta["identity"])
-    for path in docs[sid].paths:
+    for path in live.input_paths(cid, docs[sid]):
         assert (kind, instance) in [(m.kind, m.instance) for m in rows[path]], path
     # The document nobody embedded gets no vector row, even on a shared file.
     other_instance = _instance(cid, docs[other].doc.meta["identity"])
     assert all((m.kind, m.instance) != (kind, other_instance)
-               for path in docs[other].paths for m in rows[path])
+               for path in live.input_paths(cid, docs[other]) for m in rows[path])
 
 
 def test_record_embedded_never_raises(cid):
@@ -281,11 +284,11 @@ def test_a_document_wider_than_a_staging_batch_keeps_every_row(cid, monkeypatch)
     monkeypatch.setattr(live, "_STAGED_ROWS", 3)
     sid, *_ = _three(cid)
     doc = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
-    assert len(doc.paths) > 3
+    assert len(live.input_paths(cid, doc)) > 3
     with compiled.batch() as request:
-        rows = request.materialized(list(doc.paths))
+        rows = request.materialized(list(live.input_paths(cid, doc)))
     instance = _instance(cid, doc.doc.meta["identity"])
-    for path in doc.paths:
+    for path in live.input_paths(cid, doc):
         assert (scene.KIND, instance) in [(m.kind, m.instance) for m in rows[path]], path
 
 
@@ -301,9 +304,9 @@ def test_rows_a_flush_did_not_commit_are_retried(cid, monkeypatch):
     doc = next(d for d in live.scene_documents(cid).documents if d.sid == sid)
     assert live._RECORDED
     with compiled.batch() as request:
-        rows = request.materialized([doc.paths[0]])
+        rows = request.materialized([live.input_paths(cid, doc)[0]])
     assert (scene.KIND, _instance(cid, doc.doc.meta["identity"])) in \
-        [(m.kind, m.instance) for m in rows[doc.paths[0]]]
+        [(m.kind, m.instance) for m in rows[live.input_paths(cid, doc)[0]]]
 
 
 def test_a_malformed_appearances_ledger_drops_only_the_running_summary(cid):
@@ -413,3 +416,16 @@ def test_a_document_whose_first_store_failed_is_put_again(cid, monkeypatch):
     with compiled.batch() as request:
         found = request.lookup_many([key]).values
     assert found[key].hit
+
+
+def test_what_leaves_the_package_is_json_safe(cid):
+    """`LiveDocument` carries no `Path`: its input files stay private, read
+    through `input_paths`, which a restart's empty bookkeeping re-derives."""
+    _three(cid)
+    ls = live.scene_documents(cid)
+    json.dumps([dataclasses.asdict(d) for d in ls.documents])
+    doc = ls.documents[0]
+    paths = live.input_paths(cid, doc)
+    assert paths
+    live._INPUTS.clear()
+    assert live.input_paths(cid, doc) == paths

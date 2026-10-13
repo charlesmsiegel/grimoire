@@ -47,7 +47,7 @@ KIND = compiled.SEARCHDOCS_SCENE.name
 #: key cannot disagree about which rendering they name.
 SEARCH_DOCUMENT_VERSION = compiled.SEARCHDOCS_SCENE.version
 DOC_BYTES = 6000            # context/semantic.py's DOC_BYTES, for its reason
-MAX_META_REFS = 64
+MAX_META_REFS = slices_mod.META_REFS
 ITEM_SEPARATOR = "; "
 
 #: (label, items, bytes per item, line cap), in render order (spec 4.3).
@@ -59,11 +59,11 @@ LINES = (
     ("In brief:", 1, 240, 240),
     ("Summary:", 1, 1500, 1500),     # or "Running summary:", same caps
     ("Keywords:", 12, 32, 408),
-    ("Threads:", 5, 144, 730),
-    ("Commitments:", 3, 144, 438),
-    ("Facts established:", 4, 144, 584),
-    ("Facts retired:", 2, 144, 292),
-    ("Relationships:", 3, 112, 342),
+    ("Threads:", slices_mod.ITEMS["threads"], 144, 730),
+    ("Commitments:", slices_mod.ITEMS["commitments"], 144, 438),
+    ("Facts established:", slices_mod.ITEMS["facts.recorded"], 144, 584),
+    ("Facts retired:", slices_mod.ITEMS["facts.retired"], 144, 292),
+    ("Relationships:", slices_mod.ITEMS["relationships"], 112, 342),
 )
 #: The largest text `render` can produce: every line at its cap, each label
 #: (the summary's longer spelling) and its space, and the newlines between --
@@ -201,7 +201,7 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
     threads = bounded("threads", (r["ref"] for r in values["threads"]))
     commitments = bounded("commitments", (r["ref"] for r in values["commitments"]))
     ref = slices_mod.CAPS["ref"]
-    meta = {
+    return {
         "kind": "scene",
         "version": SEARCH_DOCUMENT_VERSION,
         "phase": "none",
@@ -233,8 +233,7 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
                                       (f["id"] for f in values["facts"]["recorded"])),
                   "retired": bounded("facts.retired",
                                      (f["id"] for f in values["facts"]["retired"]))},
-        "relationship_pairs": bounded("relationship_pairs", sorted(
-            {tuple(r["pair"]) for r in values["relationships"] if len(r["pair"]) == 2})),
+        "relationship_pairs": bounded("relationship_pairs", values["relationship_pairs"]),
         # Current affiliation; never truncated, but every ref in it is capped
         # like any other metadata ref (the slice keeps them whole).
         "groups": [{**g, "group": slices_mod.clip(g["group"], ref),
@@ -252,8 +251,6 @@ def _meta(values: dict, digests: dict[str, str], degraded: tuple[str, ...],
         "slices": dict(digests),
         "truncated": truncated,
     }
-    meta["relationship_pairs"] = [list(p) for p in meta["relationship_pairs"]]
-    return meta
 
 
 def key_params(sl: slices_mod.Slices) -> dict:

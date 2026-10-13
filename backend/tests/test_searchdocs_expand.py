@@ -360,3 +360,23 @@ def test_a_neighbour_cut_that_kept_a_commoner_term_is_reframed_on_the_rarest(cid
                         max_bytes=8000, max_posts=8)
     posts = {p.index: p for e in got.excerpts for p in e.posts}
     assert "rare" in posts[6].content.casefold()
+
+
+def test_a_scene_replaced_during_the_read_is_refused_without_an_identity(cid, monkeypatch):
+    """A sid is reusable: the identity is taken before and after the read and
+    must agree even when the caller named none."""
+    sid = _scene(cid, _plain(4))
+    real_read = expand.scenes_read.read_scene
+    real_identity = expand.scenes_identity.scene_identity
+    state = {"read": False}
+
+    def read_scene(*args, **kwargs):
+        state["read"] = True
+        return real_read(*args, **kwargs)
+
+    def scene_identity(*args, **kwargs):
+        got = real_identity(*args, **kwargs)
+        return "f" * 32 if state["read"] else got
+    monkeypatch.setattr(expand.scenes_read, "read_scene", read_scene)
+    monkeypatch.setattr(expand.scenes_identity, "scene_identity", scene_identity)
+    assert expand.expand(cid, sid, phase="prompt", terms=["post"]) is None
